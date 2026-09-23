@@ -53,7 +53,7 @@ func runCodexNotify(args []string) error {
 		fmt.Fprintln(os.Stdout, "WHICH PROCESS: the row is placed by walking up the process tree from --pid")
 		fmt.Fprintln(os.Stdout, "until a muxterm pane is reached. Codex spawns this program as its own")
 		fmt.Fprintln(os.Stdout, "direct child, so --pid defaults to the parent -- the codex process living")
-		fmt.Fprintln(os.Stdout, "in the pane. A report from outside any pane is written and then not shown.")
+		fmt.Fprintln(os.Stdout, "in the pane. Outside a muxterm pane, the session is shown with no terminal.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "WHAT A CODEX ROW CANNOT SAY: Codex emits only turn-COMPLETE, so a lane has")
 		fmt.Fprintln(os.Stdout, "no row until its first turn ends, is never seen as 'working', and is never")

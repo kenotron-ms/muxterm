@@ -1427,6 +1427,7 @@ export class MuxHome extends LitElement {
   };
 
   private _open(s: SessionState): void {
+    if (s.paneId === null || s.workspaceId === null) return;
     this.dispatchEvent(
       new CustomEvent('home-open', {
         detail: { sessionId: s.sessionId, paneId: s.paneId, workspaceId: s.workspaceId },
@@ -1525,6 +1526,7 @@ export class MuxHome extends LitElement {
   /** The machine a session lives on, or null for local / no remotes at all. */
   private _hostOf(s: SessionState): { name: string; state: HostConnState } | null {
     if (!remotesStore.any) return null;
+    if (s.workspaceId === null) return null;
     const { host } = parseHostRef(s.workspaceId);
     if (host === '') return null;
     const entry = remotesStore.get(host);
@@ -1582,6 +1584,9 @@ export class MuxHome extends LitElement {
 
   private _loc(s: SessionState): string {
     const a = age(s.updatedAt, this._now);
+    if (s.paneId === null || s.workspaceId === null) {
+      return a ? `no terminal · ${a}` : 'no terminal';
+    }
     const base = `${this._wsLabel(s.workspaceId)} · p${s.paneId}`;
     return a ? `${base} · ${a}` : base;
   }
@@ -1695,7 +1700,9 @@ export class MuxHome extends LitElement {
         <div class="meta rr">
           ${s.pr && s.pr > 0
             ? html`<span class="badge pr">#${s.pr}</span>`
-            : html`<span>${this._wsLabel(s.workspaceId)} · p${s.paneId}</span>`}
+            : s.workspaceId === null || s.paneId === null
+              ? html`<span>no terminal</span>`
+              : html`<span>${this._wsLabel(s.workspaceId)} · p${s.paneId}</span>`}
           <span>${a || '—'}</span>
         </div>
       </div>
@@ -1741,7 +1748,11 @@ export class MuxHome extends LitElement {
         </div>
         <div class="tbody">${body}</div>
         <div class="meta tf">
-          <span>${this._wsLabel(s.workspaceId)} · p${s.paneId}</span>
+          <span
+            >${s.workspaceId === null || s.paneId === null
+              ? 'no terminal'
+              : `${this._wsLabel(s.workspaceId)} · p${s.paneId}`}</span
+          >
           <span>${age(s.updatedAt, this._now) || s.mode}</span>
         </div>
         ${needs

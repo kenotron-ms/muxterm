@@ -715,7 +715,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const bits: string[] = [];
     if (s.harness) bits.push(isKnownHarness(s.harness) ? s.harness : `${s.harness}?`);
     if (s.mode === 'autonomous') bits.push('autonomous');
-    bits.push(s.workspaceId);
+    bits.push(s.workspaceId ?? 'no terminal');
     const a = age(s.updatedAt, this._now);
     if (a) bits.push(a);
     // THE HONEST FALLBACK, and it is the whole of it: both of these return ''

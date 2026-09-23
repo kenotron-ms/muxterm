@@ -137,6 +137,30 @@ type sessionSnapshot struct {
 	SID int `json:"sid,omitempty"`
 }
 
+// MarshalJSON preserves snapshot metadata even though the embedded
+// SessionState has its own wire marshaler for nullable attachments.
+func (s sessionSnapshot) MarshalJSON() ([]byte, error) {
+	row, err := json.Marshal(s.SessionState)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(row, &fields); err != nil {
+		return nil, err
+	}
+	if s.V != 0 {
+		fields["v"] = s.V
+	}
+	fields["pid"] = s.PID
+	if s.PIDStart != 0 {
+		fields["pidStart"] = s.PIDStart
+	}
+	if s.SID != 0 {
+		fields["sid"] = s.SID
+	}
+	return json.Marshal(fields)
+}
+
 // snapshotPIDMatches reports whether the process now holding snap.PID is the
 // same process that wrote the snapshot.
 func snapshotPIDMatches(snap sessionSnapshot) bool {
@@ -202,8 +226,8 @@ func (s *sessionStore) changedLocked(rows []SessionState) bool {
 	return true
 }
 
-// collect reads the spool directory, joins each snapshot to the pane running
-// it, and returns the rows in a deterministic order.
+// collect reads the spool directory, optionally joins each snapshot to the pane
+// running it, and returns the rows in a deterministic order.
 //
 // It takes the owners map rather than the registry view so the read-and-join is
 // separable from the registry snapshot: the caller decides when to look at the
@@ -303,6 +327,26 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 		if owners == nil {
 			owners = ownersFor()
 		}
+		if sessionStateIsTerminal(snap.State) {
+			// A completed declaration is durable session history. PID/SID
+			// evidence can attach it to a terminal, but stale or absent process
+			// evidence cannot revoke the session's existence.
+			if processLive(snap.PID) && !snapshotPIDMatches(snap) {
+				rows = append(rows, snap.SessionState)
+				continue
+			}
+			pane, ok := placeSnapshot(snap, owners)
+			if !ok {
+				rows = append(rows, snap.SessionState)
+				continue
+			}
+			pending = append(pending, pendingRow{
+				row:  stampPane(snap.SessionState, pane),
+				path: path,
+				pane: pane,
+			})
+			continue
+		}
 
 		if processLive(snap.PID) {
 			if !snapshotPIDMatches(snap) {
@@ -315,9 +359,9 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 			}
 			pane, ok := placeSnapshot(snap, owners)
 			if !ok {
-				// Running, but not inside any pane of ours. Left on disk
-				// rather than reclaimed: it is a live process's file, and it
-				// is not ours to delete.
+				// A valid declaration admits a session. Placement only enriches
+				// it with an optional terminal attachment.
+				rows = append(rows, snap.SessionState)
 				continue
 			}
 			pending = append(pending, pendingRow{
@@ -329,27 +373,9 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 			continue
 		}
 
-		// The process is gone. Whether the row goes with it depends on
-		// whether the session ENDED or was killed.
-		if !sessionStateIsTerminal(snap.State) {
-			_ = os.Remove(path)
-			continue
-		}
-		pane, ok := placeSnapshot(snap, owners)
-		if !ok {
-			// Its pane is gone -- or it never wrote a sid, in which case the
-			// walk has nothing left to walk now that /proc has forgotten the
-			// process. Either way there is no terminal to show this on, and
-			// closing a pane is the user saying they are done with it,
-			// endings included.
-			_ = os.Remove(path)
-			continue
-		}
-		pending = append(pending, pendingRow{
-			row:  stampPane(snap.SessionState, pane),
-			path: path,
-			pane: pane,
-		})
+		// A non-terminal declaration whose process is gone was killed and has
+		// no current state left to report.
+		_ = os.Remove(path)
 	}
 
 	// Second phase: per pane, decide which of its snapshots to publish.

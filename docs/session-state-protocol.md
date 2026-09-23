@@ -143,12 +143,14 @@ as soon as your process is gone.** A session killed mid-flight never got to say
 how it went, and leaving it up would assert that it is still thinking, or still
 waiting on a human, when it is neither.
 
-A snapshot whose `pid` has been recycled by an unrelated process is always
-reclaimed, whatever it says (see `pidStart`).
+A non-terminal snapshot whose `pid` has been recycled by an unrelated process
+is reclaimed. A terminal snapshot remains durable but receives no attachment
+from mismatched process evidence (see `pidStart`).
 
-None of this depends on anyone watching. The row is placed from the `sid` you
-recorded in the file, not from your `/proc` entry, so a session that starts and
-finishes with no browser open still has its ending waiting when one opens.
+None of this depends on anyone watching. The row is optionally attached from
+the `sid` you recorded in the file, not from your `/proc` entry, so a session
+that starts and finishes with no browser open still has its ending waiting when
+one opens. A session outside muxterm has `null` pane and workspace attachments.
 
 ### `sid` — how a finished session is still found
 
@@ -258,9 +260,10 @@ string may be omitted.
 
 ### Never write these
 
-`paneId`, `workspaceId`, `goalId` and `origin` are **the daemon's**, filled in
-during the pane join. Anything you put there is discarded. You cannot know them
-— that is the point of the division of labour described below.
+`paneId`, `workspaceId`, `goalId` and `origin` are **the daemon's**. The first
+two are filled in during an optional pane join and are JSON `null` when no
+terminal is attached. Anything you put there is discarded. You cannot know
+them — that is the point of the division of labour described below.
 
 The last two are launch provenance, read from the command line the daemon itself
 started the pane with, and they exist because they answer what a declaration
@@ -289,7 +292,7 @@ write one.
 
 ## Which pid
 
-**This is the field that decides whether your row appears at all.**
+**This field supplies evidence for an optional terminal attachment.**
 
 You report a pid; the daemon walks *up* the process tree from it until it
 reaches a pane's root shell, and that is how a row learns which terminal it
@@ -306,10 +309,9 @@ Consequences:
   its caller.
 - **Any live ancestor inside the pane works.** The walk goes upward, so a
   script, its subshell, and its parent shell all resolve to the same pane.
-- **A process outside every muxterm pane cannot be placed.** The snapshot is
-  written successfully and then not shown. This is correct: a row with no pane
-  is a row the home view cannot act on, and inventing a location for it would be
-  worse than omitting it.
+- **A process outside every muxterm pane still creates a session.** Its
+  `paneId` and `workspaceId` are `null`, terminal-only actions are unavailable,
+  and the fleet labels it `no terminal` rather than inventing a location.
 
 ### `pidStart`
 

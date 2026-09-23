@@ -1,5 +1,7 @@
 package sessiond
 
+import "encoding/json"
+
 // Session state contract for the muxterm "home" view.
 //
 // This file is TYPES ONLY -- the wire contract shared by the daemon (which
@@ -133,15 +135,16 @@ type TodoProgress struct {
 }
 
 // SessionState is one row of the home view: everything known about a single
-// agent session running in a muxterm pane.
+// agent session. A terminal is an optional attachment.
 //
 // Every field is DECLARED by the session's own producer -- nothing here is
 // inferred from PTY state, because the daemon's existing activity classifier
 // cannot distinguish "thinking" from "waiting for you", which is precisely why
 // this declared channel exists.
 type SessionState struct {
-	// Identity. SessionID is the producer's own session id; PaneID and
-	// WorkspaceID locate its terminal in muxterm.
+	// Identity. SessionID is the producer's own session id. Zero PaneID and an
+	// empty WorkspaceID mean the session has no muxterm terminal attachment;
+	// MarshalJSON emits those sentinels as null on the wire.
 	SessionID   string `json:"sessionId"`
 	PaneID      int    `json:"paneId"`
 	WorkspaceID string `json:"workspaceId"`
@@ -251,6 +254,27 @@ type SessionState struct {
 
 	// UpdatedAt is a Unix timestamp (seconds) of the last state change.
 	UpdatedAt int64 `json:"updatedAt"`
+}
+
+// MarshalJSON keeps the established internal scalar representation while
+// making terminal attachment explicitly optional on the versioned wire. This
+// is a compatibility bridge for producers and daemon code that still use zero
+// values internally; consumers never receive a synthetic pane 0 or workspace.
+func (s SessionState) MarshalJSON() ([]byte, error) {
+	type wireSessionState SessionState
+	var paneID *int
+	var workspaceID *string
+	if s.PaneID != 0 {
+		paneID = &s.PaneID
+	}
+	if s.WorkspaceID != "" {
+		workspaceID = &s.WorkspaceID
+	}
+	return json.Marshal(struct {
+		wireSessionState
+		PaneID      *int    `json:"paneId"`
+		WorkspaceID *string `json:"workspaceId"`
+	}{wireSessionState: wireSessionState(s), PaneID: paneID, WorkspaceID: workspaceID})
 }
 
 // NeedsInput reports whether this session belongs in the home view's

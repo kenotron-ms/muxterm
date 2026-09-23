@@ -108,9 +108,17 @@ func runFleet(args []string) error {
 			if r.PR != 0 {
 				pr = fmt.Sprintf("#%d", r.PR)
 			}
-			fmt.Printf("%-12s %-11s %-13s %-6d %-5s %s\n",
-				dash(r.Harness), dash(r.State), dash(r.Mode), r.PaneID, dash(pr), dash(r.Name))
-			fmt.Printf("  session   %s  workspace %s\n", r.SessionID, r.WorkspaceID)
+			pane := "-"
+			workspace := "-"
+			if r.PaneID != 0 {
+				pane = fmt.Sprintf("%d", r.PaneID)
+			}
+			if r.WorkspaceID != "" {
+				workspace = r.WorkspaceID
+			}
+			fmt.Printf("%-12s %-11s %-13s %-6s %-5s %s\n",
+				dash(r.Harness), dash(r.State), dash(r.Mode), pane, dash(pr), dash(r.Name))
+			fmt.Printf("  session   %s  workspace %s\n", r.SessionID, workspace)
 			if r.WaitingFor != "" {
 				fmt.Printf("  waiting   %s\n", r.WaitingFor)
 			}
