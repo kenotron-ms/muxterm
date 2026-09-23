@@ -213,8 +213,8 @@ func amplifierTranscriptPath(row sessiond.SessionState) string {
 
 // claudeTranscriptPath is ~/.claude/projects/<slug>/<session-uuid>.jsonl.
 //
-// The session id is un-prefixed first: the Claude adapter namespaces every
-// muxterm session ID is "claude-<uuid>", but the native transcript file is
+// The session id is un-prefixed first: the common hook registry namespaces every
+// Claude session ID as "claude-<uuid>", but the native transcript file is
 // named by the bare UUID.
 //
 // The slug rule here is "every path separator and dot becomes -", which is what

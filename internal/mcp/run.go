@@ -833,8 +833,8 @@ func registerAllTools(
 		"durably admit and execute one native-resume turn for a known session_id. Works for sessions with or without panes. "+
 			"client_ref is the caller's stable idempotency key: reuse returns the original outcome and never executes twice. "+
 			"cursor optionally rejects a stale transcript view before admission. A dispatch whose native acceptance cannot be "+
-			"proved is returned as uncertain and is never retried automatically. Local machine only; terminal steering remains "+
-			"available explicitly through send_input",
+			"proved is returned as uncertain and is never retried automatically. Local machine only. Managed-turn approval "+
+			"brokerage and cross-surface terminal takeover are disabled; terminal input remains a separate explicit send_input capability",
 		map[string]any{
 			"type": "object",
 			"properties": withMachine(map[string]any{

@@ -1,5 +1,10 @@
 # Lane D — Make session state harness-agnostic
 
+> **Historical goal (superseded 2026-09-22):** this lane implemented the first
+> Claude integration as a poller. PR #178 deleted that implementation in favor
+> of invocation-scoped native hooks. Commands and acceptance criteria below are
+> retained as execution history, not current architecture or setup guidance.
+
 ## Outcome
 
 muxterm's home view stops being an Amplifier feature and becomes a **fleet view

@@ -502,7 +502,7 @@ muxterm session report --session-id nightly-build --harness nightly-build \
 | Amplifier | in-process hook | `modules/hooks-muxterm-session` |
 | any tool | one-shot CLI | `muxterm session report` |
 | Claude Code | invocation-scoped native plugin hooks | `cmd/muxterm/claude_plugin` |
-| Codex | invocation-scoped turn-complete hook | `internal/sessiond/codex_notify.go` |
+| Codex | invocation-scoped rich hooks, plus legacy turn-complete compatibility | `cmd/muxterm/codex_hook_cmd.go`, `internal/sessiond/codex_notify.go` |
 
 The supported manual entry points are `muxterm claude` and `muxterm codex`.
 They configure reporting for only the child invocation and do not edit global
@@ -525,21 +525,21 @@ lane uses that same wrapper. Raw `claude` invocations are outside guaranteed
 coverage; muxterm performs no background `claude agents` polling and does not
 edit `~/.claude/settings.json`.
 
-### Codex — `MUXTERM_CODEX_NOTIFY`
+### Codex — rich hooks with legacy notify compatibility
 
-Not a poller. Codex has a real external-program hook, so muxterm does not run
-`codex` as a subprocess at all — it asks Codex to call muxterm. Lane argv
-carries an override that points Codex's turn-complete hook at this binary:
+`muxterm codex` injects invocation-scoped SessionStart, UserPromptSubmit, tool,
+permission, Stop, interruption, compaction, subagent, and SessionEnd hooks. Each
+native event is translated into the common hook-report envelope. The legacy
+`notify` slot remains a completion-only compatibility source:
 
 ```
 codex -c notify=["<muxterm>","session","codex-notify"] -- <prompt>
 ```
 
 Codex appends one JSON document to that argv after each completed agent turn.
-`muxterm session codex-notify` translates it into the common hook-report envelope,
-and because Codex
-spawns the hook as a **direct child of the codex process**, the ordinary
-pid-to-pane walk places the row with no special case.
+`muxterm session codex-notify` translates it into the same ingress. Muxterm-owned
+rich launches suppress that compatibility event so Stop and notify cannot
+double-count one completion.
 
 Use `muxterm codex` for an interactive session with reporting; muxterm does not
 edit `~/.codex/config.toml`. A lane muxterm starts needs no persistent setup.
@@ -547,23 +547,21 @@ Note that `-c` **replaces** your own
 `notify` program for that lane's lifetime rather than appending to it — that is
 the cost of needing no setup, and `MUXTERM_CODEX_NOTIFY=0` is the way out.
 
-**What a Codex row cannot say.** These are limits of the hook, not of the
-mapping, and they are why a Codex row is coarser than an Amplifier one. Codex
-emits only `agent-turn-complete`; there is no turn-*started* counterpart, and a
-turn that fails emits nothing at all.
+Rich Codex rows report lifecycle, prompt, local-tool, plan, permission, and
+interruption observations. Hosted tools are not guaranteed hook sources, and
+the installed hook vocabulary has no generic provider-failure event. A raw
+Codex session configured only with legacy notify is explicitly marked
+completion-only: it appears after its first completed turn and cannot report
+working or blocked states before that completion.
 
 | Field | Codex | Why |
 |---|---|---|
-| `state` | only ever `stopped` | A turn ending is the session arriving at its prompt. No verdict is offered, so `done` would be an invention. |
-| `working` | never observable | No turn-started event exists. |
-| `blocked` | never observable | A session sitting on an approval prompt has not completed a turn, so it looks exactly like one resting. This is the limit that costs the most. |
-| row before first turn | absent | The thread id that identifies the session does not exist until Codex creates it, and does not reach muxterm until the first notify fires. |
-| `mode` | always `interactive` | muxterm cannot launch a Codex session that runs unattended toward its own stop condition, so declaring `autonomous` would make every resting lane an alarm. |
-| `name` | the session's first prompt, stably | Not a limit — `input-messages` accumulates across the thread, so a stateless hook reading element zero re-declares the same title every turn. `label` is left empty so the daemon's argv-derived tab name keeps winning. |
-
-A Codex lane that breaks mid-turn is silent until its pane exits, at which point
-the harness-agnostic exit path writes the completion record and the failure
-becomes visible that way.
+| `state` | Rich hooks report working, blocked, and stopped; completion-only reports stopped | Neither path invents a successful `done` verdict. |
+| `working` | Prompt and local-tool events | Unavailable from legacy notify alone. |
+| `blocked` | PermissionRequest | Unavailable from legacy notify alone. |
+| row before first turn | SessionStart on rich launches | Absent until the first completion with legacy notify alone. |
+| `mode` | interactive unless an explicit supervising goal declares otherwise | Quiet interactive sessions are not mislabeled autonomous. |
+| `name` | first prompt, stably | Later turns do not rename the session. |
 
 ## Related
 
