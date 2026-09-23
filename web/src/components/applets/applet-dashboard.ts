@@ -508,7 +508,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
       cursor: pointer;
       font-size: 16px;
     }
-    .card:hover .status { display: none; }
+    .card:has(.card-close):hover .status { display: none; }
     .card:hover .card-close { display: grid; }
     .card-body { padding: var(--s-5); }
     .card .g {
