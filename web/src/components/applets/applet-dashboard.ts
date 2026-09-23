@@ -67,10 +67,13 @@ import type { SessiondMessage, SessionTranscriptTurn } from '../../types.js';
  * approved copy.
  */
 const GROUP_LABEL: Record<HomeGroup, string> = {
-  'Needs input': 'wants you',
+  'Needs input': 'needs attention',
   Running: 'working',
-  Completed: 'done',
+  Completed: 'finished',
 };
+
+/** Visual reading order from the approved mockup: motion, intervention, outcome. */
+const DISPLAY_GROUPS: readonly HomeGroup[] = ['Running', 'Needs input', 'Completed'];
 
 /**
  * Left-edge state colour class -- DUPLICATED from mux-home.ts's markClass()
@@ -173,6 +176,14 @@ export class AppletDashboard extends LitElement implements AppletElement {
          the two modes and the mobile sheet cannot drift apart. */
       --meta-h: 74px;
       --thumb-h: 84px;
+      --fleet-panel: #121824;
+      --fleet-raised-top: #1a2230;
+      --fleet-raised-bottom: #151c28;
+      --fleet-edge: #2b3548;
+      --fleet-muted: #8c99ad;
+      --fleet-body: #c8d0dd;
+      --fleet-shadow: 0 8px 22px #05070b44;
+      --fleet-detail-shadow: 0 18px 48px #0008;
     }
 
     /* The icon() helper emits this class; the rule is per-shadow-root. */
@@ -195,6 +206,25 @@ export class AppletDashboard extends LitElement implements AppletElement {
       overflow-y: auto;
       padding: var(--s-6);
     }
+    .fleet-top {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: var(--s-6);
+      margin-bottom: 20px;
+    }
+    .fleet-top h1 {
+      margin: 0 0 3px;
+      color: var(--ink-1);
+      font-size: 22px;
+      line-height: 1.2;
+    }
+    .fleet-sub,
+    .fleet-hint {
+      color: var(--fleet-muted);
+      font-size: 12px;
+    }
+    .fleet-hint { font-size: 11px; }
     /* A phone is narrower than the padding was designed for: --s-6 on both
        sides of a 393px screen is 8% of it spent on nothing. */
     :host([narrow]) .body {
@@ -205,10 +235,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
       font-size: 10.5px;
       font-weight: 600;
       line-height: 1;
-      letter-spacing: 0.07em;
+      letter-spacing: 0.11em;
       text-transform: uppercase;
       color: var(--ink-3);
-      padding: var(--s-6) var(--s-1) var(--s-4);
+      padding: 22px 0 9px;
     }
     .grp:first-child {
       padding-top: 0;
@@ -443,23 +473,24 @@ export class AppletDashboard extends LitElement implements AppletElement {
       overflow: hidden;
       border: 1px solid var(--edge);
       border-radius: 10px;
-      background: var(--surface);
-      box-shadow: 0 8px 22px color-mix(in srgb, #000 22%, transparent);
+      background: var(--fleet-panel);
+      box-shadow: var(--fleet-shadow);
       cursor: default;
     }
-    .card.work { border-color: color-mix(in srgb, var(--work) 38%, var(--edge)); }
-    .card.need { border-color: color-mix(in srgb, var(--need) 45%, var(--edge)); }
-    .card.fail { border-color: color-mix(in srgb, var(--fail) 45%, var(--edge)); }
-    .card.done { border-color: color-mix(in srgb, var(--ok) 35%, var(--edge)); }
+    .card { border-color: var(--fleet-edge); }
+    .card.work { border-color: #355465; }
+    .card.need { border-color: color-mix(in srgb, var(--need) 45%, var(--fleet-edge)); }
+    .card.fail { border-color: color-mix(in srgb, var(--fail) 45%, var(--fleet-edge)); }
+    .card.done { border-color: color-mix(in srgb, var(--ok) 35%, var(--fleet-edge)); }
     .card-head {
       height: 54px;
-      padding: 10px var(--s-5);
+      padding: 11px 13px;
       display: grid;
       grid-template-columns: minmax(0, 1fr) 24px;
       gap: var(--s-4);
       align-items: center;
-      border-bottom: 1px solid var(--edge);
-      background: color-mix(in srgb, var(--chrome-raised) 72%, var(--surface));
+      border-bottom: 1px solid #273043;
+      background: linear-gradient(180deg, var(--fleet-raised-top), var(--fleet-raised-bottom));
     }
     .card-open {
       min-width: 0;
@@ -481,7 +512,9 @@ export class AppletDashboard extends LitElement implements AppletElement {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .card.work .n { font-weight: 700; }
+    .card .n { font-size: 13px; font-weight: 700; }
+    .card.work .n { font-weight: 800; }
+    .card .m { font-size: 10px; color: var(--fleet-muted); }
     .status,
     .card-close {
       grid-column: 2;
@@ -510,9 +543,12 @@ export class AppletDashboard extends LitElement implements AppletElement {
     }
     .card:hover .status { display: none; }
     .card:hover .card-close { display: grid; }
-    .card-body { padding: var(--s-5); }
+    .card-body { padding: 12px 13px 10px; }
     .card .g {
-      min-height: 36px;
+      height: 40px;
+      min-height: 40px;
+      color: var(--fleet-body);
+      font-size: 13px;
       white-space: normal;
       display: -webkit-box;
       -webkit-line-clamp: 2;
@@ -522,9 +558,9 @@ export class AppletDashboard extends LitElement implements AppletElement {
       display: flex;
       align-items: center;
       gap: var(--s-4);
-      margin-top: var(--s-4);
+      margin-top: 10px;
     }
-    .card .frac { flex: none; margin: 0; font-weight: 600; }
+    .card .frac { flex: none; margin: 0; font-size: 11px; font-weight: 650; }
     .track {
       height: 4px;
       flex: 1;
@@ -539,12 +575,12 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .done .track { color: var(--ok); }
     .todo-toggle {
       width: 100%;
-      margin-top: var(--s-4);
-      padding: var(--s-4) 0 0;
+      margin-top: 10px;
+      padding: 8px 0 2px;
       border: 0;
       border-top: 1px solid var(--edge);
       background: none;
-      color: var(--ink-2);
+      color: #aeb9ca;
       display: flex;
       justify-content: space-between;
       font: inherit;
@@ -556,34 +592,42 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .todo-toggle[aria-expanded='true'] .chevron { transform: rotate(180deg); }
     .todo-list {
       list-style: none;
-      margin: var(--s-4) 0 0;
+      margin: 9px 0 2px;
       padding: 0;
       display: grid;
-      gap: var(--s-3);
+      gap: 7px;
       font-size: 11px;
     }
-    .todo-list li { display: grid; grid-template-columns: 14px 1fr; gap: var(--s-2); color: var(--ink-3); }
+    .todo-list li { display: grid; grid-template-columns: 15px 1fr; gap: 6px; color: #aeb8c8; }
     .todo-list .complete { text-decoration: line-through; }
     .todo-list .current { color: var(--ink-1); font-weight: 600; }
 
     /* Drill-in is a two-part workspace, not the compact card stretched wide. */
     .detail {
       padding: 0;
-      border: 1px solid var(--edge);
-      border-radius: 10px;
-      background: var(--surface);
+      margin: 14px 0 22px;
+      border: 1px solid #3a465b;
+      border-radius: 12px;
+      background: #111824;
       overflow: hidden;
-      box-shadow: 0 16px 42px color-mix(in srgb, #000 28%, transparent);
+      box-shadow: var(--fleet-detail-shadow);
     }
     .detail-head {
-      min-height: 58px;
-      padding: var(--s-5) var(--s-6);
+      min-height: 68px;
+      padding: 16px 18px;
       align-items: center;
-      background: var(--chrome-raised);
-      border-bottom: 1px solid var(--edge);
-      font-size: 14px;
+      background: #192130;
+      border-bottom: 1px solid var(--fleet-edge);
+      font-size: 13px;
     }
-    .detail-head > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail-identity { min-width: 0; flex: 1; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 14px; align-items: center; }
+    .detail-copy { min-width: 0; }
+    .detail-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-1); font-size: 17px; font-weight: 700; }
+    .detail-meta { margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fleet-muted); font: 10px/1.35 var(--mono); font-weight: 400; }
+    .detail-state { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; color: var(--work); background: color-mix(in srgb, currentColor 14%, transparent); }
+    .detail.need .detail-state { color: var(--need); }
+    .detail.fail .detail-state { color: var(--fail); }
+    .detail.done .detail-state { color: var(--ok); }
     .detail-head > span:last-child { flex: none; display: flex; align-items: center; gap: var(--s-3); }
     .detail-head .open-terminal {
       padding: var(--s-3) var(--s-5);
@@ -594,29 +638,38 @@ export class AppletDashboard extends LitElement implements AppletElement {
       font-weight: 600;
     }
     .detail-head .detail-close { width: 28px; height: 28px; font-size: 17px; }
-    .detail-main { display: grid; grid-template-columns: minmax(210px, .72fr) minmax(360px, 1.6fr); }
-    .detail-summary { padding: var(--s-6); border-right: 1px solid var(--edge); }
+    .detail-main { display: grid; grid-template-columns: minmax(220px, .75fr) minmax(360px, 1.6fr); }
+    .detail-summary { padding: 18px; border-right: 1px solid var(--fleet-edge); }
+    .detail-summary h3, .history h3 { margin: 0 0 14px; color: var(--fleet-muted); font-size: 11px; letter-spacing: .09em; text-transform: uppercase; }
     .detail-summary dl { margin-top: 0; }
-    .history { padding: var(--s-6); min-width: 0; }
+    .detail-summary dl { grid-template-columns: 72px minmax(0, 1fr); gap: 8px; font-size: 12px; }
+    .detail-summary .summary-todo { margin-top: 20px; }
+    .detail-todo { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; font-size: 11px; }
+    .detail-todo li { display: grid; grid-template-columns: 15px 1fr; gap: 6px; color: #aeb8c8; }
+    .detail-todo .current { color: var(--ink-1); font-weight: 650; }
+    .history { padding: 18px; min-width: 0; }
     .transcript-head { margin-top: 0; }
     .history-actions { display: flex; align-items: center; gap: var(--s-3); }
     .history-refresh { color: var(--ink-3) !important; padding: var(--s-2) var(--s-3) !important; }
-    .transcript { max-height: 22rem; gap: var(--s-4); }
+    .transcript { max-height: 22rem; gap: 12px; }
     .transcript li {
-      grid-template-columns: 54px minmax(0, 1fr);
-      gap: var(--s-4);
+      grid-template-columns: 62px minmax(0, 1fr);
+      gap: 12px;
       border-left: 0;
       padding: 0;
       align-items: start;
     }
     .transcript b { padding-top: var(--s-2); }
-    .transcript span { padding: var(--s-3) var(--s-4); border: 1px solid var(--edge); border-radius: var(--r-ctl); background: var(--chrome-raised); }
-    .archive-row { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--edge); text-align: right; }
+    .transcript span { padding: 10px 12px; border: 1px solid #283247; border-radius: 7px; background: #151c29; color: #cbd3df; }
+    .transcript li.agent span, .transcript li.assistant span { border-left: 2px solid var(--work); }
+    .transcript li.tool span { background: #101620; color: #99a6ba; font: 11px/1.45 var(--mono); }
+    .archive-row { margin-top: 14px; padding-top: 11px; border-top: 1px solid #283143; text-align: right; }
     .archive-action { color: color-mix(in srgb, var(--fail) 60%, var(--ink-3)) !important; }
     @media (max-width: 700px) {
       .grid, :host([view='tiles']) .grid { grid-template-columns: 1fr; }
       .detail-main { grid-template-columns: 1fr; }
       .detail-summary { border-right: 0; border-bottom: 1px solid var(--edge); }
+      .fleet-hint { display: none; }
     }
   `;
 
@@ -833,34 +886,48 @@ export class AppletDashboard extends LitElement implements AppletElement {
   // -------------------------------------------------------------------------
 
   override render(): TemplateResult {
-    return html`<div class="body">${this._renderDetail()}${this._renderFleet()}</div>`;
+    const sessions = homeSessions.sessions;
+    const workspaces = new Set(sessions.map((s) => s.workspaceId).filter(Boolean)).size;
+    return html`<div class="body">
+      <header class="fleet-top">
+        <div><h1>Fleet</h1><div class="fleet-sub">${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'} across ${workspaces} ${workspaces === 1 ? 'workspace' : 'workspaces'}</div></div>
+        <div class="fleet-hint">Click a card heading to inspect it</div>
+      </header>
+      ${this._renderDetail()}${this._renderFleet()}
+    </div>`;
   }
 
   private _renderDetail(): TemplateResult | typeof nothing {
     if (!this._detailSessionId) return nothing;
     const s = homeSessions.sessions.find((row) => row.sessionId === this._detailSessionId);
     if (!s) return nothing;
-    return html`<section class="detail" aria-label="Session detail">
-      <div class="detail-head"><span>${s.name}</span><span>${s.paneId !== null && s.workspaceId !== null ? html`<button class="open-terminal" type="button" @click="${() => this._openTerminal(s)}">Open terminal ↗</button>` : nothing}<button class="detail-close" type="button" aria-label="Close session detail" @click="${() => { this._detailSessionId = null; }}">×</button></span></div>
+    const detailBits = [s.harness, s.label, age(s.updatedAt, this._now) ? `updated ${age(s.updatedAt, this._now)} ago` : ''].filter(Boolean);
+    const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
+    return html`<section class="detail ${stateClass(s)}" aria-label="Session detail">
+      <div class="detail-head"><span class="detail-identity"><span class="detail-state" aria-hidden="true">●</span><span class="detail-copy"><span class="detail-title">${s.name}</span><span class="detail-meta">${detailBits.join(' · ')}</span></span></span><span>${s.paneId !== null && s.workspaceId !== null ? html`<button class="open-terminal" type="button" @click="${() => this._openTerminal(s)}">Open terminal ↗</button>` : nothing}<button class="detail-close" type="button" aria-label="Close session detail" @click="${() => { this._detailSessionId = null; }}">×</button></span></div>
       <div class="detail-main">
         <aside class="detail-summary">
+          <h3>Session</h3>
           <dl>
-            <dt>session</dt><dd>${s.sessionId}</dd>
-            <dt>terminal</dt><dd>${s.paneId === null ? 'no terminal' : `${s.workspaceId} · p${s.paneId}`}</dd>
-            ${s.todo ? html`<dt>progress</dt><dd><strong>${s.todo.done} of ${s.todo.total} complete</strong></dd>` : nothing}
-            ${s.todo?.current ? html`<dt>current</dt><dd>${s.todo.current}</dd>` : nothing}
-            ${s.project ? html`<dt>project</dt><dd>${s.project}</dd>` : nothing}
-            ${s.reporting ? html`<dt>reporting</dt><dd>${s.reporting}${s.lastReportAt ? ` · ${age(s.lastReportAt, this._now)}` : ''}</dd>` : nothing}
-            ${s.reportingCoverage ? html`<dt>coverage</dt><dd>${s.reportingCoverage}</dd>` : nothing}
-            ${s.reportingError ? html`<dt>reporting error</dt><dd>${s.reportingError}</dd>` : nothing}
+            ${s.todo ? html`<dt>Progress</dt><dd><strong>${s.todo.done} of ${s.todo.total} complete</strong></dd>` : nothing}
+            ${s.todo?.current ? html`<dt>Current</dt><dd>${s.todo.current}</dd>` : nothing}
+            ${s.project ? html`<dt>Project</dt><dd>${s.project}</dd>` : nothing}
+            <dt>Terminal</dt><dd>${s.paneId === null ? 'no terminal' : `${s.workspaceId} · pane ${s.paneId}`}</dd>
+            ${s.pr ? html`<dt>Pull request</dt><dd><strong>PR #${s.pr}</strong></dd>` : nothing}
+            ${s.knows?.length ? html`<dt>Artifacts</dt><dd>${s.knows.length} ${s.knows.length === 1 ? 'path' : 'paths'}</dd>` : nothing}
           </dl>
+          ${s.todo ? html`<h3 class="summary-todo">Todo list</h3><ul class="detail-todo">
+            ${s.todo.done > 0 ? html`<li><span>✓</span><span>${s.todo.done} completed</span></li>` : nothing}
+            ${s.todo.current ? html`<li class="current"><span>●</span><span>${s.todo.current}</span></li>` : nothing}
+            ${remaining > 0 ? html`<li><span>○</span><span>${remaining} remaining</span></li>` : nothing}
+          </ul>` : nothing}
         </aside>
         <section class="history">
-          <div class="transcript-head"><span>History${this._transcriptMeta ? ` · ${this._transcriptMeta}` : ''}</span><span class="history-actions"><button class="history-refresh" type="button" @click="${() => this._requestTranscript(s.sessionId)}">↻ Refresh</button></span></div>
+          <div class="transcript-head"><h3>History${this._transcriptMeta ? ` · ${this._transcriptMeta}` : ''}</h3><span class="history-actions"><button class="history-refresh" type="button" @click="${() => this._requestTranscript(s.sessionId)}">↻ Refresh</button></span></div>
           ${this._transcriptLoading ? html`<p class="transcript-note">Importing bounded native history…</p>` : nothing}
           ${this._transcriptError ? html`<p class="transcript-error">${this._transcriptError}</p>` : nothing}
           ${!this._transcriptLoading && !this._transcriptError && this._transcriptTurns.length === 0 ? html`<p class="transcript-note">No readable turns in the imported tail.</p>` : nothing}
-          <ol class="transcript">${this._transcriptTurns.map((turn) => html`<li><b>${turn.role}${turn.tool ? ` · ${turn.tool}` : ''}</b><span>${turn.text ?? ''}</span></li>`)}</ol>
+          <ol class="transcript">${this._transcriptTurns.map((turn) => html`<li class="${turn.role}"><b>${turn.role}${turn.tool ? ` · ${turn.tool}` : ''}</b><span>${turn.text ?? ''}</span></li>`)}</ol>
           <div class="archive-row"><button class="archive-action" type="button" @click="${() => this._setArchived(s.sessionId)}">${this._transcriptArchived ? 'Unarchive session' : 'Archive session'}</button></div>
         </section>
       </div>
@@ -907,11 +974,11 @@ export class AppletDashboard extends LitElement implements AppletElement {
       ${freshness === 'unavailable'
         ? html`<div class="fzero">Fleet status is unavailable; showing its last known rows.</div>`
         : nothing}
-      ${HOME_GROUPS.map((g) => {
+      ${DISPLAY_GROUPS.map((g) => {
         const members = byGroup.get(g) ?? [];
         if (members.length === 0) return nothing;
         return html`
-          <h2 class="grp">${GROUP_LABEL[g]}</h2>
+          <h2 class="grp">${GROUP_LABEL[g]} · ${members.length}</h2>
           <div class="grid">
             ${members.map((s) => this._renderCard(s))}
           </div>
@@ -927,6 +994,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
     bits.push(s.workspaceId ?? 'no terminal');
     const a = age(s.updatedAt, this._now);
     if (a) bits.push(a);
+    if (s.pr) bits.push(`PR #${s.pr}`);
+    if (s.knows?.length) bits.push(`${s.knows.length} ${s.knows.length === 1 ? 'artifact' : 'artifacts'}`);
     // THE HONEST FALLBACK, and it is the whole of it: both of these return ''
     // for a session that keeps no todo list, and '' renders nothing at all.
     // Such a card shows exactly what it showed before this feature existed --
@@ -943,12 +1012,12 @@ export class AppletDashboard extends LitElement implements AppletElement {
       <article class="card ${stateClass(s)} ${expanded ? 'expanded' : ''}">
         <header class="card-head">
           <button class="card-open" type="button" title="${s.name}" @click="${() => this._openPane(s)}">
-            <span class="n">${s.label || s.name}</span>
+            <span class="n">${s.name}</span>
             <span class="m">${bits.join(' \u00b7 ')}</span>
           </button>
           <span class="status" aria-hidden="true">●</span>
           ${s.paneId !== null && s.workspaceId !== null ? html`
-            <button class="card-close" type="button" aria-label="Close ${s.label || s.name}" title="Close terminal" @click="${() => this._closeTerminal(s)}">×</button>
+            <button class="card-close" type="button" aria-label="Close ${s.name}" title="Close terminal" @click="${() => this._closeTerminal(s)}">×</button>
           ` : nothing}
         </header>
         <div class="card-body">
