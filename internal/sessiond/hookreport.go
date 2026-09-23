@@ -36,6 +36,7 @@ type HookPatch struct {
 	State      *string       `json:"state,omitempty"`
 	WaitingFor *string       `json:"waiting_for,omitempty"`
 	Doing      *string       `json:"doing,omitempty"`
+	Summary    *string       `json:"summary,omitempty"`
 	DoneMeans  *string       `json:"done_means,omitempty"`
 	Coverage   *string       `json:"coverage,omitempty"`
 	Todo       *TodoProgress `json:"todo,omitempty"`
@@ -164,14 +165,14 @@ func QueueHookReport(body []byte) (HookQueueReceipt, error) {
 }
 
 func NewCodexCompletionReport(row SessionState, nativeID, eventID, turnID string, pid int) HookReport {
-	project, name, mode, state, doing := row.Project, row.Name, row.Mode, row.State, row.Doing
+	project, name, mode, state, doing, summary := row.Project, row.Name, row.Mode, row.State, row.Doing, row.Summary
 	start, _ := processStartTime(pid)
 	sid, _ := processSessionID(pid)
 	return HookReport{
 		V: HookReportVersion, Harness: HarnessCodex, NativeSessionID: nativeID,
 		NativeEvent: "agent-turn-complete", Event: "turn.completed", EventID: eventID,
 		TurnID: turnID, ObservedAt: time.Now().UTC(), Process: &HookProcess{PID: pid, PIDStart: start, SID: sid},
-		Set: HookPatch{Project: &project, Name: &name, Mode: &mode, State: &state, Doing: &doing},
+		Set: HookPatch{Project: &project, Name: &name, Mode: &mode, State: &state, Doing: &doing, Summary: &summary},
 	}
 }
 
@@ -255,7 +256,7 @@ func decodeHookReport(body []byte) (HookReport, error) {
 	}
 	for _, field := range report.Clear {
 		switch field {
-		case "project", "label", "waiting_for", "doing", "done_means", "todo", "knows":
+		case "project", "label", "waiting_for", "doing", "summary", "done_means", "todo", "knows":
 		default:
 			return report, fmt.Errorf("unsupported clear field %q", field)
 		}
@@ -357,6 +358,9 @@ func applyHookPatch(row *SessionState, set HookPatch, clear []string) {
 	if set.Doing != nil {
 		row.Doing = *set.Doing
 	}
+	if set.Summary != nil {
+		row.Summary = *set.Summary
+	}
 	if set.DoneMeans != nil {
 		row.DoneMeans = *set.DoneMeans
 	}
@@ -380,6 +384,8 @@ func applyHookPatch(row *SessionState, set HookPatch, clear []string) {
 			row.WaitingFor = ""
 		case "doing":
 			row.Doing = ""
+		case "summary":
+			row.Summary = ""
 		case "done_means":
 			row.DoneMeans = ""
 		case "todo":

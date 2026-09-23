@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -475,6 +476,7 @@ func (s *Server) recordPaneCompletion(wsID string, pane *Pane, exitCode int, run
 		GoalID:        declared.GoalID,
 		Origin:        declared.Origin,
 		Doing:         declared.Doing,
+		FinalSummary:  declared.Summary,
 		DeclaredState: terminalDeclaration(declared.State),
 		ExitCode:      exitCode,
 		RuntimeMs:     runtimeMs,
@@ -486,13 +488,46 @@ func (s *Server) recordPaneCompletion(wsID string, pane *Pane, exitCode int, run
 	// a screen. Nothing shipped declares one today, which is why the scan
 	// exists at all -- see completionPRFrom.
 	record.PR = declared.PR
+	// The final assistant report is first-hand output too, and is often the
+	// only durable copy after a TUI redraws its terminal. Scan it alongside the
+	// terminal history so a literal PR URL in Doing cannot be missed.
+	artifactText := scanned + "\n" + declared.Doing + "\n" + declared.Summary
 	if record.PR == 0 {
-		record.PR, record.PRURL = completionPRFrom(scanned)
+		record.PR, record.PRURL = completionPRFrom(artifactText)
 	}
 	// Every URL the lane printed, not just the one that became this record's
 	// headline PR. A lane that opened two used to have the first one dropped
 	// here, permanently: this scan is the only place either was ever visible.
-	record.PRURLs = completionPRURLsFrom(scanned)
+	record.PRURLs = completionPRURLsFrom(artifactText)
+	record.PRRefs = append([]string(nil), record.PRURLs...)
+	for _, ref := range completionPRRefsFrom(declared.Summary + "\n" + declared.Doing) {
+		duplicate := false
+		refNumber, _ := completionPRFrom(ref)
+		if strings.HasPrefix(ref, "#") {
+			refNumber, _ = strconv.Atoi(strings.TrimPrefix(ref, "#"))
+		}
+		for _, existing := range record.PRRefs {
+			existingNumber, _ := completionPRFrom(existing)
+			if strings.HasPrefix(existing, "#") {
+				existingNumber, _ = strconv.Atoi(strings.TrimPrefix(existing, "#"))
+			}
+			if existing == ref || refNumber > 0 && existingNumber == refNumber {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			record.PRRefs = append(record.PRRefs, ref)
+		}
+	}
+	if record.PR == 0 {
+		for i := len(record.PRRefs) - 1; i >= 0; i-- {
+			if strings.HasPrefix(record.PRRefs[i], "#") {
+				record.PR, _ = strconv.Atoi(strings.TrimPrefix(record.PRRefs[i], "#"))
+				break
+			}
+		}
+	}
 
 	stored := s.completions.Append(record)
 	if !holdWorkspace {

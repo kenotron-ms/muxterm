@@ -343,6 +343,25 @@ func completionPRCandidates(r sessiond.CompletionRecord) []prCandidate {
 		seen[key] = true
 		out = append(out, prCandidate{repo: repo, number: number, url: strings.TrimSpace(u)})
 	}
+	for _, ref := range r.PRRefs {
+		if !strings.HasPrefix(ref, "#") {
+			continue
+		}
+		number, err := strconv.Atoi(strings.TrimPrefix(ref, "#"))
+		if err != nil || number <= 0 {
+			continue
+		}
+		accounted := false
+		for _, cand := range out {
+			if cand.number == number {
+				accounted = true
+				break
+			}
+		}
+		if !accounted {
+			out = append(out, prCandidate{number: number})
+		}
+	}
 
 	if r.PR > 0 {
 		// The headline number, when no URL accounted for it -- a declared PR

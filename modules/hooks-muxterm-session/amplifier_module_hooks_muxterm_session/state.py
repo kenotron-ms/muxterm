@@ -107,6 +107,10 @@ SCHEMA_VERSION = 1
 # should be allowed to grow a snapshot file without limit.
 NAME_MAX_CHARS = 80
 DOING_MAX_CHARS = 120
+# The lane's closing message is notice substance, not dashboard furniture.
+# Keep it separately so the fleet line stays compact while lifecycle notices
+# can relay concrete findings and verification details from every harness.
+SUMMARY_MAX_CHARS = 8000
 # The one variable part of a mid-turn `doing` phrase -- a filename, a search
 # pattern, an agent name. It shares the line with the phrase around it and, for
 # a sub-agent, with an "[explorer] " prefix, so it is bounded well below
@@ -317,6 +321,7 @@ class SessionRecord:
         "state",
         "waiting_for",
         "doing",
+        "summary",
         "done_means",
         "todo",
         "knows",
@@ -341,6 +346,7 @@ class SessionRecord:
         self.state = STATE_WORKING
         self.waiting_for = ""
         self.doing = ""
+        self.summary = ""
         self.done_means = ""
         # Structured progress from this session's own todo list, or None when it
         # has never called the todo tool. None is load-bearing: it is what tells
@@ -486,6 +492,8 @@ class SessionRecord:
             payload["waitingFor"] = self.waiting_for
         if self.doing:
             payload["doing"] = self.doing
+        if self.summary:
+            payload["summary"] = self.summary
         if self.done_means:
             payload["doneMeans"] = self.done_means
         if self.todo:
@@ -517,6 +525,7 @@ class SessionRecord:
             "state": payload.get("state"),
             "waiting_for": payload.get("waitingFor"),
             "doing": payload.get("doing"),
+            "summary": payload.get("summary"),
             "done_means": payload.get("doneMeans"),
             "todo": payload.get("todo"),
             "knows": payload.get("knows"),
@@ -526,6 +535,7 @@ class SessionRecord:
             "label",
             "waiting_for",
             "doing",
+            "summary",
             "done_means",
             "todo",
             "knows",
@@ -853,6 +863,7 @@ class SessionStateTracker:
         self._sync_mode(record, fresh_turn=True)
         if not record.name:
             record.name = _first_line(data.get("prompt"), NAME_MAX_CHARS)
+        record.summary = ""
         record.set_working("")
         record.flush()
 
@@ -1136,6 +1147,9 @@ class SessionStateTracker:
             return
         self._sync_mode(record)
         already_blocked = record.state == STATE_BLOCKED
+        response = data.get("response")
+        if isinstance(response, str) and response.strip():
+            record.summary = _clip(response.strip(), SUMMARY_MAX_CHARS)
         if record.state in (STATE_WORKING, STATE_BLOCKED):
             record.state = STATE_STOPPED
             record.waiting_for = ""
@@ -1170,10 +1184,10 @@ class SessionStateTracker:
         direction is deliberate: a false alarm teaches people to ignore the
         indicator, which costs more than a missed one.
         """
-        if not self._classify_enabled:
-            return
         response = data.get("response")
         if not isinstance(response, str) or not response.strip():
+            return
+        if not self._classify_enabled:
             return
         try:
             from .classify import classify_turn
