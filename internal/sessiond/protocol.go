@@ -154,7 +154,19 @@ const (
 	TypeSessionStateSubscribe       = "session-state-subscribe"        // request: client -> daemon
 	TypeSessionStateSubscribeResult = "session-state-subscribe-result" // reply:   daemon -> client
 	TypeSessionState                = "session-state"                  // event:   daemon -> opted-in subscribers
+	TypeSessionTranscript           = "session-transcript"             // request: browser -> relay
+	TypeSessionTranscriptResult     = "session-transcript-result"      // reply: relay -> browser
+	TypeSessionArchive              = "session-archive"                // request: browser -> relay
 )
+
+// SessionTranscriptTurn is the bounded, readable projection stored in the
+// muxterm-owned transcript journal. It deliberately excludes native payloads.
+type SessionTranscriptTurn struct {
+	Role string `json:"role"`
+	Text string `json:"text,omitempty"`
+	TS   string `json:"ts,omitempty"`
+	Tool string `json:"tool,omitempty"`
+}
 
 // Activity-aware close message types are additive. They preserve the legacy
 // force-close messages while routing browser close intents through daemon-owned
@@ -424,6 +436,18 @@ type Message struct {
 	// ended. Feature availability is detected from the subscribe ack, never
 	// from the presence of this field.
 	Sessions []SessionState `json:"sessions,omitempty"`
+
+	// Durable transcript detail. SessionID+TranscriptCursor form the replay
+	// request; the result carries either changed turns or Unchanged=true.
+	SessionID           string                  `json:"sessionId,omitempty"`
+	TranscriptCursor    string                  `json:"transcriptCursor,omitempty"`
+	TranscriptPath      string                  `json:"transcriptPath,omitempty"`
+	TranscriptError     string                  `json:"transcriptError,omitempty"`
+	TranscriptTurns     []SessionTranscriptTurn `json:"transcriptTurns,omitempty"`
+	TranscriptTruncated bool                    `json:"transcriptTruncated,omitempty"`
+	TranscriptArchived  bool                    `json:"transcriptArchived,omitempty"`
+	TranscriptDetached  bool                    `json:"transcriptDetached,omitempty"`
+	Unchanged           bool                    `json:"unchanged,omitempty"`
 
 	// SessionStateStatus is relay-only metadata for a merged TypeSessionState
 	// document. A direct daemon event leaves it empty; the browser relay writes
