@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
-	"github.com/kenotron-ms/muxterm/internal/server"
 	"github.com/kenotron-ms/muxterm/internal/service"
 	"github.com/kenotron-ms/muxterm/internal/transport"
 )
@@ -90,12 +89,6 @@ func TestVersionVar(t *testing.T) {
 func TestOpenBrowser_Signature(t *testing.T) {
 	// Compile-time check that openBrowser accepts a string.
 	var fn func(string) = openBrowser
-	_ = fn
-}
-
-func TestRunWithGracefulShutdown_Signature(t *testing.T) {
-	// Compile-time check that runWithGracefulShutdown has the expected signature.
-	var fn func(*server.Server) error = runWithGracefulShutdown
 	_ = fn
 }
 

@@ -25,15 +25,6 @@ func (m *mockCommander) Run(name string, args ...string) ([]byte, error) {
 	return nil, nil
 }
 
-func (m *mockCommander) findCommand(name string) *mockCmd {
-	for i := range m.commands {
-		if m.commands[i].Name == name {
-			return &m.commands[i]
-		}
-	}
-	return nil
-}
-
 func TestInstall_Linux_WritesUnitFile(t *testing.T) {
 	tmp := t.TempDir()
 	unitPath := filepath.Join(tmp, "muxterm.service")

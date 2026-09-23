@@ -183,9 +183,3 @@ export function injectTerminalFonts(): void {
 `.trim();
   document.head.appendChild(style);
 }
-
-/**
- * @deprecated Use injectTerminalFonts() instead. This alias remains for any
- * call sites that used the old single-font name.
- */
-export const injectTerminalFont = injectTerminalFonts;

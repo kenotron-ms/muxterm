@@ -11,7 +11,7 @@ import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig }
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
 import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
-import { injectTerminalFont } from './lib/fonts.js';
+import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 import { voiceSessionController } from './lib/voice-session-controller.js';
 import { requestArtifactOpen } from './lib/artifact-open.js';
@@ -20,7 +20,7 @@ import { registerServiceWorker } from './lib/sw.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
-injectTerminalFont();
+injectTerminalFonts();
 
 // PWA service worker. No-op unless the app is served at the origin root —
 // see lib/sw.ts. Was an index.html snippet injected by vite-plugin-pwa.

@@ -73,12 +73,6 @@ func HarnessArgv(harness, prompt, goal string) ([]string, error) {
 	return sessiond.LaneArgv(harness, prompt, goal)
 }
 
-// checkPromptIsNotCommand rejects a prompt that a harness would read as a
-// slash command rather than as work. See the note in HarnessArgv.
-func checkPromptIsNotCommand(prompt string) error {
-	return sessiond.CheckPromptIsNotCommand(prompt)
-}
-
 // goalLintJSON projects stop-condition findings into the MCP reply shape.
 //
 // snake_case like every other key this server emits, and the QUOTE is carried

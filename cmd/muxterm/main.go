@@ -803,16 +803,6 @@ func runUninstall() error {
 	return nil
 }
 
-// runWithGracefulShutdown blocks until srv stops or a SIGINT/SIGTERM is received,
-// then performs a graceful shutdown. This consolidates the signal-handling pattern
-// shared by runLocal and runServe and is the canonical way to start the server
-// in a signal-aware manner from a *server.Server value.
-func runWithGracefulShutdown(srv *server.Server) error {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	return srv.ListenAndServe(ctx)
-}
-
 // openBrowser opens the given URL in the default browser. Non-fatal if it fails.
 func openBrowser(url string) {
 	var cmd string

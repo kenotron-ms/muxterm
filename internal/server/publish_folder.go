@@ -95,13 +95,6 @@ const (
 
 	// folderGitDeadline bounds the single `git check-ignore` batch call.
 	folderGitDeadline = 5 * time.Second
-
-	// folderNoTotalSizeLimit documents an absence. There is deliberately NO
-	// publish-time total-size cap: content is LIVE, so any total measured at
-	// publish is stale the instant it is recorded, and a limit that stops
-	// applying the moment the thing it bounds changes is not a limit. The
-	// real bound is publicationMaxBytes, enforced PER FILE on EVERY read.
-	folderNoTotalSizeLimit = true
 )
 
 // kindFolder is a publication whose subject is a directory tree rather than
