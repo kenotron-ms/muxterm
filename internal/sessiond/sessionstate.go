@@ -256,9 +256,10 @@ type SessionState struct {
 	UpdatedAt int64 `json:"updatedAt"`
 
 	// Reporting is launch/report delivery health, not harness run state.
-	Reporting      string `json:"reporting,omitempty"`
-	ReportingError string `json:"reportingError,omitempty"`
-	LastReportAt   int64  `json:"lastReportAt,omitempty"`
+	Reporting         string `json:"reporting,omitempty"`
+	ReportingCoverage string `json:"reportingCoverage,omitempty"`
+	ReportingError    string `json:"reportingError,omitempty"`
+	LastReportAt      int64  `json:"lastReportAt,omitempty"`
 }
 
 // MarshalJSON keeps the established internal scalar representation while

@@ -15,6 +15,9 @@ CADDY := $(shell command -v caddy 2>/dev/null || echo $(HOME)/go/bin/caddy)
 # build from a non-tag commit (the common dev case) still identifies itself
 # instead of silently falling back to main.go's "dev" default.
 DEV_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+DEV_LOCAL_NAME ?= dev-local
+DEV_LOCAL_ADDR ?= 127.0.0.1:8313
+DEV_LOCAL_COS_SESSION ?= muxterm-cos-dev
 
 # ---------------------------------------------------------------------------
 # DEV_ISOLATE -- the ONE mechanism that separates a dev instance from production.
@@ -153,16 +156,16 @@ dev: web-public
 # Requires: air (falls back to $(HOME)/go/bin/air if not on PATH).
 dev-local: web-public
 	@mkdir -p tmp
-	@$(call DEV_ISOLATE,dev-local,muxterm-cos-dev) \
+	@$(call DEV_ISOLATE,$(DEV_LOCAL_NAME),$(DEV_LOCAL_COS_SESSION)) \
 	cd $(WEB_SRC) && npx vite build --watch > ../tmp/dev-local-vite.out 2>&1 & VITE_PID=$$!; \
-	$(AIR) -c .air.local.toml & AIR_PID=$$!; \
+	$(AIR) -c .air.local.toml -build.args_bin "serve --addr $(DEV_LOCAL_ADDR) --no-auth" & AIR_PID=$$!; \
 	kill_tree() { \
 		for child in $$(pgrep -P "$$1" 2>/dev/null); do kill_tree "$$child"; done; \
 		kill -TERM "$$1" 2>/dev/null; \
 	}; \
 	trap 'kill_tree $$VITE_PID; kill -INT $$AIR_PID 2>/dev/null; wait $$AIR_PID 2>/dev/null; exit 0' EXIT INT TERM; \
 	echo "dev-local stack:"; \
-	echo "  muxterm-dev   http://127.0.0.1:8313  (air hot-reload)"; \
+	echo "  muxterm-dev   http://$(DEV_LOCAL_ADDR)  (air hot-reload)"; \
 	echo "  vite watch    logging to tmp/dev-local-vite.out"; \
 	echo "  runtime dir   $$XDG_RUNTIME_DIR  (isolated sessiond socket/log)"; \
 	echo "  data dir      $$XDG_DATA_HOME  (isolated crash-restore snapshot)"; \

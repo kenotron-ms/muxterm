@@ -97,13 +97,13 @@ func LaneArgv(harness, prompt, goal string) ([]string, error) {
 		// separator a lane whose opening turn happened to start with a dash
 		// would die instantly with a usage message in the pane.
 		//
-		// The notify override goes BEFORE the separator because it is an
-		// option; see CodexNotifyOverride (codex_notify.go) for what it buys
-		// and what it costs. It is spliced rather than appended so that an
-		// operator opt-out simply produces a shorter argv.
-		argv := []string{"codex"}
-		argv = append(argv, CodexNotifyOverride()...)
-		return append(argv, "--", prompt), nil
+		// Route Operator/spawn-lane starts through the same wrapper as manual
+		// launches so both receive the identical invocation-scoped hook layer.
+		self, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("resolve muxterm wrapper: %w", err)
+		}
+		return []string{self, "codex", "--", prompt}, nil
 
 	case HarnessAmplifier:
 		if goal != "" {

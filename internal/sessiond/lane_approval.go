@@ -23,6 +23,12 @@ func ApplyLaneApproval(argv []string, override string) ([]string, error) {
 		return argv, nil
 	}
 	harness := filepath.Base(argv[0])
+	prefix := 1
+	wrapped := strings.HasPrefix(harness, "muxterm") && len(argv) > 1 && (argv[1] == HarnessCodex || argv[1] == HarnessClaude)
+	if wrapped {
+		harness = argv[1]
+		prefix = 2
+	}
 	if harness != HarnessCodex && harness != HarnessClaude {
 		if override != "" {
 			return nil, fmt.Errorf("lanes.approval: %s has no approval translation", harness)
@@ -45,7 +51,7 @@ func ApplyLaneApproval(argv []string, override string) ([]string, error) {
 	}
 	// Reject ambiguous raw launch options instead of claiming muxterm owns a
 	// policy that a competing CLI option/profile/remote server could override.
-	for i := 1; i < len(argv); i++ {
+	for i := prefix; i < len(argv); i++ {
 		arg := argv[i]
 		if arg == "--" {
 			break
@@ -61,7 +67,7 @@ func ApplyLaneApproval(argv []string, override string) ([]string, error) {
 			return nil, fmt.Errorf("lanes.approval: unsupported competing launch option %q", arg)
 		}
 	}
-	path, err := exec.LookPath(argv[0])
+	path, err := exec.LookPath(harness)
 	if err != nil {
 		return nil, fmt.Errorf("lanes.approval: %w", err)
 	}
@@ -85,7 +91,7 @@ func ApplyLaneApproval(argv []string, override string) ([]string, error) {
 			flags = []string{"-c", "approval_policy=never", "-c", "sandbox_mode=danger-full-access"}
 		}
 	case HarnessClaude:
-		if version != "2.1.277 (Claude Code)" {
+		if version != "2.1.280 (Claude Code)" {
 			return nil, approvalVersionError(harness, version)
 		}
 		flags = []string{"--permission-mode", "default"}
@@ -95,6 +101,10 @@ func ApplyLaneApproval(argv []string, override string) ([]string, error) {
 	}
 	if _, err := approvalProbe(path, append(append([]string{}, flags...), "--help")...); err != nil {
 		return nil, err
+	}
+	if wrapped {
+		result := append([]string{argv[0], argv[1]}, flags...)
+		return append(result, argv[2:]...), nil
 	}
 	result := append([]string{path}, flags...)
 	return append(result, argv[1:]...), nil
