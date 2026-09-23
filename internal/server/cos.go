@@ -1390,25 +1390,6 @@ func (c *Client) sendCosClearResult(ok bool, removed, kept int, errMsg string) {
 	}
 }
 
-// sendCosClearRefusal adds a machine-readable code without changing the
-// established count-carrying clear-result shape for legacy sidecar failures.
-func (c *Client) sendCosClearRefusal(code, errMsg string) {
-	frame := struct {
-		Type  string `json:"type"`
-		OK    bool   `json:"ok"`
-		Code  string `json:"code"`
-		Error string `json:"error"`
-	}{Type: cosTypeClearResult, Code: code, Error: errMsg}
-	data, err := json.Marshal(frame)
-	if err != nil {
-		log.Printf("cos: encode clear refusal: %v", err)
-		return
-	}
-	if err := c.writeText(data); err != nil {
-		log.Printf("cos: clear refusal write error: %v", err)
-	}
-}
-
 // cosHistoryFrame encodes one replay frame.
 //
 // The turns array is forwarded VERBATIM, for the same reason cos-event is: it

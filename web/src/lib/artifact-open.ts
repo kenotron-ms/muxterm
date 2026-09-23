@@ -74,22 +74,6 @@ export function requestArtifactOpen(path: string): void {
   for (const fn of listeners) fn({ kind: 'artifact', path: p });
 }
 
-/**
- * Present an already-received read-only document in the existing Viewer.
- * This is intentionally a one-process handoff rather than a generated file:
- * no filesystem write, URL, publication, or second applet is involved.
- */
-export function requestViewerDocument(document: ViewerDocument): void {
-  const title = document.title.trim();
-  if (title === '' || document.text === '') return;
-  const safe: ViewerDocument = Object.freeze({
-    title,
-    text: document.text,
-    subtitle: document.subtitle.trim(),
-  });
-  for (const fn of listeners) fn({ kind: 'document', document: safe });
-}
-
 /** Listen for open requests. Returns the unsubscribe. */
 export function onArtifactOpen(fn: Listener): () => void {
   listeners.add(fn);

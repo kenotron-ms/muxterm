@@ -13,7 +13,6 @@ import { SessiondType, SessiondErrorCode, type SessiondMessage } from '../types'
 import { WorkspaceMru } from './workspace-mru.js';
 import { chooseRecoveryTarget } from './workspace-recovery.js';
 import { currentLayoutMode } from './breakpoint.js';
-import { terminalRegistry } from './terminal-registry.js';
 import { voiceInputController } from './voice-input-controller.js';
 
 const LAST_WS_KEY = 'muxterm.lastWorkspaceId';

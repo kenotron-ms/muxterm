@@ -17,7 +17,6 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebFontsAddon } from '@xterm/addon-web-fonts';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { paletteAnsiArray, resolvePalette } from './theme.js';
 import { muxLog } from './mux-log.js';
 import { TERMINAL_FONT_FAMILY } from './fonts.js';
@@ -25,31 +24,6 @@ import { ansiFromXterm256, nearestAnsi } from './ansi-approx.js';
 import { cropToTile } from './preview-tile.js';
 import type { PreviewTile, SourceCell, TileSource } from './preview-tile.js';
 
-/**
- * Ensure xterm.js's stylesheet is present in the root node that actually
- * contains the terminal element. xterm renders inside whatever shadow root
- * (or document) hosts the dockview panel; WITHOUT its stylesheet, xterm's
- * internal helper elements (.xterm-helpers, .xterm-char-measure-element,
- * .xterm-helper-textarea) are not position/visibility-hidden and leak into
- * view as garbled runs of $ and ~.
- *
- * Injecting at attach time using the host element's OWN getRootNode()
- * guarantees the stylesheet lands in the exact root where the terminal lives —
- * no reliance on a parent component's render-root timing.
- */
-const XTERM_STYLE_ID = 'xterm-base-css';
-function ensureXtermCss(node: Node): void {
-  const root = node.getRootNode();
-  const target: ShadowRoot | Document =
-    root instanceof ShadowRoot ? root : document;
-  // For a Document target, styles live in <head>.
-  const host: ParentNode = target instanceof ShadowRoot ? target : document.head;
-  if ((host as ParentNode).querySelector(`#${XTERM_STYLE_ID}`)) return;
-  const style = document.createElement('style');
-  style.id = XTERM_STYLE_ID;
-  style.textContent = xtermCss;
-  (host as Node).appendChild(style);
-}
 import { serializeSnapshot } from './snapshot.js';
 import type { StructuredSnapshot, SnapshotSource } from './snapshot.js';
 import type { ResolvedConfig } from './config.js';

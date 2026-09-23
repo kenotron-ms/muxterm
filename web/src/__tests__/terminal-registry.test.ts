@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 // terminal-registry is a module-level singleton — import it directly.
 // @xterm/xterm is aliased to setup.ts mock (see vite.config.ts),
 // so Terminal here is the mock class with getWrittenData() / simulateInput() etc.
-import { terminalRegistry, buildTerminalConfig, configureTerminals } from '../lib/terminal-registry.js';
+import { terminalRegistry, buildTerminalConfig } from '../lib/terminal-registry.js';
 import type { PaneHandlers } from '../lib/terminal-registry.js';
 import { DEFAULT_RESOLVED_CONFIG } from '../lib/config.js';
 import { resolvePalette } from '../lib/theme.js';
