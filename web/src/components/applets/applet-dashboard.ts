@@ -16,40 +16,34 @@
  *      so an unseen tab can still notice that a lane went blocked. The
  *      argument for it, and its cost, are on _onFleet.
  *
- *   2. IT OWNS ITS OWN CONTROL. cards|tiles has now moved twice, in one
- *      direction: out of the surface's topbar, where it was the only control
- *      there and meant nothing to anything but the fleet; then out of the
- *      applet host's rail, which was the same mistake one row lower. It is
- *      rendered HERE, above the fleet it reshapes, from this file's styles --
- *      the applet owns what it shows, the host owns only which applet you are
- *      looking at (lib/applet-registry.ts).
+ *   2. IT RENDERS ONE SESSION CARD. The old cards|tiles choice changed only
+ *      whether a terminal-text thumbnail was appended to the same metadata
+ *      strip. It did not represent a second object or workflow, so that
+ *      distinction is gone. A session now has one heading/body/disclosure
+ *      anatomy at every width.
  *
  *   3. IT KEEPS THE SHEET'S JOB. Portrait puts the applet HOST inside
  *      <mux-cos>'s bottom sheet, so this element is the same one the desktop
- *      mounts, in a shorter container, told `narrow`. That is what suppresses
- *      terminal thumbnails -- a tile needs width to say anything. It used to
- *      be a separate `insheet` flag on a SECOND instance of this element that
- *      the sheet mounted by tag; the flag went when the second instance did,
- *      because "I am in the sheet" and "I am on a phone" were never two facts.
+ *      mounts, in a shorter container, told `narrow`. It used to be a separate
+ *      `insheet` flag on a SECOND instance of this element that the sheet
+ *      mounted by tag; the flag went when the second instance did, because
+ *      "I am in the sheet" and "I am on a phone" were never two facts.
  *
  * TOKENS ARE NOT RE-DECLARED. --ink-*, --edge, --surface, --need/--work/--ok/
  * --fail, --mono and the --r/--s/--t/--lh scales are all declared on
  * <mux-cos>'s :host, and custom properties inherit into shadow roots
  * (theme.ts:349), so they arrive here for free and cannot drift. Only
- * --meta-h/--thumb-h are declared below, because they are not theme at all --
- * they are THIS grid's fixed-height contract, and they belong with the grid.
+ * The card-specific geometry stays local to this shadow root.
  */
 
 import { LitElement, html, css, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { LayoutGrid, Rows3 } from 'lucide';
-import { icon } from '../../lib/icons.js';
+import { LayoutGrid } from 'lucide';
 import {
   registerApplet,
   type AppletAttentionDetail,
   type AppletElement,
 } from '../../lib/applet-registry.js';
-import { appletControlStyles, appletToggle } from '../../lib/applet-controls.js';
 import { homeSessions } from '../../lib/home-sessions.js';
 import {
   HOME_GROUPS,
@@ -61,54 +55,7 @@ import {
   type HomeGroup,
   type SessionState,
 } from '../../lib/session-state.js';
-import { tileLinesFor } from '../../lib/home-tile.js';
 import type { SessiondMessage, SessionTranscriptTurn } from '../../types.js';
-
-/** Which way the fleet draws itself. Desktop only -- portrait is cards. */
-export type FleetView = 'cards' | 'tiles';
-
-/**
- * localStorage, not the server config -- mux-home's VIEW_KEY reasoning
- * verbatim: this is a per-eyeball display preference with no server-side
- * meaning, and config.toml would make it machine-wide.
- *
- * NAMESPACED under the applet that owns it. The old key was flat
- * ('muxterm.dashboard.fleetView'), which was fine while the Dashboard was the
- * whole surface and stops being fine the moment a second applet wants a
- * preference of its own -- at which point the flat spelling is already a
- * convention and every later key inherits the ambiguity. Renaming it now,
- * while there is exactly one, costs a five-line migration; renaming it later
- * costs an argument.
- */
-const VIEW_KEY = 'muxterm.applet.dashboard.view';
-
-/** The pre-applet spelling. Read once, rewritten, and removed. */
-const LEGACY_VIEW_KEY = 'muxterm.dashboard.fleetView';
-
-function loadView(): FleetView {
-  try {
-    const stored = localStorage.getItem(VIEW_KEY);
-    if (stored === 'tiles' || stored === 'cards') return stored;
-    // ONE-TIME MIGRATION: whoever had picked tiles keeps tiles.
-    const legacy = localStorage.getItem(LEGACY_VIEW_KEY);
-    if (legacy === 'tiles' || legacy === 'cards') {
-      localStorage.setItem(VIEW_KEY, legacy);
-      localStorage.removeItem(LEGACY_VIEW_KEY);
-      return legacy;
-    }
-  } catch {
-    /* private mode / storage disabled: still usable, just not sticky */
-  }
-  return 'cards';
-}
-
-function saveView(v: FleetView): void {
-  try {
-    localStorage.setItem(VIEW_KEY, v);
-  } catch {
-    /* not sticky; not fatal */
-  }
-}
 
 /**
  * The group headings, in the mockup's words.
@@ -156,10 +103,6 @@ function age(updatedAt: number, nowSec: number): string {
   return `${Math.floor(d / 86400)}d`;
 }
 
-/** Thumbnail geometry. Six lines is what fits the 84px thumb strip. */
-const THUMB_COLS = 44;
-const THUMB_ROWS = 6;
-
 @customElement('applet-dashboard')
 export class AppletDashboard extends LitElement implements AppletElement {
   /**
@@ -178,13 +121,6 @@ export class AppletDashboard extends LitElement implements AppletElement {
   /** Deep-link target. Nothing in the fleet defines one yet; see updated(). */
   @property({ attribute: false }) target: string | null = null;
 
-  /**
-   * Cards or tiles. Reflected to the host so the grid's minmax and the thumb
-   * strip are pure CSS -- the segmented control writes ONE attribute and the
-   * layout follows, rather than every card re-rendering to a different shape.
-   */
-  @property({ type: String, reflect: true }) view: FleetView = loadView();
-
   /** Bumped by the homeSessions subscription, and only while active. */
   @state() private _fleetVersion = 0;
   @state() private _detailSessionId: string | null = null;
@@ -196,6 +132,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
   @state() private _transcriptArchived = false;
   @state() private _transcriptDetached = false;
   @state() private _transcriptTruncated = false;
+  @state() private _expandedTodo: string | null = null;
 
   private _unsubFleet: (() => void) | null = null;
 
@@ -215,9 +152,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
    */
   private _now = Math.floor(Date.now() / 1000);
 
-  static styles = [
-    appletControlStyles,
-    css`
+  static styles = css`
     *,
     *::before,
     *::after {
@@ -490,8 +425,200 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .transcript li { display: grid; gap: var(--s-1); border-left: 2px solid var(--edge); padding-left: var(--s-3); }
     .transcript b { color: var(--ink-3); font-size: 10px; text-transform: uppercase; }
     .transcript span { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-1); }
-  `,
-  ];
+
+    /* One fleet object, with actual card anatomy. The former tiles mode was
+       this same metadata strip plus a terminal thumbnail; it did not change
+       the session model or the available actions, so the meaningless toggle
+       and its second geometry are intentionally gone. */
+    .grid,
+    :host([view='tiles']) .grid {
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: var(--s-5);
+    }
+    .card,
+    :host([view='tiles']) .card {
+      height: auto;
+      min-height: 154px;
+      display: block;
+      overflow: hidden;
+      border: 1px solid var(--edge);
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: 0 8px 22px color-mix(in srgb, #000 22%, transparent);
+      cursor: default;
+    }
+    .card.work { border-color: color-mix(in srgb, var(--work) 38%, var(--edge)); }
+    .card.need { border-color: color-mix(in srgb, var(--need) 45%, var(--edge)); }
+    .card.fail { border-color: color-mix(in srgb, var(--fail) 45%, var(--edge)); }
+    .card.done { border-color: color-mix(in srgb, var(--ok) 35%, var(--edge)); }
+    .card-head {
+      height: 54px;
+      padding: 10px var(--s-5);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 24px;
+      gap: var(--s-4);
+      align-items: center;
+      border-bottom: 1px solid var(--edge);
+      background: color-mix(in srgb, var(--chrome-raised) 72%, var(--surface));
+    }
+    .card-open {
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      background: none;
+      text-align: left;
+      color: inherit;
+      cursor: pointer;
+      display: grid;
+      gap: 3px;
+    }
+    .card .n,
+    .card .m,
+    .card .g {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .card.work .n { font-weight: 700; }
+    .status,
+    .card-close {
+      grid-column: 2;
+      grid-row: 1;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      place-items: center;
+    }
+    .status {
+      display: grid;
+      color: var(--edge);
+      background: color-mix(in srgb, currentColor 14%, transparent);
+    }
+    .work .status { color: var(--work); }
+    .need .status { color: var(--need); }
+    .fail .status { color: var(--fail); }
+    .done .status { color: var(--ok); }
+    .card-close {
+      display: none;
+      border: 0;
+      background: var(--chrome-hover);
+      color: var(--ink-2);
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .card:has(.card-close):hover .status { display: none; }
+    .card:hover .card-close { display: grid; }
+    .card-body { padding: var(--s-5); }
+    .card .g {
+      min-height: 36px;
+      white-space: normal;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .progress {
+      display: flex;
+      align-items: center;
+      gap: var(--s-4);
+      margin-top: var(--s-4);
+    }
+    .card .frac { flex: none; margin: 0; font-weight: 600; }
+    .track {
+      height: 4px;
+      flex: 1;
+      overflow: hidden;
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--ink-3) 22%, transparent);
+    }
+    .track i { display: block; height: 100%; background: currentColor; }
+    .work .track { color: var(--work); }
+    .need .track { color: var(--need); }
+    .fail .track { color: var(--fail); }
+    .done .track { color: var(--ok); }
+    .todo-toggle {
+      width: 100%;
+      margin-top: var(--s-4);
+      padding: var(--s-4) 0 0;
+      border: 0;
+      border-top: 1px solid var(--edge);
+      background: none;
+      color: var(--ink-2);
+      display: flex;
+      justify-content: space-between;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .chevron { transition: transform var(--dur) ease; }
+    .todo-toggle[aria-expanded='true'] .chevron { transform: rotate(180deg); }
+    .todo-list {
+      list-style: none;
+      margin: var(--s-4) 0 0;
+      padding: 0;
+      display: grid;
+      gap: var(--s-3);
+      font-size: 11px;
+    }
+    .todo-list li { display: grid; grid-template-columns: 14px 1fr; gap: var(--s-2); color: var(--ink-3); }
+    .todo-list .complete { text-decoration: line-through; }
+    .todo-list .current { color: var(--ink-1); font-weight: 600; }
+
+    /* Drill-in is a two-part workspace, not the compact card stretched wide. */
+    .detail {
+      padding: 0;
+      border: 1px solid var(--edge);
+      border-radius: 10px;
+      background: var(--surface);
+      overflow: hidden;
+      box-shadow: 0 16px 42px color-mix(in srgb, #000 28%, transparent);
+    }
+    .detail-head {
+      min-height: 58px;
+      padding: var(--s-5) var(--s-6);
+      align-items: center;
+      background: var(--chrome-raised);
+      border-bottom: 1px solid var(--edge);
+      font-size: 14px;
+    }
+    .detail-head > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail-head > span:last-child { flex: none; display: flex; align-items: center; gap: var(--s-3); }
+    .detail-head .open-terminal {
+      padding: var(--s-3) var(--s-5);
+      border: 1px solid color-mix(in srgb, var(--work) 60%, var(--edge));
+      border-radius: var(--r-ctl);
+      background: color-mix(in srgb, var(--work) 14%, var(--surface));
+      color: var(--ink-1);
+      font-weight: 600;
+    }
+    .detail-head .detail-close { width: 28px; height: 28px; font-size: 17px; }
+    .detail-main { display: grid; grid-template-columns: minmax(210px, .72fr) minmax(360px, 1.6fr); }
+    .detail-summary { padding: var(--s-6); border-right: 1px solid var(--edge); }
+    .detail-summary dl { margin-top: 0; }
+    .history { padding: var(--s-6); min-width: 0; }
+    .transcript-head { margin-top: 0; }
+    .history-actions { display: flex; align-items: center; gap: var(--s-3); }
+    .history-refresh { color: var(--ink-3) !important; padding: var(--s-2) var(--s-3) !important; }
+    .transcript { max-height: 22rem; gap: var(--s-4); }
+    .transcript li {
+      grid-template-columns: 54px minmax(0, 1fr);
+      gap: var(--s-4);
+      border-left: 0;
+      padding: 0;
+      align-items: start;
+    }
+    .transcript b { padding-top: var(--s-2); }
+    .transcript span { padding: var(--s-3) var(--s-4); border: 1px solid var(--edge); border-radius: var(--r-ctl); background: var(--chrome-raised); }
+    .archive-row { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--edge); text-align: right; }
+    .archive-action { color: color-mix(in srgb, var(--fail) 60%, var(--ink-3)) !important; }
+    @media (max-width: 700px) {
+      .grid, :host([view='tiles']) .grid { grid-template-columns: 1fr; }
+      .detail-main { grid-template-columns: 1fr; }
+      .detail-summary { border-right: 0; border-bottom: 1px solid var(--edge); }
+    }
+  `;
 
   // -------------------------------------------------------------------------
   // The inactive rule, and its one exception
@@ -627,20 +754,6 @@ export class AppletDashboard extends LitElement implements AppletElement {
   // -------------------------------------------------------------------------
 
   /**
-   * Switch the grid's shape.
-   *
-   * No event: the control that calls this is rendered by THIS element, in
-   * THIS shadow root, so `view` being a reactive property is the whole of the
-   * update path. Telling the host would be telling it something it has no use
-   * for.
-   */
-  setView(v: FleetView): void {
-    if (this.view === v) return;
-    this.view = v;
-    saveView(v);
-  }
-
-  /**
    * One session. Activation dispatches `home-open` -- byte-identical to what
    * <mux-home> fires, so app.ts's one handler opens the workspace and focuses
    * the pane for either surface. bubbles AND composed, because it now has two
@@ -673,6 +786,15 @@ export class AppletDashboard extends LitElement implements AppletElement {
         composed: true,
       }),
     );
+  }
+
+  private _closeTerminal(s: SessionState): void {
+    if (s.paneId === null || s.workspaceId === null) return;
+    this.dispatchEvent(new CustomEvent('pane-close', {
+      detail: { targetKind: 'pane', workspaceId: s.workspaceId, paneId: s.paneId },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   private _requestTranscript(sessionId: string): void {
@@ -711,7 +833,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
   // -------------------------------------------------------------------------
 
   override render(): TemplateResult {
-    return html`<div class="body">${this._renderControls()}${this._renderDetail()}${this._renderFleet()}</div>`;
+    return html`<div class="body">${this._renderDetail()}${this._renderFleet()}</div>`;
   }
 
   private _renderDetail(): TemplateResult | typeof nothing {
@@ -719,48 +841,30 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const s = homeSessions.sessions.find((row) => row.sessionId === this._detailSessionId);
     if (!s) return nothing;
     return html`<section class="detail" aria-label="Session detail">
-      <div class="detail-head"><span>${s.name}</span><span>${s.paneId !== null && s.workspaceId !== null ? html`<button type="button" @click="${() => this._openTerminal(s)}">Open terminal</button>` : nothing}<button type="button" aria-label="Close session detail" @click="${() => { this._detailSessionId = null; }}">×</button></span></div>
-      <dl>
-        <dt>session</dt><dd>${s.sessionId}</dd>
-        <dt>terminal</dt><dd>${s.paneId === null ? 'no terminal' : `${s.workspaceId} · p${s.paneId}`}</dd>
-        ${s.project ? html`<dt>project</dt><dd>${s.project}</dd>` : nothing}
-        ${s.reporting ? html`<dt>reporting</dt><dd>${s.reporting}${s.lastReportAt ? ` · ${age(s.lastReportAt, this._now)}` : ''}</dd>` : nothing}
-        ${s.reportingCoverage ? html`<dt>coverage</dt><dd>${s.reportingCoverage}</dd>` : nothing}
-        ${s.reportingError ? html`<dt>reporting error</dt><dd>${s.reportingError}</dd>` : nothing}
-      </dl>
-      <div class="transcript-head"><span>History${this._transcriptMeta ? ` · ${this._transcriptMeta}` : ''}</span><span><button type="button" @click="${() => this._setArchived(s.sessionId)}">${this._transcriptArchived ? 'Unarchive' : 'Archive'}</button><button type="button" @click="${() => this._requestTranscript(s.sessionId)}">Refresh</button></span></div>
-      ${this._transcriptLoading ? html`<p class="transcript-note">Importing bounded native history…</p>` : nothing}
-      ${this._transcriptError ? html`<p class="transcript-error">${this._transcriptError}</p>` : nothing}
-      ${!this._transcriptLoading && !this._transcriptError && this._transcriptTurns.length === 0 ? html`<p class="transcript-note">No readable turns in the imported tail.</p>` : nothing}
-      <ol class="transcript">${this._transcriptTurns.map((turn) => html`<li><b>${turn.role}${turn.tool ? ` · ${turn.tool}` : ''}</b><span>${turn.text ?? ''}</span></li>`)}</ol>
-    </section>`;
-  }
-
-  /**
-   * THIS APPLET'S OWN CONTROLS, in this applet's own body.
-   *
-   * Suppressed on a phone: portrait is cards, always (see `narrow`), so the
-   * control would offer a choice that portrait does not honour.
-   */
-  private _renderControls(): TemplateResult | typeof nothing {
-    if (this.narrow) return nothing;
-    return html`
-      <div class="controls" role="group" aria-label="Fleet view">
-        ${appletToggle({
-          label: html`${icon(Rows3, { size: 12 })} cards`,
-          on: this.view === 'cards',
-          title: 'One row per session, with what it is doing',
-          onToggle: () => this.setView('cards'),
-        })}
-        ${appletToggle({
-          label: html`${icon(LayoutGrid, { size: 12 })} tiles`,
-          on: this.view === 'tiles',
-          title: 'Add a live thumbnail of each terminal',
-          onToggle: () => this.setView('tiles'),
-        })}
+      <div class="detail-head"><span>${s.name}</span><span>${s.paneId !== null && s.workspaceId !== null ? html`<button class="open-terminal" type="button" @click="${() => this._openTerminal(s)}">Open terminal ↗</button>` : nothing}<button class="detail-close" type="button" aria-label="Close session detail" @click="${() => { this._detailSessionId = null; }}">×</button></span></div>
+      <div class="detail-main">
+        <aside class="detail-summary">
+          <dl>
+            <dt>session</dt><dd>${s.sessionId}</dd>
+            <dt>terminal</dt><dd>${s.paneId === null ? 'no terminal' : `${s.workspaceId} · p${s.paneId}`}</dd>
+            ${s.todo ? html`<dt>progress</dt><dd><strong>${s.todo.done} of ${s.todo.total} complete</strong></dd>` : nothing}
+            ${s.todo?.current ? html`<dt>current</dt><dd>${s.todo.current}</dd>` : nothing}
+            ${s.project ? html`<dt>project</dt><dd>${s.project}</dd>` : nothing}
+            ${s.reporting ? html`<dt>reporting</dt><dd>${s.reporting}${s.lastReportAt ? ` · ${age(s.lastReportAt, this._now)}` : ''}</dd>` : nothing}
+            ${s.reportingCoverage ? html`<dt>coverage</dt><dd>${s.reportingCoverage}</dd>` : nothing}
+            ${s.reportingError ? html`<dt>reporting error</dt><dd>${s.reportingError}</dd>` : nothing}
+          </dl>
+        </aside>
+        <section class="history">
+          <div class="transcript-head"><span>History${this._transcriptMeta ? ` · ${this._transcriptMeta}` : ''}</span><span class="history-actions"><button class="history-refresh" type="button" @click="${() => this._requestTranscript(s.sessionId)}">↻ Refresh</button></span></div>
+          ${this._transcriptLoading ? html`<p class="transcript-note">Importing bounded native history…</p>` : nothing}
+          ${this._transcriptError ? html`<p class="transcript-error">${this._transcriptError}</p>` : nothing}
+          ${!this._transcriptLoading && !this._transcriptError && this._transcriptTurns.length === 0 ? html`<p class="transcript-note">No readable turns in the imported tail.</p>` : nothing}
+          <ol class="transcript">${this._transcriptTurns.map((turn) => html`<li><b>${turn.role}${turn.tool ? ` · ${turn.tool}` : ''}</b><span>${turn.text ?? ''}</span></li>`)}</ol>
+          <div class="archive-row"><button class="archive-action" type="button" @click="${() => this._setArchived(s.sessionId)}">${this._transcriptArchived ? 'Unarchive session' : 'Archive session'}</button></div>
+        </section>
       </div>
-      <div class="controls-rule"></div>
-    `;
+    </section>`;
   }
 
   /**
@@ -833,30 +937,36 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const frac = todoFraction(s);
     const line = progressLine(s);
     const pct = todoPercent(s);
-    // Portrait is cards only. Gated here as well as in CSS so a phone never
-    // even builds the six lines of text it would not draw.
-    const thumb = !this.narrow && this.view === 'tiles';
+    const expanded = this._expandedTodo === s.sessionId;
+    const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
     return html`
-      <button
-        type="button"
-        class="card ${stateClass(s)}"
-        title="${s.name}"
-        @click="${() => this._openPane(s)}"
-      >
-        <div class="meta">
-          <div class="n">${s.label || s.name}</div>
-          <div class="m">${bits.join(' \u00b7 ')}</div>
-          ${line
-            ? html`<div class="g">${frac
-                ? html`<span class="frac" aria-label="${frac} tasks done">${frac}</span>`
-                : nothing}${line}</div>`
-            : nothing}
+      <article class="card ${stateClass(s)} ${expanded ? 'expanded' : ''}">
+        <header class="card-head">
+          <button class="card-open" type="button" title="${s.name}" @click="${() => this._openPane(s)}">
+            <span class="n">${s.label || s.name}</span>
+            <span class="m">${bits.join(' \u00b7 ')}</span>
+          </button>
+          <span class="status" aria-hidden="true">●</span>
+          ${s.paneId !== null && s.workspaceId !== null ? html`
+            <button class="card-close" type="button" aria-label="Close ${s.label || s.name}" title="Close terminal" @click="${() => this._closeTerminal(s)}">×</button>
+          ` : nothing}
+        </header>
+        <div class="card-body">
+          <div class="g">${line || 'No current activity reported.'}</div>
+          ${frac ? html`
+            <div class="progress"><span class="frac" aria-label="${frac} tasks done">${frac}</span><span class="track"><i style="width:${pct}%"></i></span></div>
+            <button class="todo-toggle" type="button" aria-expanded="${expanded}" @click="${() => { this._expandedTodo = expanded ? null : s.sessionId; }}">
+              <span>Todo list</span><span class="chevron">⌄</span>
+            </button>
+            ${expanded ? html`<ul class="todo-list">
+              ${s.todo!.done > 0 ? html`<li class="complete"><span>✓</span><span>${s.todo!.done} completed</span></li>` : nothing}
+              ${s.todo!.current ? html`<li class="current"><span>●</span><span>${s.todo!.current}</span></li>` : nothing}
+              ${remaining > 0 ? html`<li><span>○</span><span>${remaining} remaining</span></li>` : nothing}
+              ${s.todo!.done === s.todo!.total ? html`<li class="current"><span>✓</span><span>All tasks complete</span></li>` : nothing}
+            </ul>` : nothing}
+          ` : nothing}
         </div>
-        ${frac ? html`<div class="bar"><i style="width:${pct}%"></i></div>` : nothing}
-        ${thumb
-          ? html`<pre class="thumb">${tileLinesFor(s, THUMB_COLS, THUMB_ROWS).join('\n')}</pre>`
-          : nothing}
-      </button>
+      </article>
     `;
   }
 }
