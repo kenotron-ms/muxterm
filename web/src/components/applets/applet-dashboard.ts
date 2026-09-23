@@ -731,7 +731,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
       <div class="transcript-head"><span>History${this._transcriptMeta ? ` · ${this._transcriptMeta}` : ''}</span><span><button type="button" @click="${() => this._setArchived(s.sessionId)}">${this._transcriptArchived ? 'Unarchive' : 'Archive'}</button><button type="button" @click="${() => this._requestTranscript(s.sessionId)}">Refresh</button></span></div>
       ${this._transcriptLoading ? html`<p class="transcript-note">Importing bounded native history…</p>` : nothing}
       ${this._transcriptError ? html`<p class="transcript-error">${this._transcriptError}</p>` : nothing}
-      ${!this._transcriptLoading && this._transcriptTurns.length === 0 ? html`<p class="transcript-note">No readable turns in the imported tail.</p>` : nothing}
+      ${!this._transcriptLoading && !this._transcriptError && this._transcriptTurns.length === 0 ? html`<p class="transcript-note">No readable turns in the imported tail.</p>` : nothing}
       <ol class="transcript">${this._transcriptTurns.map((turn) => html`<li><b>${turn.role}${turn.tool ? ` · ${turn.tool}` : ''}</b><span>${turn.text ?? ''}</span></li>`)}</ol>
     </section>`;
   }

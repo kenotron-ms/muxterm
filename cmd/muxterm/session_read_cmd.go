@@ -92,7 +92,7 @@ func runSessionRead(args []string) error {
 			return err
 		}
 		if _, err := mcp.StoreTranscriptJournal(row, tr); err != nil {
-			return fmt.Errorf("store durable transcript journal: %w", err)
+			fmt.Fprintf(os.Stderr, "warning: transcript read succeeded but durable journal storage failed: %v\n", err)
 		}
 		if *asJSON {
 			turns := tr.Turns
