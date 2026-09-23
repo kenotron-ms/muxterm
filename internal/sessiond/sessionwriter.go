@@ -72,6 +72,12 @@ func ValidSessionID(id string) bool {
 // daemon's to fill during the pane join; accepting them here would let a
 // producer assert a location it cannot possibly know.
 func WriteSessionSnapshot(row SessionState, pid int) (string, error) {
+	start, _ := processStartTime(pid)
+	sid, _ := processSessionID(pid)
+	return writeSessionSnapshot(row, pid, start, sid)
+}
+
+func writeSessionSnapshot(row SessionState, pid int, start uint64, sid int) (string, error) {
 	if !ValidSessionID(row.SessionID) {
 		return "", fmt.Errorf("invalid session id %q: must be 1-%d chars of [A-Za-z0-9._-] and not start with '.'", row.SessionID, maxSessionIDLen)
 	}
@@ -98,11 +104,9 @@ func WriteSessionSnapshot(row SessionState, pid int) (string, error) {
 	row.PaneID = 0
 	row.WorkspaceID = ""
 
-	start, _ := processStartTime(pid)
-	// Captured now, while pid is alive, because it is the only thing that can
+	// Captured by the producer while pid is alive, because it is the only thing that can
 	// place this row once the process is gone -- which is exactly when an
 	// ending most needs placing.
-	sid, _ := processSessionID(pid)
 	snap := sessionSnapshot{SessionState: row, V: sessionSnapshotVersion, PID: pid, PIDStart: start, SID: sid}
 	body, err := json.Marshal(snap)
 	if err != nil {

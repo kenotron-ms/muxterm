@@ -92,12 +92,17 @@ func runCodexNotify(args []string) error {
 		reportPID = os.Getppid()
 	}
 
-	path, err := sessiond.WriteSessionSnapshot(row, reportPID)
+	report := sessiond.NewCodexCompletionReport(row, notice.ThreadID, "codex:"+notice.ThreadID+":"+notice.TurnID+":complete", notice.TurnID, reportPID)
+	body, err := report.JSON()
+	if err != nil {
+		return codexNotifySkip("could not encode %s: %v", row.SessionID, err)
+	}
+	receipt, err := sessiond.QueueHookReport(body)
 	if err != nil {
 		return codexNotifySkip("could not publish %s: %v", row.SessionID, err)
 	}
 	if *verbose {
-		fmt.Printf("reported %s (%s, %s) pid %d -> %s\n", row.SessionID, row.State, row.Mode, reportPID, path)
+		fmt.Printf("queued %s (%s, %s) pid %d -> report %s\n", row.SessionID, row.State, row.Mode, reportPID, receipt.ReportID)
 	}
 	return nil
 }

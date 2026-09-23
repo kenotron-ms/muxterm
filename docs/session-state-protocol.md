@@ -8,6 +8,10 @@ Claude Code sessions, and a nightly shell script can appear in it side by side,
 because none of them talk to muxterm directly: each one writes a small JSON file
 into a spool directory, and the daemon reads that directory.
 
+Muxterm-owned harness launchers use the versioned `muxterm session hook-report`
+ingress described below. The snapshot format remains the compatibility contract
+for `session report` and existing producers while those producers migrate.
+
 This document is the contract for writing those files. It is a **public
 integration contract**, not an implementation detail — if you follow it, your
 tool appears in the fleet.
@@ -55,6 +59,26 @@ Run `muxterm session report --help` for the full flag list. Enum values are
 validated and a bad one is a loud non-zero exit — a producer that silently
 writes garbage is worse than one that errors, because the garbage is skipped by
 the reader with no explanation.
+
+---
+
+## Harness hooks: `muxterm session hook-report`
+
+Harness adapters write one JSON envelope (maximum 64 KiB) to stdin. The command
+atomically queues and fsyncs it under
+`$XDG_DATA_HOME/muxterm/agent-sessions/inbox/`, prints a `queued` receipt, and
+exits. The daemon consumes the inbox even with no browser connected, records an
+`accepted` or `rejected` receipt under `agent-sessions/receipts/`, and projects
+accepted state into the fleet. The durable registry is keyed by the local
+installation identity, harness, and native session ID; repeated event IDs are
+deduplicated.
+
+Required envelope fields are `v` (currently `2`), `harness`,
+`native_session_id`, `native_event`, normalized `event`, stable `event_id`, and
+RFC 3339 `observed_at`. `process`, `turn_id`, `run_id`, `set`, and `clear` are
+optional. Producers cannot set muxterm session, pane, workspace, goal, or origin
+identity. Unknown versions, fields, harnesses, and events are rejected and
+appear as reporting diagnostics in the fleet.
 
 ---
 
@@ -478,7 +502,7 @@ muxterm session report --session-id nightly-build --harness nightly-build \
 | Amplifier | in-process hook | `modules/hooks-muxterm-session` |
 | any tool | one-shot CLI | `muxterm session report` |
 | Claude Code | poller, on by default | `internal/sessiond/claude_adapter.go` |
-| Codex | turn-complete hook, on by default | `internal/sessiond/codex_notify.go` |
+| Codex | invocation-scoped turn-complete hook | `internal/sessiond/codex_notify.go` |
 
 Both third-party bridges are **on by default with an explicit opt-out**, because
 a fleet view that silently omits half the agents running on the machine is worse
@@ -510,18 +534,14 @@ codex -c notify=["<muxterm>","session","codex-notify"] -- <prompt>
 ```
 
 Codex appends one JSON document to that argv after each completed agent turn.
-`muxterm session codex-notify` translates it into a snapshot, and because Codex
+`muxterm session codex-notify` translates it into the common hook-report envelope,
+and because Codex
 spawns the hook as a **direct child of the codex process**, the ordinary
 pid-to-pane walk places the row with no special case.
 
-To report Codex sessions you start yourself, put the same program in
-`~/.codex/config.toml`:
-
-```toml
-notify = ["muxterm", "session", "codex-notify"]
-```
-
-A lane muxterm starts needs none of that. Note that `-c` **replaces** your own
+Use `muxterm codex` for an interactive session with reporting; muxterm does not
+edit `~/.codex/config.toml`. A lane muxterm starts needs no persistent setup.
+Note that `-c` **replaces** your own
 `notify` program for that lane's lifetime rather than appending to it — that is
 the cost of needing no setup, and `MUXTERM_CODEX_NOTIFY=0` is the way out.
 

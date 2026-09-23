@@ -178,6 +178,12 @@ export interface SessionState {
   pr?: number;
   /** Unix timestamp (seconds) of the last state change. */
   updatedAt: number;
+  /** Delivery health for the muxterm-owned hook path, separate from run state. */
+  reporting?: string;
+  /** Last rejected delivery or instrumentation diagnostic. */
+  reportingError?: string;
+  /** Unix timestamp of the last accepted native report. */
+  lastReportAt?: number;
 }
 
 /**
