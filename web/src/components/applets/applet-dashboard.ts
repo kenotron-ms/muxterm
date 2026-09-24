@@ -216,12 +216,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
       font-size: 22px;
       line-height: 1.2;
     }
-    .fleet-sub,
-    .fleet-hint {
+    .fleet-sub {
       color: var(--fleet-muted);
       font-size: 12px;
     }
-    .fleet-hint { font-size: 11px; }
     /* A phone is narrower than the padding was designed for: --s-6 on both
        sides of a 393px screen is 8% of it spent on nothing. */
     :host([narrow]) .body {
@@ -710,14 +708,18 @@ export class AppletDashboard extends LitElement implements AppletElement {
        measurements are the ledger's local design tokens: one anatomy shared
        by its heading, columns, rows and expanded detail. */
     :host {
-      --fleet-section-h: 30px;
-      --fleet-ledger-head-h: 25px;
-      --fleet-ledger-row-h: 36px;
+      --fleet-section-h: 42px;
+      --fleet-ledger-head-h: 27px;
+      --fleet-ledger-row-h: 46px;
       --fleet-ledger-gap: 8px;
       --fleet-action-size: 30px;
-      --fleet-ledger-tracks: 20px minmax(180px, 2.3fr) minmax(130px, 1.35fr) 78px 106px 92px 38px;
+      --fleet-ledger-tracks: minmax(0, 1.35fr) minmax(120px, .85fr) 58px 82px 100px 36px;
       --fleet-ledger-rule: color-mix(in srgb, var(--fleet-edge) 72%, transparent);
       --fleet-pr: color-mix(in srgb, var(--chrome-accent) 58%, var(--ink-1));
+    }
+    .body.dense {
+      --fleet-section-h: 38px;
+      --fleet-ledger-row-h: 39px;
     }
     .grp {
       min-height: var(--fleet-section-h);
@@ -734,10 +736,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .finished-toggle {
       width: 100%;
       margin-top: 10px;
-      padding: 8px 0 0;
-      border: 0;
-      border-top: 1px solid var(--fleet-edge);
-      background: none;
+      padding: 0 12px;
+      border: 1px solid var(--fleet-edge);
+      border-radius: 8px;
+      background: var(--fleet-raised-bottom);
       color: var(--fleet-muted);
       cursor: pointer;
       text-align: left;
@@ -746,6 +748,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .finished-toggle:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: 2px; }
     .finished-toggle .group-chevron {
       width: 13px;
+      margin-left: auto;
       color: color-mix(in srgb, var(--ink-2) 82%, transparent);
       font-size: 13px;
       line-height: 1;
@@ -753,7 +756,19 @@ export class AppletDashboard extends LitElement implements AppletElement {
     }
     .finished-toggle[aria-expanded='true'] .group-chevron { transform: rotate(90deg); }
 
-    .finished-ledger { border-top: 1px solid var(--fleet-edge); }
+    .finished-ledger {
+      overflow: hidden;
+      border: 1px solid var(--fleet-edge);
+      border-top: 0;
+      border-radius: 0 0 8px 8px;
+    }
+    .finished-toggle[aria-expanded='true'] { border-radius: 8px 8px 0 0; }
+    .finished-summary {
+      color: color-mix(in srgb, var(--fleet-muted) 78%, transparent);
+      font: 500 9px/1 var(--mono);
+      letter-spacing: 0;
+      text-transform: none;
+    }
     .ledger-columns,
     .ledger-row {
       display: grid;
@@ -767,27 +782,20 @@ export class AppletDashboard extends LitElement implements AppletElement {
       font: 700 9px/1 var(--mono);
       letter-spacing: .08em;
       text-transform: uppercase;
+      padding: 0 8px;
     }
     .ledger-row {
       min-height: var(--fleet-ledger-row-h);
       border-bottom: 1px solid var(--fleet-ledger-rule);
       color: color-mix(in srgb, var(--ink-2) 78%, transparent);
-      opacity: .78;
+      padding: 0 8px;
       cursor: pointer;
     }
     .ledger-row:hover,
     .ledger-row.open {
       background: color-mix(in srgb, var(--fleet-panel) 54%, transparent);
-      opacity: 1;
     }
     .ledger-row:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: -2px; }
-    .ledger-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--ok);
-      box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 11%, transparent);
-    }
     .ledger-title,
     .ledger-activity,
     .ledger-artifact,
@@ -815,7 +823,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .ledger-age { color: var(--fleet-muted); font: 9px/1 var(--mono); }
     .ledger-status,
     .ledger-close {
-      grid-column: 7;
+      grid-column: 6;
       grid-row: 1;
       justify-self: end;
       width: var(--fleet-action-size);
@@ -844,7 +852,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .ledger-row:hover .ledger-close { display: grid; }
     .ledger-detail {
       display: none;
-      grid-column: 2 / 7;
+      grid-column: 1 / 6;
       padding: 10px 12px 11px 0;
       color: color-mix(in srgb, var(--fleet-body) 82%, transparent);
       cursor: default;
@@ -895,27 +903,26 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .card-close { width: var(--fleet-action-size); height: var(--fleet-action-size); border-radius: 6px; }
 
     @container (max-width: 950px) {
-      :host { --fleet-ledger-tracks: 20px minmax(150px, 2fr) minmax(110px, 1.2fr) 70px 80px 34px; }
+      :host { --fleet-ledger-tracks: minmax(150px, 2fr) minmax(110px, 1.2fr) 70px 80px 34px; }
       .ledger-artifact-column,
       .ledger-artifact { display: none; }
       .ledger-status,
-      .ledger-close { grid-column: 6; }
-      .ledger-detail { grid-column: 2 / 6; }
+      .ledger-close { grid-column: 5; }
+      .ledger-detail { grid-column: 1 / 5; }
     }
     @media (max-width: 700px) {
       .grid, :host([view='tiles']) .grid { grid-template-columns: 1fr; }
       .detail-main { grid-template-columns: 1fr; }
       .detail-summary { border-right: 0; border-bottom: 1px solid var(--edge); }
-      .fleet-hint { display: none; }
       .ledger-columns { display: none; }
-      :host { --fleet-ledger-tracks: 20px minmax(0, 1fr) 68px 34px; }
+      :host { --fleet-ledger-tracks: minmax(0, 1fr) 68px 34px; }
       .ledger-activity,
       .ledger-artifact,
       .ledger-age { display: none; }
-      .ledger-progress { grid-column: 3; }
+      .ledger-progress { grid-column: 2; }
       .ledger-status,
-      .ledger-close { grid-column: 4; }
-      .ledger-detail { grid-column: 2 / 5; grid-template-columns: 1fr !important; }
+      .ledger-close { grid-column: 3; }
+      .ledger-detail { grid-column: 1 / 4; grid-template-columns: 1fr !important; }
     }
   `;
 
@@ -1139,10 +1146,9 @@ export class AppletDashboard extends LitElement implements AppletElement {
   override render(): TemplateResult {
     const sessions = homeSessions.sessions;
     const workspaces = new Set(sessions.map((s) => s.workspaceId).filter(Boolean)).size;
-    return html`<div class="body">
+    return html`<div class="body ${sessions.length >= 30 ? 'dense' : ''}">
       <header class="fleet-top">
         <div><h1>Fleet</h1><div class="fleet-sub">${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'} across ${workspaces} ${workspaces === 1 ? 'workspace' : 'workspaces'}</div></div>
-        <div class="fleet-hint">Click a card heading to inspect it</div>
       </header>
       ${this._renderDetail()}${this._renderFleet()}
     </div>`;
@@ -1256,15 +1262,20 @@ export class AppletDashboard extends LitElement implements AppletElement {
   }
 
   private _renderFinished(members: readonly SessionState[]): TemplateResult {
+    const pullRequests = members.filter((s) => Boolean(s.pr)).length;
+    const newestAge = members.reduce((latest, s) => Math.max(latest, s.updatedAt), 0);
+    const lastFinished = age(newestAge, this._now);
     return html`
       <button class="grp finished-toggle" type="button" aria-expanded="${this._finishedOpen}" @click="${this._toggleFinished}">
+        <span aria-hidden="true" style="color:var(--ok)">●</span>
+        <span>${members.length} finished ${members.length === 1 ? 'lane' : 'lanes'}</span>
+        <span class="finished-summary">${pullRequests} ${pullRequests === 1 ? 'pull request' : 'pull requests'}${lastFinished ? ` · last finished ${lastFinished} ago` : ''}</span>
         <span class="group-chevron" aria-hidden="true">›</span>
-        <span>Finished</span><span class="grp-count">· ${members.length}</span>
       </button>
       ${this._finishedOpen ? html`
         <div class="finished-ledger">
           <div class="ledger-columns" aria-hidden="true">
-            <span></span><span>Lane</span><span>Now</span><span>Todo</span><span class="ledger-artifact-column">Artifact</span><span>Age</span><span></span>
+            <span>Lane</span><span>Now</span><span>Todo</span><span class="ledger-artifact-column">Artifact</span><span>Age · model</span><span></span>
           </div>
           ${members.map((s) => this._renderFinishedRow(s))}
         </div>
@@ -1290,7 +1301,6 @@ export class AppletDashboard extends LitElement implements AppletElement {
           this._expandedFinished = open ? null : s.sessionId;
         }}"
       >
-        <span class="ledger-dot" aria-hidden="true"></span>
         <span class="ledger-title">${s.name}</span>
         <span class="ledger-activity">${progressLine(s) || s.doing || '—'}</span>
         <span class="ledger-progress">
