@@ -157,6 +157,9 @@ const (
 	TypeSessionTranscript           = "session-transcript"             // request: browser -> relay
 	TypeSessionTranscriptResult     = "session-transcript-result"      // reply: relay -> browser
 	TypeSessionArchive              = "session-archive"                // request: browser -> relay
+	TypeSessionClear                = "session-clear"                  // request: browser -> daemon
+	TypeSessionClearUndo            = "session-clear-undo"             // request: browser -> daemon
+	TypeSessionClearResult          = "session-clear-result"           // reply: daemon -> browser
 )
 
 // SessionTranscriptTurn is the bounded, readable projection stored in the
@@ -448,6 +451,7 @@ type Message struct {
 	TranscriptArchived  bool                    `json:"transcriptArchived,omitempty"`
 	TranscriptDetached  bool                    `json:"transcriptDetached,omitempty"`
 	Unchanged           bool                    `json:"unchanged,omitempty"`
+	UndoToken           string                  `json:"undoToken,omitempty"`
 
 	// SessionStateStatus is relay-only metadata for a merged TypeSessionState
 	// document. A direct daemon event leaves it empty; the browser relay writes

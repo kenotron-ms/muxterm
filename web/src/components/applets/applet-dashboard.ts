@@ -130,8 +130,14 @@ export class AppletDashboard extends LitElement implements AppletElement {
   @state() private _expandedTodo: string | null = null;
   @state() private _finishedOpen = false;
   @state() private _expandedFinished: string | null = null;
+  @state() private _hiddenFinished = new Set<string>();
+  @state() private _finishedUndo: Array<{ workspaceId: string; sessionId: string; token: string }> = [];
+  @state() private _finishedNotice = '';
 
   private _unsubFleet: (() => void) | null = null;
+  private _finishedNoticeTimer: number | null = null;
+  private _swipe: { session: SessionState; row: HTMLElement; startX: number; startY: number; dx: number; horizontal: boolean } | null = null;
+  private _suppressFinishedClick = false;
 
   private static readonly finishedOpenKey = 'muxterm:fleet:finished-open';
 
@@ -731,12 +737,23 @@ export class AppletDashboard extends LitElement implements AppletElement {
     }
     .grp:not(:first-child) { margin-top: 7px; }
     .grp-count { color: color-mix(in srgb, var(--fleet-muted) 62%, transparent); }
-    .finished-toggle {
+    .finished-header {
       width: 100%;
       margin-top: 10px;
       padding: 8px 0 0;
-      border: 0;
       border-top: 1px solid var(--fleet-edge);
+      display: flex;
+      align-items: center;
+    }
+    .finished-toggle {
+      min-width: 0;
+      min-height: var(--fleet-section-h);
+      padding: 0;
+      border: 0;
+      display: flex;
+      flex: 1;
+      align-items: center;
+      gap: var(--fleet-ledger-gap);
       background: none;
       color: var(--fleet-muted);
       cursor: pointer;
@@ -752,6 +769,20 @@ export class AppletDashboard extends LitElement implements AppletElement {
       transition: transform var(--dur) ease;
     }
     .finished-toggle[aria-expanded='true'] .group-chevron { transform: rotate(90deg); }
+    .finished-clear-all {
+      min-width: var(--fleet-action-size);
+      min-height: var(--fleet-action-size);
+      padding: 0 9px;
+      border: 0;
+      border-radius: 6px;
+      background: none;
+      color: var(--fleet-muted);
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .finished-clear-all:hover { background: var(--chrome-hover); color: var(--ink-1); }
+    .finished-clear-all:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: 1px; }
 
     .finished-ledger { border-top: 1px solid var(--fleet-edge); }
     .ledger-columns,
@@ -768,12 +799,36 @@ export class AppletDashboard extends LitElement implements AppletElement {
       letter-spacing: .08em;
       text-transform: uppercase;
     }
+    .ledger-row-shell {
+      position: relative;
+      overflow: hidden;
+      border-bottom: 1px solid var(--fleet-ledger-rule);
+    }
+    .ledger-swipe-action {
+      position: absolute;
+      inset: 0 0 0 auto;
+      width: 82px;
+      display: grid;
+      place-items: center;
+      background: color-mix(in srgb, var(--fail) 76%, var(--fleet-panel));
+      color: var(--ink-1);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      opacity: 0;
+    }
+    .ledger-row-shell.swiping .ledger-swipe-action { opacity: 1; }
     .ledger-row {
       min-height: var(--fleet-ledger-row-h);
-      border-bottom: 1px solid var(--fleet-ledger-rule);
+      position: relative;
+      z-index: 1;
+      background: var(--fleet-panel);
       color: color-mix(in srgb, var(--ink-2) 78%, transparent);
       opacity: .78;
       cursor: pointer;
+      touch-action: pan-y;
+      transition: transform 140ms ease, opacity 140ms ease;
     }
     .ledger-row:hover,
     .ledger-row.open {
@@ -814,10 +869,11 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .ledger-artifact.pr { color: var(--fleet-pr); font-weight: 700; }
     .ledger-age { color: var(--fleet-muted); font: 9px/1 var(--mono); }
     .ledger-status,
-    .ledger-close {
-      grid-column: 7;
-      grid-row: 1;
-      justify-self: end;
+    .ledger-clear {
+      position: absolute;
+      z-index: 2;
+      top: 3px;
+      right: 3px;
       width: var(--fleet-action-size);
       height: var(--fleet-action-size);
       border-radius: 6px;
@@ -832,7 +888,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
       background: currentColor;
       box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 12%, transparent);
     }
-    .ledger-close {
+    .ledger-clear {
       display: none;
       border: 0;
       background: var(--chrome-hover);
@@ -840,8 +896,9 @@ export class AppletDashboard extends LitElement implements AppletElement {
       cursor: pointer;
       font-size: 17px;
     }
-    .ledger-row:has(.ledger-close):hover .ledger-status { display: none; }
-    .ledger-row:hover .ledger-close { display: grid; }
+    .ledger-row:hover .ledger-status { display: none; }
+    .ledger-row:hover .ledger-clear,
+    .ledger-clear:focus-visible { display: grid; }
     .ledger-detail {
       display: none;
       grid-column: 2 / 7;
@@ -889,6 +946,34 @@ export class AppletDashboard extends LitElement implements AppletElement {
       user-select: text;
       white-space: pre-wrap;
     }
+    .fleet-undo {
+      position: sticky;
+      z-index: 4;
+      bottom: 12px;
+      width: fit-content;
+      margin: 12px 0 0 auto;
+      padding: 7px 8px 7px 12px;
+      border: 1px solid var(--fleet-edge);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: color-mix(in srgb, var(--fleet-panel) 94%, transparent);
+      box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+      color: var(--ink-1);
+      font-size: 11px;
+    }
+    .fleet-undo button {
+      min-height: 28px;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 5px;
+      background: var(--chrome-hover);
+      color: var(--chrome-accent);
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 700;
+    }
 
     .card-head { grid-template-columns: minmax(0, 1fr) var(--fleet-action-size); }
     .status,
@@ -899,7 +984,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
       .ledger-artifact-column,
       .ledger-artifact { display: none; }
       .ledger-status,
-      .ledger-close { grid-column: 6; }
+      .ledger-clear { grid-column: 6; }
       .ledger-detail { grid-column: 2 / 6; }
     }
     @media (max-width: 700px) {
@@ -914,7 +999,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
       .ledger-age { display: none; }
       .ledger-progress { grid-column: 3; }
       .ledger-status,
-      .ledger-close { grid-column: 4; }
+      .ledger-clear { grid-column: 4; }
       .ledger-detail { grid-column: 2 / 5; grid-template-columns: 1fr !important; }
     }
   `;
@@ -932,6 +1017,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
       this._finishedOpen = false;
     }
     window.addEventListener('session-transcript-result', this._onTranscriptResult as EventListener);
+    window.addEventListener('finished-clear-result', this._onFinishedClearResult as EventListener);
+    window.addEventListener('finished-clear-undo-result', this._onFinishedClearUndoResult as EventListener);
     this._sync();
   }
 
@@ -939,6 +1026,9 @@ export class AppletDashboard extends LitElement implements AppletElement {
     // isConnected is already false here, so this is the unsubscribe branch.
     this._sync();
     window.removeEventListener('session-transcript-result', this._onTranscriptResult as EventListener);
+    window.removeEventListener('finished-clear-result', this._onFinishedClearResult as EventListener);
+    window.removeEventListener('finished-clear-undo-result', this._onFinishedClearUndoResult as EventListener);
+    if (this._finishedNoticeTimer !== null) window.clearTimeout(this._finishedNoticeTimer);
     super.disconnectedCallback();
   }
 
@@ -1234,7 +1324,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
       ${DASHBOARD_GROUPS.map((g) => {
         const members = byGroup.get(g) ?? [];
         if (members.length === 0) return nothing;
-        if (g === 'Finished') return this._renderFinished(members);
+        if (g === 'Finished') {
+          const visible = members.filter((member) => !this._hiddenFinished.has(member.sessionId));
+          return visible.length > 0 ? this._renderFinished(visible) : nothing;
+        }
         return html`
           <h2 class="grp"><span>${g}</span><span class="grp-count">· ${members.length}</span></h2>
           <div class="grid">
@@ -1242,6 +1335,12 @@ export class AppletDashboard extends LitElement implements AppletElement {
           </div>
         `;
       })}
+      ${this._finishedNotice ? html`
+        <div class="fleet-undo" role="status">
+          <span>${this._finishedNotice}</span>
+          ${this._finishedUndo.length > 0 ? html`<button type="button" @click="${this._undoFinished}">Undo</button>` : nothing}
+        </div>
+      ` : nothing}
     `;
   }
 
@@ -1255,12 +1354,127 @@ export class AppletDashboard extends LitElement implements AppletElement {
     }
   }
 
+  private _clearFinished(members: readonly SessionState[]): void {
+    const rows = members.map((session) => ({
+      workspaceId: session.workspaceId ?? '',
+      sessionId: session.sessionId,
+    }));
+    if (rows.length === 0) return;
+    this._hiddenFinished = new Set([...this._hiddenFinished, ...rows.map((row) => row.sessionId)]);
+    if (this._expandedFinished && rows.some((row) => row.sessionId === this._expandedFinished)) {
+      this._expandedFinished = null;
+    }
+    this.dispatchEvent(new CustomEvent('finished-clear-request', {
+      detail: { rows }, bubbles: true, composed: true,
+    }));
+  }
+
+  private _onFinishedClearResult = (event: CustomEvent<{
+    cleared: number;
+    failedRows: Array<{ sessionId: string }>;
+    undos: Array<{ workspaceId: string; sessionId: string; token: string }>;
+    error: string;
+  }>): void => {
+    const detail = event.detail;
+    if (detail.failedRows?.length) {
+      const failed = new Set(detail.failedRows.map((row) => row.sessionId));
+      this._hiddenFinished = new Set([...this._hiddenFinished].filter((sessionId) => !failed.has(sessionId)));
+    }
+    this._finishedUndo = detail.undos ?? [];
+    this._showFinishedNotice(detail.cleared > 0
+      ? `${detail.cleared} finished ${detail.cleared === 1 ? 'lane' : 'lanes'} cleared`
+      : (detail.error || 'Clear failed'));
+  };
+
+  private _undoFinished = (): void => {
+    if (this._finishedUndo.length === 0) return;
+    const undos = this._finishedUndo;
+    this._finishedUndo = [];
+    this.dispatchEvent(new CustomEvent('finished-clear-undo-request', {
+      detail: { undos }, bubbles: true, composed: true,
+    }));
+  };
+
+  private _onFinishedClearUndoResult = (event: CustomEvent<{
+    restored: number;
+    sessionIds: string[];
+    error: string;
+  }>): void => {
+    const restored = new Set(event.detail.sessionIds ?? []);
+    this._hiddenFinished = new Set([...this._hiddenFinished].filter((sessionId) => !restored.has(sessionId)));
+    this._showFinishedNotice(event.detail.restored > 0
+      ? `${event.detail.restored} finished ${event.detail.restored === 1 ? 'lane' : 'lanes'} restored`
+      : (event.detail.error || 'Undo failed'));
+  };
+
+  private _showFinishedNotice(message: string): void {
+    if (this._finishedNoticeTimer !== null) window.clearTimeout(this._finishedNoticeTimer);
+    this._finishedNotice = message;
+    this._finishedNoticeTimer = window.setTimeout(() => {
+      this._finishedNotice = '';
+      this._finishedUndo = [];
+      this._finishedNoticeTimer = null;
+    }, 8_000);
+  }
+
+  private _finishedPointerDown(event: PointerEvent, session: SessionState): void {
+    if (event.pointerType !== 'touch' || event.button !== 0) return;
+    const row = event.currentTarget as HTMLElement;
+    row.setPointerCapture(event.pointerId);
+    this._swipe = { session, row, startX: event.clientX, startY: event.clientY, dx: 0, horizontal: false };
+  }
+
+  private _finishedPointerMove = (event: PointerEvent): void => {
+    const swipe = this._swipe;
+    if (!swipe) return;
+    const dx = event.clientX - swipe.startX;
+    const dy = event.clientY - swipe.startY;
+    if (!swipe.horizontal && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+    if (!swipe.horizontal && Math.abs(dy) >= Math.abs(dx)) {
+      this._resetFinishedSwipe();
+      return;
+    }
+    swipe.horizontal = true;
+    swipe.row.parentElement?.classList.add('swiping');
+    swipe.dx = Math.min(0, Math.max(-96, dx));
+    swipe.row.style.transform = `translateX(${swipe.dx}px)`;
+    event.preventDefault();
+  };
+
+  private _finishedPointerUp = (): void => {
+    const swipe = this._swipe;
+    if (!swipe) return;
+    this._suppressFinishedClick = swipe.horizontal;
+    if (swipe.dx <= -64) {
+      swipe.row.style.transform = '';
+      swipe.row.parentElement?.classList.remove('swiping');
+      this._swipe = null;
+      this._clearFinished([swipe.session]);
+    } else {
+      this._resetFinishedSwipe();
+    }
+    window.setTimeout(() => { this._suppressFinishedClick = false; }, 0);
+  };
+
+  private _finishedPointerCancel = (): void => this._resetFinishedSwipe();
+
+  private _resetFinishedSwipe(): void {
+    if (this._swipe) {
+      this._swipe.row.style.transform = '';
+      this._swipe.row.parentElement?.classList.remove('swiping');
+    }
+    this._swipe = null;
+  }
+
   private _renderFinished(members: readonly SessionState[]): TemplateResult {
     return html`
-      <button class="grp finished-toggle" type="button" aria-expanded="${this._finishedOpen}" @click="${this._toggleFinished}">
-        <span class="group-chevron" aria-hidden="true">›</span>
-        <span>Finished</span><span class="grp-count">· ${members.length}</span>
-      </button>
+      <div class="finished-header">
+        <button class="grp finished-toggle" type="button" aria-expanded="${this._finishedOpen}" @click="${this._toggleFinished}">
+          <span class="group-chevron" aria-hidden="true">›</span>
+          <span>Finished</span><span class="grp-count">· ${members.length}</span>
+        </button>
+        <button class="finished-clear-all" type="button" aria-label="Clear all finished lanes" @click="${() => this._clearFinished(members)}">Clear</button>
+      </div>
       ${this._finishedOpen ? html`
         <div class="finished-ledger">
           <div class="ledger-columns" aria-hidden="true">
@@ -1279,17 +1493,26 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const a = age(s.updatedAt, this._now);
     const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
     return html`
-      <article
-        class="ledger-row ${stateClass(s)} ${open ? 'open' : ''}"
-        tabindex="0"
-        aria-expanded="${open}"
-        @click="${() => { this._expandedFinished = open ? null : s.sessionId; }}"
-        @keydown="${(event: KeyboardEvent) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return;
-          event.preventDefault();
-          this._expandedFinished = open ? null : s.sessionId;
-        }}"
-      >
+      <div class="ledger-row-shell">
+        <span class="ledger-swipe-action" aria-hidden="true">Clear</span>
+        <article
+          class="ledger-row ${stateClass(s)} ${open ? 'open' : ''}"
+          tabindex="0"
+          aria-expanded="${open}"
+          @pointerdown="${(event: PointerEvent) => this._finishedPointerDown(event, s)}"
+          @pointermove="${this._finishedPointerMove}"
+          @pointerup="${this._finishedPointerUp}"
+          @pointercancel="${this._finishedPointerCancel}"
+          @click="${() => {
+            if (this._suppressFinishedClick) return;
+            this._expandedFinished = open ? null : s.sessionId;
+          }}"
+          @keydown="${(event: KeyboardEvent) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            this._expandedFinished = open ? null : s.sessionId;
+          }}"
+        >
         <span class="ledger-dot" aria-hidden="true"></span>
         <span class="ledger-title">${s.name}</span>
         <span class="ledger-activity">${progressLine(s) || s.doing || '—'}</span>
@@ -1300,9 +1523,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
         <span class="ledger-artifact ${s.pr ? 'pr' : ''}">${s.pr ? `⑂ PR #${s.pr}` : '—'}</span>
         <span class="ledger-age">${[a, s.harness].filter(Boolean).join(' · ') || '—'}</span>
         <span class="ledger-status" aria-hidden="true"></span>
-        ${s.paneId !== null && s.workspaceId !== null ? html`
-          <button class="ledger-close" type="button" aria-label="Close ${s.name}" @click="${(event: Event) => { event.stopPropagation(); this._closeTerminal(s); }}">×</button>
-        ` : nothing}
+        <button class="ledger-clear" type="button" aria-label="Clear finished lane ${s.name}" @click="${(event: Event) => { event.stopPropagation(); this._clearFinished([s]); }}">×</button>
         <div class="ledger-detail" @click="${(event: Event) => event.stopPropagation()}">
           <div><b>Current activity</b><br>${s.doing || 'No current activity reported.'}</div>
           <div>
@@ -1316,7 +1537,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
             </figure>
           ` : nothing}
         </div>
-      </article>
+        </article>
+      </div>
     `;
   }
 

@@ -19,6 +19,19 @@ import { HOST_STATE, remotesStore } from './lib/remotes-store.js';
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
 
+export interface FinishedClearResult {
+  sessionId: string;
+  workspaceId: string;
+  undoToken?: string;
+}
+
+interface PendingFinishedClear {
+  workspaceId: string;
+  resolve: (result: FinishedClearResult) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 /**
  * What the connection is actually doing right now, for a UI that has to tell
  * the truth about it.
@@ -97,6 +110,7 @@ const JITTER_MAX_MS = 250;
  * server that is only half up it is the worst possible moment to send one.
  */
 const WAKE_MIN_INTERVAL_MS = 250;
+const FINISHED_CLEAR_TIMEOUT_MS = 5_000;
 
 const CLOSE_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CLOSE_CID = Number.MAX_SAFE_INTEGER;
@@ -266,6 +280,8 @@ export class MuxSocket {
   private _pendingCloseRequests = new Map<number, PendingCloseRequest>();
   private _nextWorkspaceScreenCid = 1;
   private _pendingWorkspaceScreens = new Map<number, PendingWorkspaceScreen>();
+  private _nextFinishedClearCid = 1;
+  private _pendingFinishedClears = new Map<number, PendingFinishedClear>();
   /** Epoch-ms an attempt was last STARTED. Feeds the WAKE_MIN_INTERVAL floor. */
   private _lastAttemptAt = 0;
   /** Epoch-ms the pending timer is due to fire, or 0 when none is armed. */
@@ -386,6 +402,7 @@ export class MuxSocket {
       new Error('The close outcome could not be confirmed because the connection closed.'),
     );
     this._rejectPendingWorkspaceScreens(new Error('The workspace preview connection closed.'));
+    this._rejectPendingFinishedClears(new Error('The Fleet connection closed.'));
     this._clearTimer();
     if (this._ws) {
       this._ws.close();
@@ -671,6 +688,49 @@ export class MuxSocket {
 
   setSessionArchived(sessionId: string, archived: boolean): boolean {
     return this.sendSessiond({ type: SessiondType.SessionArchive, sessionId, ok: archived });
+  }
+
+  clearFinishedSession(workspaceId: string, sessionId: string): Promise<FinishedClearResult> {
+    return this._requestFinishedClear(SessiondType.SessionClear, workspaceId, { sessionId });
+  }
+
+  undoFinishedClear(workspaceId: string, undoToken: string): Promise<FinishedClearResult> {
+    return this._requestFinishedClear(SessiondType.SessionClearUndo, workspaceId, { undoToken });
+  }
+
+  private _requestFinishedClear(
+    type: typeof SessiondType.SessionClear | typeof SessiondType.SessionClearUndo,
+    workspaceId: string,
+    payload: { sessionId?: string; undoToken?: string },
+  ): Promise<FinishedClearResult> {
+    const ws = this._ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('The Fleet connection is unavailable.'));
+    }
+    const start = this._nextFinishedClearCid;
+    let cid = start;
+    do {
+      cid = this._nextFinishedClearCid;
+      this._nextFinishedClearCid = cid >= MAX_CLOSE_CID ? 1 : cid + 1;
+      if (!this._pendingFinishedClears.has(cid) && !this._pendingCloseRequests.has(cid) && !this._pendingWorkspaceScreens.has(cid)) break;
+    } while (this._nextFinishedClearCid !== start);
+    if (this._pendingFinishedClears.has(cid) || this._pendingCloseRequests.has(cid) || this._pendingWorkspaceScreens.has(cid)) {
+      return Promise.reject(new Error('No Fleet correlation IDs are available.'));
+    }
+    return new Promise<FinishedClearResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._pendingFinishedClears.delete(cid);
+        reject(new Error('The finished lane did not clear in time.'));
+      }, FINISHED_CLEAR_TIMEOUT_MS);
+      this._pendingFinishedClears.set(cid, { workspaceId, resolve, reject, timer });
+      try {
+        ws.send(JSON.stringify({ type, workspaceId, cid, ...payload }));
+      } catch (error) {
+        clearTimeout(timer);
+        this._pendingFinishedClears.delete(cid);
+        reject(error instanceof Error ? error : new Error('The finished lane could not be cleared.'));
+      }
+    });
   }
 
   // --- chief-of-staff senders ----------------------------------------------
@@ -1065,6 +1125,37 @@ export class MuxSocket {
     this._pendingWorkspaceScreens.clear();
   }
 
+  private _rejectPendingFinishedClears(error: Error): void {
+    for (const pending of this._pendingFinishedClears.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this._pendingFinishedClears.clear();
+  }
+
+  private _resolveFinishedClear(raw: Record<string, unknown>): boolean {
+    if (raw.type !== SessiondType.SessionClearResult && raw.type !== SessiondType.Error) return false;
+    if (!isPositiveSafeInteger(raw.cid)) return false;
+    const pending = this._pendingFinishedClears.get(raw.cid);
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    this._pendingFinishedClears.delete(raw.cid);
+    if (raw.type === SessiondType.Error) {
+      pending.reject(new Error(typeof raw.error === 'string' ? raw.error : 'The finished lane could not be cleared.'));
+      return true;
+    }
+    if (typeof raw.sessionId !== 'string') {
+      pending.reject(new Error('The finished-lane response was invalid.'));
+      return true;
+    }
+    pending.resolve({
+      sessionId: raw.sessionId,
+      workspaceId: typeof raw.workspaceId === 'string' ? raw.workspaceId : pending.workspaceId,
+      undoToken: typeof raw.undoToken === 'string' ? raw.undoToken : undefined,
+    });
+    return true;
+  }
+
   private _resolveWorkspaceScreen(raw: Record<string, unknown>): boolean {
     if (raw.type !== SessiondType.WorkspaceScreenResult && raw.type !== SessiondType.Error) return false;
     if (!isPositiveSafeInteger(raw.cid)) return false;
@@ -1157,6 +1248,7 @@ export class MuxSocket {
       if (typeof ev.data === 'string') {
         const raw = JSON.parse(ev.data) as Record<string, unknown>;
         if (this._resolveWorkspaceScreen(raw)) return;
+        if (this._resolveFinishedClear(raw)) return;
         this._resolveCloseOutcome(raw);
         // Pass the raw message to control handlers (e.g. for detached/session-picker).
         // Non-typed envelopes (e.g. serve config) still flow through here.
@@ -1208,6 +1300,7 @@ export class MuxSocket {
         new Error('The close outcome could not be confirmed because the connection was lost.'),
       );
       this._rejectPendingWorkspaceScreens(new Error('The workspace preview connection was lost.'));
+      this._rejectPendingFinishedClears(new Error('The Fleet connection was lost.'));
       if (this._intentionalClose) {
         return;
       }

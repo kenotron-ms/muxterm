@@ -63,6 +63,8 @@ const previewSubscribeReplyTimeout = 2 * time.Second
 
 const MissionControlReplyTimeout = 2 * time.Second
 
+const FinishedClearReplyTimeout = 3 * time.Second
+
 // Handlers holds callbacks for unsolicited events (Messages with CID == 0)
 // pushed by the daemon. It is guarded by Client.hmu. Every callback runs on the
 // client's single read-loop goroutine and must not block for long; offload slow
@@ -460,6 +462,14 @@ func (c *Client) ScreenSnapshot(paneID int) (*Message, error) {
 // without attaching, focusing, resizing, or sending input.
 func (c *Client) WorkspaceScreenWithin(workspaceID string, timeout time.Duration) (*Message, error) {
 	return c.requestWithin(&Message{Type: TypeWorkspaceScreen, WorkspaceID: workspaceID}, timeout)
+}
+
+func (c *Client) ClearFinishedWithin(sessionID string, timeout time.Duration) (*Message, error) {
+	return c.requestWithin(&Message{Type: TypeSessionClear, SessionID: sessionID}, timeout)
+}
+
+func (c *Client) UndoFinishedClearWithin(token string, timeout time.Duration) (*Message, error) {
+	return c.requestWithin(&Message{Type: TypeSessionClearUndo, UndoToken: token}, timeout)
 }
 
 // ScrollbackPage requests one page of server-side scrollback history for the
