@@ -59,7 +59,10 @@ type Server struct {
 	// from an exiting pane's readLoop goroutine and read from the
 	// session-state ticker, and a file write must never be able to stall an
 	// attach or a broadcast.
-	completions *completionStore
+	completions        *completionStore
+	finishedClearOpMu  sync.Mutex
+	finishedClearMu    sync.Mutex
+	finishedClearUndos map[string]finishedClearUndo
 
 	// triggers is the durable set of automations that spawn lanes with no
 	// human present, and the engine that fires them. Same ownership shape as
@@ -96,16 +99,17 @@ func NewServer(socketPath string) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		reg:               NewRegistry(),
-		socket:            socketPath,
-		machineIdentity:   identity,
-		daemonIncarnation: uuid.New().String(),
-		subs:              make(map[string]map[*conn]bool),
-		conns:             make(map[*conn]bool),
-		preview:           make(map[string]*previewState),
-		sessions:          newSessionStore(),
-		completions:       newCompletionStore(CompletionsPath()),
-		triggers:          newTriggerStore(TriggersPath()),
+		reg:                NewRegistry(),
+		socket:             socketPath,
+		machineIdentity:    identity,
+		daemonIncarnation:  uuid.New().String(),
+		subs:               make(map[string]map[*conn]bool),
+		conns:              make(map[*conn]bool),
+		preview:            make(map[string]*previewState),
+		sessions:           newSessionStore(),
+		completions:        newCompletionStore(CompletionsPath()),
+		finishedClearUndos: make(map[string]finishedClearUndo),
+		triggers:           newTriggerStore(TriggersPath()),
 	}
 	s.hookReports = newHookReportStore(identity.MachineID)
 	s.hookReports.projectAll()
@@ -851,6 +855,20 @@ func (c *conn) handle(msg Message) {
 		// supports the home view from an older one that silently drops an
 		// unknown control type.
 		c.reply(&Message{Type: TypeSessionStateSubscribeResult, CID: msg.CID, OK: true})
+	case TypeSessionClear:
+		token, err := c.srv.clearFinished(msg.SessionID)
+		if err != nil {
+			c.replyError(msg.CID, "session-clear-failed", err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSessionClearResult, CID: msg.CID, OK: true, SessionID: msg.SessionID, UndoToken: token})
+	case TypeSessionClearUndo:
+		sessionID, err := c.srv.undoFinishedClear(msg.UndoToken)
+		if err != nil {
+			c.replyError(msg.CID, "session-clear-undo-failed", err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSessionClearResult, CID: msg.CID, OK: true, SessionID: sessionID})
 	}
 }
 

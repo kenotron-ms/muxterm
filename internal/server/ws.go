@@ -633,7 +633,9 @@ func (c *Client) route(msg *sessiond.Message) (sess *hostSession, browserWSID st
 		sessiond.TypeCloseWorkspace,
 		sessiond.TypeSaveLayout,
 		sessiond.TypeCloseIntent,
-		sessiond.TypeWorkspaceScreen:
+		sessiond.TypeWorkspaceScreen,
+		sessiond.TypeSessionClear,
+		sessiond.TypeSessionClearUndo:
 		host, msg.WorkspaceID = splitID(msg.WorkspaceID)
 
 	case sessiond.TypeCloseConfirm:
@@ -727,6 +729,30 @@ func (c *Client) handleTextInput(data []byte) {
 		// occupy readPump while they run: terminal input on this WebSocket must
 		// remain deliverable. sessionTranscript also bounds the response wait.
 		go c.sessionTranscript(msg, dc)
+
+	case sessiond.TypeSessionClear, sessiond.TypeSessionClearUndo:
+		clearer, ok := dc.(interface {
+			ClearFinishedWithin(string, time.Duration) (*sessiond.Message, error)
+			UndoFinishedClearWithin(string, time.Duration) (*sessiond.Message, error)
+		})
+		if !ok {
+			c.sendError(msg.CID, browserWSID, errors.New("finished-session clearing is unavailable on this daemon"))
+			return
+		}
+		var result *sessiond.Message
+		var err error
+		if msg.Type == sessiond.TypeSessionClear {
+			result, err = clearer.ClearFinishedWithin(msg.SessionID, sessiond.FinishedClearReplyTimeout)
+		} else {
+			result, err = clearer.UndoFinishedClearWithin(msg.UndoToken, sessiond.FinishedClearReplyTimeout)
+		}
+		if err != nil {
+			c.sendError(msg.CID, browserWSID, err)
+			return
+		}
+		result.CID = msg.CID
+		result.WorkspaceID = browserWSID
+		c.sendMessage(result)
 
 	case sessiond.TypeWorkspaceScreen:
 		screenClient, ok := dc.(interface {

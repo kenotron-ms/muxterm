@@ -92,6 +92,9 @@ export const SessiondType = {
   SessionTranscript: 'session-transcript',
   SessionTranscriptResult: 'session-transcript-result',
   SessionArchive: 'session-archive',
+  SessionClear: 'session-clear',
+  SessionClearUndo: 'session-clear-undo',
+  SessionClearResult: 'session-clear-result',
 } as const;
 
 export interface SessionTranscriptTurn {
@@ -285,6 +288,7 @@ export interface SessiondMessage {
   transcriptArchived?: boolean;
   transcriptDetached?: boolean;
   unchanged?: boolean;
+  undoToken?: string;
 }
 
 // ---------------------------------------------------------------------------
