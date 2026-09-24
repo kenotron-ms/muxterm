@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 export const SIDEBAR_WIDTH_KEY = 'mux-sidebar-width';
-export const SIDEBAR_DEFAULT_WIDTH = 220;
+export const SIDEBAR_DEFAULT_WIDTH = 348;
 export const SIDEBAR_MIN_WIDTH = 160;
 export const SIDEBAR_MAX_WIDTH = 360;
 

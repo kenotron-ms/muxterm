@@ -7,6 +7,7 @@ import './launcher-menu.js';
 import './mux-start-card.js';
 import type { StartSplitRow } from './mux-start-card.js';
 import { homeSessions } from '../lib/home-sessions.js';
+import type { SessionRunState } from '../lib/session-state.js';
 import { needsInputByWorkspace, needsInputCount } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
 import { Download, Ellipsis, SquareTerminal } from 'lucide';
@@ -124,6 +125,8 @@ interface CardState {
    * whole feature exists to break.
    */
   completion: SessiondWorkspaceCompletion | null;
+  /** Highest-signal declared session state in this workspace. */
+  sessionState: SessionRunState | null;
 }
 
 /**
@@ -153,7 +156,7 @@ function cardsSignature(cards: CardState[], mode: PreviewMode, cols: number): st
   let sig = `${mode}/${cols}`;
   for (const c of cards) {
     sig += `\u0000${c.id}|${c.label}|${c.active ? 1 : 0}${c.bell ? 1 : 0}`;
-    sig += `|${c.visual}|${c.title}|${c.extra}|${c.hint}|${c.needs}|${c.paneCount}`;
+    sig += `|${c.visual}|${c.title}|${c.extra}|${c.hint}|${c.needs}|${c.paneCount}|${c.sessionState ?? ''}`;
   }
   return sig;
 }
@@ -310,20 +313,6 @@ function fleetSplit(needsByWs: Map<string, number>, localName: string): StartSpl
   return rows.length > 1 ? rows : NO_SPLIT;
 }
 
-/**
- * Status dot class, reusing the existing colour vocabulary (ux D3):
- * `--mux-ok` connected, `--mux-warn` reconnecting, hollow otherwise.
- * Local has no connection state and is always shown as up — the daemon it
- * talks to is in this process.
- */
-function hostDotClass(state: HostConnState | null): string {
-  if (state === null || state === 'connected') return 'ok';
-  if (state === 'reconnecting') return 'warn';
-  // unreachable's red belongs to settings (ux failure table); in the sidebar
-  // it reads the same as never-connected: this one is not here.
-  return 'off';
-}
-
 /** "12s" / "4m" / "2h" — the age of a host's current state. */
 function ageLabel(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -333,9 +322,9 @@ function ageLabel(ms: number): string {
   return `${Math.floor(m / 60)}h`;
 }
 
-function hostTypeLabel(host: string): 'Local' | 'SSH' | 'Remote' {
+function hostTypeLabel(host: string): 'Local' | 'SSH' | 'Remote daemon' {
   if (host === '') return 'Local';
-  return /^ssh:[^/]+$/.test(host) ? 'SSH' : 'Remote';
+  return /^ssh:[^/]+$/.test(host) ? 'SSH' : 'Remote daemon';
 }
 
 // ---------------------------------------------------------------------------
@@ -1143,6 +1132,284 @@ export class MuxSidebar extends LitElement {
     .update-btn:disabled:hover {
       background: transparent;
     }
+
+    /* Approved round-seven rail geometry. These component tokens are the
+       single source for the dense and quiet layouts; colour aliases continue
+       to follow the application theme. */
+    :host {
+      --sidebar-header-height: 42px;
+      --sidebar-mc-height: 36px;
+      --sidebar-global-action-height: 30px;
+      --sidebar-machine-height: 30px;
+      --sidebar-row-height: 31px;
+      --sidebar-control-track: 28px;
+      --sidebar-dot-track: 14px;
+      --sidebar-row-gap: 5px;
+      --sidebar-group-gap: 18px;
+      --sidebar-status-local: #7f8da1;
+      --sidebar-status-connected: #829b91;
+      --sidebar-status-reconnecting: #9a8eaa;
+      --sidebar-status-unreachable: #d08a91;
+      --sidebar-status-never-connected: #778397;
+      --sidebar-bg: #10141f;
+      --sidebar-panel: #121824;
+      --sidebar-hover: #1a2231;
+      --sidebar-edge: #20293a;
+      --sidebar-text: #e7ecf5;
+      --sidebar-bright: #c8d0f0;
+      --sidebar-muted: #8c99ad;
+      --sidebar-faint: #5e6b81;
+      background: var(--sidebar-bg);
+      border-right-color: var(--sidebar-edge);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .header {
+      height: var(--sidebar-header-height);
+      padding: 0 12px;
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+    }
+
+    .tab-content {
+      padding: 0 7px 14px;
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(in srgb, var(--chrome-border) 65%, var(--chrome-text-dim)) transparent;
+    }
+
+    .sb-heading,
+    .preview-tooltip,
+    .stale-banner {
+      display: none;
+    }
+
+    .global-connect {
+      flex: 0 0 var(--sidebar-global-action-height);
+      height: var(--sidebar-global-action-height);
+      margin: 0 7px;
+      padding: 0 6px;
+      border: 0;
+      background: transparent;
+      color: color-mix(in srgb, var(--chrome-text-bright) 72%, var(--chrome-text-dim));
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      text-align: left;
+      font: 780 9.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: 0.075em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    .global-connect:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
+    .global-connect-mark { color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright)); font-size: 14px; }
+
+    .hostgroup { margin: var(--sidebar-group-gap) 0 0; }
+    .hostgroup:first-child { margin-top: 11px; }
+    .workspace-groups.busy {
+      --sidebar-machine-height: 27px;
+      --sidebar-row-height: 27px;
+      --sidebar-group-gap: 14px;
+    }
+    .workspace-groups.busy .hostgroup:first-child { margin-top: 8px; }
+    .workspace-groups.busy .new-ws-btn { height: 22px; }
+
+    .hg-head {
+      box-sizing: border-box;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 74px var(--sidebar-control-track);
+      gap: 4px;
+      height: var(--sidebar-machine-height);
+      min-height: var(--sidebar-machine-height);
+      padding: 0 6px 0 5px;
+      margin: 0;
+      border: 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--chrome-border) 78%, transparent);
+      border-radius: 0;
+      background: transparent;
+      position: relative;
+    }
+
+    .hg-head:hover { background: var(--sidebar-hover); border-color: #303b4f; }
+    .hg-ident { min-width: 0; display: flex; align-items: center; gap: 7px; }
+    .hg-name,
+    .hg-name.remote {
+      flex: 0 1 auto;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      font-size: 11px;
+      font-weight: 790;
+      letter-spacing: 0.025em;
+      text-transform: none;
+      color: #d6ddea;
+    }
+
+    .hg-type {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 16px;
+      padding: 0 5px;
+      border: 1px solid color-mix(in srgb, var(--chrome-border) 72%, var(--chrome-text-dim));
+      border-radius: 999px;
+      font: 700 7.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: 0.055em;
+      text-transform: uppercase;
+      color: var(--chrome-text-dim);
+    }
+
+    .hg-status {
+      font: 700 7.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      text-align: right;
+      text-transform: lowercase;
+      color: var(--sidebar-status-local);
+    }
+    .hg-status::before { display: inline-block; margin-right: 3px; font-size: 9px; font-weight: 850; }
+    .hg-status.local::before { content: '⌂'; }
+    .hg-status.connected { color: var(--sidebar-status-connected); }
+    .hg-status.connected::before { content: '✓'; }
+    .hg-status.reconnecting { color: var(--sidebar-status-reconnecting); }
+    .hg-status.reconnecting::before { content: '↻'; }
+    .hg-status.unreachable { color: var(--sidebar-status-unreachable); font-weight: 850; }
+    .hg-status.unreachable::before { content: '!'; }
+    .hg-status.never-connected { color: var(--sidebar-status-never-connected); font-size: 6.75px; letter-spacing: -0.01em; }
+    .hg-status.never-connected::before { content: '◇'; margin-right: 2px; font-size: 8px; }
+
+    .hg-chev,
+    .hg-remove-btn {
+      grid-column: 3;
+      grid-row: 1;
+      width: var(--sidebar-control-track);
+      height: var(--sidebar-control-track);
+      padding: 0;
+      border: 0;
+      border-radius: 5px;
+      align-self: center;
+      justify-self: end;
+      background: transparent;
+      color: var(--chrome-text-dim);
+      display: grid;
+      place-items: center;
+      font-family: inherit;
+    }
+    .hg-head.collapsed .hg-chev { transform: rotate(-90deg); }
+    .hg-remove-btn { visibility: hidden; background: color-mix(in srgb, var(--chrome-text-dim) 32%, var(--chrome-bar)); color: var(--chrome-text-bright); font-size: 18px; }
+    .hg-head:hover .hg-chev { visibility: hidden; }
+    .hg-head:hover .hg-remove-btn { visibility: visible; }
+    .hg-remove-btn:hover { background: color-mix(in srgb, var(--chrome-danger) 28%, var(--chrome-bar)); color: var(--chrome-danger); }
+    .hg-dot,
+    .hg-needs,
+    .hg-meta { display: none; }
+    .hg-body { padding: 0; margin: 0; overflow: visible; }
+
+    .ws-card,
+    .ws-card.preview {
+      box-sizing: border-box;
+      position: relative;
+      display: grid;
+      grid-template-columns: var(--sidebar-dot-track) minmax(0, 1fr) var(--sidebar-control-track);
+      gap: var(--sidebar-row-gap);
+      align-items: center;
+      height: var(--sidebar-row-height);
+      min-height: var(--sidebar-row-height);
+      padding: 0 6px 0 3px;
+      margin: 0;
+      border: 0;
+      border-radius: 3px;
+      background: transparent;
+      box-shadow: none;
+      overflow: visible;
+      cursor: grab;
+      transition: background 0.12s, box-shadow 0.12s, transform 0.12s;
+    }
+    .ws-card:hover { background: var(--sidebar-hover); }
+    .ws-card.active,
+    :host([home-active]) .ws-card.active { background: color-mix(in srgb, var(--chrome-accent) 12%, var(--chrome-bar)); border: 0; }
+    .ws-card.dragging { opacity: 0.95; background: color-mix(in srgb, var(--chrome-accent) 13%, var(--chrome-bar)); box-shadow: 0 12px 28px rgba(0,0,0,.6); z-index: 3; transform: translateY(8px); cursor: grabbing; }
+    .ws-card.drop-before::before { content: ''; position: absolute; left: 4px; right: 4px; top: -2px; height: 3px; border-radius: 4px; background: var(--chrome-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--chrome-accent) 13%, transparent); }
+    .ws-header { display: contents; }
+    .dot {
+      grid-column: 1;
+      width: 7px;
+      height: 7px;
+      justify-self: center;
+      border-radius: 50%;
+      font-size: 0;
+      background: var(--chrome-text-dim);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--chrome-text-dim) 12%, transparent);
+    }
+    .dot.active { background: var(--chrome-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--chrome-accent) 12%, transparent); }
+    .dot.bell,
+    .dot.needs { background: var(--mux-warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--mux-warn) 12%, transparent); }
+    .dot.working { background: var(--chrome-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--chrome-accent) 12%, transparent); }
+    .dot.blocked { background: var(--mux-warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--mux-warn) 12%, transparent); }
+    .dot.done { background: var(--mux-ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--mux-ok) 12%, transparent); }
+    .dot.failed { background: var(--mux-error); box-shadow: 0 0 0 4px color-mix(in srgb, var(--mux-error) 12%, transparent); }
+    .dot.stopped { background: var(--chrome-text-dim); }
+    .ws-name {
+      grid-column: 2;
+      min-width: 0;
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font: 500 11px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      color: color-mix(in srgb, var(--chrome-text-bright) 82%, var(--chrome-text-dim));
+    }
+    .ws-card.active .ws-name,
+    .ws-card.live .ws-name { font-weight: 790; color: var(--chrome-text-bright); }
+    .ws-panes {
+      grid-column: 3;
+      grid-row: 1;
+      font: 700 9.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      font-variant-numeric: tabular-nums lining-nums;
+      color: color-mix(in srgb, var(--chrome-text-dim) 76%, var(--chrome-text-bright));
+      text-align: center;
+    }
+    .ws-remove-btn {
+      grid-column: 3;
+      grid-row: 1;
+      width: var(--sidebar-control-track);
+      height: var(--sidebar-control-track);
+      padding: 0;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      visibility: hidden;
+      opacity: 1;
+      background: color-mix(in srgb, var(--chrome-text-dim) 32%, var(--chrome-bar));
+      color: var(--chrome-text-bright);
+      font-size: 18px;
+    }
+    .ws-card:hover .ws-panes { visibility: hidden; }
+    .ws-card:hover .ws-remove-btn { visibility: visible; }
+    .ws-card:hover .dot { display: block; }
+    .ws-needs,
+    .ws-completion { display: none; }
+
+    .new-ws-btn,
+    .new-ws-btn.remote {
+      display: block;
+      width: 100%;
+      height: 25px;
+      margin: 0;
+      padding: 0 5px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: color-mix(in srgb, var(--chrome-accent) 48%, var(--chrome-text-dim));
+      font: 500 10.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+    }
+    .new-ws-btn:hover,
+    .new-ws-btn.remote:hover { border: 0; background: var(--sidebar-hover); color: var(--chrome-accent); }
+
+    .hg-body.stale .ws-card { opacity: 0.5; border: 0; border-style: none; }
+
+    .footer { min-height: 31px; padding: 6px 11px; }
+    .footer-line { font-size: 9.5px; }
+    .footer-note { display: none; }
   `;
 
   // ---------------------------------------------------------------------------
@@ -1213,17 +1480,22 @@ export class MuxSidebar extends LitElement {
   @state() private _updatePhase: UpdatePhase = 'idle';
   @state() private _updateError = '';
 
-  /**
-   * Host groups the user has closed. Seeded with every remote the first time
-   * it is seen, so remotes start COLLAPSED and local starts open: a remote's
-   * cards are 104px each and the machine you are sitting at is the one you
-   * are most likely to want.
-   *
-   * Replaced rather than mutated on every change — a Set's identity is what
-   * Lit compares. Deliberately not persisted (YAGNI): a page reload is not a
-   * frequent enough event to earn a storage key.
-   */
+  /** Host groups the user explicitly collapsed during this page session. */
   @state() private _collapsed = new Set<string>();
+
+  /** User-authored workspace order. Machine membership never changes here;
+   *  the array only ranks siblings and is durable across reloads. */
+  private _workspaceOrder: string[] = (() => {
+    try {
+      const value = JSON.parse(localStorage.getItem('muxterm.sidebar.workspace-order') ?? '[]');
+      return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [];
+    } catch {
+      return [];
+    }
+  })();
+  @state() private _draggingWorkspace: string | null = null;
+  @state() private _dropBeforeWorkspace: string | null = null;
+  private _dragJustEnded = false;
 
   /** Hosts already given their default collapse state. Not reactive. */
   private _seededHosts = new Set<string>();
@@ -1418,22 +1690,12 @@ export class MuxSidebar extends LitElement {
     }
   }
 
-  /**
-   * Give every newly-seen remote its default collapse state, once.
-   *
-   * Once, not on every frame: re-seeding would slam a group shut under a user
-   * who had just opened it every time its host so much as changed state.
-   */
+  /** Record newly seen remotes without moving or collapsing their groups. */
   private _seedCollapsed(): void {
-    let changed = false;
-    const next = new Set(this._collapsed);
     for (const host of remotesStore.hosts) {
       if (this._seededHosts.has(host.id)) continue;
       this._seededHosts.add(host.id);
-      next.add(host.id);
-      changed = true;
     }
-    if (changed) this._collapsed = next;
   }
 
   /**
@@ -1602,7 +1864,7 @@ export class MuxSidebar extends LitElement {
    * Otherwise it draws straight to the existing canvases.
    */
   private _onPreviewTick = (): void => {
-    const cards = this._computeCards();
+    const cards = this._orderedCards(this._computeCards());
     if (cardsSignature(cards, previewStore.mode, this._cols) !== this._cardSig) {
       this._version++;
       return;
@@ -1711,6 +1973,12 @@ export class MuxSidebar extends LitElement {
         needs: needsByWs.get(id) ?? 0,
         paneCount: active ? panes.length : ws.paneCount,
         completion: ws.completion ?? null,
+        sessionState:
+          homeSessions.sessions.find((session) => session.workspaceId === id && session.state === 'blocked')?.state ??
+          homeSessions.sessions.find((session) => session.workspaceId === id && session.state === 'working')?.state ??
+          homeSessions.sessions.find((session) => session.workspaceId === id && session.state === 'failed')?.state ??
+          homeSessions.sessions.find((session) => session.workspaceId === id)?.state ??
+          null,
       };
     });
   }
@@ -1952,6 +2220,10 @@ export class MuxSidebar extends LitElement {
   }
 
   private _onWsClick(wsId: string): void {
+    if (this._dragJustEnded) {
+      this._dragJustEnded = false;
+      return;
+    }
     this._touchFocusGuard = false;
     this._dismissPreview(true);
     store.ackWorkspace(wsId);
@@ -1962,6 +2234,63 @@ export class MuxSidebar extends LitElement {
         composed: true,
       }),
     );
+  }
+
+  private _orderedCards(cards: CardState[]): CardState[] {
+    const rank = new Map(this._workspaceOrder.map((id, index) => [id, index]));
+    return cards
+      .map((card, index) => ({ card, index }))
+      .sort((a, b) => {
+        const ar = rank.get(a.card.id);
+        const br = rank.get(b.card.id);
+        if (ar === undefined && br === undefined) return a.index - b.index;
+        if (ar === undefined) return 1;
+        if (br === undefined) return -1;
+        return ar - br;
+      })
+      .map(({ card }) => card);
+  }
+
+  private _onWorkspaceDragStart(event: DragEvent, workspaceId: string): void {
+    this._dismissPreview(true);
+    this._draggingWorkspace = workspaceId;
+    event.dataTransfer?.setData('text/plain', workspaceId);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  }
+
+  private _onWorkspaceDragOver(event: DragEvent, workspaceId: string): void {
+    const source = this._draggingWorkspace;
+    if (!source || source === workspaceId) return;
+    if (parseHostRef(source).host !== parseHostRef(workspaceId).host) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    this._dropBeforeWorkspace = workspaceId;
+  }
+
+  private _onWorkspaceDrop(event: DragEvent, workspaceId: string): void {
+    event.preventDefault();
+    const source = this._draggingWorkspace;
+    if (!source || source === workspaceId) return this._onWorkspaceDragEnd();
+    const cards = this._orderedCards(this._computeCards());
+    const host = parseHostRef(source).host;
+    const siblings = cards.filter((card) => parseHostRef(card.id).host === host).map((card) => card.id);
+    const from = siblings.indexOf(source);
+    const to = siblings.indexOf(workspaceId);
+    if (from < 0 || to < 0) return this._onWorkspaceDragEnd();
+    siblings.splice(from, 1);
+    siblings.splice(siblings.indexOf(workspaceId), 0, source);
+    const siblingSet = new Set(siblings);
+    const others = this._workspaceOrder.filter((id) => !siblingSet.has(id));
+    this._workspaceOrder = [...others, ...siblings];
+    localStorage.setItem('muxterm.sidebar.workspace-order', JSON.stringify(this._workspaceOrder));
+    this._version++;
+    this._onWorkspaceDragEnd();
+  }
+
+  private _onWorkspaceDragEnd(): void {
+    if (this._draggingWorkspace) this._dragJustEnded = true;
+    this._draggingWorkspace = null;
+    this._dropBeforeWorkspace = null;
   }
 
   /**
@@ -2025,12 +2354,9 @@ export class MuxSidebar extends LitElement {
     this._toggleGroup(host);
   }
 
-  /** Remotes are collapsed by default; local is open by default. */
+  /** Every machine starts open; only an explicit user toggle collapses it. */
   private _isCollapsed(host: string): boolean {
-    if (host === '') return this._collapsed.has('');
-    // A host with cards but no host-state frame was never seeded. It is still
-    // a remote, and remotes start closed.
-    return this._collapsed.has(host) || !this._seededHosts.has(host);
+    return this._collapsed.has(host);
   }
 
   private _onWsRemove(e: Event, wsId: string, name: string): void {
@@ -2100,7 +2426,7 @@ export class MuxSidebar extends LitElement {
   private _renderHeader(card: CardState) {
     // The bell producer only ever fires for pushed preview frames, so this
     // class is inert on the no-preview card and the header stays one renderer.
-    const dotClass = card.bell ? 'bell' : card.active ? 'active' : 'inactive';
+    const dotClass = card.bell ? 'bell' : card.sessionState ?? (card.active ? 'active' : 'inactive');
     return html`
       <div class="ws-header">
         <span class="dot ${dotClass}">●</span>
@@ -2118,18 +2444,7 @@ export class MuxSidebar extends LitElement {
               @dblclick="${(e: Event) => this._startRename(e, card.id)}"
               >${card.label}</span
             >`}
-        ${card.completion
-          ? this._renderCompletion(card.completion)
-          : card.needs > 0
-            ? html`<span
-                class="ws-needs"
-                role="img"
-                aria-label="Something in this workspace needs input"
-                title="Something here needs input"
-              ></span>`
-            : html`<span class="ws-panes"
-                >${card.paneCount} pane${card.paneCount === 1 ? '' : 's'}</span
-              >`}
+        <span class="ws-panes" aria-label="${card.paneCount} panes">${card.paneCount}</span>
         <button
           type="button"
           class="ws-remove-btn"
@@ -2191,10 +2506,13 @@ export class MuxSidebar extends LitElement {
 
   /** Previews off, or the bitmap font failed: today's exact card. */
   private _renderTextCard(card: CardState) {
+    const dragging = this._draggingWorkspace === card.id;
+    const dropBefore = this._dropBeforeWorkspace === card.id;
     return html`
       <div
-        class="ws-card ${this._remoteClass(card)}${card.active ? 'active' : ''}"
+        class="ws-card ${this._remoteClass(card)}${card.active ? 'active ' : ''}${card.sessionState === 'working' ? 'live ' : ''}${dragging ? 'dragging ' : ''}${dropBefore ? 'drop-before' : ''}"
         data-workspace-id="${card.id}"
+        draggable="true"
         role="button"
         tabindex="0"
         aria-describedby="${this._previewWorkspaceId === card.id && this._previewState !== 'hidden'
@@ -2204,6 +2522,10 @@ export class MuxSidebar extends LitElement {
         @pointercancel="${this._onPreviewPointerCancel}"
         @pointerenter="${(e: PointerEvent) => this._onPreviewPointerEnter(e, card.id)}"
         @pointerleave="${this._onPreviewPointerLeave}"
+        @dragstart="${(e: DragEvent) => this._onWorkspaceDragStart(e, card.id)}"
+        @dragover="${(e: DragEvent) => this._onWorkspaceDragOver(e, card.id)}"
+        @drop="${(e: DragEvent) => this._onWorkspaceDrop(e, card.id)}"
+        @dragend="${() => this._onWorkspaceDragEnd()}"
         @focusin="${(e: FocusEvent) => this._onPreviewFocusIn(e, card.id)}"
         @focusout="${this._onPreviewFocusOut}"
         @keydown="${(e: KeyboardEvent) => {
@@ -2298,20 +2620,19 @@ export class MuxSidebar extends LitElement {
           @click="${() => this._toggleGroup(group.host)}"
           @keydown="${(e: KeyboardEvent) => this._onGroupKeyDown(e, group.host)}"
         >
-          <span class="hg-chev">▾</span>
-          <span class="hg-dot ${hostDotClass(group.state)}"></span>
-          <span class="hg-name ${remote ? 'remote' : ''}">${group.name}</span>
-          <span class="hg-type">${hostTypeLabel(group.host)}</span>
-          ${group.state === 'reconnecting'
-            ? html`<span class="hg-meta">reconnecting</span>`
-            : group.needs > 0
-              ? html`<span
-                  class="hg-needs"
-                  role="img"
-                  aria-label="Something on this machine needs input"
-                  title="Something here needs input"
-                ></span>`
-              : ''}
+          <div class="hg-ident">
+            <span class="hg-name ${remote ? 'remote' : ''}">${group.name}</span>
+            <span class="hg-type">${hostTypeLabel(group.host)}</span>
+          </div>
+          <span class="hg-status ${group.state ?? 'local'}">${group.state ?? 'local'}</span>
+          <span class="hg-chev" aria-hidden="true">▾</span>
+          <button
+            type="button"
+            class="hg-remove-btn"
+            title="Machine action — meaning undecided"
+            aria-label="Machine action unavailable"
+            @click="${(e: Event) => e.stopPropagation()}"
+          >×</button>
         </div>
         <div class="${bodyClass}">
           ${dropped
@@ -2329,7 +2650,7 @@ export class MuxSidebar extends LitElement {
             class="new-ws-btn${remote ? ' remote' : ''}"
             @click="${() => this._onNewWsOn(group.host)}"
           >
-            + New workspace
+            ＋ New workspace on ${group.name}
           </button>
         </div>
       </div>
@@ -2340,7 +2661,7 @@ export class MuxSidebar extends LitElement {
     const cols = this._cols;
     // Recorded so the preview tick can tell a structural change from a mere
     // content change without re-rendering to find out.
-    const cards = this._computeCards();
+    const cards = this._orderedCards(this._computeCards());
     this._cards = cards;
     this._cardSig = cardsSignature(cards, previewStore.mode, cols);
 
@@ -2354,14 +2675,9 @@ export class MuxSidebar extends LitElement {
     // copy of the remote group's own button directly above it. The only thing
     // that belongs after the groups is the affordance that adds a NEW group.
     const groups = groupCards(cards, instanceLabel());
-    return html`
-      ${groups.map((group) =>
-        this._renderHostGroup(group),
-      )}
-      <button class="new-ws-btn remote" @click="${() => this._onConnectMachine()}">
-        + Connect machine
-      </button>
-    `;
+    return html`<div class="workspace-groups ${cards.length >= 20 ? 'busy' : ''}">
+      ${groups.map((group) => this._renderHostGroup(group))}
+    </div>`;
   }
 
   // ---------------------------------------------------------------------------
@@ -2486,16 +2802,18 @@ export class MuxSidebar extends LitElement {
             </div>`
           : ''}
       </div>
+      <mux-start-card
+        .count="${needsInputCount(sessions)}"
+        .spread="${needsByWs.size}"
+        .active="${this.homeActive}"
+        .hint="${this.homeKey}"
+        .split="${split}"
+        @start-click="${() => this._onStartClick()}"
+      ></mux-start-card>
+      <button class="global-connect" title="Connect machine" @click="${() => this._onConnectMachine()}">
+        <span class="global-connect-mark">⊕</span><span>Connect machine</span>
+      </button>
       <div class="tab-content">
-        <mux-start-card
-          .count="${needsInputCount(sessions)}"
-          .spread="${needsByWs.size}"
-          .active="${this.homeActive}"
-          .hint="${this.homeKey}"
-          .split="${split}"
-          @start-click="${() => this._onStartClick()}"
-        ></mux-start-card>
-        <div class="sb-heading">workspaces</div>
         ${this._renderWorkspaces()}
       </div>
       ${this._renderFooter()}
