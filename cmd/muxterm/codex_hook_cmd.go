@@ -87,7 +87,7 @@ func codexReport(p codexHookPayload, raw []byte) (sessiond.HookReport, error) {
 		// had no result. Interrupt has its own event below; failures do not emit a
 		// successful Stop. This is therefore a declaration of completion, not an
 		// inference from process exit or prose in the report.
-		event, state, doing, summary, anchor = "turn.completed", sessiond.SessionStateDone, firstCodexLine(p.LastAssistantMessage, 240), sessiond.BoundFinalMessage(p.LastAssistantMessage), p.TurnID
+		event, state, doing, summary, anchor = "turn.completed", sessiond.SessionStateDone, firstCodexLine(p.LastAssistantMessage, 240), p.LastAssistantMessage, p.TurnID
 	case "Interrupt":
 		event, state, doing, summary, anchor = "turn.interrupted", sessiond.SessionStateStopped, "Codex turn interrupted", "Codex turn interrupted", p.TurnID
 	case "SessionEnd":

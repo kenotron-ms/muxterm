@@ -114,7 +114,7 @@ func writeSessionSnapshot(row SessionState, pid int, start uint64, sid int) (str
 	// Refuse here rather than let the reader silently skip an oversized file.
 	// The producer is the only party that can do anything about it.
 	if len(body) > maxSessionSnapshotBytes {
-		return "", fmt.Errorf("snapshot is %d bytes, over the %d-byte limit: shorten doing/doneMeans or send fewer knows entries", len(body), maxSessionSnapshotBytes)
+		return "", fmt.Errorf("snapshot is %d bytes, over the %d-byte transport limit", len(body), maxSessionSnapshotBytes)
 	}
 
 	dir := SessionStateDir()

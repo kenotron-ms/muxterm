@@ -18,8 +18,11 @@ import (
 )
 
 const (
-	HookReportVersion  = 2
-	MaxHookReportBytes = 64 << 10
+	HookReportVersion = 2
+	// Turn-end reports carry the harness's complete final assistant message.
+	// This is a transport rejection ceiling, not a truncation limit: an
+	// oversized report fails loudly rather than publishing altered text.
+	MaxHookReportBytes = 1 << 20
 )
 
 type HookProcess struct {
@@ -359,7 +362,7 @@ func applyHookPatch(row *SessionState, set HookPatch, clear []string) {
 		row.Doing = *set.Doing
 	}
 	if set.Summary != nil {
-		row.Summary = BoundFinalMessage(*set.Summary)
+		row.Summary = *set.Summary
 	}
 	if set.DoneMeans != nil {
 		row.DoneMeans = *set.DoneMeans

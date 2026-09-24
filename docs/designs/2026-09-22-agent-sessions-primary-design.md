@@ -242,7 +242,9 @@ Required: `v`, allowlisted harness adapter, nonempty `native_session_id`,
 All other envelope members are optional. `set` is a partial semantic patch;
 omission preserves prior values, and `clear` explicitly removes optional values.
 Unknown schema versions and invalid fields are rejected with a diagnostic receipt.
-Bound each envelope to 64 KiB; no full tool output or transcript in fleet patches.
+Bound ordinary envelopes to 64 KiB; turn-end envelopes may reach 1 MiB because
+they carry the harness-provided final assistant message intact. No full tool
+output or whole transcript belongs in fleet patches.
 Allowed events: `session.started`, `session.ended`, `turn.started`,
 `turn.completed`, `turn.failed`, `turn.interrupted`, `tool.started`,
 `tool.completed`, `tool.failed`, `attention.required`, `attention.resolved`,

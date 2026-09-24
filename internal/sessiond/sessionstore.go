@@ -48,11 +48,12 @@ const sessionStateDirName = "session-state"
 // be impossible, costs a bounded number of reads instead of a hung tick.
 const sessionStateAncestorHops = 32
 
-// maxSessionSnapshotBytes bounds one snapshot file. A snapshot is a handful of
-// short display strings and a capped path list -- a few kilobytes at the very
-// most. The cap exists so a file that is not what it claims to be cannot be
-// read into the daemon once a second.
-const maxSessionSnapshotBytes = 64 << 10
+// maxSessionSnapshotBytes bounds one snapshot file. Turn-end snapshots include
+// the harness's complete final assistant message, so this is deliberately
+// larger than an ordinary state row. It is a rejection ceiling, never a
+// truncation point: text below it survives byte-for-byte and an oversized
+// snapshot fails loudly at its producer.
+const maxSessionSnapshotBytes = 1 << 20
 
 // sessionSnapshotVersion is the schema version this daemon writes and the
 // highest it understands. A snapshot declaring a HIGHER version was written by

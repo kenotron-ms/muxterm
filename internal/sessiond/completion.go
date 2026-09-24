@@ -670,7 +670,7 @@ func completionRows(records []CompletionRecord) []SessionState {
 			Mode:        r.Mode,
 			State:       r.FleetState(),
 			Doing:       r.Summary(),
-			Summary:     BoundFinalMessage(r.FinalSummary),
+			Summary:     r.FinalSummary,
 			DoneMeans:   r.DoneMeans,
 			GoalID:      r.GoalID,
 			Origin:      r.Origin,

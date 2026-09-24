@@ -317,7 +317,7 @@ func CodexRowFor(n CodexNotify) (SessionState, bool) {
 		// tell muxterm whether the work is finished or merely paused.
 		State:     SessionStateStopped,
 		Doing:     truncateRunes(firstMeaningfulLine(n.LastAssistantMessage), codexDoingBytes),
-		Summary:   BoundFinalMessage(strings.TrimSpace(n.LastAssistantMessage)),
+		Summary:   n.LastAssistantMessage,
 		UpdatedAt: time.Now().Unix(),
 	}
 	return row, true

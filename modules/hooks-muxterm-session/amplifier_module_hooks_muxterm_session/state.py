@@ -110,10 +110,6 @@ DOING_MAX_CHARS = 120
 # The lane's closing message is notice substance, not dashboard furniture.
 # Keep it separately so the fleet line stays compact while lifecycle notices
 # can relay concrete findings and verification details from every harness.
-SUMMARY_MAX_BYTES = 24 * 1024
-SUMMARY_TRUNCATED_MARKER = (
-    "\n\n[… final message truncated by muxterm after 24,576 UTF-8 bytes …]"
-)
 # The one variable part of a mid-turn `doing` phrase -- a filename, a search
 # pattern, an agent name. It shares the line with the phrase around it and, for
 # a sub-agent, with an "[explorer] " prefix, so it is bounded well below
@@ -224,17 +220,6 @@ def _clip(text: Any, limit: int) -> str:
     if len(text) > limit:
         text = text[: limit - 1].rstrip() + "\u2026"
     return text
-
-
-def _clip_final_message(text: Any) -> str:
-    """Bound a closing message without changing its whitespace or structure."""
-    if not isinstance(text, str):
-        text = "" if text is None else str(text)
-    encoded = text.encode("utf-8")
-    if len(encoded) <= SUMMARY_MAX_BYTES:
-        return text
-    prefix = encoded[:SUMMARY_MAX_BYTES].decode("utf-8", errors="ignore")
-    return prefix + SUMMARY_TRUNCATED_MARKER
 
 
 def _todo_progress(tool_input: Any) -> dict[str, Any] | None:
@@ -1163,7 +1148,7 @@ class SessionStateTracker:
         already_blocked = record.state == STATE_BLOCKED
         response = data.get("response")
         if isinstance(response, str) and response.strip():
-            record.summary = _clip_final_message(response.strip())
+            record.summary = response
         if record.state in (STATE_WORKING, STATE_BLOCKED):
             record.state = STATE_STOPPED
             record.waiting_for = ""

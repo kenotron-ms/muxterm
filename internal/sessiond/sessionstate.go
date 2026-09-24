@@ -1,31 +1,6 @@
 package sessiond
 
-import (
-	"encoding/json"
-	"unicode/utf8"
-)
-
-// FinalMessageMaxBytes bounds the lane's raw closing message on the fleet
-// wire and in durable session/completion records. 24KiB of UTF-8 text is
-// large enough for a normal multi-page closing report while keeping one
-// session snapshot comfortably inside its 64KiB envelope.
-const FinalMessageMaxBytes = 24 << 10
-
-const finalMessageTruncatedMarker = "\n\n[… final message truncated by muxterm after 24,576 UTF-8 bytes …]"
-
-// BoundFinalMessage preserves the closing message byte-for-byte unless it is
-// over the explicit fleet bound. Newlines and other structure are data, not
-// display whitespace, so this deliberately does not trim or collapse them.
-func BoundFinalMessage(message string) string {
-	if len(message) <= FinalMessageMaxBytes {
-		return message
-	}
-	prefix := message[:FinalMessageMaxBytes]
-	for !utf8.ValidString(prefix) {
-		prefix = prefix[:len(prefix)-1]
-	}
-	return prefix + finalMessageTruncatedMarker
-}
+import "encoding/json"
 
 // Session state contract for the muxterm "home" view.
 //
@@ -222,8 +197,8 @@ type SessionState struct {
 	// "editing cmd/muxterm/pane_cmd.go". Refreshed cheaply from recent events.
 	Doing string `json:"doing,omitempty"`
 
-	// Summary is the lane's own raw final assistant message, bounded by
-	// FinalMessageMaxBytes. It is separate from Doing so a detailed result can survive
+	// Summary is the lane's own raw final assistant message exactly as supplied
+	// by its turn-end hook. It is separate from Doing so a detailed result can survive
 	// without turning the fleet's one-line activity label into a transcript.
 	Summary string `json:"summary,omitempty"`
 
