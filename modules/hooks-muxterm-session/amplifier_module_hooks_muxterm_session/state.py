@@ -248,10 +248,15 @@ def _todo_progress(tool_input: Any) -> dict[str, Any] | None:
 
     done = 0
     current = ""
+    projected_items: list[dict[str, str]] = []
     for item in todos:
         if not isinstance(item, dict):
             continue
         status = item.get("status")
+        text = _clip(item.get("content") or item.get("activeForm") or "", TODO_CURRENT_MAX_CHARS)
+        if status not in ("completed", "in_progress", "pending") or not text:
+            continue
+        projected_items.append({"text": text, "status": status})
         if status == "completed":
             done += 1
         elif status == "in_progress" and not current:
@@ -263,7 +268,13 @@ def _todo_progress(tool_input: Any) -> dict[str, Any] | None:
                 TODO_CURRENT_MAX_CHARS,
             )
 
-    progress: dict[str, Any] = {"done": done, "total": len(todos)}
+    if not projected_items:
+        return None
+    progress: dict[str, Any] = {
+        "done": done,
+        "total": len(projected_items),
+        "items": projected_items,
+    }
     if current:
         # Omitted when nothing is in progress -- a list that is all-pending or
         # all-complete has a truthful fraction and no current item, and inventing

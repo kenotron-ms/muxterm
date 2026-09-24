@@ -271,6 +271,9 @@ func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 		if r.Todo.Current != "" {
 			todo["current"] = r.Todo.Current
 		}
+		if len(r.Todo.Items) > 0 {
+			todo["items"] = r.Todo.Items
+		}
 	}
 	var paneID any
 	var workspaceID any

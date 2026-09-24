@@ -705,6 +705,11 @@ func sessionStateHash(rows []SessionState) uint64 {
 			writeHashField(h, strconv.Itoa(r.Todo.Done))
 			writeHashField(h, strconv.Itoa(r.Todo.Total))
 			writeHashField(h, r.Todo.Current)
+			writeHashField(h, strconv.Itoa(len(r.Todo.Items)))
+			for _, item := range r.Todo.Items {
+				writeHashField(h, item.Text)
+				writeHashField(h, item.Status)
+			}
 		}
 		// The row's variable-length tail is framed by a LEADING COUNT, not by a
 		// trailing sentinel. A sentinel would itself be just another
