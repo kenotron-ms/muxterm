@@ -94,6 +94,7 @@ type sessionRecord struct {
 type hookReportStore struct {
 	root           string
 	installationID string
+	nextPrune      time.Time
 }
 
 func HookReportRoot() string {
@@ -186,6 +187,7 @@ func newHookReportStore(installationID string) *hookReportStore {
 }
 
 func (s *hookReportStore) consume() {
+	s.pruneDeadProjections()
 	dir := filepath.Join(s.root, "inbox")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -418,8 +420,51 @@ func (s *hookReportStore) projectAll() {
 		return
 	}
 	for _, record := range reg.Sessions {
+		if deadTerminalHookRecord(record) {
+			_ = RemoveSessionSnapshot(record.Row.SessionID)
+			continue
+		}
 		_ = s.project(record)
 	}
+}
+
+// pruneDeadProjections keeps the durable hook registry available for managed
+// resume while removing its dead terminal rows from the live Fleet projection.
+// Completion records, not the hook registry, own finished-lane history after a
+// process exits. Without this split every daemon restart re-projects every old
+// Stop/SessionEnd record as an unplaced Fleet row forever.
+func (s *hookReportStore) pruneDeadProjections() {
+	now := time.Now()
+	if now.Before(s.nextPrune) {
+		return
+	}
+	s.nextPrune = now.Add(30 * time.Second)
+	reg, err := s.loadRegistry()
+	if err != nil {
+		return
+	}
+	for _, record := range reg.Sessions {
+		if deadTerminalHookRecord(record) {
+			_ = RemoveSessionSnapshot(record.Row.SessionID)
+		}
+	}
+}
+
+func deadTerminalHookRecord(record sessionRecord) bool {
+	if !sessionStateIsTerminal(record.Row.State) || record.PID <= 0 {
+		return false
+	}
+	if !processLive(record.PID) {
+		return true
+	}
+	// Old completion-only records did not carry a process start time. A live
+	// PID without that identity is ambiguous, so retain it rather than risk
+	// pruning a session whose process still exists.
+	if record.PIDStart == 0 {
+		return false
+	}
+	start, ok := processStartTime(record.PID)
+	return !ok || start != record.PIDStart
 }
 
 func (s *hookReportStore) project(record sessionRecord) error {

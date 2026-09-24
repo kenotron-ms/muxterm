@@ -20,7 +20,13 @@ var codexRichEvents = []string{
 	"PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop", "Interrupt",
 }
 
-const codexRichHookCommand = `exec "${MUXTERM_CODEX_BRIDGE:?}" session codex-hook`
+// The wrapper supplies MUXTERM_CODEX_BRIDGE so a source build reports through
+// the exact muxterm process that launched it. Keep the installed command as a
+// fallback, though: Codex can receive this invocation-scoped hook layer from a
+// pane launch whose environment does not retain the wrapper-only variable.
+// Failing that path with 127 disables every lifecycle and tool report even
+// though muxterm is already resolvable on the lane's PATH.
+const codexRichHookCommand = `exec "${MUXTERM_CODEX_BRIDGE:-muxterm}" session codex-hook`
 
 type codexRPCResponse struct {
 	ID     int `json:"id"`
