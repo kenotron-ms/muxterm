@@ -46,34 +46,26 @@ import {
 } from '../../lib/applet-registry.js';
 import { homeSessions } from '../../lib/home-sessions.js';
 import {
-  HOME_GROUPS,
   groupFor,
   isKnownHarness,
   progressLine,
   todoFraction,
   todoPercent,
-  type HomeGroup,
   type SessionState,
 } from '../../lib/session-state.js';
 import type { SessiondMessage, SessionTranscriptTurn } from '../../types.js';
 
-/**
- * The group headings, in the mockup's words.
- *
- * HOME_GROUPS remains the SOURCE of the grouping -- groupFor() decides which
- * bucket a row lands in and this file never re-derives it. Only the LABEL is
- * local, because the Dashboard speaks in the second person ("wants you")
- * where a list view names a state ("Needs input"), and the mockup is the
- * approved copy.
- */
-const GROUP_LABEL: Record<HomeGroup, string> = {
-  'Needs input': 'needs attention',
-  Running: 'working',
-  Completed: 'finished',
-};
+type DashboardGroup = 'Working' | 'Blocked' | 'Failed' | 'Finished';
 
-/** Visual reading order from the approved mockup: motion, intervention, outcome. */
-const DISPLAY_GROUPS: readonly HomeGroup[] = ['Running', 'Needs input', 'Completed'];
+const DASHBOARD_GROUPS: readonly DashboardGroup[] = ['Working', 'Blocked', 'Failed', 'Finished'];
+
+function dashboardGroupFor(s: SessionState): DashboardGroup {
+  if (s.state === 'failed') return 'Failed';
+  const group = groupFor(s);
+  if (group === 'Running') return 'Working';
+  if (group === 'Needs input') return 'Blocked';
+  return 'Finished';
+}
 
 /**
  * Left-edge state colour class -- DUPLICATED from mux-home.ts's markClass()
@@ -136,8 +128,12 @@ export class AppletDashboard extends LitElement implements AppletElement {
   @state() private _transcriptDetached = false;
   @state() private _transcriptTruncated = false;
   @state() private _expandedTodo: string | null = null;
+  @state() private _finishedOpen = false;
+  @state() private _expandedFinished: string | null = null;
 
   private _unsubFleet: (() => void) | null = null;
+
+  private static readonly finishedOpenKey = 'muxterm:fleet:finished-open';
 
   /**
    * How many sessions wanted a human at the last notification. An INTEGER, and
@@ -205,6 +201,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
       height: 100%;
       overflow-y: auto;
       padding: var(--s-6);
+      container-type: inline-size;
     }
     .fleet-top {
       display: flex;
@@ -708,11 +705,217 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .transcript li.tool span { background: #101620; color: #99a6ba; font: 11px/1.45 var(--mono); }
     .archive-row { margin-top: 14px; padding-top: 11px; border-top: 1px solid #283143; text-align: right; }
     .archive-action { color: color-mix(in srgb, var(--fail) 60%, var(--ink-3)) !important; }
+
+    /* Finished work changes representation, not live work. These named
+       measurements are the ledger's local design tokens: one anatomy shared
+       by its heading, columns, rows and expanded detail. */
+    :host {
+      --fleet-section-h: 30px;
+      --fleet-ledger-head-h: 25px;
+      --fleet-ledger-row-h: 36px;
+      --fleet-ledger-gap: 8px;
+      --fleet-action-size: 30px;
+      --fleet-ledger-tracks: 20px minmax(180px, 2.3fr) minmax(130px, 1.35fr) 78px 106px 92px 38px;
+      --fleet-ledger-rule: color-mix(in srgb, var(--fleet-edge) 72%, transparent);
+      --fleet-pr: color-mix(in srgb, var(--chrome-accent) 58%, var(--ink-1));
+    }
+    .grp {
+      min-height: var(--fleet-section-h);
+      padding: 0;
+      display: flex;
+      align-items: center;
+      gap: var(--fleet-ledger-gap);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .1em;
+    }
+    .grp:not(:first-child) { margin-top: 7px; }
+    .grp-count { color: color-mix(in srgb, var(--fleet-muted) 62%, transparent); }
+    .finished-toggle {
+      width: 100%;
+      margin-top: 10px;
+      padding: 8px 0 0;
+      border: 0;
+      border-top: 1px solid var(--fleet-edge);
+      background: none;
+      color: var(--fleet-muted);
+      cursor: pointer;
+      text-align: left;
+    }
+    .finished-toggle:hover { color: var(--ink-1); }
+    .finished-toggle:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: 2px; }
+    .finished-toggle .group-chevron {
+      width: 13px;
+      color: color-mix(in srgb, var(--ink-2) 82%, transparent);
+      font-size: 13px;
+      line-height: 1;
+      transition: transform var(--dur) ease;
+    }
+    .finished-toggle[aria-expanded='true'] .group-chevron { transform: rotate(90deg); }
+
+    .finished-ledger { border-top: 1px solid var(--fleet-edge); }
+    .ledger-columns,
+    .ledger-row {
+      display: grid;
+      grid-template-columns: var(--fleet-ledger-tracks);
+      align-items: center;
+      column-gap: var(--fleet-ledger-gap);
+    }
+    .ledger-columns {
+      height: var(--fleet-ledger-head-h);
+      color: color-mix(in srgb, var(--fleet-muted) 68%, transparent);
+      font: 700 9px/1 var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .ledger-row {
+      min-height: var(--fleet-ledger-row-h);
+      border-bottom: 1px solid var(--fleet-ledger-rule);
+      color: color-mix(in srgb, var(--ink-2) 78%, transparent);
+      opacity: .78;
+      cursor: pointer;
+    }
+    .ledger-row:hover,
+    .ledger-row.open {
+      background: color-mix(in srgb, var(--fleet-panel) 54%, transparent);
+      opacity: 1;
+    }
+    .ledger-row:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: -2px; }
+    .ledger-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 11%, transparent);
+    }
+    .ledger-title,
+    .ledger-activity,
+    .ledger-artifact,
+    .ledger-age {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ledger-title { color: var(--ink-1); font-size: 12px; font-weight: 600; }
+    .ledger-activity { height: auto; color: color-mix(in srgb, var(--fleet-body) 82%, transparent); font-size: 11.5px; }
+    .ledger-progress {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 27px minmax(0, 1fr);
+      align-items: center;
+      gap: 5px;
+      color: var(--ink-1);
+      font: 700 9px/1 var(--mono);
+    }
+    .ledger-progress .track { height: 3px; margin: 0; border-radius: 0; }
+    .ledger-progress .track i { background: var(--ok); }
+    .ledger-artifact { color: color-mix(in srgb, var(--fleet-muted) 90%, transparent); font-size: 11px; }
+    .ledger-artifact.pr { color: var(--fleet-pr); font-weight: 700; }
+    .ledger-age { color: var(--fleet-muted); font: 9px/1 var(--mono); }
+    .ledger-status,
+    .ledger-close {
+      grid-column: 7;
+      grid-row: 1;
+      justify-self: end;
+      width: var(--fleet-action-size);
+      height: var(--fleet-action-size);
+      border-radius: 6px;
+      place-items: center;
+    }
+    .ledger-status { display: grid; color: var(--ok); }
+    .ledger-status::after {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 12%, transparent);
+    }
+    .ledger-close {
+      display: none;
+      border: 0;
+      background: var(--chrome-hover);
+      color: var(--ink-1);
+      cursor: pointer;
+      font-size: 17px;
+    }
+    .ledger-row:has(.ledger-close):hover .ledger-status { display: none; }
+    .ledger-row:hover .ledger-close { display: grid; }
+    .ledger-detail {
+      display: none;
+      grid-column: 2 / 7;
+      padding: 10px 12px 11px 0;
+      color: color-mix(in srgb, var(--fleet-body) 82%, transparent);
+      cursor: default;
+    }
+    .ledger-row.open {
+      grid-template-rows: var(--fleet-ledger-row-h) auto;
+    }
+    .ledger-row.open > :not(.ledger-detail) { grid-row: 1; }
+    .ledger-row.open .ledger-detail {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 20px;
+      grid-row: 2;
+    }
+    .ledger-detail b { color: var(--ink-1); }
+    .ledger-todo-line { display: flex; gap: 13px; margin-top: 3px; }
+    .ledger-final-message {
+      grid-column: 1 / -1;
+      margin: 0;
+      padding-top: 10px;
+      border-top: 1px solid var(--fleet-ledger-rule);
+    }
+    .ledger-final-message figcaption {
+      margin-bottom: 7px;
+      color: var(--fleet-muted);
+      font-size: 10px;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    .ledger-final-message blockquote {
+      max-height: 20rem;
+      margin: 0;
+      padding: 10px 12px;
+      overflow: auto;
+      border: 1px solid var(--fleet-edge);
+      border-left: 3px solid var(--ok);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--fleet-panel) 72%, var(--chrome-body));
+      color: var(--ink-1);
+      font: 11px/1.55 var(--mono);
+      overflow-wrap: anywhere;
+      user-select: text;
+      white-space: pre-wrap;
+    }
+
+    .card-head { grid-template-columns: minmax(0, 1fr) var(--fleet-action-size); }
+    .status,
+    .card-close { width: var(--fleet-action-size); height: var(--fleet-action-size); border-radius: 6px; }
+
+    @container (max-width: 950px) {
+      :host { --fleet-ledger-tracks: 20px minmax(150px, 2fr) minmax(110px, 1.2fr) 70px 80px 34px; }
+      .ledger-artifact-column,
+      .ledger-artifact { display: none; }
+      .ledger-status,
+      .ledger-close { grid-column: 6; }
+      .ledger-detail { grid-column: 2 / 6; }
+    }
     @media (max-width: 700px) {
       .grid, :host([view='tiles']) .grid { grid-template-columns: 1fr; }
       .detail-main { grid-template-columns: 1fr; }
       .detail-summary { border-right: 0; border-bottom: 1px solid var(--edge); }
       .fleet-hint { display: none; }
+      .ledger-columns { display: none; }
+      :host { --fleet-ledger-tracks: 20px minmax(0, 1fr) 68px 34px; }
+      .ledger-activity,
+      .ledger-artifact,
+      .ledger-age { display: none; }
+      .ledger-progress { grid-column: 3; }
+      .ledger-status,
+      .ledger-close { grid-column: 4; }
+      .ledger-detail { grid-column: 2 / 5; grid-template-columns: 1fr !important; }
     }
   `;
 
@@ -723,6 +926,11 @@ export class AppletDashboard extends LitElement implements AppletElement {
   override connectedCallback(): void {
     // This is where the fleet subscription starts, regardless of `active`.
     super.connectedCallback();
+    try {
+      this._finishedOpen = localStorage.getItem(AppletDashboard.finishedOpenKey) === 'true';
+    } catch {
+      this._finishedOpen = false;
+    }
     window.addEventListener('session-transcript-result', this._onTranscriptResult as EventListener);
     this._sync();
   }
@@ -992,10 +1200,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
    */
   private _renderFleet(): TemplateResult {
     void this._fleetVersion; // read so Lit re-renders on every fleet change
-    const byGroup = new Map<HomeGroup, SessionState[]>(
-      HOME_GROUPS.map((g) => [g, [] as SessionState[]]),
+    const byGroup = new Map<DashboardGroup, SessionState[]>(
+      DASHBOARD_GROUPS.map((g) => [g, [] as SessionState[]]),
     );
-    for (const s of homeSessions.sessions) byGroup.get(groupFor(s))?.push(s);
+    for (const s of homeSessions.sessions) byGroup.get(dashboardGroupFor(s))?.push(s);
     const total = homeSessions.sessions.length;
     const freshness = homeSessions.snapshotStatus;
 
@@ -1023,16 +1231,92 @@ export class AppletDashboard extends LitElement implements AppletElement {
       ${freshness === 'unavailable'
         ? html`<div class="fzero">Fleet status is unavailable; showing its last known rows.</div>`
         : nothing}
-      ${DISPLAY_GROUPS.map((g) => {
+      ${DASHBOARD_GROUPS.map((g) => {
         const members = byGroup.get(g) ?? [];
         if (members.length === 0) return nothing;
+        if (g === 'Finished') return this._renderFinished(members);
         return html`
-          <h2 class="grp">${GROUP_LABEL[g]} · ${members.length}</h2>
+          <h2 class="grp"><span>${g}</span><span class="grp-count">· ${members.length}</span></h2>
           <div class="grid">
             ${members.map((s) => this._renderCard(s))}
           </div>
         `;
       })}
+    `;
+  }
+
+  private _toggleFinished(): void {
+    this._finishedOpen = !this._finishedOpen;
+    if (!this._finishedOpen) this._expandedFinished = null;
+    try {
+      localStorage.setItem(AppletDashboard.finishedOpenKey, String(this._finishedOpen));
+    } catch {
+      // Persistence is a convenience when browser storage is available.
+    }
+  }
+
+  private _renderFinished(members: readonly SessionState[]): TemplateResult {
+    return html`
+      <button class="grp finished-toggle" type="button" aria-expanded="${this._finishedOpen}" @click="${this._toggleFinished}">
+        <span class="group-chevron" aria-hidden="true">›</span>
+        <span>Finished</span><span class="grp-count">· ${members.length}</span>
+      </button>
+      ${this._finishedOpen ? html`
+        <div class="finished-ledger">
+          <div class="ledger-columns" aria-hidden="true">
+            <span></span><span>Lane</span><span>Now</span><span>Todo</span><span class="ledger-artifact-column">Artifact</span><span>Age</span><span></span>
+          </div>
+          ${members.map((s) => this._renderFinishedRow(s))}
+        </div>
+      ` : nothing}
+    `;
+  }
+
+  private _renderFinishedRow(s: SessionState): TemplateResult {
+    const open = this._expandedFinished === s.sessionId;
+    const frac = todoFraction(s);
+    const pct = todoPercent(s);
+    const a = age(s.updatedAt, this._now);
+    const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
+    return html`
+      <article
+        class="ledger-row ${stateClass(s)} ${open ? 'open' : ''}"
+        tabindex="0"
+        aria-expanded="${open}"
+        @click="${() => { this._expandedFinished = open ? null : s.sessionId; }}"
+        @keydown="${(event: KeyboardEvent) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          this._expandedFinished = open ? null : s.sessionId;
+        }}"
+      >
+        <span class="ledger-dot" aria-hidden="true"></span>
+        <span class="ledger-title">${s.name}</span>
+        <span class="ledger-activity">${progressLine(s) || s.doing || '—'}</span>
+        <span class="ledger-progress">
+          <span>${frac || '—'}</span>
+          ${frac ? html`<span class="track"><i style="width:${pct}%"></i></span>` : html`<span></span>`}
+        </span>
+        <span class="ledger-artifact ${s.pr ? 'pr' : ''}">${s.pr ? `⑂ PR #${s.pr}` : '—'}</span>
+        <span class="ledger-age">${[a, s.harness].filter(Boolean).join(' · ') || '—'}</span>
+        <span class="ledger-status" aria-hidden="true"></span>
+        ${s.paneId !== null && s.workspaceId !== null ? html`
+          <button class="ledger-close" type="button" aria-label="Close ${s.name}" @click="${(event: Event) => { event.stopPropagation(); this._closeTerminal(s); }}">×</button>
+        ` : nothing}
+        <div class="ledger-detail" @click="${(event: Event) => event.stopPropagation()}">
+          <div><b>Current activity</b><br>${s.doing || 'No current activity reported.'}</div>
+          <div>
+            <b>Todo list</b>
+            ${s.todo ? html`<div class="ledger-todo-line"><span>✓ ${s.todo.done} complete</span>${s.todo.current ? html`<b>● ${s.todo.current}</b>` : nothing}${remaining ? html`<span>○ ${remaining} left</span>` : nothing}</div>` : html`<div class="ledger-todo-line"><span>No todo list reported</span></div>`}
+          </div>
+          ${s.summary ? html`
+            <figure class="ledger-final-message" aria-label="Final message from ${s.name}">
+              <figcaption>Final message</figcaption>
+              <blockquote>${s.summary}</blockquote>
+            </figure>
+          ` : nothing}
+        </div>
+      </article>
     `;
   }
 
@@ -1060,13 +1344,13 @@ export class AppletDashboard extends LitElement implements AppletElement {
     return html`
       <article class="card ${stateClass(s)} ${expanded ? 'expanded' : ''}">
         <header class="card-head">
-          <button class="card-open" type="button" title="${s.name}" @click="${() => this._openPane(s)}">
+          <button class="card-open" type="button" @click="${() => this._openPane(s)}">
             <span class="n">${s.name}</span>
             <span class="m">${bits.join(' \u00b7 ')}</span>
           </button>
           <span class="status" aria-hidden="true">●</span>
           ${s.paneId !== null && s.workspaceId !== null ? html`
-            <button class="card-close" type="button" aria-label="Close ${s.name}" title="Close terminal" @click="${() => this._closeTerminal(s)}">×</button>
+            <button class="card-close" type="button" aria-label="Close ${s.name}" @click="${() => this._closeTerminal(s)}">×</button>
           ` : nothing}
         </header>
         <div class="card-body">
