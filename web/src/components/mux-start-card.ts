@@ -174,7 +174,7 @@ export class MuxStartCard extends LitElement {
       letter-spacing: 0;
       text-transform: none;
       color: var(--chrome-text-dim);
-      border: 1px solid var(--chrome-border);
+      border: 1px solid var(--sidebar-edge, var(--chrome-border));
       border-radius: 3px;
       padding: 0 5px;
       white-space: nowrap;
@@ -260,6 +260,39 @@ export class MuxStartCard extends LitElement {
       color: var(--chrome-text-dim);
       flex-shrink: 0;
     }
+
+    :host { margin: 8px 9px 5px; }
+    .start,
+    .start.zero {
+      box-sizing: border-box;
+      height: 36px;
+      padding: 0 9px;
+      border: 1px solid var(--chrome-border);
+      border-radius: 7px;
+      background: var(--sidebar-panel, var(--chrome-body));
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .start:hover,
+    .start.zero:hover { background: var(--sidebar-hover, var(--chrome-hover)); border-color: var(--sidebar-edge, var(--chrome-border)); }
+    .start.here,
+    .start.zero.here,
+    .start.zero.here:hover {
+      border-color: color-mix(in srgb, var(--chrome-accent) 58%, var(--sidebar-edge, var(--chrome-border)));
+      background: color-mix(in srgb, var(--chrome-accent) 9%, var(--sidebar-panel, var(--chrome-body)));
+      box-shadow: none;
+    }
+    .mc-mark { color: var(--chrome-accent); font-weight: 800; }
+    .mc-name { font-size: 12px; font-weight: 760; color: var(--sidebar-bright, var(--chrome-text-bright)); }
+    .mc-state {
+      margin-left: auto;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--chrome-accent);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--chrome-accent) 9%, transparent);
+    }
   `;
 
   private _onClick(): void {
@@ -268,101 +301,20 @@ export class MuxStartCard extends LitElement {
 
   override render() {
     const zero = this.count === 0;
-    const cls = `start ${zero ? 'zero' : ''} ${this.active ? 'here' : ''}`;
-
-    // The second line says WHERE the card takes you -- so while Mission Control
-    // is the thing on screen it must not still read "click to go there". The
-    // spread is a shape, not a tally: "across 2 workspaces" tells you the
-    // attention is scattered, which is a different fact from how many rows
-    // there are, and it is the one the sidebar can act on.
-    const spread =
-      this.spread > 1
-        ? `across ${this.spread} workspaces`
-        : '';
-    const lbl = this.active
-      ? spread || 'you are here'
-      : zero
-        ? 'nothing is waiting'
-        : spread || 'something wants you';
-
-    // The card's whole body: its name, the one dot, and the line saying where
-    // it takes you.
-    const body = html`<div class="name">
-        Mission Control
-        ${zero ? '' : html`<span class="dot"></span>`}
-      </div>
-      <div class="lbl">${lbl}</div>`;
-
-    // THE ZERO-REMOTE GATE, expressed in Lit rather than as an early return.
-    //
-    // `body` is passed through UNTOUCHED when there is no split, into the same
-    // single binding it has always occupied. Appending a second `${...}` to the
-    // template instead would add a ChildPart marker comment to the card on
-    // every machine, including the ones with no remotes at all -- so the split
-    // is composed INSIDE the existing binding's value, where it costs a browser
-    // with one machine exactly nothing.
-    //
-    // A row shows a dot when that machine wants you, `?` when we cannot see it,
-    // and nothing at all when it is clear. No numbers: this card is the door to
-    // Mission Control, and Mission Control counts nothing.
-    const shown =
-      this.split.length === 0
-        ? body
-        : html`${body}
-            <div class="split">
-              ${this.split.map(
-                (row) => html`<div class="splitrow ${row.count === null ? 'unknown' : ''}">
-                  <span class="nm" title="${row.name}">${row.name}</span>
-                  ${row.count === null
-                    ? html`<span class="mk" title="not connected">?</span>`
-                    : row.count > 0
-                      ? html`<span class="dot"></span>`
-                      : ''}
-                </div>`,
-              )}
-            </div>`;
-
-    // Selection has to reach a screen reader too, or the fix is only for
-    // people who can see the ring. aria-current="page" is the cue for "this
-    // is the view you are on"; it replaces aria-pressed, which described the
-    // card as a toggle rather than as where you are. The dot is decorative
-    // here -- the label below carries the same fact in words.
     const need = zero ? 'Nothing needs input.' : 'Sessions need input.';
-
-    // An aria-label REPLACES the element's contents for a screen reader, and
-    // this card is one button — so a split that exists only in the DOM is a
-    // split nobody using one can hear, including the `?` that is the whole
-    // point of it. Appended to the label, and empty when there is no split, so
-    // the label a machine with no remotes exposes is the string it exposes now.
-    // It says the same three states the dots say, in words, and no numbers.
-    const fleet =
-      this.split.length === 0
-        ? ''
-        : ` ${this.split
-            .map((r) =>
-              r.count === null
-                ? `${r.name}: unknown, not connected.`
-                : r.count > 0
-                  ? `${r.name}: needs input.`
-                  : `${r.name}: nothing waiting.`,
-            )
-            .join(' ')}`;
-
+    const cls = `start ${zero ? 'zero' : ''} ${this.active ? 'here' : ''}`;
     return html`
       <button
         type="button"
         class="${cls}"
-        aria-label="${(this.active
-          ? `${need} Mission Control, current view.`
-          : `${need} Go to Mission Control.`) + fleet}"
+        title="Mission Control${this.hint ? ` · ${this.hint}` : ''}"
+        aria-label="${this.active ? `${need} Mission Control, current view.` : `${need} Go to Mission Control.`}"
         aria-current="${this.active ? 'page' : 'false'}"
         @click="${this._onClick}"
       >
-        <div class="head">
-          <span>mission control</span>
-          ${this.hint ? html`<span class="kb">${this.hint}</span>` : ''}
-        </div>
-        ${shown}
+        <span class="mc-mark">⌘</span>
+        <span class="mc-name">Mission Control</span>
+        ${zero ? '' : html`<span class="mc-state" aria-hidden="true"></span>`}
       </button>
     `;
   }
