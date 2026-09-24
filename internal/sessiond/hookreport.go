@@ -18,8 +18,11 @@ import (
 )
 
 const (
-	HookReportVersion  = 2
-	MaxHookReportBytes = 64 << 10
+	HookReportVersion = 2
+	// Turn-end reports carry the harness's complete final assistant message.
+	// This is a transport rejection ceiling, not a truncation limit: an
+	// oversized report fails loudly rather than publishing altered text.
+	MaxHookReportBytes = 1 << 20
 )
 
 type HookProcess struct {

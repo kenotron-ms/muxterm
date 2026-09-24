@@ -622,8 +622,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
     }
     .detail-identity { min-width: 0; flex: 1; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 14px; align-items: center; }
     .detail-copy { min-width: 0; }
-    .detail-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-1); font-size: 17px; font-weight: 700; }
-    .detail-meta { margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fleet-muted); font: 10px/1.35 var(--mono); font-weight: 400; }
+    .detail-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-1); font-size: 17px; font-weight: 700; }
+    .detail-meta { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fleet-muted); font: 10px/1.35 var(--mono); font-weight: 400; }
     .detail-state { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; color: var(--work); background: color-mix(in srgb, currentColor 14%, transparent); }
     .detail.need .detail-state { color: var(--need); }
     .detail.fail .detail-state { color: var(--fail); }
@@ -638,6 +638,49 @@ export class AppletDashboard extends LitElement implements AppletElement {
       font-weight: 600;
     }
     .detail-head .detail-close { width: 28px; height: 28px; font-size: 17px; }
+    .final-message {
+      margin: 0;
+      padding: 16px 18px 18px;
+      border-bottom: 1px solid var(--fleet-edge);
+      background: #121a27;
+    }
+    .final-message figcaption {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 9px;
+      color: var(--fleet-muted);
+      font-size: 11px;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    .final-message cite {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #aeb8c8;
+      font-style: normal;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .final-message blockquote {
+      max-height: 20rem;
+      margin: 0;
+      padding: 13px 15px;
+      overflow: auto;
+      border: 1px solid #2b3850;
+      border-left: 3px solid var(--ok);
+      border-radius: 7px;
+      background: #0e1520;
+      color: #d2d9e5;
+      font: 12px/1.55 var(--mono);
+      overflow-wrap: anywhere;
+      user-select: text;
+      white-space: pre-wrap;
+    }
+    .detail.fail .final-message blockquote { border-left-color: var(--fail); }
+    .detail.need .final-message blockquote { border-left-color: var(--need); }
     .detail-main { display: grid; grid-template-columns: minmax(220px, .75fr) minmax(360px, 1.6fr); }
     .detail-summary { padding: 18px; border-right: 1px solid var(--fleet-edge); }
     .detail-summary h3, .history h3 { margin: 0 0 14px; color: var(--fleet-muted); font-size: 11px; letter-spacing: .09em; text-transform: uppercase; }
@@ -905,6 +948,12 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
     return html`<section class="detail ${stateClass(s)}" aria-label="Session detail">
       <div class="detail-head"><span class="detail-identity"><span class="detail-state" aria-hidden="true">●</span><span class="detail-copy"><span class="detail-title">${s.name}</span><span class="detail-meta">${detailBits.join(' · ')}</span></span></span><span>${s.paneId !== null && s.workspaceId !== null ? html`<button class="open-terminal" type="button" @click="${() => this._openTerminal(s)}">Open terminal ↗</button>` : nothing}<button class="detail-close" type="button" aria-label="Close session detail" @click="${() => { this._detailSessionId = null; }}">×</button></span></div>
+      ${groupFor(s) === 'Completed' && s.summary ? html`
+        <figure class="final-message" aria-label="Final message from ${s.name}">
+          <figcaption><span>Final message</span><cite>${s.name}</cite></figcaption>
+          <blockquote>${s.summary}</blockquote>
+        </figure>
+      ` : nothing}
       <div class="detail-main">
         <aside class="detail-summary">
           <h3>Session</h3>

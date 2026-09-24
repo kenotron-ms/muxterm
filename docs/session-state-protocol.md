@@ -64,7 +64,7 @@ the reader with no explanation.
 
 ## Harness hooks: `muxterm session hook-report`
 
-Harness adapters write one JSON envelope (maximum 64 KiB) to stdin. The command
+Harness adapters write one JSON envelope (maximum 1 MiB) to stdin. The command
 atomically queues and fsyncs it under
 `$XDG_DATA_HOME/muxterm/agent-sessions/inbox/`, prints a `queued` receipt, and
 exits. The daemon consumes the inbox even with no browser connected, records an
@@ -253,7 +253,7 @@ silently never read, which is the most confusing possible outcome.
 | `label` | string | 1–3 words naming the work, for a pane tab. Not a shorter `name`; see below. |
 | `waitingFor` | enum | Why it is blocked. Only meaningful with `state: "blocked"`. |
 | `doing` | string | One short line of current activity. |
-| `summary` | string | The lane's bounded final assistant message. Kept separate from `doing` so lifecycle notices retain concrete result details without bloating the fleet row. |
+| `summary` | string | The lane's raw final assistant message exactly as supplied by its turn-end hook, including original line breaks and structure. Muxterm does not shorten this field. Kept separate from `doing` so lifecycle notices and Fleet retain concrete result details without bloating the resting row. |
 | `todo` | object | Optional structured task-list progress: `{ "done": 2, "total": 6, "current": "Checking reconnects" }`. See below. |
 | `doneMeans` | string | This session's own definition of finished. |
 | `knows` | string[] | Distinct paths this session has read. |
@@ -309,8 +309,8 @@ one condition share an id; it names the condition, not the run.
 
 ### Size
 
-A snapshot must be under 64 KiB. Keep `doing` to about 120 characters,
-`summary` under about 8,000 characters, `doneMeans` to about 400, and `knows`
+A snapshot must be under 1 MiB. The turn-end `summary` is retained unabridged;
+keep `doing` to about 120 characters, `doneMeans` to about 400, and `knows`
 to about 50 entries of 256 characters. The
 reader silently skips an oversized file; `muxterm session report` refuses to
 write one.

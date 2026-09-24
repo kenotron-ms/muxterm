@@ -120,11 +120,6 @@ const codexNotifyType = "agent-turn-complete"
 // line, and maxSessionSnapshotBytes caps the whole document anyway.
 const codexDoingBytes = 240
 
-// The lifecycle notice needs the substance of the closing message, not only
-// the fleet's first-line projection. This remains well below the 64KiB
-// snapshot ceiling and is sanitized again before reaching Operator.
-const codexSummaryBytes = 8 << 10
-
 // codexNameBytes bounds the row title taken from the turn's input message.
 const codexNameBytes = 120
 
@@ -322,7 +317,7 @@ func CodexRowFor(n CodexNotify) (SessionState, bool) {
 		// tell muxterm whether the work is finished or merely paused.
 		State:     SessionStateStopped,
 		Doing:     truncateRunes(firstMeaningfulLine(n.LastAssistantMessage), codexDoingBytes),
-		Summary:   truncateRunes(strings.TrimSpace(n.LastAssistantMessage), codexSummaryBytes),
+		Summary:   n.LastAssistantMessage,
 		UpdatedAt: time.Now().Unix(),
 	}
 	return row, true

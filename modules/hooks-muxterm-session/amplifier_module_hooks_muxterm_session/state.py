@@ -110,7 +110,6 @@ DOING_MAX_CHARS = 120
 # The lane's closing message is notice substance, not dashboard furniture.
 # Keep it separately so the fleet line stays compact while lifecycle notices
 # can relay concrete findings and verification details from every harness.
-SUMMARY_MAX_CHARS = 8000
 # The one variable part of a mid-turn `doing` phrase -- a filename, a search
 # pattern, an agent name. It shares the line with the phrase around it and, for
 # a sub-agent, with an "[explorer] " prefix, so it is bounded well below
@@ -1149,7 +1148,7 @@ class SessionStateTracker:
         already_blocked = record.state == STATE_BLOCKED
         response = data.get("response")
         if isinstance(response, str) and response.strip():
-            record.summary = _clip(response.strip(), SUMMARY_MAX_CHARS)
+            record.summary = response
         if record.state in (STATE_WORKING, STATE_BLOCKED):
             record.state = STATE_STOPPED
             record.waiting_for = ""
