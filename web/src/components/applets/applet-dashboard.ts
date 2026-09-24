@@ -46,13 +46,11 @@ import {
 } from '../../lib/applet-registry.js';
 import { homeSessions } from '../../lib/home-sessions.js';
 import {
-  HOME_GROUPS,
   groupFor,
   isKnownHarness,
   progressLine,
   todoFraction,
   todoPercent,
-  type HomeGroup,
   type SessionState,
 } from '../../lib/session-state.js';
 import type { SessiondMessage, SessionTranscriptTurn } from '../../types.js';
@@ -66,15 +64,6 @@ import type { SessiondMessage, SessionTranscriptTurn } from '../../types.js';
  * where a list view names a state ("Needs input"), and the mockup is the
  * approved copy.
  */
-const GROUP_LABEL: Record<HomeGroup, string> = {
-  'Needs input': 'needs attention',
-  Running: 'working',
-  Completed: 'finished',
-};
-
-/** Visual reading order from the approved mockup: motion, intervention, outcome. */
-const DISPLAY_GROUPS: readonly HomeGroup[] = ['Running', 'Needs input', 'Completed'];
-
 /**
  * Left-edge state colour class -- DUPLICATED from mux-home.ts's markClass()
  * with eyes open. The class names and their colours have to live in this
@@ -104,6 +93,16 @@ function age(updatedAt: number, nowSec: number): string {
   if (d < 3600) return `${Math.floor(d / 60)}m`;
   if (d < 86400) return `${Math.floor(d / 3600)}h`;
   return `${Math.floor(d / 86400)}d`;
+}
+
+const FINISHED_OPEN_KEY = 'muxterm:fleet-finished-open';
+
+function restoreFinishedOpen(): boolean {
+  try {
+    return localStorage.getItem(FINISHED_OPEN_KEY) === 'true';
+  } catch {
+    return false;
+  }
 }
 
 @customElement('applet-dashboard')
@@ -136,6 +135,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
   @state() private _transcriptDetached = false;
   @state() private _transcriptTruncated = false;
   @state() private _expandedTodo: string | null = null;
+  @state() private _finishedOpen = restoreFinishedOpen();
+  @state() private _expandedFinished: string | null = null;
 
   private _unsubFleet: (() => void) | null = null;
 
@@ -462,7 +463,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
        and its second geometry are intentionally gone. */
     .grid,
     :host([view='tiles']) .grid {
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
       gap: var(--s-5);
     }
     .card,
@@ -708,11 +709,67 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .transcript li.tool span { background: #101620; color: #99a6ba; font: 11px/1.45 var(--mono); }
     .archive-row { margin-top: 14px; padding-top: 11px; border-top: 1px solid #283143; text-align: right; }
     .archive-action { color: color-mix(in srgb, var(--fail) 60%, var(--ink-3)) !important; }
+
+    /* Quiet finished ledger: geometry follows the approved Fleet mockup. */
+    .fleet-top { margin-bottom: 12px; }
+    .fleet-hint { display: none; }
+    .grp { padding: 7px 0 8px; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+    .grid, :host([view='tiles']) .grid { gap: 9px; }
+    .card, :host([view='tiles']) .card { min-height: 0; box-shadow: none; }
+    .card-head { height: 47px; padding: 9px 11px; grid-template-columns: minmax(0, 1fr) 30px; }
+    .card-body { padding: 9px 11px; }
+    .card .g { height: 20px; min-height: 20px; font-size: 12px; white-space: nowrap; display: block; }
+    .progress { margin-top: 5px; gap: 7px; }
+    .track { height: 3px; }
+    .todo-toggle { margin-top: 7px; padding: 6px 0 1px; }
+    .status, .card-close { width: 30px; height: 30px; border-radius: 6px; }
+
+    .finished-toggle {
+      width: 100%; height: 38px; margin-top: 10px; padding: 8px 0 0;
+      border: 0; border-top: 1px solid var(--fleet-edge); background: none;
+      display: flex; align-items: center; gap: 8px; color: var(--ink-3);
+      font: 700 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+      cursor: pointer;
+    }
+    .finished-toggle:hover { color: var(--ink-2); }
+    .finished-toggle .count { color: color-mix(in srgb, var(--ink-3) 72%, transparent); }
+    .finished-toggle .group-chevron { width: 12px; color: var(--ink-2); font-size: 13px; }
+    .ledger { border-top: 1px solid var(--fleet-edge); }
+    .ledger-columns, .ledger-row-main {
+      display: grid;
+      grid-template-columns: 12px minmax(150px, 2.3fr) minmax(120px, 1.35fr) 68px 88px 72px 30px;
+      align-items: center; gap: 8px;
+    }
+    .ledger-columns { height: 25px; color: color-mix(in srgb, var(--ink-3) 72%, transparent); font: 700 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .ledger-row { border-bottom: 1px solid color-mix(in srgb, var(--fleet-edge) 72%, transparent); opacity: .78; }
+    .ledger-row:hover, .ledger-row.open { opacity: 1; background: color-mix(in srgb, var(--fleet-panel) 64%, transparent); }
+    .ledger-row-main { min-height: 36px; }
+    .ledger-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--row-state); box-shadow: 0 0 0 4px color-mix(in srgb, var(--row-state) 11%, transparent); }
+    .ledger-name, .ledger-doing, .ledger-artifact, .ledger-age { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ledger-name { color: var(--ink-1); font-size: 12px; font-weight: 600; }
+    .ledger-doing { color: var(--fleet-body); font-size: 12px; }
+    .ledger-artifact { color: #aebeff; font-size: 11px; font-weight: 700; }
+    .ledger-artifact.empty { color: var(--ink-3); font-weight: 400; }
+    .ledger-age { color: var(--fleet-muted); font: 9px/1.35 var(--mono); }
+    .ledger-progress { display: grid; grid-template-columns: 27px 1fr; align-items: center; gap: 5px; font: 700 9px/1 var(--mono); }
+    .ledger-row .status, .ledger-row .card-close { grid-column: auto; grid-row: auto; }
+    .ledger-row .status { color: var(--row-state); }
+    .ledger-row:hover .status { display: none; }
+    .ledger-row:hover .card-close { display: grid; }
+    .ledger-details { display: grid; grid-template-columns: 1.1fr .9fr; gap: 20px; margin-left: 20px; padding: 10px 12px 11px 0; color: #9da9bc; font-size: 11px; }
+    .ledger-details b { color: var(--ink-1); }
+    .ledger-todo { display: flex; gap: 13px; margin-top: 4px; }
+    .ledger-final { grid-column: 1 / -1; margin: 0; }
+    .ledger-final figcaption { margin-bottom: 6px; color: var(--fleet-muted); font: 700 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .ledger-final blockquote { max-height: 14rem; margin: 0; padding: 10px 12px; overflow: auto; border-left: 3px solid var(--row-state); background: #0e1520; color: #d2d9e5; font: 11px/1.5 var(--mono); overflow-wrap: anywhere; user-select: text; white-space: pre-wrap; }
     @media (max-width: 700px) {
       .grid, :host([view='tiles']) .grid { grid-template-columns: 1fr; }
       .detail-main { grid-template-columns: 1fr; }
       .detail-summary { border-right: 0; border-bottom: 1px solid var(--edge); }
       .fleet-hint { display: none; }
+      .ledger-columns, .ledger-row-main { grid-template-columns: 12px minmax(130px, 2fr) minmax(90px, 1.2fr) 58px 54px 30px; }
+      .ledger-artifact-col, .ledger-artifact { display: none; }
+      .ledger-details { grid-template-columns: 1fr; }
     }
   `;
 
@@ -934,7 +991,6 @@ export class AppletDashboard extends LitElement implements AppletElement {
     return html`<div class="body">
       <header class="fleet-top">
         <div><h1>Fleet</h1><div class="fleet-sub">${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'} across ${workspaces} ${workspaces === 1 ? 'workspace' : 'workspaces'}</div></div>
-        <div class="fleet-hint">Click a card heading to inspect it</div>
       </header>
       ${this._renderDetail()}${this._renderFleet()}
     </div>`;
@@ -992,10 +1048,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
    */
   private _renderFleet(): TemplateResult {
     void this._fleetVersion; // read so Lit re-renders on every fleet change
-    const byGroup = new Map<HomeGroup, SessionState[]>(
-      HOME_GROUPS.map((g) => [g, [] as SessionState[]]),
-    );
-    for (const s of homeSessions.sessions) byGroup.get(groupFor(s))?.push(s);
+    const working = homeSessions.sessions.filter((s) => groupFor(s) === 'Running');
+    const blocked = homeSessions.sessions.filter((s) => groupFor(s) === 'Needs input');
+    const failed = homeSessions.sessions.filter((s) => groupFor(s) === 'Completed' && s.state === 'failed');
+    const finished = homeSessions.sessions.filter((s) => groupFor(s) === 'Completed' && s.state !== 'failed');
     const total = homeSessions.sessions.length;
     const freshness = homeSessions.snapshotStatus;
 
@@ -1023,17 +1079,64 @@ export class AppletDashboard extends LitElement implements AppletElement {
       ${freshness === 'unavailable'
         ? html`<div class="fzero">Fleet status is unavailable; showing its last known rows.</div>`
         : nothing}
-      ${DISPLAY_GROUPS.map((g) => {
-        const members = byGroup.get(g) ?? [];
-        if (members.length === 0) return nothing;
-        return html`
-          <h2 class="grp">${GROUP_LABEL[g]} · ${members.length}</h2>
-          <div class="grid">
-            ${members.map((s) => this._renderCard(s))}
-          </div>
-        `;
-      })}
+      ${this._renderCardGroup('working', working)}
+      ${this._renderCardGroup('needs attention', blocked)}
+      ${this._renderCardGroup('failed', failed)}
+      ${finished.length ? html`
+        <button class="finished-toggle" type="button" aria-expanded="${this._finishedOpen}" @click="${() => this._toggleFinished()}">
+          <span class="group-chevron">${this._finishedOpen ? '⌄' : '›'}</span>
+          <span>finished</span><span class="count">· ${finished.length}</span>
+        </button>
+        ${this._finishedOpen ? this._renderFinishedLedger(finished) : nothing}
+      ` : nothing}
     `;
+  }
+
+  private _renderCardGroup(label: string, members: readonly SessionState[]): TemplateResult | typeof nothing {
+    if (members.length === 0) return nothing;
+    return html`<h2 class="grp">${label} · ${members.length}</h2><div class="grid">${members.map((s) => this._renderCard(s))}</div>`;
+  }
+
+  private _toggleFinished(): void {
+    this._finishedOpen = !this._finishedOpen;
+    try {
+      localStorage.setItem(FINISHED_OPEN_KEY, String(this._finishedOpen));
+    } catch {
+      // A denied display-preference write must not make the ledger unusable.
+    }
+    if (!this._finishedOpen) this._expandedFinished = null;
+  }
+
+  private _renderFinishedLedger(sessions: readonly SessionState[]): TemplateResult {
+    return html`<div class="ledger">
+      <div class="ledger-columns"><span></span><span>Lane</span><span>Now</span><span>Todo</span><span class="ledger-artifact-col">Artifact</span><span>Age</span><span></span></div>
+      ${sessions.map((s) => this._renderFinishedRow(s))}
+    </div>`;
+  }
+
+  private _renderFinishedRow(s: SessionState): TemplateResult {
+    const open = this._expandedFinished === s.sessionId;
+    const frac = todoFraction(s);
+    const pct = todoPercent(s);
+    const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
+    const rowState = s.state === 'done' ? 'var(--ok)' : 'var(--ink-3)';
+    return html`<article class="ledger-row ${open ? 'open' : ''}" style="--row-state:${rowState}">
+      <div class="ledger-row-main" @click="${() => { this._expandedFinished = open ? null : s.sessionId; }}">
+        <span class="ledger-dot"></span>
+        <span class="ledger-name">${s.name}</span>
+        <span class="ledger-doing">${progressLine(s) || s.doing || '—'}</span>
+        <span class="ledger-progress">${frac ? html`<span>${frac}</span><span class="track"><i style="width:${pct}%"></i></span>` : html`<span>—</span>`}</span>
+        <span class="ledger-artifact ${s.pr ? '' : 'empty'}">${s.pr ? `⑂ PR #${s.pr}` : '—'}</span>
+        <span class="ledger-age">${age(s.updatedAt, this._now) || '—'} · ${s.harness ?? '—'}</span>
+        <span class="status" aria-hidden="true">●</span>
+        ${s.paneId !== null && s.workspaceId !== null ? html`<button class="card-close" type="button" aria-label="Close ${s.name}" title="Close terminal" @click="${(event: Event) => { event.stopPropagation(); this._closeTerminal(s); }}">×</button>` : nothing}
+      </div>
+      ${open ? html`<div class="ledger-details">
+        <div><b>Current activity</b><br>${s.doing || 'No current activity reported.'}</div>
+        <div><b>Todo list</b>${s.todo ? html`<div class="ledger-todo"><span>✓ ${s.todo.done} complete</span>${s.todo.current ? html`<b>● current</b>` : nothing}<span>○ ${remaining} left</span></div>` : html`<div>—</div>`}</div>
+        ${s.summary ? html`<figure class="ledger-final" aria-label="Final message from ${s.name}"><figcaption>Final message · ${s.name}</figcaption><blockquote>${s.summary}</blockquote></figure>` : nothing}
+      </div>` : nothing}
+    </article>`;
   }
 
   private _renderCard(s: SessionState): TemplateResult {
@@ -1060,7 +1163,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     return html`
       <article class="card ${stateClass(s)} ${expanded ? 'expanded' : ''}">
         <header class="card-head">
-          <button class="card-open" type="button" title="${s.name}" @click="${() => this._openPane(s)}">
+          <button class="card-open" type="button" @click="${() => this._openPane(s)}">
             <span class="n">${s.name}</span>
             <span class="m">${bits.join(' \u00b7 ')}</span>
           </button>
