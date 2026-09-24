@@ -1617,6 +1617,8 @@ export class MuxApp extends LitElement {
                   @fleet-state="${this._onFleetState}"
                   @session-transcript-request="${this._onSessionTranscriptRequest}"
                   @session-archive-request="${this._onSessionArchiveRequest}"
+                  @finished-clear-request="${this._onFinishedClearRequest}"
+                  @finished-clear-undo-request="${this._onFinishedClearUndoRequest}"
                 ></mux-cos>
               `
             : '',
@@ -2439,6 +2441,59 @@ export class MuxApp extends LitElement {
   private _onSessionArchiveRequest = (e: Event): void => {
     const detail = (e as CustomEvent<{ sessionId?: string; archived?: boolean }>).detail;
     if (detail?.sessionId) this._socket?.setSessionArchived(detail.sessionId, detail.archived === true);
+  };
+
+  private _onFinishedClearRequest = (e: Event): void => {
+    const rows = (e as CustomEvent<{ rows?: Array<{ workspaceId: string; sessionId: string }> }>).detail?.rows ?? [];
+    const socket = this._socket;
+    if (rows.length === 0) return;
+    if (!socket) {
+      window.dispatchEvent(new CustomEvent('finished-clear-result', {
+        detail: { cleared: 0, clearedRows: [], failedRows: rows, undos: [], error: 'The Fleet connection is unavailable.' },
+      }));
+      return;
+    }
+    void Promise.allSettled(rows.map((row) => socket.clearFinishedSession(row.workspaceId, row.sessionId))).then((results) => {
+      const undos: Array<{ workspaceId: string; sessionId: string; token: string }> = [];
+      const clearedRows: Array<{ workspaceId: string; sessionId: string }> = [];
+      const failedRows: Array<{ workspaceId: string; sessionId: string }> = [];
+      let cleared = 0;
+      let error = '';
+      for (const [index, result] of results.entries()) {
+        if (result.status === 'fulfilled') {
+          cleared++;
+          clearedRows.push(rows[index]);
+          if (result.value.undoToken) undos.push({ workspaceId: result.value.workspaceId, sessionId: rows[index].sessionId, token: result.value.undoToken });
+        } else if (!error) {
+          failedRows.push(rows[index]);
+          error = result.reason instanceof Error ? result.reason.message : 'A finished lane could not be cleared.';
+        } else {
+          failedRows.push(rows[index]);
+        }
+      }
+      window.dispatchEvent(new CustomEvent('finished-clear-result', { detail: { cleared, clearedRows, failedRows, undos, error } }));
+    });
+  };
+
+  private _onFinishedClearUndoRequest = (e: Event): void => {
+    const undos = (e as CustomEvent<{ undos?: Array<{ workspaceId: string; sessionId: string; token: string }> }>).detail?.undos ?? [];
+    const socket = this._socket;
+    if (undos.length === 0) return;
+    if (!socket) {
+      window.dispatchEvent(new CustomEvent('finished-clear-undo-result', {
+        detail: { restored: 0, sessionIds: [], error: 'The Fleet connection is unavailable.' },
+      }));
+      return;
+    }
+    void Promise.allSettled(undos.map((undo) => socket.undoFinishedClear(undo.workspaceId, undo.token))).then((results) => {
+      const restored = results.filter((result) => result.status === 'fulfilled').length;
+      const failure = results.find((result) => result.status === 'rejected');
+      const error = failure?.status === 'rejected'
+        ? (failure.reason instanceof Error ? failure.reason.message : 'Undo failed.')
+        : '';
+      const sessionIds = results.flatMap((result, index) => result.status === 'fulfilled' ? [undos[index].sessionId] : []);
+      window.dispatchEvent(new CustomEvent('finished-clear-undo-result', { detail: { restored, sessionIds, error } }));
+    });
   };
 
   /**
