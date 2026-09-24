@@ -122,7 +122,7 @@ func managedResumeCommand(row sessiond.SessionState, nativeID, prompt string) (*
 		if cwd == "" {
 			cwd, _ = os.Getwd()
 		}
-		hooks, err := sessiond.CodexRichHookArgs(codex, cwd)
+		hooks, err := sessiond.CodexRichHookArgs(codex, self, cwd)
 		if err != nil {
 			return nil, nil, err
 		}
