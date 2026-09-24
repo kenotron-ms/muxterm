@@ -134,7 +134,6 @@ export class AppletDashboard extends LitElement implements AppletElement {
   @state() private _transcriptArchived = false;
   @state() private _transcriptDetached = false;
   @state() private _transcriptTruncated = false;
-  @state() private _expandedTodo: string | null = null;
   @state() private _finishedOpen = restoreFinishedOpen();
   @state() private _expandedFinished: string | null = null;
 
@@ -722,6 +721,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .progress { margin-top: 5px; gap: 7px; }
     .track { height: 3px; }
     .todo-toggle { margin-top: 7px; padding: 6px 0 1px; }
+    .artifact-line { height: 18px; margin-top: 7px; overflow: hidden; color: #a9b7ce; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .artifact-line strong { color: #aebeff; font-weight: 700; }
     .status, .card-close { width: 30px; height: 30px; border-radius: 6px; }
 
     .finished-toggle {
@@ -1158,10 +1159,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const frac = todoFraction(s);
     const line = progressLine(s);
     const pct = todoPercent(s);
-    const expanded = this._expandedTodo === s.sessionId;
-    const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
     return html`
-      <article class="card ${stateClass(s)} ${expanded ? 'expanded' : ''}">
+      <article class="card ${stateClass(s)}">
         <header class="card-head">
           <button class="card-open" type="button" @click="${() => this._openPane(s)}">
             <span class="n">${s.name}</span>
@@ -1176,16 +1175,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
           <div class="g">${line || 'No current activity reported.'}</div>
           ${frac ? html`
             <div class="progress"><span class="frac" aria-label="${frac} tasks done">${frac}</span><span class="track"><i style="width:${pct}%"></i></span></div>
-            <button class="todo-toggle" type="button" aria-expanded="${expanded}" @click="${() => { this._expandedTodo = expanded ? null : s.sessionId; }}">
-              <span>Todo list</span><span class="chevron">⌄</span>
-            </button>
-            ${expanded ? html`<ul class="todo-list">
-              ${s.todo!.done > 0 ? html`<li class="complete"><span>✓</span><span>${s.todo!.done} completed</span></li>` : nothing}
-              ${s.todo!.current ? html`<li class="current"><span>●</span><span>${s.todo!.current}</span></li>` : nothing}
-              ${remaining > 0 ? html`<li><span>○</span><span>${remaining} remaining</span></li>` : nothing}
-              ${s.todo!.done === s.todo!.total ? html`<li class="current"><span>✓</span><span>All tasks complete</span></li>` : nothing}
-            </ul>` : nothing}
           ` : nothing}
+          <div class="artifact-line">${s.pr ? html`<strong>⑂ PR #${s.pr}</strong>` : 'No produced artifact yet'}</div>
         </div>
       </article>
     `;
