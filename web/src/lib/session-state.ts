@@ -135,6 +135,8 @@ export interface SessionState {
   waitingFor?: WaitingFor;
   /** Short line describing current activity, refreshed cheaply. */
   doing?: string;
+  /** Raw final assistant message, with original line breaks and structure. */
+  summary?: string;
   /** The session's declared stop condition. Normally only when autonomous. */
   doneMeans?: string;
   /**

@@ -79,10 +79,10 @@ func claudeReport(p claudeHookPayload, raw []byte) sessiond.HookReport {
 		// Claude's Stop is the successful completion of an assistant turn and
 		// carries its final report. Interruptions and API failures have distinct
 		// events, so mapping this to verdict-less stopped discards a declaration.
-		event, state, doing, summary = "turn.completed", sessiond.SessionStateDone, p.LastAssistantMessage, p.LastAssistantMessage
+		event, state, doing, summary = "turn.completed", sessiond.SessionStateDone, firstCodexLine(p.LastAssistantMessage, 240), sessiond.BoundFinalMessage(p.LastAssistantMessage)
 	case "StopFailure":
 		event, state, doing = "turn.failed", sessiond.SessionStateFailed, "Claude stopped with an API error"
-		summary = p.LastAssistantMessage
+		summary = sessiond.BoundFinalMessage(p.LastAssistantMessage)
 		if summary == "" {
 			summary = doing
 		}

@@ -359,7 +359,7 @@ func applyHookPatch(row *SessionState, set HookPatch, clear []string) {
 		row.Doing = *set.Doing
 	}
 	if set.Summary != nil {
-		row.Summary = *set.Summary
+		row.Summary = BoundFinalMessage(*set.Summary)
 	}
 	if set.DoneMeans != nil {
 		row.DoneMeans = *set.DoneMeans

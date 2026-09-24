@@ -253,7 +253,7 @@ silently never read, which is the most confusing possible outcome.
 | `label` | string | 1–3 words naming the work, for a pane tab. Not a shorter `name`; see below. |
 | `waitingFor` | enum | Why it is blocked. Only meaningful with `state: "blocked"`. |
 | `doing` | string | One short line of current activity. |
-| `summary` | string | The lane's bounded final assistant message. Kept separate from `doing` so lifecycle notices retain concrete result details without bloating the fleet row. |
+| `summary` | string | The lane's raw final assistant message, including its original line breaks and structure. Muxterm retains 24,576 UTF-8 bytes (without splitting a character) and appends a visible truncation marker when more text follows. Kept separate from `doing` so lifecycle notices retain concrete result details without bloating the fleet row. |
 | `todo` | object | Optional structured task-list progress: `{ "done": 2, "total": 6, "current": "Checking reconnects" }`. See below. |
 | `doneMeans` | string | This session's own definition of finished. |
 | `knows` | string[] | Distinct paths this session has read. |
@@ -310,7 +310,7 @@ one condition share an id; it names the condition, not the run.
 ### Size
 
 A snapshot must be under 64 KiB. Keep `doing` to about 120 characters,
-`summary` under about 8,000 characters, `doneMeans` to about 400, and `knows`
+`summary` under 24 KiB of UTF-8 text, `doneMeans` to about 400, and `knows`
 to about 50 entries of 256 characters. The
 reader silently skips an oversized file; `muxterm session report` refuses to
 write one.
