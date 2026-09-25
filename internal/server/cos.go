@@ -260,6 +260,7 @@ func newCosRelay() *cosRelay {
 		cfg: cos.Config{
 			Logf:            log.Printf,
 			SubscriberDepth: cosSubscriberDepth,
+			LoopLive:        cos.LoopLiveFromEnv(),
 		},
 		subs:        make(map[string]cosSubmission),
 		refs:        make(map[string]string),
