@@ -363,6 +363,32 @@ func (c *Client) MissionControlIdentity() (MissionControlIdentity, error) {
 	return MissionControlIdentity{ProtocolVersion: reply.MissionControlProtocolVersion, MachineID: reply.MachineID, DaemonIncarnation: reply.DaemonIncarnation}, nil
 }
 
+// ListProjects asks the daemon which containers exist -- the filing
+// destination list. There is always at least one: the Inbox is constructed in
+// memory at daemon boot and cannot be removed, so an empty reply means a
+// protocol failure, never an installation with nowhere to put a session.
+func (c *Client) ListProjects() ([]Project, error) {
+	reply, err := c.request(&Message{Type: TypeListProjects})
+	if err != nil {
+		return nil, err
+	}
+	return reply.Projects, nil
+}
+
+// AssignSessionProject files a session into a container.
+//
+// One method for both directions: filing a session OUT of a project is calling
+// this with InboxProjectID. There is no separate unfile call that could
+// disagree with this one about what an unfiled session is.
+//
+// A project that does not exist is refused by the daemon with
+// CodeUnknownProject rather than quietly redirected, so a caller that offers a
+// stale destination finds out.
+func (c *Client) AssignSessionProject(sessionID string, projectID ProjectID) error {
+	_, err := c.request(&Message{Type: TypeAssignSession, SessionID: sessionID, ProjectID: projectID})
+	return err
+}
+
 // CreateWorkspace asks the daemon to create a new workspace named name and
 // returns the daemon-assigned workspace id from the workspace-created reply.
 func (c *Client) CreateWorkspace(name string) (string, error) {
