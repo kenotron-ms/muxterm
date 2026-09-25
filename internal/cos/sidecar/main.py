@@ -116,6 +116,10 @@ TOOL_SURFACE_KEYS = ("muxterm_cos", "tools")
 SESSION_COST_CHANNEL = "session.cost"
 DEFAULT_APPROVAL_TIMEOUT = 300.0
 SUMMARY_LIMIT = 240
+LOOP_LIVE_COMMIT = "1d7be38ef47798bbb162f5331b413e78d6b4e70b"
+LOOP_LIVE_SOURCE = (
+    "git+https://github.com/microsoft/amplifier-module-loop-live@" + LOOP_LIVE_COMMIT
+)
 
 # Serve-loop wake-up token.  Pushed onto the op queue by the signal handler so
 # an IDLE sidecar (parked on queue.get(), which no signal interrupts) re-reads
@@ -816,6 +820,9 @@ class Sidecar:
         # nothing to crash on.
         self._loop: "asyncio.AbstractEventLoop | None" = None
         self._queue: "asyncio.Queue | None" = None
+        self.live_runtime: Any = None
+        self.live_task: "asyncio.Task | None" = None
+        self._live_inputs: dict[str, dict] = {}
 
     # -- boot ---------------------------------------------------------------
     async def build(self) -> Any:
@@ -851,6 +858,21 @@ class Sidecar:
         # MANDATORY: without this hook-context-intelligence dies validating
         # "Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'".
         cfg = expand_env_vars(cfg)
+        if self.args.loop_live:
+            # Canary only: replace exactly the root orchestrator and pin the
+            # private dependency to the design-reviewed commit. Background
+            # jobs and native steering remain disabled in Slice 1.
+            session_cfg = cfg.setdefault("session", {})
+            live_orchestrator = {
+                "module": "loop-live",
+                "source": LOOP_LIVE_SOURCE,
+                "config": {"background_tools": [], "background_delegate": False},
+            }
+            session_cfg["orchestrator"] = live_orchestrator
+            # _create_bundle_session activates modules from PreparedBundle,
+            # while SessionConfig.config supplies their runtime config. Keep
+            # both representations on the same pinned orchestrator.
+            prepared.bundle.session["orchestrator"] = dict(live_orchestrator)
 
         # -- resume ---------------------------------------------------------
         # The session lives in the ordinary amplifier session store for this
@@ -905,6 +927,19 @@ class Sidecar:
         register_mention_handling(session)
         register_session_spawning(session)
         self.session = session
+
+        if self.args.loop_live:
+            # PreparedBundle has already activated the stock orchestrator by
+            # this point. Mount the canary explicitly so the coordinator's
+            # single orchestrator slot is replaced before any execution starts.
+            from amplifier_module_loop_live import mount as mount_loop_live
+            from amplifier_module_loop_live.runtime import Runtime
+
+            await mount_loop_live(session.coordinator, {
+                "background_tools": [], "background_delegate": False,
+            })
+            self.live_runtime = Runtime(session_id=self.session_id, observer=self._live_observe)
+            session.coordinator.register_capability("live.runtime", self.live_runtime)
 
         # session.config is not guaranteed to be the same dict object as cfg.
         session.config["working_dir"] = cwd
@@ -1517,6 +1552,62 @@ class Sidecar:
         return str(turn), str(total)
 
     # -- turn execution -----------------------------------------------------
+    def _live_observe(self, event: dict) -> None:
+        """Translate loop-live's event truth onto muxterm's stdout protocol."""
+        event_type = event.get("type", "")
+        common = {
+            "version": 1,
+            "sequence": event.get("sequence"),
+            "generation_id": event.get("generation_id", ""),
+        }
+        if event_type == "input.accepted":
+            self.proto.emit(ev="input_accepted", input_id=event.get("input_id", ""),
+                            kind=event.get("kind", ""), source=event.get("source", ""), **common)
+        elif event_type == "input.delivered":
+            self.proto.emit(ev="input_delivered", input_id=event.get("input_id", ""),
+                            source=event.get("source", ""), delivery=event.get("delivery", ""), **common)
+        elif event_type in {"generation.finished", "generation.failed", "generation.detached"}:
+            asyncio.get_running_loop().create_task(self._live_terminal(event, common))
+
+    async def _live_terminal(self, event: dict, common: dict) -> None:
+        persisted = False
+        try:
+            persisted = await self._save_session()
+        except BaseException:
+            logger.warning("session save failed for live generation", exc_info=True)
+        ids = list(event.get("input_ids") or [])
+        finished = event.get("type") == "generation.finished"
+        self.proto.emit(ev="generation_finished" if finished else "generation_failed",
+                        input_ids=ids, response=event.get("text", ""),
+                        error=event.get("error_type", ""), persisted=persisted, **common)
+        turn = self._turn
+        if turn is not None and turn.id in ids:
+            self._emit_terminal(turn, ev="turn_end", response=event.get("text", "") if finished else "",
+                                ms=int((time.monotonic() - turn.started) * 1000),
+                                turn_cost=None, session_cost=None,
+                                error=None if finished else event.get("error_type", "generation failed"),
+                                persisted=persisted)
+            self.broker.current_turn_id = None
+            self._turn = None
+
+    async def _start_live(self) -> None:
+        if not self.args.loop_live:
+            return
+        # Exactly one execute owner for this sidecar incarnation.
+        self.live_task = asyncio.create_task(self.session.execute(""), name="cos-loop-live-owner")
+
+    async def _submit_live(self, *, input_id: str, kind: str, source: str, text: str) -> bool:
+        from amplifier_module_loop_live.runtime import Input
+
+        try:
+            await self.live_runtime.submit(Input(kind=kind, text=text, source=source, id=input_id))
+        except BaseException as exc:  # noqa: BLE001
+            self.proto.emit(ev="generation_failed", version=1, input_id=input_id,
+                            input_ids=[input_id], error=f"{type(exc).__name__}: {exc}")
+            return False
+        self._live_inputs[input_id] = {"kind": kind, "source": source}
+        return True
+
     async def _run_turn(self, turn: Turn) -> None:
         # turn_start was emitted synchronously when the turn was accepted, so
         # that a shutdown arriving before this task is first scheduled can
@@ -2013,7 +2104,7 @@ class Sidecar:
 
 
     # -- op dispatch --------------------------------------------------------
-    def _handle_turn(self, msg: dict) -> None:
+    async def _handle_turn(self, msg: dict) -> None:
         turn_id = msg.get("turn_id")
         prompt = msg.get("prompt")
         if not isinstance(turn_id, str) or not turn_id:
@@ -2042,6 +2133,11 @@ class Sidecar:
             if turn.causation_id:
                 start["causation_id"] = turn.causation_id
         self.proto.emit(**start)
+        if self.args.loop_live:
+            self.broker.current_turn_id = turn.id
+            if not await self._submit_live(input_id=turn.id, kind="user", source="user", text=prompt):
+                self._turn = None
+            return
         turn.task = asyncio.create_task(self._run_turn(turn), name=f"cos-turn-{turn_id}")
         turn.task.add_done_callback(self._turn_done)
 
@@ -2083,6 +2179,22 @@ class Sidecar:
             self.proto.emit(ev="error", code="unknown_approval",
                             message=f"no pending approval {request_id}", fatal=False)
 
+    async def _handle_input(self, msg: dict) -> None:
+        if not self.args.loop_live:
+            self.proto.emit(ev="error", code="unknown_op", message="unknown op 'input'", fatal=False)
+            return
+        if msg.get("version") != 1:
+            self.proto.emit(ev="generation_failed", version=1, input_id=msg.get("input_id", ""),
+                            input_ids=[msg.get("input_id", "")], error="unsupported input version")
+            return
+        input_id, kind, source, text = (msg.get(k) for k in ("input_id", "kind", "source", "text"))
+        if not all(isinstance(v, str) for v in (input_id, kind, source, text)):
+            self.proto.emit(ev="generation_failed", version=1, input_id=input_id or "",
+                            input_ids=[input_id] if isinstance(input_id, str) else [],
+                            error="input requires string input_id, kind, source, and text")
+            return
+        await self._submit_live(input_id=input_id, kind=kind, source=source, text=text)
+
 
     async def dispatch(self, line: str) -> None:
         line = line.strip()
@@ -2098,7 +2210,9 @@ class Sidecar:
             return
         op = msg.get("op")
         if op == "turn":
-            self._handle_turn(msg)
+            await self._handle_turn(msg)
+        elif op == "input":
+            await self._handle_input(msg)
         elif op == "cancel":
             self._handle_cancel(msg)
         elif op == "approval":
@@ -2162,6 +2276,13 @@ class Sidecar:
                 break
             await self.dispatch(item)
 
+        if self.args.loop_live and self.live_runtime is not None and self.live_task is not None:
+            try:
+                from amplifier_module_loop_live.runtime import Input
+                await self.live_runtime.submit(Input(kind="stop", id="muxterm-sidecar-stop"))
+                await asyncio.wait_for(asyncio.shield(self.live_task), timeout=15)
+            except BaseException:
+                self.live_task.cancel()
         await self._drain_active_turn()
 
     def _on_signal(self, sig: int) -> None:
@@ -2224,6 +2345,8 @@ def parse_args(argv: list) -> argparse.Namespace:
                    help="seconds before an unanswered approval is DENIED (default: 300)")
     p.add_argument("--session-store-exists", action="store_true",
                    help="emit public SessionStore existence for this exact cwd/session and exit")
+    p.add_argument("--loop-live", action="store_true",
+                   help="enable the pinned experimental one-execution-per-process host")
     args = p.parse_args(argv)
     return args
 
@@ -2244,15 +2367,15 @@ async def run(args: argparse.Namespace, proto: Proto) -> int:
 
     try:
         async with session:
-            proto.emit(
-                ev="ready",
-                session_id=sidecar.session_id,
-                bundle=sidecar.bundle,
-                tools=sidecar.tool_count,
-                muxterm_tools=sidecar.muxterm_tool_count,
-                boot_ms=int((time.monotonic() - _BOOT_T0) * 1000),
-                resumed=sidecar.resumed,
+            ready = dict(
+                ev="ready", session_id=sidecar.session_id, bundle=sidecar.bundle,
+                tools=sidecar.tool_count, muxterm_tools=sidecar.muxterm_tool_count,
+                boot_ms=int((time.monotonic() - _BOOT_T0) * 1000), resumed=sidecar.resumed,
             )
+            if args.loop_live:
+                ready["loop_live"] = True
+            proto.emit(**ready)
+            await sidecar._start_live()
             await sidecar.serve()
     except BaseException as exc:  # noqa: BLE001
         logger.exception("serve loop failed")
