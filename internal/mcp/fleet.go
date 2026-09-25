@@ -256,6 +256,18 @@ func unknownSessionErr(sessionID string, rows []sessiond.SessionState) error {
 // like an interactive lane that never had a goal. The flip happens on the
 // human's first prompt (the hook's _sync_mode(fresh_turn=True)), because that
 // is the moment it stops being a goal lane and starts being a conversation.
+// projectIDOrInbox is the MCP projection's copy of the invariant the wire
+// marshaler enforces (sessiond.SessionState.MarshalJSON): a row's container is
+// never empty, and an unset one is the Inbox. It exists because this file
+// builds its result map field by field rather than serializing the struct, so
+// it is the one path that could otherwise publish an empty parent.
+func projectIDOrInbox(id sessiond.ProjectID) string {
+	if id.IsZero() {
+		return string(sessiond.InboxProjectID)
+	}
+	return string(id)
+}
+
 func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 	knows := r.Knows
 	if knows == nil {
@@ -289,6 +301,14 @@ func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 		"session_id":   r.SessionID,
 		"pane_id":      paneID,
 		"workspace_id": workspaceID,
+		// project_id is the session's CONTAINER, and unlike pane_id and
+		// workspace_id above it is never null: a session that belongs to no
+		// real project belongs to the Inbox. It is normalized here rather
+		// than passed through so this projection -- which builds its map by
+		// hand and would otherwise emit "" for a row assembled before the
+		// daemon stamped it -- cannot become the one place in the system
+		// where an empty parent is observable.
+		"project_id": projectIDOrInbox(r.ProjectID),
 		"harness":      r.Harness,
 		"project":      r.Project,
 		"name":         r.Name,

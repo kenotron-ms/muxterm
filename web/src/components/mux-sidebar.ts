@@ -7,8 +7,15 @@ import './launcher-menu.js';
 import './mux-start-card.js';
 import type { StartSplitRow } from './mux-start-card.js';
 import { homeSessions } from '../lib/home-sessions.js';
-import type { SessionRunState } from '../lib/session-state.js';
+import type { SessionRunState, SessionState } from '../lib/session-state.js';
 import { needsInputByWorkspace, needsInputCount } from '../lib/session-state.js';
+import {
+  groupSessionsByProject,
+  projectIdOf,
+  projectStore,
+  sessionTitle,
+  type Project,
+} from '../lib/projects.js';
 import { icon } from '../lib/icons.js';
 import { Download, Ellipsis, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
@@ -1207,6 +1214,161 @@ export class MuxSidebar extends LitElement {
 
     .hostgroup { margin: var(--sidebar-group-gap) 0 0; }
     .hostgroup:first-child { margin-top: 11px; }
+
+    /* ---------------------------------------------------------------------
+       PROJECT CONTAINERS.
+       Deliberately built from the SAME geometry tokens as the machine groups
+       and workspace rows below (--sidebar-machine-height, --sidebar-row-height,
+       --sidebar-dot-track, --sidebar-control-track, --sidebar-row-gap). A new
+       level of the rail that invented its own spacing would read as bolted on;
+       reusing the tokens is what makes the Inbox look like it has always been
+       there, and it means the busy-density override further down applies to it
+       for free.
+       --------------------------------------------------------------------- */
+    .projectgroup { margin: 11px 0 0; }
+    .pg-head {
+      box-sizing: border-box;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) var(--sidebar-control-track);
+      gap: 4px;
+      align-items: center;
+      height: var(--sidebar-machine-height);
+      min-height: var(--sidebar-machine-height);
+      padding: 0 6px 0 5px;
+      border-bottom: 1px solid color-mix(in srgb, var(--chrome-border) 78%, transparent);
+    }
+    .pg-name {
+      min-width: 0;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      font-size: 11px;
+      font-weight: 790;
+      letter-spacing: 0.025em;
+      color: #d6ddea;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* A plain neutral count of what is inside, exactly like the pane count on
+       a workspace row. It is INFORMATION, never a nag: no accent colour, no
+       warning tint, no "unfiled" wording, and it does not appear at all when
+       the container is empty. */
+    .pg-count {
+      justify-self: end;
+      font: 500 10px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      color: var(--sidebar-faint);
+      font-variant-numeric: tabular-nums;
+    }
+    .pg-body { display: flex; flex-direction: column; gap: 2px; padding: 3px 0 0; }
+
+    /* THE EMPTY STATE. One quiet line in the faintest text colour the rail
+       has. No icon, no border, no warning tint, no call to action, no "0". An
+       empty Inbox is the ordinary state of a machine where nothing is running,
+       and it must read as calm rather than as a missing project or an error. */
+    .pg-empty {
+      height: var(--sidebar-row-height);
+      display: flex;
+      align-items: center;
+      padding: 0 6px 0 10px;
+      font: 400 11px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      color: var(--sidebar-faint);
+    }
+
+    /* A session row. Same three-track grid as .ws-card so a session and a
+       workspace line up down the rail instead of sitting at two indents. */
+    .sess-row {
+      box-sizing: border-box;
+      position: relative;
+      display: grid;
+      grid-template-columns: var(--sidebar-dot-track) minmax(0, 1fr) var(--sidebar-control-track);
+      gap: var(--sidebar-row-gap);
+      align-items: center;
+      height: var(--sidebar-row-height);
+      min-height: var(--sidebar-row-height);
+      padding: 0 6px 0 3px;
+      border: 0;
+      border-radius: 3px;
+      background: transparent;
+      overflow: visible;
+    }
+    .sess-row:hover { background: var(--sidebar-hover); }
+    .sess-name {
+      grid-column: 2;
+      min-width: 0;
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font: 500 11px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      color: color-mix(in srgb, var(--chrome-text-bright) 82%, var(--chrome-text-dim));
+    }
+    /* The filing control. Hidden until the row is hovered or the menu is open,
+       following .ws-remove-btn: a rail that shows a control on every row at
+       rest is a rail that is asking you to do something, and nothing here ever
+       asks. */
+    .sess-file-btn {
+      grid-column: 3;
+      justify-self: end;
+      width: 20px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: 0;
+      border-radius: 3px;
+      background: transparent;
+      color: var(--sidebar-faint);
+      font: 600 13px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.12s, background 0.12s, color 0.12s;
+    }
+    .sess-row:hover .sess-file-btn,
+    .sess-file-btn.open,
+    .sess-file-btn:focus-visible { opacity: 1; }
+    .sess-file-btn:hover { background: var(--sidebar-edge); color: var(--sidebar-text); }
+
+    /* The destination list. Renders whatever projectStore.destinations holds —
+       one entry today, more the day real projects exist, with no change here. */
+    .file-menu {
+      position: absolute;
+      top: calc(100% - 4px);
+      right: 4px;
+      z-index: 20;
+      min-width: 148px;
+      padding: 4px;
+      border: 1px solid var(--sidebar-edge);
+      border-radius: 6px;
+      background: var(--sidebar-panel);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.6);
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .file-menu-label {
+      padding: 4px 8px 5px;
+      font: 700 8px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--sidebar-faint);
+    }
+    .file-dest {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      height: 26px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--sidebar-text);
+      font: 500 11px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      text-align: left;
+      cursor: pointer;
+    }
+    .file-dest:hover { background: var(--sidebar-hover); }
+    .file-dest .here { color: var(--sidebar-faint); font-size: 10px; }
     .workspace-groups.busy {
       --sidebar-machine-height: 27px;
       --sidebar-row-height: 27px;
@@ -1467,6 +1629,11 @@ export class MuxSidebar extends LitElement {
   @state() private _version = 0;
   @state() private _renaming: string | null = null;
   @state() private _menuOpen = false;
+  /**
+   * Session id whose filing menu is open, or null. One at a time: a rail with
+   * two open menus is a rail you cannot read.
+   */
+  @state() private _fileMenuFor: string | null = null;
 
   /**
    * Tile width in columns, derived from the measured card. 0 = not measured
@@ -1513,6 +1680,7 @@ export class MuxSidebar extends LitElement {
 
   private _unsubPreview: (() => void) | null = null;
   private _unsubSessions: (() => void) | null = null;
+  private _unsubProjects: (() => void) | null = null;
   private _resizeObserver: ResizeObserver | null = null;
   private _resizeTimer: number | null = null;
 
@@ -1547,6 +1715,21 @@ export class MuxSidebar extends LitElement {
     if (this._menuOpen && !e.composedPath().includes(this)) {
       this._menuOpen = false;
     }
+    // A filing menu closes on ANY click that is not inside it, including a
+    // click elsewhere in this same sidebar. Unlike the launcher menu above it
+    // is anchored to one row, so leaving it open while the user clicks a
+    // different row would leave a destination list floating over a session it
+    // no longer belongs to.
+    if (this._fileMenuFor !== null) {
+      const path = e.composedPath();
+      const insideMenu = path.some(
+        (node) => node instanceof HTMLElement && node.classList.contains('file-menu'),
+      );
+      const onFileButton = path.some(
+        (node) => node instanceof HTMLElement && node.classList.contains('sess-file-btn'),
+      );
+      if (!insideMenu && !onFileButton) this._fileMenuFor = null;
+    }
   };
 
   private _onLauncherAction(e: Event): void {
@@ -1576,6 +1759,12 @@ export class MuxSidebar extends LitElement {
     // Session state (Start card total + per-workspace badges). Low rate — one
     // frame per session state change — so a plain re-render is the right cost.
     this._unsubSessions = homeSessions.subscribe(() => {
+      this._version++;
+    });
+
+    // The containers sessions live in. One frame per project-list reply, which
+    // today means once per connection, so a plain re-render is right here too.
+    this._unsubProjects = projectStore.subscribe(() => {
       this._version++;
     });
 
@@ -1614,6 +1803,8 @@ export class MuxSidebar extends LitElement {
     this._unsubPreview = null;
     this._unsubSessions?.();
     this._unsubSessions = null;
+    this._unsubProjects?.();
+    this._unsubProjects = null;
     this._unsubRemotes?.();
     this._unsubRemotes = null;
     window.removeEventListener('keydown', this._onPreviewKeyDown, true);
@@ -2589,6 +2780,137 @@ export class MuxSidebar extends LitElement {
     `;
   }
 
+  // ---------------------------------------------------------------------------
+  // PROJECT CONTAINERS
+  //
+  // The project is the unit of containment, so it sits ABOVE the machine tree
+  // in the rail. The machine tree itself is untouched: every workspace row,
+  // every machine group, every pane count below renders exactly as it did
+  // before this section existed. This is added alongside, not instead of.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Every container, each with the sessions inside it.
+   *
+   * Containers with NO sessions are rendered, not skipped. A container that
+   * disappears when it empties is a container you cannot file into, and the
+   * Inbox going missing the moment the fleet is quiet would read as breakage
+   * every single time.
+   */
+  private _renderProjects(): TemplateResult {
+    const groups = groupSessionsByProject(homeSessions.sessions, projectStore.projects);
+    return html`
+      <div class="project-groups">
+        ${groups.map((group) => this._renderProjectGroup(group.project, group.sessions))}
+      </div>
+    `;
+  }
+
+  private _renderProjectGroup(project: Project, sessions: readonly SessionState[]): TemplateResult {
+    return html`
+      <div class="projectgroup">
+        <div class="pg-head">
+          <span class="pg-name">${project.name}</span>
+          ${sessions.length > 0
+            ? html`<span class="pg-count" aria-label="${sessions.length} sessions">${sessions.length}</span>`
+            : ''}
+        </div>
+        <div class="pg-body">
+          ${sessions.length === 0
+            ? html`<div class="pg-empty">No sessions yet</div>`
+            : sessions.map((session) => this._renderSessionRow(session))}
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * One session inside a container.
+   *
+   * The dot reuses the rail's existing .dot state classes, so a working
+   * session in the Inbox is the same colour as a working session anywhere
+   * else. The title comes from sessionTitle() — the one naming rule, applied
+   * in one place.
+   */
+  private _renderSessionRow(session: SessionState): TemplateResult {
+    const open = this._fileMenuFor === session.sessionId;
+    return html`
+      <div class="sess-row" data-session-id="${session.sessionId}">
+        <span class="dot ${session.state}">\u25cf</span>
+        <span class="sess-name" title="${session.name ?? ''}">${sessionTitle(session)}</span>
+        <button
+          type="button"
+          class="sess-file-btn ${open ? 'open' : ''}"
+          title="Move to\u2026"
+          aria-label="Move ${sessionTitle(session)} to another project"
+          aria-expanded="${open ? 'true' : 'false'}"
+          @click="${(e: Event) => this._onFileClick(e, session.sessionId)}"
+        >\u22ef</button>
+        ${open ? this._renderFileMenu(session) : ''}
+      </div>
+    `;
+  }
+
+  /**
+   * THE FILING DESTINATION LIST.
+   *
+   * It renders projectStore.destinations verbatim and has no idea how many
+   * entries that is. Today it is one — the Inbox — and the session is already
+   * there, so the menu shows the Inbox marked "here". That is the honest
+   * state of a world with one container, and it is the mechanism working, not
+   * a placeholder: the day a second project exists it appears in this list
+   * with no change to this file.
+   *
+   * The current container is shown and is NOT disabled: filing a session into
+   * the container it is already in is a no-op the daemon accepts, and greying
+   * it out would make the menu look broken in the one-project world that is
+   * the whole of this slice.
+   */
+  private _renderFileMenu(session: SessionState): TemplateResult {
+    const current = projectIdOf(session, projectStore.knownIds);
+    return html`
+      <div class="file-menu" role="menu" @click="${(e: Event) => e.stopPropagation()}">
+        <div class="file-menu-label">Move to</div>
+        ${projectStore.destinations.map(
+          (dest) => html`
+            <button
+              type="button"
+              class="file-dest"
+              role="menuitem"
+              @click="${() => this._onFileTo(session.sessionId, dest.id)}"
+            >
+              <span>${dest.name}</span>
+              ${dest.id === current ? html`<span class="here">here</span>` : ''}
+            </button>
+          `,
+        )}
+      </div>
+    `;
+  }
+
+  private _onFileClick(e: Event, sessionId: string): void {
+    e.stopPropagation();
+    this._fileMenuFor = this._fileMenuFor === sessionId ? null : sessionId;
+  }
+
+  /**
+   * The gesture completes. One event, one destination, menu closed.
+   *
+   * No confirmation step and no undo prompt: filing is cheap, reversible by
+   * the same gesture, and a dialog would turn a one-decision action into
+   * three.
+   */
+  private _onFileTo(sessionId: string, projectId: string): void {
+    this._fileMenuFor = null;
+    this.dispatchEvent(
+      new CustomEvent('session-file', {
+        detail: { sessionId, projectId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   /** One machine's section: header, then its cards (ux D1). */
   private _renderHostGroup(
     group: HostGroup,
@@ -2814,6 +3136,7 @@ export class MuxSidebar extends LitElement {
         <span class="global-connect-mark">⊕</span><span>Connect machine</span>
       </button>
       <div class="tab-content">
+        ${this._renderProjects()}
         ${this._renderWorkspaces()}
       </div>
       ${this._renderFooter()}

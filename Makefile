@@ -1,4 +1,4 @@
-.PHONY: build dev dev-local verify-lifecycle install-stable test clean web
+.PHONY: build dev dev-local verify-lifecycle verify-inbox install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -185,6 +185,24 @@ verify-lifecycle:
 	@go build -o tmp/muxterm-verify ./cmd/muxterm
 	@$(call DEV_ISOLATE,lifecycle-verify,muxterm-cos-lifecycle-verify) \
 	MUXTERM_BIN="$$PWD/tmp/muxterm-verify" bash tools/verify-lifecycle-notices.sh
+
+# Verify the Inbox container against a real, isolated sessiond.
+#
+# Same reasoning as verify-lifecycle directly above: a verification run is a
+# dev instance like any other, so it expands DEV_ISOLATE rather than setting
+# XDG_* by hand. It binds MUXTERM_VERIFY_ADDR (default 8317) and starts a
+# daemon under the isolated runtime dir, so it must not be pointed at 8311/9090.
+#
+# MUXTERM_BASELINE_BIN is optional and is what makes the upgrade check real:
+# point it at a binary built from the commit BEFORE this feature and the script
+# builds an installation with that one, stops it, and reopens the same runtime
+# and data dirs with the build under test.
+verify-inbox:
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-inbox-verify ./cmd/muxterm
+	@mkdir -p tmp/probe && cp /home/ken/artifacts/inbox-verify/probe.go tmp/probe/main.go && go build -o tmp/inbox-probe ./tmp/probe
+	@$(call DEV_ISOLATE,inbox-verify,muxterm-cos-inbox-verify) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-inbox-verify" bash tools/verify-inbox.sh
 
 # Build the production binary from origin/main and install to the stable path.
 # This is what systemd runs — separate from ./bin/muxterm used by `make dev`.
