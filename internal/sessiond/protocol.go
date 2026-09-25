@@ -162,6 +162,45 @@ const (
 	TypeSessionClearResult          = "session-clear-result"           // reply: daemon -> browser
 )
 
+// Project containment message types (ADDITIVE, post-v1).
+//
+// Two verbs, and deliberately only two.
+//
+// TypeListProjects asks for every container this daemon knows about; the reply
+// carries them in Message.Projects. A client uses it to build the FILING
+// DESTINATION LIST. Today that list has exactly one entry, the Inbox, and the
+// client does not know or care that it is one -- it renders whatever comes
+// back, so the day a second project exists the list grows with no client
+// change.
+//
+// TypeAssignSession is the FILING GESTURE: put this session in that container.
+// There is no companion "unfile"/"remove"/"clear" verb, because moving a
+// session OUT of a project is moving it INTO the Inbox. One verb, both
+// directions, one round trip -- which is what lets the UI be one gesture
+// rather than two that can disagree about what an unfiled session is.
+//
+// A daemon that predates these types ignores them and never replies, which the
+// client's request timeout surfaces as "projects unavailable" rather than a
+// hang -- the same degradation the session-state trio above already has.
+const (
+	TypeListProjects       = "list-projects"        // request: browser -> daemon
+	TypeProjectList        = "project-list"         // reply:   daemon -> browser
+	TypeAssignSession      = "assign-session"       // request: browser -> daemon
+	TypeAssignSessionReply = "assign-session-reply" // reply:   daemon -> browser
+)
+
+// CodeProjectReserved is returned when a caller tries to rename or delete a
+// reserved container. The Inbox is reserved, so this is what an attempt to
+// remove or rename it looks like on the wire: a loud, named refusal, never a
+// silent no-op.
+//
+// CodeUnknownProject is returned when a caller files a session into a project
+// that does not exist.
+const (
+	CodeProjectReserved = "project-reserved"
+	CodeUnknownProject  = "unknown-project"
+)
+
 // SessionTranscriptTurn is the bounded, readable projection stored in the
 // muxterm-owned transcript journal. It deliberately excludes native payloads.
 type SessionTranscriptTurn struct {
@@ -452,6 +491,17 @@ type Message struct {
 	TranscriptDetached  bool                    `json:"transcriptDetached,omitempty"`
 	Unchanged           bool                    `json:"unchanged,omitempty"`
 	UndoToken           string                  `json:"undoToken,omitempty"`
+
+	// Project containment. ProjectID is the filing destination on a
+	// TypeAssignSession request (paired with SessionID above); Projects is the
+	// payload of TypeProjectList.
+	//
+	// ProjectID carries the distinct ProjectID type rather than a string, so
+	// the compiler will not let a workspace id or a session id be assigned
+	// into it on this shared envelope -- which is exactly the mistake a flat
+	// message struct with thirty string fields invites.
+	ProjectID ProjectID `json:"projectId,omitempty"`
+	Projects  []Project `json:"projects,omitempty"`
 
 	// SessionStateStatus is relay-only metadata for a merged TypeSessionState
 	// document. A direct daemon event leaves it empty; the browser relay writes

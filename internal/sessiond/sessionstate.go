@@ -149,6 +149,26 @@ type SessionState struct {
 	PaneID      int    `json:"paneId"`
 	WorkspaceID string `json:"workspaceId"`
 
+	// ProjectID is the CONTAINER this session belongs to, and it is NEVER
+	// NULL -- on the wire, in memory, or on disk. A session that belongs to no
+	// real project belongs to the Inbox (InboxProjectID), which is a place,
+	// not an absence. There is deliberately no `omitempty`: this field is
+	// present on every row of every frame, so no consumer can be written
+	// against a version of the shape where it might be missing.
+	//
+	// It is the FIFTH daemon-stamped field, alongside PaneID, WorkspaceID,
+	// GoalID and Origin, and for the same reason those four are: a producer
+	// knows its own pid and nothing about muxterm's containment model.
+	// Anything a producer writes here is discarded and replaced during the
+	// publish (server.go stampProjectIDs) out of the daemon's own durable
+	// assignment store.
+	//
+	// Note the deliberate name. The neighbouring `Project` field is the
+	// session's WORKING DIRECTORY and has meant that for the life of this
+	// contract; it is untouched. This one is the containment parent. They are
+	// different facts and they keep different names.
+	ProjectID ProjectID `json:"projectId"`
+
 	// Harness names the coding-agent CLI running this session -- one of the
 	// Harness* constants, or any other string a producer chooses to declare.
 	// Empty means the producer declared nothing, which is allowed: the row
@@ -276,6 +296,17 @@ type SessionState struct {
 // making terminal attachment explicitly optional on the versioned wire. This
 // is a compatibility bridge for producers and daemon code that still use zero
 // values internally; consumers never receive a synthetic pane 0 or workspace.
+//
+// It is ALSO where the project invariant is enforced at the API boundary, and
+// this placement is the point rather than a convenience. Every path that puts a
+// session on a wire -- the browser's session-state frame, the CLI's `fleet
+// --json`, a hook registry record on disk, a remote daemon's relayed rows --
+// goes through this one method. Normalising here means a row with an empty
+// ProjectID is not merely unlikely, it is UNSERIALIZABLE: there is no code path
+// anywhere, present or future, by which `"projectId": null` or `"projectId":
+// ""` can reach a consumer, including from a caller that builds a SessionState
+// literal and forgets the field. An invariant defended at one choke point
+// cannot be forgotten at a hundred call sites.
 func (s SessionState) MarshalJSON() ([]byte, error) {
 	type wireSessionState SessionState
 	var paneID *int
@@ -286,11 +317,17 @@ func (s SessionState) MarshalJSON() ([]byte, error) {
 	if s.WorkspaceID != "" {
 		workspaceID = &s.WorkspaceID
 	}
+	// Unassigned is a container, never a state. An unset parent is the Inbox.
+	projectID := s.ProjectID
+	if projectID.IsZero() {
+		projectID = InboxProjectID
+	}
 	return json.Marshal(struct {
 		wireSessionState
-		PaneID      *int    `json:"paneId"`
-		WorkspaceID *string `json:"workspaceId"`
-	}{wireSessionState: wireSessionState(s), PaneID: paneID, WorkspaceID: workspaceID})
+		PaneID      *int      `json:"paneId"`
+		WorkspaceID *string   `json:"workspaceId"`
+		ProjectID   ProjectID `json:"projectId"`
+	}{wireSessionState: wireSessionState(s), PaneID: paneID, WorkspaceID: workspaceID, ProjectID: projectID})
 }
 
 // NeedsInput reports whether this session belongs in the home view's

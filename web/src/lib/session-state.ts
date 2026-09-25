@@ -114,6 +114,23 @@ export interface SessionState {
   paneId: number | null;
   /** muxterm workspace containing that pane, or null when unattached. */
   workspaceId: string | null;
+  /**
+   * The CONTAINER this session belongs to. NEVER NULL.
+   *
+   * Note the type: `string`, not `string | null | undefined`, unlike paneId
+   * and workspaceId directly above. That difference is the whole design
+   * showing up in the type system -- a terminal attachment is genuinely
+   * optional, a container is not. A session that belongs to no real project
+   * belongs to the Inbox (INBOX_PROJECT_ID), which is a place, not an absence,
+   * so there is no `projectId == null` branch for a component to write.
+   *
+   * The daemon stamps this onto every row at its single fleet source and its
+   * marshaler refuses to emit an empty one, so the non-null promise is kept on
+   * the wire rather than being patched up here. Use projectIdOf() from
+   * projects.ts to read it anyway: that one function also covers a row from a
+   * daemon too old to stamp anything.
+   */
+  projectId: string;
   /** Which agent CLI is running this. Absent means nothing was declared. */
   harness?: Harness;
   /** Working directory. Absolute path. */
@@ -379,6 +396,7 @@ export const FIXTURE_SESSIONS: SessionState[] = [
     sessionId: 'fx-extract-muxops',
     paneId: 1,
     workspaceId: 'parity',
+    projectId: 'inbox',
     harness: 'amplifier',
     project: '/home/ken/workspace/muxterm',
     name: 'extract-muxops',
@@ -398,6 +416,7 @@ export const FIXTURE_SESSIONS: SessionState[] = [
     sessionId: 'fx-pr-412-rebase',
     paneId: 9,
     workspaceId: 'infra',
+    projectId: 'inbox',
     harness: 'claude',
     project: '/home/ken/workspace/muxterm',
     name: 'pr-412-rebase',
@@ -411,6 +430,7 @@ export const FIXTURE_SESSIONS: SessionState[] = [
     sessionId: 'fx-pane-send-cli',
     paneId: 2,
     workspaceId: 'parity',
+    projectId: 'inbox',
     harness: 'amplifier',
     project: '/home/ken/workspace/muxterm',
     name: 'pane-send-cli',
@@ -423,6 +443,7 @@ export const FIXTURE_SESSIONS: SessionState[] = [
     sessionId: 'fx-scrollback-parity',
     paneId: 3,
     workspaceId: 'parity',
+    projectId: 'inbox',
     harness: 'codex',
     project: '/home/ken/workspace/muxterm',
     name: 'scrollback-parity',
@@ -436,6 +457,7 @@ export const FIXTURE_SESSIONS: SessionState[] = [
     sessionId: 'fx-nightly-smoke',
     paneId: 4,
     workspaceId: 'infra',
+    projectId: 'inbox',
     // Not a harness muxterm has ever heard of -- a shell script reporting via
     // `muxterm session report --harness ci-runner`. Neutral badge, real row.
     harness: 'ci-runner',
@@ -451,6 +473,7 @@ export const FIXTURE_SESSIONS: SessionState[] = [
     sessionId: 'fx-design-notes',
     paneId: 7,
     workspaceId: 'cos',
+    projectId: 'inbox',
     harness: 'claude',
     project: '/home/ken/workspace/muxterm',
     name: 'design-notes',

@@ -43,6 +43,7 @@ import './components/mux-sidebar.js';
 // looking at one of. The component and its standalone demo are untouched.
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
+import { projectStore, type Project } from './lib/projects.js';
 import { cosStore } from './lib/cos-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -1028,6 +1029,14 @@ export class MuxApp extends LitElement {
       if ((msg as { ok?: unknown }).ok === false) homeSessions.markUnavailable();
     };
     this._socket.sessionStateSubscribe(true);
+    // The containers sessions live in, and the list a filing gesture offers.
+    // Asked for alongside the session-state subscribe so destinations are in
+    // hand by the time there are rows to file. A daemon too old to know the
+    // verb never replies and projectStore keeps the Inbox it started with.
+    this._socket.onProjectList = (msg) => {
+      projectStore.set((msg as { projects?: Project[] }).projects);
+    };
+    this._socket.listProjects();
     // Per-host connection state. No subscription to send: the server pushes a
     // frame per registry member right after attach and one per transition
     // after that. A browser with no remotes receives NONE, which is exactly
@@ -1537,6 +1546,7 @@ export class MuxApp extends LitElement {
             @workspace-switch="${this._onWorkspaceSelected}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
+            @session-file="${this._onSessionFile}"
             @launcher-action="${this._onLauncherAction}"
             @home-show="${this._onDashboardShow}"
           ></mux-sidebar>
@@ -1653,6 +1663,7 @@ export class MuxApp extends LitElement {
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
+            @session-file="${this._onSessionFile}"
                 @launcher-action="${this._onLauncherAction}"
                 @home-show="${this._onDashboardShow}"
               ></mux-sidebar>
@@ -2016,6 +2027,25 @@ export class MuxApp extends LitElement {
       },
       commit: () => this._socket?.renameWorkspace(workspaceId, name),
     });
+  };
+
+  /**
+   * File a session into a container. THE one gesture, and its whole
+   * implementation.
+   *
+   * Deliberately NOT optimistic, unlike the workspace rename directly above.
+   * A rename is the browser's own fact and showing it instantly is honest; a
+   * container is the DAEMON's fact, stamped onto every row at its single fleet
+   * source. Writing it locally first would mean a refused assignment leaves
+   * the sidebar confidently showing a move that did not happen. The daemon
+   * emits a fresh whole-state frame the moment it has filed the session, so
+   * the row moves in the same breath anyway — it just moves because the
+   * authority said so.
+   */
+  private _onSessionFile = (e: CustomEvent<{ sessionId: string; projectId: string }>): void => {
+    const { sessionId, projectId } = e.detail;
+    if (!sessionId || !projectId) return;
+    this._socket?.assignSessionProject(sessionId, projectId);
   };
 
   private _onWorkspaceCloseIntent = (e: Event): void => {
