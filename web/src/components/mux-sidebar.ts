@@ -620,7 +620,9 @@ export class MuxSidebar extends LitElement {
       inset: auto;
       z-index: 2000;
       margin: 0;
-      padding: 8px;
+      padding: var(--sidebar-preview-padding, 8px);
+      max-width: var(--sidebar-preview-max-width, 320px);
+      max-height: var(--sidebar-preview-max-height, 200px);
       box-sizing: border-box;
       border: 1px solid var(--chrome-border);
       border-radius: 6px;
@@ -636,14 +638,19 @@ export class MuxSidebar extends LitElement {
     }
 
     .preview-tooltip-frame {
-      display: grid;
-      place-items: center;
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-start;
       min-width: 160px;
       min-height: 32px;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
     }
 
     .preview-tooltip canvas {
       display: block;
+      flex: none;
       image-rendering: pixelated;
     }
 
@@ -1146,6 +1153,12 @@ export class MuxSidebar extends LitElement {
       --sidebar-dot-track: 14px;
       --sidebar-row-gap: 5px;
       --sidebar-group-gap: 18px;
+      --sidebar-preview-max-width: 320px;
+      --sidebar-preview-max-height: 200px;
+      --sidebar-preview-padding: 8px;
+      --sidebar-preview-gap: 8px;
+      --sidebar-preview-viewport-inset: 8px;
+      --sidebar-preview-min-scale: 0.5;
       --sidebar-status-local: #7f8da1;
       --sidebar-status-connected: #829b91;
       --sidebar-status-reconnecting: #9a8eaa;
@@ -1179,9 +1192,12 @@ export class MuxSidebar extends LitElement {
     }
 
     .sb-heading,
-    .preview-tooltip,
     .stale-banner {
       display: none;
+    }
+
+    @media (hover: none), (pointer: coarse) {
+      .preview-tooltip { display: none !important; }
     }
 
     .global-connect {
@@ -2131,21 +2147,26 @@ export class MuxSidebar extends LitElement {
     this._schedulePreviewDismiss();
   };
 
+  /** Resolve a component length token once geometry is actually needed. */
+  private _previewToken(name: string, fallback: number): number {
+    const value = Number.parseFloat(getComputedStyle(this).getPropertyValue(name));
+    return Number.isFinite(value) ? value : fallback;
+  }
+
   private _paintPreviewTooltip(): void {
     const entry = this._previewEntry;
     const canvas = this.shadowRoot?.querySelector<HTMLCanvasElement>('[data-workspace-preview-canvas]');
-    if (!entry || !canvas) return;
+    const frame = this.shadowRoot?.querySelector<HTMLElement>('.preview-tooltip-frame');
+    if (!entry || !canvas || !frame) return;
     const naturalW = entry.tile.cols * PREVIEW_CELL.w;
     const naturalH = entry.tile.rows * PREVIEW_CELL.h;
-    const viewport = window.visualViewport;
-    const maxOuterW = Math.max(80, (viewport?.width ?? window.innerWidth) - 24);
-    const maxOuterH = Math.max(48, (viewport?.height ?? window.innerHeight) - 24);
-    // The tooltip contributes 16px of padding; calculate the fit before
-    // rendering so renderTile bounds the native backing grid as well as CSS.
+    const minScale = this._previewToken('--sidebar-preview-min-scale', 0.5);
+    // Preserve the pane's current viewport as the ideal. Scale it down until
+    // the preview remains readable, then let the fixed frame crop any excess.
+    // flex-end/start above makes that crop the terminal's bottom-left corner.
     const scale = Math.min(
       1,
-      Math.max(1 / naturalW, (maxOuterW - 16) / naturalW),
-      Math.max(1 / naturalH, (maxOuterH - 16) / naturalH),
+      Math.max(minScale, Math.min(frame.clientWidth / naturalW, frame.clientHeight / naturalH)),
     );
     const palette = resolvePalette(store.config.theme.palette);
     renderTile(canvas, entry.tile, {
@@ -2162,7 +2183,6 @@ export class MuxSidebar extends LitElement {
     const tooltip = this.shadowRoot?.querySelector<HTMLElement>('[data-workspace-preview-tooltip]');
     const workspaceId = this._previewWorkspaceId;
     if (!tooltip || !workspaceId) return;
-    if (this._previewState === 'ready') this._paintPreviewTooltip();
     const anchor = this._anchorForPreview(workspaceId);
     if (!anchor) {
       this._dismissPreview(true);
@@ -2179,15 +2199,26 @@ export class MuxSidebar extends LitElement {
     const right = left + (viewport?.width ?? window.innerWidth);
     const bottom = top + (viewport?.height ?? window.innerHeight);
     const anchorRect = anchor.getBoundingClientRect();
-    const tooltipRect = tooltip.getBoundingClientRect();
-    let x = anchorRect.right + 8;
-    let y = anchorRect.top;
-    if (x + tooltipRect.width > right - 8) x = anchorRect.left - tooltipRect.width - 8;
-    if (x < left + 8) x = Math.min(right - tooltipRect.width - 8, anchorRect.left);
-    if (y + tooltipRect.height > bottom - 8) y = bottom - tooltipRect.height - 8;
-    y = Math.max(top + 8, y);
-    tooltip.style.left = `${Math.max(left + 8, x)}px`;
+    const gap = this._previewToken('--sidebar-preview-gap', 8);
+    const inset = this._previewToken('--sidebar-preview-viewport-inset', 8);
+    const padding = this._previewToken('--sidebar-preview-padding', 8);
+    const maxWidth = this._previewToken('--sidebar-preview-max-width', 320);
+    const maxHeight = this._previewToken('--sidebar-preview-max-height', 200);
+    const naturalW = (this._previewEntry?.tile.cols ?? 32) * PREVIEW_CELL.w + padding * 2;
+    const naturalH = (this._previewEntry?.tile.rows ?? 4) * PREVIEW_CELL.h + padding * 2;
+    const x = anchorRect.right + gap;
+    const roomWidth = Math.max(0, right - inset - x);
+    const roomHeight = Math.max(0, bottom - top - inset * 2);
+    const outerWidth = Math.min(maxWidth, naturalW, roomWidth);
+    const outerHeight = Math.min(maxHeight, naturalH, roomHeight);
+    tooltip.style.width = `${outerWidth}px`;
+    tooltip.style.height = `${outerHeight}px`;
+    let y = Math.min(anchorRect.top, bottom - inset - outerHeight);
+    y = Math.max(top + inset, y);
+    // Deliberately never flip over the row: the row's right edge owns the X.
+    tooltip.style.left = `${x}px`;
     tooltip.style.top = `${y}px`;
+    if (this._previewState === 'ready') this._paintPreviewTooltip();
   }
 
   private _renderPreviewTooltip() {
