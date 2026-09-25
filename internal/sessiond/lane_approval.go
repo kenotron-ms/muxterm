@@ -5,11 +5,21 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
 )
+
+// codexApprovalVerified lists the exact `codex --version` strings whose
+// approval translation below has been verified by hand against a real CLI.
+// Append to it only after reverifying; the block comment in ApplyLaneApproval
+// records what "verified" means and how to repeat it.
+var codexApprovalVerified = []string{
+	"codex-cli 0.155.1",
+	"codex-cli 0.157.0",
+}
 
 // ApplyLaneApproval runs in the launching daemon, so remote callers use the
 // destination machine's config and executable. Read on each spawn: an owner can
@@ -75,15 +85,42 @@ func ApplyLaneApproval(argv []string, override string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Verified translation: codex-cli 0.155.1; Claude Code 2.1.277 (host).
-	// Claude 2.1.276 is intentionally NOT accepted without live verification.
-	// Exact pinning is deliberate: Codex accepts unknown -c keys silently, so
-	// --help alone cannot prove the policy survived an upgrade. Reverify before
-	// extending this allowlist. No fallback to a launch without policy flags.
+	// VERIFIED TRANSLATIONS. Each harness pins the exact --version strings whose
+	// approval translation was checked against a real CLI. There is deliberately
+	// no fallback to a launch without policy flags.
+	//
+	// Exact pinning is deliberate and is STILL load-bearing on 0.157.0: Codex
+	// accepts unknown -c keys silently, and `--help` short-circuits before config
+	// validation, so the approvalProbe below cannot prove the policy survived an
+	// upgrade. Measured on 0.157.0: `codex -c approval_policy=totally-bogus-value
+	// --help` exits 0, exactly as `-c muxterm_unknown_key_xyz=1 --help` does.
+	// That is why this allowlist exists and why widening it needs real evidence.
+	//
+	// codex-cli 0.157.0 added 2026-09-25, verified with `codex doctor`, which --
+	// unlike --help -- does load and validate the invocation config:
+	//   - approval_policy and sandbox_mode are still live, TYPED keys. A bogus
+	//     value for either fails config load (exit 1) while an unknown key is
+	//     accepted silently (exit 0), so the four values emitted below are
+	//     genuinely being read rather than ignored.
+	//   - all four values this function emits still load clean: approval_policy
+	//     on-request and never, sandbox_mode workspace-write and
+	//     danger-full-access.
+	//   - sandbox_mode still BEHAVES as named, measured with `codex sandbox`:
+	//     read-only denied a write inside the cwd, workspace-write allowed that
+	//     write and denied one outside the workspace, and danger-full-access
+	//     allowed the outside write.
+	//   - the approval_policy enum did narrow in 0.157.0 -- `untrusted` is now
+	//     rejected, where 0.155.1 accepted it -- but muxterm emits only
+	//     on-request and never, both of which still load. A real CLI change,
+	//     not a change to this translation.
+	//
+	// Claude's pin is UNCHANGED and was not re-verified here: claude is not
+	// installed on this host, and a version this function has never run against
+	// is refused rather than guessed.
 	var flags []string
 	switch harness {
 	case HarnessCodex:
-		if version != "codex-cli 0.155.1" {
+		if !slices.Contains(codexApprovalVerified, version) {
 			return nil, approvalVersionError(harness, version)
 		}
 		flags = []string{"-c", "approval_policy=on-request", "-c", "sandbox_mode=workspace-write"}
