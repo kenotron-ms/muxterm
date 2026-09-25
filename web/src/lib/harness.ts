@@ -88,6 +88,56 @@ const CODEX_NOTIFY_OVERRIDE = [
  * prompt text and the loop would never arm. The Go comment carries the full
  * reasoning; do not re-derive it here.
  */
+/**
+ * The harness a session starts in when nobody chose one.
+ *
+ * SMALLEST SENSIBLE DEFAULT, on three counts, not just taste:
+ *   1. It is already this module's default (harnessLabel's `default:` branch)
+ *      and the head of LAUNCHABLE_HARNESSES, so nothing new is being decided.
+ *   2. It is the only one of the three whose CLI starts an interactive
+ *      session with NO prompt. `claude` and `codex` both REQUIRE one --
+ *      sessiond.LaneArgv returns an error for an empty prompt on either
+ *      branch -- and a "New Session" button has no prompt to give.
+ *   3. It is the harness muxterm itself wraps (`muxterm amplifier`), which is
+ *      what makes the session report; see newSessionArgv below.
+ */
+export const DEFAULT_HARNESS: HarnessName = "amplifier";
+
+/**
+ * The argv for a session started with NO opening turn — the sidebar's
+ * "New Session" button.
+ *
+ * NOT harnessArgv(DEFAULT_HARNESS, "") — that would build
+ * `amplifier run "" --mode chat`, an empty first user message. This is the
+ * prompt-less shape of the same thing: the harness starts and waits, with
+ * nothing said yet, which is what a "new chat" affordance means.
+ *
+ * `--mode chat` IS STILL REQUIRED WITHOUT A PROMPT, which is the opposite of
+ * what the harnessArgv comment below might suggest and was established by
+ * running it: `amplifier run` with no mode defaults to SINGLE mode and exits
+ * immediately with "Error: Prompt required in single mode" (observed exit
+ * status 1). So the flag is not only about keeping a prompted run alive past
+ * its first turn — it is what makes a run with no prompt legal at all.
+ *
+ * THE `muxterm` WRAPPER IS LOAD-BEARING and is the reason this is not just
+ * ["amplifier", "run", "--mode", "chat"]. runAmplifier()
+ * (cmd/muxterm/amplifier_cmd.go) writes an invocation-scoped bundle carrying
+ * the `hooks-muxterm-session` hook before exec'ing amplifier. That hook is
+ * what publishes session state to the spool the daemon collects from — so it
+ * is what makes the new session appear in the Inbox at all, rather than being
+ * an untracked agent in a pane. Bare `amplifier` only reports on a machine
+ * that happens to have the hook installed globally, which is a property of
+ * one user's config, not of muxterm. sessiond.LaneArgv makes the same choice
+ * (`self amplifier …`) for every lane it starts.
+ *
+ * The program is NAMED rather than given as an absolute path, for the reason
+ * CODEX_NOTIFY_OVERRIDE above already documents: a browser cannot know where
+ * the running binary lives, so the pane's PATH resolves it.
+ */
+export function newSessionArgv(): string[] {
+  return ["muxterm", DEFAULT_HARNESS, "run", "--mode", "chat"];
+}
+
 export function harnessArgv(harness: HarnessName, prompt: string): string[] {
   switch (harness) {
     case "claude":

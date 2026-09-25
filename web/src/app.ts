@@ -44,6 +44,7 @@ import './components/mux-sidebar.js';
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
 import { projectStore, type Project } from './lib/projects.js';
+import { newSessionArgv } from './lib/harness.js';
 import { cosStore } from './lib/cos-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -925,6 +926,8 @@ export class MuxApp extends LitElement {
     // composed event bubbling to here covers them, and any later entry point,
     // without a third binding to keep in step.
     this.addEventListener('connect-machine', this._onConnectMachine);
+    // "New Session" — same two-sidebars reasoning as connect-machine above.
+    this.addEventListener('new-session', this._onNewSession);
     // Escape dismisses the open overlay panel — see _onOverlayPanelEscape.
     window.addEventListener('keydown', this._onOverlayPanelEscape, true);
     // Update layout mode when the viewport crosses the 768px breakpoint.
@@ -1312,6 +1315,7 @@ export class MuxApp extends LitElement {
     this.removeEventListener('pane-close', this._onPaneCloseIntent);
     this.removeEventListener('workspace-close', this._onWorkspaceCloseIntent);
     this.removeEventListener('connect-machine', this._onConnectMachine);
+    this.removeEventListener('new-session', this._onNewSession);
     window.removeEventListener('keydown', this._onOverlayPanelEscape, true);
     this._disposePaneFocusListeners?.();
     this._disposePaneFocusListeners = null;
@@ -2660,6 +2664,29 @@ export class MuxApp extends LitElement {
    */
   private _onConnectMachine = (): void => {
     this._overlayPanel = 'connect';
+  };
+
+  /**
+   * Start a session from the rail's "New Session" button.
+   *
+   * It goes through _spawnPane — the SAME door every other pane in this app
+   * is created by (the launcher's new pane, the dock's split, the empty
+   * workspace's auto-spawn) — with an argv instead of the default $SHELL.
+   * That is the path the removed home composer used and the one
+   * _spawnPane's own doc names; nothing new is being created here, and no
+   * new endpoint exists for a session that the pane's harness does not
+   * already announce for itself.
+   *
+   * ONE DESTINATION, and it is not chosen here. The daemon stamps every
+   * session's container at its single fleet source, and a session with no
+   * filing lands in the Inbox — so this handler has nothing to pass and
+   * nothing to ask. The row appears under Inbox in the rail.
+   *
+   * The event carries no detail and this reads none, matching
+   * _onConnectMachine directly above: "start a session" is the whole message.
+   */
+  private _onNewSession = (): void => {
+    this._spawnPane(newSessionArgv());
   };
 
   private _closeOverlayPanel = (): void => {
