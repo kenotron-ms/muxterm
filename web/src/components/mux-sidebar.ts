@@ -5,7 +5,12 @@ import type { SessiondWorkspaceCompletion } from '../types.js';
 import { workspaceLabel } from '../lib/workspace-label.js';
 import './launcher-menu.js';
 import './mux-start-card.js';
-import type { StartSplitRow } from './mux-start-card.js';
+import {
+  RAIL_ENTRY_EDGE,
+  RAIL_ENTRY_GAP,
+  railEntryStyles,
+  type StartSplitRow,
+} from './mux-start-card.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import type { SessionRunState, SessionState } from '../lib/session-state.js';
 import { needsInputByWorkspace, needsInputCount } from '../lib/session-state.js';
@@ -17,7 +22,7 @@ import {
   type Project,
 } from '../lib/projects.js';
 import { icon } from '../lib/icons.js';
-import { Download, Ellipsis, SquareTerminal } from 'lucide';
+import { Download, Ellipsis, MessageSquare, Monitor, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { previewStore, type PreviewEntry, type PreviewMode } from '../lib/preview-store.js';
@@ -340,7 +345,23 @@ function hostTypeLabel(host: string): 'Local' | 'SSH' | 'Remote daemon' {
 
 @customElement('mux-sidebar')
 export class MuxSidebar extends LitElement {
-  static styles = css`
+  /**
+   * [railEntryStyles, then the rail's own.]
+   *
+   * railEntryStyles is Mission Control's card styling, imported verbatim from
+   * mux-start-card.ts. The rail's two ACTION entries -- "New Session" and
+   * "Connect machine" -- are rendered with its class names (`.start`,
+   * `.mc-mark`, `.mc-name`), so their font, size, weight, height, padding,
+   * hover and selected state are not merely similar to Mission Control's:
+   * they are the same declarations. Changing how a rail entry looks is one
+   * edit, in one file, and it cannot move two of the three rows.
+   *
+   * It comes FIRST so every rule below can still override it. Nothing here
+   * uses `.start` or `.mc-*`, so nothing does.
+   */
+  static styles = [
+    railEntryStyles,
+    css`
     :host {
       display: flex;
       flex-direction: column;
@@ -1191,26 +1212,25 @@ export class MuxSidebar extends LitElement {
       display: none;
     }
 
-    .global-connect {
-      flex: 0 0 var(--sidebar-global-action-height);
-      height: var(--sidebar-global-action-height);
-      margin: 0 7px;
-      padding: 0 6px;
-      border: 0;
-      background: transparent;
-      color: color-mix(in srgb, var(--chrome-text-bright) 72%, var(--chrome-text-dim));
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      text-align: left;
-      font: 780 9.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
-      letter-spacing: 0.075em;
-      text-transform: uppercase;
-      cursor: pointer;
-    }
+    /* THE RAIL'S ACTION ENTRIES -- "New Session" and "Connect machine".
+       Everything that makes them look like a rail entry (36px row, 0 9px
+       padding, 12px/760 label, the hover and .here selected states) comes
+       from railEntryStyles above, which is Mission Control's own block. The
+       ONLY thing left to say here is the outer margin, because Mission
+       Control takes that on its component's :host and a button in this
+       shadow root cannot.
 
-    .global-connect:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
-    .global-connect-mark { color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright)); font-size: 14px; }
+       Zero on top, not RAIL_ENTRY_TOP: that constant is the gap above the
+       FIRST entry in the rail, which Mission Control already spends. Each
+       entry's own bottom GAP is what separates it from the next, so the three
+       stack on the rhythm the card established instead of gaining a top
+       margin apiece. flex-shrink: 0 because the rail is a flex column and a
+       fixed-height row must not be squeezed by a long project list. */
+    .rail-entry {
+      flex: 0 0 auto;
+      margin: 0 ${unsafeCSS(RAIL_ENTRY_EDGE)} ${unsafeCSS(RAIL_ENTRY_GAP)};
+      width: auto;
+    }
 
     .hostgroup { margin: var(--sidebar-group-gap) 0 0; }
     .hostgroup:first-child { margin-top: 11px; }
@@ -1572,7 +1592,8 @@ export class MuxSidebar extends LitElement {
     .footer { min-height: 31px; padding: 6px 11px; }
     .footer-line { font-size: 9.5px; }
     .footer-note { display: none; }
-  `;
+  `,
+  ];
 
   // ---------------------------------------------------------------------------
   // State
@@ -2504,6 +2525,31 @@ export class MuxSidebar extends LitElement {
     );
   }
 
+  /**
+   * "New Session" — starts a session, which app.ts spawns.
+   *
+   * NO DETAIL, and that is the design rather than an omission. A session's
+   * container is not a choice this button offers: every session belongs to
+   * the Inbox, the daemon stamps that parent itself at its one fleet source
+   * (stampProjectIDs in server.go), and the row appears under the Inbox
+   * group below with no destination having been picked. So there is nothing
+   * for a picker, a project selector or a dropdown to ask about — one
+   * button, one destination — and the event carries what that is worth:
+   * "start a session", and nothing else.
+   *
+   * Composed, like connect-machine, because the rail is rendered twice (the
+   * wide column and the narrow drawer) and one host-level listener in app.ts
+   * covers both.
+   */
+  private _onNewSession(): void {
+    this.dispatchEvent(
+      new CustomEvent('new-session', {
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   /** "+ Connect machine" — opens the connect dialog, which lives in app.ts. */
   private _onConnectMachine(): void {
     this.dispatchEvent(
@@ -3132,8 +3178,24 @@ export class MuxSidebar extends LitElement {
         .split="${split}"
         @start-click="${() => this._onStartClick()}"
       ></mux-start-card>
-      <button class="global-connect" title="Connect machine" @click="${() => this._onConnectMachine()}">
-        <span class="global-connect-mark">⊕</span><span>Connect machine</span>
+      <button
+        type="button"
+        class="start rail-entry"
+        title="Connect machine"
+        @click="${() => this._onConnectMachine()}"
+      >
+        <span class="mc-mark">${icon(Monitor, { size: 15 })}</span>
+        <span class="mc-name">Connect machine</span>
+      </button>
+      <button
+        type="button"
+        class="start rail-entry"
+        title="New Session"
+        aria-label="Start a new session in the Inbox."
+        @click="${() => this._onNewSession()}"
+      >
+        <span class="mc-mark">${icon(MessageSquare, { size: 15 })}</span>
+        <span class="mc-name">New Session</span>
       </button>
       <div class="tab-content">
         ${this._renderProjects()}
