@@ -267,8 +267,12 @@ func (v VoiceConfig) Validate() error {
 	if !v.Enabled {
 		return nil
 	}
+	// Validate what will actually be USED, not the raw file. Otherwise the
+	// defaults applied by Resolved -- the direct OpenAI path -- would be
+	// rejected here before they ever reached the client.
+	v = v.Resolved()
 	if v.Endpoint == "" {
-		return errors.New(`config: [voice] enabled but endpoint is empty; set endpoint (e.g. "https://example.openai.azure.com/openai/v1")`)
+		return errors.New(`config: [voice] enabled but endpoint is empty; set endpoint (e.g. "https://api.openai.com/v1")`)
 	}
 	u, err := url.Parse(v.Endpoint)
 	if err != nil {
@@ -281,7 +285,7 @@ func (v VoiceConfig) Validate() error {
 		return fmt.Errorf("config: [voice] endpoint %q must include a host", v.Endpoint)
 	}
 	if v.Model == "" {
-		return errors.New(`config: [voice] enabled but model is empty; set model (e.g. "gpt-realtime-2.1")`)
+		return errors.New(`config: [voice] enabled but model is empty; set model (e.g. "gpt-live-1")`)
 	}
 	switch v.AuthMode {
 	case VoiceAuthEntra, VoiceAuthAPIKey:
@@ -319,6 +323,22 @@ func (v VoiceConfig) KeySource() string {
 // Resolved returns v with every optional field filled in. Callers use this
 // instead of reading the raw struct so a default lives in exactly one place.
 func (v VoiceConfig) Resolved() VoiceConfig {
+	// Saying nothing about the provider means the direct OpenAI path, not
+	// a startup failure. Only a fully unnamed provider is defaulted: a
+	// config that sets an endpoint keeps its own auth_mode, so an Azure
+	// section is never quietly rewritten into an OpenAI one.
+	if v.Endpoint == "" {
+		v.Endpoint = DefaultVoiceEndpoint
+		if v.AuthMode == "" {
+			v.AuthMode = VoiceAuthAPIKey
+			if v.APIKeyEnv == "" && !v.APIKeyStored {
+				v.APIKeyEnv = DefaultVoiceAPIKeyEnv
+			}
+		}
+	}
+	if v.Model == "" {
+		v.Model = DefaultVoiceModel
+	}
 	if v.EntraScope == "" {
 		v.EntraScope = DefaultVoiceEntraScope
 	}
@@ -329,6 +349,20 @@ func (v VoiceConfig) Resolved() VoiceConfig {
 }
 
 const (
+	// DefaultVoiceEndpoint is the direct OpenAI realtime base URL. This is
+	// the path voice takes unless a config explicitly names another one:
+	// {endpoint}/realtime/client_secrets mints, {endpoint}/realtime/calls
+	// exchanges SDP, and the wss:// form attaches the sideband. Azure
+	// remains fully supported -- it is simply no longer what you get by
+	// saying nothing.
+	DefaultVoiceEndpoint = "https://api.openai.com/v1"
+	// DefaultVoiceModel is the realtime model sent to that endpoint.
+	// Verified accepted by api.openai.com: POST /v1/realtime/client_secrets
+	// answered HTTP 200 and echoed "model": "gpt-live-1".
+	DefaultVoiceModel = "gpt-live-1"
+	// DefaultVoiceAPIKeyEnv names the environment variable holding the
+	// OpenAI key. A NAME, never a value -- no key is ever stored in config.
+	DefaultVoiceAPIKeyEnv = "OPENAI_API_KEY"
 	// DefaultVoiceEntraScope is the token audience an Azure AI Foundry
 	// resource accepts. Verified working against a live resource whose
 	// key auth is disabled.
@@ -804,11 +838,18 @@ func Defaults() Config {
 			Enabled:          true,
 			SnapshotInterval: 30 * time.Second,
 		},
-		// Realtime voice is OFF by default and carries no endpoint. It
-		// opens a microphone and bills per minute of speech; an
-		// operator turns it on deliberately or not at all.
+		// Realtime voice is OFF by default: it opens a microphone and
+		// bills per minute of speech, so an operator turns it on
+		// deliberately or not at all. What it points AT once enabled is
+		// the direct OpenAI realtime endpoint, keyed from the
+		// environment -- naming a provider is no longer a prerequisite
+		// for turning voice on.
 		Voice: VoiceConfig{
 			Enabled:         false,
+			Endpoint:        DefaultVoiceEndpoint,
+			Model:           DefaultVoiceModel,
+			AuthMode:        VoiceAuthAPIKey,
+			APIKeyEnv:       DefaultVoiceAPIKeyEnv,
 			EntraScope:      DefaultVoiceEntraScope,
 			SyncToolTimeout: DefaultVoiceSyncToolTimeout,
 		},
