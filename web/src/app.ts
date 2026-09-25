@@ -17,6 +17,7 @@ import { voiceSessionController } from './lib/voice-session-controller.js';
 import { requestArtifactOpen } from './lib/artifact-open.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
+import { newSessionArgv } from './lib/harness.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
@@ -1547,6 +1548,7 @@ export class MuxApp extends LitElement {
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @session-file="${this._onSessionFile}"
+            @session-create="${this._onSessionCreate}"
             @launcher-action="${this._onLauncherAction}"
             @home-show="${this._onDashboardShow}"
           ></mux-sidebar>
@@ -1664,6 +1666,7 @@ export class MuxApp extends LitElement {
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
             @session-file="${this._onSessionFile}"
+                @session-create="${this._onSessionCreate}"
                 @launcher-action="${this._onLauncherAction}"
                 @home-show="${this._onDashboardShow}"
               ></mux-sidebar>
@@ -2046,6 +2049,38 @@ export class MuxApp extends LitElement {
     const { sessionId, projectId } = e.detail;
     if (!sessionId || !projectId) return;
     this._socket?.assignSessionProject(sessionId, projectId);
+  };
+
+  /**
+   * The sidebar's "New session" button. One destination, no picker.
+   *
+   * WHAT IT DOES: spawns a pane running the default harness with no opening
+   * turn, through _spawnPane -> createPane -- the same creation path the home
+   * composer used before it was removed, and the only one the browser has. No
+   * new protocol verb, no new API.
+   *
+   * WHERE THE SESSION LANDS: in the Inbox, and nothing here arranges that.
+   * Containment is the daemon's fact -- stampProjectIDs gives every row it
+   * publishes a parent, and ResolveProjectID is total, so a session with no
+   * filing record resolves to the Inbox by construction. That is exactly why
+   * this event carries no destination: there is nothing for the browser to
+   * choose, and a projectId on the wire here would be a second, weaker copy
+   * of an invariant the daemon already guarantees.
+   *
+   * The pane is created in the CURRENT attachment, because create-pane is
+   * connection-scoped (internal/sessiond/server.go createPane resolves the
+   * target as c.attached and ignores any workspaceId on the message). Which
+   * workspace holds the session is a different axis from which container it
+   * belongs to; the button promises the second, not the first.
+   *
+   * The dashboard and the drawer step aside first, matching _onHomeOpen: both
+   * are opaque covers over the dock, and starting a session the user cannot
+   * see is indistinguishable from the button doing nothing.
+   */
+  private _onSessionCreate = (): void => {
+    this._onDashboardHide();
+    this._closeDrawer();
+    this._spawnPane(newSessionArgv());
   };
 
   private _onWorkspaceCloseIntent = (e: Event): void => {

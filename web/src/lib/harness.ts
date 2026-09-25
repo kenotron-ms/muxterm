@@ -66,6 +66,36 @@ const CODEX_NOTIFY_OVERRIDE = [
 ];
 
 /**
+ * The harness a session started from a bare "New session" gesture runs.
+ *
+ * The sidebar's button has NO composer, so there is no prompt to infer a
+ * harness from and nothing to ask about -- the button is one click, not a
+ * click and a menu. Amplifier is the default here for the same reason it is
+ * the default arm of harnessArgv() and harnessLabel(): it is the one this
+ * project ships with, and it is the only one of the three whose bare argv
+ * needs no extra flags to come up interactive and stay that way.
+ */
+export const DEFAULT_NEW_SESSION_HARNESS: HarnessName = "amplifier";
+
+/**
+ * The argv that starts a session with NO opening turn.
+ *
+ * Deliberately not harnessArgv(h, '') -- that would build
+ * `amplifier run "" --mode chat`, sending an EMPTY first turn to a provider.
+ * A session with nothing to say yet is started by running the harness's own
+ * interactive entry point and letting it wait, which is the bare program name.
+ * That is also the form `agent_catalog.go` recognises by argv basename, so the
+ * daemon badges it as the harness it actually is.
+ *
+ * Returns a fresh array per call: the value is handed to createPane() and
+ * ends up in the daemon's captured argv, so a shared constant would be one
+ * accidental mutation away from rewriting every future spawn.
+ */
+export function newSessionArgv(): string[] {
+  return [DEFAULT_NEW_SESSION_HARNESS];
+}
+
+/**
  * The argv that starts `harness` with `prompt` as its opening turn.
  *
  * Both of these take the first prompt as a positional argument and then stay

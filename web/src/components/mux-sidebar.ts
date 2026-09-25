@@ -840,7 +840,13 @@ export class MuxSidebar extends LitElement {
       color: var(--chrome-accent);
     }
 
-    .new-ws-btn {
+    /* The rail's create affordance. ONE rule for both buttons on purpose:
+       "＋ New session" under the Inbox and "＋ New workspace on <machine>"
+       under a machine are the same gesture at two levels, and a second set of
+       declarations for the newer one is how two things that should look
+       identical drift apart. Only the margins differ (below). */
+    .new-ws-btn,
+    .new-session-btn {
       display: block;
       width: calc(100% - 12px);
       margin: 6px 6px 4px;
@@ -856,10 +862,16 @@ export class MuxSidebar extends LitElement {
       transition: border-color 0.12s, background 0.12s;
     }
 
-    .new-ws-btn:hover {
+    .new-ws-btn:hover,
+    .new-session-btn:hover {
       border-color: var(--chrome-accent);
       background: var(--chrome-hover);
     }
+
+    /* Enough air to read as belonging to the Inbox directly above it rather
+       than to the machine tree directly below. Nothing else about the
+       sidebar's density changes. */
+    .new-session-btn { margin: 8px 6px 2px; }
 
     /* ---- host groups ----
        .hostgroup and .hg-* apply to EVERY machine, local included, so they
@@ -2803,7 +2815,50 @@ export class MuxSidebar extends LitElement {
       <div class="project-groups">
         ${groups.map((group) => this._renderProjectGroup(group.project, group.sessions))}
       </div>
+      ${this._renderNewSession()}
     `;
+  }
+
+  /**
+   * THE ONE WAY TO START A SESSION FROM THE RAIL.
+   *
+   * It sits directly under the containers, OUTSIDE .project-groups and not
+   * inside any group's body, and that position is the whole design: there is
+   * exactly one destination -- the Inbox -- so there is exactly one button,
+   * and standing it immediately beneath the Inbox is what says where the
+   * session is about to land without a picker, a dropdown, or a word of
+   * explanation.
+   *
+   * DO NOT turn this into a per-container button. Every session in muxterm is
+   * created in the Inbox; a "new session" control repeated on each project
+   * header would be offering a destination that does not exist, and the first
+   * one anybody clicked would have to either lie or grow a filing step.
+   */
+  private _renderNewSession(): TemplateResult {
+    return html`
+      <button
+        type="button"
+        class="new-session-btn"
+        title="Start a session in the Inbox"
+        @click="${() => this._onNewSession()}"
+      >
+        \uff0b New session
+      </button>
+    `;
+  }
+
+  /**
+   * Ask for a session. No destination travels on this event because there is
+   * none to choose: app.ts starts the default harness, and the daemon files
+   * every row it publishes into the Inbox on its own (stampProjectIDs).
+   */
+  private _onNewSession(): void {
+    this.dispatchEvent(
+      new CustomEvent('session-create', {
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   private _renderProjectGroup(project: Project, sessions: readonly SessionState[]): TemplateResult {
