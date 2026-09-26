@@ -1,4 +1,4 @@
-.PHONY: build dev dev-local verify-lifecycle verify-inbox install-stable test clean web
+.PHONY: build desktop dev dev-local verify-lifecycle verify-inbox install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -66,6 +66,33 @@ endef
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
 build: web
 	go build -ldflags "-X main.version=$(DEV_VERSION)" -o bin/muxterm ./cmd/muxterm
+
+# ---------------------------------------------------------------------------
+# desktop -- the native Wails shell in desktop/.
+#
+# desktop/ is a SEPARATE nested Go module and this is the ONLY target that
+# builds it. `build`, `go build ./...`, `go vet ./...` and the GoReleaser
+# matrix are deliberately untouched by it -- see desktop/go.mod for why.
+#
+# Linux build prerequisites. This target does NOT install them, and no other
+# target in this file needs them:
+#
+#   Debian/Ubuntu   apt install libgtk-3-dev libwebkit2gtk-4.1-dev
+#   Fedora          dnf install gtk3-devel webkit2gtk4.1-devel
+#
+# WEBKIT_TAG selects the WebKit2GTK ABI. 4.1 is current (Debian 13,
+# Ubuntu 24.04+, Fedora 40+); pass WEBKIT_TAG= on an older distro still on the
+# 4.0 ABI. `desktop,production` are Wails' own required build tags -- without
+# them the binary links but refuses to open a window at runtime.
+WEBKIT_TAG ?= webkit2_41
+
+desktop: web
+	cd desktop && GOTOOLCHAIN=auto go build -tags "desktop,production,$(WEBKIT_TAG)" \
+		-ldflags "-X main.version=$(DEV_VERSION)" \
+		-o ../bin/muxterm-desktop .
+	@echo "built bin/muxterm-desktop -- run it directly. It starts its own"
+	@echo "loopback server on an ephemeral port and attaches to the sessiond"
+	@echo "you already have; it never touches an installed server's port."
 
 # Dev mode: Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
 #   - Vite rebuilds web/dist on muxterm frontend changes
