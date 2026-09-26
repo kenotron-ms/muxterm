@@ -98,11 +98,33 @@ echo "==> building $APP_NAME.app $VERSION (${MACOS_ARCHS// /+})"
 # own, and without it the darwin build keeps the devtools inspector wired in.
 #
 # CGO_ENABLED=1 is mandatory: the darwin frontend is Objective-C.
+#
+# CGO_LDFLAGS is a WAILS v2.15.0 BUG WORKAROUND, not a preference. Its darwin
+# frontend guards the import with __has_include:
+#
+#   WailsContext.h:15   #if __has_include(<UniformTypeIdentifiers/UTType.h>)
+#   WailsContext.m:618  UTType *t = [UTType typeWithFilenameExtension:filter];
+#
+# but NO file in that package declares `-framework UniformTypeIdentifiers` in
+# its `#cgo LDFLAGS` -- every one of them names only Foundation/Cocoa/WebKit.
+# On any SDK new enough to ship the header (Xcode 26 / macOS 26 SDK, which is
+# what macos-latest has) the guard passes, the Objective-C compiles, and the
+# link then fails:
+#
+#   Undefined symbols for architecture arm64:
+#     "_OBJC_CLASS_$_UTType", referenced from: ... 000015.o
+#
+# Supplying the framework here fixes it without vendoring or patching Wails.
+# UniformTypeIdentifiers is macOS 11+, which is why LSMinimumSystemVersion
+# below says 11.0 rather than Wails' own 10.13.
+CGO_EXTRA_LDFLAGS="-framework UniformTypeIdentifiers"
+
 SLICES=()
 for arch in $MACOS_ARCHS; do
   echo "--> go build darwin/$arch"
   out="$WORK/$EXE_NAME.$arch"
   ( cd "$REPO_ROOT" && CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" \
+      CGO_LDFLAGS="$CGO_EXTRA_LDFLAGS" \
       go build -tags "desktop,production" \
         -ldflags "-s -w -X main.version=$VERSION" \
         -o "$out" ./desktop )
@@ -168,7 +190,10 @@ cat > "$CONTENTS/Info.plist" <<EOF
 	<key>CFBundleVersion</key><string>$VERSION</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleSignature</key><string>????</string>
-	<key>LSMinimumSystemVersion</key><string>10.15.0</string>
+	<!-- 11.0, not Wails' own 10.13: this binary links
+	     UniformTypeIdentifiers.framework, which does not exist before
+	     macOS 11. See the CGO_LDFLAGS note above. -->
+	<key>LSMinimumSystemVersion</key><string>11.0</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSHumanReadableCopyright</key><string>muxterm maintainers</string>
