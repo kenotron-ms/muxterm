@@ -1,4 +1,4 @@
-.PHONY: build dev dev-local verify-lifecycle verify-inbox install-stable test clean web
+.PHONY: build desktop desktop-deb dev dev-local verify-lifecycle verify-inbox install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -66,6 +66,51 @@ endef
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
 build: web
 	go build -ldflags "-X main.version=$(DEV_VERSION)" -o bin/muxterm ./cmd/muxterm
+
+# ---------------------------------------------------------------------------
+# desktop -- the native Wails shell in desktop/.
+#
+# desktop/ is an ordinary package of the ONE muxterm module: same go.mod, same
+# go.sum, same dependency graph. What separates it from the CLI is not a module
+# boundary but a build tag.
+#
+# Wails links GTK3 and WebKit2GTK through cgo, so desktop/ needs headers the
+# CLI, the server and the GoReleaser matrix neither have nor need. desktop/*.go
+# therefore carries `//go:build desktop`, and Go skips a wildcard-matched
+# directory whose files are all excluded by a constraint -- so `go build ./...`
+# and the release matrix stay exactly as green as before on a machine with no
+# desktop toolchain, while this target builds the real thing.
+#
+# Linux build prerequisites, which are NOT installed by this target and are not
+# needed for any other target in this file:
+#
+#   Debian/Ubuntu   apt install libgtk-3-dev libwebkit2gtk-4.1-dev libpam0g-dev
+#   Fedora          dnf install gtk3-devel webkit2gtk4.1-devel pam-devel
+#
+# WEBKIT_TAG selects the WebKit2GTK ABI. 4.1 is current (Debian 13, Ubuntu
+# 24.04+, Fedora 40+); pass WEBKIT_TAG= on an older distro that still ships the
+# 4.0 ABI. `desktop,production` are Wails' own required build tags -- without
+# them the binary compiles but refuses to start a window at runtime.
+WEBKIT_TAG ?= webkit2_41
+
+desktop: web
+	go build -tags "desktop,production,$(WEBKIT_TAG)" \
+		-ldflags "-X main.version=$(DEV_VERSION)" \
+		-o bin/muxterm-desktop ./desktop
+	@echo "built bin/muxterm-desktop -- run it directly; it starts its own"
+	@echo "loopback server and attaches to the sessiond you already have."
+
+# desktop-deb -- the installable Linux package.
+#
+# Produces bin/muxterm-desktop_<version>_<arch>.deb: the binary, a .desktop
+# entry, and the icon at every hicolor size, so after `apt install ./<file>.deb`
+# muxterm is in the application menu by name and by icon and opens in its own
+# window. Nothing is typed into a terminal and no URL is typed by a human.
+#
+# See desktop/packaging/linux/build-deb.sh for why .deb rather than AppImage,
+# and for the extra build prerequisite (dpkg-dev).
+desktop-deb: web
+	desktop/packaging/linux/build-deb.sh
 
 # Dev mode: Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
 #   - Vite rebuilds web/dist on muxterm frontend changes

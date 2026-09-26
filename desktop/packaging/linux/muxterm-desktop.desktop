@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=muxterm
+GenericName=Terminal Multiplexer
+Comment=Persistent terminal sessions and agent lanes in a native window
+Exec=muxterm-desktop
+Icon=muxterm-desktop
+Terminal=false
+# One main category only: desktop-file-validate hints that more than one
+# makes the app show up twice in the menu.
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;console;multiplexer;session;tmux;agent;
+StartupNotify=true
+# MEASURED, not assumed: xprop on the running window reports
+#   WM_CLASS(STRING) = "muxterm-desktop", "Muxterm-desktop"
+# GTK derives it from argv[0], not from Wails' linux.Options.ProgramName.
+# This must match exactly, or the shell draws a generic icon for the running
+# window instead of pairing it with this launcher.
+StartupWMClass=muxterm-desktop
