@@ -59,6 +59,12 @@ jobs:
           echo "clang     : $(clang --version | head -1)"
           echo "xcode CLT : $(xcode-select -p)"
 
+      # web/embed.go embeds web/dist and web/dist-public, so NOTHING in this
+      # module compiles until the frontend has been built once. The frontend
+      # step therefore has to come before any go build, not after.
+      - name: Build the frontend
+        run: make web
+
       # The repo default build must stay green on darwin exactly as it does on
       # Linux: desktop/ is excluded by its own build constraint, so this is
       # compiling the CLI and server, not the Wails app.
@@ -67,9 +73,6 @@ jobs:
           go build ./...
           go vet ./...
           echo "DARWIN-WILDCARD-OK (constrained desktop/ skipped)"
-
-      - name: Build the frontend
-        run: make web
 
       - name: Build muxterm.app
         run: make desktop-app
@@ -229,6 +232,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libpam0g-dev dpkg-dev
 
+      # Same ordering rule as the macOS job: web/embed.go embeds web/dist, so
+      # the frontend has to exist before anything Go compiles.
+      - name: Build the frontend
+        run: make web
+
       - name: go build ./... and go vet ./...
         run: |
           go build ./...
@@ -236,7 +244,7 @@ jobs:
 
       - name: Frontend static checks (not tests -- AGENTS.md bans unit tests)
         run: |
-          cd web && npm install && npm run check:fast
+          cd web && npm run check:fast
 
       - name: make desktop-deb
         run: make desktop-deb
