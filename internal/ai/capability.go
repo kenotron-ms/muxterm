@@ -64,8 +64,6 @@ func (m *Manager) Status() Status {
 	return Status{Enabled: true, Source: src, KeyHint: keyHint(key)}
 }
 
-func (m *Manager) IsAIEnabled() bool { return m.Status().Enabled }
-
 func (m *Manager) SaveKey(key string) (Status, error) {
 	key = strings.TrimSpace(key)
 	if len(key) < MinKeyLen {

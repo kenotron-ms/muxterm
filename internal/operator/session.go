@@ -19,12 +19,6 @@ func ResolveSessionID(override string) (id, source string) {
 	return DefaultSessionID, "default"
 }
 
-// IsSession reports whether id names this muxterm instance's Operator.
-func IsSession(id string) bool {
-	operatorID, _ := ResolveSessionID("")
-	return id != "" && id == operatorID
-}
-
 // IsFleetSession recognizes the Operator after sessiond's durable hook ingress
 // has projected a native Amplifier id into its harness-qualified fleet id.
 // nativeID is the hook's execution/run identity when available.

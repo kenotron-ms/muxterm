@@ -580,18 +580,6 @@ func (s *completionStore) AcknowledgeWorkspace(wsID string) bool {
 	return changed
 }
 
-// PendingForWorkspace returns the newest unacknowledged record for wsID.
-func (s *completionStore) PendingForWorkspace(wsID string) (CompletionRecord, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := len(s.records) - 1; i >= 0; i-- {
-		if s.records[i].WorkspaceID == wsID && !s.records[i].Acknowledged {
-			return s.records[i], true
-		}
-	}
-	return CompletionRecord{}, false
-}
-
 func (s *completionStore) indexOfLocked(id string) int {
 	for i := range s.records {
 		if s.records[i].ID == id {

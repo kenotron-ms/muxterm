@@ -45,20 +45,6 @@ const (
 	SocketBlocked
 )
 
-func (s SocketState) String() string {
-	switch s {
-	case SocketFree:
-		return "free"
-	case SocketStale:
-		return "stale"
-	case SocketOwned:
-		return "owned"
-	case SocketBlocked:
-		return "blocked"
-	}
-	return "unknown"
-}
-
 // ProbeSocket asks whether anything is listening at path, WITHOUT modifying
 // anything. The reason it dials rather than stat-ing is that the filesystem
 // cannot answer the question: a socket file's existence says only that some

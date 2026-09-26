@@ -284,17 +284,6 @@ func (r *Registry) workspaceName(wsID string) string {
 	return ws.Name
 }
 
-// Completion returns the finished-lane annotation for wsID, or nil.
-func (r *Registry) Completion(wsID string) *WorkspaceCompletion {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	ws, ok := r.workspaces[wsID]
-	if !ok {
-		return nil
-	}
-	return ws.completion
-}
-
 // Pane returns the pane paneID within wsID and whether it exists.
 func (r *Registry) Pane(wsID string, paneID int) (*Pane, bool) {
 	r.mu.Lock()
