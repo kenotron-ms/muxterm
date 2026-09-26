@@ -1,4 +1,4 @@
-.PHONY: build desktop desktop-deb dev dev-local verify-lifecycle verify-inbox install-stable test clean web
+.PHONY: build desktop desktop-deb desktop-app dev dev-local verify-lifecycle verify-inbox install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -111,6 +111,25 @@ desktop: web
 # and for the extra build prerequisite (dpkg-dev).
 desktop-deb: web
 	desktop/packaging/linux/build-deb.sh
+
+# desktop-app -- the macOS bundle. RUNS ON macOS ONLY.
+#
+# Wails links Cocoa and WKWebView through cgo, so unlike every other target in
+# this file this one cannot be cross-compiled: there is no darwin toolchain on
+# a Linux box that can link those frameworks. Building it needs a Mac, or the
+# macos-latest runner in .github/workflows/desktop-macos.yml.
+#
+# Produces bin/muxterm.app -- a universal (arm64 + x86_64) bundle with an
+# Info.plist, the icns icon, and an AD-HOC code signature. Ad-hoc is what makes
+# the binary executable at all on Apple silicon; it is NOT a Developer ID
+# signature, so Gatekeeper still blocks the first open of a downloaded copy.
+# See desktop/packaging/darwin/build-app.sh for the whole reasoning.
+#
+# macOS build prerequisites, which are NOT installed by this target:
+#   xcode-select --install          (Command Line Tools: clang + the SDK)
+#   Go >= 1.25
+desktop-app: web
+	desktop/packaging/darwin/build-app.sh
 
 # Dev mode: Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
 #   - Vite rebuilds web/dist on muxterm frontend changes
