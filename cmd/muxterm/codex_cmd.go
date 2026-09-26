@@ -35,17 +35,17 @@ func runCodex(args []string) error {
 	if err != nil {
 		return err
 	}
-	hooks, err := sessiond.CodexRichHookArgs(codex, cwd)
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	hooks, err := sessiond.CodexRichHookArgs(codex, self, cwd)
 	if err != nil {
 		return fmt.Errorf("Codex reporting injection failed: %w", err)
 	}
 	argv := append([]string{"codex"}, sessiond.CodexNotifyOverride()...)
 	argv = append(argv, hooks...)
 	argv = append(argv, args...)
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	env := append(os.Environ(),
 		sessiond.CodexHookBridgeEnv+"="+self,
 		sessiond.CodexRichReportingEnv+"=1",
