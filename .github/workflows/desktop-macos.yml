@@ -1,0 +1,256 @@
+name: Desktop (macOS)
+
+# Wails links Cocoa and WKWebView through cgo, so a macOS build of the desktop
+# app cannot be cross-compiled from Linux -- it has to be compiled ON macOS.
+# This workflow is that macOS. It produces a downloadable, universal
+# (arm64 + x86_64) muxterm.app.
+#
+# WHAT THIS WORKFLOW CAN AND CANNOT PROVE
+#
+# It compiles, packages, verifies the bundle's structure and signature, and
+# starts the app to prove its in-process loopback server answers real HTTP on
+# macOS. It CANNOT meaningfully confirm the window renders: a GitHub-hosted
+# runner has no attached display and no TCC grant for screen recording. First
+# run on a real Mac is unverified -- see the PR body.
+#
+# The app is UNSIGNED in the distribution sense. The ad-hoc signature applied
+# by build-app.sh is what makes a Mach-O executable on Apple silicon; it is not
+# a Developer ID signature, and no notarization is attempted. macOS WILL refuse
+# the first open of the downloaded artifact until the user clears quarantine.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'desktop/**'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/desktop-macos.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  macos-app:
+    name: muxterm.app (universal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Toolchain in use
+        run: |
+          sw_vers
+          echo "arch      : $(uname -m)"
+          echo "go        : $(go version)"
+          echo "clang     : $(clang --version | head -1)"
+          echo "xcode CLT : $(xcode-select -p)"
+
+      # The repo default build must stay green on darwin exactly as it does on
+      # Linux: desktop/ is excluded by its own build constraint, so this is
+      # compiling the CLI and server, not the Wails app.
+      - name: go build ./... and go vet ./... (desktop/ excluded by build tag)
+        run: |
+          go build ./...
+          go vet ./...
+          echo "DARWIN-WILDCARD-OK (constrained desktop/ skipped)"
+
+      - name: Build the frontend
+        run: make web
+
+      - name: Build muxterm.app
+        run: make desktop-app
+
+      - name: Verify the bundle
+        run: |
+          set -euo pipefail
+          APP=bin/muxterm.app
+          EXE="$APP/Contents/MacOS/muxterm-desktop"
+
+          echo "--- bundle layout ---"
+          find "$APP" -maxdepth 3 -print | sed "s|^$APP|muxterm.app|"
+
+          echo "--- architectures (must contain BOTH slices) ---"
+          lipo -archs "$EXE"
+          lipo -archs "$EXE" | grep -q arm64
+          lipo -archs "$EXE" | grep -q x86_64
+          file "$EXE"
+
+          echo "--- Info.plist ---"
+          plutil -lint "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier'         "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable'         "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSExceptionDomains:127.0.0.1:NSExceptionAllowsInsecureHTTPLoads' \
+            "$APP/Contents/Info.plist"
+
+          echo "--- icon decodes ---"
+          sips -g pixelWidth -g pixelHeight "$APP/Contents/Resources/muxterm-desktop.icns"
+
+          echo "--- signature: ad-hoc, NOT Developer ID ---"
+          codesign -dvvv "$APP" 2>&1 | grep -E 'Identifier|Signature|TeamIdentifier|Authority' || true
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+          echo "--- Gatekeeper's own verdict on this unsigned build ---"
+          # Expected to REJECT. That is the honest state of an unsigned app and
+          # the reason the PR documents a quarantine step; it is not a failure
+          # of this build, so the exit code is captured rather than fatal.
+          spctl --assess --type execute --verbose=4 "$APP" 2>&1 || true
+
+      # The window cannot be verified here, but the thing the window LOADS can:
+      # desktop/main.go starts muxterm's real server in-process on a loopback
+      # port before Wails is touched. If that origin answers, the server half of
+      # the app works on macOS.
+      - name: Smoke test -- the in-process loopback server on macOS
+        run: |
+          set -euo pipefail
+          APP=bin/muxterm.app
+          "$APP/Contents/MacOS/muxterm-desktop" > /tmp/muxterm-app.log 2>&1 &
+          APP_PID=$!
+          echo "launched pid $APP_PID"
+
+          ORIGIN=""
+          for i in $(seq 1 40); do
+            ORIGIN="$(sed -n 's|.*listening on \(http://127\.0\.0\.1:[0-9]*/\).*|\1|p' /tmp/muxterm-app.log | head -1)"
+            [ -n "$ORIGIN" ] && break
+            sleep 1
+          done
+          echo "--- app log so far ---"; cat /tmp/muxterm-app.log
+          if [ -z "$ORIGIN" ]; then
+            echo "FAILED: the app never reported a loopback origin" >&2
+            kill "$APP_PID" 2>/dev/null || true
+            exit 1
+          fi
+          echo "origin: $ORIGIN"
+
+          echo "--- real HTTP against the app's own server ---"
+          curl -sS -o /dev/null -w 'GET /            -> %{http_code}\n' "$ORIGIN"          | tee /tmp/http.txt
+          curl -sS -o /dev/null -w 'GET /api/config  -> %{http_code}\n' "${ORIGIN}api/config" | tee -a /tmp/http.txt
+          grep -q 'GET /            -> 200' /tmp/http.txt
+          grep -q 'GET /api/config  -> 200' /tmp/http.txt
+
+          echo "--- did the Cocoa/WKWebView runtime abort? ---"
+          sleep 10
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "process ALIVE 10s after serving: wails.Run did not abort"
+            echo "NOTE: alive != rendered. No display is attached to this runner."
+          else
+            echo "process EXITED -- log follows (the window could not initialise here)"
+            cat /tmp/muxterm-app.log
+          fi
+          cat /tmp/muxterm-app.log > /tmp/muxterm-app-final.log
+          kill "$APP_PID" 2>/dev/null || true
+          pkill -f 'muxterm-desktop sessiond' 2>/dev/null || true
+          true
+
+      # ditto, not zip, and zipped HERE rather than letting upload-artifact do
+      # it: the artifact zip GitHub builds does not carry the executable bit, so
+      # an .app uploaded as a directory arrives unrunnable. ditto -c -k
+      # --keepParent preserves the bundle's modes and extended attributes,
+      # including the ad-hoc signature.
+      - name: Package the artifact
+        run: |
+          set -euo pipefail
+          cd bin
+          ditto -c -k --keepParent muxterm.app muxterm-macos-universal.zip
+          ls -l muxterm-macos-universal.zip
+          shasum -a 256 muxterm-macos-universal.zip
+          {
+            echo "muxterm.app -- macOS desktop build"
+            echo "commit      : ${GITHUB_SHA}"
+            echo "ref         : ${GITHUB_REF}"
+            echo "built on    : $(sw_vers -productName) $(sw_vers -productVersion) ($(uname -m))"
+            echo "go          : $(go version)"
+            echo "archs       : $(lipo -archs muxterm.app/Contents/MacOS/muxterm-desktop)"
+            echo "signature   : ad-hoc (codesign -s -). NOT Developer ID. NOT notarized."
+            echo "sha256      : $(shasum -a 256 muxterm-macos-universal.zip | cut -d' ' -f1)"
+            echo
+            echo "FIRST RUN: macOS quarantines anything downloaded from a browser and"
+            echo "refuses an unsigned app. Unzip, then:"
+            echo "    xattr -dr com.apple.quarantine /Applications/muxterm.app"
+            echo "    open /Applications/muxterm.app"
+          } > BUILD-INFO.txt
+          cat BUILD-INFO.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxterm-macos-universal
+          path: |
+            bin/muxterm-macos-universal.zip
+            bin/BUILD-INFO.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the macOS run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-smoke-log
+          path: /tmp/muxterm-app-final.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Proof that adding the macOS path did not cost the Linux one. Same commit,
+  # same module: builds the .deb PR #215 ships.
+  linux-deb:
+    name: Linux .deb still builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Desktop build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libpam0g-dev dpkg-dev
+
+      - name: go build ./... and go vet ./...
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Frontend static checks (not tests -- AGENTS.md bans unit tests)
+        run: |
+          cd web && npm install && npm run check:fast
+
+      - name: make desktop-deb
+        run: make desktop-deb
+
+      - name: Show the package
+        run: |
+          set -euo pipefail
+          DEB="$(ls bin/muxterm-desktop_*.deb)"
+          ls -l "$DEB"
+          dpkg-deb --info "$DEB" | sed -n '1,14p'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxterm-desktop-deb
+          path: bin/muxterm-desktop_*.deb
+          if-no-files-found: error
+          retention-days: 30
