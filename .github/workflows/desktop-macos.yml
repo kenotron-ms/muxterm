@@ -159,6 +159,58 @@ jobs:
           pkill -f 'muxterm-desktop sessiond' 2>/dev/null || true
           true
 
+      # Best effort, and honestly labelled either way. A GitHub-hosted macOS
+      # runner has no attached display and no TCC grant for screen recording,
+      # so screencapture may return a blank frame or nothing at all. If it DOES
+      # capture muxterm's window, that is the one thing CI otherwise cannot
+      # show. Never fatal: the artifact does not depend on it.
+      - name: Attempt a screenshot of the window (best effort)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          set +e
+          open bin/muxterm.app
+          sleep 25
+
+          echo "--- processes ---"
+          ps -Ao pid,comm | grep -i muxterm | grep -v grep
+
+          echo "--- windows CoreGraphics can see (no TCC needed for the list) ---"
+          /usr/bin/python3 - <<'PY'
+          import Quartz
+          wins = Quartz.CGWindowListCopyWindowInfo(
+              Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+              Quartz.kCGNullWindowID) or []
+          for w in wins:
+              owner = w.get('kCGWindowOwnerName', '')
+              name  = w.get('kCGWindowName', '')
+              b     = w.get('kCGWindowBounds', {})
+              print(f"owner={owner!r} title={name!r} {int(b.get('Width',0))}x{int(b.get('Height',0))}")
+          PY
+
+          echo "--- screencapture ---"
+          screencapture -x /tmp/macos-screen.png
+          echo "screencapture exit=$?"
+          if [ -f /tmp/macos-screen.png ]; then
+            sips -g pixelWidth -g pixelHeight /tmp/macos-screen.png
+            ls -l /tmp/macos-screen.png
+          else
+            echo "no screenshot produced"
+          fi
+          pkill -f 'muxterm.app/Contents/MacOS/muxterm-desktop' 2>/dev/null
+          pkill -f 'muxterm-desktop sessiond' 2>/dev/null
+          exit 0
+
+      - name: Upload the screenshot attempt
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-screenshot-attempt
+          path: /tmp/macos-screen.png
+          if-no-files-found: warn
+          retention-days: 30
+
       # ditto, not zip, and zipped HERE rather than letting upload-artifact do
       # it: the artifact zip GitHub builds does not carry the executable bit, so
       # an .app uploaded as a directory arrives unrunnable. ditto -c -k
