@@ -34,9 +34,9 @@ Root sessions only
 ------------------
 A delegated sub-agent gets its own coordinator and its own mount() call in the
 SAME OS process, so module state here is shared across a root session and all
-its children. Every child shares the root's pid, so writing a spool file per
-sub-session would map several rows onto one pane. Only root sessions
-(parent_id is None) own a file; a child's events fold into its root's `doing`
+its children. Every child shares the root's pid, so reporting each sub-session
+as a separate row would map several rows onto one pane. Only root sessions
+(parent_id is None) own a report; a child's events fold into its root's `doing`
 line, which is what "delegating to explorer" should mean anyway.
 """
 
@@ -76,7 +76,7 @@ WAITING_FOR_INPUT = "input needed"
 MODE_INTERACTIVE = "interactive"
 MODE_AUTONOMOUS = "autonomous"
 
-# The three states that are an ENDING rather than a moment. A snapshot in one
+# The three states that are an ENDING rather than a moment. A projected row in one
 # of these outlives the process that wrote it -- the home view exists to answer
 # "how did it end?", and a row that vanishes the instant the agent exits cannot.
 TERMINAL_STATES = frozenset({STATE_DONE, STATE_FAILED, STATE_STOPPED})
@@ -96,15 +96,13 @@ ENDING_TTL_SECONDS = 24 * 60 * 60
 # any harness, and a row that does not say what is running it cannot be badged.
 HARNESS = "amplifier"
 
-# Snapshot schema version. Bump ONLY for a breaking change to the on-disk
-# shape; a reader that does not understand the version skips the file with a
-# logged reason rather than guessing. Additive optional fields do not need a
-# bump -- that is what makes them additive. See docs/session-state-protocol.md.
+# Projection schema version retained for the state-to-hook translation below.
+# The common v2 hook envelope, not this value, is the durable ingress contract.
 SCHEMA_VERSION = 1
 
 # Display bounds. A goal lane's first prompt is an entire inlined goal file and
-# an artifact list is unbounded; neither belongs on a sidebar row, and neither
-# should be allowed to grow a snapshot file without limit.
+# an artifact list is unbounded; neither belongs on a sidebar row or in a
+# bounded hook report.
 NAME_MAX_CHARS = 80
 DOING_MAX_CHARS = 120
 # The lane's closing message is notice substance, not dashboard furniture.
