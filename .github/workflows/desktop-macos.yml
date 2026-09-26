@@ -164,29 +164,31 @@ jobs:
       # so screencapture may return a blank frame or nothing at all. If it DOES
       # capture muxterm's window, that is the one thing CI otherwise cannot
       # show. Never fatal: the artifact does not depend on it.
-      - name: Attempt a screenshot of the window (best effort)
+      - name: Open the bundle, screenshot it, and read the macOS clipboard
         continue-on-error: true
-        timeout-minutes: 3
+        timeout-minutes: 4
         run: |
           set +e
+          # `open` rather than exec'ing the binary: this is the LaunchServices
+          # path a double-click takes, so Info.plist, the icon and the
+          # activation policy are all resolved the way they will be on a Mac.
           open bin/muxterm.app
           sleep 25
 
-          echo "--- processes ---"
-          ps -Ao pid,comm | grep -i muxterm | grep -v grep
+          echo "--- processes (a second one means the app spawned its own sessiond) ---"
+          ps -Ao pid,command | grep 'muxterm-desktop' | grep -v grep
 
-          echo "--- windows CoreGraphics can see (no TCC needed for the list) ---"
-          /usr/bin/python3 - <<'PY'
-          import Quartz
-          wins = Quartz.CGWindowListCopyWindowInfo(
-              Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-              Quartz.kCGNullWindowID) or []
-          for w in wins:
-              owner = w.get('kCGWindowOwnerName', '')
-              name  = w.get('kCGWindowName', '')
-              b     = w.get('kCGWindowBounds', {})
-              print(f"owner={owner!r} title={name!r} {int(b.get('Width',0))}x{int(b.get('Height',0))}")
-          PY
+          # desktop/main.go's OnStartup writes a token to the OS clipboard and
+          # reads it back. On Linux that was GTK; here it is NSPasteboard. If
+          # pbpaste -- a separate process, outside the app -- can see the token,
+          # the app really did write the macOS system clipboard.
+          echo "--- macOS system clipboard, read from OUTSIDE the app ---"
+          CLIP="$(pbpaste)"
+          echo "pbpaste: $CLIP"
+          case "$CLIP" in
+            muxterm-native-clipboard-*) echo "NATIVE-CLIPBOARD-MACOS: OK" ;;
+            *) echo "NATIVE-CLIPBOARD-MACOS: token not present" ;;
+          esac
 
           echo "--- screencapture ---"
           screencapture -x /tmp/macos-screen.png
@@ -201,12 +203,12 @@ jobs:
           pkill -f 'muxterm-desktop sessiond' 2>/dev/null
           exit 0
 
-      - name: Upload the screenshot attempt
+      - name: Upload the screenshot
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: macos-screenshot-attempt
+          name: macos-screenshot
           path: /tmp/macos-screen.png
           if-no-files-found: warn
           retention-days: 30
