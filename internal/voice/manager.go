@@ -56,6 +56,13 @@ func NewManager(cfg config.VoiceConfig, bridge Bridge, keyPath string) (*Manager
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	// Resolve BEFORE building the credential. Validate and NewClient each
+	// resolve internally, so a defaulted section passed validation and then
+	// died here on the raw auth_mode -- "voice: unsupported auth_mode \"\"" --
+	// which registerVoiceRoutes reports as voice being switched off. The
+	// credential must be chosen from the same resolved values the client
+	// will actually send.
+	cfg = cfg.Resolved()
 	cred, err := NewCredential(cfg, keyPath)
 	if err != nil {
 		return nil, err
