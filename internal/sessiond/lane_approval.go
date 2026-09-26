@@ -114,6 +114,17 @@ func ApplyLaneApproval(argv []string, override string) ([]string, error) {
 	//     on-request and never, both of which still load. A real CLI change,
 	//     not a change to this translation.
 	//
+	// Re-verified independently 2026-09-26 against the same codex-cli 0.157.0.
+	// Every measurement above reproduced exactly. One trap is worth writing
+	// down, because the obvious way to re-run the sandbox_mode check gets it
+	// wrong: `/tmp` is itself a WRITABLE ROOT under workspace-write, so an
+	// "outside the workspace" control built with `mktemp -d` is allowed, and
+	// workspace-write looks indistinguishable from danger-full-access. Use an
+	// outside path that is neither under the cwd nor under /tmp (a directory in
+	// $HOME works). With that control: read-only denied both writes,
+	// workspace-write allowed the in-cwd write and DENIED the outside one, and
+	// danger-full-access allowed both.
+	//
 	// Claude's pin is UNCHANGED and was not re-verified here: claude is not
 	// installed on this host, and a version this function has never run against
 	// is refused rather than guessed.
