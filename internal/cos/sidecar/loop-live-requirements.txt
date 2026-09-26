@@ -1,0 +1,3 @@
+# Experimental opt-in canary only. amplifier-core is supplied by the host as a
+# peer dependency. Never replace this commit with a branch name.
+amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@1d7be38ef47798bbb162f5331b413e78d6b4e70b

@@ -42,7 +42,7 @@ import (
 // written to every user's cache. Anything new that the sidecar genuinely needs
 // at runtime has to be added here on purpose.
 //
-//go:embed sidecar/main.py sidecar/bundle
+//go:embed sidecar/main.py sidecar/bundle sidecar/loop-live-requirements.txt
 var embeddedSidecar embed.FS
 
 // sidecarScriptName is the tree-relative path of the script itself. Callers
