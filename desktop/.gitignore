@@ -1,0 +1,2 @@
+# Local build output; the shared bin/ is already ignored at the repo root.
+muxterm-desktop
