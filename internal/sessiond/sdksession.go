@@ -45,10 +45,24 @@ import (
 // and triggerStore: own mutex, own file under snapshotDir(), atomic rewrite,
 // merged onto the published rows on the way out.
 //
-// WHAT THIS SLICE DOES NOT DO, named rather than implied: it does not resume a
-// thread after a restart (the record and the thread id survive, the live
-// app-server process does not), it does not migrate any existing session, and
-// it does not touch the PTY path. Those are later slices.
+// WHAT THIS FILE DOES NOW THAT #220 DID NOT. Two gaps in that slice are closed
+// here, and they are the two that stood between a proof and something usable:
+//
+//   - RESUME. A record surviving a restart carried a thread id nothing used,
+//     so a conversation that outlived the daemon could be listed and never
+//     continued. Resume/resumeLocked call thread/resume against that id, and
+//     Send calls it AUTOMATICALLY when the record is detached -- so continuing
+//     a session after a restart is the same verb as continuing one before it.
+//
+//   - WATCHABILITY. item/agentMessage/delta was already arriving and was
+//     dropped on the floor, which is why an SDK session's output could only be
+//     read after the fact, as a summary. Deltas are now coalesced and
+//     broadcast (onOutput) so a browser can watch the answer being written.
+//
+// STILL NOT DONE, named rather than implied: no approval routing (the sandbox
+// stays read-only with approvalPolicy never, and loosening it without a human
+// route is how a headless session silently gains write access), no migration
+// of existing sessions, no second harness.
 
 // sdkSessionsVersion is the schema version of the on-disk document. A file
 // declaring a HIGHER version was written by a newer daemon: its entries are
@@ -106,6 +120,12 @@ type SDKSessionRecord struct {
 	// not a reading of what a terminal showed.
 	Summary string `json:"summary,omitempty"`
 
+	// ResumeCount counts how many times this record has been reattached to
+	// its harness thread through thread/resume. Persisted, because it is the
+	// durable evidence that a conversation outlived a daemon: a record with
+	// resumeCount > 0 was continued, not restarted.
+	ResumeCount int `json:"resumeCount,omitempty"`
+
 	CreatedAt int64 `json:"createdAt"`
 	UpdatedAt int64 `json:"updatedAt"`
 
@@ -137,6 +157,60 @@ type sdkSessionStore struct {
 	// notify is called after any change that should reach the fleet
 	// immediately rather than on the next tick.
 	notify func()
+
+	// resumeMu serializes reattachment. Resuming spawns a process and makes a
+	// protocol round trip, so it must not be done under mu -- and two
+	// concurrent sends against the same detached record must not each spawn
+	// their own app server and leave one orphaned. One global lock rather
+	// than one per session because resuming is rare and contention on it is
+	// not a thing that happens.
+	resumeMu sync.Mutex
+
+	// onOutput publishes one coalesced run of assistant text. Set by the
+	// server; nil in a store nobody is watching, which costs one nil check
+	// per delta.
+	onOutput func(SDKOutputChunk)
+	// pending holds the deltas that have arrived since the last flush, per
+	// session, and flushTimer is the single timer that will drain them.
+	//
+	// WHY COALESCE AT ALL. Deltas arrive per token. Publishing each one as
+	// its own frame would push tens of advisory frames a second at every
+	// browser, onto a queue that DROPS when full (subscriber.go) -- and a
+	// dropped fragment is not a missing frame, it is a hole in the middle of
+	// a sentence. Batching to flushEvery turns the same text into a handful
+	// of frames and makes a drop far less likely; seq makes one visible when
+	// it happens anyway.
+	pending    map[string]*sdkPendingOutput
+	flushTimer *time.Timer
+	// outSeq counts published chunks PER SESSION. Per session rather than
+	// store-wide because the number exists to let one consumer of one
+	// session's text notice a hole in it; a counter shared with another
+	// session's stream would report a gap every time the two interleaved.
+	outSeq map[string]uint64
+}
+
+// SDKOutputChunk is one coalesced run of assistant text from an SDK session.
+//
+// Seq counts this session's chunks, from 1, for the lifetime of one daemon. It
+// exists so a consumer can tell "nothing has arrived yet" from "a frame was
+// dropped on the way here": these frames are advisory and droppable by design,
+// and text that silently closes over a gap reads as though the assistant said
+// something it did not.
+type SDKOutputChunk struct {
+	SessionID string
+	ThreadID  string
+	TurnID    string
+	ItemID    string
+	Text      string
+	Seq       uint64
+}
+
+// sdkPendingOutput accumulates one session's unflushed deltas.
+type sdkPendingOutput struct {
+	threadID string
+	turnID   string
+	itemID   string
+	text     strings.Builder
 }
 
 type sdkSessionsFile struct {
@@ -155,6 +229,8 @@ func newSDKSessionStore(path string) *sdkSessionStore {
 		path:    path,
 		records: map[string]*SDKSessionRecord{},
 		clients: map[string]*sdkclient.Client{},
+		pending: map[string]*sdkPendingOutput{},
+		outSeq:  map[string]uint64{},
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -199,7 +275,10 @@ func (s *sdkSessionStore) Rows() []SessionState {
 	for _, rec := range s.records {
 		doing := "SDK session (" + rec.Harness + ")"
 		if rec.Detached {
-			doing = "SDK record restored after daemon restart; no live connection"
+			// Says what is true AND what happens next. The record is not
+			// live, and it is not stranded either: the next turn reattaches
+			// it to thread rec.ThreadID.
+			doing = "SDK record detached from this daemon; next turn resumes thread " + shortThread(rec.ThreadID)
 		}
 		rows = append(rows, SessionState{
 			SessionID: rec.SessionID,
@@ -264,9 +343,7 @@ func (s *sdkSessionStore) Start(ctx context.Context, harness, cwd, name string) 
 	}
 
 	sessionID := newSDKSessionID()
-	client, err := sdkclient.Start(ctx, bin, "muxterm", sdkClientVersion, func(n sdkclient.Notification) {
-		s.onNotification(sessionID, n)
-	})
+	client, err := s.dial(ctx, bin, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -303,6 +380,87 @@ func (s *sdkSessionStore) Start(ctx context.Context, harness, cwd, name string) 
 	return &out, nil
 }
 
+// dial launches one app server and routes its notifications at sessionID.
+//
+// Shared by Start and Resume so a resumed session is driven by exactly the
+// same client, with exactly the same notification routing, as a fresh one --
+// which is what makes "continue after a restart" the same code path as
+// "continue", rather than a second, thinner implementation that drifts.
+func (s *sdkSessionStore) dial(ctx context.Context, bin, sessionID string) (*sdkclient.Client, error) {
+	return sdkclient.Start(ctx, bin, "muxterm", sdkClientVersion, func(n sdkclient.Notification) {
+		s.onNotification(sessionID, n)
+	})
+}
+
+// Resume reattaches a detached record to the harness thread it named.
+//
+// THIS IS THE GAP #220 LEFT OPEN, CLOSED. That slice demonstrated a record
+// surviving a daemon restart carrying its harness-native thread id, and then
+// refused every turn against it -- honestly, but uselessly: a conversation you
+// can list and cannot continue is an epitaph. Resume spawns a new app server
+// and calls thread/resume with the id the store persisted, so the harness
+// reopens the rollout it already wrote. The turns delivered before the restart
+// are still in that thread's context, which is a property of the harness's
+// storage, not a claim muxterm makes.
+//
+// A session that is already live is returned unchanged rather than resumed a
+// second time: the operation is idempotent, because Send calls it on a path
+// where "is it attached?" is a race against every other caller.
+func (s *sdkSessionStore) Resume(ctx context.Context, sessionID string) (*SDKSessionRecord, bool, error) {
+	// One resume at a time, and never under s.mu: this spawns a process and
+	// makes a protocol round trip.
+	s.resumeMu.Lock()
+	defer s.resumeMu.Unlock()
+
+	s.mu.Lock()
+	rec, ok := s.records[sessionID]
+	client := s.clients[sessionID]
+	s.mu.Unlock()
+	if !ok {
+		return nil, false, fmt.Errorf("no SDK-backed session %q", sessionID)
+	}
+	if client != nil && client.Alive() {
+		out := *rec
+		return &out, false, nil // already attached; nothing to do
+	}
+	if rec.ThreadID == "" {
+		// Nothing to resume BY. Refused by name rather than by starting a
+		// fresh thread under the old record's id, which would silently hand
+		// the caller a different conversation wearing a familiar name.
+		return nil, false, fmt.Errorf("SDK session %q carries no harness thread id; it cannot be resumed", sessionID)
+	}
+	if rec.Harness != HarnessCodex {
+		return nil, false, fmt.Errorf("resume is implemented for harness %q only (got %q)", HarnessCodex, rec.Harness)
+	}
+	bin, err := exec.LookPath("codex")
+	if err != nil {
+		return nil, false, fmt.Errorf("harness %q is not installed: %w", rec.Harness, err)
+	}
+	fresh, err := s.dial(ctx, bin, sessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	thread, err := fresh.ThreadResume(ctx, rec.ThreadID, rec.Cwd, sdkSandboxMode, sdkApprovalPolicy)
+	if err != nil {
+		fresh.Close()
+		return nil, false, fmt.Errorf("thread/resume %s: %w", rec.ThreadID, err)
+	}
+	s.mu.Lock()
+	// The harness is authoritative about the id of the thread it just
+	// reopened. Taking its answer rather than assuming ours keeps the record
+	// pointing at the thread that actually exists.
+	rec.ThreadID = thread.ID
+	rec.Detached = false
+	rec.ResumeCount++
+	rec.UpdatedAt = time.Now().Unix()
+	s.clients[sessionID] = fresh
+	s.persistLocked()
+	out := *rec
+	s.mu.Unlock()
+	s.fire()
+	return &out, true, nil
+}
+
 // Send delivers one turn and returns the harness's receipt.
 //
 // The returned Turn is the acknowledgement: an id the harness minted and a
@@ -311,20 +469,38 @@ func (s *sdkSessionStore) Start(ctx context.Context, harness, cwd, name string) 
 // PTY-backed managed-dispatch path cannot do -- it runs a subprocess and reads
 // an exit code, so its failure mode is "uncertain" by construction
 // (cmd/muxterm/session_send_cmd.go).
-func (s *sdkSessionStore) Send(ctx context.Context, sessionID, text string) (*sdkclient.Turn, error) {
+//
+// A DETACHED SESSION RESUMES ITSELF HERE. #220 refused this turn and said so;
+// refusing was honest but it made the durable record a museum piece. Sending
+// into a session that survived a restart is now the ordinary verb, and the
+// returned resumed flag reports which of the two happened rather than hiding
+// it -- a caller is entitled to know that a fresh app server was spawned and
+// a thread reopened under its request.
+func (s *sdkSessionStore) Send(ctx context.Context, sessionID, text string) (*sdkclient.Turn, bool, error) {
 	s.mu.Lock()
 	rec, ok := s.records[sessionID]
 	client := s.clients[sessionID]
 	s.mu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("no SDK-backed session %q", sessionID)
+		return nil, false, fmt.Errorf("no SDK-backed session %q", sessionID)
 	}
+	resumed := false
 	if client == nil || !client.Alive() {
-		// The honest error. The record is here and the thread id is here, but
-		// this daemon holds no connection -- so the turn cannot be delivered
-		// and must not be reported as delivered.
-		return nil, fmt.Errorf("SDK session %q has no live harness connection in this daemon "+
-			"(thread %s survives on disk; resuming it is not implemented in this slice)", sessionID, rec.ThreadID)
+		if _, did, err := s.Resume(ctx, sessionID); err != nil {
+			// Still the honest error, just later: the record and the thread
+			// id are here, the harness would not reopen the thread, so the
+			// turn was NOT delivered and must not be reported as delivered.
+			return nil, false, fmt.Errorf("SDK session %q has no live harness connection and could not be resumed: %w",
+				sessionID, err)
+		} else {
+			resumed = did
+		}
+		s.mu.Lock()
+		client = s.clients[sessionID]
+		s.mu.Unlock()
+	}
+	if client == nil {
+		return nil, false, fmt.Errorf("SDK session %q has no live harness connection", sessionID)
 	}
 	turn, err := client.TurnStart(ctx, rec.ThreadID, text)
 	if err != nil {
@@ -334,7 +510,7 @@ func (s *sdkSessionStore) Send(ctx context.Context, sessionID, text string) (*sd
 		s.persistLocked()
 		s.mu.Unlock()
 		s.fire()
-		return nil, err
+		return nil, resumed, err
 	}
 	s.mu.Lock()
 	rec.LastTurnID = turn.ID
@@ -345,7 +521,7 @@ func (s *sdkSessionStore) Send(ctx context.Context, sessionID, text string) (*sd
 	s.persistLocked()
 	s.mu.Unlock()
 	s.fire()
-	return turn, nil
+	return turn, resumed, nil
 }
 
 // onNotification applies a harness event to the record.
@@ -361,6 +537,11 @@ func (s *sdkSessionStore) onNotification(sessionID string, n sdkclient.Notificat
 		return
 	}
 	changed := true
+	// drain forces the coalescing buffer out now rather than up to one flush
+	// interval later. Set when the turn ends: the last fragment of an answer
+	// is the one a reader is waiting on, and leaving it in a buffer behind a
+	// row that already says "stopped" is the one place the delay is visible.
+	drain := false
 	switch n.Method {
 	case sdkclient.NotifyTurnStarted:
 		rec.State = SessionStateWorking
@@ -369,6 +550,7 @@ func (s *sdkSessionStore) onNotification(sessionID string, n sdkclient.Notificat
 			rec.LastTurnStatus = n.Turn.Status
 		}
 	case sdkclient.NotifyTurnCompleted:
+		drain = true
 		// An interactive session that finished its turn is RESTING, not
 		// broken: Stopped, never Failed. The distinction is the one Mode
 		// exists to make (sessionstate.go).
@@ -396,6 +578,20 @@ func (s *sdkSessionStore) onNotification(sessionID string, n sdkclient.Notificat
 			break
 		}
 		rec.Summary = payload.Item.Text
+	case sdkclient.NotifyAgentMessageDelta:
+		// THE ANSWER ARRIVING. #220 recorded this notification as already
+		// present and unrendered, which is exactly what made an SDK session
+		// unwatchable: a human saw a row go to working and, seconds later, a
+		// finished summary, with the writing itself invisible.
+		//
+		// It touches no record field and persists nothing. A fragment of a
+		// sentence is not session state -- it is a frame -- and writing the
+		// store on every token would be a disk write per token for text the
+		// completed item already carries in full.
+		if n.Delta != "" {
+			s.bufferOutputLocked(sessionID, rec.ThreadID, n)
+		}
+		changed = false
 	default:
 		changed = false
 	}
@@ -404,8 +600,68 @@ func (s *sdkSessionStore) onNotification(sessionID string, n sdkclient.Notificat
 		s.persistLocked()
 	}
 	s.mu.Unlock()
+	if drain {
+		s.flushOutput()
+	}
 	if changed {
 		s.fire()
+	}
+}
+
+// sdkOutputFlushEvery bounds how often accumulated assistant text is
+// published. Short enough that a human reads it as the answer being written,
+// long enough that a fast model does not turn into one advisory frame per
+// token on a queue that drops when full.
+const sdkOutputFlushEvery = 80 * time.Millisecond
+
+// bufferOutputLocked accumulates one delta. s.mu MUST be held.
+//
+// It does not publish. Publishing under the store mutex would put a fan-out
+// across every browser connection inside the same lock the notification
+// goroutine, the control handlers and the fleet ticker all contend for.
+func (s *sdkSessionStore) bufferOutputLocked(sessionID, threadID string, n sdkclient.Notification) {
+	if s.onOutput == nil {
+		return // nobody is watching: do not accumulate text no one will read
+	}
+	p := s.pending[sessionID]
+	if p == nil {
+		p = &sdkPendingOutput{}
+		s.pending[sessionID] = p
+	}
+	p.threadID, p.turnID, p.itemID = threadID, n.TurnID, n.ItemID
+	p.text.WriteString(n.Delta)
+	if s.flushTimer == nil {
+		s.flushTimer = time.AfterFunc(sdkOutputFlushEvery, s.flushOutput)
+	}
+}
+
+// flushOutput publishes every session's accumulated text and clears it.
+func (s *sdkSessionStore) flushOutput() {
+	s.mu.Lock()
+	s.flushTimer = nil
+	fn := s.onOutput
+	chunks := make([]SDKOutputChunk, 0, len(s.pending))
+	for id, p := range s.pending {
+		delete(s.pending, id)
+		if p.text.Len() == 0 {
+			continue
+		}
+		s.outSeq[id]++
+		chunks = append(chunks, SDKOutputChunk{
+			SessionID: id,
+			ThreadID:  p.threadID,
+			TurnID:    p.turnID,
+			ItemID:    p.itemID,
+			Text:      p.text.String(),
+			Seq:       s.outSeq[id],
+		})
+	}
+	s.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	for _, c := range chunks {
+		fn(c)
 	}
 }
 
@@ -440,6 +696,13 @@ func (s *sdkSessionStore) Shutdown() {
 		clients = append(clients, c)
 		delete(s.clients, id)
 	}
+	// Stop the coalescing timer and drop whatever it was holding: a fragment
+	// of a sentence has nowhere to go once the connections are gone.
+	if s.flushTimer != nil {
+		s.flushTimer.Stop()
+		s.flushTimer = nil
+	}
+	s.pending = map[string]*sdkPendingOutput{}
 	s.mu.Unlock()
 	for _, c := range clients {
 		c.Close()
@@ -559,6 +822,15 @@ func shadowsSDKThread(sessionID string, threads map[string]bool) bool {
 // makes the provenance of a row obvious in a log line without a lookup.
 func newSDKSessionID() string {
 	return fmt.Sprintf("sdk-%d-%d", time.Now().UnixNano(), os.Getpid())
+}
+
+// shortThread trims a thread id for a one-line fleet cell without losing which
+// thread it is.
+func shortThread(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 const (

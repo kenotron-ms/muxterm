@@ -284,6 +284,25 @@ verify-sdk-session:
 	@$(call DEV_ISOLATE,sdk-verify,muxterm-cos-sdk-verify) \
 	MUXTERM_BIN="$$PWD/tmp/muxterm-sdk-verify" bash tools/verify-sdk-session.sh
 
+# Verify that an SDK-backed session can be CONTINUED across a daemon restart --
+# the gap #220 named and left open. Same isolation mechanism, its own runtime
+# dir, so it can be run alongside verify-sdk-session without either daemon
+# binding the other's socket.
+verify-sdk-resume:
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-sdk-resume ./cmd/muxterm
+	@$(call DEV_ISOLATE,sdk-resume,muxterm-cos-sdk-resume) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-sdk-resume" bash tools/verify-sdk-resume.sh
+
+# Verify that an SDK-backed session's output is WATCHABLE -- in a real browser,
+# while the model is still producing it. Needs playwright-cli; binds a
+# non-production port (8319) and refuses the reserved ones.
+verify-sdk-stream: web
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-sdk-stream ./cmd/muxterm
+	@$(call DEV_ISOLATE,sdk-stream,muxterm-cos-sdk-stream) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-sdk-stream" bash tools/verify-sdk-stream.sh
+
 # Build the production binary from origin/main and install to the stable path.
 # This is what systemd runs — separate from ./bin/muxterm used by `make dev`.
 # Usage: git pull && make install-stable

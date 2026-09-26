@@ -215,6 +215,31 @@ const (
 	TypeSDKSessionListReply  = "sdk-session-list-reply"  // reply:   daemon -> client
 	TypeSDKSessionClose      = "sdk-session-close"       // request: client -> daemon
 	TypeSDKSessionCloseReply = "sdk-session-close-reply" // reply:   daemon -> client
+
+	// TypeSDKSessionResume reattaches a durable record to the harness thread
+	// it names, through thread/resume. It is the verb that turns a record
+	// which SURVIVED a daemon restart into a conversation that can be
+	// CONTINUED -- #220 persisted the thread id and had nothing that used it.
+	//
+	// TypeSDKSessionSend performs the same reattachment implicitly when the
+	// session is detached, so an ordinary caller never has to know whether a
+	// restart happened. This verb is for the caller that wants to reattach
+	// WITHOUT delivering, and for a receipt that names the resumption alone.
+	TypeSDKSessionResume      = "sdk-session-resume"       // request: client -> daemon
+	TypeSDKSessionResumeReply = "sdk-session-resume-reply" // reply:   daemon -> client
+
+	// TypeSDKSessionOutput is assistant text ARRIVING from an SDK session,
+	// pushed to the connections that opted into session-state.
+	//
+	// It is the only SDK message that is an event rather than a
+	// request/reply pair, and the only one carrying something that is not
+	// session state: a run of characters the model is in the middle of
+	// producing. Delivery is advisory and droppable exactly like
+	// session-state and preview frames -- but unlike those it is a DELTA,
+	// not a whole-state document, so a drop cannot be repaired by the next
+	// frame arriving. OutputSeq is what makes such a loss visible instead of
+	// silently closing over a hole in a sentence.
+	TypeSDKSessionOutput = "sdk-session-output" // event: daemon -> opted-in subscribers
 )
 
 // CodeSDKSession is returned when an SDK-backed session operation fails: an
@@ -543,12 +568,26 @@ type Message struct {
 	// path acknowledged rather than assumed: a caller holding a TurnID has
 	// the harness's word that the turn was admitted, minted by the harness
 	// before any output existed.
+	//
+	// Resumed is the other half of the receipt, and it is deliberately not
+	// inferable from anything else on the wire: it says that THIS request
+	// found the session detached, spawned a fresh app server and reopened
+	// the harness thread before delivering. A caller that never restarts a
+	// daemon will never see it true.
+	//
+	// OutputText / OutputSeq / ItemID carry TypeSDKSessionOutput: a run of
+	// assistant text (alongside SessionID, ThreadID and TurnID above) and
+	// the per-session sequence number that makes a dropped frame detectable.
 	Harness     string             `json:"harness,omitempty"`
 	Cwd         string             `json:"cwd,omitempty"`
 	Prompt      string             `json:"prompt,omitempty"`
 	ThreadID    string             `json:"threadId,omitempty"`
 	TurnID      string             `json:"turnId,omitempty"`
 	TurnStatus  string             `json:"turnStatus,omitempty"`
+	Resumed     bool               `json:"resumed,omitempty"`
+	OutputText  string             `json:"outputText,omitempty"`
+	OutputSeq   uint64             `json:"outputSeq,omitempty"`
+	ItemID      string             `json:"itemId,omitempty"`
 	SDKSessions []SDKSessionRecord `json:"sdkSessions,omitempty"`
 
 	// SessionStateStatus is relay-only metadata for a merged TypeSessionState

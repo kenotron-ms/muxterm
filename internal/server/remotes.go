@@ -804,6 +804,28 @@ func (s *hostSession) installHandlers() {
 				c.emitSessionState()
 			}
 		},
+		OnSDKSessionOutput: func(msg *sessiond.Message) {
+			// FORWARDED, NOT MERGED, and that is the whole difference from
+			// the handler above. A session-state frame is a whole-state
+			// document that has to be joined with the other hosts' before it
+			// means anything; this is a run of text belonging to one session
+			// on one host, and holding it back to merge it with anything
+			// would only delay it.
+			//
+			// Session ids are NOT namespaced by host (stampSessions rewrites
+			// workspace ids only), so the id on this frame is the same id the
+			// browser already has on the row -- no translation, and none
+			// possible to get wrong.
+			c.sendMessage(&sessiond.Message{
+				Type:       sessiond.TypeSDKSessionOutput,
+				SessionID:  msg.SessionID,
+				ThreadID:   msg.ThreadID,
+				TurnID:     msg.TurnID,
+				ItemID:     msg.ItemID,
+				OutputText: msg.OutputText,
+				OutputSeq:  msg.OutputSeq,
+			})
+		},
 	})
 }
 

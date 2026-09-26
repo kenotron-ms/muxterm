@@ -131,6 +131,17 @@ type Handlers struct {
 	// and droppable: a slow consumer loses frames rather than the connection,
 	// and because each frame is complete, the next one repairs the view.
 	OnSessionState func(msg *Message)
+
+	// OnSDKSessionOutput fires when an SDK-backed session produces assistant
+	// text, on the same subscription as OnSessionState. msg carries
+	// SessionID, ThreadID, TurnID, ItemID, OutputText and OutputSeq.
+	//
+	// UNLIKE EVERY OTHER HANDLER HERE, THIS ONE CARRIES A DELTA. Session
+	// state, workspace lists and previews are whole-state documents, so a
+	// dropped frame is repaired by the next one; a dropped run of text is
+	// gone. OutputSeq counts this session's chunks so a consumer can say so
+	// rather than joining the two sides of a hole into one sentence.
+	OnSDKSessionOutput func(msg *Message)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -409,12 +420,32 @@ func (c *Client) SDKSessionStart(harness, cwd, name string) (sessionID, threadID
 // that one runs a subprocess and inspects an exit code, so it reports
 // "uncertain" whenever the subprocess fails for any reason at all
 // (cmd/muxterm/session_send_cmd.go). Here, acceptance is a protocol response.
-func (c *Client) SDKSessionSend(sessionID, prompt string) (turnID, turnStatus string, err error) {
+//
+// resumed reports that the daemon found the session DETACHED -- its previous
+// app server gone with a restarted daemon -- and reopened the harness thread
+// before delivering. It is reported rather than hidden because "the harness
+// took this turn" and "the harness took this turn into a conversation that was
+// reconstructed a moment ago" are different facts about the same success.
+func (c *Client) SDKSessionSend(sessionID, prompt string) (turnID, turnStatus string, resumed bool, err error) {
 	reply, err := c.requestWithin(&Message{Type: TypeSDKSessionSend, SessionID: sessionID, Prompt: prompt}, 90*time.Second)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
-	return reply.TurnID, reply.TurnStatus, nil
+	return reply.TurnID, reply.TurnStatus, reply.Resumed, nil
+}
+
+// SDKSessionResume reattaches a durable record to its harness thread without
+// delivering anything.
+//
+// resumed is false when the session was already live, which is not a failure:
+// the call is idempotent, and "it is attached" is the postcondition either
+// way. threadID is the id the HARNESS returned from thread/resume.
+func (c *Client) SDKSessionResume(sessionID string) (threadID string, resumed bool, err error) {
+	reply, err := c.requestWithin(&Message{Type: TypeSDKSessionResume, SessionID: sessionID}, 90*time.Second)
+	if err != nil {
+		return "", false, err
+	}
+	return reply.ThreadID, reply.Resumed, nil
 }
 
 // SDKSessionList returns every durable SDK-backed session record the daemon
@@ -853,6 +884,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeSessionState:
 		if h.OnSessionState != nil {
 			h.OnSessionState(msg)
+		}
+	case TypeSDKSessionOutput:
+		if h.OnSDKSessionOutput != nil {
+			h.OnSDKSessionOutput(msg)
 		}
 	}
 }

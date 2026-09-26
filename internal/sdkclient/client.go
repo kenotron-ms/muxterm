@@ -38,14 +38,28 @@ import (
 // Protocol method names, verbatim from the app server's own generated schema
 // (codex app-server generate-json-schema, ClientRequest.json / ServerNotification.json).
 const (
-	MethodInitialize  = "initialize"
-	MethodThreadStart = "thread/start"
-	MethodTurnStart   = "turn/start"
+	MethodInitialize   = "initialize"
+	MethodThreadStart  = "thread/start"
+	MethodThreadResume = "thread/resume"
+	MethodTurnStart    = "turn/start"
 
 	NotifyThreadStarted = "thread/started"
 	NotifyTurnStarted   = "turn/started"
 	NotifyTurnCompleted = "turn/completed"
 	NotifyItemCompleted = "item/completed"
+
+	// NotifyAgentMessageDelta is the assistant's answer ARRIVING, token by
+	// token, while it is being produced. Its payload is
+	// AgentMessageDeltaNotification {delta, itemId, threadId, turnId} --
+	// every field required, per the app server's own v2 schema.
+	//
+	// It is the only notification in this package that is not a state
+	// transition: turn/started, turn/completed and item/completed each say
+	// that something HAS happened, and this one says what is happening now.
+	// That is what makes an SDK session watchable rather than merely
+	// reportable -- without it a human sees a row flip to working and then,
+	// some seconds later, a finished summary, with nothing in between.
+	NotifyAgentMessageDelta = "item/agentMessage/delta"
 )
 
 // Thread is the harness's own session object, as returned by thread/start.
@@ -96,6 +110,15 @@ type Notification struct {
 	ThreadID string
 	Turn     *Turn
 	Raw      json.RawMessage
+
+	// TurnID, ItemID and Delta are populated for the streaming notifications
+	// that name a turn by id rather than carrying the whole Turn object --
+	// item/agentMessage/delta is the one this package models. Delta is a
+	// FRAGMENT of the assistant's message, not a whole message: concatenating
+	// the deltas of one itemId in arrival order reconstructs the text.
+	TurnID string
+	ItemID string
+	Delta  string
 }
 
 // Client is one live connection to a `codex app-server --stdio` process.
@@ -213,9 +236,13 @@ func (c *Client) readLoop() {
 		var envelope struct {
 			ThreadID string `json:"threadId"`
 			Turn     *Turn  `json:"turn"`
+			TurnID   string `json:"turnId"`
+			ItemID   string `json:"itemId"`
+			Delta    string `json:"delta"`
 		}
 		if err := json.Unmarshal(msg.Params, &envelope); err == nil {
 			n.ThreadID, n.Turn = envelope.ThreadID, envelope.Turn
+			n.TurnID, n.ItemID, n.Delta = envelope.TurnID, envelope.ItemID, envelope.Delta
 		}
 		c.onNotif(n)
 	}
@@ -281,6 +308,48 @@ func (c *Client) ThreadStart(ctx context.Context, cwd, sandbox, approvalPolicy s
 	params := map[string]any{"cwd": cwd, "sandbox": sandbox, "approvalPolicy": approvalPolicy}
 	if err := c.call(ctx, MethodThreadStart, params, &res); err != nil {
 		return nil, err
+	}
+	return &res.Thread, nil
+}
+
+// ThreadResume reopens a thread the harness already has, by its id.
+//
+// THIS IS WHAT MAKES A SURVIVING RECORD MORE THAN AN EPITAPH. A thread id is
+// minted and persisted by the harness, so the conversation outlives every
+// process muxterm owns: the app server this client spawned, and the daemon
+// that spawned it. `thread/start` on the same cwd would produce a NEW thread
+// with no history -- a different conversation wearing the same name. Resume
+// loads the rollout the harness wrote and continues it, which is why a turn
+// delivered after this call can refer back to one delivered before a restart.
+//
+// The params are the harness's own: threadId is required, and cwd, sandbox and
+// approvalPolicy are overrides the caller restates rather than inherits. They
+// are restated deliberately -- a resumed session must run under exactly the
+// policy sdksession.go pins for a terminal-less session, not under whatever
+// policy happened to be recorded in the rollout.
+func (c *Client) ThreadResume(ctx context.Context, threadID, cwd, sandbox, approvalPolicy string) (*Thread, error) {
+	var res struct {
+		Thread Thread `json:"thread"`
+	}
+	params := map[string]any{
+		"threadId":       threadID,
+		"cwd":            cwd,
+		"sandbox":        sandbox,
+		"approvalPolicy": approvalPolicy,
+		// Metadata only. The turns are in the harness's rollout either way;
+		// asking it to hydrate and ship the whole history back would buy
+		// muxterm nothing here, because the model reads the thread, not this
+		// response. Deprecated for paginated threads per the schema.
+		"excludeTurns": true,
+	}
+	if err := c.call(ctx, MethodThreadResume, params, &res); err != nil {
+		return nil, err
+	}
+	if res.Thread.ID == "" {
+		// Same rule as TurnStart: a response that parsed but names no thread
+		// is not a resumption, and reporting success would let a caller
+		// deliver a turn into nothing.
+		return nil, errors.New("thread/resume returned no thread id")
 	}
 	return &res.Thread, nil
 }
