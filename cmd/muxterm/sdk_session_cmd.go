@@ -38,6 +38,8 @@ func runSDKSession(args []string) error {
 		return runSDKSessionStart(args[1:])
 	case "send":
 		return runSDKSessionSend(args[1:])
+	case "resume":
+		return runSDKSessionResume(args[1:])
 	case "list":
 		return runSDKSessionList(args[1:])
 	case "close":
@@ -59,7 +61,8 @@ func sdkSessionUsage() {
 	fmt.Fprintln(os.Stdout, "daemon restart as a durable record.")
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "  start  --harness codex [--cwd DIR] [--name NAME]")
-	fmt.Fprintln(os.Stdout, "  send   <session-id> --prompt TEXT")
+	fmt.Fprintln(os.Stdout, "  send   <session-id> --prompt TEXT   (resumes the thread first if detached)")
+	fmt.Fprintln(os.Stdout, "  resume <session-id>                 (reattach without delivering)")
 	fmt.Fprintln(os.Stdout, "  list   [--json]")
 	fmt.Fprintln(os.Stdout, "  close  <session-id>")
 }
@@ -124,13 +127,14 @@ func runSDKSessionSend(args []string) error {
 		return err
 	}
 	defer c.Close()
-	turnID, turnStatus, err := c.SDKSessionSend(fs.Arg(0), *prompt)
+	turnID, turnStatus, resumed, err := c.SDKSessionSend(fs.Arg(0), *prompt)
 	if err != nil {
 		return err
 	}
 	if *asJSON {
-		return printJSON(map[string]string{
-			"sessionId": fs.Arg(0), "turnId": turnID, "turnStatus": turnStatus, "delivery": "acknowledged",
+		return printJSON(map[string]any{
+			"sessionId": fs.Arg(0), "turnId": turnID, "turnStatus": turnStatus,
+			"delivery": "acknowledged", "resumed": resumed,
 		})
 	}
 	// The receipt, printed as a receipt. "acknowledged" is not a hope here:
@@ -139,6 +143,51 @@ func runSDKSessionSend(args []string) error {
 	fmt.Printf("  session     %s\n", fs.Arg(0))
 	fmt.Printf("  turn        %s\n", turnID)
 	fmt.Printf("  turn status %s\n", turnStatus)
+	if resumed {
+		// Said out loud. The session had no live connection when this
+		// command ran, so the daemon reopened the harness thread before
+		// delivering -- the turn landed in the SAME conversation, not a new
+		// one, and a reader is entitled to know that happened.
+		fmt.Printf("  resumed     yes (harness thread reopened before delivery)\n")
+	}
+	return nil
+}
+
+func runSDKSessionResume(args []string) error {
+	fs := flag.NewFlagSet("sdk-session resume", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	asJSON := fs.Bool("json", false, "print the resumption as JSON")
+	if err := fs.Parse(reorderFlagsFirst(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("sdk-session resume requires exactly one session id")
+	}
+	c, err := dialDaemon()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	threadID, resumed, err := c.SDKSessionResume(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return printJSON(map[string]any{
+			"sessionId": fs.Arg(0), "threadId": threadID, "resumed": resumed,
+		})
+	}
+	if resumed {
+		fmt.Printf("session %s resumed\n", fs.Arg(0))
+	} else {
+		// Not a failure and not a no-op dressed as success: the session was
+		// already attached, so there was nothing to reopen.
+		fmt.Printf("session %s was already live; nothing to resume\n", fs.Arg(0))
+	}
+	fmt.Printf("  thread   %s\n", threadID)
 	return nil
 }
 
@@ -169,10 +218,11 @@ func runSDKSessionList(args []string) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SESSION\tHARNESS\tSTATE\tTURNS\tLAST TURN\tTHREAD\tCREATED")
+	fmt.Fprintln(w, "SESSION\tHARNESS\tSTATE\tTURNS\tRESUMES\tLAST TURN\tTHREAD\tCREATED")
 	for _, r := range recs {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-			r.SessionID, r.Harness, r.State, r.TurnCount, shortID(r.LastTurnID), shortID(r.ThreadID),
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\n",
+			r.SessionID, r.Harness, r.State, r.TurnCount, r.ResumeCount,
+			shortID(r.LastTurnID), shortID(r.ThreadID),
 			time.Unix(r.CreatedAt, 0).Format(time.RFC3339))
 	}
 	return w.Flush()

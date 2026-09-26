@@ -142,6 +142,11 @@ func NewServer(socketPath string) (*Server, error) {
 	// by hand or a turn boundary would not reach the browser until the next
 	// tick happened to differ.
 	s.sdkSessions.notify = func() { s.emitSessionState() }
+	// And the stream. Deliberately NOT routed through emitSessionState: that
+	// function reads the spool directory and walks /proc for every row, which
+	// is the right price once a second and an absurd one per run of assistant
+	// text. This is a small delta frame on its own path.
+	s.sdkSessions.onOutput = func(chunk SDKOutputChunk) { s.publishSDKOutput(chunk) }
 	s.hookReports = newHookReportStore(identity.MachineID)
 	s.hookReports.projectAll()
 	s.attention = newAttentionStore(AttentionPath())
@@ -787,13 +792,30 @@ func (c *conn) handle(msg Message) {
 		// There is deliberately no third outcome -- no "sent, outcome
 		// unknown" -- because the protocol either returned a turn or it did
 		// not.
-		turn, err := c.srv.sdkSessions.Send(context.Background(), msg.SessionID, msg.Prompt)
+		//
+		// A detached session -- one whose daemon was restarted under it --
+		// is resumed here first, so continuing a conversation that outlived
+		// this process is the same verb as continuing one that did not.
+		turn, resumed, err := c.srv.sdkSessions.Send(context.Background(), msg.SessionID, msg.Prompt)
 		if err != nil {
 			c.replyError(msg.CID, CodeSDKSession, err.Error())
 			return
 		}
 		c.reply(&Message{Type: TypeSDKSessionSendReply, CID: msg.CID,
-			SessionID: msg.SessionID, TurnID: turn.ID, TurnStatus: turn.Status, OK: true})
+			SessionID: msg.SessionID, TurnID: turn.ID, TurnStatus: turn.Status, Resumed: resumed, OK: true})
+	case TypeSDKSessionResume:
+		// Reattach without delivering. The receipt is the thread id the
+		// HARNESS returned from thread/resume, not the one muxterm sent it:
+		// the harness is authoritative about which thread it just reopened.
+		rec, resumed, err := c.srv.sdkSessions.Resume(context.Background(), msg.SessionID)
+		if err != nil {
+			c.replyError(msg.CID, CodeSDKSession, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSDKSessionResumeReply, CID: msg.CID,
+			SessionID: rec.SessionID, ThreadID: rec.ThreadID, Harness: rec.Harness, Cwd: rec.Cwd,
+			Name: rec.Name, Resumed: resumed, OK: true})
+		c.srv.emitSessionState()
 	case TypeSDKSessionList:
 		c.reply(&Message{Type: TypeSDKSessionListReply, CID: msg.CID, SDKSessions: c.srv.sdkSessions.Records()})
 	case TypeSDKSessionClose:
@@ -1940,6 +1962,41 @@ func excludeOperatorSession(rows []SessionState) []SessionState {
 // whole-state frame stays pending for that one connection until a later tick
 // successfully queues the current complete set. The shared change gate remains
 // quiet for healthy connections.
+// publishSDKOutput fans one run of assistant text out to every connection that
+// opted into session state.
+//
+// SAME SUBSCRIPTION, NO NEW OPT-IN. A client that asked for the fleet asked to
+// know what its sessions are doing, and an SDK session's output is the only
+// form that answer can take: it has no pane, so there is no preview tile and
+// no scrollback to page. Adding a second subscribe verb for it would mean a
+// browser could be shown the row and not the thing the row is about.
+//
+// Advisory and droppable, via enqueuePreview, exactly like session-state
+// frames: a slow browser tab loses output, never its terminal session. What is
+// different from every other droppable frame is that this one is a DELTA -- a
+// later frame does not repair it -- which is why each carries a per-session
+// sequence number the browser can use to say a gap happened rather than
+// concatenate across it.
+func (s *Server) publishSDKOutput(chunk SDKOutputChunk) {
+	msg := &Message{
+		Type:       TypeSDKSessionOutput,
+		SessionID:  chunk.SessionID,
+		ThreadID:   chunk.ThreadID,
+		TurnID:     chunk.TurnID,
+		ItemID:     chunk.ItemID,
+		OutputText: chunk.Text,
+		OutputSeq:  chunk.Seq,
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.conns {
+		if !c.sessionStateOn {
+			continue
+		}
+		c.sub.enqueuePreview(msg)
+	}
+}
+
 func (s *Server) publishSessionState(rows []SessionState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

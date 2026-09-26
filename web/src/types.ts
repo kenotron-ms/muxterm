@@ -91,6 +91,14 @@ export const SessiondType = {
   SessionState: 'session-state',
   SessionTranscript: 'session-transcript',
   SessionTranscriptResult: 'session-transcript-result',
+  /**
+   * Assistant text ARRIVING from an SDK-backed session (Go's
+   * TypeSDKSessionOutput). It rides the session-state subscription -- there is
+   * no separate opt-in -- and it is the ONLY daemon->browser frame here that
+   * is a DELTA rather than a whole-state document: a dropped one is not
+   * repaired by the next, which is what outputSeq is for.
+   */
+  SDKSessionOutput: 'sdk-session-output',
   SessionArchive: 'session-archive',
   SessionClear: 'session-clear',
   SessionClearUndo: 'session-clear-undo',
@@ -309,6 +317,17 @@ export interface SessiondMessage {
   transcriptDetached?: boolean;
   unchanged?: boolean;
   undoToken?: string;
+  /** sdk-session-output: a run of assistant text, and where it came from. */
+  threadId?: string;
+  turnId?: string;
+  itemId?: string;
+  outputText?: string;
+  /**
+   * Per-session chunk counter, from 1, for one daemon's lifetime. A jump means
+   * a frame was dropped in transit; a value at or below the last one seen means
+   * the daemon restarted and the stream began again.
+   */
+  outputSeq?: number;
 }
 
 // ---------------------------------------------------------------------------

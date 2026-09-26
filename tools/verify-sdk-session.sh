@@ -18,10 +18,13 @@
 #   (c) TURN BOUNDARIES COME FROM SDK EVENTS. The session has no PTY, no pane
 #       and no hook, so its working -> stopped transition and its summary can
 #       only have come from turn/started, turn/completed and item/completed.
-#   (d) THE RECORD SURVIVES A DAEMON RESTART. The daemon is stopped by the exact
-#       PID this script started, restarted on the same runtime and data dirs,
-#       and the record is still there -- because it is written durably with
-#       atomicfile, not published into the tmpfs session-state spool.
+#   (d) THE RECORD SURVIVES A DAEMON RESTART, AND IS RESUMABLE. The daemon is
+#       stopped by the exact PID this script started, restarted on the same
+#       runtime and data dirs, and the record is still there -- because it is
+#       written durably with atomicfile, not published into the tmpfs
+#       session-state spool. A turn sent afterwards reopens the harness thread
+#       instead of being refused; tools/verify-sdk-resume.sh proves that the
+#       reopened thread still carries the pre-restart conversation.
 #
 # It binds a port and starts a daemon, so it tears both down on the way out.
 set -uo pipefail
@@ -189,13 +192,21 @@ sys.exit(0)
   && ok "record survived the restart, with its harness thread id" \
   || bad "record did not survive the restart"
 
-# A restarted daemon holds no live connection, and must SAY so rather than
-# pretend the session is still drivable.
+# A restarted daemon holds no live connection -- and now REOPENS the harness
+# thread rather than refusing the turn.
+#
+# THIS ASSERTION IS INVERTED FROM THE ONE #220 SHIPPED, deliberately and with
+# the reason named. That slice asserted the send was REFUSED with "no live
+# harness connection", which was the honest report of a real gap: the thread id
+# survived and nothing used it. tools/verify-sdk-resume.sh now proves the other
+# half -- that the reopened thread still holds the earlier turn's context -- so
+# leaving this check asserting a refusal would make a passing test mean the
+# feature regressed.
 "$BIN" sdk-session send "$SID" --prompt 'after restart' --json > "$OUT/send-after-restart.txt" 2>&1
-if grep -q "no live harness connection" "$OUT/send-after-restart.txt"; then
-  ok "post-restart send refused honestly (no live connection claimed)"
+if grep -q '"resumed": true' "$OUT/send-after-restart.txt"; then
+  ok "post-restart send RESUMED the surviving thread and was acknowledged"
 else
-  bad "post-restart send did not report the missing connection"
+  bad "post-restart send did not resume the surviving thread"
 fi
 cat "$OUT/send-after-restart.txt" | sed 's/^/   /'
 

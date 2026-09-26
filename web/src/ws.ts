@@ -1313,6 +1313,13 @@ export class MuxSocket {
             this.onProjectList?.(raw as unknown as SessiondMessage);
           } else if (raw.type === SessiondType.SessionTranscriptResult) {
             window.dispatchEvent(new CustomEvent('session-transcript-result', { detail: raw }));
+          } else if (raw.type === SessiondType.SDKSessionOutput) {
+            // A window event, like the transcript result above, rather than a
+            // callback on this object: the consumer is one applet that may
+            // not be mounted, and a frame nobody is listening for should
+            // vanish rather than queue. These are advisory by construction --
+            // the daemon itself drops them for a slow client.
+            window.dispatchEvent(new CustomEvent('sdk-session-output', { detail: raw }));
           } else if (raw.type === HOST_STATE) {
             // Relay-only, and inert for the frozen store: state.ts's
             // applySessiond already ends in `default: return`, so this frame
