@@ -268,6 +268,22 @@ verify-inbox:
 	@$(call DEV_ISOLATE,inbox-verify,muxterm-cos-inbox-verify) \
 	MUXTERM_BIN="$$PWD/tmp/muxterm-inbox-verify" bash tools/verify-inbox.sh
 
+# Verify the first SDK-backed session against a real, isolated sessiond.
+#
+# Same reasoning as verify-lifecycle and verify-inbox above: a verification run
+# is a dev instance like any other, so it expands DEV_ISOLATE rather than
+# setting XDG_* by hand. It starts a daemon under the isolated runtime dir and
+# restarts it in place to prove the record is durable, so it must never be
+# pointed at 8311/9090.
+#
+# It makes real calls to the codex app server, which needs the harness
+# installed and authenticated on this machine.
+verify-sdk-session:
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-sdk-verify ./cmd/muxterm
+	@$(call DEV_ISOLATE,sdk-verify,muxterm-cos-sdk-verify) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-sdk-verify" bash tools/verify-sdk-session.sh
+
 # Build the production binary from origin/main and install to the stable path.
 # This is what systemd runs — separate from ./bin/muxterm used by `make dev`.
 # Usage: git pull && make install-stable

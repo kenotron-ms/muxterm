@@ -223,6 +223,8 @@ func parseCommand(args []string) (Config, error) {
 		return Config{Mode: "spawn-lane", Args: args[1:]}, nil
 	case "fleet":
 		return Config{Mode: "fleet", Args: args[1:]}, nil
+	case "sdk-session":
+		return Config{Mode: "sdk-session", Args: args[1:]}, nil
 	case "layout":
 		return Config{Mode: "layout", Args: args[1:]}, nil
 	case "remote":
