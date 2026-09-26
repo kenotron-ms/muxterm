@@ -254,7 +254,7 @@ silently never read, which is the most confusing possible outcome.
 | `waitingFor` | enum | Why it is blocked. Only meaningful with `state: "blocked"`. |
 | `doing` | string | One short line of current activity. |
 | `summary` | string | The lane's raw final assistant message exactly as supplied by its turn-end hook, including original line breaks and structure. Muxterm does not shorten this field. Kept separate from `doing` so lifecycle notices and Fleet retain concrete result details without bloating the resting row. |
-| `todo` | object | Optional structured task-list progress: `{ "done": 2, "total": 6, "current": "Checking reconnects" }`. See below. |
+| `todo` | object | Optional structured task-list progress: counts, current item, and the complete `items` array. See below. |
 | `doneMeans` | string | This session's own definition of finished. |
 | `knows` | string[] | Distinct paths this session has read. |
 | `pr` | int | Pull-request number. Shown on the row; does not change its group. |
@@ -283,6 +283,12 @@ Absence means **"keeps no list"**, not "no progress". Consumers fall back to
 `current` is the in-progress item in the producer's present-tense form. Empty
 is a real value for an all-pending or all-complete list; the empty `current`
 string may be omitted.
+
+`items` is the complete ordered list, with each entry shaped as
+`{ "text": "Check reconnects", "status": "in_progress" }`. Status is one of
+`completed`, `in_progress`, or `pending`. Producers include every item; the
+Fleet card uses this array directly instead of replacing unseen tasks with a
+count.
 
 ### Never write these
 

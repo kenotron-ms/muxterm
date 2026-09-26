@@ -52,6 +52,7 @@ import {
   todoFraction,
   todoPercent,
   type SessionState,
+  type TodoProgress,
 } from '../../lib/session-state.js';
 import type { SessiondMessage, SessionTranscriptTurn } from '../../types.js';
 
@@ -98,6 +99,18 @@ function age(updatedAt: number, nowSec: number): string {
   return `${Math.floor(d / 86400)}d`;
 }
 
+function renderTodoList(todo: TodoProgress, className = 'todo-list'): TemplateResult | typeof nothing {
+  if (!todo.items?.length) return nothing;
+  return html`<ul class="${className}">
+    ${todo.items.map((item) => html`
+      <li class="${item.status}" aria-label="${item.status.replace('_', ' ')}: ${item.text}">
+        <span class="todo-mark" aria-hidden="true">${item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '●' : '○'}</span>
+        <span>${item.text}</span>
+      </li>
+    `)}
+  </ul>`;
+}
+
 @customElement('applet-dashboard')
 export class AppletDashboard extends LitElement implements AppletElement {
   /**
@@ -127,7 +140,6 @@ export class AppletDashboard extends LitElement implements AppletElement {
   @state() private _transcriptArchived = false;
   @state() private _transcriptDetached = false;
   @state() private _transcriptTruncated = false;
-  @state() private _expandedTodo: string | null = null;
   @state() private _finishedOpen = false;
   @state() private _expandedFinished: string | null = null;
   @state() private _hiddenFinished = new Set<string>();
@@ -465,6 +477,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     :host([view='tiles']) .grid {
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
       gap: var(--s-5);
+      align-items: start;
     }
     .card,
     :host([view='tiles']) .card {
@@ -574,34 +587,38 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .need .track { color: var(--need); }
     .fail .track { color: var(--fail); }
     .done .track { color: var(--ok); }
-    .todo-toggle {
-      width: 100%;
-      margin-top: 10px;
-      padding: 8px 0 2px;
-      border: 0;
-      border-top: 1px solid var(--edge);
-      background: none;
-      color: #aeb9ca;
-      display: flex;
-      justify-content: space-between;
-      font: inherit;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .chevron { transition: transform var(--dur) ease; }
-    .todo-toggle[aria-expanded='true'] .chevron { transform: rotate(180deg); }
     .todo-list {
+      max-height: 18rem;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+      margin: var(--s-5) 0 var(--s-1);
+      padding: var(--s-4) 0 0;
+      border-top: 1px solid var(--edge);
       list-style: none;
-      margin: 9px 0 2px;
-      padding: 0;
       display: grid;
-      gap: 7px;
+      gap: var(--s-3);
       font-size: 11px;
     }
-    .todo-list li { display: grid; grid-template-columns: 15px 1fr; gap: 6px; color: #aeb8c8; }
-    .todo-list .complete { text-decoration: line-through; }
-    .todo-list .current { color: var(--ink-1); font-weight: 600; }
+    .todo-list li,
+    .detail-todo li,
+    .ledger-todo-list li {
+      display: grid;
+      grid-template-columns: var(--s-6) minmax(0, 1fr);
+      gap: var(--s-3);
+      color: var(--fleet-body);
+      overflow-wrap: anywhere;
+    }
+    .todo-mark { color: var(--fleet-muted); text-align: center; }
+    .todo-list .completed span:last-child,
+    .detail-todo .completed span:last-child,
+    .ledger-todo-list .completed span:last-child { color: var(--fleet-muted); text-decoration: line-through; }
+    .todo-list .in_progress,
+    .detail-todo .in_progress,
+    .ledger-todo-list .in_progress { color: var(--ink-1); font-weight: 650; }
+    .todo-list .in_progress .todo-mark,
+    .detail-todo .in_progress .todo-mark,
+    .ledger-todo-list .in_progress .todo-mark { color: var(--work); }
 
     /* Drill-in is a two-part workspace, not the compact card stretched wide. */
     .detail {
@@ -688,9 +705,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .detail-summary dl { margin-top: 0; }
     .detail-summary dl { grid-template-columns: 72px minmax(0, 1fr); gap: 8px; font-size: 12px; }
     .detail-summary .summary-todo { margin-top: 20px; }
-    .detail-todo { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; font-size: 11px; }
-    .detail-todo li { display: grid; grid-template-columns: 15px 1fr; gap: 6px; color: #aeb8c8; }
-    .detail-todo .current { color: var(--ink-1); font-weight: 650; }
+    .detail-todo { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-3); font-size: 11px; }
     .history { padding: 18px; min-width: 0; }
     .transcript-head { margin-top: 0; }
     .history-actions { display: flex; align-items: center; gap: var(--s-3); }
@@ -926,7 +941,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
       grid-row: 2;
     }
     .ledger-detail b { color: var(--ink-1); }
-    .ledger-todo-line { display: flex; gap: 13px; margin-top: 3px; }
+    .ledger-todo-list { list-style: none; margin: var(--s-3) 0 0; padding: 0; display: grid; gap: var(--s-3); }
     .ledger-final-message {
       grid-column: 1 / -1;
       margin: 0;
@@ -1250,7 +1265,6 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const s = homeSessions.sessions.find((row) => row.sessionId === this._detailSessionId);
     if (!s) return nothing;
     const detailBits = [s.harness, s.label, age(s.updatedAt, this._now) ? `updated ${age(s.updatedAt, this._now)} ago` : ''].filter(Boolean);
-    const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
     return html`<section class="detail ${stateClass(s)}" aria-label="Session detail">
       <div class="detail-head"><span class="detail-identity"><span class="detail-state" aria-hidden="true">●</span><span class="detail-copy"><span class="detail-title">${s.name}</span><span class="detail-meta">${detailBits.join(' · ')}</span></span></span><span>${s.paneId !== null && s.workspaceId !== null ? html`<button class="open-terminal" type="button" @click="${() => this._openTerminal(s)}">Open terminal ↗</button>` : nothing}<button class="detail-close" type="button" aria-label="Close session detail" @click="${() => { this._detailSessionId = null; }}">×</button></span></div>
       ${groupFor(s) === 'Completed' && s.summary ? html`
@@ -1270,11 +1284,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
             ${s.pr ? html`<dt>Pull request</dt><dd><strong>PR #${s.pr}</strong></dd>` : nothing}
             ${s.knows?.length ? html`<dt>Artifacts</dt><dd>${s.knows.length} ${s.knows.length === 1 ? 'path' : 'paths'}</dd>` : nothing}
           </dl>
-          ${s.todo ? html`<h3 class="summary-todo">Todo list</h3><ul class="detail-todo">
-            ${s.todo.done > 0 ? html`<li><span>✓</span><span>${s.todo.done} completed</span></li>` : nothing}
-            ${s.todo.current ? html`<li class="current"><span>●</span><span>${s.todo.current}</span></li>` : nothing}
-            ${remaining > 0 ? html`<li><span>○</span><span>${remaining} remaining</span></li>` : nothing}
-          </ul>` : nothing}
+          ${s.todo?.items?.length ? html`<h3 class="summary-todo">Todo list</h3>${renderTodoList(s.todo, 'detail-todo')}` : nothing}
         </aside>
         <section class="history">
           <div class="transcript-head"><h3>History${this._transcriptMeta ? ` · ${this._transcriptMeta}` : ''}</h3><span class="history-actions"><button class="history-refresh" type="button" @click="${() => this._requestTranscript(s.sessionId)}">↻ Refresh</button></span></div>
@@ -1503,7 +1513,6 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const frac = todoFraction(s);
     const pct = todoPercent(s);
     const a = age(s.updatedAt, this._now);
-    const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
     return html`
       <div class="ledger-row-shell">
         <span class="ledger-swipe-action" aria-hidden="true">Clear</span>
@@ -1539,7 +1548,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
           <div><b>Current activity</b><br>${s.doing || 'No current activity reported.'}</div>
           <div>
             <b>Todo list</b>
-            ${s.todo ? html`<div class="ledger-todo-line"><span>✓ ${s.todo.done} complete</span>${s.todo.current ? html`<b>● ${s.todo.current}</b>` : nothing}${remaining ? html`<span>○ ${remaining} left</span>` : nothing}</div>` : html`<div class="ledger-todo-line"><span>No todo list reported</span></div>`}
+            ${s.todo?.items?.length ? renderTodoList(s.todo, 'ledger-todo-list') : html`<div class="ledger-todo-list"><span>No todo list reported</span></div>`}
           </div>
           ${s.summary ? html`
             <figure class="ledger-final-message" aria-label="Final message from ${s.name}">
@@ -1572,10 +1581,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const frac = todoFraction(s);
     const line = progressLine(s);
     const pct = todoPercent(s);
-    const expanded = this._expandedTodo === s.sessionId;
-    const remaining = s.todo ? Math.max(0, s.todo.total - s.todo.done - (s.todo.current ? 1 : 0)) : 0;
     return html`
-      <article class="card ${stateClass(s)} ${expanded ? 'expanded' : ''}">
+      <article class="card ${stateClass(s)}">
         <header class="card-head">
           <button class="card-open" type="button" @click="${() => this._openPane(s)}">
             <span class="n">${s.name}</span>
@@ -1590,15 +1597,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
           <div class="g">${line || 'No current activity reported.'}</div>
           ${frac ? html`
             <div class="progress"><span class="frac" aria-label="${frac} tasks done">${frac}</span><span class="track"><i style="width:${pct}%"></i></span></div>
-            <button class="todo-toggle" type="button" aria-expanded="${expanded}" @click="${() => { this._expandedTodo = expanded ? null : s.sessionId; }}">
-              <span>Todo list</span><span class="chevron">⌄</span>
-            </button>
-            ${expanded ? html`<ul class="todo-list">
-              ${s.todo!.done > 0 ? html`<li class="complete"><span>✓</span><span>${s.todo!.done} completed</span></li>` : nothing}
-              ${s.todo!.current ? html`<li class="current"><span>●</span><span>${s.todo!.current}</span></li>` : nothing}
-              ${remaining > 0 ? html`<li><span>○</span><span>${remaining} remaining</span></li>` : nothing}
-              ${s.todo!.done === s.todo!.total ? html`<li class="current"><span>✓</span><span>All tasks complete</span></li>` : nothing}
-            </ul>` : nothing}
+            ${renderTodoList(s.todo!)}
           ` : nothing}
         </div>
       </article>
