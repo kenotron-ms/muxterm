@@ -222,9 +222,13 @@ jobs:
         run: |
           set -euo pipefail
           cd bin
-          ditto -c -k --keepParent muxterm.app muxterm-macos-universal.zip
-          ls -l muxterm-macos-universal.zip
-          shasum -a 256 muxterm-macos-universal.zip
+          # Named muxterm.app.zip, NOT the artifact's own name: GitHub wraps
+          # the artifact in a zip of its own, so an inner file sharing that
+          # name would collide with the outer archive the moment anyone ran
+          # `unzip` in their Downloads folder.
+          ditto -c -k --keepParent muxterm.app muxterm.app.zip
+          ls -l muxterm.app.zip
+          shasum -a 256 muxterm.app.zip
           {
             echo "muxterm.app -- macOS desktop build"
             echo "commit      : ${GITHUB_SHA}"
@@ -233,10 +237,13 @@ jobs:
             echo "go          : $(go version)"
             echo "archs       : $(lipo -archs muxterm.app/Contents/MacOS/muxterm-desktop)"
             echo "signature   : ad-hoc (codesign -s -). NOT Developer ID. NOT notarized."
-            echo "sha256      : $(shasum -a 256 muxterm-macos-universal.zip | cut -d' ' -f1)"
+            echo "sha256      : $(shasum -a 256 muxterm.app.zip | cut -d' ' -f1)"
             echo
-            echo "FIRST RUN: macOS quarantines anything downloaded from a browser and"
-            echo "refuses an unsigned app. Unzip, then:"
+            echo "FIRST RUN. macOS quarantines anything a browser downloaded and"
+            echo "refuses an unsigned app, with a dialog offering only Move to Trash"
+            echo "and Done. Clear the quarantine flag and it opens normally:"
+            echo "    unzip muxterm.app.zip           # this file, inside the artifact zip"
+            echo "    mv muxterm.app /Applications/"
             echo "    xattr -dr com.apple.quarantine /Applications/muxterm.app"
             echo "    open /Applications/muxterm.app"
           } > BUILD-INFO.txt
@@ -246,7 +253,7 @@ jobs:
         with:
           name: muxterm-macos-universal
           path: |
-            bin/muxterm-macos-universal.zip
+            bin/muxterm.app.zip
             bin/BUILD-INFO.txt
           if-no-files-found: error
           retention-days: 30
