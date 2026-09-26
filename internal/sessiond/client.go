@@ -389,6 +389,51 @@ func (c *Client) AssignSessionProject(sessionID string, projectID ProjectID) err
 	return err
 }
 
+// SDKSessionStart asks the daemon to create a session through a harness SDK.
+//
+// The daemon owns the resulting connection, not this client: the session has
+// to outlive the CLI invocation that asked for it, which is why this is a
+// protocol verb rather than something the caller runs itself.
+func (c *Client) SDKSessionStart(harness, cwd, name string) (sessionID, threadID string, err error) {
+	reply, err := c.requestWithin(&Message{Type: TypeSDKSessionStart, Harness: harness, Cwd: cwd, Name: name}, 90*time.Second)
+	if err != nil {
+		return "", "", err
+	}
+	return reply.SessionID, reply.ThreadID, nil
+}
+
+// SDKSessionSend delivers one turn and returns the harness's receipt.
+//
+// A nil error means the harness ACCEPTED the turn and turnID is the id it
+// minted for it. This is the call that the managed-dispatch path cannot make:
+// that one runs a subprocess and inspects an exit code, so it reports
+// "uncertain" whenever the subprocess fails for any reason at all
+// (cmd/muxterm/session_send_cmd.go). Here, acceptance is a protocol response.
+func (c *Client) SDKSessionSend(sessionID, prompt string) (turnID, turnStatus string, err error) {
+	reply, err := c.requestWithin(&Message{Type: TypeSDKSessionSend, SessionID: sessionID, Prompt: prompt}, 90*time.Second)
+	if err != nil {
+		return "", "", err
+	}
+	return reply.TurnID, reply.TurnStatus, nil
+}
+
+// SDKSessionList returns every durable SDK-backed session record the daemon
+// holds, including those restored from disk after a restart.
+func (c *Client) SDKSessionList() ([]SDKSessionRecord, error) {
+	reply, err := c.request(&Message{Type: TypeSDKSessionList})
+	if err != nil {
+		return nil, err
+	}
+	return reply.SDKSessions, nil
+}
+
+// SDKSessionClose ends a session's live harness connection. The durable record
+// stays on disk: closing is not deleting.
+func (c *Client) SDKSessionClose(sessionID string) error {
+	_, err := c.request(&Message{Type: TypeSDKSessionClose, SessionID: sessionID})
+	return err
+}
+
 // CreateWorkspace asks the daemon to create a new workspace named name and
 // returns the daemon-assigned workspace id from the workspace-created reply.
 func (c *Client) CreateWorkspace(name string) (string, error) {

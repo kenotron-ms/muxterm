@@ -189,6 +189,38 @@ const (
 	TypeAssignSessionReply = "assign-session-reply" // reply:   daemon -> browser
 )
 
+// SDK-backed session message types (ADDITIVE, post-v1).
+//
+// These drive a session the daemon owns through a harness SDK instead of
+// through a PTY (sdksession.go). They are a SEPARATE vocabulary from the pane
+// verbs on purpose: an SDK session has no pane, no argv and no terminal, so
+// reusing create-pane for it would mean a pane id that addresses nothing.
+//
+// TypeSDKSessionSend's reply is the interesting one. It carries TurnID and
+// TurnStatus straight from the harness's own turn/start response -- a RECEIPT,
+// not a hopeful acknowledgement of a terminal write. The existing managed
+// dispatch path cannot produce one: it runs a subprocess and reads an exit
+// code, so its failure mode is "uncertain" by construction
+// (cmd/muxterm/session_send_cmd.go). That is the gap these verbs close.
+//
+// A daemon that predates these types ignores them and never replies, which the
+// client's request timeout surfaces as unavailable rather than as a hang --
+// the same degradation the project and session-state verbs already have.
+const (
+	TypeSDKSessionStart      = "sdk-session-start"       // request: client -> daemon
+	TypeSDKSessionStartReply = "sdk-session-start-reply" // reply:   daemon -> client
+	TypeSDKSessionSend       = "sdk-session-send"        // request: client -> daemon
+	TypeSDKSessionSendReply  = "sdk-session-send-reply"  // reply:   daemon -> client
+	TypeSDKSessionList       = "sdk-session-list"        // request: client -> daemon
+	TypeSDKSessionListReply  = "sdk-session-list-reply"  // reply:   daemon -> client
+	TypeSDKSessionClose      = "sdk-session-close"       // request: client -> daemon
+	TypeSDKSessionCloseReply = "sdk-session-close-reply" // reply:   daemon -> client
+)
+
+// CodeSDKSession is returned when an SDK-backed session operation fails: an
+// unknown session, an uninstalled harness, a harness that refused the turn.
+const CodeSDKSession = "sdk-session"
+
 // CodeProjectReserved is returned when a caller tries to rename or delete a
 // reserved container. The Inbox is reserved, so this is what an attempt to
 // remove or rename it looks like on the wire: a loud, named refusal, never a
@@ -502,6 +534,22 @@ type Message struct {
 	// message struct with thirty string fields invites.
 	ProjectID ProjectID `json:"projectId,omitempty"`
 	Projects  []Project `json:"projects,omitempty"`
+
+	// SDK-backed sessions (sdksession.go). Harness and Cwd are the start
+	// request; Prompt is the turn text on a send.
+	//
+	// TurnID and TurnStatus are the RECEIPT on a send reply, copied from the
+	// harness's own turn/start response. They are what makes delivery on this
+	// path acknowledged rather than assumed: a caller holding a TurnID has
+	// the harness's word that the turn was admitted, minted by the harness
+	// before any output existed.
+	Harness     string             `json:"harness,omitempty"`
+	Cwd         string             `json:"cwd,omitempty"`
+	Prompt      string             `json:"prompt,omitempty"`
+	ThreadID    string             `json:"threadId,omitempty"`
+	TurnID      string             `json:"turnId,omitempty"`
+	TurnStatus  string             `json:"turnStatus,omitempty"`
+	SDKSessions []SDKSessionRecord `json:"sdkSessions,omitempty"`
 
 	// SessionStateStatus is relay-only metadata for a merged TypeSessionState
 	// document. A direct daemon event leaves it empty; the browser relay writes

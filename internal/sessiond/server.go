@@ -99,6 +99,16 @@ type Server struct {
 	// ticker. Absence of an entry means the Inbox, so an installation where
 	// nobody has filed anything carries no file at all.
 	projectAssign *projectAssignments
+
+	// sdkSessions holds the sessions this daemon drives through a harness SDK
+	// rather than through a PTY (sdksession.go). Same ownership shape as
+	// projectAssign -- own lock, written from a control-protocol handler and
+	// from SDK notification goroutines, read from the session-state ticker.
+	//
+	// It is ADDITIVE. The PTY path does not consult it, and a daemon on which
+	// no SDK session is ever started carries an empty store and an absent
+	// file.
+	sdkSessions *sdkSessionStore
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -125,7 +135,13 @@ func NewServer(socketPath string) (*Server, error) {
 		triggers:           newTriggerStore(TriggersPath()),
 		projects:           NewProjectRegistry(),
 		projectAssign:      newProjectAssignments(ProjectAssignmentsPath()),
+		sdkSessions:        newSDKSessionStore(SDKSessionsPath()),
 	}
+	// An SDK event is an out-of-band input, exactly like the filing gesture:
+	// the rows did not change on disk, so the change gate has to be re-armed
+	// by hand or a turn boundary would not reach the browser until the next
+	// tick happened to differ.
+	s.sdkSessions.notify = func() { s.emitSessionState() }
 	s.hookReports = newHookReportStore(identity.MachineID)
 	s.hookReports.projectAll()
 	s.attention = newAttentionStore(AttentionPath())
@@ -750,6 +766,42 @@ func (c *conn) handle(msg Message) {
 		c.reply(&Message{Type: TypeAssignSessionReply, CID: msg.CID, SessionID: msg.SessionID, ProjectID: msg.ProjectID, OK: true})
 		// Push the moved row now rather than waiting on the next tick, so the
 		// gesture lands on screen immediately instead of up to a second later.
+		c.srv.emitSessionState()
+	case TypeSDKSessionStart:
+		// Creating a session through the harness SDK. The daemon does this
+		// itself rather than handing the caller a connection, because the
+		// daemon is what has to still be holding the session when the caller
+		// has gone -- which is the entire difference between this and running
+		// `codex app-server` from a shell.
+		rec, err := c.srv.sdkSessions.Start(context.Background(), msg.Harness, msg.Cwd, msg.Name)
+		if err != nil {
+			c.replyError(msg.CID, CodeSDKSession, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSDKSessionStartReply, CID: msg.CID,
+			SessionID: rec.SessionID, ThreadID: rec.ThreadID, Harness: rec.Harness, Cwd: rec.Cwd, Name: rec.Name, OK: true})
+		c.srv.emitSessionState()
+	case TypeSDKSessionSend:
+		// The acknowledged delivery. An error here means the harness did NOT
+		// take the turn; a reply means it did and TurnID is its receipt.
+		// There is deliberately no third outcome -- no "sent, outcome
+		// unknown" -- because the protocol either returned a turn or it did
+		// not.
+		turn, err := c.srv.sdkSessions.Send(context.Background(), msg.SessionID, msg.Prompt)
+		if err != nil {
+			c.replyError(msg.CID, CodeSDKSession, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSDKSessionSendReply, CID: msg.CID,
+			SessionID: msg.SessionID, TurnID: turn.ID, TurnStatus: turn.Status, OK: true})
+	case TypeSDKSessionList:
+		c.reply(&Message{Type: TypeSDKSessionListReply, CID: msg.CID, SDKSessions: c.srv.sdkSessions.Records()})
+	case TypeSDKSessionClose:
+		if err := c.srv.sdkSessions.Close(msg.SessionID); err != nil {
+			c.replyError(msg.CID, CodeSDKSession, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSDKSessionCloseReply, CID: msg.CID, SessionID: msg.SessionID, OK: true})
 		c.srv.emitSessionState()
 	case TypeMissionControlIdentity:
 		identity := c.srv.MissionControlIdentity()
@@ -1766,6 +1818,13 @@ func (s *Server) emitSessionState() {
 	// with it. The rows come from the durable log, so they survive a restart
 	// of this daemon.
 	rows = mergeCompletionRows(rows, s.completions.Pending())
+	// Fold in the SDK-backed sessions. They are NOT in the spool and never
+	// will be: the spool is producer-owned and reclaimed every tick, whereas
+	// these are records this daemon owns durably (sdksession.go). A session
+	// already present from the spool is left alone -- see mergeSDKRows.
+	if s.sdkSessions != nil {
+		rows = mergeSDKRows(rows, s.sdkSessions.Rows())
+	}
 	rows = excludeOperatorSession(rows)
 	// Stamp the containment parent onto every row, at the daemon's ONE fleet
 	// source. Placed after the completion merge deliberately: a finished lane
