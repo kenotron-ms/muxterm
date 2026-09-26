@@ -1,4 +1,4 @@
-.PHONY: build desktop dev dev-local verify-lifecycle verify-inbox install-stable test clean web
+.PHONY: build desktop desktop-deb dev dev-local verify-lifecycle verify-inbox install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -70,11 +70,16 @@ build: web
 # ---------------------------------------------------------------------------
 # desktop -- the native Wails shell in desktop/.
 #
-# desktop/ is a SEPARATE Go module and this target is the only thing that
-# builds it. `make build`, `go build ./...` and the GoReleaser matrix are
-# deliberately untouched by it: Wails requires go >= 1.25 and the muxterm CLI
-# module is on go 1.24, so folding the two together would drag every server and
-# CLI build onto a toolchain the CLI does not need.
+# desktop/ is an ordinary package of the ONE muxterm module: same go.mod, same
+# go.sum, same dependency graph. What separates it from the CLI is not a module
+# boundary but a build tag.
+#
+# Wails links GTK3 and WebKit2GTK through cgo, so desktop/ needs headers the
+# CLI, the server and the GoReleaser matrix neither have nor need. desktop/*.go
+# therefore carries `//go:build desktop`, and Go skips a wildcard-matched
+# directory whose files are all excluded by a constraint -- so `go build ./...`
+# and the release matrix stay exactly as green as before on a machine with no
+# desktop toolchain, while this target builds the real thing.
 #
 # Linux build prerequisites, which are NOT installed by this target and are not
 # needed for any other target in this file:
@@ -89,11 +94,23 @@ build: web
 WEBKIT_TAG ?= webkit2_41
 
 desktop: web
-	cd desktop && go build -tags "desktop,production,$(WEBKIT_TAG)" \
+	go build -tags "desktop,production,$(WEBKIT_TAG)" \
 		-ldflags "-X main.version=$(DEV_VERSION)" \
-		-o ../bin/muxterm-desktop .
+		-o bin/muxterm-desktop ./desktop
 	@echo "built bin/muxterm-desktop -- run it directly; it starts its own"
 	@echo "loopback server and attaches to the sessiond you already have."
+
+# desktop-deb -- the installable Linux package.
+#
+# Produces bin/muxterm-desktop_<version>_<arch>.deb: the binary, a .desktop
+# entry, and the icon at every hicolor size, so after `apt install ./<file>.deb`
+# muxterm is in the application menu by name and by icon and opens in its own
+# window. Nothing is typed into a terminal and no URL is typed by a human.
+#
+# See desktop/packaging/linux/build-deb.sh for why .deb rather than AppImage,
+# and for the extra build prerequisite (dpkg-dev).
+desktop-deb: web
+	desktop/packaging/linux/build-deb.sh
 
 # Dev mode: Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
 #   - Vite rebuilds web/dist on muxterm frontend changes

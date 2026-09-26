@@ -101,19 +101,42 @@ func parseVersion(v string) (nums [3]int, prerelease string, ok bool) {
 type Method string
 
 const (
-	MethodBinary      Method = "binary"      // in-place replace is supported
-	MethodHomebrew    Method = "homebrew"    // macOS: defer to brew
-	MethodUnsupported Method = "unsupported" // no release asset for this platform
+	MethodBinary         Method = "binary"          // in-place replace is supported
+	MethodHomebrew       Method = "homebrew"        // macOS: defer to brew
+	MethodPackageManager Method = "package-manager" // an OS package owns this file
+	MethodUnsupported    Method = "unsupported"     // no release asset for this platform
 )
+
+// PackageManager names the OS package manager that owns this binary, when one
+// does. It is EMPTY for every artifact this repo publishes today -- the
+// GoReleaser tarballs, the install.sh binary, and any local `make build` -- so
+// their behaviour is unchanged.
+//
+// An OS package sets it at build time:
+//
+//	-ldflags "-X github.com/kenotron-ms/muxterm/internal/update.PackageManager=dpkg"
+//
+// which is what desktop/packaging/linux/build-deb.sh does. The reason is the
+// same one that already makes macOS defer to Homebrew: a file installed by a
+// package manager must be replaced by that package manager. Rewriting it in
+// place desynchronises the package database, and for the desktop app it is
+// worse than untidy -- the published release asset is the muxterm CLI, so a
+// successful self-update would replace the desktop app with a binary that has
+// no window.
+var PackageManager string
 
 // Platform reports how (or whether) this build can update itself in place,
 // plus a human-readable reason when it cannot. The reason is empty for
 // MethodBinary.
 //
-// This inspects runtime.GOOS/runtime.GOARCH rather than using build tags so
-// the whole package compiles unchanged on every target.
+// This inspects runtime.GOOS/runtime.GOARCH (and the build-time PackageManager
+// stamp) rather than using build tags, so the whole package compiles unchanged
+// on every target.
 func Platform() (Method, string) {
 	switch {
+	case PackageManager != "":
+		return MethodPackageManager, fmt.Sprintf(
+			"Installed by %s — update it with your package manager, not from here.", PackageManager)
 	case runtime.GOOS == "darwin":
 		// install.sh redirects macOS users to Homebrew, so the binary a mac
 		// user is running is brew-managed; replacing it behind brew's back

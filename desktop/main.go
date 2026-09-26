@@ -1,3 +1,20 @@
+//go:build desktop
+
+// The `desktop` build tag is what lets the muxterm desktop app live in the
+// SAME Go module as the CLI and the server.
+//
+// Wails links GTK3 and WebKit2GTK through cgo, so this package needs
+// libgtk-3-dev and libwebkit2gtk-4.1-dev headers present to compile -- headers
+// the CLI, the server and the GoReleaser matrix neither have nor need. Go
+// silently skips a directory whose files are all excluded by a build
+// constraint when it is matched by a wildcard, so `go build ./...` and
+// `go vet ./...` stay green on a machine with no desktop toolchain, while
+// `make desktop` (which already passes `desktop,production,webkit2_41`,
+// because Wails requires those tags anyway) builds the real thing.
+//
+// This is a toolchain constraint, not a module boundary: one go.mod, one
+// go.sum, one dependency graph.
+
 // Command muxterm-desktop is muxterm's native desktop shell.
 //
 // WHAT THIS IS
