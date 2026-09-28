@@ -52,11 +52,26 @@ async function runClaude(s) {
         for (const block of msg.message?.content || []) if (block.type === 'tool_use')
           emit(s.id, 'tool.completed', { toolId: block.id, name: block.name, raw: block });
       } else if (msg.type === 'result') {
+        // The SDK's result echoes the UUIDs of user inputs the native turn
+        // consumed. A local input queue is not proof that a turn was accepted.
+        const accepted = msg.user_message_uuids || (msg.user_message_uuid ? [msg.user_message_uuid] : []);
+        for (const id of accepted) {
+          const pending = s.pendingInputs.get(id);
+          if (!pending) continue;
+          s.pendingInputs.delete(id);
+          emit(s.id, 'input.accepted', { inputId: id, kind: pending.input.kind,
+            source: pending.input.source, text: pending.input.content });
+          pending.resolve();
+        }
         s.busy = false;
         emit(s.id, msg.subtype === 'success' ? 'turn.completed' : 'error', { inputIds: msg.user_message_uuids, message: msg.subtype });
       }
     }
   } catch (error) { s.busy = false; emit(s.id, 'error', { message: String(error) }); }
+  finally {
+    for (const pending of s.pendingInputs.values()) pending.reject(new Error('Claude stream ended before input acceptance was confirmed'));
+    s.pendingInputs.clear();
+  }
 }
 async function command(cmd) {
   const { op, sessionId, harness, cwd, nativeId, input } = cmd;
@@ -65,7 +80,7 @@ async function command(cmd) {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
     if (harness !== 'codex' && harness !== 'claude') throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
-    const s = { id: sessionId, harness, cwd, nativeId, inputs: [], busy: false, closed: false };
+    const s = { id: sessionId, harness, cwd, nativeId, inputs: [], pendingInputs: new Map(), busy: false, closed: false };
     sessions.set(sessionId, s);
     if (harness === 'claude') void runClaude(s);
     if (op === 'start') emit(sessionId, 'session.started', { capabilities: capabilities(harness), pendingNativeId: true });
@@ -90,8 +105,14 @@ async function command(cmd) {
         s.busy = false;
         throw error;
       }
-    } else { s.busy = true; queue(s, input); }
-    emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.content });
+    } else {
+      s.busy = true;
+      await new Promise((resolve, reject) => {
+        s.pendingInputs.set(input.id, { input, resolve, reject });
+        queue(s, input);
+      });
+    }
+    if (s.harness === 'codex') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.content });
     return { status: 'accepted', inputId: input.id };
   }
   if (op === 'interrupt') {
