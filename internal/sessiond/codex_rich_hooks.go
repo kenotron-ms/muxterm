@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -20,13 +21,18 @@ var codexRichEvents = []string{
 	"PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop", "Interrupt",
 }
 
-// The wrapper supplies MUXTERM_CODEX_BRIDGE so a source build reports through
-// the exact muxterm process that launched it. Keep the installed command as a
-// fallback, though: Codex can receive this invocation-scoped hook layer from a
-// pane launch whose environment does not retain the wrapper-only variable.
-// Failing that path with 127 disables every lifecycle and tool report even
-// though muxterm is already resolvable on the lane's PATH.
-const codexRichHookCommand = `exec "${MUXTERM_CODEX_BRIDGE:-muxterm}" session codex-hook`
+func codexRichHookCommand(bridge string) string {
+	// Codex executes command hooks through /bin/sh. Embed the already-resolved
+	// muxterm executable in the trusted invocation layer instead of asking every
+	// later hook process to recover it from an environment variable. Codex may
+	// sanitize that environment, and an upgrade may replace a bridge path after
+	// the lane starts; neither event should turn every tool hook into exit 127.
+	return "exec " + shellWord(bridge) + " session codex-hook"
+}
+
+func shellWord(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
 
 type codexRPCResponse struct {
 	ID     int `json:"id"`
@@ -49,10 +55,14 @@ type codexRPCResponse struct {
 // CodexRichHookArgs builds an invocation-only hook layer, asks this exact
 // Codex binary to hash it, then supplies matching trust state. It never writes
 // hooks.json or config.toml and never uses the dangerous trust-bypass switch.
-func CodexRichHookArgs(codex, cwd string) ([]string, error) {
+func CodexRichHookArgs(codex, bridge, cwd string) ([]string, error) {
+	if bridge == "" {
+		return nil, errors.New("muxterm hook bridge path is empty")
+	}
+	command := codexRichHookCommand(bridge)
 	definition := make([]string, 0, len(codexRichEvents)*2)
 	for _, event := range codexRichEvents {
-		value := `[{hooks=[{type="command",command=` + strconv.Quote(codexRichHookCommand) + `,timeout=3,statusMessage="Reporting to muxterm"}]}]`
+		value := `[{hooks=[{type="command",command=` + strconv.Quote(command) + `,timeout=3,statusMessage="Reporting to muxterm"}]}]`
 		definition = append(definition, "-c", "hooks."+event+"="+value)
 	}
 	hooks, err := codexHookInventory(codex, cwd, definition)

@@ -420,7 +420,7 @@ func (s *hookReportStore) projectAll() {
 		return
 	}
 	for _, record := range reg.Sessions {
-		if deadTerminalHookRecord(record) {
+		if deadHookRecord(record) {
 			_ = RemoveSessionSnapshot(record.Row.SessionID)
 			continue
 		}
@@ -429,10 +429,11 @@ func (s *hookReportStore) projectAll() {
 }
 
 // pruneDeadProjections keeps the durable hook registry available for managed
-// resume while removing its dead terminal rows from the live Fleet projection.
-// Completion records, not the hook registry, own finished-lane history after a
-// process exits. Without this split every daemon restart re-projects every old
-// Stop/SessionEnd record as an unplaced Fleet row forever.
+// resume while removing rows whose processes have died from the live Fleet
+// projection. Completion records, not the hook registry, own finished-lane
+// history after exit; interrupted working records have no live lane to project
+// either. Without this split every daemon restart briefly resurrects durable
+// records as unplaced Fleet rows.
 func (s *hookReportStore) pruneDeadProjections() {
 	now := time.Now()
 	if now.Before(s.nextPrune) {
@@ -444,14 +445,14 @@ func (s *hookReportStore) pruneDeadProjections() {
 		return
 	}
 	for _, record := range reg.Sessions {
-		if deadTerminalHookRecord(record) {
+		if deadHookRecord(record) {
 			_ = RemoveSessionSnapshot(record.Row.SessionID)
 		}
 	}
 }
 
-func deadTerminalHookRecord(record sessionRecord) bool {
-	if !sessionStateIsTerminal(record.Row.State) || record.PID <= 0 {
+func deadHookRecord(record sessionRecord) bool {
+	if record.PID <= 0 {
 		return false
 	}
 	if !processLive(record.PID) {
