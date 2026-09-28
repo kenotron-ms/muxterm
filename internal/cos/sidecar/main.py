@@ -43,11 +43,13 @@ import asyncio  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import signal  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import importlib.metadata  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
-from decimal import Decimal  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
@@ -114,7 +116,6 @@ DEFAULT_BUNDLE = _default_bundle()
 # by declining to declare it.
 TOOL_SURFACE_KEYS = ("muxterm_cos", "tools")
 
-SESSION_COST_CHANNEL = "session.cost"
 DEFAULT_APPROVAL_TIMEOUT = 300.0
 SUMMARY_LIMIT = 240
 LOOP_LIVE_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
@@ -352,7 +353,6 @@ class Turn:
     origin: str = ORIGIN_HUMAN
     causation_id: str = ""
     started: float = 0.0
-    task: "asyncio.Task | None" = None
     terminal_sent: bool = False
     cancel_requests: int = 0
     saw_stream_delta: bool = False
@@ -791,7 +791,6 @@ class Sidecar:
         self._turn: "Turn | None" = None
         self._forced_approval: set = set()
         self._stopping = False
-        self._prev_cost: "Decimal | None" = None
         # -- tuning (the `reconfigure` op) ----------------------------------
         # The three things a live retune needs and cannot recover later:
         #
@@ -839,8 +838,7 @@ class Sidecar:
         from amplifier_app_cli.session_store import SessionStore
         from rich.console import Console
 
-        devnull = open(os.devnull, "w")
-        console = Console(quiet=True, file=devnull)
+        console = Console(file=sys.stderr)
 
         # Provider auto-install after an amplifier update; without this a
         # resumed session can come up with zero providers.  Never interactive.
@@ -856,21 +854,17 @@ class Sidecar:
         # MANDATORY: without this hook-context-intelligence dies validating
         # "Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'".
         cfg = expand_env_vars(cfg)
-        if self.args.loop_live:
-            # Canary only: replace exactly the root orchestrator and pin the
-            # private dependency to the design-reviewed commit. Background
-            # jobs and native steering remain disabled in Slice 1.
-            session_cfg = cfg.setdefault("session", {})
-            live_orchestrator = {
-                "module": "loop-live",
-                "source": LOOP_LIVE_SOURCE,
-                "config": {"background_tools": [], "background_delegate": False},
-            }
-            session_cfg["orchestrator"] = live_orchestrator
-            # _create_bundle_session activates modules from PreparedBundle,
-            # while SessionConfig.config supplies their runtime config. Keep
-            # both representations on the same pinned orchestrator.
-            prepared.bundle.session["orchestrator"] = dict(live_orchestrator)
+        # Loop-live owns the sole execution path.
+        session_cfg = cfg.setdefault("session", {})
+        live_orchestrator = {
+            "module": "loop-live",
+            "source": LOOP_LIVE_SOURCE,
+            "config": {"background_tools": [], "background_delegate": False},
+        }
+        session_cfg["orchestrator"] = live_orchestrator
+        # SessionConfig and PreparedBundle must select the same orchestrator.
+        prepared.bundle.session["orchestrator"] = dict(live_orchestrator)
+        prepared.mount_plan.setdefault("session", {})["orchestrator"] = dict(live_orchestrator)
 
         # -- resume ---------------------------------------------------------
         # The session lives in the ordinary amplifier session store for this
@@ -924,22 +918,19 @@ class Sidecar:
         )
         self.session = session
 
-        if self.args.loop_live:
-            # Resolve through AppSettings above, as the supported CLI does.
-            # A bare Foundation session can mount with no configured provider.
-            if self._model_name() == "unknown":
-                raise RuntimeError("loop-live requires a provider/model from Amplifier AppSettings")
-            # PreparedBundle has already activated the stock orchestrator by
-            # this point. Mount the canary explicitly so the coordinator's
-            # single orchestrator slot is replaced before any execution starts.
-            from amplifier_module_loop_live import mount as mount_loop_live
-            from amplifier_module_loop_live.runtime import Runtime
+        # Resolve through AppSettings above, as the supported CLI does.
+        # A bare Foundation session can mount with no configured provider.
+        if self._model_name() == "unknown":
+            raise RuntimeError("loop-live requires a provider/model from Amplifier AppSettings")
+        # Mount the selected orchestrator before any execution starts.
+        from amplifier_module_loop_live import mount as mount_loop_live
+        from amplifier_module_loop_live.runtime import Runtime
 
-            await mount_loop_live(session.coordinator, {
-                "background_tools": [], "background_delegate": False,
-            })
-            self.live_runtime = Runtime(session_id=self.session_id, observer=self._live_observe)
-            session.coordinator.register_capability("live.runtime", self.live_runtime)
+        await mount_loop_live(session.coordinator, {
+            "background_tools": [], "background_delegate": False,
+        })
+        self.live_runtime = Runtime(session_id=self.session_id, observer=self._live_observe)
+        session.coordinator.register_capability("live.runtime", self.live_runtime)
 
         # session.config is not guaranteed to be the same dict object as cfg.
         session.config["working_dir"] = cwd
@@ -1338,8 +1329,8 @@ class Sidecar:
             return sid is None or sid == root
 
         async def on_provider_request(event: str, data: dict) -> Any:
-            # loop-streaming emits this immediately before each of ITS OWN llm
-            # calls.  Background hook calls never do -- which is what makes it
+            # The foreground orchestrator emits this before its own llm
+            # calls. Background hook calls do not, which makes it
             # a usable foreground marker.
             turn = self._turn
             if turn is None or not is_root(data):
@@ -1531,26 +1522,6 @@ class Sidecar:
         self._session_root_established = True
         return True
 
-    async def _costs(self):
-        """Returns (turn_cost, session_cost) as strings, or (None, None)."""
-        try:
-            contributions = await self.session.coordinator.collect_contributions(SESSION_COST_CHANNEL)
-        except Exception:
-            logger.debug("cost collection failed", exc_info=True)
-            return None, None
-        total = None
-        for c in contributions:
-            if isinstance(c, dict) and c.get("cost_usd") is not None:
-                try:
-                    total = (total or Decimal("0")) + Decimal(str(c["cost_usd"]))
-                except Exception:
-                    continue
-        if total is None:
-            return None, None
-        turn = total - self._prev_cost if self._prev_cost is not None else total
-        self._prev_cost = total
-        return str(turn), str(total)
-
     # -- turn execution -----------------------------------------------------
     def _live_observe(self, event: dict) -> None:
         """Translate loop-live's event truth onto muxterm's stdout protocol."""
@@ -1591,8 +1562,6 @@ class Sidecar:
             self._turn = None
 
     async def _start_live(self) -> None:
-        if not self.args.loop_live:
-            return
         # Exactly one execute owner for this sidecar incarnation.
         self.live_task = asyncio.create_task(self.session.execute(""), name="cos-loop-live-owner")
 
@@ -1607,73 +1576,6 @@ class Sidecar:
             return False
         self._live_inputs[input_id] = {"kind": kind, "source": source}
         return True
-
-    async def _run_turn(self, turn: Turn) -> None:
-        # turn_start was emitted synchronously when the turn was accepted, so
-        # that a shutdown arriving before this task is first scheduled can
-        # never produce a terminal event with no turn_start ahead of it.
-        self.broker.current_turn_id = turn.id
-        response = ""
-        error_msg = None
-        cancelled = False
-        persisted = False
-        try:
-            self.session.coordinator.cancellation.reset()
-            # Runtime mentions can resolve arbitrary configured context,
-            # including material outside this thread. Preview roots accept
-            # literal text only; their fixed tool surface is the sole source
-            # of bounded live facts.
-            prompt = await self._expand_mentions(turn.prompt)
-            response = await self.session.execute(prompt)
-            # Stamp provenance BEFORE the finally block's _save_session, so the
-            # bytes that reach disk already carry it. Never after: a save that
-            # happened first would persist an unstamped message and a restart
-            # would replay a lifecycle notice as if a person had typed it.
-            await self._stamp_turn_origin(turn, prompt)
-            if self.session.coordinator.cancellation.is_cancelled:
-                cancelled = True
-        except asyncio.CancelledError:
-            cancelled = True
-            raise
-        except BaseException as exc:  # noqa: BLE001 -- a turn must never kill the sidecar
-            error_msg = f"{type(exc).__name__}: {exc}"
-            logger.exception("turn %s failed", turn.id)
-        finally:
-            # Every await below is defended: a terminal event must still be
-            # emitted while a CancelledError propagates through this frame.
-            ms = int((time.monotonic() - turn.started) * 1000)
-            turn_cost = session_cost = None
-            try:
-                turn_cost, session_cost = await self._costs()
-            except BaseException:
-                logger.debug("cost lookup failed during teardown", exc_info=True)
-            try:
-                persisted = await self._save_session()
-            except BaseException:
-                logger.warning("session save failed for turn %s", turn.id, exc_info=True)
-
-            if cancelled or turn.cancel_requests:
-                self._emit_terminal(turn, ev="cancelled", response=response, ms=ms,
-                                    turn_cost=turn_cost, session_cost=session_cost, persisted=persisted)
-            elif error_msg is not None:
-                self.proto.emit(ev="error", turn_id=turn.id, code="turn_failed",
-                                message=error_msg, fatal=False)
-                self._emit_terminal(turn, ev="turn_end", response=response, ms=ms,
-                                    turn_cost=turn_cost, session_cost=session_cost,
-                                    error=error_msg, persisted=persisted)
-            else:
-                self._emit_terminal(turn, ev="turn_end", response=response, ms=ms,
-                                    turn_cost=turn_cost, session_cost=session_cost, persisted=persisted)
-            logger.info("turn %s: %d deltas emitted, %d dropped (background llm calls)",
-                        turn.id, turn.deltas_emitted, turn.deltas_dropped)
-            if not turn.saw_provider_request:
-                logger.warning(
-                    "turn %s saw no provider:request -- this orchestrator does not mark "
-                    "its own llm calls, so token deltas were suppressed entirely",
-                    turn.id)
-            self.broker.current_turn_id = None
-            if self._turn is turn:
-                self._turn = None
 
     def _emit_terminal(self, turn: Turn, *, ev: str, response: str, ms: int,
                        turn_cost, session_cost, error=None, persisted=False) -> None:
@@ -1694,73 +1596,6 @@ class Sidecar:
         if error is not None:
             payload["error"] = error
         self.proto.emit(**payload)
-
-    async def _stamp_turn_origin(self, turn: Turn, expanded_prompt: str) -> None:
-        """Record this turn's provenance on the message that opened it.
-
-        WHY IT IS DONE BY SEARCH RATHER THAN DECLARED UP FRONT: `execute` takes
-        a prompt string and nothing else, and muxterm does not get to change
-        that -- amplifier is a dependency here, not part of this repository.
-        So the message is located after the fact, and the match is made strict
-        so a miss degrades to "no durable stamp" rather than to "stamped the
-        wrong message". An unstamped turn replays as a human turn, which is the
-        safe direction; a mis-stamped one would put a system badge on something
-        a person said.
-
-        Only non-human origins are stamped. Writing `origin: human` onto every
-        message a person ever typed would double the metadata on the hot path
-        to record the default.
-        """
-        if turn.origin == ORIGIN_HUMAN:
-            return
-        try:
-            messages = await self._messages()
-        except Exception:
-            logger.debug("turn %s: transcript unavailable for origin stamp", turn.id, exc_info=True)
-            return
-        target = None
-        for m in reversed(list(messages)):
-            if not _opens_turn(m):
-                continue
-            # The newest turn-opening message must be the one this turn just
-            # submitted. Verify it rather than assume it: LAW 1 makes that true
-            # today, and this check is what keeps it from silently becoming a
-            # lie if it ever stops being.
-            if _turn_prompt([m]).strip() != expanded_prompt.strip():
-                logger.warning("turn %s: newest prompt does not match; origin not stamped", turn.id)
-                return
-            target = m
-            break
-        if target is None:
-            return
-        md = target.get("metadata")
-        if not isinstance(md, dict):
-            md = {}
-            target["metadata"] = md
-        md[ORIGIN_META_KEY] = turn.origin
-        if turn.causation_id:
-            md[CAUSATION_META_KEY] = turn.causation_id
-        # get_messages may hand back copies rather than the live dicts. Confirm
-        # the stamp is actually visible and write the list back if it is not,
-        # because a stamp that only exists in a local copy is exactly the
-        # live-only decorator this whole mechanism exists to avoid.
-        try:
-            if _newest_turn_origin(await self._messages()) == turn.origin:
-                return
-            context = self.session.coordinator.get("context")
-            if context is not None and hasattr(context, "set_messages"):
-                await context.set_messages(list(messages))
-        except Exception:
-            logger.warning("turn %s: origin stamp could not be persisted", turn.id, exc_info=True)
-
-    async def _expand_mentions(self, prompt: str) -> str:
-        try:
-            from amplifier_app_cli.main import process_runtime_mentions
-
-            return await process_runtime_mentions(self.session, prompt)
-        except Exception:
-            logger.debug("mention expansion skipped", exc_info=True)
-            return prompt
 
     # -- transcript housekeeping --------------------------------------------
     def _session_dir(self) -> Path:
@@ -2133,20 +1968,9 @@ class Sidecar:
             if turn.causation_id:
                 start["causation_id"] = turn.causation_id
         self.proto.emit(**start)
-        if self.args.loop_live:
-            self.broker.current_turn_id = turn.id
-            if not await self._submit_live(input_id=turn.id, kind="user", source="user", text=prompt):
-                self._turn = None
-            return
-        turn.task = asyncio.create_task(self._run_turn(turn), name=f"cos-turn-{turn_id}")
-        turn.task.add_done_callback(self._turn_done)
-
-    def _turn_done(self, task: asyncio.Task) -> None:
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc is not None:
-            logger.error("turn task ended with %r", exc)
+        self.broker.current_turn_id = turn.id
+        if not await self._submit_live(input_id=turn.id, kind="user", source="user", text=prompt):
+            self._turn = None
 
     def _handle_cancel(self, msg: dict) -> None:
         turn_id = msg.get("turn_id")
@@ -2158,13 +1982,10 @@ class Sidecar:
         turn.cancel_requests += 1
         cancellation = self.session.coordinator.cancellation
         # A single composer Stop is the full user action, not the first half of
-        # a hidden two-click escalation. A provider/tool await may not observe
-        # graceful cancellation promptly; cancel the owning task too so its
-        # finally block emits the one terminal event that releases the FIFO.
+        # a hidden two-click escalation. The live execution owns the provider
+        # await and reports the terminal generation event.
         cancellation.request_immediate()
         logger.info("immediate cancel requested for %s", turn.id)
-        if turn.task is not None:
-            turn.task.cancel()
 
     def _handle_approval(self, msg: dict) -> None:
         request_id = msg.get("request_id")
@@ -2180,9 +2001,6 @@ class Sidecar:
                             message=f"no pending approval {request_id}", fatal=False)
 
     async def _handle_input(self, msg: dict) -> None:
-        if not self.args.loop_live:
-            self.proto.emit(ev="error", code="unknown_op", message="unknown op 'input'", fatal=False)
-            return
         if msg.get("version") != 1:
             self.proto.emit(ev="generation_failed", version=1, input_id=msg.get("input_id", ""),
                             input_ids=[msg.get("input_id", "")], error="unsupported input version")
@@ -2292,14 +2110,13 @@ class Sidecar:
                 break
             await self.dispatch(item)
 
-        if self.args.loop_live and self.live_runtime is not None and self.live_task is not None:
+        if self.live_runtime is not None and self.live_task is not None:
             try:
                 from amplifier_module_loop_live.runtime import Input
                 await self.live_runtime.submit(Input(kind="stop", id="muxterm-sidecar-stop"))
                 await asyncio.wait_for(asyncio.shield(self.live_task), timeout=15)
             except BaseException:
                 self.live_task.cancel()
-        await self._drain_active_turn()
         for chat in list(SDK_CHAT_SESSIONS.values()):
             try:
                 await chat.close()
@@ -2309,10 +2126,8 @@ class Sidecar:
     def _on_signal(self, sig: int) -> None:
         logger.info("received signal %s -- shutting down", sig)
         self._stopping = True
-        turn = self._turn
-        if turn is not None and turn.task is not None:
+        if self._turn is not None:
             self.session.coordinator.cancellation.request_immediate()
-            turn.task.cancel()
         # WAKE THE SERVE LOOP.  _stopping is only re-read at the top of the
         # loop, and an idle sidecar is blocked inside queue.get() -- which no
         # signal interrupts.  Setting the flag without this leaves the process
@@ -2327,28 +2142,6 @@ class Sidecar:
                 # The loop is already closing; it is not going to sit idle.
                 pass
 
-    async def _drain_active_turn(self) -> None:
-        turn = self._turn
-        if turn is None or turn.task is None:
-            return
-        logger.info("shutdown with turn %s active -- cancelling", turn.id)
-        turn.cancel_requests += 1
-        try:
-            self.session.coordinator.cancellation.request_immediate()
-        except Exception:
-            pass
-        turn.task.cancel()
-        try:
-            await asyncio.wait_for(asyncio.shield(turn.task), timeout=15)
-        except (asyncio.CancelledError, asyncio.TimeoutError, TimeoutError):
-            pass
-        except Exception:
-            logger.debug("turn teardown raised", exc_info=True)
-        if not turn.terminal_sent:
-            # Guarantee: no turn_start is ever left without a terminal event.
-            turn.terminal_sent = True
-            self.proto.emit(ev="cancelled", turn_id=turn.id, response="",
-                            ms=int((time.monotonic() - turn.started) * 1000))
 
 
 # ---------------------------------------------------------------------------
@@ -2413,10 +2206,11 @@ class SDKChatSession:
         ))
         cfg, prepared = await resolve_bundle_config("anchors", settings, None, project_slug=slug)
         cfg = expand_env_vars(cfg)
-        live = {"module": "loop-live", "source": "git+https://github.com/microsoft/amplifier-module-loop-live@main",
+        live = {"module": "loop-live", "source": LOOP_LIVE_SOURCE,
                 "config": {"background_tools": [], "background_delegate": False}}
         cfg.setdefault("session", {})["orchestrator"] = live
         prepared.bundle.session["orchestrator"] = dict(live)
+        prepared.mount_plan.setdefault("session", {})["orchestrator"] = dict(live)
         self.store = SessionStore(base_dir=home / "projects" / slug / "sessions")
         transcript = None
         if self.store.exists(self.id):
@@ -2584,6 +2378,40 @@ async def command(cmd):
 # ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
+def ensure_loop_live_dependency() -> str:
+    """Prepare the selected Amplifier interpreter for every normal sidecar boot."""
+    package = "amplifier-module-loop-live"
+    requirements = Path(__file__).resolve().parent / "loop-live-requirements.txt"
+    if not requirements.is_file():
+        raise RuntimeError(f"{package}: missing embedded requirements file {requirements}")
+    uv = shutil.which("uv")
+    command = ([uv, "pip", "install", "--python", sys.executable, "-r", str(requirements)]
+               if uv else [sys.executable, "-m", "pip", "install", "-r", str(requirements)])
+    logger.info("installing %s into %s", package, sys.executable)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f"failed to install {package} into {sys.executable}: {detail}")
+    try:
+        dist = importlib.metadata.distribution(package)
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RuntimeError(f"installed {package} but it is unavailable in {sys.executable}") from exc
+    # Foundation imports this source from its managed cache during session
+    # creation. Importing it here from site-packages would poison sys.modules
+    # and cause Foundation's source validation to reject its own cache path.
+    direct_url = dist.read_text("direct_url.json")
+    if direct_url:
+        try:
+            sha = json.loads(direct_url).get("vcs_info", {}).get("commit_id", "")
+        except (TypeError, ValueError):
+            sha = ""
+        if sha:
+            logger.info("%s installed commit %s", package, sha)
+            return sha
+    logger.info("%s installed (commit metadata unavailable)", package)
+    return ""
+
+
 def parse_args(argv: list) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="cos", description="muxterm Chief-of-Staff sidecar")
     p.add_argument("--session-id", required=True, help="amplifier session id (also the resume key)")
@@ -2596,8 +2424,6 @@ def parse_args(argv: list) -> argparse.Namespace:
                    help="seconds before an unanswered approval is DENIED (default: 300)")
     p.add_argument("--session-store-exists", action="store_true",
                    help="emit public SessionStore existence for this exact cwd/session and exit")
-    p.add_argument("--loop-live", action="store_true",
-                   help="enable the pinned experimental one-execution-per-process host")
     args = p.parse_args(argv)
     return args
 
@@ -2605,6 +2431,7 @@ def parse_args(argv: list) -> argparse.Namespace:
 async def run(args: argparse.Namespace, proto: Proto) -> int:
     sidecar = Sidecar(args, proto)
     try:
+        ensure_loop_live_dependency()
         session = await sidecar.build()
     except SystemExit as exc:
         # _create_bundle_session calls sys.exit(1) on module validation errors.
@@ -2623,8 +2450,7 @@ async def run(args: argparse.Namespace, proto: Proto) -> int:
                 tools=sidecar.tool_count, muxterm_tools=sidecar.muxterm_tool_count,
                 boot_ms=int((time.monotonic() - _BOOT_T0) * 1000), resumed=sidecar.resumed,
             )
-            if args.loop_live:
-                ready["loop_live"] = True
+            ready["loop_live"] = True
             proto.emit(**ready)
             await sidecar._start_live()
             await sidecar.serve()

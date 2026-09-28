@@ -261,7 +261,6 @@ func newCosRelay() *cosRelay {
 		cfg: cos.Config{
 			Logf:            log.Printf,
 			SubscriberDepth: cosSubscriberDepth,
-			LoopLive:        cos.LoopLiveFromEnv(),
 		},
 		subs:        make(map[string]cosSubmission),
 		refs:        make(map[string]string),
@@ -1172,7 +1171,7 @@ func (c *Client) cosSteer(msg cosClientMessage) {
 	if relay != nil {
 		sup = relay.started()
 	}
-	if code == "" && (sup == nil || !sup.LoopLiveEnabled()) {
+	if code == "" && sup == nil {
 		code = "live_session_unavailable"
 	}
 	if code == "" {

@@ -67,20 +67,7 @@ const (
 	// same project slug would otherwise share one transcript. `make dev-local`
 	// sets this; see the note there.
 	EnvSessionID = operator.EnvSessionID
-	// EnvLoopLive is the explicit canary gate. Absence and every value except
-	// a recognized true spelling preserve the historical path.
-	EnvLoopLive = "MUXTERM_COS_LOOP_LIVE"
 )
-
-// LoopLiveFromEnv implements the opt-in gate shared by serve and CLI hosts.
-func LoopLiveFromEnv() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvLoopLive))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
 
 // ResolveSessionID returns the amplifier session id to use and where it came
 // from, so a caller can say so out loud instead of leaving the user to guess
@@ -192,9 +179,6 @@ var ErrNotRunning = errors.New("cos: sidecar is not running")
 // defaults to log.Printf, which is what routes sidecar stderr into muxterm's
 // normal logging.
 type Config struct {
-	// LoopLive enables the pinned experimental one-execution-per-process host.
-	// It is false by default and must never be inferred from module presence.
-	LoopLive bool
 	// SessionID is the amplifier session id (default DefaultSessionID).
 	SessionID string
 	// Bundle names the amplifier bundle; empty lets the sidecar choose.
@@ -626,21 +610,11 @@ func (s *Supervisor) SubmitOrigin(prompt, origin, causationID string) *Turn {
 	})
 }
 
-// LoopLiveEnabled reports whether this supervisor explicitly selected the
-// experimental loop-live host.
-func (s *Supervisor) LoopLiveEnabled() bool { return s.cfg.LoopLive }
-
 // SubmitLifecycleInput sends one typed service observation independently of
 // the human FIFO. markerID is also loop-live's idempotency key.
 func (s *Supervisor) SubmitLifecycleInput(text, markerID string) *Turn {
 	t := &Turn{ID: markerID, Prompt: text, Origin: OriginLifecycle,
 		CausationID: markerID, SubmittedAt: time.Now(), done: make(chan struct{})}
-	if !s.cfg.LoopLive {
-		err := errors.New("cos: loop-live is disabled")
-		t.finish(synthEvent(Event{Ev: EvError, TurnID: markerID, Code: CodeSidecarUnavailable,
-			Message: err.Error(), Fatal: true}), err)
-		return t
-	}
 	s.mu.Lock()
 	if previous := s.liveSeen[markerID]; previous != nil {
 		s.mu.Unlock()
@@ -672,12 +646,6 @@ func (s *Supervisor) SubmitLifecycleInput(text, markerID string) *Turn {
 func (s *Supervisor) SubmitSteerInput(text, inputID string) *Turn {
 	t := &Turn{ID: inputID, Prompt: text, Origin: OriginHuman,
 		SubmittedAt: time.Now(), done: make(chan struct{})}
-	if !s.cfg.LoopLive {
-		err := errors.New("cos: loop-live is disabled")
-		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeSidecarUnavailable,
-			Message: err.Error(), Fatal: true}), err)
-		return t
-	}
 	s.mu.Lock()
 	if previous := s.liveSeen[inputID]; previous != nil {
 		s.mu.Unlock()
@@ -1199,9 +1167,6 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	args := []string{s.script, "--session-id", s.cfg.SessionID, "--log-level", s.cfg.LogLevel}
 	if s.cfg.Bundle != "" {
 		args = append(args, "--bundle", s.cfg.Bundle)
-	}
-	if s.cfg.LoopLive {
-		args = append(args, "--loop-live")
 	}
 	// Cwd was pinned in New (resolveCwd), never re-derived here: re-reading
 	// os.Getwd() per incarnation would let a chdir anywhere in the host
