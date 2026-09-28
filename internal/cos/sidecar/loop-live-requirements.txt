@@ -1,2 +1,2 @@
 # Required for every sidecar boot; installed into the selected Amplifier interpreter.
-amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@main
+amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@36d242ed2a3a061e2e670779ca646edf85f006be

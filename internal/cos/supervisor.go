@@ -179,6 +179,9 @@ var ErrNotRunning = errors.New("cos: sidecar is not running")
 // defaults to log.Printf, which is what routes sidecar stderr into muxterm's
 // normal logging.
 type Config struct {
+	// SDKOnly starts the supervised sidecar for SDK chats without mounting the
+	// separate chief-of-staff session, which SDK chats never use.
+	SDKOnly bool
 	// SessionID is the amplifier session id (default DefaultSessionID).
 	SessionID string
 	// Bundle names the amplifier bundle; empty lets the sidecar choose.
@@ -1165,6 +1168,9 @@ func (s *Supervisor) stopping(ctx context.Context) bool {
 // whether that incarnation ever reported ready, plus the process's exit error.
 func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error) {
 	args := []string{s.script, "--session-id", s.cfg.SessionID, "--log-level", s.cfg.LogLevel}
+	if s.cfg.SDKOnly {
+		args = append(args, "--sdk-only")
+	}
 	if s.cfg.Bundle != "" {
 		args = append(args, "--bundle", s.cfg.Bundle)
 	}

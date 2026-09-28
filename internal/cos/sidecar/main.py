@@ -27,6 +27,8 @@ delegate.  Pass --bundle anchors to get the general-purpose coding roster back
 # ---------------------------------------------------------------------------
 import os  # noqa: E402
 import sys  # noqa: E402
+import time  # noqa: E402
+_PROCESS_T0 = time.monotonic()
 
 _REAL_STDOUT_FD = os.dup(1)
 os.dup2(2, 1)
@@ -54,6 +56,13 @@ from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
 _BOOT_T0 = time.monotonic()
+
+
+def timing(stage: str, started: float | None = None) -> None:
+    now = time.monotonic()
+    logger.info("TIMING %s elapsed_ms=%.1f process_ms=%.1f", stage,
+                (now - started) * 1000 if started is not None else 0,
+                (now - _PROCESS_T0) * 1000)
 
 logger = logging.getLogger("cos")
 
@@ -118,7 +127,7 @@ TOOL_SURFACE_KEYS = ("muxterm_cos", "tools")
 
 DEFAULT_APPROVAL_TIMEOUT = 300.0
 SUMMARY_LIMIT = 240
-LOOP_LIVE_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
+LOOP_LIVE_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@36d242ed2a3a061e2e670779ca646edf85f006be"
 
 # Serve-loop wake-up token.  Pushed onto the op queue by the signal handler so
 # an IDLE sidecar (parked on queue.get(), which no signal interrupts) re-reads
@@ -826,6 +835,7 @@ class Sidecar:
     # -- boot ---------------------------------------------------------------
     async def build(self) -> Any:
         """The verified recipe -- spec section 0.  The order here is load-bearing."""
+        build_start = time.monotonic()
         from amplifier_app_cli.commands.init import auto_init_from_env, check_first_run
         from amplifier_app_cli.lib.settings import AppSettings
         from amplifier_app_cli.paths import get_bundle_search_paths
@@ -849,7 +859,9 @@ class Sidecar:
             logger.debug("first-run check skipped", exc_info=True)
 
         settings = AppSettings()
+        resolve_start = time.monotonic()
         cfg, prepared = await resolve_bundle_config(self.bundle, settings, None)
+        timing("cos.bundle_resolution", resolve_start)
         self._prepared = prepared
         # MANDATORY: without this hook-context-intelligence dies validating
         # "Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'".
@@ -916,6 +928,7 @@ class Sidecar:
         session = await _create_bundle_session(
             sc, self.session_id, HostApprovalSystem(self.broker), self.display, console
         )
+        timing("cos.session_creation_provider_init", resolve_start)
         self.session = session
 
         # Resolve through AppSettings above, as the supported CLI does.
@@ -1003,6 +1016,7 @@ class Sidecar:
         logger.info("tools mounted (%d): %s", self.tool_count, sorted(tools))
 
         self._register_hooks()
+        timing("cos.build_total", build_start)
         return session
 
 
@@ -2038,7 +2052,7 @@ class Sidecar:
         elif op == "sdk":
             try:
                 sdk_command = msg.get("command") or {}
-                if sdk_command.get("op") in {"start", "resume"} and (
+                if sdk_command.get("op") in {"start", "resume"} and sdk_command.get("sessionId") not in SDK_CHAT_SESSIONS and (
                     self._turn is not None or any(chat.active for chat in SDK_CHAT_SESSIONS.values())
                 ):
                     raise RuntimeError("Amplifier chat creation is busy; retry after the active turn")
@@ -2175,16 +2189,23 @@ class QuietDisplay:
 
 
 class SDKChatSession:
-    def __init__(self, session_id, cwd):
+    def __init__(self, session_id, cwd, bundle="anchors", provider=""):
         self.id, self.cwd = session_id, cwd
+        self.bundle, self.provider = bundle or "anchors", provider or ""
         self.session = self.runtime = self.task = self.store = None
         self.active = set()
         self.partial = ""
         self.model = ""
+        self.available_providers = []
+        self.available_bundles = []
         self.closed = False
+        self.turn_started = None
+        self.first_token_seen = False
 
     async def build(self):
+        build_start = time.monotonic()
         from amplifier_app_cli.lib.settings import AppSettings, SettingsPaths
+        from amplifier_app_cli.lib.bundle_loader.discovery import AppBundleDiscovery
         from amplifier_app_cli.paths import get_amplifier_home, get_bundle_search_paths
         from amplifier_app_cli.runtime.config import expand_env_vars, resolve_bundle_config
         from amplifier_app_cli.session_runner import SessionConfig, _create_bundle_session
@@ -2204,7 +2225,27 @@ class SDKChatSession:
             local_settings=project / ".amplifier" / "settings.local.yaml",
             session_settings=None,
         ))
-        cfg, prepared = await resolve_bundle_config("anchors", settings, None, project_slug=slug)
+        resolve_start = time.monotonic()
+        try:
+            cfg, prepared = await resolve_bundle_config(self.bundle, settings, None, project_slug=slug)
+        except Exception as exc:
+            raise RuntimeError(f"bundle '{self.bundle}' failed to load: {exc}") from exc
+        timing("sdk.bundle_resolution", resolve_start)
+        discovery_paths = [project / ".amplifier" / "bundles", *get_bundle_search_paths()]
+        self.available_bundles = sorted({self.bundle, *(
+            name for name in AppBundleDiscovery(search_paths=discovery_paths).list_bundles()
+            if not name.startswith("muxterm-invocation-")
+        )})
+        providers = cfg.get("providers") or []
+        self.available_providers = sorted(set(entry.get("module", "") for entry in providers if entry.get("module")))
+        if self.provider:
+            selected = [entry for entry in providers if entry.get("module") == self.provider
+                        or entry.get("instance_id") == self.provider]
+            if not selected:
+                raise RuntimeError(f"provider '{self.provider}' is unavailable for bundle '{self.bundle}'")
+            cfg["providers"] = selected
+            prepared.mount_plan["providers"] = selected
+            prepared.bundle.providers = list(selected)
         cfg = expand_env_vars(cfg)
         live = {"module": "loop-live", "source": LOOP_LIVE_SOURCE,
                 "config": {"background_tools": [], "background_delegate": False}}
@@ -2228,7 +2269,7 @@ class SDKChatSession:
             path for path in get_bundle_search_paths() if path != process_bundle_dir
         ]
         sc = SessionConfig(config=cfg, search_paths=bundle_paths, verbose=False,
-                           session_id=self.id, bundle_name="anchors", prepared_bundle=prepared,
+                           session_id=self.id, bundle_name=self.bundle, prepared_bundle=prepared,
                            initial_transcript=transcript)
         devnull = open(os.devnull, "w")
         # _create_bundle_session passes Path.cwd() as session_cwd into
@@ -2237,22 +2278,31 @@ class SDKChatSession:
         # refuses a build while another turn is active, so the temporary cwd
         # cannot redirect work already in flight.
         previous_cwd = os.getcwd()
+        create_start = time.monotonic()
         try:
             os.chdir(self.cwd)
-            self.session = await _create_bundle_session(sc, self.id, DenyApproval(), QuietDisplay(),
-                                                        Console(quiet=True, file=devnull))
+            try:
+                self.session = await _create_bundle_session(sc, self.id, DenyApproval(), QuietDisplay(),
+                                                            Console(quiet=True, file=devnull))
+            except BaseException as exc:
+                raise RuntimeError(f"bundle '{self.bundle}' provider '{self.provider or 'default'}' failed to load: {exc}") from exc
         finally:
             os.chdir(previous_cwd)
             devnull.close()
+        timing("sdk.session_creation_provider_init", create_start)
         providers = self.session.coordinator.get("providers") or {}
         self.model = next((f"{name}/{getattr(p, 'model', None) or getattr(p, 'default_model', '')}"
                            for name, p in providers.items()
                            if getattr(p, "model", None) or getattr(p, "default_model", None)), "")
         if not self.model:
-            raise RuntimeError("Amplifier AppSettings resolved no provider/model")
+            raise RuntimeError(f"provider '{self.provider or 'default'}' resolved no model for bundle '{self.bundle}'")
+        import_start = time.monotonic()
         from amplifier_module_loop_live import mount as mount_loop_live
         from amplifier_module_loop_live.runtime import Runtime
+        timing("sdk.loop_live_import", import_start)
+        mount_start = time.monotonic()
         await mount_loop_live(self.session.coordinator, {"background_tools": [], "background_delegate": False})
+        timing("sdk.loop_live_mount", mount_start)
         self.runtime = Runtime(session_id=self.id, observer=self.observe)
         self.session.coordinator.register_capability("live.runtime", self.runtime)
         if transcript:
@@ -2263,7 +2313,9 @@ class SDKChatSession:
         self.hooks()
         self.task = asyncio.create_task(self.session.execute(""), name=f"amplifier-chat-{self.id}")
         self.task.add_done_callback(self.owner_done)
-        frame(self.id, "session.started", nativeId=self.id, capabilities=CAPS, model=self.model)
+        frame(self.id, "session.started", nativeId=self.id, capabilities=CAPS, model=self.model,
+              bundle=self.bundle, provider=self.provider or self.model.split("/", 1)[0])
+        timing("sdk.build_total", build_start)
 
     def owner_done(self, task):
         if task.cancelled(): return
@@ -2278,6 +2330,9 @@ class SDKChatSession:
         cont = HookResult(action="continue")
         async def delta(event, data):
             if data.get("block_type") != "thinking" and data.get("text"):
+                if not self.first_token_seen and self.turn_started is not None:
+                    self.first_token_seen = True
+                    timing("sdk.first_token", self.turn_started)
                 frame(self.id, "assistant.delta", text=data["text"])
             return cont
         async def tool_start(event, data):
@@ -2306,6 +2361,8 @@ class SDKChatSession:
             asyncio.create_task(self.finish(event))
 
     async def finish(self, event):
+        if self.turn_started is not None:
+            timing("sdk.turn_completion", self.turn_started)
         ids = list(event.get("input_ids") or [])
         persisted = False
         try:
@@ -2313,7 +2370,7 @@ class SDKChatSession:
             messages = await context.get_messages()
             if messages:
                 self.store.save(self.id, messages, {"session_id": self.id,
-                    "created": datetime.now(timezone.utc).isoformat(), "bundle": "anchors",
+                    "created": datetime.now(timezone.utc).isoformat(), "bundle": self.bundle,
                     "model": self.model, "working_dir": self.cwd})
                 persisted = True
         except Exception as exc:
@@ -2340,6 +2397,9 @@ class SDKChatSession:
             raise ValueError("steer input requires a human source")
         await self.runtime.submit(Input(kind=kind, text=content,
                                         source=source if kind == "service" else "user", id=input_id))
+        if kind == "user":
+            self.turn_started = time.monotonic()
+            self.first_token_seen = False
         self.active.add(input_id)
         frame(self.id, "input.accepted", inputId=input_id, kind=kind, source=source, text=content)
         return {"status": "accepted", "inputId": input_id}
@@ -2360,12 +2420,37 @@ async def command(cmd):
         if sid not in SDK_CHAT_SESSIONS:
             cwd = cmd.get("cwd")
             if not cwd or not Path(cwd).is_dir(): raise ValueError("Amplifier project folder unavailable")
-            session = SDKChatSession(sid, cwd)
+            session = SDKChatSession(sid, cwd, cmd.get("bundle") or "anchors", cmd.get("provider") or "")
             await session.build()
             SDK_CHAT_SESSIONS[sid] = session
         return {"sessionId": sid, "capabilities": CAPS}
     session = SDK_CHAT_SESSIONS.get(sid)
     if session is None: raise ValueError("Amplifier session is not resident; resume it first")
+    if op == "settings":
+        active_name = session.model.split("/", 1)[0]
+        active_provider = session.provider or next(
+            (name for name in session.available_providers if name == active_name or name.endswith("-" + active_name)),
+            active_name)
+        return {"bundle": session.bundle, "provider": active_provider,
+                "model": session.model, "bundles": session.available_bundles,
+                "providers": session.available_providers}
+    if op == "select":
+        if session.active: raise RuntimeError("finish the current Amplifier turn before changing settings")
+        bundle = cmd.get("bundle") or session.bundle
+        provider = cmd.get("provider") or session.provider
+        current = await command({"op": "settings", "sessionId": sid})
+        if bundle == session.bundle and provider == current["provider"]:
+            return await command({"op": "settings", "sessionId": sid})
+        replacement = SDKChatSession(sid, session.cwd, bundle, provider)
+        try:
+            await replacement.build()
+        except BaseException:
+            if replacement.task:
+                await replacement.close()
+            raise
+        await session.close()
+        SDK_CHAT_SESSIONS[sid] = replacement
+        return await command({"op": "settings", "sessionId": sid})
     if op == "send": return await session.send(cmd.get("input") or {})
     if op == "interrupt":
         return await session.send({"kind": "stop", "source": "browser", "id": f"interrupt-{sid}"})
@@ -2384,11 +2469,23 @@ def ensure_loop_live_dependency() -> str:
     requirements = Path(__file__).resolve().parent / "loop-live-requirements.txt"
     if not requirements.is_file():
         raise RuntimeError(f"{package}: missing embedded requirements file {requirements}")
+    pinned_commit = requirements.read_text().strip().rsplit("@", 1)[-1]
+    try:
+        installed = importlib.metadata.distribution(package)
+        direct_url = installed.read_text("direct_url.json") or "{}"
+        installed_commit = json.loads(direct_url).get("vcs_info", {}).get("commit_id", "")
+        if installed_commit == pinned_commit:
+            timing("process.loop_live_installed_cache_hit")
+            return installed_commit
+    except (importlib.metadata.PackageNotFoundError, ValueError, TypeError):
+        pass
     uv = shutil.which("uv")
     command = ([uv, "pip", "install", "--python", sys.executable, "-r", str(requirements)]
                if uv else [sys.executable, "-m", "pip", "install", "-r", str(requirements)])
     logger.info("installing %s into %s", package, sys.executable)
+    install_start = time.monotonic()
     result = subprocess.run(command, capture_output=True, text=True, check=False)
+    timing("process.loop_live_install", install_start)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
         raise RuntimeError(f"failed to install {package} into {sys.executable}: {detail}")
@@ -2415,6 +2512,7 @@ def ensure_loop_live_dependency() -> str:
 def parse_args(argv: list) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="cos", description="muxterm Chief-of-Staff sidecar")
     p.add_argument("--session-id", required=True, help="amplifier session id (also the resume key)")
+    p.add_argument("--sdk-only", action="store_true", help="host SDK chats without a chief-of-staff session")
     p.add_argument("--bundle", default=DEFAULT_BUNDLE,
                    help=f"bundle to load (default: {DEFAULT_BUNDLE})")
     p.add_argument("--cwd", default=None, help="working directory; sets project slug and session store")
@@ -2429,9 +2527,17 @@ def parse_args(argv: list) -> argparse.Namespace:
 
 
 async def run(args: argparse.Namespace, proto: Proto) -> int:
+    timing("process.start")
     sidecar = Sidecar(args, proto)
     try:
         ensure_loop_live_dependency()
+        if args.sdk_only:
+            proto.emit(ev="ready", session_id=args.session_id, bundle="sdk-only",
+                       tools=0, muxterm_tools=0,
+                       boot_ms=int((time.monotonic() - _BOOT_T0) * 1000),
+                       resumed=False, loop_live=True)
+            await sidecar.serve()
+            return 0
         session = await sidecar.build()
     except SystemExit as exc:
         # _create_bundle_session calls sys.exit(1) on module validation errors.

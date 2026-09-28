@@ -4,6 +4,7 @@ import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
+import './mux-amplifier-settings.js';
 
 type Event = { type: string; text?: string; name?: string; toolId?: string; message?: string; kind?: string; raw?: unknown };
 type Block = { kind: 'user' | 'assistant' | 'tool' | 'error'; text: string; name?: string; id?: string; done?: boolean };
@@ -91,7 +92,7 @@ export class MuxSDKChat extends LitElement {
     } catch (error) { this.error = String(error); this.draft = content; }
   }
   override render() { return html`
-    <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${this.chat?.projectPath || ''}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${() => { this.drawerOpen = !this.drawerOpen; }}>▥</button></div>
+    <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${this.chat?.projectPath || ''}</span>${this.chat?.harness === 'amplifier' ? html`<mux-amplifier-settings .sessionId=${this.sessionId} .turnBusy=${this.busy}></mux-amplifier-settings>` : nothing}<button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${() => { this.drawerOpen = !this.drawerOpen; }}>▥</button></div>
     <div class="layout"><div class="chat"><div class="body">
       ${this.blocks.length ? this.blocks.map((b, i) => html`<div class="block ${b.kind}">${b.kind === 'user' ? html`<div class="bubble">${b.text}</div>` : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, i)}</div>` : b.kind === 'tool' ? html`<div class="tool"><span class="tool-name">${b.name}</span> · ${b.text}</div>` : html`<div class="error">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
