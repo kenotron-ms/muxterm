@@ -25,6 +25,7 @@ type Config struct {
 	Font           FontConfig           `toml:"font"       json:"font"`
 	Terminal       TerminalConfig       `toml:"terminal"   json:"terminal"`
 	Sidebar        SidebarConfig        `toml:"sidebar"    json:"sidebar"`
+	Chat           ChatConfig           `toml:"chat" json:"chat" patch:"readonly"`
 	Keys           KeysConfig           `toml:"keys"       json:"keys" patch:"readonly"`
 	Workspace      WorkspaceConfig      `toml:"workspace"  json:"workspace" patch:"readonly"`
 	Driver         DriverConfig         `toml:"driver"     json:"driver" patch:"readonly"`
@@ -565,6 +566,12 @@ type TerminalConfig struct {
 // hidden workspace content becoming visible while screen-sharing).
 type SidebarConfig struct {
 	Preview string `toml:"preview" json:"preview"`
+}
+
+// ChatConfig controls where the server-side folder picker starts and where
+// ungrouped chats run when no folder is selected.
+type ChatConfig struct {
+	DefaultBaseHomeFolder string `toml:"default_base_home_folder" json:"default_base_home_folder"`
 }
 
 // KeysConfig defines muxterm's own UI keybindings.

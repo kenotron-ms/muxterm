@@ -30,9 +30,15 @@ type sdkChat struct {
 	ProjectPath string    `json:"projectPath"`
 	Title       string    `json:"title"`
 	Harness     string    `json:"harness"`
+	Provider    string    `json:"provider,omitempty"`
 	NativeID    string    `json:"nativeId,omitempty"`
 	State       string    `json:"state"`
 	CreatedAt   time.Time `json:"createdAt"`
+}
+type sdkProject struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Path string `json:"path"`
 }
 type sdkEvent struct {
 	SessionID    string          `json:"sessionId"`
@@ -61,6 +67,7 @@ type sdkChatHost struct {
 	cosRelay *cosRelay
 	ampSup   *cos.Supervisor
 	chats    map[string]*sdkChat
+	projects map[string]*sdkProject
 	streams  map[string]map[chan sdkEvent]struct{}
 }
 
@@ -73,10 +80,20 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, streams: map[string]map[chan sdkEvent]struct{}{}}
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}}
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	entries, _ := os.ReadDir(h.dir)
 	for _, e := range entries {
+		if e.Name() == "projects.json" {
+			data, err := os.ReadFile(filepath.Join(h.dir, e.Name()))
+			if err == nil {
+				_ = json.Unmarshal(data, &h.projects)
+			}
+			if h.projects == nil {
+				h.projects = map[string]*sdkProject{}
+			}
+			continue
+		}
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
@@ -92,6 +109,13 @@ func newSDKChatHost() *sdkChatHost {
 			h.chats[chat.ID] = &chat
 		}
 	}
+	// Old chat records already carried a workspace ID. Preserve that identity
+	// while moving project metadata into its own durable catalog.
+	for _, c := range h.chats {
+		if c.WorkspaceID != "" && h.projects[c.WorkspaceID] == nil {
+			h.projects[c.WorkspaceID] = &sdkProject{ID: c.WorkspaceID, Name: filepath.Base(c.ProjectPath), Path: c.ProjectPath}
+		}
+	}
 	return h
 }
 func sdkID() string { var b [16]byte; _, _ = rand.Read(b[:]); return hex.EncodeToString(b[:]) }
@@ -105,6 +129,20 @@ func (h *sdkChatHost) saveLocked(c *sdkChat) error {
 		return err
 	}
 	return os.Rename(tmp, filepath.Join(h.dir, c.ID+".json"))
+}
+func (h *sdkChatHost) saveProjectsLocked() error {
+	if err := os.MkdirAll(h.dir, 0700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(h.projects, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := filepath.Join(h.dir, "projects.json.tmp")
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(h.dir, "projects.json"))
 }
 func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	h.mu.Lock()
@@ -387,6 +425,96 @@ func writeSDKJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
+func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
+	h := s.sdkChats
+	if r.Method == http.MethodGet {
+		h.mu.Lock()
+		rows := make([]sdkProject, 0, len(h.projects))
+		for _, p := range h.projects {
+			rows = append(rows, *p)
+		}
+		h.mu.Unlock()
+		writeSDKJSON(w, 200, rows)
+		return
+	}
+	var req struct{ Name, Path string }
+	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil || !filepath.IsAbs(req.Path) {
+		http.Error(w, "absolute project path required", 400)
+		return
+	}
+	req.Path = filepath.Clean(req.Path)
+	if req.Name == "" {
+		req.Name = filepath.Base(req.Path)
+	}
+	p := &sdkProject{ID: sdkID(), Name: req.Name, Path: req.Path}
+	h.mu.Lock()
+	h.projects[p.ID] = p
+	err := h.saveProjectsLocked()
+	if err != nil {
+		delete(h.projects, p.ID)
+	}
+	h.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeSDKJSON(w, 201, p)
+}
+func (s *Server) handleSDKProject(w http.ResponseWriter, r *http.Request) {
+	h := s.sdkChats
+	id := r.PathValue("id")
+	h.mu.Lock()
+	p := h.projects[id]
+	if p == nil {
+		h.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	delete(h.projects, id)
+	// Only muxterm's metadata changes. The folder and native session remain intact.
+	for _, c := range h.chats {
+		if c.WorkspaceID == id {
+			c.WorkspaceID = ""
+			_ = h.saveLocked(c)
+		}
+	}
+	err := h.saveProjectsLocked()
+	h.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) handleSDKFolders(w http.ResponseWriter, r *http.Request) {
+	s.cfgMu.RLock()
+	base := s.cfg.Chat.DefaultBaseHomeFolder
+	s.cfgMu.RUnlock()
+	if base == "" {
+		base, _ = os.UserHomeDir()
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path = base
+	}
+	if !filepath.IsAbs(path) {
+		http.Error(w, "absolute folder path required", 400)
+		return
+	}
+	path = filepath.Clean(path)
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	folders := make([]string, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			folders = append(folders, entry.Name())
+		}
+	}
+	writeSDKJSON(w, 200, map[string]any{"path": path, "base": base, "parent": filepath.Dir(path), "folders": folders})
+}
 func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == "GET" {
@@ -399,7 +527,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, rows)
 		return
 	}
-	var req struct{ WorkspaceID, ProjectPath, Harness, Prompt string }
+	var req struct{ WorkspaceID, ProjectPath, Harness, Provider, Prompt string }
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
@@ -408,19 +536,50 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
-	if !filepath.IsAbs(req.ProjectPath) || strings.TrimSpace(req.Prompt) == "" {
-		http.Error(w, "projectPath and prompt required", 400)
+	if strings.TrimSpace(req.Prompt) == "" {
+		http.Error(w, "prompt required", 400)
 		return
 	}
-	if info, err := os.Stat(req.ProjectPath); err != nil || !info.IsDir() {
-		http.Error(w, "project folder unavailable", 400)
+	if req.Provider != "" && req.Provider != "openai" && req.Provider != "anthropic" && req.Provider != "configured" {
+		http.Error(w, "unsupported provider", 400)
+		return
+	}
+	if req.Provider == "openai" && req.Harness != "codex" || req.Provider == "anthropic" && req.Harness != "claude" || req.Provider == "configured" && req.Harness != "amplifier" {
+		http.Error(w, "provider does not match harness", 400)
+		return
+	}
+	if req.WorkspaceID != "" {
+		h.mu.Lock()
+		p := h.projects[req.WorkspaceID]
+		h.mu.Unlock()
+		if p == nil {
+			http.Error(w, "project not found", 404)
+			return
+		}
+		req.ProjectPath = p.Path
+	}
+	if req.ProjectPath == "" {
+		s.cfgMu.RLock()
+		req.ProjectPath = s.cfg.Chat.DefaultBaseHomeFolder
+		s.cfgMu.RUnlock()
+		if req.ProjectPath == "" {
+			req.ProjectPath, _ = os.UserHomeDir()
+		}
+	}
+	if !filepath.IsAbs(req.ProjectPath) {
+		http.Error(w, "absolute project path required", 400)
+		return
+	}
+	req.ProjectPath = filepath.Clean(req.ProjectPath)
+	if err := os.MkdirAll(req.ProjectPath, 0755); err != nil {
+		http.Error(w, "cannot create project folder: "+err.Error(), 400)
 		return
 	}
 	title := strings.TrimSpace(req.Prompt)
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
-	c := &sdkChat{ID: sdkID(), WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, Title: title, Harness: req.Harness, State: "starting", CreatedAt: time.Now().UTC()}
+	c := &sdkChat{ID: sdkID(), WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, Title: title, Harness: req.Harness, Provider: req.Provider, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	h.chats[c.ID] = c
 	err := h.saveLocked(c)

@@ -2811,8 +2811,8 @@ export class MuxSidebar extends LitElement {
         .split="${split}"
         @start-click="${() => this._onStartClick()}"
       ></mux-start-card>
-      <button class="global-connect" title="Connect machine" @click="${() => this._onConnectMachine()}">
-        <span class="global-connect-mark">⊕</span><span>Connect machine</span>
+      <button class="global-connect" title="New chat" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
+        <span class="global-connect-mark">＋</span><span>New Chat</span>
       </button>
       <div class="tab-content">
         <mux-chat-list></mux-chat-list>

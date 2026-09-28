@@ -694,9 +694,12 @@ func (c *conn) handle(msg Message) {
 	switch msg.Type {
 	case TypeCreateWorkspace:
 		if msg.ProjectPath != "" {
-			info, err := os.Stat(msg.ProjectPath)
-			if err != nil || !filepath.IsAbs(msg.ProjectPath) || !info.IsDir() {
-				c.replyError(msg.CID, CodeFSNotDir, "project path must be an existing absolute directory")
+			if !filepath.IsAbs(msg.ProjectPath) {
+				c.replyError(msg.CID, CodeFSNotDir, "project path must be an absolute directory")
+				return
+			}
+			if err := os.MkdirAll(msg.ProjectPath, 0755); err != nil {
+				c.replyError(msg.CID, CodeFSNotDir, "cannot create project directory: "+err.Error())
 				return
 			}
 		}

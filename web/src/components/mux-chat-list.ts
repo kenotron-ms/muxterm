@@ -1,70 +1,68 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { store } from '../state.js';
-import { sdkChats } from '../lib/sdk-chats.js';
-import { LAUNCHABLE_HARNESSES, harnessLabel, type HarnessName } from '../lib/harness.js';
+import { sdkChats, type SDKChat, type SDKProject } from '../lib/sdk-chats.js';
+import { harnessLabel } from '../lib/harness.js';
 
-interface ChatRow {
-  id: string;
-  title: string;
-  harness: HarnessName;
-  status: string;
-}
-interface WorkspaceRow {
-  id: string;
-  name: string;
-  path: string;
-  chats: ChatRow[];
-}
+interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[] }
 
-// A workspace owns its disclosure state. The parent reuses this model object
-// until one of its visible fields changes, so another workspace's state tick
-// never asks this element to render or replaces its DOM.
 @customElement('mux-chat-workspace')
 export class MuxChatWorkspace extends LitElement {
-  @property({ attribute: false }) model!: WorkspaceRow;
+  @property({ attribute: false }) model!: ChatGroup;
   @property() selectedSession = '';
   @state() private open = true;
+  @state() private menuOpen = false;
+  @state() private error = '';
 
   static styles = css`
-    :host { display: block; margin: 2px 6px; font: 12px/1.35 system-ui, sans-serif; color: var(--chrome-text-bright, #d8dce5); }
-    button { font: inherit; color: inherit; border: 0; cursor: pointer; background: transparent; }
-    .workspace { display: flex; align-items: center; width: 100%; min-height: 38px; gap: 7px; padding: 4px 7px; text-align: left; border-radius: 6px; }
-    .workspace:hover, .chat:hover { background: rgba(255,255,255,.07); }
-    .chevron { width: 12px; color: var(--chrome-text-dim, #9299a5); flex: none; }
-    .identity { min-width: 0; flex: 1; }
-    .name, .path, .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .name { font-weight: 600; }
-    .path { font-size: 10px; color: var(--chrome-text-dim, #9299a5); }
-    .chats { margin: 1px 0 7px 20px; }
-    .chat { width: 100%; min-height: 31px; padding: 5px 8px; text-align: left; border-radius: 6px; display: flex; align-items: center; gap: 6px; }
-    .chat[selected] { background: rgba(122,162,247,.16); color: var(--chrome-text-bright, #e6ebff); }
-    .title { flex: 1; min-width: 0; }
-    .harness { flex: none; color: var(--chrome-text-dim, #9299a5); font-size: 10px; }
-    .status { width: 5px; height: 5px; border-radius: 50%; background: #697386; flex: none; }
-    .status.working { background: #7dcba1; }
-    .status.blocked { background: #e9b56a; }
-    .empty { color: var(--chrome-text-dim, #9299a5); padding: 7px 8px; font-size: 11px; }
+    :host { display:block; margin:2px 6px; font:12px/1.35 system-ui,sans-serif; color:var(--chrome-text-bright,#d8dce5); }
+    button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
+    .row { display:flex; align-items:center; min-height:36px; border-radius:7px; position:relative; }
+    .row:hover,.chat:hover { background:rgba(255,255,255,.07); }
+    .group { display:flex; align-items:center; gap:8px; flex:1; min-width:0; padding:6px 8px; text-align:left; }
+    .folder { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.7; flex:none; color:#aab8d8; }
+    .chevron { width:10px; color:var(--chrome-text-dim,#9299a5); flex:none; }
+    .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    .ungrouped { margin-top:12px; padding-top:9px; border-top:1px solid var(--chrome-border,#3b4355); color:var(--chrome-text-dim,#aab2c1); }
+    .ungrouped .name { font-size:10px; letter-spacing:.09em; text-transform:uppercase; }
+    .more { padding:4px 8px; border-radius:5px; margin-right:3px; font-size:17px; line-height:16px; }
+    .more:hover { background:rgba(255,255,255,.1); }
+    .menu { position:absolute; z-index:20; top:30px; right:4px; min-width:165px; padding:5px; background:var(--chrome-bar,#252b38); border:1px solid var(--chrome-border,#3b4355); border-radius:8px; box-shadow:0 9px 25px #0008; }
+    .menu button { width:100%; padding:8px; text-align:left; border-radius:5px; }
+    .menu button:hover { background:rgba(255,255,255,.09); }
+    .chats { margin:0 0 6px 24px; }
+    .chat { width:100%; min-height:31px; padding:5px 8px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:6px; }
+    .chat[selected] { background:rgba(122,162,247,.16); }
+    .title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .harness { color:var(--chrome-text-dim,#9299a5); font-size:10px; }
+    .status { width:5px; height:5px; border-radius:50%; background:#697386; flex:none; }
+    .status.working { background:#7dcba1; }
+    .error { color:#e6a5a5; padding:5px; }
   `;
+
+  private async removeProject() {
+    this.menuOpen = false;
+    if (!this.model.project) return;
+    try { await sdkChats.removeProject(this.model.id); }
+    catch (error) { this.error = String(error); }
+  }
 
   override render() {
     const row = this.model;
     return html`
-      <button class="workspace" title=${row.path} aria-expanded=${this.open} @click=${() => { this.open = !this.open; }}>
-        <span class="chevron">${this.open ? '⌄' : '›'}</span>
-        <span class="identity"><span class="name">${row.name}</span><span class="path">${row.path}</span></span>
-      </button>
-      ${this.open ? html`<div class="chats">
-        ${repeat(row.chats, chat => chat.id, chat => html`
-          <button class="chat" ?selected=${this.selectedSession === chat.id}
-            title=${chat.title} @click=${() => this.dispatchEvent(new CustomEvent('chat-open', {
-              detail: { sessionId: chat.id }, bubbles: true, composed: true,
-            }))}>
-            <span class="status ${chat.status}" title=${chat.status || 'Live session'}></span>
-            <span class="title">${chat.title}</span><span class="harness">${harnessLabel(chat.harness)}</span>
-          </button>`)}
-        ${row.chats.length === 0 ? html`<div class="empty">No chats yet</div>` : nothing}
+      <div class="row ${row.project ? '' : 'ungrouped'}">
+        <button class="group" title=${row.project?.path || 'Chats without a project'} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.menuOpen = false; }}>
+          ${row.project ? this.open ? html`<svg class="folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v2M3 20l3-9h15l-3 9H3Z"/></svg>` : html`<svg class="folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5Z"/></svg>` : html`<span aria-hidden="true">◌</span>`}
+          <span class="name">${row.name}</span><span class="chevron">${this.open ? '⌄' : '›'}</span>
+        </button>
+        ${row.project ? html`<button class="more" aria-label="${`More options for ${row.name}`}" aria-expanded=${this.menuOpen} @click=${() => { this.menuOpen = !this.menuOpen; }}>⋯</button>` : nothing}
+        ${this.menuOpen ? html`<div class="menu" role="menu"><button role="menuitem" @click=${() => void this.removeProject()}>Remove this project</button></div>` : nothing}
+      </div>
+      ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+      ${this.open ? html`<div class="chats">${repeat(row.chats, chat => chat.id, chat => html`
+        <button class="chat" ?selected=${this.selectedSession === chat.id} title=${chat.title} @click=${() => this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:chat.id}, bubbles:true, composed:true }))}>
+          <span class="status ${chat.state}" title=${chat.state}></span><span class="title">${chat.title}</span><span class="harness">${harnessLabel(chat.harness)}</span>
+        </button>`)}
       </div>` : nothing}
     `;
   }
@@ -73,117 +71,17 @@ export class MuxChatWorkspace extends LitElement {
 @customElement('mux-chat-list')
 export class MuxChatList extends LitElement {
   @state() private version = 0;
-  @state() private creating = false;
-  @state() private workspaceId = 'new';
-  @state() private folder = '';
-  @state() private harness: HarnessName = 'codex';
-  @state() private prompt = '';
-  private unsubs: Array<() => void> = [];
-  private cached = new Map<string, { signature: string; row: WorkspaceRow }>();
-
+  private unsub?: () => void;
   static styles = css`
-    :host { display: block; color: var(--chrome-text-bright, #d8dce5); font: 12px/1.35 system-ui, sans-serif; }
-    .heading { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px 3px; color: var(--chrome-text-dim, #9299a5); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
-    button { font: inherit; cursor: pointer; }
-    .add { border: 0; background: transparent; color: var(--chrome-text-bright, #d8dce5); font-size: 20px; line-height: 18px; border-radius: 4px; width: 23px; height: 23px; }
-    .add:hover { background: rgba(255,255,255,.08); }
-    .hint { color: var(--chrome-text-dim, #9299a5); margin: 8px 15px 12px; }
-    .overlay { position: fixed; inset: 0; z-index: 10000; background: rgba(8,10,16,.62); display: grid; place-items: center; }
-    .dialog { box-sizing: border-box; width: min(440px, calc(100vw - 28px)); padding: 20px; border: 1px solid var(--chrome-border, #3b4355); border-radius: 12px; background: var(--chrome-bar, #202632); box-shadow: 0 20px 70px #0008; }
-    h2 { font-size: 17px; margin: 0 0 17px; letter-spacing: 0; }
-    label { display: block; margin: 13px 0 6px; color: var(--chrome-text-dim, #a4adbc); font-size: 11px; }
-    select, input, textarea { box-sizing: border-box; width: 100%; border: 1px solid var(--chrome-border, #3b4355); border-radius: 7px; background: rgba(0,0,0,.2); color: var(--chrome-text-bright, #ecf0f7); font: 13px system-ui, sans-serif; padding: 10px; outline: none; }
-    select:focus, input:focus, textarea:focus { border-color: #7aa2f7; }
-    textarea { min-height: 92px; resize: vertical; }
-    .harnesses { display: flex; gap: 6px; }
-    .harnesses button { flex: 1; min-width: 0; padding: 8px 4px; border: 1px solid var(--chrome-border, #3b4355); border-radius: 6px; color: var(--chrome-text-bright, #d8dce5); background: transparent; }
-    .harnesses button[aria-pressed="true"] { border-color: #7aa2f7; background: rgba(122,162,247,.15); }
-    .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-    .actions button { border: 0; border-radius: 7px; padding: 9px 13px; color: #e9edf6; background: rgba(255,255,255,.08); }
-    .actions .start { background: #6d8fdb; color: #111827; font-weight: 650; }
+    :host { display:block; color:var(--chrome-text-dim,#9299a5); font:12px/1.35 system-ui,sans-serif; }
+    .heading { padding:9px 12px 3px; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
   `;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.unsubs = [store.subscribe(() => this.version++), sdkChats.subscribe(() => this.version++)];
-    void sdkChats.refresh();
-  }
-  override disconnectedCallback() {
-    for (const unsub of this.unsubs) unsub();
-    this.unsubs = [];
-    super.disconnectedCallback();
-  }
-
-  private rows(): WorkspaceRow[] {
-    const rows: WorkspaceRow[] = [];
-    const included = new Set<string>();
-    for (const ws of store.workspaces) {
-      if (!ws.projectPath) continue;
-      const chats: ChatRow[] = sdkChats.chats.filter(c => c.workspaceId === ws.workspaceId || (!c.workspaceId && c.projectPath === ws.projectPath)).map(c => {
-        included.add(c.id);
-        return { id: c.id, title: c.title, harness: c.harness, status: c.state };
-      });
-      const parts = ws.projectPath.split('/').filter(Boolean);
-      const name = ws.name || parts[parts.length - 1] || ws.projectPath;
-      const signature = JSON.stringify([name, ws.projectPath, chats]);
-      const previous = this.cached.get(ws.workspaceId);
-      if (previous?.signature === signature) rows.push(previous.row);
-      else { const row = { id: ws.workspaceId, name, path: ws.projectPath, chats }; this.cached.set(ws.workspaceId, { signature, row }); rows.push(row); }
-    }
-    const byPath = new Map<string, ChatRow[]>();
-    for (const c of sdkChats.chats) {
-      if (included.has(c.id)) continue;
-      const chats = byPath.get(c.projectPath) ?? [];
-      chats.push({ id: c.id, title: c.title, harness: c.harness, status: c.state });
-      byPath.set(c.projectPath, chats);
-    }
-    for (const [path, chats] of byPath) {
-      const id = `sdk:${path}`;
-      const name = path.split('/').filter(Boolean).slice(-1)[0] || path;
-      const signature = JSON.stringify([name, path, chats]);
-      const previous = this.cached.get(id);
-      if (previous?.signature === signature) rows.push(previous.row);
-      else { const row = { id, name, path, chats }; this.cached.set(id, { signature, row }); rows.push(row); }
-    }
-    for (const id of this.cached.keys()) if (!rows.some(row => row.id === id)) this.cached.delete(id);
-    return rows;
-  }
-
-  private submit() {
-    const projectPath = this.folder.trim();
-    if (this.workspaceId === 'new' && !projectPath.startsWith('/')) return;
-    if (!this.prompt.trim()) return;
-    this.dispatchEvent(new CustomEvent('chat-create', {
-      detail: { workspaceId: this.workspaceId === 'new' ? null : this.workspaceId,
-        projectPath: this.workspaceId === 'new' ? projectPath : undefined,
-        harness: this.harness, prompt: this.prompt.trim() }, bubbles: true, composed: true,
-    }));
-    this.creating = false;
-    this.prompt = '';
-  }
-
+  override connectedCallback() { super.connectedCallback(); this.unsub = sdkChats.subscribe(() => this.version++); void sdkChats.refresh(); }
+  override disconnectedCallback() { this.unsub?.(); super.disconnectedCallback(); }
   override render() {
     void this.version;
-    const rows = this.rows();
-    return html`
-      <div class="heading"><span>Chats</span><button class="add" aria-label="New chat" title="New chat" @click=${() => { this.creating = true; }}>＋</button></div>
-      ${rows.length ? repeat(rows, row => row.id, row => html`
-        <mux-chat-workspace .model=${row} .selectedSession=${(window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? ''}></mux-chat-workspace>
-      `) : html`<div class="hint">Choose a folder and start a chat.</div>`}
-      ${this.creating ? html`<div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.creating = false; }}>
-        <form class="dialog" @submit=${(e: Event) => { e.preventDefault(); this.submit(); }}>
-          <h2>New chat</h2>
-          <label for="workspace">Workspace</label>
-          <select id="workspace" .value=${this.workspaceId} @change=${(e: Event) => { this.workspaceId = (e.target as HTMLSelectElement).value; }}>
-            <option value="new">＋ New workspace</option>
-            ${rows.map(row => html`<option value=${row.id}>${row.name} · ${row.path}</option>`)}
-          </select>
-          ${this.workspaceId === 'new' ? html`<label for="folder">Project folder</label><input id="folder" type="text" required placeholder="/home/ken/work/my-project" .value=${this.folder} @input=${(e: Event) => { this.folder = (e.target as HTMLInputElement).value; }}>` : nothing}
-          <label>Harness</label><div class="harnesses">${LAUNCHABLE_HARNESSES.map(h => html`<button type="button" aria-pressed=${this.harness === h} @click=${() => { this.harness = h; }}>${harnessLabel(h)}</button>`)}</div>
-          <label for="prompt">First message</label><textarea id="prompt" required placeholder="What would you like to work on?" .value=${this.prompt} @input=${(e: Event) => { this.prompt = (e.target as HTMLTextAreaElement).value; }}></textarea>
-          <div class="actions"><button type="button" @click=${() => { this.creating = false; }}>Cancel</button><button class="start" type="submit">Start chat ↗</button></div>
-        </form>
-      </div>` : nothing}
-    `;
+    const groups: ChatGroup[] = sdkChats.projects.map(project => ({ id:project.id, name:project.name, project, chats:sdkChats.chats.filter(c => c.workspaceId === project.id) }));
+    groups.push({ id:'ungrouped', name:'Ungrouped', chats:sdkChats.chats.filter(c => !c.workspaceId || !sdkChats.projects.some(p => p.id === c.workspaceId)) });
+    return html`<div class="heading">Chats</div>${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${(window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? ''}></mux-chat-workspace>`)}`;
   }
 }
