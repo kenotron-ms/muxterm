@@ -24,7 +24,7 @@ func (f *fakeDaemonConn) ListWorkspaces() ([]sessiond.WorkspaceInfo, error) {
 	return []sessiond.WorkspaceInfo{{WorkspaceID: "w1", Name: "dev", PaneCount: 1}}, nil
 }
 
-func (f *fakeDaemonConn) CreateWorkspace(name string) (string, error) {
+func (f *fakeDaemonConn) CreateWorkspace(name string, projectPath ...string) (string, error) {
 	return "w2", nil
 }
 

@@ -309,6 +309,7 @@ export class MuxStore {
           {
             workspaceId: msg.workspaceId ?? '',
             name: msg.name ? msg.name : undefined,
+            projectPath: msg.projectPath,
             clientRef: msg.clientRef,
             paneCount: 0,
           },

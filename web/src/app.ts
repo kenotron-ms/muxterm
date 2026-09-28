@@ -38,11 +38,13 @@ import type { CloseConfirmationModal } from './components/close-confirmation-mod
 import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
+import './components/mux-agent-chat.js';
 // <mux-home> is deliberately NOT imported. The Dashboard IS home now (see
 // <mux-cos>), and the two were never meant to be alternatives you could be
 // looking at one of. The component and its standalone demo are untouched.
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
+import { harnessArgv, type HarnessName } from './lib/harness.js';
 import { cosStore } from './lib/cos-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -717,6 +719,7 @@ export class MuxApp extends LitElement {
    */
   @state()
   private _showDashboard = false;
+  @state() private _agentChat: { workspaceId: string; paneId: number } | null = null;
 
   /**
    * Whether the boot-surface decision has already been made for THIS instance.
@@ -1535,6 +1538,8 @@ export class MuxApp extends LitElement {
             .homeKey="${store.config.keys.toggleHome}"
             .showLauncher="${this._showDashboard}"
             @workspace-switch="${this._onWorkspaceSelected}"
+            @chat-open="${this._onChatOpen}"
+            @chat-create="${this._onChatCreate}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
@@ -1623,6 +1628,17 @@ export class MuxApp extends LitElement {
               `
             : '',
           )}
+          ${this._agentChat && !this._showDashboard && this._agentChat.workspaceId === store.attached ? html`
+            <mux-agent-chat
+              .workspaceId=${this._agentChat.workspaceId}
+              .paneId=${this._agentChat.paneId}
+              .title=${homeSessions.sessions.find(s => s.workspaceId === this._agentChat?.workspaceId && s.paneId === this._agentChat?.paneId)?.name ?? store.panes.find(p => p.paneId === this._agentChat?.paneId)?.title ?? 'Chat'}
+              .harness=${store.panes.find(p => p.paneId === this._agentChat?.paneId)?.harness ?? ''}
+              .projectPath=${store.workspaces.find(w => w.workspaceId === this._agentChat?.workspaceId)?.projectPath ?? ''}
+              @agent-chat-send=${this._onAgentChatSend}
+              @agent-chat-terminal=${this._onAgentChatTerminal}
+              @session-transcript-request=${this._onSessionTranscriptRequest}
+            ></mux-agent-chat>` : ''}
         </div>
 
       </div>
@@ -1651,6 +1667,8 @@ export class MuxApp extends LitElement {
                 .homeKey="${''}"
                 .previewsVisible="${this._drawerOpen}"
                 @workspace-switch="${this._onWorkspaceSelected}"
+                @chat-open="${this._onChatOpen}"
+                @chat-create="${this._onChatCreate}"
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
                 @launcher-action="${this._onLauncherAction}"
@@ -2496,27 +2514,32 @@ export class MuxApp extends LitElement {
     });
   };
 
-  /**
-   * NOTE ON THE PARKED-DISPATCH MACHINERY BELOW.
-   *
-   * `_onHomeDispatch` -- the handler for the home view's new-session bar --
-   * is GONE, because that composer is gone: the Dashboard has exactly one
-   * input and it talks to Operator, which starts lanes through its
-   * own tools rather than through this browser.
-   *
-   * `_pendingDispatch`, `_dropPendingDispatch` and their hooks in the
-   * workspace-created / composition handlers are deliberately LEFT IN PLACE.
-   * They encode a subtle and hard-won safety property -- a dispatch may only
-   * spawn when the arriving composition is for the workspace it was aimed at
-   * AND the connection is still headed there -- and they have no producer
-   * today only because the one caller was removed above them. Nothing sets
-   * `_pendingDispatch`, so every path through them is currently a no-op.
-   *
-   * They are the landing site for the next thing that needs to start a pane
-   * somewhere other than the current attachment. Deleting them would mean
-   * re-deriving that identity check from scratch when it is needed again,
-   * which is how this class of bug comes back.
-   */
+  /** Start a real harness pane after its target workspace is attached. */
+  private _onChatCreate = (e: CustomEvent<{
+    workspaceId: string | null; projectPath?: string; harness: HarnessName; prompt: string;
+  }>): void => {
+    const { workspaceId, projectPath, harness, prompt } = e.detail;
+    const clientRef = mintClientRef();
+    const cmd = harnessArgv(harness, prompt);
+    this._agentChat = null;
+    this._dispatchAlert = null;
+    this._onDashboardHide();
+    this._closeDrawer();
+    if (workspaceId && workspaceId === store.attached) {
+      this._spawnPane(cmd);
+      return;
+    }
+    this._pendingDispatch = { workspaceId, cmd, prompt, clientRef };
+    if (workspaceId) {
+      this._socket?.attachWithBreakpoint(workspaceId, currentLayoutMode());
+    } else if (projectPath) {
+      const parts = projectPath.split('/').filter(Boolean);
+      const name = parts[parts.length - 1] || projectPath;
+      if (!this._socket?.createWorkspace(name, clientRef, undefined, projectPath)) {
+        this._dropPendingDispatch('the connection is unavailable');
+      }
+    }
+  };
 
   /**
    * Give up on a parked dispatch and tell the user, with their words.
@@ -2561,11 +2584,29 @@ export class MuxApp extends LitElement {
     );
   };
 
+  private _onChatOpen = (e: Event): void => {
+    const detail = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
+    if (!detail) return;
+    this._agentChat = detail;
+    this._onHomeOpen(e);
+  };
+
+  private _onAgentChatTerminal = (): void => {
+    this._agentChat = null;
+  };
+
+  private _onAgentChatSend = (e: CustomEvent<{ workspaceId: string; paneId: number; text: string }>): void => {
+    const { workspaceId, paneId, text } = e.detail;
+    if (workspaceId !== store.attached || !store.panes.some(p => p.paneId === paneId)) return;
+    this._socket?.sendPaneInput(paneId, new TextEncoder().encode(text + '\r'));
+  };
+
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     // Picking a workspace is the "go work in there" gesture — the Dashboard
     // steps aside and so does the drawer that was covering the terminal,
     // or the click would land on a workspace nobody can see.
     this._onDashboardHide();
+    this._agentChat = null;
     this._closeDrawer();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive

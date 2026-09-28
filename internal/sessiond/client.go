@@ -365,8 +365,12 @@ func (c *Client) MissionControlIdentity() (MissionControlIdentity, error) {
 
 // CreateWorkspace asks the daemon to create a new workspace named name and
 // returns the daemon-assigned workspace id from the workspace-created reply.
-func (c *Client) CreateWorkspace(name string) (string, error) {
-	reply, err := c.request(&Message{Type: TypeCreateWorkspace, Name: name})
+func (c *Client) CreateWorkspace(name string, projectPath ...string) (string, error) {
+	path := ""
+	if len(projectPath) > 0 {
+		path = projectPath[0]
+	}
+	reply, err := c.request(&Message{Type: TypeCreateWorkspace, Name: name, ProjectPath: path})
 	if err != nil {
 		return "", err
 	}
