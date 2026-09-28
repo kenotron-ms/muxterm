@@ -1,5 +1,5 @@
 import { apiPath } from './base-path.js';
-export interface SDKChat { id: string; workspaceId?: string; projectPath: string; title: string; harness: 'codex' | 'claude'; nativeId?: string; state: string; createdAt: string }
+export interface SDKChat { id: string; workspaceId?: string; projectPath: string; title: string; harness: 'codex' | 'claude' | 'amplifier'; nativeId?: string; state: string; createdAt: string }
 class SDKChatStore {
   chats: SDKChat[] = [];
   private listeners = new Set<() => void>();

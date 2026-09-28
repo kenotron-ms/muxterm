@@ -33,27 +33,35 @@ type sdkChat struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 type sdkEvent struct {
-	SessionID string          `json:"sessionId"`
-	Type      string          `json:"type"`
-	NativeID  string          `json:"nativeId,omitempty"`
-	InputID   string          `json:"inputId,omitempty"`
-	Kind      string          `json:"kind,omitempty"`
-	Source    string          `json:"source,omitempty"`
-	Text      string          `json:"text,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	ToolID    string          `json:"toolId,omitempty"`
-	Message   string          `json:"message,omitempty"`
-	Raw       json.RawMessage `json:"raw,omitempty"`
+	SessionID    string          `json:"sessionId"`
+	Type         string          `json:"type"`
+	NativeID     string          `json:"nativeId,omitempty"`
+	InputID      string          `json:"inputId,omitempty"`
+	InputIDs     []string        `json:"inputIds,omitempty"`
+	GenerationID string          `json:"generationId,omitempty"`
+	Delivery     string          `json:"delivery,omitempty"`
+	Persisted    *bool           `json:"persisted,omitempty"`
+	Kind         string          `json:"kind,omitempty"`
+	Source       string          `json:"source,omitempty"`
+	Text         string          `json:"text,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	ToolID       string          `json:"toolId,omitempty"`
+	Message      string          `json:"message,omitempty"`
+	Raw          json.RawMessage `json:"raw,omitempty"`
 }
 type sdkChatHost struct {
-	mu      sync.Mutex
-	dir     string
-	socket  string
-	process *exec.Cmd
-	done    chan struct{}
-	running bool
-	chats   map[string]*sdkChat
-	streams map[string]map[chan sdkEvent]struct{}
+	mu         sync.Mutex
+	dir        string
+	socket     string
+	process    *exec.Cmd
+	done       chan struct{}
+	running    bool
+	ampSocket  string
+	ampProcess *exec.Cmd
+	ampDone    chan struct{}
+	ampRunning bool
+	chats      map[string]*sdkChat
+	streams    map[string]map[chan sdkEvent]struct{}
 }
 
 func sdkDataDir() string {
@@ -67,6 +75,7 @@ func sdkDataDir() string {
 func newSDKChatHost() *sdkChatHost {
 	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, streams: map[string]map[chan sdkEvent]struct{}{}}
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
+	h.ampSocket = filepath.Join(h.dir, "amplifier.sock")
 	entries, _ := os.ReadDir(h.dir)
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
@@ -141,7 +150,10 @@ func (h *sdkChatHost) sidecarPath() string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "sdk-chat", "sidecar.mjs"))
 }
-func (h *sdkChatHost) ensure() error {
+func (h *sdkChatHost) ensure(harness string) error {
+	if harness == "amplifier" {
+		return h.ensureAmplifier()
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.running {
@@ -165,8 +177,8 @@ func (h *sdkChatHost) ensure() error {
 	h.running = true
 	h.done = make(chan struct{})
 	ready := make(chan error, 1)
-	go h.observe(cmd, ready)
-	go h.watch(cmd, h.done)
+	go h.observe(cmd, h.socket, ready)
+	go h.watch(cmd, h.done, "node")
 	select {
 	case err := <-ready:
 		return err
@@ -174,16 +186,63 @@ func (h *sdkChatHost) ensure() error {
 		return errors.New("SDK sidecar did not open its Unix socket")
 	}
 }
-func (h *sdkChatHost) watch(cmd *exec.Cmd, done chan struct{}) {
+func (h *sdkChatHost) ensureAmplifier() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ampRunning {
+		return nil
+	}
+	if err := os.MkdirAll(h.dir, 0700); err != nil {
+		return err
+	}
+	_ = os.Remove(h.ampSocket)
+	path := os.Getenv("MUXTERM_SDK_CHAT_AMPLIFIER_SIDECAR")
+	if path == "" {
+		_, file, _, _ := runtime.Caller(0)
+		path = filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "sdk-chat", "amplifier_sidecar.py"))
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("Amplifier sidecar unavailable at %s: %w", path, err)
+	}
+	python := os.Getenv("MUXTERM_COS_PYTHON")
+	if python == "" {
+		home, _ := os.UserHomeDir()
+		python = filepath.Join(home, ".local", "share", "uv", "tools", "amplifier", "bin", "python")
+	}
+	cmd := exec.Command(python, path, h.ampSocket)
+	cmd.Dir = filepath.Dir(path)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("Amplifier SDK failed to start: %w", err)
+	}
+	h.ampProcess = cmd
+	h.ampRunning = true
+	h.ampDone = make(chan struct{})
+	ready := make(chan error, 1)
+	go h.observe(cmd, h.ampSocket, ready)
+	go h.watch(cmd, h.ampDone, "amplifier")
+	select {
+	case err := <-ready:
+		return err
+	case <-time.After(3 * time.Second):
+		return errors.New("Amplifier sidecar did not open its Unix socket")
+	}
+}
+func (h *sdkChatHost) watch(cmd *exec.Cmd, done chan struct{}, harness string) {
 	defer close(done)
 	err := cmd.Wait()
 	var uncertain []string
 	h.mu.Lock()
-	if h.process == cmd {
-		h.running = false
-		h.process = nil
+	if (harness == "amplifier" && h.ampProcess == cmd) || (harness == "node" && h.process == cmd) {
+		if harness == "amplifier" {
+			h.ampRunning = false
+			h.ampProcess = nil
+		} else {
+			h.running = false
+			h.process = nil
+		}
 		for _, c := range h.chats {
-			if c.State == "working" || c.State == "starting" {
+			if (c.Harness == "amplifier") == (harness == "amplifier") && (c.State == "working" || c.State == "starting") {
 				c.State = "uncertain"
 				_ = h.saveLocked(c)
 				uncertain = append(uncertain, c.ID)
@@ -199,6 +258,7 @@ func (h *sdkChatHost) watch(cmd *exec.Cmd, done chan struct{}) {
 func (h *sdkChatHost) close() {
 	h.mu.Lock()
 	cmd := h.process
+	amp := h.ampProcess
 	h.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt)
@@ -214,11 +274,20 @@ func (h *sdkChatHost) close() {
 			}
 		}
 	}
+	if amp != nil && amp.Process != nil {
+		_ = amp.Process.Signal(os.Interrupt)
+		select {
+		case <-h.ampDone:
+		case <-time.After(3 * time.Second):
+			_ = amp.Process.Kill()
+			<-h.ampDone
+		}
+	}
 }
-func (h *sdkChatHost) observe(cmd *exec.Cmd, ready chan error) {
+func (h *sdkChatHost) observe(cmd *exec.Cmd, socket string, ready chan error) {
 	var conn net.Conn
 	for i := 0; i < 40; i++ {
-		c, err := net.Dial("unix", h.socket)
+		c, err := net.Dial("unix", socket)
 		if err == nil {
 			conn = c
 			break
@@ -244,13 +313,27 @@ func (h *sdkChatHost) observe(cmd *exec.Cmd, ready chan error) {
 	}
 }
 func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) (json.RawMessage, error) {
-	if err := h.ensure(); err != nil {
+	harness, _ := args["harness"].(string)
+	if harness == "" {
+		if id, ok := args["sessionId"].(string); ok {
+			h.mu.Lock()
+			if c := h.chats[id]; c != nil {
+				harness = c.Harness
+			}
+			h.mu.Unlock()
+		}
+	}
+	if err := h.ensure(harness); err != nil {
 		return nil, err
+	}
+	socket := h.socket
+	if harness == "amplifier" {
+		socket = h.ampSocket
 	}
 	var conn net.Conn
 	var err error
 	for attempt := 0; attempt < 40; attempt++ {
-		conn, err = (&net.Dialer{}).DialContext(ctx, "unix", h.socket)
+		conn, err = (&net.Dialer{}).DialContext(ctx, "unix", socket)
 		if err == nil {
 			break
 		}
@@ -321,11 +404,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", 400)
 		return
 	}
-	if req.Harness == "amplifier" {
-		http.Error(w, "Amplifier unavailable in this build", 501)
-		return
-	}
-	if req.Harness != "codex" && req.Harness != "claude" {
+	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "amplifier" {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
@@ -350,7 +429,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath}); err == nil {
 		_, err = h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": sdkID(), "content": req.Prompt}})
@@ -391,8 +470,12 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unsupported: attributed service input", 422)
 			return
 		}
-		if req.Kind != "user" && req.Kind != "service" {
+		if req.Kind != "user" && req.Kind != "service" && !(c.Harness == "amplifier" && (req.Kind == "steer" || req.Kind == "cancel_job" || req.Kind == "stop")) {
 			http.Error(w, "unsupported input kind", 422)
+			return
+		}
+		if req.Kind == "service" && c.Harness == "amplifier" && (req.Source == "" || req.Source == "browser" || req.Source == "user" || req.Source == "system" || req.Source == "developer") {
+			http.Error(w, "service input requires a distinct source", 422)
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
