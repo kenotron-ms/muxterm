@@ -105,6 +105,16 @@ import { store } from '../state.js';
  */
 const parsers = new WeakMap<object, MarkdownStream>();
 
+const LANE_FINAL_OPEN = '<lane-final-message>';
+const LANE_FINAL_CLOSE = '</lane-final-message>';
+
+interface LifecycleMarkdownParts {
+  before: object;
+  message: object;
+}
+
+const lifecycleParsers = new WeakMap<object, LifecycleMarkdownParts>();
+
 function renderMarkdown(block: object, text: string, streaming: boolean): TemplateResult {
   let s = parsers.get(block);
   if (!s) {
@@ -112,6 +122,40 @@ function renderMarkdown(block: object, text: string, streaming: boolean): Templa
     parsers.set(block, s);
   }
   return renderSegments(s.update(text, streaming), { resolve: () => null, reference: operatorReference });
+}
+
+/**
+ * Render the raw closing message in a lifecycle-owned visual container.
+ *
+ * The first opening tag and LAST closing tag are structural. Using the last
+ * close is the escape-prevention rule: a hostile lane can print either tag,
+ * including `</lane-final-message>`, but that text remains before the outer
+ * close appended by Operator and therefore remains inside this container.
+ * The outer close must also be the last non-whitespace content. If the pair is
+ * incomplete, reordered, or followed by anything, the ordinary Markdown
+ * renderer displays all of it inertly instead of guessing at a boundary.
+ */
+function renderLifecycleMarkdown(block: object, text: string, streaming: boolean): TemplateResult {
+  const open = text.indexOf(LANE_FINAL_OPEN);
+  const close = text.lastIndexOf(LANE_FINAL_CLOSE);
+  const after = close < 0 ? '' : text.slice(close + LANE_FINAL_CLOSE.length);
+  if (open < 0 || close < open + LANE_FINAL_OPEN.length || after.trim() !== '') {
+    return renderMarkdown(block, text, streaming);
+  }
+
+  let keys = lifecycleParsers.get(block);
+  if (!keys) {
+    keys = { before: {}, message: {} };
+    lifecycleParsers.set(block, keys);
+  }
+  const before = text.slice(0, open);
+  const message = text.slice(open + LANE_FINAL_OPEN.length, close);
+  return html`
+    ${before ? renderMarkdown(keys.before, before, false) : nothing}
+    <section class="lane-final" aria-label="Lane final message">
+      ${renderMarkdown(keys.message, message, false)}
+    </section>
+  `;
 }
 
 /** mm:ss for the approval countdown. Clamped at zero, never negative. */
@@ -780,6 +824,17 @@ export class MuxCos extends LitElement {
       padding: 0 0 0 var(--s-4);
       border-left: 2px solid var(--chrome-border);
       color: var(--ink-2);
+    }
+    .lane-final {
+      margin: 0;
+      padding: var(--s-5);
+      min-width: 0;
+      border: 1px solid var(--chrome-border);
+      border-left: 3px solid var(--chrome-accent);
+      border-radius: var(--r-card);
+      background: var(--chrome-bar);
+      color: var(--ink-1);
+      overflow-wrap: anywhere;
     }
     .md .md-hr {
       margin: var(--s-5) 0;
@@ -2146,7 +2201,9 @@ export class MuxCos extends LitElement {
     const streaming = live && i === t.blocks.length - 1;
 
     if (b.kind === 'text') {
-      return html`<div class="say md">${renderMarkdown(b, b.text, streaming)}</div>`;
+      return html`<div class="say md">${t.origin === 'lifecycle'
+        ? renderLifecycleMarkdown(b, b.text, streaming)
+        : renderMarkdown(b, b.text, streaming)}</div>`;
     }
     if (b.kind === 'thinking') {
       const key = `${t.id}:${i}`;
