@@ -1,18 +1,15 @@
 # CoS sidecar — implementation contract
 
-## 2026-09-28 SDK chat multiplexing
+## 2026-09-28 SDK chats
 
-The supervised `internal/cos/sidecar/main.py` process also owns addressable
-Amplifier chat sessions. Operator retains its original queue and wire events.
-Go sends chat commands as `sdk` ops through the same supervisor writer, with
-`req_id` replies, and receives `sdk_event` frames through its event broker.
-The server persists and fans those frames out by chat ID. Each chat uses
-`resolve_bundle_config` with project settings, `_create_bundle_session`, a
-project-scoped native `SessionStore`, and loop-live for its `service` and
-`steer` inputs. The CLI's session factory reads process cwd during creation,
-so chat creation is refused while another turn is active and temporarily uses
-the chat project cwd; the process cwd is restored before any turn is accepted.
-The Node sidecar remains separate for Codex and Claude.
+Go owns chat metadata, input IDs, normalized event persistence and browser
+fan-out. Codex and Claude share a Node sidecar. Amplifier runs in a second,
+Python sidecar with the same versioned NDJSON Unix socket contract. Its chat
+sessions use project settings through `resolve_bundle_config`, a native
+`SessionStore`, and loop-live for `service` and `steer` inputs. A service input
+has a distinct non-authorizing source. The CLI session factory reads process
+cwd during creation, so a new chat waits until running turns finish; the
+previous cwd is restored after construction.
 
 **Status:** spec, being built
 **Date:** 2026-09-06

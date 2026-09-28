@@ -1,6 +1,6 @@
 # Amplifier live inputs
 
-Loop-live is the execution path for the Operator and Amplifier SDK chats. On every boot the sidecar installs `amplifier-module-loop-live` from `internal/cos/sidecar/loop-live-requirements.txt` into its selected Amplifier interpreter. Installation or module validation failure stops boot.
+Loop-live is opt-in for the Operator through `MUXTERM_COS_LOOP_LIVE` or the CLI `--loop-live` flag. With the flag off, Operator keeps its original execution and event schema. Amplifier SDK chats always use loop-live in their separate Python socket sidecar. That sidecar installs its embedded `amplifier-loop-live-requirements.txt` if the module is missing; installation failure stops chat creation.
 
 Provider and model selection comes from the existing Amplifier CLI `AppSettings`; startup fails if that environment resolves no provider/model. The live bundle selects `loop-live@main` as its root orchestrator. The sidecar owns one `session.execute("")` task and registers `Runtime` as `live.runtime`.
 

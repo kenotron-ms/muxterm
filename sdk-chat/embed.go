@@ -19,6 +19,57 @@ import (
 //go:embed sidecar.mjs package.json package-lock.json
 var files embed.FS
 
+//go:embed amplifier_sidecar.py amplifier-loop-live-requirements.txt
+var amplifierFiles embed.FS
+
+// PrepareAmplifier extracts the Python socket host without involving Node or npm.
+func PrepareAmplifier() (string, error) {
+	prepareMu.Lock()
+	defer prepareMu.Unlock()
+	names := []string{"amplifier_sidecar.py", "amplifier-loop-live-requirements.txt"}
+	hash := sha256.New()
+	contents := make(map[string][]byte, len(names))
+	for _, name := range names {
+		data, err := amplifierFiles.ReadFile(name)
+		if err != nil {
+			return "", fmt.Errorf("sdk-chat: read embedded %s: %w", name, err)
+		}
+		contents[name] = data
+		hash.Write([]byte(name))
+		hash.Write(data)
+	}
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("sdk-chat: resolve cache directory: %w", err)
+	}
+	base := filepath.Join(cache, "muxterm", "sdk-chat")
+	if err := os.MkdirAll(base, 0700); err != nil {
+		return "", err
+	}
+	dest := filepath.Join(base, fmt.Sprintf("amplifier-%x", hash.Sum(nil)[:8]))
+	path := filepath.Join(dest, "amplifier_sidecar.py")
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		return path, nil
+	}
+	tmp, err := os.MkdirTemp(base, ".amplifier-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp) //nolint:errcheck
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(tmp, name), contents[name], 0600); err != nil {
+			return "", err
+		}
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		if info, statErr := os.Stat(path); statErr == nil && info.Mode().IsRegular() {
+			return path, nil
+		}
+		return "", err
+	}
+	return path, nil
+}
+
 var names = []string{"sidecar.mjs", "package.json", "package-lock.json"}
 var prepareMu sync.Mutex
 

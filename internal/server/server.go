@@ -190,7 +190,6 @@ func New(cfg Config) *Server {
 		version:        cfg.Version,
 	}
 	s.sdkChats = newSDKChatHost()
-	s.sdkChats.cosRelay = hub.cos
 	s.configPath = cfg.ConfigPath
 	// Use the supplied initial config if it looks populated (palette is never
 	// empty in a real config), otherwise fall back to hardcoded defaults.

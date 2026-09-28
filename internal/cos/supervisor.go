@@ -67,7 +67,20 @@ const (
 	// same project slug would otherwise share one transcript. `make dev-local`
 	// sets this; see the note there.
 	EnvSessionID = operator.EnvSessionID
+	// EnvLoopLive is the explicit canary gate. Absence and every value except
+	// a recognized true spelling preserve the historical path.
+	EnvLoopLive = "MUXTERM_COS_LOOP_LIVE"
 )
+
+// LoopLiveFromEnv implements the opt-in gate shared by serve and CLI hosts.
+func LoopLiveFromEnv() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvLoopLive))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
 
 // ResolveSessionID returns the amplifier session id to use and where it came
 // from, so a caller can say so out loud instead of leaving the user to guess
@@ -179,6 +192,9 @@ var ErrNotRunning = errors.New("cos: sidecar is not running")
 // defaults to log.Printf, which is what routes sidecar stderr into muxterm's
 // normal logging.
 type Config struct {
+	// LoopLive enables the pinned experimental one-execution-per-process host.
+	// It is false by default and must never be inferred from module presence.
+	LoopLive bool
 	// SessionID is the amplifier session id (default DefaultSessionID).
 	SessionID string
 	// Bundle names the amplifier bundle; empty lets the sidecar choose.
@@ -610,11 +626,21 @@ func (s *Supervisor) SubmitOrigin(prompt, origin, causationID string) *Turn {
 	})
 }
 
+// LoopLiveEnabled reports whether this supervisor explicitly selected the
+// experimental loop-live host.
+func (s *Supervisor) LoopLiveEnabled() bool { return s.cfg.LoopLive }
+
 // SubmitLifecycleInput sends one typed service observation independently of
 // the human FIFO. markerID is also loop-live's idempotency key.
 func (s *Supervisor) SubmitLifecycleInput(text, markerID string) *Turn {
 	t := &Turn{ID: markerID, Prompt: text, Origin: OriginLifecycle,
 		CausationID: markerID, SubmittedAt: time.Now(), done: make(chan struct{})}
+	if !s.cfg.LoopLive {
+		err := errors.New("cos: loop-live is disabled")
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: markerID, Code: CodeSidecarUnavailable,
+			Message: err.Error(), Fatal: true}), err)
+		return t
+	}
 	s.mu.Lock()
 	if previous := s.liveSeen[markerID]; previous != nil {
 		s.mu.Unlock()
@@ -646,6 +672,12 @@ func (s *Supervisor) SubmitLifecycleInput(text, markerID string) *Turn {
 func (s *Supervisor) SubmitSteerInput(text, inputID string) *Turn {
 	t := &Turn{ID: inputID, Prompt: text, Origin: OriginHuman,
 		SubmittedAt: time.Now(), done: make(chan struct{})}
+	if !s.cfg.LoopLive {
+		err := errors.New("cos: loop-live is disabled")
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeSidecarUnavailable,
+			Message: err.Error(), Fatal: true}), err)
+		return t
+	}
 	s.mu.Lock()
 	if previous := s.liveSeen[inputID]; previous != nil {
 		s.mu.Unlock()
@@ -830,11 +862,6 @@ func (s *Supervisor) requestContext(ctx context.Context, o op) (Event, error) {
 	if err := s.sendOp(o); err != nil {
 		return Event{}, err
 	}
-	timeout := requestTimeout
-	if o.Op == "sdk" {
-		// A cold app bundle can take longer than a history lookup to mount.
-		timeout = 60 * time.Second
-	}
 	select {
 	case ev := <-ch:
 		if ev.Ev == EvError {
@@ -853,8 +880,8 @@ func (s *Supervisor) requestContext(ctx context.Context, o op) (Event, error) {
 			return ev, fmt.Errorf("cos: %s op refused: %s", o.Op, msg)
 		}
 		return ev, nil
-	case <-time.After(timeout):
-		return Event{}, fmt.Errorf("cos: no answer to the %s op within %s", o.Op, timeout)
+	case <-time.After(requestTimeout):
+		return Event{}, fmt.Errorf("cos: no answer to the %s op within %s", o.Op, requestTimeout)
 	case <-s.stopCh:
 		return Event{}, ErrQueueClosed
 	case <-ctx.Done():
@@ -1167,6 +1194,9 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	args := []string{s.script, "--session-id", s.cfg.SessionID, "--log-level", s.cfg.LogLevel}
 	if s.cfg.Bundle != "" {
 		args = append(args, "--bundle", s.cfg.Bundle)
+	}
+	if s.cfg.LoopLive {
+		args = append(args, "--loop-live")
 	}
 	// Cwd was pinned in New (resolveCwd), never re-derived here: re-reading
 	// os.Getwd() per incarnation would let a chdir anywhere in the host
@@ -1544,18 +1574,17 @@ func (s *Supervisor) writeLoop(w io.WriteCloser, ops <-chan []byte, done <-chan 
 // also reads as everything, so the two agree, but only by accident. Writing
 // it explicitly means the wire says what the caller meant.
 type op struct {
-	Op        string          `json:"op"`
-	Command   json.RawMessage `json:"command,omitempty"`
-	Version   int             `json:"version,omitempty"`
-	InputID   string          `json:"input_id,omitempty"`
-	Kind      string          `json:"kind,omitempty"`
-	Source    string          `json:"source,omitempty"`
-	Text      string          `json:"text,omitempty"`
-	TurnID    string          `json:"turn_id,omitempty"`
-	Prompt    string          `json:"prompt,omitempty"`
-	RequestID string          `json:"request_id,omitempty"`
-	Approved  *bool           `json:"approved,omitempty"`
-	Reason    string          `json:"reason,omitempty"`
+	Op        string `json:"op"`
+	Version   int    `json:"version,omitempty"`
+	InputID   string `json:"input_id,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Text      string `json:"text,omitempty"`
+	TurnID    string `json:"turn_id,omitempty"`
+	Prompt    string `json:"prompt,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+	Approved  *bool  `json:"approved,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 
 	// Origin and CausationID travel with a turn so the sidecar can stamp them
 	// onto the persisted message. Omitted for an ordinary human turn: absence
@@ -1579,25 +1608,6 @@ type op struct {
 	ToolsDeny   []string `json:"tools_deny,omitempty"`
 	// Summaries is typed server-owned data for the Lobby summary tool.
 	Summaries json.RawMessage `json:"summaries,omitempty"`
-}
-
-// SDKCommand sends an addressable chat command through the existing supervised
-// Python process. Replies use the same req_id routing as history and clear.
-func (s *Supervisor) SDKCommand(ctx context.Context, command json.RawMessage) (json.RawMessage, error) {
-	ev, err := s.requestContext(ctx, op{Op: "sdk", Command: command})
-	if err != nil {
-		return nil, err
-	}
-	var reply struct {
-		Result json.RawMessage `json:"result"`
-	}
-	if err := json.Unmarshal(ev.Raw, &reply); err != nil {
-		return nil, err
-	}
-	if ev.Ev != "sdk_reply" {
-		return nil, fmt.Errorf("cos: unexpected SDK reply %s", ev.Ev)
-	}
-	return reply.Result, nil
 }
 
 // sendOp encodes and queues one op for the writer goroutine. It never blocks.
