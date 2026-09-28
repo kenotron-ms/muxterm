@@ -33,10 +33,11 @@ includes:
 session:
   raw: true
   orchestrator:
-    module: loop-streaming
-    source: git+https://github.com/microsoft/amplifier-module-loop-streaming@main
+    module: loop-live
+    source: git+https://github.com/microsoft/amplifier-module-loop-live@main
     config:
-      extended_thinking: true
+      background_tools: []
+      background_delegate: false
   context:
     module: context-simple
     source: git+https://github.com/microsoft/amplifier-module-context-simple@main

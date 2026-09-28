@@ -206,6 +206,7 @@ export interface SessiondWorkspaceInfo {
   workspaceUuid?: string;
   panes?: SessiondPaneInfo[];
   name?: string;
+  projectPath?: string;
   clientRef?: string;
   paneCount: number;
   /**
@@ -221,6 +222,7 @@ export interface SessiondPaneInfo {
   cols: number;
   rows: number;
   title?: string;
+  harness?: 'amplifier' | 'claude' | 'codex';
   clientRef?: string;
   /** Absolute byte sequence of the first replayed byte for this pane.
    *  Omitted (undefined) when 0. Set by the server on each composition reply
@@ -240,6 +242,7 @@ export interface SessiondMessage {
   clientRef?: string;
   workspaceId?: string;
   name?: string;
+  projectPath?: string;
   paneId?: number;
   cols?: number;
   rows?: number;

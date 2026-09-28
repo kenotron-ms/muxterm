@@ -41,8 +41,9 @@ const EnvPaneID = "MUXTERM_PANE_ID"
 // PaneBuffer (scrollback) and an optional onData callback, accepts input,
 // resizes the PTY, and fires onExit exactly once when the process exits.
 type Pane struct {
-	LocalID int
-	Title   string // settable; OSC 0/2 title capture is a later phase
+	LocalID     int
+	Title       string // settable; OSC 0/2 title capture is a later phase
+	chatHarness string // one of the three sidebar harnesses when launched directly
 
 	// titleOrigin says whether Title was chosen by a person or derived by the
 	// daemon, and is guarded by mu exactly like Title itself -- the two are
@@ -194,6 +195,13 @@ func NewPane(
 	if err != nil {
 		return nil, err
 	}
+	chatHarness := ""
+	if len(argv) > 0 {
+		if name, ok := matchAgent(argv, defaultAgentCatalog()); ok &&
+			(name == HarnessAmplifier || name == HarnessClaude || name == HarnessCodex) {
+			chatHarness = name
+		}
+	}
 
 	c := exec.Command(launch.argv[0], launch.argv[1:]...)
 	c.Env = append(os.Environ(), "TERM=xterm-256color")
@@ -222,6 +230,7 @@ func NewPane(
 
 	p := &Pane{
 		LocalID:            localID,
+		chatHarness:        chatHarness,
 		cols:               cols,
 		rows:               rows,
 		cmd:                c,
@@ -634,10 +643,11 @@ func (p *Pane) Info() PaneInfo {
 	cols, rows, title := p.cols, p.rows, p.Title
 	p.mu.Unlock()
 	return PaneInfo{
-		PaneID: p.LocalID,
-		Cols:   cols,
-		Rows:   rows,
-		Title:  title,
+		PaneID:  p.LocalID,
+		Cols:    cols,
+		Rows:    rows,
+		Title:   title,
+		Harness: p.chatHarness,
 	}
 }
 

@@ -807,7 +807,7 @@ func (c *Client) handleTextInput(data []byte) {
 		c.emitWorkspaceList(msg.CID)
 
 	case sessiond.TypeCreateWorkspace:
-		id, err := dc.CreateWorkspace(msg.Name)
+		id, err := dc.CreateWorkspace(msg.Name, msg.ProjectPath)
 		if err != nil {
 			c.sendError(msg.CID, browserWSID, err)
 			return
@@ -817,6 +817,7 @@ func (c *Client) handleTextInput(data []byte) {
 			CID:         msg.CID,
 			WorkspaceID: nsID(host, id),
 			Name:        msg.Name,
+			ProjectPath: msg.ProjectPath,
 			ClientRef:   msg.ClientRef,
 		})
 

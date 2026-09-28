@@ -693,8 +693,16 @@ func (c *conn) cleanup() {
 func (c *conn) handle(msg Message) {
 	switch msg.Type {
 	case TypeCreateWorkspace:
+		if msg.ProjectPath != "" {
+			info, err := os.Stat(msg.ProjectPath)
+			if err != nil || !filepath.IsAbs(msg.ProjectPath) || !info.IsDir() {
+				c.replyError(msg.CID, CodeFSNotDir, "project path must be an existing absolute directory")
+				return
+			}
+		}
 		id := c.srv.reg.AddWorkspace(msg.Name, msg.ClientRef)
-		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name, ClientRef: msg.ClientRef})
+		c.srv.reg.BindWorkspace(id, msg.ProjectPath)
+		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name, ProjectPath: msg.ProjectPath, ClientRef: msg.ClientRef})
 		c.srv.broadcastWorkspaceList()
 	case TypeListWorkspaces:
 		c.srv.replyWorkspaceList(c, msg.CID)
@@ -1056,8 +1064,8 @@ func (c *conn) createPane(msg Message) {
 		// (see pane.go) so the emulator's internal io.Pipe never blocks emu.Write().
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int, exitCode int, runtimeMs int64) { c.srv.handlePaneExit(wsID, id, exitCode, runtimeMs) },
-		onPromptFn, // stored before readLoop starts — eliminates OSC 133 race
-		"",         // cwd: no override for a live-created pane — today's forced-$HOME behavior
+		onPromptFn,                  // stored before readLoop starts — eliminates OSC 133 race
+		c.srv.reg.ProjectPath(wsID), // bound workspaces start every pane in their folder
 	)
 	if err != nil {
 		c.replyError(msg.CID, CodePaneSpawnFailed, err.Error())
