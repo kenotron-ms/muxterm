@@ -338,6 +338,8 @@ export class MuxSocket {
    * needs-input badge sticks forever at its last non-zero value.
    */
   onSessionState?: (msg: SessiondMessage) => void;
+  /** The daemon's reply to listProjects(): every container it knows about. */
+  onProjectList?: (msg: SessiondMessage) => void;
   /**
    * Fires for the session-state subscription acknowledgement. `ok: false`
    * means the local daemon cannot supply Fleet state, so the UI must not wait
@@ -679,6 +681,37 @@ export class MuxSocket {
   sessionStateSubscribe(enabled: boolean): void {
     this._sessionStateWanted = enabled;
     this.sendSessiond({ type: SessiondType.SessionStateSubscribe, ok: enabled });
+  }
+
+  /**
+   * Ask for the containers this daemon knows about — the filing destination
+   * list. The reply arrives as a `project-list` frame on onProjectList.
+   *
+   * Sent alongside the session-state subscribe, so a browser has its
+   * destinations by the time it has rows to file. A daemon too old to know the
+   * verb ignores it and never replies, and the browser keeps the Inbox it
+   * already had: projectStore starts populated rather than empty precisely so
+   * that degradation is invisible rather than an empty sidebar.
+   */
+  listProjects(): boolean {
+    return this.sendSessiond({ type: SessiondType.ListProjects });
+  }
+
+  /**
+   * THE FILING GESTURE: put this session in that container.
+   *
+   * Fire-and-forget on purpose, with no optimistic local write. The daemon
+   * emits a fresh whole-state session frame the instant it has filed the
+   * session, so the row moves because the AUTHORITY said it moved — which
+   * means a refused or lost assignment leaves the UI showing the truth rather
+   * than a move that did not happen.
+   *
+   * One method for both directions. Filing a session out of a project is
+   * calling this with the Inbox's id; there is no second "unfile" call that
+   * could disagree with this one about what an unfiled session is.
+   */
+  assignSessionProject(sessionId: string, projectId: string): boolean {
+    return this.sendSessiond({ type: SessiondType.AssignSession, sessionId, projectId });
   }
 
   /** Import one bounded native tail and replay its durable journal. */
@@ -1276,6 +1309,8 @@ export class MuxSocket {
             this.onSessionStateSubscribeResult?.(raw as unknown as SessiondMessage);
           } else if (raw.type === SessiondType.SessionState) {
             this.onSessionState?.(raw as unknown as SessiondMessage);
+          } else if (raw.type === SessiondType.ProjectList) {
+            this.onProjectList?.(raw as unknown as SessiondMessage);
           } else if (raw.type === SessiondType.SessionTranscriptResult) {
             window.dispatchEvent(new CustomEvent('session-transcript-result', { detail: raw }));
           } else if (raw.type === HOST_STATE) {

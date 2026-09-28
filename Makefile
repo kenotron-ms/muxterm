@@ -1,4 +1,4 @@
-.PHONY: build dev dev-local verify-lifecycle install-stable test clean web
+.PHONY: build desktop dev dev-local verify-lifecycle verify-inbox install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -66,6 +66,33 @@ endef
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
 build: web
 	go build -ldflags "-X main.version=$(DEV_VERSION)" -o bin/muxterm ./cmd/muxterm
+
+# ---------------------------------------------------------------------------
+# desktop -- the native Wails shell in desktop/.
+#
+# desktop/ is a SEPARATE nested Go module and this is the ONLY target that
+# builds it. `build`, `go build ./...`, `go vet ./...` and the GoReleaser
+# matrix are deliberately untouched by it -- see desktop/go.mod for why.
+#
+# Linux build prerequisites. This target does NOT install them, and no other
+# target in this file needs them:
+#
+#   Debian/Ubuntu   apt install libgtk-3-dev libwebkit2gtk-4.1-dev
+#   Fedora          dnf install gtk3-devel webkit2gtk4.1-devel
+#
+# WEBKIT_TAG selects the WebKit2GTK ABI. 4.1 is current (Debian 13,
+# Ubuntu 24.04+, Fedora 40+); pass WEBKIT_TAG= on an older distro still on the
+# 4.0 ABI. `desktop,production` are Wails' own required build tags -- without
+# them the binary links but refuses to open a window at runtime.
+WEBKIT_TAG ?= webkit2_41
+
+desktop: web
+	cd desktop && GOTOOLCHAIN=auto go build -tags "desktop,production,$(WEBKIT_TAG)" \
+		-ldflags "-X main.version=$(DEV_VERSION)" \
+		-o ../bin/muxterm-desktop .
+	@echo "built bin/muxterm-desktop -- run it directly. It starts its own"
+	@echo "loopback server on an ephemeral port and attaches to the sessiond"
+	@echo "you already have; it never touches an installed server's port."
 
 # Dev mode: Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
 #   - Vite rebuilds web/dist on muxterm frontend changes
@@ -185,6 +212,24 @@ verify-lifecycle:
 	@go build -o tmp/muxterm-verify ./cmd/muxterm
 	@$(call DEV_ISOLATE,lifecycle-verify,muxterm-cos-lifecycle-verify) \
 	MUXTERM_BIN="$$PWD/tmp/muxterm-verify" bash tools/verify-lifecycle-notices.sh
+
+# Verify the Inbox container against a real, isolated sessiond.
+#
+# Same reasoning as verify-lifecycle directly above: a verification run is a
+# dev instance like any other, so it expands DEV_ISOLATE rather than setting
+# XDG_* by hand. It binds MUXTERM_VERIFY_ADDR (default 8317) and starts a
+# daemon under the isolated runtime dir, so it must not be pointed at 8311/9090.
+#
+# MUXTERM_BASELINE_BIN is optional and is what makes the upgrade check real:
+# point it at a binary built from the commit BEFORE this feature and the script
+# builds an installation with that one, stops it, and reopens the same runtime
+# and data dirs with the build under test.
+verify-inbox:
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-inbox-verify ./cmd/muxterm
+	@mkdir -p tmp/probe && cp /home/ken/artifacts/inbox-verify/probe.go tmp/probe/main.go && go build -o tmp/inbox-probe ./tmp/probe
+	@$(call DEV_ISOLATE,inbox-verify,muxterm-cos-inbox-verify) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-inbox-verify" bash tools/verify-inbox.sh
 
 # Build the production binary from origin/main and install to the stable path.
 # This is what systemd runs — separate from ./bin/muxterm used by `make dev`.

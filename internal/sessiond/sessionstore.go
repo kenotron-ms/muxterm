@@ -675,6 +675,13 @@ func sessionStateHash(rows []SessionState) uint64 {
 		writeHashField(h, r.SessionID)
 		writeHashField(h, r.WorkspaceID)
 		writeHashField(h, strconv.Itoa(r.PaneID))
+		// The containment parent is hashed like any other rendered field.
+		// Leaving it out would mean FILING A SESSION CHANGED NOTHING ON SCREEN:
+		// the gate would see an unchanged set, suppress the frame, and the
+		// session would sit in its old container until something unrelated
+		// about it moved. The one gesture this slice exists to deliver would
+		// appear to do nothing.
+		writeHashField(h, string(r.ProjectID))
 		writeHashField(h, r.Harness)
 		writeHashField(h, r.Project)
 		writeHashField(h, r.Name)
