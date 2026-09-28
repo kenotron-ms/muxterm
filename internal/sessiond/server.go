@@ -86,6 +86,19 @@ type Server struct {
 	// when the watcher is off so a request handler can read history that an
 	// earlier, enabled run wrote.
 	attention *attentionStore
+
+	// projects is every container this daemon knows about. Today that is the
+	// Inbox and nothing else, and it is built in memory rather than loaded
+	// from a file precisely so that no failure -- a wiped data dir, a first
+	// run, a failed write -- can produce a daemon with nowhere to put a
+	// session. See project.go.
+	projects *ProjectRegistry
+	// projectAssign is the durable session -> project map. Same ownership
+	// shape as completions and triggers, for the same reason: its own lock,
+	// written from a control-protocol handler, read from the session-state
+	// ticker. Absence of an entry means the Inbox, so an installation where
+	// nobody has filed anything carries no file at all.
+	projectAssign *projectAssignments
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -110,6 +123,8 @@ func NewServer(socketPath string) (*Server, error) {
 		completions:        newCompletionStore(CompletionsPath()),
 		finishedClearUndos: make(map[string]finishedClearUndo),
 		triggers:           newTriggerStore(TriggersPath()),
+		projects:           NewProjectRegistry(),
+		projectAssign:      newProjectAssignments(ProjectAssignmentsPath()),
 	}
 	s.hookReports = newHookReportStore(identity.MachineID)
 	s.hookReports.projectAll()
@@ -147,6 +162,17 @@ func CompletionsPath() string {
 		return override
 	}
 	return DefaultCompletionsPath()
+}
+
+// ProjectRegistry exposes the containers this daemon knows about, following
+// Registry directly below: the project layer's shape is part of the daemon's
+// surface, not an implementation detail, and a verification probe or a future
+// project-management verb reaches the Inbox's invariants through here.
+func (s *Server) ProjectRegistry() *ProjectRegistry {
+	if s.projects == nil {
+		return NewProjectRegistry()
+	}
+	return s.projects
 }
 
 // Registry exposes the server's Registry for tests and later phases.
@@ -698,6 +724,33 @@ func (c *conn) handle(msg Message) {
 		c.srv.broadcastWorkspaceList()
 	case TypeListWorkspaces:
 		c.srv.replyWorkspaceList(c, msg.CID)
+	case TypeListProjects:
+		// The filing destination list. Whatever containers exist, in the
+		// registry's reserved-first order. The client renders the reply as-is
+		// and has no idea the list currently has one entry, which is what
+		// makes a second project a server-side change only.
+		c.reply(&Message{Type: TypeProjectList, CID: msg.CID, Projects: c.srv.Projects()})
+	case TypeAssignSession:
+		// THE FILING GESTURE, at the API boundary.
+		//
+		// This is also where the Inbox's invariants are visible to a caller:
+		// there is no rename or delete verb reachable from here at all, so
+		// "delete the Inbox" and "rename the Inbox" are not refused requests,
+		// they are requests that cannot be expressed on this protocol. The
+		// registry's Rename/Delete refuse reserved ids underneath, so the
+		// invariant holds for the day a project-management verb is added.
+		if err := c.srv.AssignSessionProject(msg.SessionID, msg.ProjectID); err != nil {
+			code := CodeUnknownProject
+			if errors.Is(err, ErrProjectReserved) {
+				code = CodeProjectReserved
+			}
+			c.replyError(msg.CID, code, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeAssignSessionReply, CID: msg.CID, SessionID: msg.SessionID, ProjectID: msg.ProjectID, OK: true})
+		// Push the moved row now rather than waiting on the next tick, so the
+		// gesture lands on screen immediately instead of up to a second later.
+		c.srv.emitSessionState()
 	case TypeMissionControlIdentity:
 		identity := c.srv.MissionControlIdentity()
 		c.reply(&Message{Type: TypeMissionControlIdentityResult, CID: msg.CID, MissionControlProtocolVersion: identity.ProtocolVersion, MachineID: identity.MachineID, DaemonIncarnation: identity.DaemonIncarnation})
@@ -1714,6 +1767,17 @@ func (s *Server) emitSessionState() {
 	// of this daemon.
 	rows = mergeCompletionRows(rows, s.completions.Pending())
 	rows = excludeOperatorSession(rows)
+	// Stamp the containment parent onto every row, at the daemon's ONE fleet
+	// source. Placed after the completion merge deliberately: a finished lane
+	// whose pane is gone is synthesized here out of the durable log
+	// (completion.go), so stamping any earlier would leave exactly the rows a
+	// human most wants to file carrying no project at all.
+	//
+	// Every consumer is downstream of this line -- browser cards, the sidebar,
+	// session-state subscribers, CLI and MCP fleet_status, the lifecycle edge
+	// watcher -- so there is one place where a session acquires its parent and
+	// no second authority that could disagree.
+	s.stampProjectIDs(rows)
 	// The rows are already joined to their panes, which is the only thing
 	// naming a tab or a workspace after its session needs. Done before the
 	// publish, and outside every lock, so a tick that renames something emits
@@ -1725,6 +1789,71 @@ func (s *Server) emitSessionState() {
 	// notification saying "w7" and saying what actually completed.
 	s.applyDerivedNames(rows)
 	s.publishSessionState(rows)
+}
+
+// stampProjectIDs gives every row its containment parent, in place.
+//
+// It is the READ half of the non-null invariant, and it is total: Resolve
+// returns the Inbox for a session with no record and for a session whose
+// recorded project no longer exists, so there is no row it can leave empty and
+// no error it can return. Whatever a producer wrote into the field is
+// discarded first -- a session is not authoritative about which container a
+// human filed it in, exactly as it is not authoritative about which pane it is
+// running in.
+//
+// Called on a slice the caller owns (collect returns a fresh one every tick and
+// mergeCompletionRows appends to it), so mutating in place cannot be observed
+// by anything holding an older set.
+func (s *Server) stampProjectIDs(rows []SessionState) {
+	if s.projectAssign == nil || s.projects == nil {
+		// Defensive, and it still upholds the invariant rather than skipping
+		// it: a Server built without the stores (a partially constructed test
+		// fixture) files everything in the Inbox rather than emitting a row
+		// with no parent.
+		for i := range rows {
+			rows[i].ProjectID = InboxProjectID
+		}
+		return
+	}
+	for i := range rows {
+		rows[i].ProjectID = s.projectAssign.Resolve(rows[i].SessionID, s.projects.Known)
+	}
+}
+
+// Projects returns every container this daemon knows about, reserved first.
+func (s *Server) Projects() []Project {
+	if s.projects == nil {
+		return []Project{{ID: InboxProjectID, Name: InboxProjectName, Reserved: true}}
+	}
+	return s.projects.All()
+}
+
+// AssignSessionProject files a session into a project.
+//
+// This is the whole filing gesture, server side. There is no companion
+// "unfile" verb because moving a session OUT of a project is moving it INTO
+// the Inbox -- one verb, both directions, which is what makes the gesture one
+// gesture rather than two that can disagree.
+//
+// An unknown project is refused rather than silently redirected: a client
+// offering a destination that does not exist has a bug, and filing the session
+// somewhere plausible instead would hide it.
+func (s *Server) AssignSessionProject(sessionID string, projectID ProjectID) error {
+	if s.projectAssign == nil || s.projects == nil {
+		return ErrUnknownProject
+	}
+	if err := s.projectAssign.Assign(sessionID, projectID, s.projects.Known); err != nil {
+		return err
+	}
+	// Filing is a server-owned input from outside the spool, so the change
+	// gate has to be re-armed by hand -- the rows themselves did not change on
+	// disk, only the parent this daemon stamps onto them. Without this the
+	// next tick would hash an identical set and suppress the frame, and the
+	// session would not appear to move until something else about it did.
+	s.mu.Lock()
+	s.sessions.rearmLocked()
+	s.mu.Unlock()
+	return nil
 }
 
 // excludeOperatorSession removes muxterm's own persistent chat-driver session
