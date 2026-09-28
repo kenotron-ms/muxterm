@@ -30,6 +30,8 @@ type sdkChat struct {
 	ProjectPath string    `json:"projectPath"`
 	Title       string    `json:"title"`
 	Harness     string    `json:"harness"`
+	Bundle      string    `json:"bundle,omitempty"`
+	Provider    string    `json:"provider,omitempty"`
 	NativeID    string    `json:"nativeId,omitempty"`
 	State       string    `json:"state"`
 	CreatedAt   time.Time `json:"createdAt"`
@@ -52,16 +54,17 @@ type sdkEvent struct {
 	Raw          json.RawMessage `json:"raw,omitempty"`
 }
 type sdkChatHost struct {
-	mu       sync.Mutex
-	dir      string
-	socket   string
-	process  *exec.Cmd
-	done     chan struct{}
-	running  bool
-	cosRelay *cosRelay
-	ampSup   *cos.Supervisor
-	chats    map[string]*sdkChat
-	streams  map[string]map[chan sdkEvent]struct{}
+	mu      sync.Mutex
+	dir     string
+	socket  string
+	process *exec.Cmd
+	done    chan struct{}
+	running bool
+	ampSup  *cos.Supervisor
+	ampOnce sync.Once
+	ampErr  error
+	chats   map[string]*sdkChat
+	streams map[string]map[chan sdkEvent]struct{}
 }
 
 func sdkDataDir() string {
@@ -188,23 +191,27 @@ func (h *sdkChatHost) ensure(harness string) error {
 	}
 }
 func (h *sdkChatHost) ensureAmplifier() error {
-	sup, err := h.cosRelay.get()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), cos.DefaultReadyTimeout)
-	defer cancel()
-	if _, err := sup.WaitReady(ctx); err != nil {
-		return err
-	}
-	h.mu.Lock()
-	if h.ampSup == nil {
+	h.ampOnce.Do(func() {
+		sup := cos.New(cos.Config{SDKOnly: true, SessionID: "muxterm-sdk-host-" + sdkID(),
+			StatePath: "-", Logf: log.Printf})
+		if err := sup.Start(context.Background()); err != nil {
+			h.ampErr = err
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), cos.DefaultReadyTimeout)
+		defer cancel()
+		if _, err := sup.WaitReady(ctx); err != nil {
+			h.ampErr = err
+			_ = sup.Close()
+			return
+		}
+		h.mu.Lock()
 		h.ampSup = sup
+		h.mu.Unlock()
 		// Subscribe before returning: start/send may emit the first frame at once.
 		go h.observeAmplifier(sup.Subscribe(1024))
-	}
-	h.mu.Unlock()
-	return nil
+	})
+	return h.ampErr
 }
 func (h *sdkChatHost) observeAmplifier(sub *cos.Subscription) {
 	defer sub.Close()
@@ -261,7 +268,11 @@ func (h *sdkChatHost) watch(cmd *exec.Cmd, done chan struct{}, harness string) {
 func (h *sdkChatHost) close() {
 	h.mu.Lock()
 	cmd := h.process
+	amp := h.ampSup
 	h.mu.Unlock()
+	if amp != nil {
+		_ = amp.Close()
+	}
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt)
 		h.mu.Lock()
@@ -379,8 +390,64 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID})
+	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": c.Provider})
 	return err
+}
+
+func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
+	h := s.sdkChats
+	id := r.PathValue("id")
+	h.mu.Lock()
+	c := h.chats[id]
+	h.mu.Unlock()
+	if c == nil || c.Harness != "amplifier" {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	if err := h.resume(ctx, c); err != nil {
+		http.Error(w, err.Error(), 502)
+		return
+	}
+	if r.Method == "GET" {
+		result, err := h.call(ctx, "settings", map[string]any{"sessionId": id})
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		writeSDKJSON(w, 200, json.RawMessage(result))
+		return
+	}
+	if r.Method != "PATCH" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var req struct{ Bundle, Provider string }
+	if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req) != nil ||
+		len(req.Bundle) > 256 || len(req.Provider) > 128 {
+		http.Error(w, "invalid Amplifier settings", 400)
+		return
+	}
+	result, err := h.call(ctx, "select", map[string]any{"sessionId": id, "bundle": req.Bundle, "provider": req.Provider})
+	if err != nil {
+		http.Error(w, err.Error(), 422)
+		return
+	}
+	var selected struct{ Bundle, Provider string }
+	if err := json.Unmarshal(result, &selected); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	h.mu.Lock()
+	c.Bundle, c.Provider = selected.Bundle, selected.Provider
+	err = h.saveLocked(c)
+	h.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeSDKJSON(w, 200, json.RawMessage(result))
 }
 func writeSDKJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")

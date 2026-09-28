@@ -190,7 +190,6 @@ func New(cfg Config) *Server {
 		version:        cfg.Version,
 	}
 	s.sdkChats = newSDKChatHost()
-	s.sdkChats.cosRelay = hub.cos
 	s.configPath = cfg.ConfigPath
 	// Use the supplied initial config if it looks populated (palette is never
 	// empty in a real config), otherwise fall back to hardcoded defaults.
@@ -372,6 +371,8 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("POST /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("GET /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
+	s.mux.Handle("PATCH /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("POST /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/events", protect(http.HandlerFunc(s.handleSDKChatEvents)))
 	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
