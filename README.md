@@ -37,6 +37,15 @@ curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh
 muxterm install  # restarts the service with the new binary
 ```
 
+The in-app release check shares a 15-minute cache across muxterm processes
+under the same user (`~/.cache/muxterm/github-release.json` on Linux). It
+revalidates expired entries with GitHub's ETag and pauses requests until the
+reported reset when the API rate limit is exhausted. Set `GITHUB_TOKEN` (or
+`GH_TOKEN`) in the server environment to use an authenticated GitHub budget;
+the token is never written to the cache. Development builds, `make dev` and
+`make dev-local` instances, and CI jobs skip release checks. Set
+`MUXTERM_DISABLE_UPDATE_CHECK=1` for other short-lived instances.
+
 ### Windows — Scoop (coming soon)
 
 Pre-built binaries for each platform are attached to every [GitHub Release](https://github.com/kenotron-ms/muxterm/releases).

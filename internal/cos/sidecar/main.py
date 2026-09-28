@@ -57,6 +57,12 @@ from typing import Any  # noqa: E402
 
 _BOOT_T0 = time.monotonic()
 
+# Amplifier's CLI version formatter fetches the install commit's date from
+# GitHub on every new process. This server sidecar never displays that date;
+# suppress the lookup so even a short-lived instance costs no API request.
+from amplifier_app_cli.utils import version as _amplifier_version
+_amplifier_version._get_commit_date_from_api = lambda _url, _sha: None
+
 
 def timing(stage: str, started: float | None = None) -> None:
     now = time.monotonic()
