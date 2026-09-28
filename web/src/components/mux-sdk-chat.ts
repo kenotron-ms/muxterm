@@ -35,6 +35,7 @@ export class MuxSDKChat extends LitElement {
     .text { overflow-wrap:anywhere; }
     .text :is(p,pre) { margin:0 0 10px; }
     .tool { border-left:2px solid #7384a5; padding:5px 12px; color:var(--chrome-text-dim,#b2bdd3); font:12px ui-monospace,monospace; }
+    .block.tool > .tool { border-left-color:transparent; }
     .tool-name { color:#b7c9ed; }
     .error { color:#e6a5a5; }
     .composer-wrap { padding:0 clamp(24px,8vw,120px) 18px; }
