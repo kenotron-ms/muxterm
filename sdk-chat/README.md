@@ -9,6 +9,12 @@ written. The sidecar accepts `start`, `resume`, `send`, `interrupt`,
 `capabilities`, and `close` operations. Unsupported service attribution and
 busy Codex input return explicit errors.
 
+Codex uses the CLI binary bundled by `@openai/codex-sdk` through its app-server
+protocol. The SDK's `runStreamed()` wraps `codex exec --experimental-json`, which
+emits complete assistant messages but no incremental text events. The
+app-server's `item/agentMessage/delta` notifications provide live text for the
+existing SSE renderer. Native Codex thread IDs still resume chats.
+
 The sidecar path defaults to the extracted copy embedded in the binary.
 `MUXTERM_SDK_CHAT_SIDECAR` can point to an explicit copy.
 Amplifier runs in the supervised Python sidecar. At startup the sidecar installs
