@@ -98,6 +98,18 @@ function age(updatedAt: number, nowSec: number): string {
   return `${Math.floor(d / 86400)}d`;
 }
 
+/**
+ * One SDK-backed session's live assistant text, and the turn it belongs to.
+ *
+ * The turn id is carried so the buffer can be RESET when a new turn begins
+ * rather than growing forever: what this feeds is a view of the answer being
+ * written now, and past answers are the History panel's job.
+ */
+interface SDKLiveOutput {
+  turnId: string;
+  text: string;
+}
+
 @customElement('applet-dashboard')
 export class AppletDashboard extends LitElement implements AppletElement {
   /**
@@ -127,6 +139,24 @@ export class AppletDashboard extends LitElement implements AppletElement {
   @state() private _transcriptArchived = false;
   @state() private _transcriptDetached = false;
   @state() private _transcriptTruncated = false;
+  /**
+   * LIVE ASSISTANT TEXT, keyed by session id -- an SDK-backed session's output
+   * as it is produced.
+   *
+   * WHY THIS IS HELD HERE AND NOT IN THE FLEET ROW. A fleet row is a
+   * whole-state document replaced wholesale on every push; this is a running
+   * concatenation of deltas that no later push repairs. Merging it into the
+   * row would mean the daemon re-sending the entire answer-so-far, once a
+   * frame, to every browser.
+   *
+   * It is per-BROWSER and deliberately not persisted anywhere: a reader who
+   * opens the applet mid-turn sees the rest of the answer, not the start of
+   * it. The whole final message still arrives in the row's summary, so
+   * nothing is lost -- only the live view begins where the watching began.
+   */
+  @state() private _sdkOutput = new Map<string, SDKLiveOutput>();
+  /** Last outputSeq seen per session, for gap detection. */
+  private _sdkOutputSeq = new Map<string, number>();
   @state() private _expandedTodo: string | null = null;
   @state() private _finishedOpen = false;
   @state() private _expandedFinished: string | null = null;
@@ -456,6 +486,29 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .transcript li { display: grid; gap: var(--s-1); border-left: 2px solid var(--edge); padding-left: var(--s-3); }
     .transcript b { color: var(--ink-3); font-size: 10px; text-transform: uppercase; }
     .transcript span { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-1); }
+
+    /* Live SDK output. A terminal-less session's only window, so it reads
+       like the terminal it does not have: monospaced, pre-wrapped, pinned to
+       the newest text. */
+    .live-head { display: flex; align-items: center; gap: var(--s-3); margin-top: var(--s-5); color: var(--ink-1); font-weight: 600; }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fleet-muted); }
+    .live-dot.on { background: var(--ok, #4ade80); box-shadow: 0 0 0 3px #4ade8033; }
+    .live {
+      margin: var(--s-3) 0 0;
+      padding: var(--s-3) var(--s-4);
+      max-height: 16rem;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: var(--font-mono, ui-monospace, monospace);
+      font-size: 11.5px;
+      line-height: 1.5;
+      color: var(--fleet-body);
+      background: #0c121c;
+      border: 1px solid var(--fleet-edge);
+      border-radius: 6px;
+    }
+    .live-note { margin: var(--s-3) 0 0; color: var(--ink-3); }
 
     /* One fleet object, with actual card anatomy. The former tiles mode was
        this same metadata strip plus a terminal thumbnail; it did not change
@@ -1025,6 +1078,12 @@ export class AppletDashboard extends LitElement implements AppletElement {
       this._finishedOpen = false;
     }
     window.addEventListener('session-transcript-result', this._onTranscriptResult as EventListener);
+    // Listened for whether or not this applet is ACTIVE, exactly like the
+    // fleet subscription above and for the same reason: a stream is only
+    // watchable if it was being collected before the human looked. The cost
+    // is a string append on a frame that only exists when an SDK session is
+    // mid-answer.
+    window.addEventListener('sdk-session-output', this._onSDKOutput as EventListener);
     window.addEventListener('finished-clear-result', this._onFinishedClearResult as EventListener);
     window.addEventListener('finished-clear-undo-result', this._onFinishedClearUndoResult as EventListener);
     this._sync();
@@ -1034,6 +1093,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     // isConnected is already false here, so this is the unsubscribe branch.
     this._sync();
     window.removeEventListener('session-transcript-result', this._onTranscriptResult as EventListener);
+    window.removeEventListener('sdk-session-output', this._onSDKOutput as EventListener);
     window.removeEventListener('finished-clear-result', this._onFinishedClearResult as EventListener);
     window.removeEventListener('finished-clear-undo-result', this._onFinishedClearUndoResult as EventListener);
     if (this._finishedNoticeTimer !== null) window.clearTimeout(this._finishedNoticeTimer);
@@ -1047,6 +1107,17 @@ export class AppletDashboard extends LitElement implements AppletElement {
     // IS clearing it -- but it still has to be cleared, or a stale one fires
     // the next time the tab is shown.
     if (changed.has('target') && this.target !== null) this.target = null;
+    // Keep the live pane pinned to the newest text. Only when it is ALREADY
+    // near the bottom: a reader who has scrolled up to re-read something must
+    // not be yanked back down by the next token.
+    // Cast: PropertyValues<this> is keyed by the PUBLIC property names, and
+    // the live buffer is private state.
+    if ((changed as Map<PropertyKey, unknown>).has('_sdkOutput')) {
+      const pane = this.renderRoot.querySelector('.live') as HTMLElement | null;
+      if (pane && pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80) {
+        pane.scrollTop = pane.scrollHeight;
+      }
+    }
   }
 
   /**
@@ -1224,6 +1295,39 @@ export class AppletDashboard extends LitElement implements AppletElement {
     ].filter(Boolean).join(' · ');
   };
 
+  /**
+   * One run of assistant text from an SDK-backed session.
+   *
+   * The sequence check is the honest part. These frames are advisory and the
+   * daemon drops them for a slow client rather than disconnecting it, so a
+   * hole in the middle of a sentence is a thing that can happen. A jump marks
+   * itself; a seq at or below the last one means a restarted daemon began the
+   * numbering again, so the buffer starts over rather than appending a new
+   * conversation's text to an old one's.
+   */
+  private _onSDKOutput = (event: CustomEvent<SessiondMessage>): void => {
+    const msg = event.detail;
+    const id = msg.sessionId;
+    const text = msg.outputText;
+    if (!id || !text) return;
+    const turnId = msg.turnId ?? '';
+    const seq = msg.outputSeq ?? 0;
+    const last = this._sdkOutputSeq.get(id) ?? 0;
+    const held = this._sdkOutput.get(id);
+    // A NEW TURN STARTS A NEW BUFFER. The pane says "live output", and a live
+    // view of one answer is what it has to be: concatenating this turn's reply
+    // onto the last one produces a wall with no boundary in it, in which the
+    // newest text is not even at a predictable end. Earlier turns are the
+    // History panel's job, below.
+    let prefix = held && held.turnId === turnId ? held.text : '';
+    if (seq !== 0 && seq <= last) prefix = '';
+    else if (seq > last + 1 && last !== 0 && prefix) prefix += '\n[...dropped frames...]\n';
+    this._sdkOutputSeq.set(id, seq);
+    // A NEW Map, not a mutation: @state compares by reference, so mutating in
+    // place would append text Lit never re-renders.
+    this._sdkOutput = new Map(this._sdkOutput).set(id, { turnId, text: prefix + text });
+  };
+
   private _setArchived(sessionId: string): void {
     this.dispatchEvent(new CustomEvent('session-archive-request', {
       detail: { sessionId, archived: !this._transcriptArchived }, bubbles: true, composed: true,
@@ -1277,6 +1381,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
           </ul>` : nothing}
         </aside>
         <section class="history">
+          ${this._renderLive(s)}
           <div class="transcript-head"><h3>History${this._transcriptMeta ? ` · ${this._transcriptMeta}` : ''}</h3><span class="history-actions"><button class="history-refresh" type="button" @click="${() => this._requestTranscript(s.sessionId)}">↻ Refresh</button></span></div>
           ${this._transcriptLoading ? html`<p class="transcript-note">Importing bounded native history…</p>` : nothing}
           ${this._transcriptError ? html`<p class="transcript-error">${this._transcriptError}</p>` : nothing}
@@ -1286,6 +1391,32 @@ export class AppletDashboard extends LitElement implements AppletElement {
         </section>
       </div>
     </section>`;
+  }
+
+  /**
+   * An SDK-backed session's output, as it is produced.
+   *
+   * ONLY FOR A SESSION WITH NO TERMINAL. A PTY-backed session already has a
+   * window onto itself -- its pane -- and duplicating it here would be a
+   * second, worse terminal. A session with `paneId === null` has none, which
+   * before this was the whole problem: #220 could create one, drive it and
+   * report on it, and a human could not see a word it said until the turn was
+   * over and the final message landed in the row.
+   */
+  private _renderLive(s: SessionState): TemplateResult | typeof nothing {
+    if (s.paneId !== null) return nothing;
+    const text = this._sdkOutput.get(s.sessionId)?.text ?? '';
+    const working = s.state === 'working';
+    if (!text && !working) return nothing;
+    return html`
+      <div class="live-head">
+        <span class="live-dot ${working ? 'on' : ''}" aria-hidden="true"></span>
+        <h3>Live output</h3>
+      </div>
+      ${text
+        ? html`<pre class="live" id="live-${s.sessionId}">${text}</pre>`
+        : html`<p class="live-note">Working… waiting for the first token.</p>`}
+    `;
   }
 
   /**

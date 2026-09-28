@@ -91,10 +91,29 @@ export const SessiondType = {
   SessionState: 'session-state',
   SessionTranscript: 'session-transcript',
   SessionTranscriptResult: 'session-transcript-result',
+  /**
+   * Assistant text ARRIVING from an SDK-backed session (Go's
+   * TypeSDKSessionOutput). It rides the session-state subscription -- there is
+   * no separate opt-in -- and it is the ONLY daemon->browser frame here that
+   * is a DELTA rather than a whole-state document: a dropped one is not
+   * repaired by the next, which is what outputSeq is for.
+   */
+  SDKSessionOutput: 'sdk-session-output',
   SessionArchive: 'session-archive',
   SessionClear: 'session-clear',
   SessionClearUndo: 'session-clear-undo',
   SessionClearResult: 'session-clear-result',
+  // Project containment (ADDITIVE, post-v1) — mirrors Go's TypeListProjects /
+  // TypeProjectList / TypeAssignSession / TypeAssignSessionReply.
+  //
+  // Two verbs only. ListProjects builds the filing destination list;
+  // AssignSession IS the filing gesture. There is deliberately no "unfile"
+  // verb, because moving a session out of a project is moving it into the
+  // Inbox — one verb, both directions.
+  ListProjects: 'list-projects',
+  ProjectList: 'project-list',
+  AssignSession: 'assign-session',
+  AssignSessionReply: 'assign-session-reply',
 } as const;
 
 export interface SessionTranscriptTurn {
@@ -280,6 +299,15 @@ export interface SessiondMessage {
   bg?: string[][];
   inverse?: boolean[][];
   sessionId?: string;
+  /**
+   * Filing destination on an assign-session request, and the echo on its
+   * reply. Optional HERE because this one flat envelope is shared by every
+   * message type and most of them carry no project — it is NOT optional on a
+   * session ROW, where SessionState.projectId is required and never null.
+   */
+  projectId?: string;
+  /** Payload of project-list: every container the daemon knows about. */
+  projects?: { id: string; name: string; reserved: boolean }[];
   transcriptCursor?: string;
   transcriptPath?: string;
   transcriptError?: string;
@@ -289,6 +317,17 @@ export interface SessiondMessage {
   transcriptDetached?: boolean;
   unchanged?: boolean;
   undoToken?: string;
+  /** sdk-session-output: a run of assistant text, and where it came from. */
+  threadId?: string;
+  turnId?: string;
+  itemId?: string;
+  outputText?: string;
+  /**
+   * Per-session chunk counter, from 1, for one daemon's lifetime. A jump means
+   * a frame was dropped in transit; a value at or below the last one seen means
+   * the daemon restarted and the stream began again.
+   */
+  outputSeq?: number;
 }
 
 // ---------------------------------------------------------------------------

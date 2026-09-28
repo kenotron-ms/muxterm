@@ -73,10 +73,12 @@ func TestVoiceEnabledRequiresEndpointAndModel(t *testing.T) {
 		v    VoiceConfig
 		want string
 	}{
-		{"no endpoint", VoiceConfig{Enabled: true, Model: "m", AuthMode: VoiceAuthEntra}, "endpoint"},
+		// An unnamed endpoint and an unnamed model are no longer errors:
+		// Resolved fills them with the direct OpenAI path and
+		// DefaultVoiceModel. What a STATED endpoint must still be is
+		// well-formed, which is what these two cases hold.
 		{"bad endpoint", VoiceConfig{Enabled: true, Endpoint: "ftp://x/y", Model: "m", AuthMode: VoiceAuthEntra}, "scheme"},
 		{"no host", VoiceConfig{Enabled: true, Endpoint: "https:///openai/v1", Model: "m", AuthMode: VoiceAuthEntra}, "host"},
-		{"no model", VoiceConfig{Enabled: true, Endpoint: "https://h/openai/v1", AuthMode: VoiceAuthEntra}, "model"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.v.Validate()

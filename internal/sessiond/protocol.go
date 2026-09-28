@@ -162,6 +162,102 @@ const (
 	TypeSessionClearResult          = "session-clear-result"           // reply: daemon -> browser
 )
 
+// Project containment message types (ADDITIVE, post-v1).
+//
+// Two verbs, and deliberately only two.
+//
+// TypeListProjects asks for every container this daemon knows about; the reply
+// carries them in Message.Projects. A client uses it to build the FILING
+// DESTINATION LIST. Today that list has exactly one entry, the Inbox, and the
+// client does not know or care that it is one -- it renders whatever comes
+// back, so the day a second project exists the list grows with no client
+// change.
+//
+// TypeAssignSession is the FILING GESTURE: put this session in that container.
+// There is no companion "unfile"/"remove"/"clear" verb, because moving a
+// session OUT of a project is moving it INTO the Inbox. One verb, both
+// directions, one round trip -- which is what lets the UI be one gesture
+// rather than two that can disagree about what an unfiled session is.
+//
+// A daemon that predates these types ignores them and never replies, which the
+// client's request timeout surfaces as "projects unavailable" rather than a
+// hang -- the same degradation the session-state trio above already has.
+const (
+	TypeListProjects       = "list-projects"        // request: browser -> daemon
+	TypeProjectList        = "project-list"         // reply:   daemon -> browser
+	TypeAssignSession      = "assign-session"       // request: browser -> daemon
+	TypeAssignSessionReply = "assign-session-reply" // reply:   daemon -> browser
+)
+
+// SDK-backed session message types (ADDITIVE, post-v1).
+//
+// These drive a session the daemon owns through a harness SDK instead of
+// through a PTY (sdksession.go). They are a SEPARATE vocabulary from the pane
+// verbs on purpose: an SDK session has no pane, no argv and no terminal, so
+// reusing create-pane for it would mean a pane id that addresses nothing.
+//
+// TypeSDKSessionSend's reply is the interesting one. It carries TurnID and
+// TurnStatus straight from the harness's own turn/start response -- a RECEIPT,
+// not a hopeful acknowledgement of a terminal write. The existing managed
+// dispatch path cannot produce one: it runs a subprocess and reads an exit
+// code, so its failure mode is "uncertain" by construction
+// (cmd/muxterm/session_send_cmd.go). That is the gap these verbs close.
+//
+// A daemon that predates these types ignores them and never replies, which the
+// client's request timeout surfaces as unavailable rather than as a hang --
+// the same degradation the project and session-state verbs already have.
+const (
+	TypeSDKSessionStart      = "sdk-session-start"       // request: client -> daemon
+	TypeSDKSessionStartReply = "sdk-session-start-reply" // reply:   daemon -> client
+	TypeSDKSessionSend       = "sdk-session-send"        // request: client -> daemon
+	TypeSDKSessionSendReply  = "sdk-session-send-reply"  // reply:   daemon -> client
+	TypeSDKSessionList       = "sdk-session-list"        // request: client -> daemon
+	TypeSDKSessionListReply  = "sdk-session-list-reply"  // reply:   daemon -> client
+	TypeSDKSessionClose      = "sdk-session-close"       // request: client -> daemon
+	TypeSDKSessionCloseReply = "sdk-session-close-reply" // reply:   daemon -> client
+
+	// TypeSDKSessionResume reattaches a durable record to the harness thread
+	// it names, through thread/resume. It is the verb that turns a record
+	// which SURVIVED a daemon restart into a conversation that can be
+	// CONTINUED -- #220 persisted the thread id and had nothing that used it.
+	//
+	// TypeSDKSessionSend performs the same reattachment implicitly when the
+	// session is detached, so an ordinary caller never has to know whether a
+	// restart happened. This verb is for the caller that wants to reattach
+	// WITHOUT delivering, and for a receipt that names the resumption alone.
+	TypeSDKSessionResume      = "sdk-session-resume"       // request: client -> daemon
+	TypeSDKSessionResumeReply = "sdk-session-resume-reply" // reply:   daemon -> client
+
+	// TypeSDKSessionOutput is assistant text ARRIVING from an SDK session,
+	// pushed to the connections that opted into session-state.
+	//
+	// It is the only SDK message that is an event rather than a
+	// request/reply pair, and the only one carrying something that is not
+	// session state: a run of characters the model is in the middle of
+	// producing. Delivery is advisory and droppable exactly like
+	// session-state and preview frames -- but unlike those it is a DELTA,
+	// not a whole-state document, so a drop cannot be repaired by the next
+	// frame arriving. OutputSeq is what makes such a loss visible instead of
+	// silently closing over a hole in a sentence.
+	TypeSDKSessionOutput = "sdk-session-output" // event: daemon -> opted-in subscribers
+)
+
+// CodeSDKSession is returned when an SDK-backed session operation fails: an
+// unknown session, an uninstalled harness, a harness that refused the turn.
+const CodeSDKSession = "sdk-session"
+
+// CodeProjectReserved is returned when a caller tries to rename or delete a
+// reserved container. The Inbox is reserved, so this is what an attempt to
+// remove or rename it looks like on the wire: a loud, named refusal, never a
+// silent no-op.
+//
+// CodeUnknownProject is returned when a caller files a session into a project
+// that does not exist.
+const (
+	CodeProjectReserved = "project-reserved"
+	CodeUnknownProject  = "unknown-project"
+)
+
 // SessionTranscriptTurn is the bounded, readable projection stored in the
 // muxterm-owned transcript journal. It deliberately excludes native payloads.
 type SessionTranscriptTurn struct {
@@ -452,6 +548,47 @@ type Message struct {
 	TranscriptDetached  bool                    `json:"transcriptDetached,omitempty"`
 	Unchanged           bool                    `json:"unchanged,omitempty"`
 	UndoToken           string                  `json:"undoToken,omitempty"`
+
+	// Project containment. ProjectID is the filing destination on a
+	// TypeAssignSession request (paired with SessionID above); Projects is the
+	// payload of TypeProjectList.
+	//
+	// ProjectID carries the distinct ProjectID type rather than a string, so
+	// the compiler will not let a workspace id or a session id be assigned
+	// into it on this shared envelope -- which is exactly the mistake a flat
+	// message struct with thirty string fields invites.
+	ProjectID ProjectID `json:"projectId,omitempty"`
+	Projects  []Project `json:"projects,omitempty"`
+
+	// SDK-backed sessions (sdksession.go). Harness and Cwd are the start
+	// request; Prompt is the turn text on a send.
+	//
+	// TurnID and TurnStatus are the RECEIPT on a send reply, copied from the
+	// harness's own turn/start response. They are what makes delivery on this
+	// path acknowledged rather than assumed: a caller holding a TurnID has
+	// the harness's word that the turn was admitted, minted by the harness
+	// before any output existed.
+	//
+	// Resumed is the other half of the receipt, and it is deliberately not
+	// inferable from anything else on the wire: it says that THIS request
+	// found the session detached, spawned a fresh app server and reopened
+	// the harness thread before delivering. A caller that never restarts a
+	// daemon will never see it true.
+	//
+	// OutputText / OutputSeq / ItemID carry TypeSDKSessionOutput: a run of
+	// assistant text (alongside SessionID, ThreadID and TurnID above) and
+	// the per-session sequence number that makes a dropped frame detectable.
+	Harness     string             `json:"harness,omitempty"`
+	Cwd         string             `json:"cwd,omitempty"`
+	Prompt      string             `json:"prompt,omitempty"`
+	ThreadID    string             `json:"threadId,omitempty"`
+	TurnID      string             `json:"turnId,omitempty"`
+	TurnStatus  string             `json:"turnStatus,omitempty"`
+	Resumed     bool               `json:"resumed,omitempty"`
+	OutputText  string             `json:"outputText,omitempty"`
+	OutputSeq   uint64             `json:"outputSeq,omitempty"`
+	ItemID      string             `json:"itemId,omitempty"`
+	SDKSessions []SDKSessionRecord `json:"sdkSessions,omitempty"`
 
 	// SessionStateStatus is relay-only metadata for a merged TypeSessionState
 	// document. A direct daemon event leaves it empty; the browser relay writes

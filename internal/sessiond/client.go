@@ -131,6 +131,17 @@ type Handlers struct {
 	// and droppable: a slow consumer loses frames rather than the connection,
 	// and because each frame is complete, the next one repairs the view.
 	OnSessionState func(msg *Message)
+
+	// OnSDKSessionOutput fires when an SDK-backed session produces assistant
+	// text, on the same subscription as OnSessionState. msg carries
+	// SessionID, ThreadID, TurnID, ItemID, OutputText and OutputSeq.
+	//
+	// UNLIKE EVERY OTHER HANDLER HERE, THIS ONE CARRIES A DELTA. Session
+	// state, workspace lists and previews are whole-state documents, so a
+	// dropped frame is repaired by the next one; a dropped run of text is
+	// gone. OutputSeq counts this session's chunks so a consumer can say so
+	// rather than joining the two sides of a hole into one sentence.
+	OnSDKSessionOutput func(msg *Message)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -361,6 +372,97 @@ func (c *Client) MissionControlIdentity() (MissionControlIdentity, error) {
 		return MissionControlIdentity{}, fmt.Errorf("sessiond: invalid mission control identity reply")
 	}
 	return MissionControlIdentity{ProtocolVersion: reply.MissionControlProtocolVersion, MachineID: reply.MachineID, DaemonIncarnation: reply.DaemonIncarnation}, nil
+}
+
+// ListProjects asks the daemon which containers exist -- the filing
+// destination list. There is always at least one: the Inbox is constructed in
+// memory at daemon boot and cannot be removed, so an empty reply means a
+// protocol failure, never an installation with nowhere to put a session.
+func (c *Client) ListProjects() ([]Project, error) {
+	reply, err := c.request(&Message{Type: TypeListProjects})
+	if err != nil {
+		return nil, err
+	}
+	return reply.Projects, nil
+}
+
+// AssignSessionProject files a session into a container.
+//
+// One method for both directions: filing a session OUT of a project is calling
+// this with InboxProjectID. There is no separate unfile call that could
+// disagree with this one about what an unfiled session is.
+//
+// A project that does not exist is refused by the daemon with
+// CodeUnknownProject rather than quietly redirected, so a caller that offers a
+// stale destination finds out.
+func (c *Client) AssignSessionProject(sessionID string, projectID ProjectID) error {
+	_, err := c.request(&Message{Type: TypeAssignSession, SessionID: sessionID, ProjectID: projectID})
+	return err
+}
+
+// SDKSessionStart asks the daemon to create a session through a harness SDK.
+//
+// The daemon owns the resulting connection, not this client: the session has
+// to outlive the CLI invocation that asked for it, which is why this is a
+// protocol verb rather than something the caller runs itself.
+func (c *Client) SDKSessionStart(harness, cwd, name string) (sessionID, threadID string, err error) {
+	reply, err := c.requestWithin(&Message{Type: TypeSDKSessionStart, Harness: harness, Cwd: cwd, Name: name}, 90*time.Second)
+	if err != nil {
+		return "", "", err
+	}
+	return reply.SessionID, reply.ThreadID, nil
+}
+
+// SDKSessionSend delivers one turn and returns the harness's receipt.
+//
+// A nil error means the harness ACCEPTED the turn and turnID is the id it
+// minted for it. This is the call that the managed-dispatch path cannot make:
+// that one runs a subprocess and inspects an exit code, so it reports
+// "uncertain" whenever the subprocess fails for any reason at all
+// (cmd/muxterm/session_send_cmd.go). Here, acceptance is a protocol response.
+//
+// resumed reports that the daemon found the session DETACHED -- its previous
+// app server gone with a restarted daemon -- and reopened the harness thread
+// before delivering. It is reported rather than hidden because "the harness
+// took this turn" and "the harness took this turn into a conversation that was
+// reconstructed a moment ago" are different facts about the same success.
+func (c *Client) SDKSessionSend(sessionID, prompt string) (turnID, turnStatus string, resumed bool, err error) {
+	reply, err := c.requestWithin(&Message{Type: TypeSDKSessionSend, SessionID: sessionID, Prompt: prompt}, 90*time.Second)
+	if err != nil {
+		return "", "", false, err
+	}
+	return reply.TurnID, reply.TurnStatus, reply.Resumed, nil
+}
+
+// SDKSessionResume reattaches a durable record to its harness thread without
+// delivering anything.
+//
+// resumed is false when the session was already live, which is not a failure:
+// the call is idempotent, and "it is attached" is the postcondition either
+// way. threadID is the id the HARNESS returned from thread/resume.
+func (c *Client) SDKSessionResume(sessionID string) (threadID string, resumed bool, err error) {
+	reply, err := c.requestWithin(&Message{Type: TypeSDKSessionResume, SessionID: sessionID}, 90*time.Second)
+	if err != nil {
+		return "", false, err
+	}
+	return reply.ThreadID, reply.Resumed, nil
+}
+
+// SDKSessionList returns every durable SDK-backed session record the daemon
+// holds, including those restored from disk after a restart.
+func (c *Client) SDKSessionList() ([]SDKSessionRecord, error) {
+	reply, err := c.request(&Message{Type: TypeSDKSessionList})
+	if err != nil {
+		return nil, err
+	}
+	return reply.SDKSessions, nil
+}
+
+// SDKSessionClose ends a session's live harness connection. The durable record
+// stays on disk: closing is not deleting.
+func (c *Client) SDKSessionClose(sessionID string) error {
+	_, err := c.request(&Message{Type: TypeSDKSessionClose, SessionID: sessionID})
+	return err
 }
 
 // CreateWorkspace asks the daemon to create a new workspace named name and
@@ -782,6 +884,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeSessionState:
 		if h.OnSessionState != nil {
 			h.OnSessionState(msg)
+		}
+	case TypeSDKSessionOutput:
+		if h.OnSDKSessionOutput != nil {
+			h.OnSDKSessionOutput(msg)
 		}
 	}
 }

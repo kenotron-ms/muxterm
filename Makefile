@@ -1,4 +1,4 @@
-.PHONY: build dev dev-local verify-lifecycle install-stable test clean web
+.PHONY: build desktop desktop-deb desktop-app dev dev-local verify-lifecycle verify-inbox install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -66,6 +66,70 @@ endef
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
 build: web
 	go build -ldflags "-X main.version=$(DEV_VERSION)" -o bin/muxterm ./cmd/muxterm
+
+# ---------------------------------------------------------------------------
+# desktop -- the native Wails shell in desktop/.
+#
+# desktop/ is an ordinary package of the ONE muxterm module: same go.mod, same
+# go.sum, same dependency graph. What separates it from the CLI is not a module
+# boundary but a build tag.
+#
+# Wails links GTK3 and WebKit2GTK through cgo, so desktop/ needs headers the
+# CLI, the server and the GoReleaser matrix neither have nor need. desktop/*.go
+# therefore carries `//go:build desktop`, and Go skips a wildcard-matched
+# directory whose files are all excluded by a constraint -- so `go build ./...`
+# and the release matrix stay exactly as green as before on a machine with no
+# desktop toolchain, while this target builds the real thing.
+#
+# Linux build prerequisites, which are NOT installed by this target and are not
+# needed for any other target in this file:
+#
+#   Debian/Ubuntu   apt install libgtk-3-dev libwebkit2gtk-4.1-dev libpam0g-dev
+#   Fedora          dnf install gtk3-devel webkit2gtk4.1-devel pam-devel
+#
+# WEBKIT_TAG selects the WebKit2GTK ABI. 4.1 is current (Debian 13, Ubuntu
+# 24.04+, Fedora 40+); pass WEBKIT_TAG= on an older distro that still ships the
+# 4.0 ABI. `desktop,production` are Wails' own required build tags -- without
+# them the binary compiles but refuses to start a window at runtime.
+WEBKIT_TAG ?= webkit2_41
+
+desktop: web
+	go build -tags "desktop,production,$(WEBKIT_TAG)" \
+		-ldflags "-X main.version=$(DEV_VERSION)" \
+		-o bin/muxterm-desktop ./desktop
+	@echo "built bin/muxterm-desktop -- run it directly; it starts its own"
+	@echo "loopback server and attaches to the sessiond you already have."
+
+# desktop-deb -- the installable Linux package.
+#
+# Produces bin/muxterm-desktop_<version>_<arch>.deb: the binary, a .desktop
+# entry, and the icon at every hicolor size, so after `apt install ./<file>.deb`
+# muxterm is in the application menu by name and by icon and opens in its own
+# window. Nothing is typed into a terminal and no URL is typed by a human.
+#
+# See desktop/packaging/linux/build-deb.sh for why .deb rather than AppImage,
+# and for the extra build prerequisite (dpkg-dev).
+desktop-deb: web
+	desktop/packaging/linux/build-deb.sh
+
+# desktop-app -- the macOS bundle. RUNS ON macOS ONLY.
+#
+# Wails links Cocoa and WKWebView through cgo, so unlike every other target in
+# this file this one cannot be cross-compiled: there is no darwin toolchain on
+# a Linux box that can link those frameworks. Building it needs a Mac, or the
+# macos-latest runner in .github/workflows/desktop-macos.yml.
+#
+# Produces bin/muxterm.app -- a universal (arm64 + x86_64) bundle with an
+# Info.plist, the icns icon, and an AD-HOC code signature. Ad-hoc is what makes
+# the binary executable at all on Apple silicon; it is NOT a Developer ID
+# signature, so Gatekeeper still blocks the first open of a downloaded copy.
+# See desktop/packaging/darwin/build-app.sh for the whole reasoning.
+#
+# macOS build prerequisites, which are NOT installed by this target:
+#   xcode-select --install          (Command Line Tools: clang + the SDK)
+#   Go >= 1.25
+desktop-app: web
+	desktop/packaging/darwin/build-app.sh
 
 # Dev mode: Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
 #   - Vite rebuilds web/dist on muxterm frontend changes
@@ -185,6 +249,59 @@ verify-lifecycle:
 	@go build -o tmp/muxterm-verify ./cmd/muxterm
 	@$(call DEV_ISOLATE,lifecycle-verify,muxterm-cos-lifecycle-verify) \
 	MUXTERM_BIN="$$PWD/tmp/muxterm-verify" bash tools/verify-lifecycle-notices.sh
+
+# Verify the Inbox container against a real, isolated sessiond.
+#
+# Same reasoning as verify-lifecycle directly above: a verification run is a
+# dev instance like any other, so it expands DEV_ISOLATE rather than setting
+# XDG_* by hand. It binds MUXTERM_VERIFY_ADDR (default 8317) and starts a
+# daemon under the isolated runtime dir, so it must not be pointed at 8311/9090.
+#
+# MUXTERM_BASELINE_BIN is optional and is what makes the upgrade check real:
+# point it at a binary built from the commit BEFORE this feature and the script
+# builds an installation with that one, stops it, and reopens the same runtime
+# and data dirs with the build under test.
+verify-inbox:
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-inbox-verify ./cmd/muxterm
+	@mkdir -p tmp/probe && cp /home/ken/artifacts/inbox-verify/probe.go tmp/probe/main.go && go build -o tmp/inbox-probe ./tmp/probe
+	@$(call DEV_ISOLATE,inbox-verify,muxterm-cos-inbox-verify) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-inbox-verify" bash tools/verify-inbox.sh
+
+# Verify the first SDK-backed session against a real, isolated sessiond.
+#
+# Same reasoning as verify-lifecycle and verify-inbox above: a verification run
+# is a dev instance like any other, so it expands DEV_ISOLATE rather than
+# setting XDG_* by hand. It starts a daemon under the isolated runtime dir and
+# restarts it in place to prove the record is durable, so it must never be
+# pointed at 8311/9090.
+#
+# It makes real calls to the codex app server, which needs the harness
+# installed and authenticated on this machine.
+verify-sdk-session:
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-sdk-verify ./cmd/muxterm
+	@$(call DEV_ISOLATE,sdk-verify,muxterm-cos-sdk-verify) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-sdk-verify" bash tools/verify-sdk-session.sh
+
+# Verify that an SDK-backed session can be CONTINUED across a daemon restart --
+# the gap #220 named and left open. Same isolation mechanism, its own runtime
+# dir, so it can be run alongside verify-sdk-session without either daemon
+# binding the other's socket.
+verify-sdk-resume:
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-sdk-resume ./cmd/muxterm
+	@$(call DEV_ISOLATE,sdk-resume,muxterm-cos-sdk-resume) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-sdk-resume" bash tools/verify-sdk-resume.sh
+
+# Verify that an SDK-backed session's output is WATCHABLE -- in a real browser,
+# while the model is still producing it. Needs playwright-cli; binds a
+# non-production port (8319) and refuses the reserved ones.
+verify-sdk-stream: web
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-sdk-stream ./cmd/muxterm
+	@$(call DEV_ISOLATE,sdk-stream,muxterm-cos-sdk-stream) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-sdk-stream" bash tools/verify-sdk-stream.sh
 
 # Build the production binary from origin/main and install to the stable path.
 # This is what systemd runs — separate from ./bin/muxterm used by `make dev`.

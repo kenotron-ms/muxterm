@@ -86,6 +86,29 @@ type Server struct {
 	// when the watcher is off so a request handler can read history that an
 	// earlier, enabled run wrote.
 	attention *attentionStore
+
+	// projects is every container this daemon knows about. Today that is the
+	// Inbox and nothing else, and it is built in memory rather than loaded
+	// from a file precisely so that no failure -- a wiped data dir, a first
+	// run, a failed write -- can produce a daemon with nowhere to put a
+	// session. See project.go.
+	projects *ProjectRegistry
+	// projectAssign is the durable session -> project map. Same ownership
+	// shape as completions and triggers, for the same reason: its own lock,
+	// written from a control-protocol handler, read from the session-state
+	// ticker. Absence of an entry means the Inbox, so an installation where
+	// nobody has filed anything carries no file at all.
+	projectAssign *projectAssignments
+
+	// sdkSessions holds the sessions this daemon drives through a harness SDK
+	// rather than through a PTY (sdksession.go). Same ownership shape as
+	// projectAssign -- own lock, written from a control-protocol handler and
+	// from SDK notification goroutines, read from the session-state ticker.
+	//
+	// It is ADDITIVE. The PTY path does not consult it, and a daemon on which
+	// no SDK session is ever started carries an empty store and an absent
+	// file.
+	sdkSessions *sdkSessionStore
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -110,7 +133,20 @@ func NewServer(socketPath string) (*Server, error) {
 		completions:        newCompletionStore(CompletionsPath()),
 		finishedClearUndos: make(map[string]finishedClearUndo),
 		triggers:           newTriggerStore(TriggersPath()),
+		projects:           NewProjectRegistry(),
+		projectAssign:      newProjectAssignments(ProjectAssignmentsPath()),
+		sdkSessions:        newSDKSessionStore(SDKSessionsPath()),
 	}
+	// An SDK event is an out-of-band input, exactly like the filing gesture:
+	// the rows did not change on disk, so the change gate has to be re-armed
+	// by hand or a turn boundary would not reach the browser until the next
+	// tick happened to differ.
+	s.sdkSessions.notify = func() { s.emitSessionState() }
+	// And the stream. Deliberately NOT routed through emitSessionState: that
+	// function reads the spool directory and walks /proc for every row, which
+	// is the right price once a second and an absurd one per run of assistant
+	// text. This is a small delta frame on its own path.
+	s.sdkSessions.onOutput = func(chunk SDKOutputChunk) { s.publishSDKOutput(chunk) }
 	s.hookReports = newHookReportStore(identity.MachineID)
 	s.hookReports.projectAll()
 	s.attention = newAttentionStore(AttentionPath())
@@ -147,6 +183,17 @@ func CompletionsPath() string {
 		return override
 	}
 	return DefaultCompletionsPath()
+}
+
+// ProjectRegistry exposes the containers this daemon knows about, following
+// Registry directly below: the project layer's shape is part of the daemon's
+// surface, not an implementation detail, and a verification probe or a future
+// project-management verb reaches the Inbox's invariants through here.
+func (s *Server) ProjectRegistry() *ProjectRegistry {
+	if s.projects == nil {
+		return NewProjectRegistry()
+	}
+	return s.projects
 }
 
 // Registry exposes the server's Registry for tests and later phases.
@@ -698,6 +745,86 @@ func (c *conn) handle(msg Message) {
 		c.srv.broadcastWorkspaceList()
 	case TypeListWorkspaces:
 		c.srv.replyWorkspaceList(c, msg.CID)
+	case TypeListProjects:
+		// The filing destination list. Whatever containers exist, in the
+		// registry's reserved-first order. The client renders the reply as-is
+		// and has no idea the list currently has one entry, which is what
+		// makes a second project a server-side change only.
+		c.reply(&Message{Type: TypeProjectList, CID: msg.CID, Projects: c.srv.Projects()})
+	case TypeAssignSession:
+		// THE FILING GESTURE, at the API boundary.
+		//
+		// This is also where the Inbox's invariants are visible to a caller:
+		// there is no rename or delete verb reachable from here at all, so
+		// "delete the Inbox" and "rename the Inbox" are not refused requests,
+		// they are requests that cannot be expressed on this protocol. The
+		// registry's Rename/Delete refuse reserved ids underneath, so the
+		// invariant holds for the day a project-management verb is added.
+		if err := c.srv.AssignSessionProject(msg.SessionID, msg.ProjectID); err != nil {
+			code := CodeUnknownProject
+			if errors.Is(err, ErrProjectReserved) {
+				code = CodeProjectReserved
+			}
+			c.replyError(msg.CID, code, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeAssignSessionReply, CID: msg.CID, SessionID: msg.SessionID, ProjectID: msg.ProjectID, OK: true})
+		// Push the moved row now rather than waiting on the next tick, so the
+		// gesture lands on screen immediately instead of up to a second later.
+		c.srv.emitSessionState()
+	case TypeSDKSessionStart:
+		// Creating a session through the harness SDK. The daemon does this
+		// itself rather than handing the caller a connection, because the
+		// daemon is what has to still be holding the session when the caller
+		// has gone -- which is the entire difference between this and running
+		// `codex app-server` from a shell.
+		rec, err := c.srv.sdkSessions.Start(context.Background(), msg.Harness, msg.Cwd, msg.Name)
+		if err != nil {
+			c.replyError(msg.CID, CodeSDKSession, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSDKSessionStartReply, CID: msg.CID,
+			SessionID: rec.SessionID, ThreadID: rec.ThreadID, Harness: rec.Harness, Cwd: rec.Cwd, Name: rec.Name, OK: true})
+		c.srv.emitSessionState()
+	case TypeSDKSessionSend:
+		// The acknowledged delivery. An error here means the harness did NOT
+		// take the turn; a reply means it did and TurnID is its receipt.
+		// There is deliberately no third outcome -- no "sent, outcome
+		// unknown" -- because the protocol either returned a turn or it did
+		// not.
+		//
+		// A detached session -- one whose daemon was restarted under it --
+		// is resumed here first, so continuing a conversation that outlived
+		// this process is the same verb as continuing one that did not.
+		turn, resumed, err := c.srv.sdkSessions.Send(context.Background(), msg.SessionID, msg.Prompt)
+		if err != nil {
+			c.replyError(msg.CID, CodeSDKSession, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSDKSessionSendReply, CID: msg.CID,
+			SessionID: msg.SessionID, TurnID: turn.ID, TurnStatus: turn.Status, Resumed: resumed, OK: true})
+	case TypeSDKSessionResume:
+		// Reattach without delivering. The receipt is the thread id the
+		// HARNESS returned from thread/resume, not the one muxterm sent it:
+		// the harness is authoritative about which thread it just reopened.
+		rec, resumed, err := c.srv.sdkSessions.Resume(context.Background(), msg.SessionID)
+		if err != nil {
+			c.replyError(msg.CID, CodeSDKSession, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSDKSessionResumeReply, CID: msg.CID,
+			SessionID: rec.SessionID, ThreadID: rec.ThreadID, Harness: rec.Harness, Cwd: rec.Cwd,
+			Name: rec.Name, Resumed: resumed, OK: true})
+		c.srv.emitSessionState()
+	case TypeSDKSessionList:
+		c.reply(&Message{Type: TypeSDKSessionListReply, CID: msg.CID, SDKSessions: c.srv.sdkSessions.Records()})
+	case TypeSDKSessionClose:
+		if err := c.srv.sdkSessions.Close(msg.SessionID); err != nil {
+			c.replyError(msg.CID, CodeSDKSession, err.Error())
+			return
+		}
+		c.reply(&Message{Type: TypeSDKSessionCloseReply, CID: msg.CID, SessionID: msg.SessionID, OK: true})
+		c.srv.emitSessionState()
 	case TypeMissionControlIdentity:
 		identity := c.srv.MissionControlIdentity()
 		c.reply(&Message{Type: TypeMissionControlIdentityResult, CID: msg.CID, MissionControlProtocolVersion: identity.ProtocolVersion, MachineID: identity.MachineID, DaemonIncarnation: identity.DaemonIncarnation})
@@ -1713,7 +1840,25 @@ func (s *Server) emitSessionState() {
 	// with it. The rows come from the durable log, so they survive a restart
 	// of this daemon.
 	rows = mergeCompletionRows(rows, s.completions.Pending())
+	// Fold in the SDK-backed sessions. They are NOT in the spool and never
+	// will be: the spool is producer-owned and reclaimed every tick, whereas
+	// these are records this daemon owns durably (sdksession.go). A session
+	// already present from the spool is left alone -- see mergeSDKRows.
+	if s.sdkSessions != nil {
+		rows = mergeSDKRows(rows, s.sdkSessions.Rows())
+	}
 	rows = excludeOperatorSession(rows)
+	// Stamp the containment parent onto every row, at the daemon's ONE fleet
+	// source. Placed after the completion merge deliberately: a finished lane
+	// whose pane is gone is synthesized here out of the durable log
+	// (completion.go), so stamping any earlier would leave exactly the rows a
+	// human most wants to file carrying no project at all.
+	//
+	// Every consumer is downstream of this line -- browser cards, the sidebar,
+	// session-state subscribers, CLI and MCP fleet_status, the lifecycle edge
+	// watcher -- so there is one place where a session acquires its parent and
+	// no second authority that could disagree.
+	s.stampProjectIDs(rows)
 	// The rows are already joined to their panes, which is the only thing
 	// naming a tab or a workspace after its session needs. Done before the
 	// publish, and outside every lock, so a tick that renames something emits
@@ -1725,6 +1870,71 @@ func (s *Server) emitSessionState() {
 	// notification saying "w7" and saying what actually completed.
 	s.applyDerivedNames(rows)
 	s.publishSessionState(rows)
+}
+
+// stampProjectIDs gives every row its containment parent, in place.
+//
+// It is the READ half of the non-null invariant, and it is total: Resolve
+// returns the Inbox for a session with no record and for a session whose
+// recorded project no longer exists, so there is no row it can leave empty and
+// no error it can return. Whatever a producer wrote into the field is
+// discarded first -- a session is not authoritative about which container a
+// human filed it in, exactly as it is not authoritative about which pane it is
+// running in.
+//
+// Called on a slice the caller owns (collect returns a fresh one every tick and
+// mergeCompletionRows appends to it), so mutating in place cannot be observed
+// by anything holding an older set.
+func (s *Server) stampProjectIDs(rows []SessionState) {
+	if s.projectAssign == nil || s.projects == nil {
+		// Defensive, and it still upholds the invariant rather than skipping
+		// it: a Server built without the stores (a partially constructed test
+		// fixture) files everything in the Inbox rather than emitting a row
+		// with no parent.
+		for i := range rows {
+			rows[i].ProjectID = InboxProjectID
+		}
+		return
+	}
+	for i := range rows {
+		rows[i].ProjectID = s.projectAssign.Resolve(rows[i].SessionID, s.projects.Known)
+	}
+}
+
+// Projects returns every container this daemon knows about, reserved first.
+func (s *Server) Projects() []Project {
+	if s.projects == nil {
+		return []Project{{ID: InboxProjectID, Name: InboxProjectName, Reserved: true}}
+	}
+	return s.projects.All()
+}
+
+// AssignSessionProject files a session into a project.
+//
+// This is the whole filing gesture, server side. There is no companion
+// "unfile" verb because moving a session OUT of a project is moving it INTO
+// the Inbox -- one verb, both directions, which is what makes the gesture one
+// gesture rather than two that can disagree.
+//
+// An unknown project is refused rather than silently redirected: a client
+// offering a destination that does not exist has a bug, and filing the session
+// somewhere plausible instead would hide it.
+func (s *Server) AssignSessionProject(sessionID string, projectID ProjectID) error {
+	if s.projectAssign == nil || s.projects == nil {
+		return ErrUnknownProject
+	}
+	if err := s.projectAssign.Assign(sessionID, projectID, s.projects.Known); err != nil {
+		return err
+	}
+	// Filing is a server-owned input from outside the spool, so the change
+	// gate has to be re-armed by hand -- the rows themselves did not change on
+	// disk, only the parent this daemon stamps onto them. Without this the
+	// next tick would hash an identical set and suppress the frame, and the
+	// session would not appear to move until something else about it did.
+	s.mu.Lock()
+	s.sessions.rearmLocked()
+	s.mu.Unlock()
+	return nil
 }
 
 // excludeOperatorSession removes muxterm's own persistent chat-driver session
@@ -1752,6 +1962,41 @@ func excludeOperatorSession(rows []SessionState) []SessionState {
 // whole-state frame stays pending for that one connection until a later tick
 // successfully queues the current complete set. The shared change gate remains
 // quiet for healthy connections.
+// publishSDKOutput fans one run of assistant text out to every connection that
+// opted into session state.
+//
+// SAME SUBSCRIPTION, NO NEW OPT-IN. A client that asked for the fleet asked to
+// know what its sessions are doing, and an SDK session's output is the only
+// form that answer can take: it has no pane, so there is no preview tile and
+// no scrollback to page. Adding a second subscribe verb for it would mean a
+// browser could be shown the row and not the thing the row is about.
+//
+// Advisory and droppable, via enqueuePreview, exactly like session-state
+// frames: a slow browser tab loses output, never its terminal session. What is
+// different from every other droppable frame is that this one is a DELTA -- a
+// later frame does not repair it -- which is why each carries a per-session
+// sequence number the browser can use to say a gap happened rather than
+// concatenate across it.
+func (s *Server) publishSDKOutput(chunk SDKOutputChunk) {
+	msg := &Message{
+		Type:       TypeSDKSessionOutput,
+		SessionID:  chunk.SessionID,
+		ThreadID:   chunk.ThreadID,
+		TurnID:     chunk.TurnID,
+		ItemID:     chunk.ItemID,
+		OutputText: chunk.Text,
+		OutputSeq:  chunk.Seq,
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.conns {
+		if !c.sessionStateOn {
+			continue
+		}
+		c.sub.enqueuePreview(msg)
+	}
+}
+
 func (s *Server) publishSessionState(rows []SessionState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
