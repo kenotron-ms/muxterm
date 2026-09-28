@@ -116,10 +116,7 @@ TOOL_SURFACE_KEYS = ("muxterm_cos", "tools")
 SESSION_COST_CHANNEL = "session.cost"
 DEFAULT_APPROVAL_TIMEOUT = 300.0
 SUMMARY_LIMIT = 240
-LOOP_LIVE_COMMIT = "1d7be38ef47798bbb162f5331b413e78d6b4e70b"
-LOOP_LIVE_SOURCE = (
-    "git+https://github.com/microsoft/amplifier-module-loop-live@" + LOOP_LIVE_COMMIT
-)
+LOOP_LIVE_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
 
 # Serve-loop wake-up token.  Pushed onto the op queue by the signal handler so
 # an IDLE sidecar (parked on queue.get(), which no signal interrupts) re-reads
@@ -929,6 +926,10 @@ class Sidecar:
         self.session = session
 
         if self.args.loop_live:
+            # Resolve through AppSettings above, as the supported CLI does.
+            # A bare Foundation session can mount with no configured provider.
+            if self._model_name() == "unknown":
+                raise RuntimeError("loop-live requires a provider/model from Amplifier AppSettings")
             # PreparedBundle has already activated the stock orchestrator by
             # this point. Mount the canary explicitly so the coordinator's
             # single orchestrator slot is replaced before any execution starts.
@@ -2192,6 +2193,10 @@ class Sidecar:
             self.proto.emit(ev="generation_failed", version=1, input_id=input_id or "",
                             input_ids=[input_id] if isinstance(input_id, str) else [],
                             error="input requires string input_id, kind, source, and text")
+            return
+        if kind not in {"service", "steer"} or (kind == "steer" and source != "user") or (kind == "service" and source in {"", "user", "system", "developer"}):
+            self.proto.emit(ev="generation_failed", version=1, input_id=input_id,
+                            input_ids=[input_id], error="invalid host input kind or source")
             return
         await self._submit_live(input_id=input_id, kind=kind, source=source, text=text)
 

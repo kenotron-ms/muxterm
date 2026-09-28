@@ -79,6 +79,7 @@ const (
 	cosTypeSubscribe       = "cos-subscribe"
 	cosTypeSubscribeResult = "cos-subscribe-result"
 	cosTypeTurn            = "cos-turn"
+	cosTypeSteer           = "cos-steer"
 	cosTypeApproval        = "cos-approval"
 	cosTypeCancel          = "cos-cancel"
 	cosTypeClear           = "cos-clear"
@@ -790,6 +791,8 @@ func (c *Client) handleCosMessage(data []byte) {
 		c.cosSubscribe(msg.On)
 	case cosTypeTurn:
 		c.cosTurn(msg)
+	case cosTypeSteer:
+		c.cosSteer(msg)
 	case cosTypeApproval:
 		c.cosApproval(msg)
 	case cosTypeCancel:
@@ -1149,6 +1152,46 @@ func (c *Client) cosTurn(msg cosClientMessage) {
 	}
 	if !relay.enqueue(cosAdmission{client: c, msg: msg, prompt: delivered, refs: refs}) {
 		c.cosTurnFailure(msg, "admission_full", "Mission Control is busy accepting messages. Try again.")
+	}
+}
+
+// cosSteer submits a human correction to an already running live session.
+// The input_accepted event is the authoritative receipt; this reply means
+// only that the local supervisor accepted the write request.
+func (c *Client) cosSteer(msg cosClientMessage) {
+	code := ""
+	inputID := msg.ClientRef
+	if inputID == "" {
+		code = "missing_client_ref"
+	}
+	if strings.TrimSpace(msg.Prompt) == "" || len(msg.Prompt) > cosPromptMaxBytes || len(msg.Attachments) != 0 {
+		code = "bad_request"
+	}
+	relay := c.hub.cos
+	var sup *cos.Supervisor
+	if relay != nil {
+		sup = relay.started()
+	}
+	if code == "" && (sup == nil || !sup.LoopLiveEnabled()) {
+		code = "live_session_unavailable"
+	}
+	if code == "" {
+		turn := sup.SubmitSteerInput(msg.Prompt, inputID)
+		select {
+		case <-turn.Done():
+			_, err := turn.Result()
+			if err != nil {
+				code = "dispatch_failed"
+			}
+		default:
+		}
+	}
+	data, err := json.Marshal(map[string]any{
+		"type": "cos-steer-result", "client_ref": msg.ClientRef,
+		"input_id": inputID, "submitted": code == "", "code": code,
+	})
+	if err == nil {
+		_ = c.writeText(data)
 	}
 }
 
