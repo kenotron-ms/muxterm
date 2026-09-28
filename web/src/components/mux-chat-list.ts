@@ -4,8 +4,10 @@ import { repeat } from 'lit/directives/repeat.js';
 import { store } from '../state.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { LAUNCHABLE_HARNESSES, harnessLabel, type HarnessName } from '../lib/harness.js';
+import { sdkChatStore } from '../lib/sdk-chat-store.js';
 
 interface ChatRow {
+  id: string;
   paneId: number;
   title: string;
   harness: HarnessName;
@@ -26,6 +28,7 @@ export class MuxChatWorkspace extends LitElement {
   @property({ attribute: false }) model!: WorkspaceRow;
   @property() selectedWorkspace = '';
   @property({ type: Number }) selectedPane = 0;
+  @property() selectedChat = '';
   @state() private open = true;
 
   static styles = css`
@@ -46,6 +49,7 @@ export class MuxChatWorkspace extends LitElement {
     .status { width: 5px; height: 5px; border-radius: 50%; background: #697386; flex: none; }
     .status.working { background: #7dcba1; }
     .status.blocked { background: #e9b56a; }
+    .status.uncertain, .status.error { background: #e9b56a; }
     .empty { color: var(--chrome-text-dim, #9299a5); padding: 7px 8px; font-size: 11px; }
   `;
 
@@ -57,10 +61,10 @@ export class MuxChatWorkspace extends LitElement {
         <span class="identity"><span class="name">${row.name}</span><span class="path">${row.path}</span></span>
       </button>
       ${this.open ? html`<div class="chats">
-        ${repeat(row.chats, chat => chat.paneId, chat => html`
-          <button class="chat" ?selected=${this.selectedWorkspace === row.id && this.selectedPane === chat.paneId}
+        ${repeat(row.chats, chat => chat.id, chat => html`
+          <button class="chat" ?selected=${chat.id.startsWith('sdk:') ? this.selectedChat === chat.id.slice(4) : this.selectedWorkspace === row.id && this.selectedPane === chat.paneId}
             title=${chat.title} @click=${() => this.dispatchEvent(new CustomEvent('chat-open', {
-              detail: { workspaceId: row.id, paneId: chat.paneId }, bubbles: true, composed: true,
+              detail: { workspaceId: row.id, paneId: chat.paneId, sessionId: chat.id.startsWith('sdk:') ? chat.id.slice(4) : undefined }, bubbles: true, composed: true,
             }))}>
             <span class="status ${chat.status}" title=${chat.status || 'Live session'}></span>
             <span class="title">${chat.title}</span><span class="harness">${harnessLabel(chat.harness)}</span>
@@ -106,7 +110,8 @@ export class MuxChatList extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.unsubs = [store.subscribe(() => this.version++), homeSessions.subscribe(() => this.version++)];
+    this.unsubs = [store.subscribe(() => this.version++), homeSessions.subscribe(() => this.version++), sdkChatStore.subscribe(() => this.version++)];
+    void sdkChatStore.refresh().catch(error => console.error(error));
   }
   override disconnectedCallback() {
     for (const unsub of this.unsubs) unsub();
@@ -124,7 +129,11 @@ export class MuxChatList extends LitElement {
         const session = sessions.find(s => s.paneId === pane.paneId);
         const harness = pane.harness ?? session?.harness;
         if (harness !== 'amplifier' && harness !== 'claude' && harness !== 'codex') continue;
-        chats.push({ paneId: pane.paneId, title: session?.name || pane.title || 'New chat', harness: harness as HarnessName, status: session?.state ?? '' });
+        chats.push({ id: `pane:${pane.paneId}`, paneId: pane.paneId, title: session?.name || pane.title || 'New chat', harness: harness as HarnessName, status: session?.state ?? '' });
+      }
+      for (const chat of sdkChatStore.sessions) {
+        if (chat.workspaceId !== ws.workspaceId) continue;
+        chats.push({ id: `sdk:${chat.id}`, paneId: 0, title: chat.title, harness: chat.harness, status: chat.state });
       }
       const parts = ws.projectPath.split('/').filter(Boolean);
       const name = ws.name || parts[parts.length - 1] || ws.projectPath;
@@ -160,7 +169,7 @@ export class MuxChatList extends LitElement {
     return html`
       <div class="heading"><span>Chats</span><button class="add" aria-label="New chat" title="New chat" @click=${() => { this.creating = true; }}>＋</button></div>
       ${rows.length ? repeat(rows, row => row.id, row => html`
-        <mux-chat-workspace .model=${row} .selectedWorkspace=${store.attached ?? ''} .selectedPane=${store.activePaneId ?? 0}></mux-chat-workspace>
+        <mux-chat-workspace .model=${row} .selectedWorkspace=${store.attached ?? ''} .selectedPane=${store.activePaneId ?? 0} .selectedChat=${sdkChatStore.selected}></mux-chat-workspace>
       `) : html`<div class="hint">Choose a folder and start a chat.</div>`}
       ${this.creating ? html`<div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.creating = false; }}>
         <form class="dialog" @submit=${(e: Event) => { e.preventDefault(); this.submit(); }}>

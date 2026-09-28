@@ -162,6 +162,7 @@ type Server struct {
 	// concurrent clients cannot both rewrite the binary.
 	version  string
 	updating atomic.Bool
+	sdkChats *sdkChatManager
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -188,6 +189,7 @@ func New(cfg Config) *Server {
 		version:        cfg.Version,
 	}
 	s.configPath = cfg.ConfigPath
+	s.sdkChats = newSDKChatManager()
 	// Use the supplied initial config if it looks populated (palette is never
 	// empty in a real config), otherwise fall back to hardcoded defaults.
 	s.behindReverseProxy = cfg.BehindReverseProxy
@@ -282,6 +284,14 @@ func New(cfg Config) *Server {
 	// Protected routes: loopback bypass, else a valid session (cookie or
 	// bearer token) is required — see internal/server/authmiddleware.go.
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
+	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChatList)))
+	s.mux.Handle("POST /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChatCreate)))
+	s.mux.Handle("GET /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChatGet)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/send", protect(http.HandlerFunc(s.handleSDKChatSend)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/events", protect(http.HandlerFunc(s.handleSDKChatEvents)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/resume", protect(http.HandlerFunc(s.handleSDKChatResume)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/interrupt", protect(http.HandlerFunc(s.handleSDKChatInterrupt)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/close", protect(http.HandlerFunc(s.handleSDKChatClose)))
 	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
 
 	// Opt-in AI capability. Deliberately a separate route family from

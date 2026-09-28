@@ -39,12 +39,13 @@ import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
 import './components/mux-agent-chat.js';
+import { sdkChatStore } from './lib/sdk-chat-store.js';
 // <mux-home> is deliberately NOT imported. The Dashboard IS home now (see
 // <mux-cos>), and the two were never meant to be alternatives you could be
 // looking at one of. The component and its standalone demo are untouched.
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
-import { harnessArgv, type HarnessName } from './lib/harness.js';
+import { type HarnessName } from './lib/harness.js';
 import { cosStore } from './lib/cos-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -719,7 +720,7 @@ export class MuxApp extends LitElement {
    */
   @state()
   private _showDashboard = false;
-  @state() private _agentChat: { workspaceId: string; paneId: number } | null = null;
+  @state() private _agentChat: { workspaceId: string; sessionId: string } | null = null;
 
   /**
    * Whether the boot-surface decision has already been made for THIS instance.
@@ -796,6 +797,9 @@ export class MuxApp extends LitElement {
   private _pendingDispatch:
     | { workspaceId: string | null; cmd: string[]; prompt: string; clientRef: string }
     | null = null;
+  private _pendingSDKCreate: { workspaceId: string | null; projectPath: string; harness: HarnessName; prompt: string; clientRef: string } | null = null;
+  private _sdkWorkspaceIds = new Set<string>();
+  private _sdkSpawnChecks = new Set<string>();
 
   /**
    * A composer dispatch that could not be started, surfaced to the user with
@@ -1111,6 +1115,11 @@ export class MuxApp extends LitElement {
       ) {
         this._pendingDispatch.workspaceId = msg.workspaceId;
       }
+      const pendingSDK = this._pendingSDKCreate;
+      if (msg.type === SessiondType.WorkspaceCreated && pendingSDK && pendingSDK.clientRef === msg.clientRef && typeof msg.workspaceId === 'string') {
+        pendingSDK.workspaceId = msg.workspaceId;
+        this._sdkWorkspaceIds.add(msg.workspaceId);
+      }
       // The composition IS the "you are now in that workspace" signal, so it is
       // where a parked composer dispatch (_pendingDispatch) finally spawns --
       // but only when the composition is for the workspace it was aimed at.
@@ -1124,6 +1133,12 @@ export class MuxApp extends LitElement {
       // store has zero panes, auto-spawn exactly one. Guarding on the FOLDED
       // getter means an already-overlaid optimistic pane suppresses a double-spawn.
       if (msg.type === SessiondType.Composition) {
+        const sdkCreatingTarget = this._pendingSDKCreate?.workspaceId === msg.workspaceId;
+        const sdkPending = this._pendingSDKCreate;
+        if (sdkPending && sdkPending.workspaceId === msg.workspaceId && msg.workspaceId) {
+          this._pendingSDKCreate = null;
+          void this._startSDKChat(msg.workspaceId, sdkPending.projectPath, sdkPending.harness, sdkPending.prompt);
+        }
         const pending = this._pendingDispatch;
         const isOurTarget = !!pending && pending.workspaceId === msg.workspaceId;
         // ...and the connection must still be headed there. A newer attach
@@ -1143,8 +1158,16 @@ export class MuxApp extends LitElement {
           // the user chose to be elsewhere. Hand the prompt back instead.
           this._dropPendingDispatch('the workspace was left before it started');
           if (store.panes.length === 0) this._createPaneOptimistic();
-        } else if (store.panes.length === 0) {
-          this._createPaneOptimistic();
+        } else if (store.panes.length === 0 && !sdkCreatingTarget && !this._agentChat && !this._sdkWorkspaceIds.has(msg.workspaceId ?? '') && !sdkChatStore.sessions.some(chat => chat.workspaceId === msg.workspaceId)) {
+          const workspaceId = msg.workspaceId ?? '';
+          const projectPath = store.workspaces.find(w => w.workspaceId === workspaceId)?.projectPath;
+          if (!projectPath) this._createPaneOptimistic();
+          else if (!this._sdkSpawnChecks.has(workspaceId)) {
+            this._sdkSpawnChecks.add(workspaceId);
+            void sdkChatStore.refresh().then(() => {
+              if (store.attached === workspaceId && store.panes.length === 0 && !this._sdkWorkspaceIds.has(workspaceId) && !sdkChatStore.sessions.some(chat => chat.workspaceId === workspaceId)) this._createPaneOptimistic();
+            }).catch(error => console.error('SDK chat list unavailable', error)).finally(() => this._sdkSpawnChecks.delete(workspaceId));
+          }
         }
       }
       // The identity check above already prevents a parked dispatch from
@@ -1630,14 +1653,7 @@ export class MuxApp extends LitElement {
           )}
           ${this._agentChat && !this._showDashboard && this._agentChat.workspaceId === store.attached ? html`
             <mux-agent-chat
-              .workspaceId=${this._agentChat.workspaceId}
-              .paneId=${this._agentChat.paneId}
-              .title=${homeSessions.sessions.find(s => s.workspaceId === this._agentChat?.workspaceId && s.paneId === this._agentChat?.paneId)?.name ?? store.panes.find(p => p.paneId === this._agentChat?.paneId)?.title ?? 'Chat'}
-              .harness=${store.panes.find(p => p.paneId === this._agentChat?.paneId)?.harness ?? ''}
-              .projectPath=${store.workspaces.find(w => w.workspaceId === this._agentChat?.workspaceId)?.projectPath ?? ''}
-              @agent-chat-send=${this._onAgentChatSend}
-              @agent-chat-terminal=${this._onAgentChatTerminal}
-              @session-transcript-request=${this._onSessionTranscriptRequest}
+              .sessionId=${this._agentChat.sessionId}
             ></mux-agent-chat>` : ''}
         </div>
 
@@ -2514,32 +2530,42 @@ export class MuxApp extends LitElement {
     });
   };
 
-  /** Start a real harness pane after its target workspace is attached. */
+  /** Create an SDK session from the approved project-bound sidebar. */
   private _onChatCreate = (e: CustomEvent<{
     workspaceId: string | null; projectPath?: string; harness: HarnessName; prompt: string;
   }>): void => {
     const { workspaceId, projectPath, harness, prompt } = e.detail;
-    const clientRef = mintClientRef();
-    const cmd = harnessArgv(harness, prompt);
-    this._agentChat = null;
     this._dispatchAlert = null;
-    this._onDashboardHide();
-    this._closeDrawer();
-    if (workspaceId && workspaceId === store.attached) {
-      this._spawnPane(cmd);
+    if (harness === 'amplifier') {
+      this._dispatchAlert = {message: 'Amplifier SDK chat is unavailable in this build.', prompt};
       return;
     }
-    this._pendingDispatch = { workspaceId, cmd, prompt, clientRef };
     if (workspaceId) {
-      this._socket?.attachWithBreakpoint(workspaceId, currentLayoutMode());
+      const path = store.workspaces.find(w => w.workspaceId === workspaceId)?.projectPath;
+      if (!path) { this._dispatchAlert = {message: 'This workspace has no project folder.', prompt}; return; }
+      void this._startSDKChat(workspaceId, path, harness, prompt);
     } else if (projectPath) {
+      const clientRef = mintClientRef();
+      this._pendingSDKCreate = {workspaceId:null, projectPath, harness, prompt, clientRef};
       const parts = projectPath.split('/').filter(Boolean);
       const name = parts[parts.length - 1] || projectPath;
       if (!this._socket?.createWorkspace(name, clientRef, undefined, projectPath)) {
-        this._dropPendingDispatch('the connection is unavailable');
+        this._pendingSDKCreate = null;
+        this._dispatchAlert = {message:'The connection is unavailable.', prompt};
       }
     }
   };
+
+  private async _startSDKChat(workspaceId: string, projectPath: string, harness: HarnessName, prompt: string): Promise<void> {
+    try {
+      const session = await sdkChatStore.create({workspaceId, projectPath, harness, prompt});
+      this._agentChat = {workspaceId, sessionId:session.id};
+      this._onDashboardHide(); this._closeDrawer();
+      if (workspaceId !== store.attached) this._socket?.attachWithBreakpoint(workspaceId, currentLayoutMode());
+      const response = await fetch(`/api/sdk-chats/${encodeURIComponent(session.id)}/send`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({kind:'user',content:prompt})});
+      if (!response.ok) {const body=await response.json() as {error?:string};throw new Error(body.error||'The first SDK turn failed');}
+    } catch (error) { this._dispatchAlert = {message:String(error), prompt}; }
+  }
 
   /**
    * Give up on a parked dispatch and tell the user, with their words.
@@ -2585,20 +2611,13 @@ export class MuxApp extends LitElement {
   };
 
   private _onChatOpen = (e: Event): void => {
-    const detail = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
+    const detail = (e as CustomEvent<{ workspaceId: string; paneId: number; sessionId?: string }>).detail;
     if (!detail) return;
-    this._agentChat = detail;
-    this._onHomeOpen(e);
-  };
-
-  private _onAgentChatTerminal = (): void => {
-    this._agentChat = null;
-  };
-
-  private _onAgentChatSend = (e: CustomEvent<{ workspaceId: string; paneId: number; text: string }>): void => {
-    const { workspaceId, paneId, text } = e.detail;
-    if (workspaceId !== store.attached || !store.panes.some(p => p.paneId === paneId)) return;
-    this._socket?.sendPaneInput(paneId, new TextEncoder().encode(text + '\r'));
+    if (!detail.sessionId) { this._agentChat=null; this._onHomeOpen(e); return; }
+    sdkChatStore.select(detail.sessionId);
+    this._agentChat = {workspaceId:detail.workspaceId,sessionId:detail.sessionId};
+    this._onDashboardHide();
+    if (detail.workspaceId !== store.attached) this._socket?.attachWithBreakpoint(detail.workspaceId,currentLayoutMode());
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {

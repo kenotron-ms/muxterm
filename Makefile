@@ -64,8 +64,16 @@ mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME";
 endef
 
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
-build: web
+build: web sdk-chat-deps
 	go build -ldflags "-X main.version=$(DEV_VERSION)" -o bin/muxterm ./cmd/muxterm
+
+# The Node SDK sidecar is loaded from this source tree in development. Keep its
+# lockfile install explicit so a fresh checkout can launch Codex and Claude.
+.PHONY: sdk-chat-deps
+sdk-chat-deps: internal/sdkchat/node_modules/.package-lock.json
+
+internal/sdkchat/node_modules/.package-lock.json: internal/sdkchat/package.json internal/sdkchat/package-lock.json
+	cd internal/sdkchat && npm ci --ignore-scripts --no-audit --no-fund
 
 # Dev mode: Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
 #   - Vite rebuilds web/dist on muxterm frontend changes
@@ -154,7 +162,7 @@ dev: web-public
 # sessions must survive a `make dev-local` restart), not a bug. Clean it up
 # by deleting $${TMPDIR:-/tmp}/muxterm-dev-local/ if ever desired.
 # Requires: air (falls back to $(HOME)/go/bin/air if not on PATH).
-dev-local: web-public
+dev-local: web-public sdk-chat-deps
 	@mkdir -p tmp
 	@$(call DEV_ISOLATE,$(DEV_LOCAL_NAME),$(DEV_LOCAL_COS_SESSION)) \
 	cd $(WEB_SRC) && npx vite build --watch > ../tmp/dev-local-vite.out 2>&1 & VITE_PID=$$!; \
