@@ -20,6 +20,7 @@ import (
 
 	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
+	"github.com/kenotron-ms/muxterm/internal/chatattachments"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/voice"
@@ -163,7 +164,8 @@ type Server struct {
 	version  string
 	updating atomic.Bool
 
-	sdkChats *sdkChatHost
+	sdkChats           *sdkChatHost
+	sdkChatAttachments *chatattachments.Store
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -190,6 +192,14 @@ func New(cfg Config) *Server {
 		version:        cfg.Version,
 	}
 	s.sdkChats = newSDKChatHost()
+	attachmentRoot, err := chatattachments.DefaultRoot()
+	if err != nil {
+		log.Panicf("sdk chat attachment root: %v", err)
+	}
+	s.sdkChatAttachments, err = chatattachments.NewStore(attachmentRoot)
+	if err != nil {
+		log.Panicf("sdk chat attachment store: %v", err)
+	}
 	s.configPath = cfg.ConfigPath
 	// Use the supplied initial config if it looks populated (palette is never
 	// empty in a real config), otherwise fall back to hardcoded defaults.
@@ -369,6 +379,9 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/artifact/open", protect(http.HandlerFunc(s.handleArtifactOpen)))
 
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
+	if err := chatattachments.RegisterRoutes(s.mux, s.sdkChatAttachments, protect); err != nil {
+		log.Panicf("sdk chat attachment routes: %v", err)
+	}
 	s.mux.Handle("POST /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("GET /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))
 	s.mux.Handle("POST /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))

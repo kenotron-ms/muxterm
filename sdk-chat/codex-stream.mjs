@@ -54,8 +54,15 @@ export class CodexStream {
     this.inputId = input.id;
     this.textByItem.clear();
     try {
+      const attachments = input.attachments || [];
+      const manifest = attachments.map(a => `- ${JSON.stringify(a.name)} (${a.kind}): ${JSON.stringify(a.path)}`).join('\n');
+      const prompt = attachments.length
+        ? `${input.content || 'Please inspect the attached files.'}\n\nAttached files on the local filesystem (absolute paths):\n${manifest}\nRead the files at these paths before answering. Inspect each image's contents.`
+        : input.content;
+      const turnInput = [{ type: 'text', text: prompt, text_elements: [] }];
+      for (const item of attachments) if (item.kind === 'image') turnInput.push({ type: 'localImage', path: item.path });
       const result = await this.request('turn/start', { threadId: this.session.nativeId,
-        input: [{ type: 'text', text: input.content, text_elements: [] }] });
+        input: turnInput });
       this.turnId = result.turn.id;
     } catch (error) {
       this.session.busy = false;

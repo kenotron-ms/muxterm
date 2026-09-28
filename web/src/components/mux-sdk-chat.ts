@@ -6,8 +6,9 @@ import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import './mux-amplifier-settings.js';
 
-type Event = { type: string; text?: string; name?: string; toolId?: string; message?: string; kind?: string; raw?: unknown };
+type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; message?: string; kind?: string; raw?: unknown };
 type Block = { kind: 'user' | 'assistant' | 'tool' | 'error'; text: string; name?: string; id?: string; done?: boolean };
+type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
@@ -17,8 +18,12 @@ export class MuxSDKChat extends LitElement {
   @state() private error = '';
   @state() private busy = false;
   @state() private drawerOpen = false;
+  @state() private attachments: Attachment[] = [];
+  @state() private dropActive = false;
+  private dragDepth = 0;
   private stream?: EventSource;
   private parsers = new Map<number, MarkdownStream>();
+  private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
   static styles = css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-bg,#1a1c28); color:var(--chrome-text-bright,#d9def0); font:13px/1.55 system-ui,sans-serif; }
     .topbar { min-height:44px; display:flex; align-items:center; gap:12px; padding:0 22px; border-bottom:1px solid var(--chrome-border,#343a4c); }
@@ -40,6 +45,16 @@ export class MuxSDKChat extends LitElement {
     .tool-name { color:#b7c9ed; }
     .error { color:#e6a5a5; }
     .composer-wrap { padding:0 clamp(24px,8vw,120px) 18px; }
+    .attachments { max-width:780px; margin:0 auto 8px; display:flex; flex-wrap:wrap; gap:8px; }
+    .attachment { display:flex; align-items:center; gap:8px; max-width:100%; padding:6px 8px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
+    .attachment img { width:44px; height:44px; object-fit:cover; border-radius:6px; }
+    .attachment .filename { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .attachment .status { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
+    .attachment .status.failed { color:#f0aaa8; }
+    .attachment button { background:transparent; color:inherit; border:0; font-size:18px; }
+    .attach-button { width:31px; height:31px; border:0; background:transparent; color:#9bb8f7; font-size:21px; }
+    .file-input { display:none; }
+    .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed #9bb8f7; border-radius:16px; background:rgba(25,35,60,.92); color:#d9e5ff; font-size:22px; pointer-events:none; }
     .composer { max-width:780px; margin:auto; display:flex; align-items:flex-end; gap:10px; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:rgba(0,0,0,.15); padding:11px 12px; }
     textarea { flex:1; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; height:46px; }
     .send { width:31px; height:31px; border-radius:50%; border:0; background:#9bb8f7; color:#152032; font-size:18px; }
@@ -47,19 +62,30 @@ export class MuxSDKChat extends LitElement {
     .drawer { width:min(32vw,420px); min-width:220px; border-left:1px solid var(--chrome-border,#343a4c); background:var(--chrome-bar,#202632); }
     @media(max-width:700px) { .drawer { position:absolute; right:0; top:44px; bottom:0; width:min(80vw,420px); box-shadow:-10px 0 30px #0008; } }
   `;
-  override connectedCallback() { super.connectedCallback(); this.connect(); }
-  override disconnectedCallback() { this.stream?.close(); super.disconnectedCallback(); }
+  override connectedCallback() {
+    super.connectedCallback();
+    window.addEventListener('dragover', this.preventFileNavigation);
+    window.addEventListener('drop', this.preventFileNavigation);
+    this.connect();
+  }
+  override disconnectedCallback() {
+    window.removeEventListener('dragover', this.preventFileNavigation);
+    window.removeEventListener('drop', this.preventFileNavigation);
+    this.stream?.close();
+    for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
+    super.disconnectedCallback();
+  }
   override willUpdate(changed: Map<string, unknown>) { if (changed.has('sessionId')) this.connect(); }
   private connect() {
     if (!this.isConnected || !this.sessionId) return;
     this.stream?.close(); this.blocks = []; this.parsers.clear(); this.error = ''; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
     const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/events`));
     source.addEventListener('snapshot', e => { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; });
-    source.addEventListener('sdk', e => this.onEvent(JSON.parse((e as MessageEvent).data) as Event));
+    source.addEventListener('sdk', e => this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent));
     source.onerror = () => { this.error = 'Connection to the chat stream was interrupted.'; };
     this.stream = source;
   }
-  private onEvent(event: Event) {
+  private onEvent(event: SDKEvent) {
     const blocks = [...this.blocks];
     if (event.type === 'input.accepted') { blocks.push({ kind:'user', text:event.text || '' }); this.busy = true; }
     else if (event.type === 'assistant.delta') {
@@ -83,20 +109,76 @@ export class MuxSDKChat extends LitElement {
     if (!parser) { parser = new MarkdownStream(); this.parsers.set(index, parser); }
     return renderSegments(parser.update(block.text, !block.done));
   }
+  private hasFiles(event: DragEvent) { return Array.from(event.dataTransfer?.types || []).includes('Files'); }
+  private onDragEnter(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth++; this.dropActive = true; }
+  private onDragOver(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; this.dropActive = true; }
+  private onDragLeave(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth = Math.max(0, this.dragDepth - 1); if (!this.dragDepth) this.dropActive = false; }
+  private onDrop(event: DragEvent) {
+    if (!this.hasFiles(event)) return;
+    event.preventDefault(); event.stopPropagation(); this.dragDepth = 0; this.dropActive = false;
+    this.addFiles(Array.from(event.dataTransfer?.files || []));
+  }
+  private onPick(event: Event) {
+    const input = event.target as HTMLInputElement;
+    this.addFiles(Array.from(input.files || [])); input.value = '';
+  }
+  private addFiles(files: File[]) {
+    for (const file of files) {
+      const item: Attachment = { localId: crypto.randomUUID(), file, uploading: true };
+      this.attachments = [...this.attachments, item];
+      void this.upload(item);
+    }
+  }
+  private async upload(item: Attachment) {
+    const form = new FormData(); form.append('file', item.file);
+    try {
+      const response = await fetch(apiPath('/api/sdk-chat-attachments'), {
+        method: 'POST', headers: { 'X-Muxterm-Chat-Attachment': '1' }, body: form,
+      });
+      const payload = await response.json() as { id?: string; kind?: string; reason?: string };
+      if (!response.ok) throw new Error(payload.reason || `Upload failed (${response.status})`);
+      if (!payload.id || !payload.kind) throw new Error('Upload response lacked attachment details');
+      if (!this.attachments.some(a => a.localId === item.localId)) return;
+      this.attachments = this.attachments.map(a => a.localId === item.localId
+        ? { ...a, id: payload.id, kind: payload.kind, uploading: false,
+            preview: payload.kind === 'image' ? URL.createObjectURL(a.file) : undefined } : a);
+    } catch (error) {
+      if (!this.attachments.some(a => a.localId === item.localId)) return;
+      this.attachments = this.attachments.map(a => a.localId === item.localId
+        ? { ...a, uploading: false, error: error instanceof Error ? error.message : String(error) } : a);
+    }
+  }
+  private removeAttachment(localId: string) {
+    const item = this.attachments.find(a => a.localId === localId);
+    if (item?.preview) URL.revokeObjectURL(item.preview);
+    this.attachments = this.attachments.filter(a => a.localId !== localId);
+  }
   private async send() {
-    const content = this.draft.trim(); if (!content || this.busy) return;
+    const content = this.draft.trim();
+    if ((!content && !this.attachments.length) || this.busy || this.attachments.some(a => a.uploading || a.error)) return;
+    const sent = this.attachments;
     this.draft = '';
     try {
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind:'user', source:'browser', id:crypto.randomUUID(), content }) });
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind:'user', source:'browser', id:crypto.randomUUID(), content, attachments: sent.map(a => a.id) }) });
       if (!response.ok) throw new Error(await response.text());
+      for (const item of sent) if (item.preview) URL.revokeObjectURL(item.preview);
+      this.attachments = this.attachments.filter(a => !sent.includes(a));
+      this.error = '';
     } catch (error) { this.error = String(error); this.draft = content; }
   }
   override render() { return html`
     <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${this.chat?.projectPath || ''}</span>${this.chat?.harness === 'amplifier' ? html`<mux-amplifier-settings .sessionId=${this.sessionId} .turnBusy=${this.busy}></mux-amplifier-settings>` : nothing}<button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${() => { this.drawerOpen = !this.drawerOpen; }}>▥</button></div>
-    <div class="layout"><div class="chat"><div class="body">
+    <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
       ${this.blocks.length ? this.blocks.map((b, i) => html`<div class="block ${b.kind}">${b.kind === 'user' ? html`<div class="bubble">${b.text}</div>` : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, i)}</div>` : b.kind === 'tool' ? html`<div class="tool"><span class="tool-name">${b.name}</span> · ${b.text}</div>` : html`<div class="error">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
-    </div><div class="composer-wrap"><div class="composer"><textarea placeholder="Message ${this.chat?.harness || 'agent'}…" .value=${this.draft} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><button class="send" aria-label="Send message" ?disabled=${!this.draft.trim() || this.busy} @click=${() => void this.send()}>↑</button></div></div></div>
+    </div><div class="composer-wrap">
+      ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
+        ${a.kind === 'image' && a.preview ? html`<img src=${a.preview} alt=${a.file.name}>` : nothing}
+        <span class="filename" title=${a.file.name}>${a.file.name}</span>
+        <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
+        <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
+      </div>`)}</div>` : nothing}
+      <div class="composer"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><textarea placeholder="Message ${this.chat?.harness || 'agent'}…" .value=${this.draft} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><button class="send" aria-label="Send message" ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.busy || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div></div></div>
       ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" data-dockview-host-seam></aside>` : nothing}
-    </div>`; }
+    </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`; }
 }
