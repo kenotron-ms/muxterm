@@ -2,11 +2,11 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { store } from '../state.js';
-import { homeSessions } from '../lib/home-sessions.js';
+import { sdkChats } from '../lib/sdk-chats.js';
 import { LAUNCHABLE_HARNESSES, harnessLabel, type HarnessName } from '../lib/harness.js';
 
 interface ChatRow {
-  paneId: number;
+  id: string;
   title: string;
   harness: HarnessName;
   status: string;
@@ -24,8 +24,7 @@ interface WorkspaceRow {
 @customElement('mux-chat-workspace')
 export class MuxChatWorkspace extends LitElement {
   @property({ attribute: false }) model!: WorkspaceRow;
-  @property() selectedWorkspace = '';
-  @property({ type: Number }) selectedPane = 0;
+  @property() selectedSession = '';
   @state() private open = true;
 
   static styles = css`
@@ -57,10 +56,10 @@ export class MuxChatWorkspace extends LitElement {
         <span class="identity"><span class="name">${row.name}</span><span class="path">${row.path}</span></span>
       </button>
       ${this.open ? html`<div class="chats">
-        ${repeat(row.chats, chat => chat.paneId, chat => html`
-          <button class="chat" ?selected=${this.selectedWorkspace === row.id && this.selectedPane === chat.paneId}
+        ${repeat(row.chats, chat => chat.id, chat => html`
+          <button class="chat" ?selected=${this.selectedSession === chat.id}
             title=${chat.title} @click=${() => this.dispatchEvent(new CustomEvent('chat-open', {
-              detail: { workspaceId: row.id, paneId: chat.paneId }, bubbles: true, composed: true,
+              detail: { sessionId: chat.id }, bubbles: true, composed: true,
             }))}>
             <span class="status ${chat.status}" title=${chat.status || 'Live session'}></span>
             <span class="title">${chat.title}</span><span class="harness">${harnessLabel(chat.harness)}</span>
@@ -106,7 +105,8 @@ export class MuxChatList extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.unsubs = [store.subscribe(() => this.version++), homeSessions.subscribe(() => this.version++)];
+    this.unsubs = [store.subscribe(() => this.version++), sdkChats.subscribe(() => this.version++)];
+    void sdkChats.refresh();
   }
   override disconnectedCallback() {
     for (const unsub of this.unsubs) unsub();
@@ -116,26 +116,34 @@ export class MuxChatList extends LitElement {
 
   private rows(): WorkspaceRow[] {
     const rows: WorkspaceRow[] = [];
+    const included = new Set<string>();
     for (const ws of store.workspaces) {
-      if (!ws.projectPath) continue; // legacy terminal workspaces retain their existing navigation
-      const sessions = homeSessions.sessions.filter(s => s.workspaceId === ws.workspaceId);
-      const chats: ChatRow[] = [];
-      for (const pane of ws.panes ?? []) {
-        const session = sessions.find(s => s.paneId === pane.paneId);
-        const harness = pane.harness ?? session?.harness;
-        if (harness !== 'amplifier' && harness !== 'claude' && harness !== 'codex') continue;
-        chats.push({ paneId: pane.paneId, title: session?.name || pane.title || 'New chat', harness: harness as HarnessName, status: session?.state ?? '' });
-      }
+      if (!ws.projectPath) continue;
+      const chats: ChatRow[] = sdkChats.chats.filter(c => c.workspaceId === ws.workspaceId || (!c.workspaceId && c.projectPath === ws.projectPath)).map(c => {
+        included.add(c.id);
+        return { id: c.id, title: c.title, harness: c.harness, status: c.state };
+      });
       const parts = ws.projectPath.split('/').filter(Boolean);
       const name = ws.name || parts[parts.length - 1] || ws.projectPath;
       const signature = JSON.stringify([name, ws.projectPath, chats]);
       const previous = this.cached.get(ws.workspaceId);
       if (previous?.signature === signature) rows.push(previous.row);
-      else {
-        const row = { id: ws.workspaceId, name, path: ws.projectPath, chats };
-        this.cached.set(ws.workspaceId, { signature, row });
-        rows.push(row);
-      }
+      else { const row = { id: ws.workspaceId, name, path: ws.projectPath, chats }; this.cached.set(ws.workspaceId, { signature, row }); rows.push(row); }
+    }
+    const byPath = new Map<string, ChatRow[]>();
+    for (const c of sdkChats.chats) {
+      if (included.has(c.id)) continue;
+      const chats = byPath.get(c.projectPath) ?? [];
+      chats.push({ id: c.id, title: c.title, harness: c.harness, status: c.state });
+      byPath.set(c.projectPath, chats);
+    }
+    for (const [path, chats] of byPath) {
+      const id = `sdk:${path}`;
+      const name = path.split('/').filter(Boolean).slice(-1)[0] || path;
+      const signature = JSON.stringify([name, path, chats]);
+      const previous = this.cached.get(id);
+      if (previous?.signature === signature) rows.push(previous.row);
+      else { const row = { id, name, path, chats }; this.cached.set(id, { signature, row }); rows.push(row); }
     }
     for (const id of this.cached.keys()) if (!rows.some(row => row.id === id)) this.cached.delete(id);
     return rows;
@@ -160,7 +168,7 @@ export class MuxChatList extends LitElement {
     return html`
       <div class="heading"><span>Chats</span><button class="add" aria-label="New chat" title="New chat" @click=${() => { this.creating = true; }}>＋</button></div>
       ${rows.length ? repeat(rows, row => row.id, row => html`
-        <mux-chat-workspace .model=${row} .selectedWorkspace=${store.attached ?? ''} .selectedPane=${store.activePaneId ?? 0}></mux-chat-workspace>
+        <mux-chat-workspace .model=${row} .selectedSession=${(window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? ''}></mux-chat-workspace>
       `) : html`<div class="hint">Choose a folder and start a chat.</div>`}
       ${this.creating ? html`<div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.creating = false; }}>
         <form class="dialog" @submit=${(e: Event) => { e.preventDefault(); this.submit(); }}>
