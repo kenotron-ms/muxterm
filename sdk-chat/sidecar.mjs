@@ -1,7 +1,7 @@
 // Versioned NDJSON over a Unix socket. Go owns IDs, receipts, and the event log.
 import net from 'node:net';
 import { unlink } from 'node:fs/promises';
-import { Codex } from '@openai/codex-sdk';
+import { CodexStream } from './codex-stream.mjs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 const socketPath = process.argv[2];
@@ -60,39 +60,11 @@ async function runClaude(s) {
 }
 async function runCodex(s, input) {
   s.busy = true;
-  const abort = new AbortController(); s.abort = abort;
   try {
-    if (!s.thread) {
-      const sdk = new Codex();
-      s.thread = s.nativeId ? sdk.resumeThread(s.nativeId, { workingDirectory: s.cwd,
-        skipGitRepoCheck: true, approvalPolicy: 'never', sandboxMode: 'danger-full-access' })
-        : sdk.startThread({ workingDirectory: s.cwd, skipGitRepoCheck: true,
-          approvalPolicy: 'never', sandboxMode: 'danger-full-access' });
-    }
-    const { events } = await s.thread.runStreamed(input.content, { signal: abort.signal });
-    for await (const event of events) {
-      if (event.type === 'thread.started') {
-        s.nativeId = event.thread_id;
-        emit(s.id, 'session.started', { nativeId: s.nativeId, capabilities: capabilities('codex') });
-      } else if (event.type === 'item.updated' && event.item?.type === 'agent_message') {
-        const old = s.partial || '';
-        const next = event.item.text || '';
-        if (next.startsWith(old)) emit(s.id, 'assistant.delta', { text: next.slice(old.length) });
-        s.partial = next;
-      } else if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
-        const old = s.partial || '';
-        const next = event.item.text || '';
-        emit(s.id, 'assistant.delta', { text: next.startsWith(old) ? next.slice(old.length) : next });
-        s.partial = '';
-      } else if (event.type === 'item.started' && event.item?.type !== 'agent_message') {
-        emit(s.id, 'tool.started', { name: event.item.type, toolId: event.item.id, raw: event.item });
-      } else if (event.type === 'item.completed' && event.item?.type !== 'agent_message') {
-        emit(s.id, 'tool.completed', { name: event.item.type, toolId: event.item.id, raw: event.item });
-      } else if (event.type === 'turn.completed') emit(s.id, 'turn.completed', { inputIds: [input.id] });
-      else if (event.type === 'turn.failed') emit(s.id, 'error', { message: event.error?.message || 'Codex turn failed' });
-    }
+    s.codex ||= new CodexStream(s, emit);
+    await s.codex.run(input);
   } catch (error) { emit(s.id, 'error', { message: String(error) }); }
-  finally { s.busy = false; s.abort = null; }
+  finally { if (!s.codex?.turnId) s.busy = false; }
 }
 async function command(cmd) {
   const { op, sessionId, harness, cwd, nativeId, input } = cmd;
@@ -120,11 +92,11 @@ async function command(cmd) {
     return { status: 'accepted', inputId: input.id };
   }
   if (op === 'interrupt') {
-    if (s.harness === 'codex') s.abort?.abort(); else await s.query?.interrupt();
+    if (s.harness === 'codex') await s.codex?.interrupt(); else await s.query?.interrupt();
     return { status: 'accepted' };
   }
   if (op === 'close') {
-    s.closed = true; s.wake?.(); s.abort?.abort(); s.query?.close?.(); sessions.delete(sessionId);
+    s.closed = true; s.wake?.(); s.codex?.close(); s.query?.close?.(); sessions.delete(sessionId);
     return { status: 'closed' };
   }
   throw new Error(`Unknown operation: ${op}`);
@@ -148,7 +120,7 @@ const server = net.createServer(client => {
 server.listen(socketPath);
 
 async function shutdown() {
-  for (const s of sessions.values()) { s.closed = true; s.wake?.(); s.abort?.abort(); try { await s.query?.close?.(); } catch {} }
+  for (const s of sessions.values()) { s.closed = true; s.wake?.(); s.codex?.close(); try { await s.query?.close?.(); } catch {} }
   server.close();
   try { await unlink(socketPath); } catch {}
   process.exit(0);
