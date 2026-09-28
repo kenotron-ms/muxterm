@@ -15,12 +15,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/cos"
+	sdkchat "github.com/kenotron-ms/muxterm/sdk-chat"
 )
 
 // SDK chats are Go-owned records. Native harness IDs are resume pointers only.
@@ -142,12 +142,11 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	}
 	h.mu.Unlock()
 }
-func (h *sdkChatHost) sidecarPath() string {
+func (h *sdkChatHost) sidecarPath() (string, error) {
 	if p := os.Getenv("MUXTERM_SDK_CHAT_SIDECAR"); p != "" {
-		return p
+		return p, nil
 	}
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "sdk-chat", "sidecar.mjs"))
+	return sdkchat.Prepare()
 }
 func (h *sdkChatHost) ensure(harness string) error {
 	if harness == "amplifier" {
@@ -162,7 +161,10 @@ func (h *sdkChatHost) ensure(harness string) error {
 		return err
 	}
 	_ = os.Remove(h.socket)
-	path := h.sidecarPath()
+	path, err := h.sidecarPath()
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("SDK sidecar unavailable at %s: %w", path, err)
 	}
@@ -427,7 +429,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath}); err == nil {
 		_, err = h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": sdkID(), "content": req.Prompt}})

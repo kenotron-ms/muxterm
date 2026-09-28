@@ -1,15 +1,16 @@
 # SDK chat sidecar
 
-`make dev-local` and `make build` install the pinned Node dependencies when absent.
-Go starts this sidecar lazily and supervises it through a versioned NDJSON Unix
-socket. It uses the existing Codex and Claude login state; no settings file is
+The muxterm binary embeds this sidecar, `package.json`, and the exact npm lockfile.
+On first use it extracts them to a versioned cache and runs `npm ci --ignore-scripts`
+there. Node.js and npm are required; dependency installation errors stop chat
+creation with a clear error. Go starts the sidecar lazily and supervises it
+through a versioned NDJSON Unix socket. It uses the existing Codex and Claude login state; no settings file is
 written. The sidecar accepts `start`, `resume`, `send`, `interrupt`,
 `capabilities`, and `close` operations. Unsupported service attribution and
 busy Codex input return explicit errors.
 
-The sidecar path defaults to `sdk-chat/sidecar.mjs` beside the source tree used
-to build muxterm. `MUXTERM_SDK_CHAT_SIDECAR` can point to a packaged copy.
-A release package must include this directory and its installed dependencies.
+The sidecar path defaults to the extracted copy embedded in the binary.
+`MUXTERM_SDK_CHAT_SIDECAR` can point to an explicit copy.
 Amplifier runs in the supervised Python sidecar. At startup the sidecar installs
 `amplifier-module-loop-live` into its selected Amplifier CLI interpreter on every boot
 (see `internal/cos/sidecar/loop-live-requirements.txt`). An installation failure stops boot.
