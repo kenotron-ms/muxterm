@@ -1,4 +1,4 @@
-.PHONY: build dev dev-local verify-lifecycle install-stable test clean web
+.PHONY: build dev dev-local sdk-chat-deps verify-lifecycle install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -64,7 +64,10 @@ mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME";
 endef
 
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
-build: web
+sdk-chat-deps:
+	@test -d sdk-chat/node_modules/@openai/codex-sdk -a -d sdk-chat/node_modules/@anthropic-ai/claude-agent-sdk || npm ci --ignore-scripts --prefix sdk-chat
+
+build: web sdk-chat-deps
 	go build -ldflags "-X main.version=$(DEV_VERSION)" -o bin/muxterm ./cmd/muxterm
 
 # Dev mode: Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
@@ -154,7 +157,7 @@ dev: web-public
 # sessions must survive a `make dev-local` restart), not a bug. Clean it up
 # by deleting $${TMPDIR:-/tmp}/muxterm-dev-local/ if ever desired.
 # Requires: air (falls back to $(HOME)/go/bin/air if not on PATH).
-dev-local: web-public
+dev-local: web-public sdk-chat-deps
 	@mkdir -p tmp
 	@$(call DEV_ISOLATE,$(DEV_LOCAL_NAME),$(DEV_LOCAL_COS_SESSION)) \
 	cd $(WEB_SRC) && npx vite build --watch > ../tmp/dev-local-vite.out 2>&1 & VITE_PID=$$!; \

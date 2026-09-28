@@ -162,6 +162,8 @@ type Server struct {
 	// concurrent clients cannot both rewrite the binary.
 	version  string
 	updating atomic.Bool
+
+	sdkChats *sdkChatHost
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -187,6 +189,8 @@ func New(cfg Config) *Server {
 		webRedirectURI: cfg.WebRedirectURI,
 		version:        cfg.Version,
 	}
+	s.sdkChats = newSDKChatHost()
+	s.sdkChats.cosRelay = hub.cos
 	s.configPath = cfg.ConfigPath
 	// Use the supplied initial config if it looks populated (palette is never
 	// empty in a real config), otherwise fall back to hardcoded defaults.
@@ -365,6 +369,11 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/artifact/doc.css", protect(http.HandlerFunc(s.handleArtifactDocCSS)))
 	s.mux.Handle("POST /api/artifact/open", protect(http.HandlerFunc(s.handleArtifactOpen)))
 
+	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
+	s.mux.Handle("POST /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
+	s.mux.Handle("GET /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
+	s.mux.Handle("POST /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/events", protect(http.HandlerFunc(s.handleSDKChatEvents)))
 	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
 	if cfg.StaticFS != nil {
@@ -405,6 +414,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// It does NOT cover a panic-free-fall past this frame or a SIGKILL; that is
 	// what the child's Pdeathsig is for (internal/cos/pdeathsig_linux.go).
 	defer s.hub.CloseCos()
+	defer s.sdkChats.close()
 
 	// Operator lifecycle notices are enabled unless explicitly disabled.
 	// This connects the fleet's existing terminal signals to the conversation.

@@ -1,0 +1,2 @@
+# Opt-in live path. amplifier-core is supplied by the Amplifier CLI environment.
+amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@main

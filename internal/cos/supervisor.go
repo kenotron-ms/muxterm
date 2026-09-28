@@ -27,6 +27,7 @@ import (
 // rather than fault on (2.4 law 5).
 const (
 	opTurn      = "turn"
+	opInput     = "input"
 	opApproval  = "approval"
 	opCancel    = "cancel"
 	opShutdown  = "shutdown"
@@ -66,7 +67,20 @@ const (
 	// same project slug would otherwise share one transcript. `make dev-local`
 	// sets this; see the note there.
 	EnvSessionID = operator.EnvSessionID
+	// EnvLoopLive is the explicit canary gate. Absence and every value except
+	// a recognized true spelling preserve the historical path.
+	EnvLoopLive = "MUXTERM_COS_LOOP_LIVE"
 )
+
+// LoopLiveFromEnv implements the opt-in gate shared by serve and CLI hosts.
+func LoopLiveFromEnv() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvLoopLive))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
 
 // ResolveSessionID returns the amplifier session id to use and where it came
 // from, so a caller can say so out loud instead of leaving the user to guess
@@ -178,6 +192,9 @@ var ErrNotRunning = errors.New("cos: sidecar is not running")
 // defaults to log.Printf, which is what routes sidecar stderr into muxterm's
 // normal logging.
 type Config struct {
+	// LoopLive enables the pinned experimental one-execution-per-process host.
+	// It is false by default and must never be inferred from module presence.
+	LoopLive bool
 	// SessionID is the amplifier session id (default DefaultSessionID).
 	SessionID string
 	// Bundle names the amplifier bundle; empty lets the sidecar choose.
@@ -254,8 +271,11 @@ type Supervisor struct {
 	// pending correlates a clear/history reply with the one caller waiting
 	// for it. Keyed by the req_id written onto the op; the sidecar echoes it
 	// back on the answer. Guarded by mu, like everything else here.
-	pending map[string]chan Event
-	reqSeq  int
+	pending      map[string]chan Event
+	liveInputs   map[string]*Turn
+	liveAccepted map[string]bool
+	liveSeen     map[string]*Turn
+	reqSeq       int
 
 	// Where the session id and cwd came from, reported at startup so the
 	// answer to "which conversation is this?" is in the log rather than
@@ -303,6 +323,9 @@ func New(cfg Config) *Supervisor {
 		stopCh:        make(chan struct{}),
 		doneCh:        make(chan struct{}),
 		pending:       make(map[string]chan Event),
+		liveInputs:    make(map[string]*Turn),
+		liveAccepted:  make(map[string]bool),
+		liveSeen:      make(map[string]*Turn),
 		sessionSource: sessionSource,
 		cwdSource:     cwdSource,
 	}
@@ -603,6 +626,84 @@ func (s *Supervisor) SubmitOrigin(prompt, origin, causationID string) *Turn {
 	})
 }
 
+// LoopLiveEnabled reports whether this supervisor explicitly selected the
+// experimental loop-live host.
+func (s *Supervisor) LoopLiveEnabled() bool { return s.cfg.LoopLive }
+
+// SubmitLifecycleInput sends one typed service observation independently of
+// the human FIFO. markerID is also loop-live's idempotency key.
+func (s *Supervisor) SubmitLifecycleInput(text, markerID string) *Turn {
+	t := &Turn{ID: markerID, Prompt: text, Origin: OriginLifecycle,
+		CausationID: markerID, SubmittedAt: time.Now(), done: make(chan struct{})}
+	if !s.cfg.LoopLive {
+		err := errors.New("cos: loop-live is disabled")
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: markerID, Code: CodeSidecarUnavailable,
+			Message: err.Error(), Fatal: true}), err)
+		return t
+	}
+	s.mu.Lock()
+	if previous := s.liveSeen[markerID]; previous != nil {
+		s.mu.Unlock()
+		return previous
+	}
+	if len(s.liveSeen) >= 2000 {
+		s.mu.Unlock()
+		err := errors.New("cos: live input limit reached")
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: markerID, Code: CodeDispatchFailed,
+			Message: err.Error(), Fatal: true}), err)
+		return t
+	}
+	s.liveSeen[markerID] = t
+	s.liveInputs[markerID] = t
+	s.mu.Unlock()
+	if err := s.sendOp(op{Op: opInput, Version: 1, InputID: markerID, Kind: "service",
+		Source: "muxterm-lane-lifecycle", Text: text}); err != nil {
+		s.mu.Lock()
+		delete(s.liveInputs, markerID)
+		s.mu.Unlock()
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: markerID, Code: CodeDispatchFailed,
+			Message: err.Error(), Fatal: true}), err)
+	}
+	return t
+}
+
+// SubmitSteerInput admits a human correction to the running live execution.
+// inputID is stable across a caller retry; the runtime deduplicates it.
+func (s *Supervisor) SubmitSteerInput(text, inputID string) *Turn {
+	t := &Turn{ID: inputID, Prompt: text, Origin: OriginHuman,
+		SubmittedAt: time.Now(), done: make(chan struct{})}
+	if !s.cfg.LoopLive {
+		err := errors.New("cos: loop-live is disabled")
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeSidecarUnavailable,
+			Message: err.Error(), Fatal: true}), err)
+		return t
+	}
+	s.mu.Lock()
+	if previous := s.liveSeen[inputID]; previous != nil {
+		s.mu.Unlock()
+		return previous
+	}
+	if len(s.liveSeen) >= 2000 {
+		s.mu.Unlock()
+		err := errors.New("cos: live input limit reached")
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeDispatchFailed,
+			Message: err.Error(), Fatal: true}), err)
+		return t
+	}
+	s.liveSeen[inputID] = t
+	s.liveInputs[inputID] = t
+	s.mu.Unlock()
+	if err := s.sendOp(op{Op: opInput, Version: 1, InputID: inputID, Kind: "steer",
+		Source: "user", Text: text}); err != nil {
+		s.mu.Lock()
+		delete(s.liveInputs, inputID)
+		s.mu.Unlock()
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeDispatchFailed,
+			Message: err.Error(), Fatal: true}), err)
+	}
+	return t
+}
+
 // Approve answers an approval_request. The turn stays blocked inside the
 // sidecar until this arrives (2.4 law 3), so a caller that never answers hangs
 // the session - answer, even if the answer is "no".
@@ -761,6 +862,11 @@ func (s *Supervisor) requestContext(ctx context.Context, o op) (Event, error) {
 	if err := s.sendOp(o); err != nil {
 		return Event{}, err
 	}
+	timeout := requestTimeout
+	if o.Op == "sdk" {
+		// A cold app bundle can take longer than a history lookup to mount.
+		timeout = 60 * time.Second
+	}
 	select {
 	case ev := <-ch:
 		if ev.Ev == EvError {
@@ -779,8 +885,8 @@ func (s *Supervisor) requestContext(ctx context.Context, o op) (Event, error) {
 			return ev, fmt.Errorf("cos: %s op refused: %s", o.Op, msg)
 		}
 		return ev, nil
-	case <-time.After(requestTimeout):
-		return Event{}, fmt.Errorf("cos: no answer to the %s op within %s", o.Op, requestTimeout)
+	case <-time.After(timeout):
+		return Event{}, fmt.Errorf("cos: no answer to the %s op within %s", o.Op, timeout)
 	case <-s.stopCh:
 		return Event{}, ErrQueueClosed
 	case <-ctx.Done():
@@ -1094,6 +1200,9 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	if s.cfg.Bundle != "" {
 		args = append(args, "--bundle", s.cfg.Bundle)
 	}
+	if s.cfg.LoopLive {
+		args = append(args, "--loop-live")
+	}
 	// Cwd was pinned in New (resolveCwd), never re-derived here: re-reading
 	// os.Getwd() per incarnation would let a chdir anywhere in the host
 	// process silently move the sidecar to a different project slug - and so
@@ -1302,6 +1411,7 @@ func (s *Supervisor) handleEvent(ev Event) {
 		// deliver -- a deadlock resolved only by the request timeout.
 		go s.publishEffective()
 	}
+	s.observeLiveInput(ev)
 	// A req_id-bearing event is an ANSWER to one caller, not news for
 	// everybody: routing it to the waiter and stopping keeps a history
 	// payload off every subscribed browser's socket.
@@ -1329,6 +1439,41 @@ func (s *Supervisor) handleEvent(ev Event) {
 		s.cfg.EventObserver(ev)
 	}
 	s.broker.Publish(ev)
+}
+
+func (s *Supervisor) observeLiveInput(ev Event) {
+	if ev.InputID != "" && ev.Ev == EvInputAccepted {
+		s.mu.Lock()
+		if s.liveInputs[ev.InputID] != nil {
+			s.liveAccepted[ev.InputID] = true
+		}
+		s.mu.Unlock()
+		return
+	}
+	if ev.Ev != EvInputDelivered && ev.Ev != EvGenerationFinished && ev.Ev != EvGenerationFailed {
+		return
+	}
+	ids := append([]string(nil), ev.InputIDs...)
+	if ev.InputID != "" {
+		ids = append(ids, ev.InputID)
+	}
+	for _, id := range ids {
+		s.mu.Lock()
+		t := s.liveInputs[id]
+		if t != nil {
+			delete(s.liveInputs, id)
+			delete(s.liveAccepted, id)
+		}
+		s.mu.Unlock()
+		if t == nil {
+			continue
+		}
+		if ev.Ev == EvGenerationFailed {
+			t.finish(ev, ErrTurnFailed)
+		} else {
+			t.finish(ev, nil)
+		}
+	}
 }
 
 // notifyReadyStateLocked wakes WaitReady callers and arms the notification for
@@ -1434,12 +1579,18 @@ func (s *Supervisor) writeLoop(w io.WriteCloser, ops <-chan []byte, done <-chan 
 // also reads as everything, so the two agree, but only by accident. Writing
 // it explicitly means the wire says what the caller meant.
 type op struct {
-	Op        string `json:"op"`
-	TurnID    string `json:"turn_id,omitempty"`
-	Prompt    string `json:"prompt,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
-	Approved  *bool  `json:"approved,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+	Op        string          `json:"op"`
+	Command   json.RawMessage `json:"command,omitempty"`
+	Version   int             `json:"version,omitempty"`
+	InputID   string          `json:"input_id,omitempty"`
+	Kind      string          `json:"kind,omitempty"`
+	Source    string          `json:"source,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	TurnID    string          `json:"turn_id,omitempty"`
+	Prompt    string          `json:"prompt,omitempty"`
+	RequestID string          `json:"request_id,omitempty"`
+	Approved  *bool           `json:"approved,omitempty"`
+	Reason    string          `json:"reason,omitempty"`
 
 	// Origin and CausationID travel with a turn so the sidecar can stamp them
 	// onto the persisted message. Omitted for an ordinary human turn: absence
@@ -1463,6 +1614,25 @@ type op struct {
 	ToolsDeny   []string `json:"tools_deny,omitempty"`
 	// Summaries is typed server-owned data for the Lobby summary tool.
 	Summaries json.RawMessage `json:"summaries,omitempty"`
+}
+
+// SDKCommand sends an addressable chat command through the existing supervised
+// Python process. Replies use the same req_id routing as history and clear.
+func (s *Supervisor) SDKCommand(ctx context.Context, command json.RawMessage) (json.RawMessage, error) {
+	ev, err := s.requestContext(ctx, op{Op: "sdk", Command: command})
+	if err != nil {
+		return nil, err
+	}
+	var reply struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(ev.Raw, &reply); err != nil {
+		return nil, err
+	}
+	if ev.Ev != "sdk_reply" {
+		return nil, fmt.Errorf("cos: unexpected SDK reply %s", ev.Ev)
+	}
+	return reply.Result, nil
 }
 
 // sendOp encodes and queues one op for the writer goroutine. It never blocks.
@@ -1491,6 +1661,26 @@ func (s *Supervisor) sendOp(o op) error {
 func (s *Supervisor) handleExit(reason string) {
 	s.removeState()
 	s.failPending(CodeSidecarExit, reason)
+	s.mu.Lock()
+	live := s.liveInputs
+	accepted := s.liveAccepted
+	s.liveInputs = make(map[string]*Turn)
+	s.liveAccepted = make(map[string]bool)
+	s.mu.Unlock()
+	for id, t := range live {
+		if accepted[id] {
+			ev := synthEvent(Event{Ev: EvSidecarUncertain, TurnID: id, Code: CodeSidecarExit,
+				Message: "sidecar exited after accepting input; delivery is uncertain and was not replayed", Fatal: true})
+			t.finish(ev, ErrSidecarGone)
+			if s.cfg.EventObserver != nil {
+				s.cfg.EventObserver(ev)
+			}
+			s.broker.Publish(ev)
+			continue
+		}
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: id, Code: CodeSidecarExit,
+			Message: reason, Fatal: true}), ErrSidecarGone)
+	}
 	ev, hadTurn := s.q.sidecarDown(reason)
 	if !hadTurn {
 		ev = synthEvent(Event{Ev: EvError, Code: CodeSidecarExit, Message: reason, Fatal: true})

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """muxterm Chief-of-Staff sidecar.
 
-One long-lived in-process amplifier session, driven by NDJSON over stdio.
+One long-lived Operator session plus addressable SDK chat sessions, driven by
+NDJSON over stdio.
 See docs/designs/2026-09-06-cos-sidecar-spec.md sections 2 and 3.1 -- that
 document is the contract; this file implements it.
 
@@ -116,6 +117,7 @@ TOOL_SURFACE_KEYS = ("muxterm_cos", "tools")
 SESSION_COST_CHANNEL = "session.cost"
 DEFAULT_APPROVAL_TIMEOUT = 300.0
 SUMMARY_LIMIT = 240
+LOOP_LIVE_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
 
 # Serve-loop wake-up token.  Pushed onto the op queue by the signal handler so
 # an IDLE sidecar (parked on queue.get(), which no signal interrupts) re-reads
@@ -771,6 +773,8 @@ class Sidecar:
     def __init__(self, args: argparse.Namespace, proto: Proto) -> None:
         self.args = args
         self.proto = proto
+        global SDK_CHAT_PROTO
+        SDK_CHAT_PROTO = proto
         self.session_id: str = args.session_id
         self.bundle: str = args.bundle
         self.broker = ApprovalBroker(proto, args.approval_timeout)
@@ -816,6 +820,9 @@ class Sidecar:
         # nothing to crash on.
         self._loop: "asyncio.AbstractEventLoop | None" = None
         self._queue: "asyncio.Queue | None" = None
+        self.live_runtime: Any = None
+        self.live_task: "asyncio.Task | None" = None
+        self._live_inputs: dict[str, dict] = {}
 
     # -- boot ---------------------------------------------------------------
     async def build(self) -> Any:
@@ -828,8 +835,6 @@ class Sidecar:
         from amplifier_app_cli.session_runner import (
             SessionConfig,
             _create_bundle_session,
-            register_mention_handling,
-            register_session_spawning,
         )
         from amplifier_app_cli.session_store import SessionStore
         from rich.console import Console
@@ -851,6 +856,21 @@ class Sidecar:
         # MANDATORY: without this hook-context-intelligence dies validating
         # "Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'".
         cfg = expand_env_vars(cfg)
+        if self.args.loop_live:
+            # Canary only: replace exactly the root orchestrator and pin the
+            # private dependency to the design-reviewed commit. Background
+            # jobs and native steering remain disabled in Slice 1.
+            session_cfg = cfg.setdefault("session", {})
+            live_orchestrator = {
+                "module": "loop-live",
+                "source": LOOP_LIVE_SOURCE,
+                "config": {"background_tools": [], "background_delegate": False},
+            }
+            session_cfg["orchestrator"] = live_orchestrator
+            # _create_bundle_session activates modules from PreparedBundle,
+            # while SessionConfig.config supplies their runtime config. Keep
+            # both representations on the same pinned orchestrator.
+            prepared.bundle.session["orchestrator"] = dict(live_orchestrator)
 
         # -- resume ---------------------------------------------------------
         # The session lives in the ordinary amplifier session store for this
@@ -902,9 +922,24 @@ class Sidecar:
         session = await _create_bundle_session(
             sc, self.session_id, HostApprovalSystem(self.broker), self.display, console
         )
-        register_mention_handling(session)
-        register_session_spawning(session)
         self.session = session
+
+        if self.args.loop_live:
+            # Resolve through AppSettings above, as the supported CLI does.
+            # A bare Foundation session can mount with no configured provider.
+            if self._model_name() == "unknown":
+                raise RuntimeError("loop-live requires a provider/model from Amplifier AppSettings")
+            # PreparedBundle has already activated the stock orchestrator by
+            # this point. Mount the canary explicitly so the coordinator's
+            # single orchestrator slot is replaced before any execution starts.
+            from amplifier_module_loop_live import mount as mount_loop_live
+            from amplifier_module_loop_live.runtime import Runtime
+
+            await mount_loop_live(session.coordinator, {
+                "background_tools": [], "background_delegate": False,
+            })
+            self.live_runtime = Runtime(session_id=self.session_id, observer=self._live_observe)
+            session.coordinator.register_capability("live.runtime", self.live_runtime)
 
         # session.config is not guaranteed to be the same dict object as cfg.
         session.config["working_dir"] = cwd
@@ -1517,6 +1552,62 @@ class Sidecar:
         return str(turn), str(total)
 
     # -- turn execution -----------------------------------------------------
+    def _live_observe(self, event: dict) -> None:
+        """Translate loop-live's event truth onto muxterm's stdout protocol."""
+        event_type = event.get("type", "")
+        common = {
+            "version": 1,
+            "sequence": event.get("sequence"),
+            "generation_id": event.get("generation_id", ""),
+        }
+        if event_type == "input.accepted":
+            self.proto.emit(ev="input_accepted", input_id=event.get("input_id", ""),
+                            kind=event.get("kind", ""), source=event.get("source", ""), **common)
+        elif event_type == "input.delivered":
+            self.proto.emit(ev="input_delivered", input_id=event.get("input_id", ""),
+                            source=event.get("source", ""), delivery=event.get("delivery", ""), **common)
+        elif event_type in {"generation.finished", "generation.failed", "generation.detached"}:
+            asyncio.get_running_loop().create_task(self._live_terminal(event, common))
+
+    async def _live_terminal(self, event: dict, common: dict) -> None:
+        persisted = False
+        try:
+            persisted = await self._save_session()
+        except BaseException:
+            logger.warning("session save failed for live generation", exc_info=True)
+        ids = list(event.get("input_ids") or [])
+        finished = event.get("type") == "generation.finished"
+        self.proto.emit(ev="generation_finished" if finished else "generation_failed",
+                        input_ids=ids, response=event.get("text", ""),
+                        error=event.get("error_type", ""), persisted=persisted, **common)
+        turn = self._turn
+        if turn is not None and turn.id in ids:
+            self._emit_terminal(turn, ev="turn_end", response=event.get("text", "") if finished else "",
+                                ms=int((time.monotonic() - turn.started) * 1000),
+                                turn_cost=None, session_cost=None,
+                                error=None if finished else event.get("error_type", "generation failed"),
+                                persisted=persisted)
+            self.broker.current_turn_id = None
+            self._turn = None
+
+    async def _start_live(self) -> None:
+        if not self.args.loop_live:
+            return
+        # Exactly one execute owner for this sidecar incarnation.
+        self.live_task = asyncio.create_task(self.session.execute(""), name="cos-loop-live-owner")
+
+    async def _submit_live(self, *, input_id: str, kind: str, source: str, text: str) -> bool:
+        from amplifier_module_loop_live.runtime import Input
+
+        try:
+            await self.live_runtime.submit(Input(kind=kind, text=text, source=source, id=input_id))
+        except BaseException as exc:  # noqa: BLE001
+            self.proto.emit(ev="generation_failed", version=1, input_id=input_id,
+                            input_ids=[input_id], error=f"{type(exc).__name__}: {exc}")
+            return False
+        self._live_inputs[input_id] = {"kind": kind, "source": source}
+        return True
+
     async def _run_turn(self, turn: Turn) -> None:
         # turn_start was emitted synchronously when the turn was accepted, so
         # that a shutdown arriving before this task is first scheduled can
@@ -2013,7 +2104,7 @@ class Sidecar:
 
 
     # -- op dispatch --------------------------------------------------------
-    def _handle_turn(self, msg: dict) -> None:
+    async def _handle_turn(self, msg: dict) -> None:
         turn_id = msg.get("turn_id")
         prompt = msg.get("prompt")
         if not isinstance(turn_id, str) or not turn_id:
@@ -2042,6 +2133,11 @@ class Sidecar:
             if turn.causation_id:
                 start["causation_id"] = turn.causation_id
         self.proto.emit(**start)
+        if self.args.loop_live:
+            self.broker.current_turn_id = turn.id
+            if not await self._submit_live(input_id=turn.id, kind="user", source="user", text=prompt):
+                self._turn = None
+            return
         turn.task = asyncio.create_task(self._run_turn(turn), name=f"cos-turn-{turn_id}")
         turn.task.add_done_callback(self._turn_done)
 
@@ -2083,6 +2179,26 @@ class Sidecar:
             self.proto.emit(ev="error", code="unknown_approval",
                             message=f"no pending approval {request_id}", fatal=False)
 
+    async def _handle_input(self, msg: dict) -> None:
+        if not self.args.loop_live:
+            self.proto.emit(ev="error", code="unknown_op", message="unknown op 'input'", fatal=False)
+            return
+        if msg.get("version") != 1:
+            self.proto.emit(ev="generation_failed", version=1, input_id=msg.get("input_id", ""),
+                            input_ids=[msg.get("input_id", "")], error="unsupported input version")
+            return
+        input_id, kind, source, text = (msg.get(k) for k in ("input_id", "kind", "source", "text"))
+        if not all(isinstance(v, str) for v in (input_id, kind, source, text)):
+            self.proto.emit(ev="generation_failed", version=1, input_id=input_id or "",
+                            input_ids=[input_id] if isinstance(input_id, str) else [],
+                            error="input requires string input_id, kind, source, and text")
+            return
+        if kind not in {"service", "steer"} or (kind == "steer" and source != "user") or (kind == "service" and source in {"", "user", "system", "developer"}):
+            self.proto.emit(ev="generation_failed", version=1, input_id=input_id,
+                            input_ids=[input_id], error="invalid host input kind or source")
+            return
+        await self._submit_live(input_id=input_id, kind=kind, source=source, text=text)
+
 
     async def dispatch(self, line: str) -> None:
         line = line.strip()
@@ -2098,7 +2214,21 @@ class Sidecar:
             return
         op = msg.get("op")
         if op == "turn":
-            self._handle_turn(msg)
+            await self._handle_turn(msg)
+        elif op == "input":
+            await self._handle_input(msg)
+        elif op == "sdk":
+            try:
+                sdk_command = msg.get("command") or {}
+                if sdk_command.get("op") in {"start", "resume"} and (
+                    self._turn is not None or any(chat.active for chat in SDK_CHAT_SESSIONS.values())
+                ):
+                    raise RuntimeError("Amplifier chat creation is busy; retry after the active turn")
+                result = await command(sdk_command)
+                self.proto.emit(ev="sdk_reply", req_id=msg.get("req_id"), result=result)
+            except BaseException as exc:
+                self.proto.emit(ev="error", req_id=msg.get("req_id"),
+                                code="sdk_failed", message=str(exc), fatal=False)
         elif op == "cancel":
             self._handle_cancel(msg)
         elif op == "approval":
@@ -2162,7 +2292,19 @@ class Sidecar:
                 break
             await self.dispatch(item)
 
+        if self.args.loop_live and self.live_runtime is not None and self.live_task is not None:
+            try:
+                from amplifier_module_loop_live.runtime import Input
+                await self.live_runtime.submit(Input(kind="stop", id="muxterm-sidecar-stop"))
+                await asyncio.wait_for(asyncio.shield(self.live_task), timeout=15)
+            except BaseException:
+                self.live_task.cancel()
         await self._drain_active_turn()
+        for chat in list(SDK_CHAT_SESSIONS.values()):
+            try:
+                await chat.close()
+            except BaseException:
+                logger.warning("SDK chat shutdown failed", exc_info=True)
 
     def _on_signal(self, sig: int) -> None:
         logger.info("received signal %s -- shutting down", sig)
@@ -2210,6 +2352,236 @@ class Sidecar:
 
 
 # ---------------------------------------------------------------------------
+# SDK chat sessions share this process and its supervised stdio stream.
+# ---------------------------------------------------------------------------
+SDK_CHAT_SESSIONS = {}
+SDK_CHAT_PROTO = None
+CAPS = dict(approvals=False, transcript_read=True, interrupt=True,
+            live_input=True, attributed_service_input=True, native_steering=True)
+
+
+def frame(session_id, event_type, **data):
+    SDK_CHAT_PROTO.emit(ev="sdk_event", event={"sessionId": session_id,
+                        "type": event_type, **data})
+
+
+class DenyApproval:
+    async def request_approval(self, prompt, options, timeout, default):
+        denied = next((o for o in options if str(o).lower().startswith(("deny", "no", "reject"))), None)
+        if denied is None:
+            raise PermissionError("Amplifier approval requires Go authorization")
+        return denied
+
+
+class QuietDisplay:
+    nesting_depth = 0
+    def show_message(self, message, level="info", source="hook"):
+        print(f"[{source}] {message}", file=sys.stderr)
+    def push_nesting(self): self.nesting_depth += 1
+    def pop_nesting(self): self.nesting_depth = max(0, self.nesting_depth - 1)
+
+
+class SDKChatSession:
+    def __init__(self, session_id, cwd):
+        self.id, self.cwd = session_id, cwd
+        self.session = self.runtime = self.task = self.store = None
+        self.active = set()
+        self.partial = ""
+        self.model = ""
+        self.closed = False
+
+    async def build(self):
+        from amplifier_app_cli.lib.settings import AppSettings, SettingsPaths
+        from amplifier_app_cli.paths import get_amplifier_home, get_bundle_search_paths
+        from amplifier_app_cli.runtime.config import expand_env_vars, resolve_bundle_config
+        from amplifier_app_cli.session_runner import SessionConfig, _create_bundle_session
+        from amplifier_app_cli.session_store import SessionStore
+        from rich.console import Console
+
+        # Process cwd belongs to the Operator. Resolve each chat's settings
+        # and native store explicitly from its project path.
+        project = Path(self.cwd).resolve()
+        slug = str(project).replace("/", "-").replace("\\", "-").replace(":", "")
+        if not slug.startswith("-"):
+            slug = "-" + slug
+        home = get_amplifier_home()
+        settings = AppSettings(SettingsPaths(
+            global_settings=home / "settings.yaml",
+            project_settings=project / ".amplifier" / "settings.yaml",
+            local_settings=project / ".amplifier" / "settings.local.yaml",
+            session_settings=None,
+        ))
+        cfg, prepared = await resolve_bundle_config("anchors", settings, None, project_slug=slug)
+        cfg = expand_env_vars(cfg)
+        live = {"module": "loop-live", "source": "git+https://github.com/microsoft/amplifier-module-loop-live@main",
+                "config": {"background_tools": [], "background_delegate": False}}
+        cfg.setdefault("session", {})["orchestrator"] = live
+        prepared.bundle.session["orchestrator"] = dict(live)
+        self.store = SessionStore(base_dir=home / "projects" / slug / "sessions")
+        transcript = None
+        if self.store.exists(self.id):
+            transcript, _ = self.store.load(self.id)
+            if not isinstance(transcript, list):
+                raise RuntimeError("stored Amplifier transcript is invalid; refusing replay")
+        cfg["working_dir"] = self.cwd
+        cfg.setdefault("root_session_id", self.id)
+        cfg.setdefault("application_host", "muxterm-sdk-chat")
+        cfg.setdefault("project_slug", slug)
+        cfg.setdefault("project_dir", self.cwd)
+        cfg.setdefault("project_name", project.name)
+        process_bundle_dir = Path.cwd() / ".amplifier" / "bundles"
+        bundle_paths = [project / ".amplifier" / "bundles"] + [
+            path for path in get_bundle_search_paths() if path != process_bundle_dir
+        ]
+        sc = SessionConfig(config=cfg, search_paths=bundle_paths, verbose=False,
+                           session_id=self.id, bundle_name="anchors", prepared_bundle=prepared,
+                           initial_transcript=transcript)
+        devnull = open(os.devnull, "w")
+        # _create_bundle_session passes Path.cwd() as session_cwd into
+        # PreparedBundle.create_session. That value becomes the per-session
+        # working_dir capability read by filesystem tools. The dispatch loop
+        # refuses a build while another turn is active, so the temporary cwd
+        # cannot redirect work already in flight.
+        previous_cwd = os.getcwd()
+        try:
+            os.chdir(self.cwd)
+            self.session = await _create_bundle_session(sc, self.id, DenyApproval(), QuietDisplay(),
+                                                        Console(quiet=True, file=devnull))
+        finally:
+            os.chdir(previous_cwd)
+            devnull.close()
+        providers = self.session.coordinator.get("providers") or {}
+        self.model = next((f"{name}/{getattr(p, 'model', None) or getattr(p, 'default_model', '')}"
+                           for name, p in providers.items()
+                           if getattr(p, "model", None) or getattr(p, "default_model", None)), "")
+        if not self.model:
+            raise RuntimeError("Amplifier AppSettings resolved no provider/model")
+        from amplifier_module_loop_live import mount as mount_loop_live
+        from amplifier_module_loop_live.runtime import Runtime
+        await mount_loop_live(self.session.coordinator, {"background_tools": [], "background_delegate": False})
+        self.runtime = Runtime(session_id=self.id, observer=self.observe)
+        self.session.coordinator.register_capability("live.runtime", self.runtime)
+        if transcript:
+            context = self.session.coordinator.get("context")
+            if context is None or not hasattr(context, "set_messages"):
+                raise RuntimeError("Amplifier context cannot restore transcript")
+            await context.set_messages(transcript)
+        self.hooks()
+        self.task = asyncio.create_task(self.session.execute(""), name=f"amplifier-chat-{self.id}")
+        self.task.add_done_callback(self.owner_done)
+        frame(self.id, "session.started", nativeId=self.id, capabilities=CAPS, model=self.model)
+
+    def owner_done(self, task):
+        if task.cancelled(): return
+        error = task.exception()
+        if not self.closed:
+            frame(self.id, "error", message=f"Amplifier execute stopped: {error or 'owner exited'}")
+
+    def hooks(self):
+        from amplifier_core.models import HookResult
+        hooks = self.session.coordinator.get("hooks")
+        if hooks is None: raise RuntimeError("Amplifier hook registry unavailable")
+        cont = HookResult(action="continue")
+        async def delta(event, data):
+            if data.get("block_type") != "thinking" and data.get("text"):
+                frame(self.id, "assistant.delta", text=data["text"])
+            return cont
+        async def tool_start(event, data):
+            frame(self.id, "tool.started", toolId=str(data.get("tool_call_id") or ""),
+                  name=str(data.get("tool_name") or "Tool"), raw=data.get("tool_input"))
+            return cont
+        async def tool_end(event, data):
+            frame(self.id, "tool.completed", toolId=str(data.get("tool_call_id") or ""),
+                  name=str(data.get("tool_name") or "Tool"))
+            return cont
+        hooks.register("llm:stream_block_delta", delta, name="sdk-chat-delta")
+        hooks.register("tool:pre", tool_start, name="sdk-chat-tool-start")
+        hooks.register("tool:post", tool_end, name="sdk-chat-tool-end")
+        hooks.register("tool:error", tool_end, name="sdk-chat-tool-error")
+
+    def observe(self, event):
+        kind = event.get("type")
+        if kind == "input.accepted":
+            frame(self.id, "input.accepted.runtime", inputId=event.get("input_id"),
+                  kind=event.get("kind"), source=event.get("source"), sequence=event.get("sequence"))
+        elif kind == "input.delivered":
+            frame(self.id, "input.delivered", inputId=event.get("input_id"),
+                  source=event.get("source"), delivery=event.get("delivery"),
+                  sequence=event.get("sequence"))
+        elif kind in ("generation.finished", "generation.failed", "generation.detached"):
+            asyncio.create_task(self.finish(event))
+
+    async def finish(self, event):
+        ids = list(event.get("input_ids") or [])
+        persisted = False
+        try:
+            context = self.session.coordinator.get("context")
+            messages = await context.get_messages()
+            if messages:
+                self.store.save(self.id, messages, {"session_id": self.id,
+                    "created": datetime.now(timezone.utc).isoformat(), "bundle": "anchors",
+                    "model": self.model, "working_dir": self.cwd})
+                persisted = True
+        except Exception as exc:
+            frame(self.id, "error", message=f"Amplifier transcript persistence failed: {exc}")
+        finished = event.get("type") == "generation.finished"
+        frame(self.id, "generation.finished" if finished else "error", inputIds=ids,
+              generationId=event.get("generation_id"), persisted=persisted,
+              message=event.get("error_type", ""))
+        if finished:
+            frame(self.id, "turn.completed", inputIds=ids, generationId=event.get("generation_id"), persisted=persisted)
+        self.active.difference_update(ids)
+
+    async def send(self, value):
+        from amplifier_module_loop_live.runtime import Input
+        kind, source, input_id = value.get("kind"), value.get("source"), value.get("id")
+        content = value.get("content", "")
+        if kind not in ("user", "steer", "service", "cancel_job", "stop"):
+            raise ValueError(f"unsupported Amplifier input kind: {kind}")
+        if not input_id or (kind not in ("stop", "cancel_job") and not content):
+            raise ValueError("input id and content required")
+        if kind == "service" and (not source or source in ("user", "browser", "system", "developer")):
+            raise ValueError("service input requires a distinct non-authorizing source")
+        if kind == "steer" and source not in ("user", "browser"):
+            raise ValueError("steer input requires a human source")
+        await self.runtime.submit(Input(kind=kind, text=content,
+                                        source=source if kind == "service" else "user", id=input_id))
+        self.active.add(input_id)
+        frame(self.id, "input.accepted", inputId=input_id, kind=kind, source=source, text=content)
+        return {"status": "accepted", "inputId": input_id}
+
+    async def close(self):
+        self.closed = True
+        if self.task and not self.task.done():
+            from amplifier_module_loop_live.runtime import Input
+            await self.runtime.submit(Input(kind="stop", id=f"close-{self.id}"))
+            await asyncio.wait_for(self.task, timeout=5)
+
+
+async def command(cmd):
+    op, sid = cmd.get("op"), cmd.get("sessionId")
+    if op == "capabilities": return {"capabilities": CAPS}
+    if op in ("start", "resume"):
+        if cmd.get("harness") != "amplifier": raise ValueError("unsupported harness")
+        if sid not in SDK_CHAT_SESSIONS:
+            cwd = cmd.get("cwd")
+            if not cwd or not Path(cwd).is_dir(): raise ValueError("Amplifier project folder unavailable")
+            session = SDKChatSession(sid, cwd)
+            await session.build()
+            SDK_CHAT_SESSIONS[sid] = session
+        return {"sessionId": sid, "capabilities": CAPS}
+    session = SDK_CHAT_SESSIONS.get(sid)
+    if session is None: raise ValueError("Amplifier session is not resident; resume it first")
+    if op == "send": return await session.send(cmd.get("input") or {})
+    if op == "interrupt":
+        return await session.send({"kind": "stop", "source": "browser", "id": f"interrupt-{sid}"})
+    if op == "events": return {"status": "streaming"}
+    if op == "close":
+        await session.close(); del SDK_CHAT_SESSIONS[sid]; return {"status": "closed"}
+    raise ValueError(f"unknown operation: {op}")
+
+
+# ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
 def parse_args(argv: list) -> argparse.Namespace:
@@ -2224,6 +2596,8 @@ def parse_args(argv: list) -> argparse.Namespace:
                    help="seconds before an unanswered approval is DENIED (default: 300)")
     p.add_argument("--session-store-exists", action="store_true",
                    help="emit public SessionStore existence for this exact cwd/session and exit")
+    p.add_argument("--loop-live", action="store_true",
+                   help="enable the pinned experimental one-execution-per-process host")
     args = p.parse_args(argv)
     return args
 
@@ -2244,15 +2618,15 @@ async def run(args: argparse.Namespace, proto: Proto) -> int:
 
     try:
         async with session:
-            proto.emit(
-                ev="ready",
-                session_id=sidecar.session_id,
-                bundle=sidecar.bundle,
-                tools=sidecar.tool_count,
-                muxterm_tools=sidecar.muxterm_tool_count,
-                boot_ms=int((time.monotonic() - _BOOT_T0) * 1000),
-                resumed=sidecar.resumed,
+            ready = dict(
+                ev="ready", session_id=sidecar.session_id, bundle=sidecar.bundle,
+                tools=sidecar.tool_count, muxterm_tools=sidecar.muxterm_tool_count,
+                boot_ms=int((time.monotonic() - _BOOT_T0) * 1000), resumed=sidecar.resumed,
             )
+            if args.loop_live:
+                ready["loop_live"] = True
+            proto.emit(**ready)
+            await sidecar._start_live()
             await sidecar.serve()
     except BaseException as exc:  # noqa: BLE001
         logger.exception("serve loop failed")

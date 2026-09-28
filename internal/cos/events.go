@@ -1,5 +1,5 @@
 // Package cos supervises muxterm's "chief of staff" sidecar: a long-lived
-// Python process that owns ONE amplifier session across many turns and speaks
+// Python process that owns the Operator session and addressable chat sessions, and speaks
 // NDJSON over its stdin/stdout.
 //
 // The contract is docs/designs/2026-09-06-cos-sidecar-spec.md. Three of its
@@ -62,7 +62,12 @@ const (
 	// EvReconfigured is a genuine broadcast, and is emitted ONLY when a
 	// retune changed something. The tuning is pushed ahead of every turn, so
 	// an event on every push would be one line of noise per message.
-	EvReconfigured = "reconfigured"
+	EvReconfigured       = "reconfigured"
+	EvInputAccepted      = "input_accepted"
+	EvInputDelivered     = "input_delivered"
+	EvGenerationFinished = "generation_finished"
+	EvGenerationFailed   = "generation_failed"
+	EvSidecarUncertain   = "sidecar_uncertain"
 )
 
 // Error codes carried in an EvError's "code" field.
@@ -111,9 +116,16 @@ type Event struct {
 	Ev string `json:"ev"`
 
 	// Identity
-	TurnID    string `json:"turn_id,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
-	CallID    string `json:"call_id,omitempty"`
+	TurnID       string   `json:"turn_id,omitempty"`
+	RequestID    string   `json:"request_id,omitempty"`
+	CallID       string   `json:"call_id,omitempty"`
+	InputID      string   `json:"input_id,omitempty"`
+	GenerationID string   `json:"generation_id,omitempty"`
+	InputIDs     []string `json:"input_ids,omitempty"`
+	Kind         string   `json:"kind,omitempty"`
+	Source       string   `json:"source,omitempty"`
+	Delivery     string   `json:"delivery,omitempty"`
+	Version      int      `json:"version,omitempty"`
 
 	// ready
 	SessionID string `json:"session_id,omitempty"`
