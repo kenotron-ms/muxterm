@@ -203,6 +203,7 @@ export interface SessiondWorkspaceCompletion {
 
 export interface SessiondWorkspaceInfo {
   workspaceId: string;
+  projectPath?: string;
   workspaceUuid?: string;
   panes?: SessiondPaneInfo[];
   name?: string;
@@ -218,6 +219,7 @@ export interface SessiondWorkspaceInfo {
 
 export interface SessiondPaneInfo {
   paneId: number;
+  harness?: string;
   cols: number;
   rows: number;
   title?: string;
@@ -239,6 +241,8 @@ export interface SessiondMessage {
   cid?: number;
   clientRef?: string;
   workspaceId?: string;
+  projectPath?: string;
+  harness?: string;
   name?: string;
   paneId?: number;
   cols?: number;

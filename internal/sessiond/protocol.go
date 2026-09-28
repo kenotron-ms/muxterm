@@ -367,6 +367,8 @@ type Message struct {
 	ClientRef   string          `json:"clientRef,omitempty"`   // client-minted optimistic-create correlation id
 	WorkspaceID string          `json:"workspaceId,omitempty"` //
 	Name        string          `json:"name,omitempty"`        //
+	ProjectPath string          `json:"projectPath,omitempty"` // workspace folder / pane cwd
+	Harness     string          `json:"harness,omitempty"`     // launched chat harness
 	PaneID      int             `json:"paneId,omitempty"`      // workspace-local
 	Cols        int             `json:"cols,omitempty"`        //
 	Rows        int             `json:"rows,omitempty"`        //
@@ -667,6 +669,7 @@ type CursorPos struct {
 // WorkspaceInfo is one entry in a workspace-list reply.
 type WorkspaceInfo struct {
 	WorkspaceID   string `json:"workspaceId"`
+	ProjectPath   string `json:"projectPath,omitempty"`
 	WorkspaceUUID string `json:"workspaceUuid,omitempty"`
 	Name          string `json:"name,omitempty"`
 	ClientRef     string `json:"clientRef,omitempty"`
@@ -715,6 +718,7 @@ type WorkspaceCompletion struct {
 // PaneInfo is one entry in a composition reply or pane-added event.
 type PaneInfo struct {
 	PaneID   int    `json:"paneId"`
+	Harness  string `json:"harness,omitempty"`
 	Cols     int    `json:"cols,omitempty"`
 	Rows     int    `json:"rows,omitempty"`
 	Title    string `json:"title,omitempty"`

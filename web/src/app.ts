@@ -38,11 +38,13 @@ import type { CloseConfirmationModal } from './components/close-confirmation-mod
 import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
+import './components/mux-session-chat.js';
 // <mux-home> is deliberately NOT imported. The Dashboard IS home now (see
 // <mux-cos>), and the two were never meant to be alternatives you could be
 // looking at one of. The component and its standalone demo are untouched.
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
+import { harnessArgv, type HarnessName } from './lib/harness.js';
 import { cosStore } from './lib/cos-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -717,6 +719,7 @@ export class MuxApp extends LitElement {
    */
   @state()
   private _showDashboard = false;
+  @state() private _chatTarget: { workspaceId: string; paneId: number; title: string; harness: string } | null = null;
 
   /**
    * Whether the boot-surface decision has already been made for THIS instance.
@@ -746,7 +749,7 @@ export class MuxApp extends LitElement {
   private _fleetOpen = false;
 
   /**
-   * A composer dispatch waiting on an attach: where it is going, and what to
+   * A chat launch waiting on an attach: where it is going, and what to
    * run when it gets there. null = none.
    *
    * "Start it in workspace X" is necessarily two round-trips on this wire.
@@ -793,9 +796,11 @@ export class MuxApp extends LitElement {
   private _pendingDispatch:
     | { workspaceId: string | null; cmd: string[]; prompt: string; clientRef: string }
     | null = null;
+  private _pendingChatOpen: { cmd: string[]; title: string; harness: HarnessName } | null = null;
+  private _awaitingChatPane: { ref: string; title: string; harness: HarnessName } | null = null;
 
   /**
-   * A composer dispatch that could not be started, surfaced to the user with
+   * A chat launch that could not be started, surfaced to the user with
    * the prompt they typed. null = nothing to report.
    *
    * A prompt that silently evaporates is the worst outcome this feature has:
@@ -1055,6 +1060,18 @@ export class MuxApp extends LitElement {
         msg.type !== SessiondType.PaneClosed ||
         (typeof msg.workspaceId === 'string' && msg.workspaceId === store.attached);
       if (appliesToAttachedWorkspace) store.applySessiond(msg);
+      if (msg.type === SessiondType.PaneAdded && this._awaitingChatPane && this._awaitingChatPane.ref === msg.clientRef) {
+        const pendingChat = this._awaitingChatPane;
+        store.setActivePane(msg.paneId ?? 0);
+        this._requestedPaneId = msg.paneId ?? 0;
+        this._chatTarget = {
+          workspaceId: msg.workspaceId ?? store.attached ?? '',
+          paneId: msg.paneId ?? 0,
+          title: pendingChat.title,
+          harness: pendingChat.harness,
+        };
+        this._awaitingChatPane = null;
+      }
       this._reconcileCloseAuthority(msg);
       this._controller?.onMessage(msg);
       // Replay setup: must run synchronously here, BEFORE binary replay frames
@@ -1539,6 +1556,8 @@ export class MuxApp extends LitElement {
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
             @home-show="${this._onDashboardShow}"
+            @chat-create="${this._onChatCreate}"
+            @chat-open="${this._onChatOpen}"
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
@@ -1623,6 +1642,15 @@ export class MuxApp extends LitElement {
               `
             : '',
           )}
+          ${this._chatTarget ? html`<mux-session-chat
+            .workspaceId=${this._chatTarget.workspaceId}
+            .paneId=${this._chatTarget.paneId}
+            .fallbackTitle=${this._chatTarget.title}
+            .fallbackHarness=${this._chatTarget.harness}
+            @session-transcript-request=${this._onSessionTranscriptRequest}
+            @session-chat-send=${this._onChatSend}
+            @session-chat-terminal=${() => { this._chatTarget = null; }}
+          ></mux-session-chat>` : ''}
         </div>
 
       </div>
@@ -1655,6 +1683,8 @@ export class MuxApp extends LitElement {
                 @workspace-rename="${this._onWorkspaceRename}"
                 @launcher-action="${this._onLauncherAction}"
                 @home-show="${this._onDashboardShow}"
+                @chat-create="${this._onChatCreate}"
+                @chat-open="${this._onChatOpen}"
               ></mux-sidebar>
             </div>
           `
@@ -1917,6 +1947,10 @@ export class MuxApp extends LitElement {
    */
   private _spawnPane(cmd?: string[]): void {
     const ref = mintClientRef();
+    if (cmd && this._pendingChatOpen?.cmd === cmd) {
+      this._awaitingChatPane = { ref, title: this._pendingChatOpen.title, harness: this._pendingChatOpen.harness };
+      this._pendingChatOpen = null;
+    }
     const tempId = _nextTempPaneId--;
     store.mutate({
       workspaceId: ref,
@@ -2496,27 +2530,7 @@ export class MuxApp extends LitElement {
     });
   };
 
-  /**
-   * NOTE ON THE PARKED-DISPATCH MACHINERY BELOW.
-   *
-   * `_onHomeDispatch` -- the handler for the home view's new-session bar --
-   * is GONE, because that composer is gone: the Dashboard has exactly one
-   * input and it talks to Operator, which starts lanes through its
-   * own tools rather than through this browser.
-   *
-   * `_pendingDispatch`, `_dropPendingDispatch` and their hooks in the
-   * workspace-created / composition handlers are deliberately LEFT IN PLACE.
-   * They encode a subtle and hard-won safety property -- a dispatch may only
-   * spawn when the arriving composition is for the workspace it was aimed at
-   * AND the connection is still headed there -- and they have no producer
-   * today only because the one caller was removed above them. Nothing sets
-   * `_pendingDispatch`, so every path through them is currently a no-op.
-   *
-   * They are the landing site for the next thing that needs to start a pane
-   * somewhere other than the current attachment. Deleting them would mean
-   * re-deriving that identity check from scratch when it is needed again,
-   * which is how this class of bug comes back.
-   */
+  /** A chat launch waits for its exact workspace composition before spawning. */
 
   /**
    * Give up on a parked dispatch and tell the user, with their words.
@@ -2528,6 +2542,7 @@ export class MuxApp extends LitElement {
     const pending = this._pendingDispatch;
     if (!pending) return;
     this._pendingDispatch = null;
+    this._pendingChatOpen = null;
     muxLog('home dispatch', `dropped: ${reason}`, {
       target: pending.workspaceId,
       cmd: pending.cmd,
@@ -2561,11 +2576,49 @@ export class MuxApp extends LitElement {
     );
   };
 
+  private _onChatOpen = (e: Event): void => {
+    this._onHomeOpen(e);
+    this._chatTarget = (e as CustomEvent<{workspaceId:string;paneId:number;title:string;harness:string}>).detail;
+    this._closeDrawer();
+  };
+
+  private _onChatSend = (e: Event): void => {
+    const { workspaceId, paneId, text } = (e as CustomEvent<{workspaceId:string;paneId:number;text:string}>).detail;
+    if (store.attached !== workspaceId) return;
+    this._socket?.sendPaneInput(paneId, new TextEncoder().encode(`${text}\r`));
+  };
+
+  private _onChatCreate = (e: Event): void => {
+    const detail = (e as CustomEvent<{ workspaceId: string; projectPath: string; harness: HarnessName; prompt: string }>).detail;
+    if (!detail || !['amplifier', 'claude', 'codex'].includes(detail.harness)) return;
+    const cmd = harnessArgv(detail.harness, detail.prompt);
+    this._pendingChatOpen = { cmd, title: detail.prompt, harness: detail.harness };
+    this._onDashboardHide();
+    this._chatTarget = null;
+    this._closeDrawer();
+    this._dispatchAlert = null;
+    if (detail.workspaceId === 'new') {
+      const ref = mintClientRef();
+      this._pendingDispatch = { workspaceId: null, cmd, prompt: detail.prompt, clientRef: ref };
+      const parts = detail.projectPath.split('/').filter(Boolean);
+      const name = parts[parts.length - 1] ?? detail.projectPath;
+      if (!this._socket?.createWorkspace(name, ref, '', detail.projectPath)) {
+        this._dropPendingDispatch('the workspace connection is unavailable');
+      }
+    } else if (detail.workspaceId === store.attached) {
+      this._spawnPane(cmd);
+    } else {
+      this._pendingDispatch = { workspaceId: detail.workspaceId, cmd, prompt: detail.prompt, clientRef: '' };
+      this._socket?.attachWithBreakpoint(detail.workspaceId, currentLayoutMode());
+    }
+  };
+
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     // Picking a workspace is the "go work in there" gesture — the Dashboard
     // steps aside and so does the drawer that was covering the terminal,
     // or the click would land on a workspace nobody can see.
     this._onDashboardHide();
+    this._chatTarget = null;
     this._closeDrawer();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive

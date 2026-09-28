@@ -14,6 +14,7 @@ type Workspace struct {
 	ID                 string            // daemon-allocated, e.g. "w1"
 	UUID               string            // durable UUID; empty only for an unbound legacy snapshot
 	Name               string            // optional label; "" means unnamed
+	ProjectPath        string            // folder bound to chat workspaces; empty for existing workspaces
 	ClientRef          string            // client-minted optimistic-create correlation id; "" when none
 	Panes              map[int]*Pane     // keyed by workspace-local pane id
 	Layouts            map[string]string // breakpoint label -> opaque dockview layout JSON
@@ -135,6 +136,28 @@ func (r *Registry) AddWorkspace(name, clientRef string) string {
 	return r.addWorkspaceLocked(name, clientRef, uuid.New().String())
 }
 
+// SetProjectPath binds a workspace to a folder and schedules durable capture.
+func (r *Registry) SetProjectPath(id, path string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws := r.workspaces[id]
+	if ws == nil {
+		return false
+	}
+	ws.ProjectPath = path
+	r.notifySnapshotChangedLocked()
+	return true
+}
+
+func (r *Registry) ProjectPath(id string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ws := r.workspaces[id]; ws != nil {
+		return ws.ProjectPath
+	}
+	return ""
+}
+
 // RestoreWorkspace recreates a workspace from a snapshot. A valid UUID is
 // preserved; an absent or malformed legacy UUID remains unbound rather than
 // being guessed from the workspace name, CWD, pane ids, or list position.
@@ -190,10 +213,11 @@ func (r *Registry) List() []WorkspaceInfo {
 		panes := make([]PaneInfo, 0, len(ws.Panes))
 		for _, pane := range ws.Panes {
 			info := pane.Info()
-			panes = append(panes, PaneInfo{PaneID: info.PaneID, Title: info.Title})
+			panes = append(panes, PaneInfo{PaneID: info.PaneID, Title: info.Title, Harness: info.Harness})
 		}
 		sort.Slice(panes, func(i, j int) bool { return panes[i].PaneID < panes[j].PaneID })
 		out = append(out, WorkspaceInfo{
+			ProjectPath:   ws.ProjectPath,
 			Panes:         panes,
 			WorkspaceID:   ws.ID,
 			WorkspaceUUID: ws.UUID,
@@ -549,6 +573,7 @@ func (r *Registry) authoritativeLayoutActivePane(wsID string) (int, bool) {
 // invoke them after the registry lock is released. Used only by the
 // session-restore snapshot writer (see snapshot.go).
 type workspaceLiveView struct {
+	ProjectPath        string
 	ID                 string
 	UUID               string
 	Name               string
@@ -601,7 +626,7 @@ func (r *Registry) snapshotView() []workspaceLiveView {
 		if ws.Panes[ws.lastUserActivePane] != nil {
 			activePaneID = ws.lastUserActivePane
 		}
-		out = append(out, workspaceLiveView{ID: id, UUID: ws.UUID, Name: ws.Name, LastUserActivePane: activePaneID, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
+		out = append(out, workspaceLiveView{ID: id, UUID: ws.UUID, Name: ws.Name, ProjectPath: ws.ProjectPath, LastUserActivePane: activePaneID, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
 	}
 	return out
 }

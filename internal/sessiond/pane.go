@@ -77,10 +77,11 @@ type Pane struct {
 	authorityConn *conn
 	authorityAt   time.Time
 
-	cmd       *exec.Cmd
-	ptmx      *os.File
-	buf       PaneBuffer
-	startTime time.Time
+	cmd           *exec.Cmd
+	launchHarness string
+	ptmx          *os.File
+	buf           PaneBuffer
+	startTime     time.Time
 
 	// activityMu guards the current root-process generation and its streaming
 	// shell-lifecycle parser/evidence. Lifecycle output is written by readLoop
@@ -168,8 +169,7 @@ func resolveArgv(argv []string) []string {
 // cwd overrides the child's working directory. Empty string preserves
 // today's behavior for every existing caller: unconditionally forced to
 // $HOME (see below). A non-empty value is used verbatim instead — the only
-// caller that passes one is the session-restore applier (snapshot.go),
-// restarting a pane in the directory it was last seen in.
+// callers are session restore and live creation inside a folder-bound workspace.
 func NewPane(
 	localID int,
 	argv []string,
@@ -634,10 +634,11 @@ func (p *Pane) Info() PaneInfo {
 	cols, rows, title := p.cols, p.rows, p.Title
 	p.mu.Unlock()
 	return PaneInfo{
-		PaneID: p.LocalID,
-		Cols:   cols,
-		Rows:   rows,
-		Title:  title,
+		PaneID:  p.LocalID,
+		Harness: p.launchHarness,
+		Cols:    cols,
+		Rows:    rows,
+		Title:   title,
 	}
 }
 

@@ -283,6 +283,7 @@ export class MuxStore {
           cols: msg.cols ?? 0,
           rows: msg.rows ?? 0,
           title: msg.title,
+          harness: msg.harness,
           clientRef: msg.clientRef,
         });
         break;
@@ -309,6 +310,7 @@ export class MuxStore {
           {
             workspaceId: msg.workspaceId ?? '',
             name: msg.name ? msg.name : undefined,
+            projectPath: msg.projectPath,
             clientRef: msg.clientRef,
             paneCount: 0,
           },

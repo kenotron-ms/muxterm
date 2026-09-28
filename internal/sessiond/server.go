@@ -693,8 +693,18 @@ func (c *conn) cleanup() {
 func (c *conn) handle(msg Message) {
 	switch msg.Type {
 	case TypeCreateWorkspace:
+		if msg.ProjectPath != "" {
+			info, err := os.Stat(msg.ProjectPath)
+			if !filepath.IsAbs(msg.ProjectPath) || err != nil || !info.IsDir() {
+				c.replyError(msg.CID, CodeFSBadPath, "project path must be an existing absolute directory")
+				break
+			}
+		}
 		id := c.srv.reg.AddWorkspace(msg.Name, msg.ClientRef)
-		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name, ClientRef: msg.ClientRef})
+		if msg.ProjectPath != "" {
+			c.srv.reg.SetProjectPath(id, filepath.Clean(msg.ProjectPath))
+		}
+		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name, ProjectPath: msg.ProjectPath, ClientRef: msg.ClientRef})
 		c.srv.broadcastWorkspaceList()
 	case TypeListWorkspaces:
 		c.srv.replyWorkspaceList(c, msg.CID)
@@ -1056,12 +1066,18 @@ func (c *conn) createPane(msg Message) {
 		// (see pane.go) so the emulator's internal io.Pipe never blocks emu.Write().
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int, exitCode int, runtimeMs int64) { c.srv.handlePaneExit(wsID, id, exitCode, runtimeMs) },
-		onPromptFn, // stored before readLoop starts — eliminates OSC 133 race
-		"",         // cwd: no override for a live-created pane — today's forced-$HOME behavior
+		onPromptFn,                  // stored before readLoop starts — eliminates OSC 133 race
+		c.srv.reg.ProjectPath(wsID), // bound project folder, or existing $HOME behavior
 	)
 	if err != nil {
 		c.replyError(msg.CID, CodePaneSpawnFailed, err.Error())
 		return
+	}
+	if len(msg.Cmd) > 0 {
+		switch filepath.Base(msg.Cmd[0]) {
+		case HarnessAmplifier, HarnessClaude, HarnessCodex:
+			p.launchHarness = filepath.Base(msg.Cmd[0])
+		}
 	}
 	// A pane started from the home composer carries the user's first prompt in
 	// its argv, which is the only description of this work that exists yet.
@@ -1094,6 +1110,7 @@ func (c *conn) createPane(msg Message) {
 		// paints the right tab from the broadcast it already handles, instead
 		// of rendering the fallback and correcting it after a round trip.
 		Title:           title,
+		Harness:         p.launchHarness,
 		ClientRef:       msg.ClientRef,
 		Placement:       msg.Placement,
 		ReferencePaneID: msg.ReferencePaneID,

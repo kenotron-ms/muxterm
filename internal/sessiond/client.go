@@ -373,6 +373,15 @@ func (c *Client) CreateWorkspace(name string) (string, error) {
 	return reply.WorkspaceID, nil
 }
 
+// CreateWorkspaceInFolder binds a new workspace to a project directory.
+func (c *Client) CreateWorkspaceInFolder(name, projectPath string) (string, error) {
+	reply, err := c.request(&Message{Type: TypeCreateWorkspace, Name: name, ProjectPath: projectPath})
+	if err != nil {
+		return "", err
+	}
+	return reply.WorkspaceID, nil
+}
+
 // RenameWorkspace sets the label of the workspace identified by workspaceID to
 // name. An empty name clears the label.
 func (c *Client) RenameWorkspace(workspaceID, name string) error {

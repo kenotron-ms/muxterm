@@ -5,6 +5,7 @@ import type { SessiondWorkspaceCompletion } from '../types.js';
 import { workspaceLabel } from '../lib/workspace-label.js';
 import './launcher-menu.js';
 import './mux-start-card.js';
+import './mux-chat-list.js';
 import type { StartSplitRow } from './mux-start-card.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import type { SessionRunState } from '../lib/session-state.js';
@@ -2814,6 +2815,7 @@ export class MuxSidebar extends LitElement {
         <span class="global-connect-mark">⊕</span><span>Connect machine</span>
       </button>
       <div class="tab-content">
+        <mux-chat-list></mux-chat-list>
         ${this._renderWorkspaces()}
       </div>
       ${this._renderFooter()}
