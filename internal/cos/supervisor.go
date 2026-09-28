@@ -274,6 +274,7 @@ type Supervisor struct {
 	pending      map[string]chan Event
 	liveInputs   map[string]*Turn
 	liveAccepted map[string]bool
+	liveSeen     map[string]*Turn
 	reqSeq       int
 
 	// Where the session id and cwd came from, reported at startup so the
@@ -324,6 +325,7 @@ func New(cfg Config) *Supervisor {
 		pending:       make(map[string]chan Event),
 		liveInputs:    make(map[string]*Turn),
 		liveAccepted:  make(map[string]bool),
+		liveSeen:      make(map[string]*Turn),
 		sessionSource: sessionSource,
 		cwdSource:     cwdSource,
 	}
@@ -640,6 +642,18 @@ func (s *Supervisor) SubmitLifecycleInput(text, markerID string) *Turn {
 		return t
 	}
 	s.mu.Lock()
+	if previous := s.liveSeen[markerID]; previous != nil {
+		s.mu.Unlock()
+		return previous
+	}
+	if len(s.liveSeen) >= 2000 {
+		s.mu.Unlock()
+		err := errors.New("cos: live input limit reached")
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: markerID, Code: CodeDispatchFailed,
+			Message: err.Error(), Fatal: true}), err)
+		return t
+	}
+	s.liveSeen[markerID] = t
 	s.liveInputs[markerID] = t
 	s.mu.Unlock()
 	if err := s.sendOp(op{Op: opInput, Version: 1, InputID: markerID, Kind: "service",
@@ -648,6 +662,43 @@ func (s *Supervisor) SubmitLifecycleInput(text, markerID string) *Turn {
 		delete(s.liveInputs, markerID)
 		s.mu.Unlock()
 		t.finish(synthEvent(Event{Ev: EvError, TurnID: markerID, Code: CodeDispatchFailed,
+			Message: err.Error(), Fatal: true}), err)
+	}
+	return t
+}
+
+// SubmitSteerInput admits a human correction to the running live execution.
+// inputID is stable across a caller retry; the runtime deduplicates it.
+func (s *Supervisor) SubmitSteerInput(text, inputID string) *Turn {
+	t := &Turn{ID: inputID, Prompt: text, Origin: OriginHuman,
+		SubmittedAt: time.Now(), done: make(chan struct{})}
+	if !s.cfg.LoopLive {
+		err := errors.New("cos: loop-live is disabled")
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeSidecarUnavailable,
+			Message: err.Error(), Fatal: true}), err)
+		return t
+	}
+	s.mu.Lock()
+	if previous := s.liveSeen[inputID]; previous != nil {
+		s.mu.Unlock()
+		return previous
+	}
+	if len(s.liveSeen) >= 2000 {
+		s.mu.Unlock()
+		err := errors.New("cos: live input limit reached")
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeDispatchFailed,
+			Message: err.Error(), Fatal: true}), err)
+		return t
+	}
+	s.liveSeen[inputID] = t
+	s.liveInputs[inputID] = t
+	s.mu.Unlock()
+	if err := s.sendOp(op{Op: opInput, Version: 1, InputID: inputID, Kind: "steer",
+		Source: "user", Text: text}); err != nil {
+		s.mu.Lock()
+		delete(s.liveInputs, inputID)
+		s.mu.Unlock()
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeDispatchFailed,
 			Message: err.Error(), Fatal: true}), err)
 	}
 	return t
