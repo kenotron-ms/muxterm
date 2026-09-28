@@ -478,7 +478,7 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": c.Provider})
+	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider)})
 	return err
 }
 
@@ -632,6 +632,22 @@ func (s *Server) handleSDKFolders(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSDKJSON(w, 200, map[string]any{"path": path, "base": base, "parent": filepath.Dir(path), "folders": folders})
 }
+// Amplifier selects provider modules by module ID; the new-chat labels are
+// shared with the vendor SDK harnesses and are stored on the chat record.
+func amplifierProviderModule(harness, provider string) string {
+	if harness != "amplifier" {
+		return provider
+	}
+	switch provider {
+	case "openai":
+		return "provider-openai"
+	case "anthropic":
+		return "provider-anthropic"
+	default:
+		return ""
+	}
+}
+
 func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == "GET" {
@@ -661,7 +677,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported provider", 400)
 		return
 	}
-	if req.Provider == "openai" && req.Harness != "codex" || req.Provider == "anthropic" && req.Harness != "claude" || req.Provider == "configured" && req.Harness != "amplifier" {
+	if req.Provider == "openai" && req.Harness == "claude" || req.Provider == "anthropic" && req.Harness == "codex" || req.Provider == "configured" && req.Harness != "amplifier" {
 		http.Error(w, "provider does not match harness", 400)
 		return
 	}
@@ -707,7 +723,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath}); err == nil {
+	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "provider": amplifierProviderModule(c.Harness, c.Provider)}); err == nil {
 		_, err = h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": sdkID(), "content": req.Prompt}})
 	}
 	if err != nil {
