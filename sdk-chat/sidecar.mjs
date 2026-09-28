@@ -41,7 +41,7 @@ async function* claudeInputs(s) {
 async function runClaude(s) {
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, resume: s.nativeId || undefined,
     includePartialMessages: true, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true,
-    maxTurns: 20 } });
+    thinking: { type: 'enabled', budgetTokens: 2048, display: 'summarized' }, maxTurns: 20 } });
   s.query = q;
   try {
     for await (const msg of q) {
@@ -52,11 +52,16 @@ async function runClaude(s) {
         const event = msg.event;
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta')
           emit(s.id, 'assistant.delta', { text: event.delta.text });
+        else if (event?.type === 'content_block_delta' && event.delta?.type === 'thinking_delta')
+          emit(s.id, 'thinking.delta', { text: event.delta.thinking });
         else if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use')
           emit(s.id, 'tool.started', { toolId: event.content_block.id, name: event.content_block.name, raw: event.content_block });
       } else if (msg.type === 'assistant') {
         for (const block of msg.message?.content || []) if (block.type === 'tool_use')
           emit(s.id, 'tool.completed', { toolId: block.id, name: block.name, raw: block });
+      } else if (msg.type === 'user') {
+        for (const block of msg.message?.content || []) if (block.type === 'tool_result')
+          emit(s.id, 'tool.result', { toolId: block.tool_use_id, raw: block });
       } else if (msg.type === 'result') {
         // The SDK's result echoes the UUIDs of user inputs the native turn
         // consumed. A local input queue is not proof that a turn was accepted.
@@ -133,6 +138,7 @@ async function command(cmd) {
 }
 const server = net.createServer(client => {
   clients.add(client); let buffer = '';
+  client.on('error', () => clients.delete(client));
   client.on('data', chunk => {
     buffer += chunk;
     for (;;) {
