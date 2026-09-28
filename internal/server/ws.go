@@ -807,7 +807,20 @@ func (c *Client) handleTextInput(data []byte) {
 		c.emitWorkspaceList(msg.CID)
 
 	case sessiond.TypeCreateWorkspace:
-		id, err := dc.CreateWorkspace(msg.Name)
+		var id string
+		var err error
+		if msg.ProjectPath != "" {
+			if folderConn, ok := dc.(interface {
+				CreateWorkspaceInFolder(string, string) (string, error)
+			}); ok {
+				id, err = folderConn.CreateWorkspaceInFolder(msg.Name, msg.ProjectPath)
+			} else {
+				c.sendError(msg.CID, browserWSID, fmt.Errorf("project folders require an updated daemon"))
+				return
+			}
+		} else {
+			id, err = dc.CreateWorkspace(msg.Name)
+		}
 		if err != nil {
 			c.sendError(msg.CID, browserWSID, err)
 			return
@@ -817,6 +830,7 @@ func (c *Client) handleTextInput(data []byte) {
 			CID:         msg.CID,
 			WorkspaceID: nsID(host, id),
 			Name:        msg.Name,
+			ProjectPath: msg.ProjectPath,
 			ClientRef:   msg.ClientRef,
 		})
 

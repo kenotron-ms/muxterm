@@ -44,9 +44,10 @@ type Snapshot struct {
 	Workspaces []WorkspaceSnapshot `json:"workspaces"`
 }
 
-// WorkspaceSnapshot is one workspace's captured name, layout, and panes.
+// WorkspaceSnapshot is one workspace's captured name, folder, layout, and panes.
 type WorkspaceSnapshot struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	ProjectPath string `json:"project_path,omitempty"`
 	// WorkspaceUUID is the durable workspace identity. It is absent in legacy
 	// snapshots. Restore leaves that legacy workspace unbound instead of
 	// inferring an identity or rewriting the source snapshot.
@@ -220,7 +221,7 @@ func BuildSnapshot(reg *Registry, reason string) Snapshot {
 		Reason:    reason,
 	}
 	for _, view := range views {
-		wsSnap := WorkspaceSnapshot{WorkspaceUUID: view.UUID, Name: view.Name, NameOrigin: string(view.NameOrigin), Layout: view.Layout}
+		wsSnap := WorkspaceSnapshot{WorkspaceUUID: view.UUID, Name: view.Name, ProjectPath: view.ProjectPath, NameOrigin: string(view.NameOrigin), Layout: view.Layout}
 		if view.LastUserActivePane > 0 {
 			activePaneID := view.LastUserActivePane
 			wsSnap.LastActivePaneID = &activePaneID
@@ -568,6 +569,9 @@ func (s *Server) RestoreFromSnapshot(enabled bool, path string) int {
 	restored := 0
 	for _, wsSnap := range snap.Workspaces {
 		wsID := s.reg.RestoreWorkspace(wsSnap.Name, "", wsSnap.WorkspaceUUID)
+		if wsSnap.ProjectPath != "" {
+			s.reg.SetProjectPath(wsID, wsSnap.ProjectPath)
+		}
 		// AddWorkspace records every creation as explicit, which is right for
 		// every live caller and wrong for exactly this one: a name this daemon
 		// derived last run must come back derived, or it freezes at whatever
@@ -703,6 +707,12 @@ func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) (int, error) {
 	)
 	if err != nil {
 		return 0, err
+	}
+	if len(argv) > 0 {
+		switch paneSnap.Agent {
+		case HarnessAmplifier, HarnessClaude, HarnessCodex:
+			p.launchHarness = paneSnap.Agent
+		}
 	}
 	if paneSnap.Title != "" {
 		// Restored with the provenance it was captured with, NOT through the

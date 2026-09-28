@@ -836,11 +836,12 @@ export class MuxSocket {
    * empty means the local daemon and the message on the wire is byte-identical
    * to today's: no workspaceId field at all.
    */
-  createWorkspace(name?: string, clientRef?: string, host?: string): boolean {
+  createWorkspace(name?: string, clientRef?: string, host?: string, projectPath?: string): boolean {
     const msg: SessiondMessage = { type: SessiondType.CreateWorkspace };
     if (name) msg.name = name;
     if (clientRef) msg.clientRef = clientRef;
     if (host) msg.workspaceId = hostSelector(host);
+    if (projectPath) msg.projectPath = projectPath;
     return this.sendSessiond(msg);
   }
 
