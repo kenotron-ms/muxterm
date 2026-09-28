@@ -48,7 +48,6 @@ func runCos(args []string) error {
 	bootTimeout := fs.Duration("boot-timeout", cos.DefaultReadyTimeout, "give up if the sidecar has not booted in this long")
 	yes := fs.Bool("yes", false, "approve every approval request without asking")
 	verbose := fs.Bool("verbose", false, "echo supervisor diagnostics, sidecar logs, and thinking blocks")
-	loopLive := fs.Bool("loop-live", false, "use the experimental pinned loop-live host (off by default)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm cos <message> [flags]")
 		fmt.Fprintln(os.Stdout, "       muxterm cos --status [--json]")
@@ -136,7 +135,6 @@ func runCos(args []string) error {
 	}
 	logger := newCosLogger(*verbose)
 	sup := cos.New(cos.Config{
-		LoopLive:  *loopLive || cos.LoopLiveFromEnv(),
 		SessionID: *sessionID,
 		Bundle:    *bundle,
 		Cwd:       *cwd,

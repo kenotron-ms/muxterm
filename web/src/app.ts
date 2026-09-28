@@ -38,11 +38,14 @@ import type { CloseConfirmationModal } from './components/close-confirmation-mod
 import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
+import './components/mux-sdk-chat.js';
+import { sdkChats } from './lib/sdk-chats.js';
 // <mux-home> is deliberately NOT imported. The Dashboard IS home now (see
 // <mux-cos>), and the two were never meant to be alternatives you could be
 // looking at one of. The component and its standalone demo are untouched.
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
+import { type HarnessName } from './lib/harness.js';
 import { cosStore } from './lib/cos-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -717,6 +720,7 @@ export class MuxApp extends LitElement {
    */
   @state()
   private _showDashboard = false;
+  @state() private _sdkChatId: string | null = null;
 
   /**
    * Whether the boot-surface decision has already been made for THIS instance.
@@ -1535,6 +1539,8 @@ export class MuxApp extends LitElement {
             .homeKey="${store.config.keys.toggleHome}"
             .showLauncher="${this._showDashboard}"
             @workspace-switch="${this._onWorkspaceSelected}"
+            @chat-open="${this._onChatOpen}"
+            @chat-create="${this._onChatCreate}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
@@ -1623,6 +1629,8 @@ export class MuxApp extends LitElement {
               `
             : '',
           )}
+          ${this._sdkChatId && !this._showDashboard ? html`
+            <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -1651,6 +1659,8 @@ export class MuxApp extends LitElement {
                 .homeKey="${''}"
                 .previewsVisible="${this._drawerOpen}"
                 @workspace-switch="${this._onWorkspaceSelected}"
+                @chat-open="${this._onChatOpen}"
+                @chat-create="${this._onChatCreate}"
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
                 @launcher-action="${this._onLauncherAction}"
@@ -2496,27 +2506,24 @@ export class MuxApp extends LitElement {
     });
   };
 
-  /**
-   * NOTE ON THE PARKED-DISPATCH MACHINERY BELOW.
-   *
-   * `_onHomeDispatch` -- the handler for the home view's new-session bar --
-   * is GONE, because that composer is gone: the Dashboard has exactly one
-   * input and it talks to Operator, which starts lanes through its
-   * own tools rather than through this browser.
-   *
-   * `_pendingDispatch`, `_dropPendingDispatch` and their hooks in the
-   * workspace-created / composition handlers are deliberately LEFT IN PLACE.
-   * They encode a subtle and hard-won safety property -- a dispatch may only
-   * spawn when the arriving composition is for the workspace it was aimed at
-   * AND the connection is still headed there -- and they have no producer
-   * today only because the one caller was removed above them. Nothing sets
-   * `_pendingDispatch`, so every path through them is currently a no-op.
-   *
-   * They are the landing site for the next thing that needs to start a pane
-   * somewhere other than the current attachment. Deleting them would mean
-   * re-deriving that identity check from scratch when it is needed again,
-   * which is how this class of bug comes back.
-   */
+  /** Start a Go-owned SDK chat in the selected project folder. */
+  private _onChatCreate = (e: CustomEvent<{
+    workspaceId: string | null; projectPath?: string; harness: HarnessName; prompt: string;
+  }>): void => {
+    const { workspaceId, projectPath, harness, prompt } = e.detail;
+    const path = projectPath ?? (workspaceId?.startsWith('sdk:') ? workspaceId.slice(4) : store.workspaces.find(w => w.workspaceId === workspaceId)?.projectPath);
+    if (!path) { this._dispatchAlert = { message: 'Choose a project folder.', prompt }; return; }
+    this._dispatchAlert = null;
+    this._onDashboardHide();
+    this._closeDrawer();
+    void sdkChats.create({ workspaceId: workspaceId?.startsWith('sdk:') ? undefined : workspaceId ?? undefined,
+      projectPath: path, harness, prompt }).then(chat => {
+      this._sdkChatId = chat.id;
+      (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = chat.id;
+    }).catch(error => {
+      this._dispatchAlert = { message: `That session did not start: ${String(error)}`, prompt };
+    });
+  };
 
   /**
    * Give up on a parked dispatch and tell the user, with their words.
@@ -2561,11 +2568,21 @@ export class MuxApp extends LitElement {
     );
   };
 
+  private _onChatOpen = (e: Event): void => {
+    const detail = (e as CustomEvent<{ sessionId: string }>).detail;
+    if (!detail?.sessionId) return;
+    this._sdkChatId = detail.sessionId;
+    (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
+    this._onDashboardHide();
+    this._fleetOpen = false;
+  };
+
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     // Picking a workspace is the "go work in there" gesture — the Dashboard
     // steps aside and so does the drawer that was covering the terminal,
     // or the click would land on a workspace nobody can see.
     this._onDashboardHide();
+    this._sdkChatId = null;
     this._closeDrawer();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive

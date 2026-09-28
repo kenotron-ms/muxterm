@@ -1,5 +1,5 @@
 // Package cos supervises muxterm's "chief of staff" sidecar: a long-lived
-// Python process that owns ONE amplifier session across many turns and speaks
+// Python process that owns the Operator session and addressable chat sessions, and speaks
 // NDJSON over its stdin/stdout.
 //
 // The contract is docs/designs/2026-09-06-cos-sidecar-spec.md. Three of its

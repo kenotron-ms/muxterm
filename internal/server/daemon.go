@@ -14,7 +14,7 @@ import (
 // wiring a DialFunc.
 type DaemonConn interface {
 	ListWorkspaces() ([]sessiond.WorkspaceInfo, error)
-	CreateWorkspace(name string) (string, error)
+	CreateWorkspace(name string, projectPath ...string) (string, error)
 	RenameWorkspace(workspaceID, name string) error
 	CloseWorkspace(workspaceID string) error
 	CloseIntent(target sessiond.CloseTarget) (sessiond.CloseOutcome, error)

@@ -14,6 +14,7 @@ type Workspace struct {
 	ID                 string            // daemon-allocated, e.g. "w1"
 	UUID               string            // durable UUID; empty only for an unbound legacy snapshot
 	Name               string            // optional label; "" means unnamed
+	ProjectPath        string            // bound folder; empty for pre-sidebar workspaces
 	ClientRef          string            // client-minted optimistic-create correlation id; "" when none
 	Panes              map[int]*Pane     // keyed by workspace-local pane id
 	Layouts            map[string]string // breakpoint label -> opaque dockview layout JSON
@@ -135,6 +136,25 @@ func (r *Registry) AddWorkspace(name, clientRef string) string {
 	return r.addWorkspaceLocked(name, clientRef, uuid.New().String())
 }
 
+// BindWorkspace sets the project folder on an existing workspace. Creation and
+// restore call this before publishing the workspace list.
+func (r *Registry) BindWorkspace(id, path string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ws := r.workspaces[id]; ws != nil {
+		ws.ProjectPath = path
+	}
+}
+
+func (r *Registry) ProjectPath(id string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ws := r.workspaces[id]; ws != nil {
+		return ws.ProjectPath
+	}
+	return ""
+}
+
 // RestoreWorkspace recreates a workspace from a snapshot. A valid UUID is
 // preserved; an absent or malformed legacy UUID remains unbound rather than
 // being guessed from the workspace name, CWD, pane ids, or list position.
@@ -190,7 +210,7 @@ func (r *Registry) List() []WorkspaceInfo {
 		panes := make([]PaneInfo, 0, len(ws.Panes))
 		for _, pane := range ws.Panes {
 			info := pane.Info()
-			panes = append(panes, PaneInfo{PaneID: info.PaneID, Title: info.Title})
+			panes = append(panes, info)
 		}
 		sort.Slice(panes, func(i, j int) bool { return panes[i].PaneID < panes[j].PaneID })
 		out = append(out, WorkspaceInfo{
@@ -198,6 +218,7 @@ func (r *Registry) List() []WorkspaceInfo {
 			WorkspaceID:   ws.ID,
 			WorkspaceUUID: ws.UUID,
 			Name:          ws.Name,
+			ProjectPath:   ws.ProjectPath,
 			ClientRef:     ws.ClientRef,
 			PaneCount:     len(ws.Panes),
 			Completion:    ws.completion,
@@ -552,6 +573,7 @@ type workspaceLiveView struct {
 	ID                 string
 	UUID               string
 	Name               string
+	ProjectPath        string
 	LastUserActivePane int
 	// NameOrigin travels with Name because the snapshot writer persists both:
 	// a name restored without its provenance is a name the deriver is free to
@@ -601,7 +623,7 @@ func (r *Registry) snapshotView() []workspaceLiveView {
 		if ws.Panes[ws.lastUserActivePane] != nil {
 			activePaneID = ws.lastUserActivePane
 		}
-		out = append(out, workspaceLiveView{ID: id, UUID: ws.UUID, Name: ws.Name, LastUserActivePane: activePaneID, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
+		out = append(out, workspaceLiveView{ID: id, UUID: ws.UUID, Name: ws.Name, ProjectPath: ws.ProjectPath, LastUserActivePane: activePaneID, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
 	}
 	return out
 }
