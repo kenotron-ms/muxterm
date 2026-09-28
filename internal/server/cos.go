@@ -79,6 +79,7 @@ const (
 	cosTypeSubscribe       = "cos-subscribe"
 	cosTypeSubscribeResult = "cos-subscribe-result"
 	cosTypeTurn            = "cos-turn"
+	cosTypeSteer           = "cos-steer"
 	cosTypeApproval        = "cos-approval"
 	cosTypeCancel          = "cos-cancel"
 	cosTypeClear           = "cos-clear"
@@ -260,6 +261,7 @@ func newCosRelay() *cosRelay {
 		cfg: cos.Config{
 			Logf:            log.Printf,
 			SubscriberDepth: cosSubscriberDepth,
+			LoopLive:        cos.LoopLiveFromEnv(),
 		},
 		subs:        make(map[string]cosSubmission),
 		refs:        make(map[string]string),
@@ -789,6 +791,8 @@ func (c *Client) handleCosMessage(data []byte) {
 		c.cosSubscribe(msg.On)
 	case cosTypeTurn:
 		c.cosTurn(msg)
+	case cosTypeSteer:
+		c.cosSteer(msg)
 	case cosTypeApproval:
 		c.cosApproval(msg)
 	case cosTypeCancel:
@@ -1154,6 +1158,40 @@ func (c *Client) cosTurn(msg cosClientMessage) {
 func (c *Client) cosTurnFailure(msg cosClientMessage, code, message string) {
 	c.sendCosError("", code, message)
 	c.sendCosTurnResult(msg.ClientRef, false, "", code)
+}
+
+// cosSteer accepts a user correction while the opt-in Amplifier turn runs.
+// The sidecar remains the authority for acceptance and delivery; this reply
+// only confirms that the input entered the supervisor's outgoing channel.
+func (c *Client) cosSteer(msg cosClientMessage) {
+	result := map[string]any{"type": "cos-steer-result", "client_ref": msg.ClientRef, "ok": false}
+	defer func() {
+		data, _ := json.Marshal(result)
+		_ = c.writeText(data)
+	}()
+	prompt := strings.TrimSpace(msg.Prompt)
+	if prompt == "" || len(prompt) > cosPromptMaxBytes {
+		result["code"] = "bad_request"
+		return
+	}
+	relay := c.hub.cos
+	if relay == nil || relay.started() == nil || !relay.started().LoopLiveEnabled() {
+		result["code"] = "live_session_unavailable"
+		return
+	}
+	id := uuid.NewString()
+	turn := relay.started().SubmitSteerInput(prompt, id)
+	select {
+	case <-turn.Done():
+		_, err := turn.Result()
+		if err != nil {
+			result["code"] = "dispatch_failed"
+			return
+		}
+	default:
+	}
+	result["ok"] = true
+	result["input_id"] = id
 }
 
 func (c *Client) sendMissionControlUnsupported(typ string) {

@@ -1,0 +1,2 @@
+# Amplifier-only opt-in session. amplifier-core is supplied by the host.
+amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@main
