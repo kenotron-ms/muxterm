@@ -130,6 +130,9 @@ type Event struct {
 	// ready
 	SessionID string `json:"session_id,omitempty"`
 	Bundle    string `json:"bundle,omitempty"`
+	LoopLive  bool   `json:"loop_live,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Model     string `json:"model,omitempty"`
 	Tools     int    `json:"tools,omitempty"`
 	BootMS    int64  `json:"boot_ms,omitempty"`
 	Resumed   bool   `json:"resumed,omitempty"`

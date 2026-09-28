@@ -192,7 +192,7 @@ var ErrNotRunning = errors.New("cos: sidecar is not running")
 // defaults to log.Printf, which is what routes sidecar stderr into muxterm's
 // normal logging.
 type Config struct {
-	// LoopLive enables the pinned experimental one-execution-per-process host.
+	// LoopLive enables the Amplifier one-execution-per-process host.
 	// It is false by default and must never be inferred from module presence.
 	LoopLive bool
 	// SessionID is the amplifier session id (default DefaultSessionID).
@@ -631,23 +631,33 @@ func (s *Supervisor) LoopLiveEnabled() bool { return s.cfg.LoopLive }
 // SubmitLifecycleInput sends one typed service observation independently of
 // the human FIFO. markerID is also loop-live's idempotency key.
 func (s *Supervisor) SubmitLifecycleInput(text, markerID string) *Turn {
-	t := &Turn{ID: markerID, Prompt: text, Origin: OriginLifecycle,
-		CausationID: markerID, SubmittedAt: time.Now(), done: make(chan struct{})}
+	return s.submitLiveInput(text, markerID, "service", "muxterm-lane-lifecycle", OriginLifecycle)
+}
+
+// SubmitSteerInput sends a user's correction to the running Amplifier turn.
+// It bypasses the ordinary turn FIFO because loop-live accepts it while busy.
+func (s *Supervisor) SubmitSteerInput(text, inputID string) *Turn {
+	return s.submitLiveInput(text, inputID, "steer", "user", OriginHuman)
+}
+
+func (s *Supervisor) submitLiveInput(text, inputID, kind, source, origin string) *Turn {
+	t := &Turn{ID: inputID, Prompt: text, Origin: origin,
+		CausationID: inputID, SubmittedAt: time.Now(), done: make(chan struct{})}
 	if !s.cfg.LoopLive {
 		err := errors.New("cos: loop-live is disabled")
-		t.finish(synthEvent(Event{Ev: EvError, TurnID: markerID, Code: CodeSidecarUnavailable,
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeSidecarUnavailable,
 			Message: err.Error(), Fatal: true}), err)
 		return t
 	}
 	s.mu.Lock()
-	s.liveInputs[markerID] = t
+	s.liveInputs[inputID] = t
 	s.mu.Unlock()
-	if err := s.sendOp(op{Op: opInput, Version: 1, InputID: markerID, Kind: "service",
-		Source: "muxterm-lane-lifecycle", Text: text}); err != nil {
+	if err := s.sendOp(op{Op: opInput, Version: 1, InputID: inputID, Kind: kind,
+		Source: source, Text: text}); err != nil {
 		s.mu.Lock()
-		delete(s.liveInputs, markerID)
+		delete(s.liveInputs, inputID)
 		s.mu.Unlock()
-		t.finish(synthEvent(Event{Ev: EvError, TurnID: markerID, Code: CodeDispatchFailed,
+		t.finish(synthEvent(Event{Ev: EvError, TurnID: inputID, Code: CodeDispatchFailed,
 			Message: err.Error(), Fatal: true}), err)
 	}
 	return t

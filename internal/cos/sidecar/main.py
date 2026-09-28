@@ -116,10 +116,7 @@ TOOL_SURFACE_KEYS = ("muxterm_cos", "tools")
 SESSION_COST_CHANNEL = "session.cost"
 DEFAULT_APPROVAL_TIMEOUT = 300.0
 SUMMARY_LIMIT = 240
-LOOP_LIVE_COMMIT = "1d7be38ef47798bbb162f5331b413e78d6b4e70b"
-LOOP_LIVE_SOURCE = (
-    "git+https://github.com/microsoft/amplifier-module-loop-live@" + LOOP_LIVE_COMMIT
-)
+LOOP_LIVE_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
 
 # Serve-loop wake-up token.  Pushed onto the op queue by the signal handler so
 # an IDLE sidecar (parked on queue.get(), which no signal interrupts) re-reads
@@ -823,6 +820,8 @@ class Sidecar:
         self.live_runtime: Any = None
         self.live_task: "asyncio.Task | None" = None
         self._live_inputs: dict[str, dict] = {}
+        self.live_provider: str = ""
+        self.live_model: str = ""
 
     # -- boot ---------------------------------------------------------------
     async def build(self) -> Any:
@@ -859,9 +858,8 @@ class Sidecar:
         # "Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'".
         cfg = expand_env_vars(cfg)
         if self.args.loop_live:
-            # Canary only: replace exactly the root orchestrator and pin the
-            # private dependency to the design-reviewed commit. Background
-            # jobs and native steering remain disabled in Slice 1.
+            # Replace exactly the root orchestrator. Background jobs remain
+            # disabled in this slice.
             session_cfg = cfg.setdefault("session", {})
             live_orchestrator = {
                 "module": "loop-live",
@@ -940,6 +938,25 @@ class Sidecar:
             })
             self.live_runtime = Runtime(session_id=self.session_id, observer=self._live_observe)
             session.coordinator.register_capability("live.runtime", self.live_runtime)
+            # The CLI resolver above applies the owner's existing Amplifier
+            # settings. Confirm the actual mounted provider and model now;
+            # a bare foundation session does not inherit that selection.
+            providers = session.coordinator.get("providers") or {}
+            if not providers:
+                raise RuntimeError("loop-live has no provider from Amplifier CLI settings")
+            orchestrator = session.coordinator.get("orchestrator")
+            selected = orchestrator._select_provider(providers)
+            self.live_provider = next((name for name, provider in providers.items()
+                                       if provider is selected), "")
+            info = selected.get_info()
+            if asyncio.iscoroutine(info):
+                info = await info
+            defaults = getattr(info, "defaults", {}) or {}
+            self.live_model = (defaults.get("model") or getattr(selected, "model", None)
+                               or getattr(selected, "default_model", None) or "")
+            if not self.live_provider or not self.live_model:
+                raise RuntimeError("loop-live provider/model selection is incomplete")
+            orchestrator.root_provider = selected
 
         # session.config is not guaranteed to be the same dict object as cfg.
         session.config["working_dir"] = cwd
@@ -2193,6 +2210,10 @@ class Sidecar:
                             input_ids=[input_id] if isinstance(input_id, str) else [],
                             error="input requires string input_id, kind, source, and text")
             return
+        if kind not in {"service", "steer"} or source != ("muxterm-lane-lifecycle" if kind == "service" else "user"):
+            self.proto.emit(ev="generation_failed", version=1, input_id=input_id,
+                            input_ids=[input_id], error="unsupported input kind or source")
+            return
         await self._submit_live(input_id=input_id, kind=kind, source=source, text=text)
 
 
@@ -2374,6 +2395,8 @@ async def run(args: argparse.Namespace, proto: Proto) -> int:
             )
             if args.loop_live:
                 ready["loop_live"] = True
+                ready["provider"] = sidecar.live_provider
+                ready["model"] = sidecar.live_model
             proto.emit(**ready)
             await sidecar._start_live()
             await sidecar.serve()
