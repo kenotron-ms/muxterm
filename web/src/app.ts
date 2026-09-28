@@ -39,13 +39,12 @@ import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
-import { sdkChats } from './lib/sdk-chats.js';
+import './components/mux-new-chat.js';
 // <mux-home> is deliberately NOT imported. The Dashboard IS home now (see
 // <mux-cos>), and the two were never meant to be alternatives you could be
 // looking at one of. The component and its standalone demo are untouched.
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
-import { type HarnessName } from './lib/harness.js';
 import { cosStore } from './lib/cos-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -1540,7 +1539,7 @@ export class MuxApp extends LitElement {
             .showLauncher="${this._showDashboard}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @chat-open="${this._onChatOpen}"
-            @chat-create="${this._onChatCreate}"
+            @chat-new="${this._onChatNew}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
@@ -1629,7 +1628,8 @@ export class MuxApp extends LitElement {
               `
             : '',
           )}
-          ${this._sdkChatId && !this._showDashboard ? html`
+          ${this._sdkChatId && !this._showDashboard ? this._sdkChatId === 'new' ? html`
+            <mux-new-chat @chat-created=${this._onChatOpen}></mux-new-chat>` : html`
             <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
         </div>
 
@@ -1660,7 +1660,7 @@ export class MuxApp extends LitElement {
                 .previewsVisible="${this._drawerOpen}"
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @chat-open="${this._onChatOpen}"
-                @chat-create="${this._onChatCreate}"
+                @chat-new="${this._onChatNew}"
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
                 @launcher-action="${this._onLauncherAction}"
@@ -2506,23 +2506,11 @@ export class MuxApp extends LitElement {
     });
   };
 
-  /** Start a Go-owned SDK chat in the selected project folder. */
-  private _onChatCreate = (e: CustomEvent<{
-    workspaceId: string | null; projectPath?: string; harness: HarnessName; prompt: string;
-  }>): void => {
-    const { workspaceId, projectPath, harness, prompt } = e.detail;
-    const path = projectPath ?? (workspaceId?.startsWith('sdk:') ? workspaceId.slice(4) : store.workspaces.find(w => w.workspaceId === workspaceId)?.projectPath);
-    if (!path) { this._dispatchAlert = { message: 'Choose a project folder.', prompt }; return; }
-    this._dispatchAlert = null;
+  private _onChatNew = (): void => {
+    this._sdkChatId = 'new';
     this._onDashboardHide();
+    this._fleetOpen = false;
     this._closeDrawer();
-    void sdkChats.create({ workspaceId: workspaceId?.startsWith('sdk:') ? undefined : workspaceId ?? undefined,
-      projectPath: path, harness, prompt }).then(chat => {
-      this._sdkChatId = chat.id;
-      (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = chat.id;
-    }).catch(error => {
-      this._dispatchAlert = { message: `That session did not start: ${String(error)}`, prompt };
-    });
   };
 
   /**
