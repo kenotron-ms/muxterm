@@ -667,6 +667,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSDKJSON(w, 201, c)
 }
+
 func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	id := r.PathValue("id")
@@ -681,7 +682,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		writeSDKJSON(w, 200, c)
 	case "POST":
-		var req struct{ Kind, Source, ID, Content string }
+		var req struct {
+			Kind, Source, ID, Content string
+			Attachments               []string `json:"attachments"`
+		}
 		if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 			http.Error(w, "invalid JSON", 400)
 			return
@@ -704,13 +708,43 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "service input requires a distinct source", 422)
 			return
 		}
+		if len(req.Attachments) > 0 && req.Kind != "user" {
+			http.Error(w, "attachments require a user message", 422)
+			return
+		}
+		refs := make([]cosAttachmentRef, 0, len(req.Attachments))
+		if len(req.Attachments) > 0 && s.sdkAttachments == nil {
+			http.Error(w, "attachments unavailable: "+s.sdkAttachmentsErr.Error(), 503)
+			return
+		}
+		if len(req.Attachments) > 10 {
+			http.Error(w, "too many attachments for one message", 422)
+			return
+		}
+		for _, attachmentID := range req.Attachments {
+			path, item, resolveErr := s.sdkAttachments.ResolvePath(attachmentID)
+			if resolveErr != nil {
+				http.Error(w, "attachment "+attachmentID+": "+resolveErr.Error(), 422)
+				return
+			}
+			refs = append(refs, cosAttachmentRef{meta: cosAttachmentMeta{Name: item.Filename, Kind: item.Kind, MediaType: item.ContentType, Size: item.Size}, path: path})
+		}
+		if strings.TrimSpace(req.Content) == "" && len(refs) == 0 {
+			http.Error(w, "message or attachment required", 422)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := h.resume(ctx, c); err != nil {
 			http.Error(w, err.Error(), 502)
 			return
 		}
-		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": req.Content}})
+		paths := make([]map[string]string, 0, len(refs))
+		for _, ref := range refs {
+			paths = append(paths, map[string]string{"path": ref.path, "kind": ref.meta.Kind, "mediaType": ref.meta.MediaType})
+		}
+		content := cosComposePrompt(req.Content, refs)
+		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": content, "attachments": paths}})
 		if err != nil {
 			http.Error(w, err.Error(), 422)
 			return

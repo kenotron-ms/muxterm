@@ -54,8 +54,12 @@ export class CodexStream {
     this.inputId = input.id;
     this.textByItem.clear();
     try {
+      const items = [{ type: 'text', text: input.content, text_elements: [] }];
+      for (const attachment of input.attachments || []) {
+        if (attachment.kind === 'image') items.push({ type: 'localImage', path: attachment.path });
+      }
       const result = await this.request('turn/start', { threadId: this.session.nativeId,
-        input: [{ type: 'text', text: input.content, text_elements: [] }] });
+        input: items });
       this.turnId = result.turn.id;
     } catch (error) {
       this.session.busy = false;

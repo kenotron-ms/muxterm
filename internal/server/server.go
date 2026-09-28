@@ -20,6 +20,7 @@ import (
 
 	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
+	"github.com/kenotron-ms/muxterm/internal/chatattachments"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/voice"
@@ -163,7 +164,9 @@ type Server struct {
 	version  string
 	updating atomic.Bool
 
-	sdkChats *sdkChatHost
+	sdkChats          *sdkChatHost
+	sdkAttachments    *chatattachments.Store
+	sdkAttachmentsErr error
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -190,6 +193,15 @@ func New(cfg Config) *Server {
 		version:        cfg.Version,
 	}
 	s.sdkChats = newSDKChatHost()
+	attachmentRoot, attachmentRootErr := chatattachments.DefaultRoot()
+	if attachmentRootErr == nil {
+		s.sdkAttachments, s.sdkAttachmentsErr = chatattachments.NewStore(attachmentRoot)
+	} else {
+		s.sdkAttachmentsErr = attachmentRootErr
+	}
+	if s.sdkAttachmentsErr != nil {
+		log.Printf("sdk chat attachments unavailable: %v", s.sdkAttachmentsErr)
+	}
 	s.configPath = cfg.ConfigPath
 	// Use the supplied initial config if it looks populated (palette is never
 	// empty in a real config), otherwise fall back to hardcoded defaults.
@@ -370,6 +382,11 @@ func New(cfg Config) *Server {
 
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("POST /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
+	if s.sdkAttachments != nil {
+		if err := chatattachments.RegisterRoutes(s.mux, s.sdkAttachments, protect); err != nil {
+			log.Printf("sdk chat attachment routes: %v", err)
+		}
+	}
 	s.mux.Handle("GET /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))
 	s.mux.Handle("POST /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))
 	s.mux.Handle("DELETE /api/sdk-projects/{id}", protect(http.HandlerFunc(s.handleSDKProject)))

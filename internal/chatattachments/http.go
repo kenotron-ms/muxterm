@@ -32,7 +32,20 @@ func RegisterRoutes(mux *http.ServeMux, store *Store, protect func(http.Handler)
 	}
 	mux.Handle("POST /api/sdk-chat-attachments", protect(http.HandlerFunc(store.handleUpload)))
 	mux.Handle("GET /api/sdk-chat-attachments/{id}", protect(http.HandlerFunc(store.handleGet)))
+	mux.Handle("DELETE /api/sdk-chat-attachments/{id}", protect(http.HandlerFunc(store.handleDelete)))
 	return nil
+}
+
+func (s *Store) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Muxterm-Chat-Attachment") != "1" {
+		fail(w, http.StatusForbidden, "upload_header_required", "X-Muxterm-Chat-Attachment: 1 is required")
+		return
+	}
+	if err := s.remove(r.PathValue("id")); err != nil {
+		fail(w, http.StatusBadRequest, "invalid_attachment_id", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Store) handleUpload(w http.ResponseWriter, r *http.Request) {

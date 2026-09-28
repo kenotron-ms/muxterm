@@ -73,7 +73,7 @@ func validName(name string) bool {
 		return false
 	}
 	for _, r := range name {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || r == '\u0085' || r == '\u2028' || r == '\u2029' {
 			return false
 		}
 	}
