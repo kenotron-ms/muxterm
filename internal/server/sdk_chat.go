@@ -58,6 +58,32 @@ type sdkEvent struct {
 	Message      string          `json:"message,omitempty"`
 	Raw          json.RawMessage `json:"raw,omitempty"`
 }
+type sdkInputAttachment struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, error) {
+	if len(ids) > 10 {
+		return nil, errors.New("at most 10 attachments are allowed per message")
+	}
+	seen := make(map[string]bool, len(ids))
+	items := make([]sdkInputAttachment, 0, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			return nil, errors.New("duplicate attachment id")
+		}
+		seen[id] = true
+		path, meta, err := s.sdkChatAttachments.ResolvePath(id)
+		if err != nil {
+			return nil, fmt.Errorf("attachment %q cannot be read: %w", id, err)
+		}
+		items = append(items, sdkInputAttachment{Path: path, Name: meta.Filename, Kind: meta.Kind})
+	}
+	return items, nil
+}
+
 type sdkChatHost struct {
 	mu       sync.Mutex
 	dir      string
@@ -681,7 +707,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		writeSDKJSON(w, 200, c)
 	case "POST":
-		var req struct{ Kind, Source, ID, Content string }
+		var req struct {
+			Kind, Source, ID, Content string
+			Attachments               []string `json:"attachments"`
+		}
 		if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 			http.Error(w, "invalid JSON", 400)
 			return
@@ -704,13 +733,26 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "service input requires a distinct source", 422)
 			return
 		}
+		if len(req.Attachments) > 0 && req.Kind != "user" {
+			http.Error(w, "attachments require a user message", 422)
+			return
+		}
+		attachments, err := s.resolveSDKAttachments(req.Attachments)
+		if err != nil {
+			http.Error(w, err.Error(), 422)
+			return
+		}
+		if strings.TrimSpace(req.Content) == "" && len(attachments) == 0 {
+			http.Error(w, "message or attachment required", 422)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := h.resume(ctx, c); err != nil {
 			http.Error(w, err.Error(), 502)
 			return
 		}
-		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": req.Content}})
+		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": req.Content, "attachments": attachments}})
 		if err != nil {
 			http.Error(w, err.Error(), 422)
 			return

@@ -17,8 +17,14 @@ function broadcast(message) {
 const capabilities = harness => harness === 'claude'
   ? { approvals: false, transcript_read: true, interrupt: true, live_input: true, attributed_service_input: true, native_steering: false }
   : { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: false };
+function attachmentPrompt(input) {
+  const items = input.attachments || [];
+  if (!items.length) return input.content;
+  const manifest = items.map(a => `- ${JSON.stringify(a.name)} (${a.kind}): ${JSON.stringify(a.path)}`).join('\n');
+  return `${input.content || 'Please inspect the attached files.'}\n\nAttached files on the local filesystem (absolute paths):\n${manifest}\nRead the files at these paths before answering the question. For images, inspect the image content.`;
+}
 function inputMessage(input) {
-  return { type: 'user', message: { role: 'user', content: input.content }, parent_tool_use_id: null,
+  return { type: 'user', message: { role: 'user', content: attachmentPrompt(input) }, parent_tool_use_id: null,
     origin: input.kind === 'service' ? { kind: 'task-notification', subkind: input.source || 'muxterm' } : { kind: 'human' },
     uuid: input.id, ...(input.kind === 'service' ? { priority: 'now', client_composed: true } : {}) };
 }
@@ -82,7 +88,7 @@ async function command(cmd) {
   const s = sessions.get(sessionId);
   if (!s) throw new Error('Session is not resident; resume it first');
   if (op === 'send') {
-    if (!input?.id || !input?.content || !['user', 'service'].includes(input.kind)) throw new Error('Invalid input');
+    if (!input?.id || (!input?.content && !input?.attachments?.length) || !['user', 'service'].includes(input.kind)) throw new Error('Invalid input');
     if (input.kind === 'service' && !capabilities(s.harness).attributed_service_input)
       throw new Error('unsupported: attributed service input');
     if (s.busy && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');

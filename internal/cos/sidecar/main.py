@@ -2387,6 +2387,18 @@ class SDKChatSession:
         from amplifier_module_loop_live.runtime import Input
         kind, source, input_id = value.get("kind"), value.get("source"), value.get("id")
         content = value.get("content", "")
+        display_content = content
+        attachments = value.get("attachments") or []
+        if attachments:
+            manifest = "\n".join(
+                f'- {json.dumps(item["name"])} ({item["kind"]}): {json.dumps(item["path"])}'
+                for item in attachments
+            )
+            content = (content or "Please inspect the attached files.") + (
+                "\n\nAttached files on the local filesystem (absolute paths):\n"
+                + manifest + "\nRead the files at these paths before answering. "
+                "Inspect each image's contents."
+            )
         if kind not in ("user", "steer", "service", "cancel_job", "stop"):
             raise ValueError(f"unsupported Amplifier input kind: {kind}")
         if not input_id or (kind not in ("stop", "cancel_job") and not content):
@@ -2401,7 +2413,7 @@ class SDKChatSession:
             self.turn_started = time.monotonic()
             self.first_token_seen = False
         self.active.add(input_id)
-        frame(self.id, "input.accepted", inputId=input_id, kind=kind, source=source, text=content)
+        frame(self.id, "input.accepted", inputId=input_id, kind=kind, source=source, text=display_content)
         return {"status": "accepted", "inputId": input_id}
 
     async def close(self):
