@@ -14,6 +14,20 @@ export class MuxChatWorkspace extends LitElement {
   @state() private menuOpen = false;
   @state() private error = '';
 
+  private readonly closeMenuOnOutsidePointer = (event: PointerEvent) => {
+    if (this.menuOpen && !event.composedPath().includes(this)) this.menuOpen = false;
+  };
+
+  override connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener('pointerdown', this.closeMenuOnOutsidePointer);
+  }
+
+  override disconnectedCallback() {
+    document.removeEventListener('pointerdown', this.closeMenuOnOutsidePointer);
+    super.disconnectedCallback();
+  }
+
   static styles = css`
     :host { display:block; margin:2px 6px; font:12px/1.35 system-ui,sans-serif; color:var(--chrome-text-bright,#d8dce5); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
