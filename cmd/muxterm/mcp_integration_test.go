@@ -205,8 +205,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns33Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 33 tools
+// TestMCPToolsListReturns37Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 37 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
@@ -226,8 +226,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 // file to the human in the Viewer, took it to 29. The trigger quartet
 // (create_trigger, list_triggers, set_trigger_enabled, delete_trigger), which
 // starts lanes on a schedule or a file change with no human present, took it
-// to 33.
-func TestMCPToolsListReturns33Tools(t *testing.T) {
+// to 33. The four Chat control tools took it to 37.
+func TestMCPToolsListReturns37Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "")
 
@@ -263,6 +263,11 @@ func TestMCPToolsListReturns33Tools(t *testing.T) {
 		"publish_folder",
 		"list_publications",
 		"revoke_publication",
+		// 4 serve-owned Chat control tools.
+		"list_chat_sessions",
+		"spawn_chat",
+		"send_chat_message",
+		"read_chat_session",
 		// 1 artifact tool (HTTP REST, registered via registerArtifactTools)
 		"view_file",
 		// 2 config tools (HTTP REST, registered via registerConfigTools)
@@ -334,6 +339,11 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		"publish_folder",
 		"list_publications",
 		"revoke_publication",
+		// 4 Chat tools, available inside a session for cross-chat handoffs.
+		"list_chat_sessions",
+		"spawn_chat",
+		"send_chat_message",
+		"read_chat_session",
 		// 1 artifact tool, present in a pane: view_file SHOWS a file to the
 		// human who is already logged in. It publishes nothing, creates no
 		// link and destroys nothing, so it falls on the same side of this

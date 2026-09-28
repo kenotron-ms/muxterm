@@ -58,14 +58,6 @@ async function runClaude(s) {
     }
   } catch (error) { s.busy = false; emit(s.id, 'error', { message: String(error) }); }
 }
-async function runCodex(s, input) {
-  s.busy = true;
-  try {
-    s.codex ||= new CodexStream(s, emit);
-    await s.codex.run(input);
-  } catch (error) { emit(s.id, 'error', { message: String(error) }); }
-  finally { if (!s.codex?.turnId) s.busy = false; }
-}
 async function command(cmd) {
   const { op, sessionId, harness, cwd, nativeId, input } = cmd;
   if (op === 'capabilities') return { capabilities: capabilities(harness) };
@@ -86,9 +78,20 @@ async function command(cmd) {
     if (input.kind === 'service' && !capabilities(s.harness).attributed_service_input)
       throw new Error('unsupported: attributed service input');
     if (s.busy && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');
+    if (s.harness === 'codex') {
+      // Codex has not accepted a turn until app-server answers turn/start.
+      // Returning before that answer used to turn a failed native submission
+      // into a false successful receipt in muxterm's durable control ledger.
+      s.busy = true;
+      try {
+        s.codex ||= new CodexStream(s, emit);
+        await s.codex.run(input);
+      } catch (error) {
+        s.busy = false;
+        throw error;
+      }
+    } else { s.busy = true; queue(s, input); }
     emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.content });
-    if (s.harness === 'codex') void runCodex(s, input);
-    else { s.busy = true; queue(s, input); }
     return { status: 'accepted', inputId: input.id };
   }
   if (op === 'interrupt') {

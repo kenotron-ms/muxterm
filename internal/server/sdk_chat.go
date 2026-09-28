@@ -25,16 +25,19 @@ import (
 
 // SDK chats are Go-owned records. Native harness IDs are resume pointers only.
 type sdkChat struct {
-	ID          string    `json:"id"`
-	WorkspaceID string    `json:"workspaceId,omitempty"`
-	ProjectPath string    `json:"projectPath"`
-	Title       string    `json:"title"`
-	Harness     string    `json:"harness"`
-	Bundle      string    `json:"bundle,omitempty"`
-	Provider    string    `json:"provider,omitempty"`
-	NativeID    string    `json:"nativeId,omitempty"`
-	State       string    `json:"state"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID           string    `json:"id"`
+	WorkspaceID  string    `json:"workspaceId,omitempty"`
+	ProjectPath  string    `json:"projectPath"`
+	Title        string    `json:"title"`
+	Harness      string    `json:"harness"`
+	Bundle       string    `json:"bundle,omitempty"`
+	Provider     string    `json:"provider,omitempty"`
+	NativeID     string    `json:"nativeId,omitempty"`
+	State        string    `json:"state"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt,omitempty"`
+	LastActivity string    `json:"lastActivity,omitempty"`
+	LastOutput   string    `json:"lastOutput,omitempty"`
 }
 type sdkProject struct {
 	ID   string `json:"id"`
@@ -157,13 +160,24 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	if event.NativeID != "" {
 		c.NativeID = event.NativeID
 	}
+	c.UpdatedAt = time.Now().UTC()
 	switch event.Type {
 	case "input.accepted":
 		c.State = "working"
+		c.LastActivity = "Working on: " + sdkPreview(event.Text, 160)
+		c.LastOutput = ""
+	case "tool.started":
+		c.LastActivity = "Running tool: " + event.Name
+	case "assistant.delta":
+		c.LastOutput = sdkTail(c.LastOutput+event.Text, 300)
 	case "turn.completed":
 		c.State = "ready"
+		c.LastActivity = "Turn completed"
 	case "error":
 		c.State = "failed"
+		c.LastActivity = "Error: " + sdkPreview(event.Message, 160)
+	case "session.uncertain":
+		c.LastActivity = "Delivery uncertain"
 	}
 	_ = h.saveLocked(c)
 	line, _ := json.Marshal(event)
@@ -182,6 +196,16 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		}
 	}
 	h.mu.Unlock()
+}
+func sdkPreview(text string, limit int) string {
+	return strings.TrimSpace(sdkTail(text, limit))
+}
+func sdkTail(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[len(runes)-limit:])
 }
 func (h *sdkChatHost) sidecarPath() (string, error) {
 	if p := os.Getenv("MUXTERM_SDK_CHAT_SIDECAR"); p != "" {
