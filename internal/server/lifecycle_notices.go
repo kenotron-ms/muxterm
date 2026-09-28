@@ -132,6 +132,9 @@ type lifecycleLedgerEntry struct {
 	// retry budget. It is retained so the failure is not retried forever and
 	// is visible, rather than looking identical to a successful delivery.
 	Failed bool `json:"failed,omitempty"`
+	// Uncertain means the sidecar accepted the typed input and died before a
+	// correlated delivered/terminal event. It is terminal for replay policy.
+	Uncertain bool `json:"uncertain,omitempty"`
 }
 
 type lifecycleLedgerFile struct {
@@ -579,6 +582,25 @@ func (n *lifecycleNoticer) deliver(m lifecycleMarker) {
 		// will try again.
 		return
 	}
+	if sup.LoopLiveEnabled() {
+		turn := sup.SubmitLifecycleInput(lifecycleObservation(m), m.ID)
+		select {
+		case <-turn.Done():
+		case <-n.stop:
+			return
+		}
+		ev, resultErr := turn.Result()
+		entry := lifecycleLedgerEntry{MarkerID: m.ID, Key: m.Key(), Kind: m.Kind, TurnID: turn.ID}
+		if ev.Ev == cos.EvSidecarUncertain {
+			entry.Uncertain = true
+			log.Printf("cos: lifecycle service input %s is UNCERTAIN after sidecar exit; it will not be replayed", m.ID)
+		} else if resultErr != nil {
+			entry.Failed = true
+			log.Printf("cos: lifecycle service input %s failed before correlated delivery: %v", m.ID, resultErr)
+		}
+		n.ledger.mark(entry)
+		return
+	}
 
 	backoff := lifecycleNoticeBackoff
 	for attempt := 1; attempt <= lifecycleNoticeAttempts; attempt++ {
@@ -615,6 +637,17 @@ func (n *lifecycleNoticer) deliver(m lifecycleMarker) {
 	n.ledger.mark(lifecycleLedgerEntry{
 		MarkerID: m.ID, Key: m.Key(), Kind: m.Kind, Failed: true,
 	})
+}
+
+// lifecycleObservation is facts only. Unlike the legacy user-shaped prompt it
+// contains no request to narrate, act, call a tool, or address the owner.
+func lifecycleObservation(m lifecycleMarker) string {
+	payload, err := json.Marshal(lifecycleEnvelopeFor(m))
+	if err != nil {
+		return fmt.Sprintf(`{"outcome":%q,"lane":%q,"marker_id":%q}`,
+			m.Kind, sanitizeVoiceContextText(m.LaneName, 160), m.ID)
+	}
+	return string(payload)
 }
 
 // submitAndWait admits one notice turn and waits for its authoritative
