@@ -16,15 +16,16 @@ import (
 // The installed binary carries the sidecar and the exact npm dependency lock.
 // Node packages are installed into a versioned cache before the sidecar starts.
 //
-//go:embed sidecar.mjs package.json package-lock.json
+//go:embed sidecar.mjs codex-stream.mjs package.json package-lock.json
 var files embed.FS
 
-var names = []string{"sidecar.mjs", "package.json", "package-lock.json"}
+var names = []string{"sidecar.mjs", "codex-stream.mjs", "package.json", "package-lock.json"}
 var prepareMu sync.Mutex
 
 func ready(dir string) bool {
 	for _, name := range []string{
 		"sidecar.mjs",
+		"codex-stream.mjs",
 		"node_modules/@openai/codex-sdk/package.json",
 		"node_modules/@anthropic-ai/claude-agent-sdk/package.json",
 	} {
