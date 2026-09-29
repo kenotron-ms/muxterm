@@ -43,7 +43,8 @@ async function* claudeInputs(s) {
       if (pending) {
         s.pendingInputs.delete(input.uuid);
         emit(s.id, 'input.accepted', { inputId: input.uuid, kind: pending.input.kind,
-          source: pending.input.source, text: pending.input.content });
+          source: pending.input.source, text: pending.input.content,
+          attachments: (pending.input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
         pending.resolve();
       }
       yield input;
@@ -113,7 +114,7 @@ async function command(cmd) {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
     if (harness !== 'codex' && harness !== 'claude') throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
-    const s = { id: sessionId, harness, cwd, nativeId, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false };
+    const s = { id: sessionId, harness, cwd, nativeId, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: '', effort: '' };
     sessions.set(sessionId, s);
     if (harness === 'claude') void runClaude(s);
     if (op === 'start') emit(sessionId, 'session.started', { capabilities: capabilities(harness), pendingNativeId: true });
@@ -121,12 +122,43 @@ async function command(cmd) {
   }
   const s = sessions.get(sessionId);
   if (!s) throw new Error('Session is not resident; resume it first');
+  if (op === 'options') {
+    if (s.harness === 'codex') {
+      s.codex ||= new CodexStream(s, emit);
+      return await s.codex.options();
+    }
+    const models = (await s.query.supportedModels()).map(model => ({
+      id: model.value, label: model.displayName, efforts: model.supportedEffortLevels || [],
+      defaultEffort: '',
+    }));
+    return { model: s.model || models[0]?.id || '', effort: s.effort, models };
+  }
+  if (op === 'select') {
+    if (s.busy) throw new Error('Finish the current turn before changing settings');
+    const options = await command({ op: 'options', sessionId });
+    const model = cmd.model || options.model;
+    const selected = options.models.find(item => item.id === model);
+    if (model && !selected) throw new Error('Unsupported model');
+    const effort = cmd.effort || '';
+    if (effort && !selected?.efforts.includes(effort)) throw new Error('Unsupported effort for this model');
+    if (s.harness === 'claude') {
+      if (model !== s.model) await s.query.setModel(model || undefined);
+      if (effort !== s.effort) await s.query.applyFlagSettings({ effortLevel: effort || null });
+    }
+    s.model = model; s.effort = effort;
+    return { ...options, model, effort };
+  }
   if (op === 'send') {
     if (!input?.id || (!input?.content && !input?.attachments?.length) || !['user', 'service', 'steer'].includes(input.kind)) throw new Error('Invalid input');
     if (input.kind === 'service' && !capabilities(s.harness).attributed_service_input)
       throw new Error('unsupported: attributed service input');
     if (input.kind === 'steer' && !s.busy) throw new Error('No active turn to steer');
     if (s.busy && input.kind !== 'steer' && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');
+    if (s.harness === 'claude') {
+      if (input.model && input.model !== s.model) { await s.query.setModel(input.model); s.model = input.model; }
+      if (input.effort !== s.effort) { await s.query.applyFlagSettings({ effortLevel: input.effort || null }); s.effort = input.effort || ''; }
+    }
+
     if (s.harness === 'codex') {
       // Codex has not accepted a turn until app-server answers turn/start.
       // Returning before that answer used to turn a failed native submission
@@ -158,7 +190,9 @@ async function command(cmd) {
         });
       } catch (error) { s.inFlightInputs.delete(input.id); s.steering = false; throw error; }
     }
-    if (s.harness === 'codex' && input.kind !== 'steer') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.content });
+    if (s.harness === 'codex' && input.kind !== 'steer') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.content,
+      attachments: (input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
+
     return { status: 'accepted', inputId: input.id };
   }
   if (op === 'interrupt') {
