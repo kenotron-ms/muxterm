@@ -379,6 +379,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/artifact/open", protect(http.HandlerFunc(s.handleArtifactOpen)))
 
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
+	s.mux.Handle("GET /api/sdk-chat-names/events", protect(http.HandlerFunc(s.handleSDKChatNameEvents)))
 	s.mux.Handle("GET /api/sdk-chats/search-content", protect(http.HandlerFunc(s.handleSDKChatContentSearch)))
 	if err := chatattachments.RegisterRoutes(s.mux, s.sdkChatAttachments, protect); err != nil {
 		log.Panicf("sdk chat attachment routes: %v", err)
@@ -389,6 +390,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("DELETE /api/sdk-projects/{id}", protect(http.HandlerFunc(s.handleSDKProject)))
 	s.mux.Handle("GET /api/sdk-folders", protect(http.HandlerFunc(s.handleSDKFolders)))
 	s.mux.Handle("GET /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
+	s.mux.Handle("PATCH /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("POST /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))

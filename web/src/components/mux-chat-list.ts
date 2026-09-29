@@ -34,6 +34,8 @@ export class MuxChatWorkspace extends LitElement {
   @state() private open = true;
   @state() private menuOpen = false;
   @state() private error = '';
+  @state() private renamingId = '';
+  @state() private renameDraft = '';
 
   private readonly closeMenuOnOutsidePointer = (event: PointerEvent) => {
     if (this.menuOpen && !event.composedPath().includes(this)) this.menuOpen = false;
@@ -71,7 +73,9 @@ export class MuxChatWorkspace extends LitElement {
     .menu button { width:100%; padding:8px; text-align:left; border-radius:5px; }
     .menu button:hover { background:rgba(255,255,255,.09); }
     .chats { margin:0 0 6px 24px; }
-    .chat { width:100%; min-height:55px; padding:5px 8px; text-align:left; border-radius:6px; display:flex; align-items:flex-start; gap:6px; }
+    .chat-row { display:flex; align-items:flex-start; border-radius:6px; }
+    .chat-row:hover { background:rgba(255,255,255,.07); }
+    .chat { flex:1; min-width:0; min-height:55px; padding:5px 8px; text-align:left; border-radius:6px; display:flex; align-items:flex-start; gap:6px; }
     .chat.lane { border-left:2px solid #7dcba1; }
     .chat[selected] { background:rgba(122,162,247,.16); }
     .body { flex:1; min-width:0; }
@@ -80,6 +84,10 @@ export class MuxChatWorkspace extends LitElement {
     .kind { color:#a8d9bd; font-size:10px; flex:none; }
     .status { width:5px; height:5px; margin-top:6px; border-radius:50%; background:#697386; flex:none; }
     .status.working { background:#7dcba1; }
+    .rename-chat { flex:none; opacity:0; padding:4px 7px; border-radius:5px; }
+    .chat-row:hover .rename-chat,.rename-chat:focus-visible { opacity:1; }
+    .rename-chat:hover { background:rgba(255,255,255,.1); }
+    .rename-input { width:100%; min-width:0; border:1px solid #8aa9eb; border-radius:4px; padding:3px 5px; background:var(--chrome-bar,#252b38); color:inherit; font:inherit; }
     .error { color:#e6a5a5; padding:5px; }
   `;
 
@@ -98,6 +106,14 @@ export class MuxChatWorkspace extends LitElement {
     }
   }
 
+  private async saveRename() {
+    const id = this.renamingId;
+    const title = this.renameDraft.trim();
+    if (!id || !title) return;
+    try { await sdkChats.rename(id, title); this.renamingId = ''; this.error = ''; }
+    catch (error) { this.error = String(error); }
+  }
+
   override render() {
     const row = this.model;
     return html`
@@ -111,6 +127,8 @@ export class MuxChatWorkspace extends LitElement {
       </div>
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       ${this.open ? html`<div class="chats">${repeat(row.rows, item => `${item.kind}:${item.id}`, item => html`
+        <div class="chat-row">
+        ${item.kind === 'chat' && this.renamingId === item.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e: Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="rename-chat" style="opacity:1" aria-label="Save chat name" @click=${() => void this.saveRename()}>✓</button>` : html`
         <button class="chat ${item.kind}" ?selected=${this.selectedSession === item.id} ?disabled=${item.kind === 'lane' && !item.terminal} title=${`${item.title}\n${item.path || 'Folder unknown'}`} @click=${() => this.openRow(item)}>
           <span class="status ${item.state}" title=${item.state}></span>
           <span class="body"><span class="title">${item.title}</span>
@@ -118,7 +136,8 @@ export class MuxChatWorkspace extends LitElement {
             <span class="details" title=${item.path || 'Folder unknown'}>${item.path || 'Folder unknown'}</span>
             ${item.kind === 'lane' ? html`<span class="details">${item.terminal ? `Live terminal · ${item.workspaceId} / pane ${item.paneId}` : 'Terminal unavailable'} · ${laneOrigin(item.origin)}</span>` : nothing}
           </span><span class="kind">${item.kind === 'lane' ? 'Lane' : 'Chat'}</span>
-        </button>`)}
+        </button>${item.kind === 'chat' ? html`<button class="rename-chat" aria-label=${`Rename ${item.title}`} title="Rename chat" @click=${() => { this.renamingId = item.id; this.renameDraft = item.title; }}>✎</button>` : nothing}`}
+        </div>`)}
       </div>` : nothing}
     `;
   }

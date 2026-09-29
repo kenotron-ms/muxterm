@@ -6,7 +6,18 @@ class SDKChatStore {
   chats: SDKChat[] = [];
   projects: SDKProject[] = [];
   private listeners = new Set<() => void>();
-  subscribe(fn: () => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
+  private nameEvents?: EventSource;
+  subscribe(fn: () => void) {
+    this.listeners.add(fn);
+    if (!this.nameEvents) {
+      this.nameEvents = new EventSource(apiPath('/api/sdk-chat-names/events'));
+      this.nameEvents.onmessage = () => { void this.refresh(); };
+    }
+    return () => {
+      this.listeners.delete(fn);
+      if (this.listeners.size === 0) { this.nameEvents?.close(); this.nameEvents = undefined; }
+    };
+  }
   async refresh() {
     const [response, projects] = await Promise.all([fetch(apiPath('/api/sdk-chats')), fetch(apiPath('/api/sdk-projects'))]);
     if (!response.ok || !projects.ok) return;
@@ -20,6 +31,11 @@ class SDKChatStore {
     const chat = await response.json() as SDKChat;
     await this.refresh();
     return chat;
+  }
+  async rename(id: string, title: string) {
+    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
+    if (!response.ok) throw new Error(await response.text());
+    await this.refresh();
   }
   async createProject(path: string, name = '') {
     const response = await fetch(apiPath('/api/sdk-projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name }) });

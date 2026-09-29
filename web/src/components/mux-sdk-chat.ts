@@ -195,6 +195,7 @@ export class MuxSDKChat extends LitElement {
       this.turnStart = blocks.length;
       void sdkChats.refresh();
     }
+    else if (event.type === 'session.renamed') { void sdkChats.refresh(); }
     else if (event.type === 'error' || event.type === 'session.uncertain') { blocks.push({ key:++this.nextBlockKey, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.busy = false; void sdkChats.refresh(); }
     this.blocks = blocks;
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');

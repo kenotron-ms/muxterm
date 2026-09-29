@@ -2543,6 +2543,16 @@ async def command(cmd):
         return {"sessionId": sid, "capabilities": CAPS}
     session = SDK_CHAT_SESSIONS.get(sid)
     if session is None: raise ValueError("Amplifier session is not resident; resume it first")
+    if op == "title":
+        from amplifier_foundation.session.metadata import SessionMetadataStore
+        metadata_store = SessionMetadataStore(session.store.base_dir / sid)
+        metadata = metadata_store.read()
+        mode = cmd.get("mode")
+        if mode in ("manual", "generated"):
+            name = cmd.get("name")
+            metadata = metadata_store.set_name(name, source=mode,
+                                               only_if_missing=(mode == "generated"))
+        return {"name": metadata.get("name", ""), "source": metadata.get("name_source", "")}
     if op == "settings":
         active_name = session.model.split("/", 1)[0]
         active_provider = session.provider or next(
