@@ -51,6 +51,7 @@ export class MuxSDKChat extends LitElement {
     details.support summary::-webkit-details-marker { display:none; }
     details.support summary::before { content:'▸'; display:inline-block; margin-right:8px; }
     details.support[open] summary::before { transform:rotate(90deg); }
+    .tool-hint { color:var(--chrome-text-dim,#9aa3b8); overflow-wrap:anywhere; }
     .detail { padding:0 12px 10px; }
     .detail-label { color:#9cbaf5; font-weight:600; margin:9px 0 4px; }
     .detail pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
@@ -129,15 +130,16 @@ export class MuxSDKChat extends LitElement {
       // Text before a tool call was an interim progress note, not the final answer.
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
-      blocks.push({ key:++this.nextBlockKey, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw });
+      const existing = blocks.findIndex(b => b.kind === 'tool' && b.id === event.toolId && !b.done);
+      if (existing >= 0) blocks[existing] = { ...blocks[existing], name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input };
+      else blocks.push({ key:++this.nextBlockKey, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw });
     }
     else if (event.type === 'tool.completed') {
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId && !blocks[i].done) { index = i; break; }
-      const toolUse = !!event.raw && typeof event.raw === 'object' && (event.raw as { type?: string }).type === 'tool_use';
       if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:event.failed ? 'Failed' : 'Completed', failed:event.failed,
-        input:toolUse ? event.raw : blocks[index].input || event.raw, output:toolUse ? blocks[index].output : event.raw };
+        output:event.raw };
       else blocks.push({ key:++this.nextBlockKey, kind:'tool', text:event.failed ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, failed:event.failed,
-        input:toolUse ? event.raw : undefined, output:toolUse ? undefined : event.raw });
+        output:event.raw });
     } else if (event.type === 'tool.result') {
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId) { index = i; break; }
       if (index >= 0) blocks[index] = { ...blocks[index], output:event.raw, done:true };
@@ -220,10 +222,12 @@ export class MuxSDKChat extends LitElement {
   private detail(value: unknown): string {
     if (value == null) return 'No detail was supplied by the harness.';
     let rendered: string;
-    if (typeof value === 'string') rendered = value;
+    if (typeof value === 'string') rendered = value || '(empty)';
+    else if (Array.isArray(value)) rendered = value.map(item => item && typeof item === 'object' && 'text' in item
+      ? String((item as { text: unknown }).text) : JSON.stringify(item, null, 2)).join('\n');
     else rendered = JSON.stringify(value, null, 2) || String(value);
     const limit = 12000;
-    return rendered.length > limit ? `${rendered.slice(0, limit)}\n… truncated (${rendered.length - limit} more characters)` : rendered;
+    return rendered.length > limit ? `${rendered.slice(0, limit)}\n… truncated after ${limit.toLocaleString()} characters (${rendered.length.toLocaleString()} total)` : rendered;
   }
   private toolInput(value: unknown): unknown {
     if (!value || typeof value !== 'object') return value;
@@ -239,6 +243,7 @@ export class MuxSDKChat extends LitElement {
     if (raw.type === 'tool_result') return raw.content;
     if (raw.type === 'commandExecution') return `Exit code: ${raw.exitCode ?? 'unknown'} · ${raw.status || 'unknown'}\n\n${raw.aggregatedOutput || ''}`;
     if (raw.type === 'mcpToolCall') return { result:raw.result, error:raw.error, status:raw.status };
+    if (typeof raw.output === 'string') return `Exit code: ${raw.exitCode ?? 'unknown'} · ${raw.status || 'unknown'}\n\n${raw.output}`;
     if (raw.output && typeof raw.output === 'object') {
       const output = raw.output as Record<string, unknown>;
       if ('stdout' in output || 'stderr' in output) return `Exit code: ${output.returncode ?? 'unknown'}\n${output.stderr ? `stderr:\n${output.stderr}\n` : ''}\n${output.stdout || ''}`;
@@ -247,12 +252,14 @@ export class MuxSDKChat extends LitElement {
   }
   private support(block: Block, index: number) {
     const thinking = block.kind === 'thinking';
+    const input = this.toolInput(block.input);
+    const hint = input && typeof input === 'object' ? (input as Record<string, unknown>).command || (input as Record<string, unknown>).file_path || (input as Record<string, unknown>).path : undefined;
     const label = thinking ? `Thinking · ${block.text.length} characters` : `${block.name || 'Tool'} · ${block.text}`;
     return html`<details class="support" ?open=${this.expanded.has(index)} @toggle=${(e: globalThis.Event) => {
       if ((e.currentTarget as HTMLDetailsElement).open) this.expanded.add(index); else this.expanded.delete(index);
-    }}><summary>${label}</summary><div class="detail">${thinking
+    }}><summary>${label}${!thinking && typeof hint === 'string' ? html`<span class="tool-hint"> · ${hint}</span>` : nothing}</summary><div class="detail">${thinking
       ? html`<pre>${block.text}</pre>`
-      : html`<div class="detail-label">Input arguments</div><pre>${this.detail(this.toolInput(block.input))}</pre><div class="detail-label">Output / result</div><pre>${block.done ? this.detail(this.toolOutput(block.output)) : 'Running…'}</pre>`}
+      : html`<div class="detail-label">Input arguments</div><pre>${this.detail(input)}</pre><div class="detail-label">Output / result</div><pre>${block.done ? this.detail(this.toolOutput(block.output)) : 'Running…'}</pre>`}
     </div></details>`;
   }
   private async send() {

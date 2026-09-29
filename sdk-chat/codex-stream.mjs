@@ -3,6 +3,17 @@ import { createRequire } from 'node:module';
 import readline from 'node:readline';
 
 const codexCLI = createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js');
+function toolDetails(item) {
+  if (item.type === 'commandExecution') return {
+    name: 'Command', input: { command: item.command, cwd: item.cwd },
+    output: { exitCode: item.exitCode, status: item.status, output: item.aggregatedOutput },
+  };
+  if (item.type === 'mcpToolCall') return {
+    name: item.server ? `${item.server}: ${item.tool}` : item.tool || 'MCP tool',
+    input: item.arguments, output: { result: item.result, error: item.error, status: item.status },
+  };
+  return { name: item.type, input: item, output: item };
+}
 
 // The Codex SDK's runStreamed() uses `codex exec --experimental-json`, which
 // reports completed agent messages but no text deltas. The app-server protocol
@@ -117,9 +128,12 @@ export class CodexStream {
       const rest = full.startsWith(sent) ? full.slice(sent.length) : full;
       if (rest) this.emit(this.session.id, p.item.phase === 'commentary' ? 'thinking.delta' : 'assistant.delta', { text: rest });
     } else if (method === 'item/started' && p.item?.type !== 'agentMessage' && p.item?.type !== 'reasoning' && p.item?.type !== 'userMessage') {
-      this.emit(this.session.id, 'tool.started', { name: p.item.type, toolId: p.item.id, raw: p.item });
+      const tool = toolDetails(p.item);
+      this.emit(this.session.id, 'tool.started', { name: tool.name, toolId: p.item.id, raw: tool.input });
     } else if (method === 'item/completed' && p.item?.type !== 'agentMessage' && p.item?.type !== 'reasoning' && p.item?.type !== 'userMessage') {
-      this.emit(this.session.id, 'tool.completed', { name: p.item.type, toolId: p.item.id, raw: p.item });
+      const tool = toolDetails(p.item);
+      this.emit(this.session.id, 'tool.completed', { name: tool.name, toolId: p.item.id,
+        raw: tool.output, failed: p.item.status === 'failed' || !!p.item.error });
     } else if (method === 'turn/completed') {
       this.session.busy = false;
       this.turnId = null;
