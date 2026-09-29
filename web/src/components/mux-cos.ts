@@ -1388,6 +1388,16 @@ export class MuxCos extends LitElement {
       background: var(--chrome-hover);
       color: var(--ink-1);
     }
+    .cbtn.attach {
+      display: inline-flex;
+      gap: 5px;
+      width: auto;
+      min-width: 64px;
+      padding: 0 9px;
+      border: 1px solid var(--edge);
+      border-radius: 9px;
+      color: var(--ink-1);
+    }
     .cbtn.send {
       background: var(--ink-1);
       color: var(--chrome-body);
@@ -2390,7 +2400,7 @@ export class MuxCos extends LitElement {
                     aria-label="Attach a file"
                     ?disabled="${locked || cosStore.attachmentSlotsLeft === 0}"
                     @click="${this._openFilePicker}"
-                  >${icon(Paperclip, { size: 15 })}</button>
+                  >${icon(Paperclip, { size: 15 })} Attach</button>
                   <input
                     class="afile"
                     type="file"

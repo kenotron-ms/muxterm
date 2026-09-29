@@ -38,6 +38,16 @@ export class MuxAmplifierSettings extends LitElement {
   private pending(value: boolean) {
     this.dispatchEvent(new CustomEvent('settings-pending', { detail:value, bubbles:true, composed:true }));
   }
+  private toggle() {
+    if (this.open && this.settings) {
+      this.bundle = this.settings.bundle;
+      this.provider = this.settings.provider;
+      this.error = '';
+      this.pending(false);
+    }
+    this.open = !this.open;
+    if (this.open && !this.settings && !this.loading) void this.load(this.sessionId);
+  }
   private async load(sessionId: string) {
     this.loading = true;
     try {
@@ -69,7 +79,7 @@ export class MuxAmplifierSettings extends LitElement {
     finally { this.loading = false; }
   }
   override render() { return html`
-    <button class="summary" aria-label="Change Amplifier bundle and provider" aria-expanded=${this.open} @click=${() => { this.open = !this.open; if (this.open && !this.settings && !this.loading) void this.load(this.sessionId); }}>Bundle: ${this.settings?.bundle || (this.loading ? 'Loading…' : 'Unavailable')} · Provider: ${this.settings?.provider ? providerLabel(this.settings.provider) : '—'} ▾</button>
+    <button class="summary" aria-label="Change Amplifier bundle and provider" aria-expanded=${this.open} @click=${this.toggle}>Bundle: ${this.settings?.bundle || (this.loading ? 'Loading…' : 'Unavailable')} · Provider: ${this.settings?.provider ? providerLabel(this.settings.provider) : '—'} ▾</button>
     ${this.open ? html`<div class="panel" aria-label="Amplifier settings">
       ${this.loading && !this.settings ? html`Loading…` : nothing}
       ${this.settings ? html`
