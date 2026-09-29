@@ -11,7 +11,7 @@ type DisplayAttachment = { id: string; name: string; kind: string };
 type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[] };
-type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
+type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'progress' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
 import { icon } from '../lib/icons.js';
 import { Brain, Check, ChevronDown, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
 
@@ -51,6 +51,7 @@ export class MuxSDKChat extends LitElement {
   private nextBlockKey = 0;
   private turnStart = 0;
   private completedInputAnchors = new Map<string, number>();
+  private pendingInputs = new Map<string, number>();
   static styles = css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-bg,#1a1c28); color:var(--chrome-text-bright,#d9def0); font:13px/1.55 system-ui,sans-serif; }
     .topbar { min-height:44px; display:flex; align-items:center; gap:12px; padding:0 22px; border-bottom:1px solid var(--chrome-border,#343a4c); }
@@ -75,7 +76,12 @@ export class MuxSDKChat extends LitElement {
     .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable; }
     .block { max-width:760px; width:100%; align-self:center; margin-bottom:28px; box-sizing:border-box; }
     .block.work { margin-top:-12px; margin-bottom:20px; }
-    .work-disclosure summary { display:flex; align-items:center; gap:5px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:12px; list-style:none; cursor:pointer; }
+    .work-disclosure summary { display:flex; align-items:center; gap:7px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:12px; list-style:none; cursor:pointer; }
+    .work-disclosure .activity { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .work-disclosure .activity-label { flex:none; }
+    .work-disclosure .pulse { width:7px; height:7px; flex:none; border-radius:50%; background:#9bb8f7; box-shadow:0 0 0 3px #9bb8f723; animation:activity-pulse 1.35s ease-in-out infinite; }
+    @keyframes activity-pulse { 50% { opacity:.35; transform:scale(.7); } }
+    @media (prefers-reduced-motion:reduce) { .work-disclosure .pulse { animation:none; } }
     .work-disclosure summary::-webkit-details-marker { display:none; }
     .work-disclosure summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
     .work-disclosure summary svg { opacity:.7; transition:transform .15s ease; }
@@ -290,7 +296,7 @@ export class MuxSDKChat extends LitElement {
   }
   private connect() {
     if (!this.isConnected || !this.sessionId) return;
-    this.stream?.close(); this.blocks = []; this.trajectory = []; this.selectedAgent = ''; this.parsers.clear(); this.expanded.clear(); this.workExpanded.clear(); this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now(); this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.error = ''; this.settingsPending = false; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
+    this.stream?.close(); this.blocks = []; this.trajectory = []; this.selectedAgent = ''; this.parsers.clear(); this.expanded.clear(); this.workExpanded.clear(); this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now(); this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.pendingInputs.clear(); this.error = ''; this.settingsPending = false; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
     const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/events`));
     source.addEventListener('snapshot', e => { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; this.busy = this.chat.state === 'working'; });
     source.addEventListener('sdk', e => this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent));
@@ -307,6 +313,12 @@ export class MuxSDKChat extends LitElement {
       if (previous === undefined || eventTime < previous) this.turnStarted.set(turn, eventTime);
     };
     if (event.type === 'input.accepted') {
+      const pendingKey = event.inputId ? this.pendingInputs.get(event.inputId) : undefined;
+      if (event.inputId) this.pendingInputs.delete(event.inputId);
+      const pendingIndex = pendingKey === undefined ? -1 : blocks.findIndex(block => block.key === pendingKey);
+      if (pendingIndex >= 0) {
+        blocks[pendingIndex] = { ...blocks[pendingIndex], text:event.text || blocks[pendingIndex].text, attachments:event.attachments || blocks[pendingIndex].attachments };
+      } else
       if (event.kind === 'steer') {
         const last = blocks[blocks.length - 1];
         if (last?.kind === 'assistant') blocks[blocks.length - 1] = { ...last, done:true };
@@ -325,6 +337,10 @@ export class MuxSDKChat extends LitElement {
         if (at < this.turnStart) this.turnStart++;
         if (turn === this.currentTurn) this.busy = true;
       }
+      if (pendingIndex < 0 && event.kind !== 'steer' && !blocks.some(block => block.turn === this.currentTurn && block.kind === 'progress'))
+        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Message received' });
+      for (const block of blocks) if (block.turn === this.currentTurn && block.kind === 'progress') block.text = 'Starting…';
+      markStart(this.currentTurn);
       if (event.kind === 'steer') this.busy = true;
     }
     else if (event.type === 'assistant.delta') {
@@ -571,21 +587,41 @@ export class MuxSDKChat extends LitElement {
     const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
     return `${finished === undefined ? 'Working' : 'Worked'} for ${duration}`;
   }
+  private activityLine(items: Block[]) {
+    const activity = items.filter(item => item.kind === 'tool' || item.kind === 'thinking');
+    const latest = activity[activity.length - 1];
+    if (!latest) {
+      const progress = items.find(item => item.kind === 'progress')?.text;
+      return progress === 'Message received' ? 'Waiting for agent…' : progress || 'Starting…';
+    }
+    if (latest.kind === 'tool') {
+      const name = (latest.name || 'Tool').replace(/^([^:]+):\s+/, '$1.');
+      const input = this.toolInput(latest.input);
+      const command = name === 'Command' && input && typeof input === 'object' ? (input as Record<string, unknown>).command : undefined;
+      const label = typeof command === 'string' ? `Command: ${command.split('\n')[0]}` : name;
+      return `${latest.done ? latest.failed ? 'Failed' : 'Ran' : 'Running'} ${label}`.slice(0, 180);
+    }
+    const lines = latest.text.trim().split('\n').filter(Boolean);
+    const line = lines[lines.length - 1]?.replace(/\s+/g, ' ') || 'Thinking…';
+    return `Thinking · ${line}`.slice(0, 180);
+  }
   private transcript() {
     const work = new Map<number, Block[]>();
-    for (const block of this.blocks) if (block.kind === 'thinking' || block.kind === 'tool') {
+    for (const block of this.blocks) if (block.kind === 'thinking' || block.kind === 'tool' || block.kind === 'progress') {
       const items = work.get(block.turn) || [];
       items.push(block);
       work.set(block.turn, items);
     }
     const shown = new Set<number>();
     return this.blocks.map(block => {
-      if (block.kind === 'thinking' || block.kind === 'tool') {
+      if (block.kind === 'thinking' || block.kind === 'tool' || block.kind === 'progress') {
         if (shown.has(block.turn)) return nothing;
         shown.add(block.turn);
+        const items = work.get(block.turn) || [];
+        const active = this.turnFinished.get(block.turn) === undefined;
         return html`<div class="block work"><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
           if ((event.currentTarget as HTMLDetailsElement).open) this.workExpanded.add(block.turn); else this.workExpanded.delete(block.turn);
-        }}><summary><span>${this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${(work.get(block.turn) || []).map(item => html`<div class="work-item">${this.support(item)}</div>`)}</div></details></div>`;
+        }}><summary>${active ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${active && items.length === 1 && items[0].kind === 'progress' && items[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(items)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${items.some(item => item.kind !== 'progress') ? items.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${active ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`;
       }
       return html`<div class="block ${block.kind}">${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     });
@@ -595,14 +631,27 @@ export class MuxSDKChat extends LitElement {
     if ((!content && !this.attachments.length) || this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || a.error) || (this.busy && this.attachments.length > 0)) return;
     const kind = this.busy ? 'steer' : 'user';
     const sent = this.attachments;
+    const id = crypto.randomUUID();
+    const wasBusy = this.busy;
+    const key = ++this.nextBlockKey;
+    this.pendingInputs.set(id, key);
+    this.blocks = [...this.blocks, { key, turn:this.currentTurn, kind:'user', text:content, attachments:sent.filter(item => item.id).map(item => ({ id:item.id!, name:item.file.name, kind:item.kind || '' })) },
+      ...(!wasBusy ? [{ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress' as const, text:'Message received' }] : [])];
+    if (!wasBusy) { this.busy = true; this.turnStarted.set(this.currentTurn, Date.now()); }
     this.draft = '';
     try {
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind, source:'browser', id:crypto.randomUUID(), content, attachments: sent.map(a => a.id) }) });
+      await this.updateComplete;
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind, source:'browser', id, content, attachments: sent.map(a => a.id) }) });
       if (!response.ok) throw new Error(await response.text());
       for (const item of sent) if (item.preview) URL.revokeObjectURL(item.preview);
       this.attachments = this.attachments.filter(a => !sent.includes(a));
       this.error = '';
-    } catch (error) { this.error = String(error); this.draft = content; }
+    } catch (error) {
+      this.error = String(error); this.draft = content;
+      this.pendingInputs.delete(id);
+      this.blocks = this.blocks.filter(block => block.key !== key && !(block.kind === 'progress' && block.turn === this.currentTurn && !wasBusy));
+      if (!wasBusy) { this.busy = false; this.turnStarted.delete(this.currentTurn); }
+    }
   }
   private async stop() {
     if (!this.busy || this.stopping) return;
