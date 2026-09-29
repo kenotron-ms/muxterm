@@ -17,11 +17,21 @@ export class MuxSDKChatSettings extends LitElement {
   @state() private error = '';
   private requestVersion = 0;
   static styles = css`
-    :host { display:flex; align-items:center; flex-wrap:wrap; gap:7px; min-width:0; font:12px system-ui,sans-serif; }
-    label { display:flex; align-items:center; gap:5px; color:#aebbd4; white-space:nowrap; }
-    select { max-width:190px; min-width:72px; height:31px; padding:3px 6px; color:#e4edff; background:#283852; border:1px solid #586b8f; border-radius:8px; font:inherit; cursor:pointer; }
-    select:disabled { opacity:.65; cursor:default; }
-    .status { color:#aebbd4; }
+    :host { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; min-width:0; font:12px system-ui,sans-serif; }
+    label { display:flex; align-items:center; gap:5px; color:var(--chrome-text-dim,#9aa3b8); white-space:nowrap; }
+    select { max-width:190px; min-width:58px; height:30px; padding:2px 20px 2px 5px; color:var(--chrome-text-bright,#d9def0); background:transparent; border:1px solid transparent; border-radius:7px; font:inherit; cursor:pointer; }
+    select:hover, select:focus-visible { background:rgba(255,255,255,.06); border-color:var(--chrome-border,#41485f); outline:none; }
+    select:disabled { opacity:.5; cursor:not-allowed; }
+    .advanced { position:relative; }
+    .advanced summary { display:flex; align-items:center; gap:6px; max-width:190px; height:30px; padding:0 7px; border-radius:7px; color:var(--chrome-text-dim,#9aa3b8); cursor:pointer; list-style:none; }
+    .advanced summary::-webkit-details-marker { display:none; }
+    .advanced summary:hover, .advanced summary:focus-visible, .advanced[open] summary { background:rgba(255,255,255,.06); color:var(--chrome-text-bright,#d9def0); outline:none; }
+    .advanced summary span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .advanced summary::after { content:'⌄'; font-size:15px; }
+    .advanced-panel { position:absolute; z-index:12; left:0; bottom:35px; display:grid; gap:9px; width:max-content; max-width:min(310px,80vw); padding:12px; border:1px solid var(--chrome-border,#41485f); border-radius:11px; background:var(--chrome-bar,#202632); box-shadow:0 16px 40px rgba(0,0,0,.35); }
+    .advanced-panel label { justify-content:space-between; gap:14px; }
+    .advanced-panel select { max-width:190px; border-color:var(--chrome-border,#41485f); }
+    .status { color:var(--chrome-text-dim,#9aa3b8); }
     .error { color:#f1aaaa; white-space:normal; }
   `;
   override updated(changed: Map<string, unknown>) {
@@ -46,7 +56,7 @@ export class MuxSDKChatSettings extends LitElement {
     } finally { if (this.requestVersion === version) this.loading = false; }
   }
   private async select(change: Record<string, string>) {
-    if (this.loading || !this.settings) return;
+    if (this.loading || this.turnBusy || !this.settings) return;
     this.loading = true; this.error = ''; this.pending(true);
     try {
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/settings`), {
@@ -63,7 +73,7 @@ export class MuxSDKChatSettings extends LitElement {
     if (!settings) return html`<span class="${this.error ? 'error' : 'status'}">${this.error || 'Loading settings…'}</span>`;
     const selectedModel = settings.models.find(model => model.id === settings.model);
     const models = selectedModel ? settings.models : [{ id:settings.model, label:settings.model, efforts:[] }, ...settings.models];
-    const disabled = this.loading;
+    const disabled = this.loading || this.turnBusy;
     return html`
       ${models.length ? html`<label>Model <select aria-label="Model" .value=${settings.model} ?disabled=${disabled} @change=${(event: Event) => {
         const model = (event.target as HTMLSelectElement).value;
@@ -73,7 +83,7 @@ export class MuxSDKChatSettings extends LitElement {
       ${selectedModel?.efforts?.length ? html`<label>Thinking <select aria-label="Thinking effort" .value=${settings.effort || ''} ?disabled=${disabled} @change=${(event: Event) => void this.select({ effort:(event.target as HTMLSelectElement).value })}>
         <option value="" ?selected=${!settings.effort}>Default</option>${selectedModel.efforts.map(effort => html`<option value=${effort} ?selected=${effort === settings.effort}>${effort}</option>`)}
       </select></label>` : nothing}
-      ${this.harness === 'amplifier' ? html`
+      ${this.harness === 'amplifier' ? html`<details class="advanced"><summary aria-label="Amplifier bundle and provider" title="Bundle and provider"><span>${settings.bundle || 'Bundle'} · ${providerLabel(settings.provider || 'Provider')}</span></summary><div class="advanced-panel">
         <label>Bundle <select aria-label="Amplifier bundle" .value=${settings.bundle || ''} ?disabled=${disabled} @change=${(event: Event) => void this.select({ bundle:(event.target as HTMLSelectElement).value })}>
           ${(settings.bundles || []).map(bundle => html`<option value=${bundle} ?selected=${bundle === settings.bundle}>${bundle}</option>`)}
         </select></label>
@@ -82,7 +92,7 @@ export class MuxSDKChatSettings extends LitElement {
             const available = (settings.providers || []).includes(provider);
             return html`<option value=${provider} ?selected=${provider === settings.provider} ?disabled=${!available}>${providerLabel(provider)}${available ? '' : ' — unavailable for this bundle'}</option>`;
           })}
-        </select></label>` : nothing}
+        </select></label></div></details>` : nothing}
       ${this.loading ? html`<span class="status">Applying…</span>` : nothing}
       ${this.error ? html`<span class="error" role="alert">${this.error}</span>` : nothing}`;
   }
