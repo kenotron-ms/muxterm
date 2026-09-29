@@ -79,13 +79,16 @@ async function runClaude(s) {
         // The SDK's result echoes the UUIDs of user inputs the native turn
         // consumed. A local input queue is not proof that a turn was accepted.
         const accepted = msg.user_message_uuids || (msg.user_message_uuid ? [msg.user_message_uuid] : []);
+        const steeringAbort = s.steering && !s.cancelRequested && msg.subtype !== 'success';
         for (const id of accepted) s.inFlightInputs.delete(id);
-        if (s.cancelRequested || msg.subtype !== 'success') s.inFlightInputs.clear();
+        if (s.cancelRequested || (msg.subtype !== 'success' && !steeringAbort)) s.inFlightInputs.clear();
         s.busy = s.inFlightInputs.size > 0;
-        emit(s.id, s.cancelRequested || msg.subtype === 'interrupted' ? 'turn.cancelled'
+        emit(s.id, steeringAbort ? 'turn.continued'
+          : s.cancelRequested || msg.subtype === 'interrupted' ? 'turn.cancelled'
           : msg.subtype === 'success' ? (s.busy ? 'turn.continued' : 'turn.completed') : 'error',
           { inputIds: accepted, message: msg.subtype });
         s.cancelRequested = false;
+        s.steering = false;
       }
     }
   } catch (error) { s.busy = false; emit(s.id, 'error', { message: String(error) }); }
@@ -101,7 +104,7 @@ async function command(cmd) {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
     if (harness !== 'codex' && harness !== 'claude') throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
-    const s = { id: sessionId, harness, cwd, nativeId, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false };
+    const s = { id: sessionId, harness, cwd, nativeId, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false };
     sessions.set(sessionId, s);
     if (harness === 'claude') void runClaude(s);
     if (op === 'start') emit(sessionId, 'session.started', { capabilities: capabilities(harness), pendingNativeId: true });
@@ -132,11 +135,19 @@ async function command(cmd) {
       s.busy = true;
       s.inFlightInputs.add(input.id);
       try {
+        if (input.kind === 'steer') {
+          // Streaming text has no request boundary at which Claude can fold a
+          // queued correction. Abort that generation, then continue with the
+          // correction while keeping its already-streamed transcript visible.
+          s.steering = true;
+          await s.query.interrupt();
+          if (s.cancelRequested) throw new Error('Steer was cancelled');
+        }
         await new Promise((resolve, reject) => {
           s.pendingInputs.set(input.id, { input, resolve, reject });
           queue(s, input);
         });
-      } catch (error) { s.inFlightInputs.delete(input.id); throw error; }
+      } catch (error) { s.inFlightInputs.delete(input.id); s.steering = false; throw error; }
     }
     if (s.harness === 'codex' && input.kind !== 'steer') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.content });
     return { status: 'accepted', inputId: input.id };
