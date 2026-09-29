@@ -25,7 +25,7 @@ type finishedClearUndo struct {
 }
 
 func clearableFinished(row SessionState) bool {
-	return row.State == SessionStateDone || (row.State == SessionStateStopped && row.Mode != ModeAutonomous)
+	return sessionStateIsTerminal(row.State)
 }
 
 func (s *Server) clearFinished(sessionID string) (string, error) {
@@ -54,6 +54,15 @@ func (s *Server) clearFinished(sessionID string) (string, error) {
 	}
 	if !found {
 		return "", fmt.Errorf("finished session %q was not found", sessionID)
+	}
+	// A terminal declaration alone is not proof that its process has exited.
+	// Check both durable sources by session identity, never recycled pane IDs.
+	live, err := s.finishedSessionProcessLive(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if live {
+		return "", fmt.Errorf("session %q still has a live process", sessionID)
 	}
 
 	hook, err := s.hookReports.takeFinishedSession(sessionID)
@@ -93,6 +102,33 @@ func (s *Server) clearFinished(sessionID string) (string, error) {
 	})
 	s.rearmSessionState()
 	return token, nil
+}
+
+func (s *Server) finishedSessionProcessLive(sessionID string) (bool, error) {
+	reg, err := s.hookReports.loadRegistry()
+	if err != nil {
+		return false, fmt.Errorf("verify hook session process: %w", err)
+	}
+	for _, record := range reg.Sessions {
+		if record.Row.SessionID == sessionID && hookRecordProcessLive(record) {
+			return true, nil
+		}
+	}
+	if ValidSessionID(sessionID) {
+		path := filepath.Join(s.sessions.dir, sessionID+".json")
+		if _, err := os.Stat(path); err == nil {
+			snap, ok := readSessionSnapshot(path)
+			if !ok {
+				return false, fmt.Errorf("cannot verify session snapshot %q", sessionID)
+			}
+			if processLive(snap.PID) && snapshotPIDMatches(snap) {
+				return true, nil
+			}
+		} else if !os.IsNotExist(err) {
+			return false, fmt.Errorf("stat session snapshot: %w", err)
+		}
+	}
+	return false, nil
 }
 
 func (s *Server) undoFinishedClear(token string) (string, error) {

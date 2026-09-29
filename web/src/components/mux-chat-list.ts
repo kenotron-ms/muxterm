@@ -2,26 +2,10 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { sdkChats, type SDKChat, type SDKProject } from '../lib/sdk-chats.js';
-import { homeSessions } from '../lib/home-sessions.js';
-import { store } from '../state.js';
-import { isRemoteId } from '../lib/host-ref.js';
 import { harnessLabel } from '../lib/harness.js';
 
-interface LaneRow { kind: 'lane'; id: string; title: string; path: string; harness: string; state: string; origin: string; workspaceId: string; paneId: number; terminal: boolean; updatedAt: number }
 interface ChatRow { kind: 'chat'; id: string; chat: SDKChat; path: string; title: string; harness: string; state: string; updatedAt: number }
-type SessionRow = ChatRow | LaneRow;
-interface ChatGroup { id: string; name: string; project?: SDKProject; rows: SessionRow[] }
-
-function projectFor(path: string, projects: SDKProject[]): SDKProject | undefined {
-  return projects.filter(project => path === project.path || path.startsWith(project.path.replace(/\/$/, '') + '/'))
-    .sort((a, b) => b.path.length - a.path.length || a.id.localeCompare(b.id))[0];
-}
-
-function laneOrigin(origin: string): string {
-  if (origin.startsWith('trigger:')) return `Automation · ${origin.slice(8)}`;
-  if (origin === 'trigger') return 'Automation';
-  return origin || 'Origin unknown';
-}
+interface ChatGroup { id: string; name: string; project?: SDKProject; rows: ChatRow[] }
 
 function displayHarness(harness: string): string {
   return harness === 'codex' || harness === 'claude' || harness === 'amplifier' ? harnessLabel(harness) : harness || 'Harness unknown';
@@ -76,7 +60,6 @@ export class MuxChatWorkspace extends LitElement {
     .chat-row { display:flex; align-items:flex-start; border-radius:6px; }
     .chat-row:hover { background:rgba(255,255,255,.07); }
     .chat { flex:1; min-width:0; min-height:55px; padding:5px 8px; text-align:left; border-radius:6px; display:flex; align-items:flex-start; gap:6px; }
-    .chat.lane { border-left:2px solid #7dcba1; }
     .chat[selected] { background:rgba(122,162,247,.16); }
     .body { flex:1; min-width:0; }
     .title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
@@ -98,12 +81,8 @@ export class MuxChatWorkspace extends LitElement {
     catch (error) { this.error = String(error); }
   }
 
-  private openRow(row: SessionRow) {
-    if (row.kind === 'chat') {
-      this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:row.id}, bubbles:true, composed:true }));
-    } else if (row.terminal) {
-      this.dispatchEvent(new CustomEvent('home-open', { detail:{workspaceId:row.workspaceId, paneId:row.paneId}, bubbles:true, composed:true }));
-    }
+  private openRow(row: ChatRow) {
+    this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:row.id}, bubbles:true, composed:true }));
   }
 
   private async saveRename() {
@@ -126,17 +105,16 @@ export class MuxChatWorkspace extends LitElement {
         ${this.menuOpen ? html`<div class="menu" role="menu"><button role="menuitem" @click=${() => void this.removeProject()}>Remove this project</button></div>` : nothing}
       </div>
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-      ${this.open ? html`<div class="chats">${repeat(row.rows, item => `${item.kind}:${item.id}`, item => html`
+      ${this.open ? html`<div class="chats">${repeat(row.rows, item => item.id, item => html`
         <div class="chat-row">
-        ${item.kind === 'chat' && this.renamingId === item.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e: Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="rename-chat" style="opacity:1" aria-label="Save chat name" @click=${() => void this.saveRename()}>✓</button>` : html`
-        <button class="chat ${item.kind}" ?selected=${this.selectedSession === item.id} ?disabled=${item.kind === 'lane' && !item.terminal} title=${`${item.title}\n${item.path || 'Folder unknown'}`} @click=${() => this.openRow(item)}>
+        ${this.renamingId === item.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e: Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="rename-chat" style="opacity:1" aria-label="Save chat name" @click=${() => void this.saveRename()}>✓</button>` : html`
+        <button class="chat" ?selected=${this.selectedSession === item.id} title=${`${item.title}\n${item.path || 'Folder unknown'}`} @click=${() => this.openRow(item)}>
           <span class="status ${item.state}" title=${item.state}></span>
           <span class="body"><span class="title">${item.title}</span>
             <span class="details">${row.project?.name || 'Ungrouped'} · ${displayHarness(item.harness)}</span>
             <span class="details" title=${item.path || 'Folder unknown'}>${item.path || 'Folder unknown'}</span>
-            ${item.kind === 'lane' ? html`<span class="details">${item.terminal ? `Live terminal · ${item.workspaceId} / pane ${item.paneId}` : 'Terminal unavailable'} · ${laneOrigin(item.origin)}</span>` : nothing}
-          </span><span class="kind">${item.kind === 'lane' ? 'Lane' : 'Chat'}</span>
-        </button>${item.kind === 'chat' ? html`<button class="rename-chat" aria-label=${`Rename ${item.title}`} title="Rename chat" @click=${() => { this.renamingId = item.id; this.renameDraft = item.title; }}>✎</button>` : nothing}`}
+          </span><span class="kind">Chat</span>
+        </button><button class="rename-chat" aria-label=${`Rename ${item.title}`} title="Rename chat" @click=${() => { this.renamingId = item.id; this.renameDraft = item.title; }}>✎</button>`}
         </div>`)}
       </div>` : nothing}
     `;
@@ -154,39 +132,19 @@ export class MuxChatList extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     const update = () => this.version++;
-    this.unsubs = [sdkChats.subscribe(update), homeSessions.subscribe(update), store.subscribe(update)];
+    this.unsubs = [sdkChats.subscribe(update)];
     void sdkChats.refresh();
   }
   override disconnectedCallback() { this.unsubs.forEach(unsub => unsub()); this.unsubs = []; super.disconnectedCallback(); }
   override render() {
     void this.version;
     const projects = [...sdkChats.projects].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-    const rows: SessionRow[] = sdkChats.chats.map(chat => ({ kind:'chat', id:chat.id, chat, path:chat.projectPath, title:chat.title, harness:chat.harness, state:chat.state, updatedAt:Date.parse(chat.createdAt) || 0 }));
-    const reportedPanes = new Set<string>();
-    for (const session of homeSessions.sessions) {
-      const workspaceId = session.workspaceId || '';
-      const paneId = session.paneId;
-      if (workspaceId && paneId !== null) reportedPanes.add(`${workspaceId}:${paneId}`);
-      const workspace = store.workspaces.find(ws => ws.workspaceId === workspaceId);
-      const pane = workspace?.panes?.find(pane => pane.paneId === paneId);
-      const terminal = !!workspaceId && paneId !== null && (isRemoteId(workspaceId) || !!workspace?.panes?.some(pane => pane.paneId === paneId));
-      rows.push({ kind:'lane', id:session.sessionId, path:session.project || pane?.cwd || workspace?.projectPath || '',
-        title:session.name || session.label || `Pane ${paneId ?? '?'}`, harness:session.harness || '', state:session.state,
-        origin:session.origin || '', workspaceId, paneId:paneId ?? 0, terminal,
-        updatedAt:(session.updatedAt || 0) * 1000 });
-    }
-    // Pane inventory arrives before the harness's own Fleet declaration.
-    for (const workspace of store.workspaces) for (const pane of workspace.panes || []) {
-      if (!pane.harness || reportedPanes.has(`${workspace.workspaceId}:${pane.paneId}`)) continue;
-      rows.push({ kind:'lane', id:`${workspace.workspaceId}:${pane.paneId}`, path:pane.cwd || workspace.projectPath || '', title:pane.title || `${workspace.name || workspace.workspaceId} · pane ${pane.paneId}`,
-        harness:pane.harness, state:'working', origin:pane.origin || '', workspaceId:workspace.workspaceId, paneId:pane.paneId, terminal:true, updatedAt:0 });
-    }
+    const rows: ChatRow[] = sdkChats.chats.map(chat => ({ kind:'chat', id:chat.id, chat, path:chat.projectPath, title:chat.title, harness:chat.harness, state:chat.state, updatedAt:Date.parse(chat.createdAt) || 0 }));
     rows.sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
     const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project,
-      rows:rows.filter(row => row.kind === 'chat' ? row.chat.workspaceId === project.id : projectFor(row.path, projects)?.id === project.id) }));
-    groups.push({ id:'ungrouped', name:'Ungrouped', rows:rows.filter(row => row.kind === 'chat'
-      ? !row.chat.workspaceId || !projects.some(project => project.id === row.chat.workspaceId)
-      : !projectFor(row.path, projects)) });
+      rows:rows.filter(row => row.chat.workspaceId === project.id) }));
+    groups.push({ id:'ungrouped', name:'Ungrouped', rows:rows.filter(row =>
+      !row.chat.workspaceId || !projects.some(project => project.id === row.chat.workspaceId)) });
     return html`<div class="heading">Chats</div>${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${(window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? ''}></mux-chat-workspace>`)}`;
   }
 }

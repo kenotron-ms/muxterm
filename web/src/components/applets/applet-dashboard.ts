@@ -1240,6 +1240,9 @@ export class AppletDashboard extends LitElement implements AppletElement {
     return html`<div class="body ${sessions.length >= 30 ? 'dense' : ''}">
       <header class="fleet-top">
         <div><h1>Fleet</h1><div class="fleet-sub">${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'} across ${workspaces} ${workspaces === 1 ? 'workspace' : 'workspaces'}</div></div>
+        ${sessions.some((s) => ['done', 'failed', 'stopped'].includes(s.state) && !this._hiddenFinished.has(s.sessionId)) ? html`
+          <button class="finished-clear-all" type="button" aria-label="Clear ended sessions" @click=${() => this._clearFinished(sessions.filter((s) => ['done', 'failed', 'stopped'].includes(s.state)))}>Clear ended</button>
+        ` : nothing}
       </header>
       ${this._renderDetail()}${this._renderFleet()}
     </div>`;
@@ -1300,7 +1303,9 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const byGroup = new Map<DashboardGroup, SessionState[]>(
       DASHBOARD_GROUPS.map((g) => [g, [] as SessionState[]]),
     );
-    for (const s of homeSessions.sessions) byGroup.get(dashboardGroupFor(s))?.push(s);
+    for (const s of homeSessions.sessions) {
+      if (!this._hiddenFinished.has(s.sessionId)) byGroup.get(dashboardGroupFor(s))?.push(s);
+    }
     const total = homeSessions.sessions.length;
     const freshness = homeSessions.snapshotStatus;
 
@@ -1557,7 +1562,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const bits: string[] = [];
     if (s.harness) bits.push(isKnownHarness(s.harness) ? s.harness : `${s.harness}?`);
     if (s.mode === 'autonomous') bits.push('autonomous');
-    bits.push(s.workspaceId ?? 'no terminal');
+    bits.push(s.workspaceId !== null && s.paneId !== null ? `${s.workspaceId} / pane ${s.paneId}` : 'no terminal');
+    if (s.project) bits.push(s.project);
     const a = age(s.updatedAt, this._now);
     if (a) bits.push(a);
     if (s.pr) bits.push(`PR #${s.pr}`);
@@ -1577,7 +1583,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     return html`
       <article class="card ${stateClass(s)} ${expanded ? 'expanded' : ''}">
         <header class="card-head">
-          <button class="card-open" type="button" @click="${() => this._openPane(s)}">
+          <button class="card-open" type="button" aria-label="Open terminal for ${s.name} in ${s.workspaceId ?? 'no workspace'} pane ${s.paneId ?? 'unknown'}" @click="${() => this._openPane(s)}">
             <span class="n">${s.name}</span>
             <span class="m">${bits.join(' \u00b7 ')}</span>
           </button>

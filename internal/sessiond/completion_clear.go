@@ -1,8 +1,8 @@
 package sessiond
 
 // takeFinished removes every completion that projects as sessionID, but only
-// when its lifecycle is clearable. Failed completions stay first-class Fleet
-// alarms and cannot be removed through the finished-lane operation.
+// when its lifecycle is terminal. The caller verifies process liveness before
+// this mutation, including failed sessions.
 func (s *completionStore) takeFinished(sessionID string) []CompletionRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -13,7 +13,7 @@ func (s *completionStore) takeFinished(sessionID string) []CompletionRecord {
 		if projectedID == "" {
 			projectedID = "completion:" + record.ID
 		}
-		if projectedID == sessionID && record.FleetState() != SessionStateFailed {
+		if projectedID == sessionID && sessionStateIsTerminal(record.FleetState()) {
 			taken = append(taken, record)
 			continue
 		}

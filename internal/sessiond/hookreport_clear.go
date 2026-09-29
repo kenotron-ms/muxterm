@@ -16,7 +16,7 @@ func (s *hookReportStore) takeFinishedSession(sessionID string) (hookSessionBack
 		return backup, err
 	}
 	for alias, record := range reg.Sessions {
-		if record.Row.SessionID != sessionID || !sessionStateIsTerminal(record.Row.State) || record.Row.State == SessionStateFailed {
+		if record.Row.SessionID != sessionID || !sessionStateIsTerminal(record.Row.State) {
 			continue
 		}
 		backup.sessions[alias] = record

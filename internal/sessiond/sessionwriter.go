@@ -95,7 +95,7 @@ func writeSessionSnapshot(row SessionState, pid int, start uint64, sid int) (str
 			WaitingForWorker, WaitingForDialog,
 		}, ", "))
 	}
-	if pid <= 0 {
+	if pid <= 0 && !sessionStateIsTerminal(row.State) {
 		return "", fmt.Errorf("invalid pid %d: must be a live process inside a muxterm pane", pid)
 	}
 
