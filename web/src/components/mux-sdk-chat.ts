@@ -597,8 +597,12 @@ export class MuxSDKChat extends LitElement {
     if (latest.kind === 'tool') {
       const name = (latest.name || 'Tool').replace(/^([^:]+):\s+/, '$1.');
       const input = this.toolInput(latest.input);
-      const command = name === 'Command' && input && typeof input === 'object' ? (input as Record<string, unknown>).command : undefined;
-      const label = typeof command === 'string' ? `Command: ${command.split('\n')[0]}` : name;
+      const fields = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+      const hint = name === 'Command' || name === 'Bash' ? fields.command
+        : ['Read', 'Write', 'Edit', 'Glob'].includes(name) ? fields.file_path || fields.path || fields.pattern
+        : name === 'Grep' ? fields.pattern : undefined;
+      const compact = typeof hint === 'string' ? hint.replace(/\s+/g, ' ').replace(/^\/?(?:bin\/)?(?:ba)?sh -lc ['"]/, '').replace(/['"]$/, '') : '';
+      const label = compact ? `${name}: ${compact}` : name;
       return `${latest.done ? latest.failed ? 'Failed' : 'Ran' : 'Running'} ${label}`.slice(0, 180);
     }
     const lines = latest.text.trim().split('\n').filter(Boolean);
