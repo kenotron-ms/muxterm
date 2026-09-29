@@ -2452,6 +2452,7 @@ class SDKChatSession:
             frame(self.id, "goal.progress", goalState=str(data.get("state") or ""),
                   goalReason=str(data.get("reason") or ""),
                   goalSummary=str(data.get("summary") or ""), raw=data)
+            return cont
         async def delegate_spawned(event, data):
             frame(self.id, "delegate.spawned", childSessionId=str(data.get("sub_session_id") or ""),
                   parentSessionId=str(data.get("parent_session_id") or self.id),
