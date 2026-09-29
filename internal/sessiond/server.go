@@ -1683,7 +1683,11 @@ func (s *Server) emitSessionState() {
 	// Hook reports are an installation-scoped durable ingress. Consume them
 	// even with no browser and no lifecycle subscriber; browser presence is
 	// never an admission requirement.
+	// Clearing a row and admitting a new hook report for the same session
+	// must not interleave registry updates. The inbox itself remains writable.
+	s.finishedClearOpMu.Lock()
 	s.hookReports.consume()
+	s.finishedClearOpMu.Unlock()
 	wanted := s.sessionStateWanted()
 	// The lifecycle watcher has to see EVERY transition, including the ones
 	// that happen while no browser is open -- a lane finishing at 3am is

@@ -5,10 +5,12 @@ type hookSessionBackup struct {
 	events   map[string]string
 }
 
-// takeFinishedSession removes a terminal hook record so projectAll cannot
-// resurrect a manually cleared row on the next daemon start. It deliberately
-// lives outside hookreport.go: manual Fleet clearing is independent of hook
-// ingestion and automatic pruning.
+// takeFinishedSession removes one hook record so projectAll cannot resurrect a
+// manually cleared row on the next daemon start. The caller has already
+// observed a terminal Fleet row and verified that neither the registry nor
+// the spool identifies a live process. The registry may still say "working"
+// when the process died after this daemon started, so its declared state
+// cannot be used as a second deletion gate here.
 func (s *hookReportStore) takeFinishedSession(sessionID string) (hookSessionBackup, error) {
 	backup := hookSessionBackup{sessions: map[string]sessionRecord{}, events: map[string]string{}}
 	reg, err := s.loadRegistry()
@@ -16,7 +18,7 @@ func (s *hookReportStore) takeFinishedSession(sessionID string) (hookSessionBack
 		return backup, err
 	}
 	for alias, record := range reg.Sessions {
-		if record.Row.SessionID != sessionID || !sessionStateIsTerminal(record.Row.State) {
+		if record.Row.SessionID != sessionID {
 			continue
 		}
 		backup.sessions[alias] = record
