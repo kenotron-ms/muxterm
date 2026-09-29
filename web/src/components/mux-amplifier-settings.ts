@@ -62,6 +62,7 @@ export class MuxAmplifierSettings extends LitElement {
       this.provider = this.settings.provider;
       this.dispatchEvent(new CustomEvent('settings-changed', { detail:this.settings, bubbles:true, composed:true }));
       this.pending(false);
+      this.open = false;
     } catch (error) { this.error = String(error); }
     finally { this.loading = false; }
   }

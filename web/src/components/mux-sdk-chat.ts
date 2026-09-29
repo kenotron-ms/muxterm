@@ -58,7 +58,7 @@ export class MuxSDKChat extends LitElement {
     .composer-wrap { padding:0 clamp(24px,8vw,120px) 18px; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 9px; }
     .attachment { display:flex; align-items:center; gap:8px; max-width:100%; padding:6px 8px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
-    .attachment img { width:44px; height:44px; object-fit:cover; border-radius:6px; }
+    .attachment img { width:64px; height:64px; object-fit:cover; border-radius:6px; }
     .attachment .filename { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .attachment .status { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
     .attachment .status.failed { color:#f0aaa8; }
@@ -70,7 +70,8 @@ export class MuxSDKChat extends LitElement {
     .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed #9bb8f7; border-radius:16px; background:rgba(25,35,60,.92); color:#d9e5ff; font-size:22px; pointer-events:none; }
     .composer { max-width:780px; margin:auto; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:rgba(0,0,0,.15); padding:11px 12px; }
     .composer-row { display:flex; align-items:flex-end; gap:10px; }
-    .composer-controls { display:flex; align-items:center; margin-top:8px; padding-top:8px; border-top:1px solid var(--chrome-border,#41485f); }
+    .composer-controls { display:flex; align-items:center; gap:8px; margin-top:8px; }
+    .composer-controls .send { margin-left:auto; }
     textarea { flex:1; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; height:46px; }
     .send { width:31px; height:31px; border-radius:50%; border:0; background:#9bb8f7; color:#152032; font-size:18px; }
     .send:disabled { opacity:.38; }
@@ -270,15 +271,15 @@ export class MuxSDKChat extends LitElement {
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
       ${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? html`<div class="bubble">${b.text}</div>` : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b, b.key) : html`<div class="error">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
-    </div><div class="composer-wrap"><div class="composer">
+    </div><div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
         ${a.kind === 'image' && a.preview ? html`<img src=${a.preview} alt=${a.file.name}>` : nothing}
         <span class="filename" title=${a.file.name}>${a.file.name}</span>
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
-      <div class="composer-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>Attach</button><textarea placeholder="Message ${this.chat?.harness || 'agent'}…" .value=${this.draft} @paste=${this.onPaste} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><button class="send" aria-label="Send message" ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.busy || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
-      ${this.chat?.harness === 'amplifier' ? html`<div class="composer-controls"><mux-amplifier-settings .sessionId=${this.sessionId} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-amplifier-settings></div>` : nothing}
+      <div class="composer-row"><textarea aria-label="Message" placeholder="Message ${this.chat?.harness || 'agent'}…" .value=${this.draft} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
+      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>Attach</button>${this.chat?.harness === 'amplifier' ? html`<mux-amplifier-settings .sessionId=${this.sessionId} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-amplifier-settings>` : nothing}<button class="send" aria-label="Send message" ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.busy || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
     </div></div></div>
       ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" data-dockview-host-seam></aside>` : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`; }
