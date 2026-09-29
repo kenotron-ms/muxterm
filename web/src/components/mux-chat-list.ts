@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { Archive, ArchiveRestore, Check, ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, FolderPlus, MessageSquare, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
+import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageSquare, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { sdkChats, type FolderListing, type SDKChat, type SDKProject } from '../lib/sdk-chats.js';
 
@@ -50,9 +50,8 @@ export class MuxChatWorkspace extends LitElement {
     .row,.chat-row { display:flex; align-items:center; min-height:30px; border-radius:6px; position:relative; }
     .row:hover,.chat-row:hover { background:rgba(255,255,255,.07); }
     .group { display:flex; align-items:center; gap:7px; flex:1; min-width:0; padding:5px; text-align:left; }
-    .folder,.chevron { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
+    .folder { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
     .folder { width:17px; color:#aab8d8; }
-    .chevron { width:14px; color:var(--chrome-text-dim,#9299a5); }
     .name,.title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .name { font-weight:600; }
     .archived .name { color:var(--chrome-text-dim,#aab2c1); }
@@ -200,7 +199,6 @@ export class MuxChatWorkspace extends LitElement {
           <button class="group" title=${group.project?.path || group.name} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.closeMenu(); }}>
             <span class="folder">${icon(this.open ? FolderOpen : Folder, { size: 16 })}</span>
             <span class="name">${group.name}</span>
-            <span class="chevron">${icon(this.open ? ChevronDown : ChevronRight, { size: 14 })}</span>
           </button>
           ${group.project ? html`
             <button class="action" aria-label=${`${group.project.pinned ? 'Unpin' : 'Pin'} ${group.name}`} title=${group.project.pinned ? 'Unpin project' : 'Pin project'} @click=${() => void this.pinProject()}>${icon(group.project.pinned ? PinOff : Pin,{size:14})}</button>
