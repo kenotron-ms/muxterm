@@ -32,7 +32,8 @@ Use `send_chat_message(session_id, client_ref, content)` to hand work or a
 result to another chat. Choose a unique client_ref per intended turn. Reuse
 the same key and same text after a lost reply; an uncertain result means the
 turn may have arrived, and the tool never retries it under that key. During
-an active Amplifier turn this is live steering.
+an active Amplifier turn this admits steering for the next provider request
+boundary. Read the target chat to confirm delivery and its resulting output.
 
 `spawn_lane(workspace, harness, prompt | goal, placement?)` remains available
 for explicit terminal-lane requests and existing scheduled triggers.

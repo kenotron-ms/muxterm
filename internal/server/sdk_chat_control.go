@@ -166,6 +166,10 @@ func (s *Server) handleSDKControlHistory(w http.ResponseWriter, r *http.Request)
 	h := s.sdkChats
 	h.mu.Lock()
 	c := h.chats[id]
+	var chat sdkChat
+	if c != nil {
+		chat = *c
+	}
 	h.mu.Unlock()
 	if c == nil {
 		http.NotFound(w, r)
@@ -177,15 +181,29 @@ func (s *Server) handleSDKControlHistory(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) > 200 {
-		lines = lines[len(lines)-200:]
-	}
-	events := make([]sdkEvent, 0, len(lines))
+	events := make([]sdkEvent, 0, min(len(lines), 200))
+	milestones := make([]sdkEvent, 0, min(len(lines), 100))
+	var output strings.Builder
 	for _, line := range lines {
 		var event sdkEvent
-		if json.Unmarshal([]byte(line), &event) == nil && (event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "assistant.delta" || event.Type == "tool.started" || event.Type == "tool.completed" || event.Type == "turn.continued" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain") {
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		if event.Type == "assistant.delta" {
+			output.WriteString(event.Text)
+		}
+		if event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain" {
+			milestones = append(milestones, event)
+		}
+		if event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "assistant.delta" || event.Type == "tool.started" || event.Type == "tool.completed" || event.Type == "turn.continued" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain" {
 			events = append(events, event)
 		}
 	}
-	writeSDKJSON(w, 200, map[string]any{"session": c, "events": events})
+	if len(events) > 200 {
+		events = events[len(events)-200:]
+	}
+	if len(milestones) > 100 {
+		milestones = milestones[len(milestones)-100:]
+	}
+	writeSDKJSON(w, 200, map[string]any{"session": chat, "events": events, "milestones": milestones, "recentOutput": sdkTail(output.String(), 8000)})
 }
