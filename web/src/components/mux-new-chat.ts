@@ -60,7 +60,7 @@ export class MuxNewChat extends LitElement {
     .send:disabled { opacity:.4; cursor:default; }
     .error { margin:10px 0; color:#e6a5a5; }
     .hint { margin:10px 3px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
-    .provider-note { margin:-6px 0 14px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
+    .provider-note { display:flex; flex-direction:column; gap:2px; margin:-6px 0 14px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
     .provider-change { color:var(--chrome-text-bright,#e2e6f1); }
   `;
 
@@ -99,6 +99,10 @@ export class MuxNewChat extends LitElement {
       this.providerNotice = '';
     }
   }
+  private providerAvailabilityText() {
+    const available = PROVIDERS.filter(choice => providerAvailable(this.harness, choice.value)).map(choice => choice.label);
+    return `Available for ${harnessLabel(this.harness)}: ${available.join(', ')}.`;
+  }
   private async send() {
     const prompt = this.prompt.trim();
     if (!prompt || this.busy) return;
@@ -134,7 +138,10 @@ export class MuxNewChat extends LitElement {
           ${PROVIDERS.map(provider => html`<option value=${provider.value} ?selected=${this.provider === provider.value} ?disabled=${!providerAvailable(this.harness, provider.value)} title=${providerAvailable(this.harness, provider.value) ? '' : `Unavailable for ${harnessLabel(this.harness)}`}>${provider.label}${providerAvailable(this.harness, provider.value) ? '' : ` — unavailable for ${harnessLabel(this.harness)}`}</option>`)}
         </select></label>
       </div>
-      <div class="provider-note" role="status">${this.providerNotice ? html`<span class="provider-change">${this.providerNotice}</span>` : this.harness === 'amplifier' ? 'Amplifier uses the selected provider from its configured bundle.' : `Providers unavailable for ${harnessLabel(this.harness)} remain visible in the list.`}</div>
+      <div class="provider-note" role="status">
+        ${this.providerNotice ? html`<span class="provider-change">${this.providerNotice}</span>` : nothing}
+        <span>${this.providerAvailabilityText()}${this.harness === 'amplifier' ? ' Configured uses the bundle’s default provider.' : ''}</span>
+      </div>
       ${this.projectId === 'new' ? html`<label>Project name <input aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as HTMLInputElement).value; }}></label>` : nothing}
       ${this.pickerOpen && this.listing ? html`<div class="picker" aria-label="Server folder picker"><div class="picker-head"><button aria-label="Parent folder" @click=${() => void this.browse(this.listing!.parent)}>↑</button><span>${this.listing.path}</span><button @click=${() => { this.pickerOpen = false; }}>Choose this folder</button></div><div class="picker-create"><input aria-label="New folder name" placeholder="New folder name" .value=${this.newFolderName} @input=${(e:Event) => { this.newFolderName = (e.target as HTMLInputElement).value; }}><button @click=${() => { if (!this.newFolderName.trim() || this.newFolderName.includes('/')) return; this.folder = `${this.listing!.path.replace(/\/$/,'')}/${this.newFolderName.trim()}`; this.onFolderChanged(); this.pickerOpen = false; }}>Use new folder</button></div>${this.listing.folders.map(name => html`<button class="folder-entry" @click=${() => void this.browse(`${this.listing!.path.replace(/\/$/,'')}/${name}`)}>▸ ${name}</button>`)}</div>` : nothing}
       <div class="composer"><textarea aria-label="First message" placeholder="Ask anything…" .value=${this.prompt} @input=${(e:Event) => { this.prompt = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><button class="send" aria-label="Send message" ?disabled=${!this.prompt.trim() || this.busy} @click=${() => void this.send()}>↑</button></div>
