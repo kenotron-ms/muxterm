@@ -39,19 +39,37 @@ export class MuxSDKChat extends LitElement {
     .drawer-toggle { border:0; background:transparent; color:#9cbaf5; padding:7px; }
     .layout { display:flex; flex:1; min-height:0; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
-    .body { flex:1; min-height:0; overflow:auto; padding:32px clamp(24px,8vw,120px) 55px; display:flex; flex-direction:column; gap:24px; }
-    .block { max-width:780px; width:100%; align-self:center; }
+    .body { flex:1; min-height:0; overflow:auto; padding:32px clamp(24px,8vw,120px) 55px; display:flex; flex-direction:column; }
+    .block { max-width:780px; width:100%; align-self:center; margin-bottom:22px; }
+    .block.tool, .block.thinking { margin-bottom:5px; }
+    .block.tool + .block.assistant, .block.thinking + .block.assistant { margin-top:17px; }
     .user { display:flex; justify-content:flex-end; }
     .bubble { max-width:min(82%,660px); padding:10px 14px; border-radius:15px; background:rgba(122,162,247,.14); white-space:pre-wrap; overflow-wrap:anywhere; }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; margin-bottom:7px; }
     .text { overflow-wrap:anywhere; }
     .text :is(p,pre) { margin:0 0 10px; }
-    details.support { border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:rgba(122,162,247,.045); color:var(--chrome-text-dim,#b2bdd3); font-size:12px; }
-    details.support summary { cursor:pointer; padding:7px 11px; color:#b7c9ed; list-style:none; }
+    details.support { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; }
+    details.support summary { cursor:pointer; display:flex; align-items:center; gap:8px; min-height:24px; width:fit-content; max-width:100%; list-style:none; }
     details.support summary::-webkit-details-marker { display:none; }
-    details.support summary::before { content:'▸'; display:inline-block; margin-right:8px; }
-    details.support[open] summary::before { transform:rotate(90deg); }
-    .detail { padding:0 12px 10px; }
+    details.support summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
+    .support-icon { flex:none; width:14px; text-align:center; font:13px/1 ui-monospace,monospace; }
+    .support-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .support-meta { flex:none; font-size:11px; }
+    .support-chevron { flex:none; font-size:10px; opacity:.7; transition:transform .15s ease; }
+    details.support[open] .support-chevron { transform:rotate(90deg); }
+    details.support.thinking { border-left:2px solid color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 55%,transparent); padding-left:9px; }
+    details.support.thinking summary { color:var(--chrome-text-dim,#9aa3b8); font-style:italic; }
+    details.support.thinking .support-icon { font-style:normal; }
+    details.support.thinking .support-meta { opacity:.78; font-style:normal; }
+    details.support.tool summary { padding:2px 9px 2px 7px; border:1px solid var(--chrome-border,#41485f); border-radius:5px; background:var(--chrome-bar,#202632); color:#b7c9ed; font-style:normal; }
+    details.support.tool .support-icon { color:#9cbaf5; }
+    details.support.tool .support-title { font-weight:600; }
+    details.support.tool .support-meta { color:var(--chrome-text-dim,#9aa3b8); }
+    details.support.tool.failed summary { border-color:color-mix(in srgb,#e6a5a5 45%,var(--chrome-border,#41485f)); }
+    details.support.tool.failed .support-icon, details.support.tool.failed .support-meta { color:#e6a5a5; }
+    .detail { padding:7px 12px 10px; max-width:100%; }
+    details.support[open] { width:100%; }
+    details.support.tool[open] .detail { border-left:1px solid var(--chrome-border,#41485f); margin-left:7px; }
     .detail-label { color:#9cbaf5; font-weight:600; margin:9px 0 4px; }
     .detail pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
     .error { color:#e6a5a5; }
@@ -243,12 +261,23 @@ export class MuxSDKChat extends LitElement {
     }
     return value;
   }
+  private toolFailed(block: Block): boolean {
+    if (block.failed) return true;
+    if (!block.done || !block.output || typeof block.output !== 'object') return false;
+    const result = block.output as Record<string, unknown>;
+    if (result.status === 'failed' || result.is_error === true || result.isError === true) return true;
+    if (typeof result.exitCode === 'number' && result.exitCode !== 0) return true;
+    const output = result.output;
+    return !!output && typeof output === 'object' && typeof (output as Record<string, unknown>).returncode === 'number'
+      && (output as Record<string, unknown>).returncode !== 0;
+  }
   private support(block: Block, index: number) {
     const thinking = block.kind === 'thinking';
-    const label = thinking ? `Thinking · ${block.text.length} characters` : `${block.name || 'Tool'} · ${block.text}`;
-    return html`<details class="support" ?open=${this.expanded.has(index)} @toggle=${(e: globalThis.Event) => {
+    const failed = !thinking && this.toolFailed(block);
+    const words = block.text.trim().split(/\s+/).filter(Boolean).length;
+    return html`<details class="support ${thinking ? 'thinking' : 'tool'} ${failed ? 'failed' : ''}" ?open=${this.expanded.has(index)} @toggle=${(e: globalThis.Event) => {
       if ((e.currentTarget as HTMLDetailsElement).open) this.expanded.add(index); else this.expanded.delete(index);
-    }}><summary>${label}</summary><div class="detail">${thinking
+    }}><summary><span class="support-icon" aria-hidden="true">${thinking ? '◌' : failed ? '×' : block.done ? '›' : '·'}</span><span class="support-title">${thinking ? 'Thinking' : block.name || 'Tool'}</span><span class="support-meta">${thinking ? `${words} words` : block.done ? failed ? 'Failed' : 'Succeeded' : 'Running'}</span><span class="support-chevron" aria-hidden="true">▸</span></summary><div class="detail">${thinking
       ? html`<pre>${block.text}</pre>`
       : html`<div class="detail-label">Input arguments</div><pre>${this.detail(this.toolInput(block.input))}</pre><div class="detail-label">Output / result</div><pre>${block.done ? this.detail(this.toolOutput(block.output)) : 'Running…'}</pre>`}
     </div></details>`;
