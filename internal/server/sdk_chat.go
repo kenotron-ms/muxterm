@@ -60,6 +60,7 @@ type sdkEvent struct {
 	ToolID       string          `json:"toolId,omitempty"`
 	Message      string          `json:"message,omitempty"`
 	Raw          json.RawMessage `json:"raw,omitempty"`
+	Failed       bool            `json:"failed,omitempty"`
 }
 type sdkInputAttachment struct {
 	Path string `json:"path"`

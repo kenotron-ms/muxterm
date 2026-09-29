@@ -14,7 +14,9 @@ export class CodexStream {
     this.pending = new Map();
     this.nextId = 0;
     this.textByItem = new Map();
-    this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio'], {
+    this.reasoningByItem = new Map();
+    this.phaseByItem = new Map();
+    this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="detailed"'], {
       cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.stderr = '';
@@ -53,6 +55,8 @@ export class CodexStream {
     this.session.busy = true;
     this.inputId = input.id;
     this.textByItem.clear();
+    this.reasoningByItem.clear();
+    this.phaseByItem.clear();
     try {
       const attachments = input.attachments || [];
       const manifest = attachments.map(a => `- ${JSON.stringify(a.name)} (${a.kind}): ${JSON.stringify(a.path)}`).join('\n');
@@ -62,6 +66,7 @@ export class CodexStream {
       const turnInput = [{ type: 'text', text: prompt, text_elements: [] }];
       for (const item of attachments) if (item.kind === 'image') turnInput.push({ type: 'localImage', path: item.path });
       const result = await this.request('turn/start', { threadId: this.session.nativeId,
+        summary: 'detailed',
         input: turnInput });
       this.turnId = result.turn.id;
     } catch (error) {
@@ -83,15 +88,28 @@ export class CodexStream {
     }
     const { method, params: p } = message;
     if (!p || p.threadId !== this.session.nativeId) return;
-    if (method === 'item/agentMessage/delta') {
+    if (method === 'item/started' && p.item?.type === 'agentMessage') {
+      this.phaseByItem.set(p.item.id, p.item.phase);
+    } else if (method === 'item/agentMessage/delta') {
       this.textByItem.set(p.itemId, (this.textByItem.get(p.itemId) || '') + p.delta);
-      if (p.delta) this.emit(this.session.id, 'assistant.delta', { text: p.delta });
+      if (p.delta) this.emit(this.session.id, this.phaseByItem.get(p.itemId) === 'commentary' ? 'thinking.delta' : 'assistant.delta', { text: p.delta });
+    } else if (method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
+      const delta = p.delta || '';
+      this.reasoningByItem.set(p.itemId, (this.reasoningByItem.get(p.itemId) || '') + delta);
+      if (delta) this.emit(this.session.id, 'thinking.delta', { text: delta });
+    } else if (method === 'item/completed' && p.item?.type === 'reasoning') {
+      const full = (p.item.summary || []).map(part => typeof part === 'string' ? part : part.text || '').join('')
+        || (p.item.content || []).map(part => typeof part === 'string' ? part : part.text || '').join('')
+        || p.item.text || '';
+      const sent = this.reasoningByItem.get(p.item.id) || '';
+      const rest = full.startsWith(sent) ? full.slice(sent.length) : (sent ? '' : full);
+      if (rest) this.emit(this.session.id, 'thinking.delta', { text: rest });
     } else if (method === 'item/completed' && p.item?.type === 'agentMessage') {
       // Keep compatibility with an older app-server that only sends a final item.
       const sent = this.textByItem.get(p.item.id) || '';
       const full = p.item.text || '';
       const rest = full.startsWith(sent) ? full.slice(sent.length) : full;
-      if (rest) this.emit(this.session.id, 'assistant.delta', { text: rest });
+      if (rest) this.emit(this.session.id, p.item.phase === 'commentary' ? 'thinking.delta' : 'assistant.delta', { text: rest });
     } else if (method === 'item/started' && p.item?.type !== 'agentMessage' && p.item?.type !== 'reasoning' && p.item?.type !== 'userMessage') {
       this.emit(this.session.id, 'tool.started', { name: p.item.type, toolId: p.item.id, raw: p.item });
     } else if (method === 'item/completed' && p.item?.type !== 'agentMessage' && p.item?.type !== 'reasoning' && p.item?.type !== 'userMessage') {

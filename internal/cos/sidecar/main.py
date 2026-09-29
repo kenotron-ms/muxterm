@@ -2335,7 +2335,9 @@ class SDKChatSession:
         if hooks is None: raise RuntimeError("Amplifier hook registry unavailable")
         cont = HookResult(action="continue")
         async def delta(event, data):
-            if data.get("block_type") != "thinking" and data.get("text"):
+            if data.get("block_type") == "thinking" and data.get("text"):
+                frame(self.id, "thinking.delta", text=data["text"])
+            elif data.get("text"):
                 if not self.first_token_seen and self.turn_started is not None:
                     self.first_token_seen = True
                     timing("sdk.first_token", self.turn_started)
@@ -2347,7 +2349,8 @@ class SDKChatSession:
             return cont
         async def tool_end(event, data):
             frame(self.id, "tool.completed", toolId=str(data.get("tool_call_id") or ""),
-                  name=str(data.get("tool_name") or "Tool"))
+                  name=str(data.get("tool_name") or "Tool"), raw=data.get("result") or data.get("error"),
+                  failed=event == "tool:error")
             return cont
         hooks.register("llm:stream_block_delta", delta, name="sdk-chat-delta")
         hooks.register("tool:pre", tool_start, name="sdk-chat-tool-start")
