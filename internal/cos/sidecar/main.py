@@ -43,6 +43,8 @@ sys.stdout = sys.stderr
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import base64  # noqa: E402
+import copy  # noqa: E402
+import dataclasses  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import signal  # noqa: E402
@@ -2170,6 +2172,7 @@ class Sidecar:
 # ---------------------------------------------------------------------------
 SDK_CHAT_SESSIONS = {}
 SDK_CHAT_PROTO = None
+SDK_PREPARED_CACHE = {}
 CAPS = dict(approvals=False, transcript_read=True, interrupt=True,
             live_input=True, attributed_service_input=True, native_steering=True)
 
@@ -2255,7 +2258,29 @@ class SDKChatSession:
         ))
         resolve_start = time.monotonic()
         try:
-            cfg, prepared = await resolve_bundle_config(self.bundle, settings, None, project_slug=slug)
+            # Preparation resolves every composed bundle and activates its modules.
+            # It is independent of the chat ID; reuse that work for later chats in
+            # this project, while giving each session its own mutable bundle/plan.
+            settings_paths = (home / "settings.yaml", project / ".amplifier" / "settings.yaml",
+                              project / ".amplifier" / "settings.local.yaml")
+            settings_stamp = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else None
+                                   for p in settings_paths)
+            cache_key = (str(project), self.bundle, settings_stamp)
+            cached = SDK_PREPARED_CACHE.get(cache_key)
+            if cached is not None and time.monotonic() - cached[0] > 300:
+                SDK_PREPARED_CACHE.pop(cache_key, None)
+                cached = None
+            if cached is None:
+                cfg, prepared = await resolve_bundle_config(self.bundle, settings, None, project_slug=slug)
+                if len(SDK_PREPARED_CACHE) >= 4:
+                    SDK_PREPARED_CACHE.pop(next(iter(SDK_PREPARED_CACHE)))
+                SDK_PREPARED_CACHE[cache_key] = (time.monotonic(), copy.deepcopy(cfg), prepared)
+            else:
+                cfg = copy.deepcopy(cached[1])
+                timing("sdk.prepared_cache_hit", resolve_start)
+            template = SDK_PREPARED_CACHE[cache_key][2]
+            prepared = dataclasses.replace(template, mount_plan=copy.deepcopy(template.mount_plan),
+                                           bundle=copy.deepcopy(template.bundle))
         except Exception as exc:
             raise RuntimeError(f"bundle '{self.bundle}' failed to load: {exc}") from exc
         timing("sdk.bundle_resolution", resolve_start)
@@ -2266,14 +2291,17 @@ class SDKChatSession:
         )})
         providers = cfg.get("providers") or []
         self.available_providers = sorted(set(entry.get("module", "") for entry in providers if entry.get("module")))
-        if self.provider:
-            selected = [entry for entry in providers if entry.get("module") == self.provider
-                        or entry.get("instance_id") == self.provider]
-            if not selected:
-                raise RuntimeError(f"provider '{self.provider}' is unavailable for bundle '{self.bundle}'")
-            cfg["providers"] = selected
-            prepared.mount_plan["providers"] = selected
-            prepared.bundle.providers = list(selected)
+        # A chat runs with one provider. Mounting every configured provider
+        # makes the first turn query unused model catalogs and delays the reply.
+        if not self.provider and providers:
+            self.provider = providers[0].get("module") or providers[0].get("instance_id") or ""
+        selected = [entry for entry in providers if entry.get("module") == self.provider
+                    or entry.get("instance_id") == self.provider]
+        if not selected:
+            raise RuntimeError(f"provider '{self.provider or 'default'}' is unavailable for bundle '{self.bundle}'")
+        cfg["providers"] = selected
+        prepared.mount_plan["providers"] = copy.deepcopy(selected)
+        prepared.bundle.providers = copy.deepcopy(selected)
         cfg = expand_env_vars(cfg)
         live = {"module": "loop-live", "source": LOOP_LIVE_SOURCE,
                 "config": {"background_tools": [], "background_delegate": False}}
