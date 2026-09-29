@@ -210,6 +210,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.State = "failed"
 		c.LastActivity = "Error: " + sdkPreview(event.Message, 160)
 	case "session.uncertain":
+		c.State = "uncertain"
 		c.LastActivity = "Delivery uncertain"
 	}
 	_ = h.saveLocked(c)
@@ -751,12 +752,24 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "provider": amplifierProviderModule(c.Harness, c.Provider)}); err == nil {
-		_, err = h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": sdkID(), "content": req.Prompt}})
+	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "provider": amplifierProviderModule(c.Harness, c.Provider)}); err != nil {
+		h.appendEvent(sdkEvent{SessionID: c.ID, Type: "error", Message: err.Error()})
+		http.Error(w, fmt.Sprintf("chat %s could not start: %v", c.ID, err), 502)
+		return
+	}
+	openingID := sdkID()
+	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": req.Prompt}})
+	if err == nil {
+		var ack struct{ Status, InputID string }
+		err = json.Unmarshal(result, &ack)
+		if err == nil && (ack.Status != "accepted" || ack.InputID != openingID) {
+			err = fmt.Errorf("sidecar did not confirm opening input %s", openingID)
+		}
 	}
 	if err != nil {
-		h.appendEvent(sdkEvent{SessionID: c.ID, Type: "error", Message: err.Error()})
-		http.Error(w, err.Error(), 502)
+		message := fmt.Sprintf("chat %s opening turn acceptance uncertain: %v", c.ID, err)
+		h.appendEvent(sdkEvent{SessionID: c.ID, Type: "session.uncertain", Message: message})
+		http.Error(w, message, 502)
 		return
 	}
 	writeSDKJSON(w, 201, c)
