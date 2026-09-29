@@ -26,23 +26,24 @@ import (
 
 // SDK chats are Go-owned records. Native harness IDs are resume pointers only.
 type sdkChat struct {
-	ID           string    `json:"id"`
-	WorkspaceID  string    `json:"workspaceId,omitempty"`
-	ProjectPath  string    `json:"projectPath"`
-	Title        string    `json:"title"`
-	TitleSource  string    `json:"titleSource,omitempty"`
-	UserTurns    int       `json:"userTurns,omitempty"`
-	Harness      string    `json:"harness"`
-	Bundle       string    `json:"bundle,omitempty"`
-	Provider     string    `json:"provider,omitempty"`
-	Model        string    `json:"model,omitempty"`
-	Effort       string    `json:"effort,omitempty"`
-	NativeID     string    `json:"nativeId,omitempty"`
-	State        string    `json:"state"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt,omitempty"`
-	LastActivity string    `json:"lastActivity,omitempty"`
-	LastOutput   string    `json:"lastOutput,omitempty"`
+	ID               string    `json:"id"`
+	WorkspaceID      string    `json:"workspaceId,omitempty"`
+	ProjectPath      string    `json:"projectPath"`
+	Title            string    `json:"title"`
+	TitleSource      string    `json:"titleSource,omitempty"`
+	TitleCheckedTurn int       `json:"titleCheckedTurn,omitempty"`
+	UserTurns        int       `json:"userTurns,omitempty"`
+	Harness          string    `json:"harness"`
+	Bundle           string    `json:"bundle,omitempty"`
+	Provider         string    `json:"provider,omitempty"`
+	Model            string    `json:"model,omitempty"`
+	Effort           string    `json:"effort,omitempty"`
+	NativeID         string    `json:"nativeId,omitempty"`
+	State            string    `json:"state"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt,omitempty"`
+	LastActivity     string    `json:"lastActivity,omitempty"`
+	LastOutput       string    `json:"lastOutput,omitempty"`
 }
 type sdkProject struct {
 	ID   string `json:"id"`
@@ -50,7 +51,6 @@ type sdkProject struct {
 	Path string `json:"path"`
 }
 type sdkEvent struct {
-
 	SessionID    string                 `json:"sessionId"`
 	Type         string                 `json:"type"`
 	NativeID     string                 `json:"nativeId,omitempty"`
@@ -272,7 +272,11 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			}
 		}
 	}
-	if event.Type == "turn.completed" && c.UserTurns >= 2 && (c.TitleSource == "" || c.TitleSource == "opening") && !h.naming[c.ID] {
+	// Revisit the subject after the second human turn, then every third
+	// completed human turn. The work runs outside the chat event path.
+	if event.Type == "turn.completed" && c.UserTurns >= 2 && (c.UserTurns-2)%3 == 0 && c.TitleSource != "manual" && c.TitleCheckedTurn < c.UserTurns && !h.naming[c.ID] {
+		c.TitleCheckedTurn = c.UserTurns
+		_ = h.saveLocked(c)
 		h.naming[c.ID] = true
 		go h.nameAfterTurns(c.ID)
 	}

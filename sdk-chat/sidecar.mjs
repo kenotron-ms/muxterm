@@ -161,14 +161,15 @@ async function command(cmd) {
   if (op === 'title') {
     if (s.harness === 'codex') {
       s.codex ||= new CodexStream(s, emit);
-      return s.codex.title(cmd.mode, cmd.name);
+      return s.codex.title(cmd.mode, cmd.name, cmd.previousName);
     }
     if (!s.nativeId) throw new Error('Claude native session ID unavailable');
     if (cmd.mode === 'suggest') return { name: await suggestClaudeTitle(cmd.inputs || [], s.cwd) };
     if (cmd.mode === 'manual') await renameSession(s.nativeId, cmd.name, { dir: s.cwd });
     if (cmd.mode === 'generated') {
       const existing = await getSessionInfo(s.nativeId, { dir: s.cwd });
-      if (existing?.customTitle) return { name: existing.customTitle, source: 'manual' };
+      if (existing?.customTitle && existing.customTitle !== cmd.previousName)
+        return { name: existing.customTitle, source: 'manual' };
       await renameSession(s.nativeId, cmd.name, { dir: s.cwd });
       return { name: cmd.name, source: 'generated' };
     }

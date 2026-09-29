@@ -14,10 +14,9 @@ import (
 	"unicode"
 )
 
-// A name is chosen once, after two accepted human turns. Claude's native AI
-// title is preferred when present. SDK sessions without one use a separate
-// title turn (Claude's SDK for Claude; ephemeral Codex for Codex/Amplifier),
-// then write the result through the harness's native naming surface.
+// A title is checked after human turns 2, 5, 8, and so on. Native titles can
+// supply the first subject; later checks use the recent conversation to follow
+// subject changes. This runs asynchronously, with one check in flight per chat.
 func (h *sdkChatHost) nameAfterTurns(id string) {
 	defer func() { h.mu.Lock(); delete(h.naming, id); h.mu.Unlock() }()
 	nameLock := h.nameLock(id)
@@ -25,13 +24,13 @@ func (h *sdkChatHost) nameAfterTurns(id string) {
 	defer nameLock.Unlock()
 	h.mu.Lock()
 	c := h.chats[id]
-	if c == nil || (c.TitleSource != "" && c.TitleSource != "opening") {
+	if c == nil || c.TitleSource == "manual" {
 		h.mu.Unlock()
 		return
 	}
 	chat := *c
 	h.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	if err := h.resume(ctx, &chat); err != nil {
 		return
@@ -46,9 +45,13 @@ func (h *sdkChatHost) nameAfterTurns(id string) {
 	}
 	name := ""
 	source := ""
-	if native.Source == "manual" && strings.TrimSpace(native.Name) != "" {
+	// Native stores call a previously generated title a custom name. It is
+	// still replaceable only while it matches the title we last wrote.
+	if native.Source == "manual" && strings.TrimSpace(native.Name) != "" &&
+		(chat.TitleSource != "generated" || native.Name != chat.Title) {
 		name, source = native.Name, "manual"
 	} else if candidate := shortPurposeTitle(native.Name); candidate != "" &&
+		(chat.TitleSource == "" || chat.TitleSource == "opening") &&
 		(native.Source == "native" || native.Source == "generated") &&
 		!strings.EqualFold(strings.TrimSpace(native.Name), strings.TrimSpace(native.FirstPrompt)) {
 		name, source = candidate, "native"
@@ -58,16 +61,7 @@ func (h *sdkChatHost) nameAfterTurns(id string) {
 		if readErr != nil || len(inputs) < 2 {
 			return
 		}
-		if chat.Harness == "claude" {
-			var suggested struct{ Name string }
-			raw, err = h.call(ctx, "title", map[string]any{"sessionId": id, "mode": "suggest", "inputs": inputs})
-			if err == nil {
-				err = json.Unmarshal(raw, &suggested)
-			}
-			name = shortPurposeTitle(suggested.Name)
-		} else {
-			name, err = generatePurposeTitle(ctx, chat.ProjectPath, inputs)
-		}
+		name, err = generatePurposeTitle(ctx, chat.ProjectPath, inputs)
 		if err != nil || name == "" {
 			return
 		}
@@ -78,14 +72,21 @@ func (h *sdkChatHost) nameAfterTurns(id string) {
 	}
 	h.mu.Lock()
 	c = h.chats[id]
-	stillOpening := c != nil && (c.TitleSource == "" || c.TitleSource == "opening")
+	stillEligible := c != nil && c.TitleSource != "manual" && c.Title == chat.Title && c.TitleSource == chat.TitleSource && c.UserTurns == chat.UserTurns
 	h.mu.Unlock()
-	if !stillOpening {
+	if !stillEligible {
+		return
+	}
+	if name == chat.Title && source != "manual" {
 		return
 	}
 	if source == "generated" {
 		generated := name
-		raw, err = h.call(ctx, "title", map[string]any{"sessionId": id, "mode": "generated", "name": name})
+		previousName := ""
+		if chat.TitleSource == "generated" {
+			previousName = chat.Title
+		}
+		raw, err = h.call(ctx, "title", map[string]any{"sessionId": id, "mode": "generated", "name": name, "previousName": previousName})
 		if err != nil {
 			return
 		}
@@ -103,7 +104,7 @@ func (h *sdkChatHost) nameAfterTurns(id string) {
 	}
 	h.mu.Lock()
 	c = h.chats[id]
-	if c == nil || (c.TitleSource != "" && c.TitleSource != "opening") {
+	if c == nil || c.TitleSource == "manual" || c.Title != chat.Title || c.TitleSource != chat.TitleSource {
 		h.mu.Unlock()
 		return
 	}
@@ -128,7 +129,7 @@ func (h *sdkChatHost) namingInputs(id string) ([]string, error) {
 		var ev sdkEvent
 		if json.Unmarshal(scanner.Bytes(), &ev) == nil && ev.Type == "input.accepted" && ev.Kind == "user" {
 			if input := strings.TrimSpace(ev.Text); input != "" {
-				inputs = append(inputs, input)
+				inputs = append(inputs, string([]rune(input)[:min(len([]rune(input)), 1200)]))
 			}
 		}
 	}
@@ -179,13 +180,13 @@ func shortPurposeTitle(s string) string {
 
 func generatePurposeTitle(ctx context.Context, cwd string, inputs []string) (string, error) {
 	var prompt strings.Builder
-	prompt.WriteString("Give this conversation a specific, sentence-case sidebar title of 3–5 words, at most 28 characters. Use a concrete action and object. Describe the actual task or purpose, not a greeting, the first line, or the assistant's response. Output the title only. Do not use tools.\n\nHuman messages, oldest first:\n")
+	prompt.WriteString("Give this conversation a specific, sentence-case sidebar title of 3–5 words, at most 28 characters. Use a concrete action and object. Name the current subject. If the subject changed, follow the newest messages. Do not quote the opening message or describe the assistant. Output the title only. Do not use tools.\n\nRecent human messages, oldest first:\n")
 	for _, input := range inputs {
 		prompt.WriteString("- ")
 		prompt.WriteString(input)
 		prompt.WriteByte('\n')
 	}
-	cmd := exec.CommandContext(ctx, "codex", "exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "-s", "read-only", "-C", cwd, "-")
+	cmd := exec.CommandContext(ctx, "codex", "exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "-m", "gpt-6-luna", "-s", "read-only", "-C", cwd, "-")
 	cmd.Stdin = strings.NewReader(prompt.String())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

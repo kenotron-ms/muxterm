@@ -2553,8 +2553,7 @@ async def command(cmd):
         mode = cmd.get("mode")
         if mode in ("manual", "generated"):
             name = cmd.get("name")
-            metadata = metadata_store.set_name(name, source=mode,
-                                               only_if_missing=(mode == "generated"))
+            metadata = metadata_store.set_name(name, source=mode)
         return {"name": metadata.get("name", ""), "source": metadata.get("name_source", "")}
     if op == "settings":
         active_name = session.model.split("/", 1)[0]
