@@ -26,6 +26,7 @@ export class MuxSDKChat extends LitElement {
   private unsubscribeChats?: () => void;
   private parsers = new Map<number, MarkdownStream>();
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
+  private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
   private expanded = new Set<number>();
   private nextBlockKey = 0;
   private turnStart = 0;
@@ -82,12 +83,16 @@ export class MuxSDKChat extends LitElement {
     super.connectedCallback();
     window.addEventListener('dragover', this.preventFileNavigation);
     window.addEventListener('drop', this.preventFileNavigation);
+    window.addEventListener('drop', this.resetDrop);
+    window.addEventListener('dragend', this.resetDrop);
     this.unsubscribeChats = sdkChats.subscribe(() => this.requestUpdate());
     this.connect();
   }
   override disconnectedCallback() {
     window.removeEventListener('dragover', this.preventFileNavigation);
     window.removeEventListener('drop', this.preventFileNavigation);
+    window.removeEventListener('drop', this.resetDrop);
+    window.removeEventListener('dragend', this.resetDrop);
     this.unsubscribeChats?.();
     this.stream?.close();
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
@@ -164,7 +169,7 @@ export class MuxSDKChat extends LitElement {
   private onDragLeave(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth = Math.max(0, this.dragDepth - 1); if (!this.dragDepth) this.dropActive = false; }
   private onDrop(event: DragEvent) {
     if (!this.hasFiles(event)) return;
-    event.preventDefault(); event.stopPropagation(); this.dragDepth = 0; this.dropActive = false;
+    event.preventDefault(); event.stopPropagation(); this.resetDrop();
     this.addFiles(Array.from(event.dataTransfer?.files || []));
   }
   private onPick(event: Event) {
@@ -183,9 +188,7 @@ export class MuxSDKChat extends LitElement {
   }
   private addFiles(files: File[]) {
     for (const file of files) {
-      const isImage = file.type.startsWith('image/');
-      const item: Attachment = { localId: crypto.randomUUID(), file, kind: isImage ? 'image' : undefined,
-        preview: isImage ? URL.createObjectURL(file) : undefined, uploading: true };
+      const item: Attachment = { localId: crypto.randomUUID(), file, uploading: true };
       this.attachments = [...this.attachments, item];
       void this.upload(item);
     }
@@ -203,7 +206,9 @@ export class MuxSDKChat extends LitElement {
       if (!payload.id || !payload.kind) throw new Error('Upload response lacked attachment details');
       if (!this.attachments.some(a => a.localId === item.localId)) return;
       this.attachments = this.attachments.map(a => a.localId === item.localId
-        ? { ...a, id: payload.id, kind: payload.kind, uploading: false } : a);
+        ? { ...a, id: payload.id, kind: payload.kind,
+          preview: payload.kind === 'image' ? URL.createObjectURL(a.file) : undefined,
+          uploading: false } : a);
     } catch (error) {
       if (!this.attachments.some(a => a.localId === item.localId)) return;
       this.attachments = this.attachments.map(a => a.localId === item.localId
