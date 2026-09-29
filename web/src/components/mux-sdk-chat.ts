@@ -183,9 +183,8 @@ export class MuxSDKChat extends LitElement {
   }
   private addFiles(files: File[]) {
     for (const file of files) {
-      const isImage = file.type.startsWith('image/');
-      const item: Attachment = { localId: crypto.randomUUID(), file, kind: isImage ? 'image' : undefined,
-        preview: isImage ? URL.createObjectURL(file) : undefined, uploading: true };
+      // The upload response is authoritative about image versus generic file.
+      const item: Attachment = { localId: crypto.randomUUID(), file, uploading: true };
       this.attachments = [...this.attachments, item];
       void this.upload(item);
     }
@@ -202,8 +201,9 @@ export class MuxSDKChat extends LitElement {
       if (!response.ok) throw new Error(payload.reason || body.trim() || `Upload failed (${response.status})`);
       if (!payload.id || !payload.kind) throw new Error('Upload response lacked attachment details');
       if (!this.attachments.some(a => a.localId === item.localId)) return;
+      const preview = payload.kind === 'image' ? URL.createObjectURL(item.file) : undefined;
       this.attachments = this.attachments.map(a => a.localId === item.localId
-        ? { ...a, id: payload.id, kind: payload.kind, uploading: false } : a);
+        ? { ...a, id: payload.id, kind: payload.kind, preview, uploading: false } : a);
     } catch (error) {
       if (!this.attachments.some(a => a.localId === item.localId)) return;
       this.attachments = this.attachments.map(a => a.localId === item.localId
