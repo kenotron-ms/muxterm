@@ -12,6 +12,8 @@ type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; pare
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[] };
 type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
+type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
+type TranscriptRow = { key: string; block: Block; work?: Block[] };
 import { icon } from '../lib/icons.js';
 import { Brain, Check, ChevronDown, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
 
@@ -37,6 +39,29 @@ export class MuxSDKChat extends LitElement {
   @state() private settingsPending = false;
   private dragDepth = 0;
   private stream?: EventSource;
+  private historyAbort?: AbortController;
+  private historyEpoch = 0;
+  private activeSession = '';
+  private historyFrom = 0;
+  @state() private hasOlder = false;
+  @state() private loadingOlder = false;
+  private loadedEvents: SDKEvent[] = [];
+  private replaying = false;
+  private rowHeights = new Map<string, number>();
+  private rowsCache?: { blocks: Block[]; rows: TranscriptRow[] };
+  @state() private visibleStart = 0;
+  @state() private visibleEnd = 0;
+  private rowObserver = new ResizeObserver(entries => {
+    let changed = false;
+    for (const entry of entries) {
+      const row = entry.target as HTMLElement;
+      const key = row.dataset.rowKey;
+      if (!key) continue;
+      const height = entry.borderBoxSize?.[0]?.blockSize || row.offsetHeight;
+      if (Math.abs((this.rowHeights.get(key) || 110) - height) > 2) { this.rowHeights.set(key, height); changed = true; }
+    }
+    if (changed) this.requestUpdate();
+  });
   private unsubscribeChats?: () => void;
   private parsers = new Map<number, MarkdownStream>();
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
@@ -73,6 +98,7 @@ export class MuxSDKChat extends LitElement {
     .layout { display:flex; flex:1; min-height:0; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
     .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable; }
+    .virtual-spacer { width:1px; flex:none; pointer-events:none; }
     .block { max-width:760px; width:100%; align-self:center; margin-bottom:28px; box-sizing:border-box; }
     .block.work { margin-top:-12px; margin-bottom:20px; }
     .work-disclosure summary { display:flex; align-items:center; gap:5px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:12px; list-style:none; cursor:pointer; }
@@ -202,13 +228,19 @@ export class MuxSDKChat extends LitElement {
     window.removeEventListener('dragend', this.resetDrop);
     this.unsubscribeChats?.();
     if (this.clock) clearInterval(this.clock);
+    this.historyEpoch++;
+    this.historyAbort?.abort();
     this.stream?.close();
+    this.rowObserver.disconnect();
+    this.activeSession = '';
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
     super.disconnectedCallback();
   }
   override willUpdate(changed: Map<string, unknown>) { if (changed.has('sessionId')) this.connect(); }
   override updated(changed: Map<string, unknown>) {
     if (changed.has('draft')) this.sizeTextarea();
+    this.rowObserver.disconnect();
+    this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]').forEach(row => this.rowObserver.observe(row));
   }
   private sizeTextarea() {
     const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('textarea');
@@ -289,15 +321,93 @@ export class MuxSDKChat extends LitElement {
     return [...found].slice(-30).reverse();
   }
   private connect() {
-    if (!this.isConnected || !this.sessionId) return;
-    this.stream?.close(); this.blocks = []; this.trajectory = []; this.selectedAgent = ''; this.parsers.clear(); this.expanded.clear(); this.workExpanded.clear(); this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now(); this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.error = ''; this.settingsPending = false; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
-    const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/events`));
-    source.addEventListener('snapshot', e => { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; this.busy = this.chat.state === 'working'; });
-    source.addEventListener('sdk', e => this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent));
-    source.onerror = () => { this.error = 'Connection to the chat stream was interrupted.'; };
-    this.stream = source;
+    if (!this.isConnected || !this.sessionId || this.activeSession === this.sessionId) return;
+    this.activeSession = this.sessionId;
+    const epoch = ++this.historyEpoch;
+    this.historyAbort?.abort();
+    this.historyAbort = new AbortController();
+    this.stream?.close(); this.stream = undefined;
+    this.resetTranscript();
+    this.loadedEvents = []; this.historyFrom = 0; this.hasOlder = false; this.loadingOlder = false;
+    this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
+    this.selectedAgent = ''; this.error = ''; this.settingsPending = false;
+    this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
+    this.busy = this.chat?.state === 'working';
+    void this.loadRecent(this.sessionId, epoch, this.historyAbort.signal);
+  }
+  private resetTranscript() {
+    this.blocks = []; this.trajectory = []; this.parsers.clear(); this.expanded.clear(); this.workExpanded.clear();
+    this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now();
+    this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.rowsCache = undefined;
+  }
+  private async loadRecent(id: string, epoch: number, signal: AbortSignal) {
+    try {
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history`), { signal });
+      if (!response.ok) throw new Error(`History request failed (${response.status})`);
+      const page = await response.json() as HistoryPage;
+      if (epoch !== this.historyEpoch) return;
+      this.historyFrom = page.from; this.hasOlder = page.hasMore;
+      this.loadedEvents = page.events;
+      this.replayEvents();
+      this.busy = this.chat?.state === 'working';
+      const rows = this.transcriptRows();
+      this.visibleStart = Math.max(0, rows.length - 35); this.visibleEnd = rows.length;
+      await this.updateComplete;
+      if (epoch !== this.historyEpoch) return;
+      const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+      if (body) body.scrollTop = body.scrollHeight;
+      // Events written after the page's byte offset are replayed before live
+      // delivery. This also covers the gap while this request was in flight.
+      const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/events?after=${page.to}`));
+      source.addEventListener('snapshot', e => { if (epoch !== this.historyEpoch) return; this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; this.busy = this.chat.state === 'working'; });
+      source.addEventListener('sdk', e => { if (epoch !== this.historyEpoch) return; this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent); });
+      source.onerror = () => { if (epoch === this.historyEpoch) this.error = 'Connection to the chat stream was interrupted.'; };
+      if (epoch !== this.historyEpoch) source.close(); else this.stream = source;
+    } catch (error) {
+      if (epoch === this.historyEpoch && !signal.aborted) this.error = String(error);
+    }
+  }
+  private replayEvents() {
+    const busy = this.busy;
+    this.resetTranscript();
+    this.replaying = true;
+    for (const event of this.loadedEvents) this.onEvent(event);
+    this.replaying = false;
+    this.busy = busy;
+  }
+  private async loadOlder() {
+    if (!this.hasOlder || this.loadingOlder || !this.activeSession) return;
+    const epoch = this.historyEpoch;
+    const id = this.activeSession;
+    const before = this.historyFrom;
+    const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+    const previousHeight = body?.scrollHeight || 0;
+    const previousTop = body?.scrollTop || 0;
+    this.loadingOlder = true;
+    try {
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${before}`), { signal: this.historyAbort?.signal });
+      if (!response.ok) throw new Error(`Older history request failed (${response.status})`);
+      const page = await response.json() as HistoryPage;
+      if (epoch !== this.historyEpoch) return;
+      this.historyFrom = page.from; this.hasOlder = page.hasMore;
+      this.loadedEvents = [...page.events, ...this.loadedEvents];
+      this.rowHeights.clear();
+      this.replayEvents();
+      const rows = this.transcriptRows();
+      this.visibleStart = Math.max(0, rows.length - 45); this.visibleEnd = rows.length;
+      await this.updateComplete;
+      if (epoch !== this.historyEpoch) return;
+      const current = this.shadowRoot?.querySelector<HTMLElement>('.body');
+      if (current) current.scrollTop = previousTop + current.scrollHeight - previousHeight;
+      this.updateVisibleRows();
+    } catch (error) {
+      if (epoch === this.historyEpoch && !this.historyAbort?.signal.aborted) this.error = String(error);
+    } finally {
+      if (epoch === this.historyEpoch) this.loadingOlder = false;
+    }
   }
   private onEvent(event: SDKEvent) {
+    if (!this.replaying) this.loadedEvents.push(event);
     if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'delegate.message', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type))
       this.trajectory = [...this.trajectory, event];
     const blocks = [...this.blocks];
@@ -366,7 +476,7 @@ export class MuxSDKChat extends LitElement {
       if (anchor !== undefined) for (const id of event.inputIds || []) this.completedInputAnchors.set(id, anchor);
       this.turnStart = blocks.length;
       this.currentTurn++;
-      void sdkChats.refresh();
+      if (!this.replaying) void sdkChats.refresh();
     }
     else if (event.type === 'turn.cancelled') {
       this.busy = false;
@@ -376,17 +486,19 @@ export class MuxSDKChat extends LitElement {
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:'Stopped by you · partial output kept' });
       this.turnStart = blocks.length;
       this.currentTurn++;
-      void sdkChats.refresh();
+      if (!this.replaying) void sdkChats.refresh();
     }
     else if (event.type === 'goal.progress') {
       if (this.chat) this.chat = { ...this.chat, goalState: event.goalState, goalReason: event.goalReason, goalSummary: event.goalSummary };
       if (event.goalState !== 'continuing') blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:`Goal ${event.goalState || 'updated'}: ${event.goalSummary || event.goalReason || ''}` });
     }
-    else if (event.type === 'session.renamed') { void sdkChats.refresh(); }
-    else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; void sdkChats.refresh(); }
+    else if (event.type === 'session.renamed') { if (!this.replaying) void sdkChats.refresh(); }
+    else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (!this.replaying) void sdkChats.refresh(); }
     this.blocks = blocks;
+    if (this.replaying) return;
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     const follow = !body || body.scrollHeight - body.scrollTop - body.clientHeight < 100;
+    if (follow) { const count = this.transcriptRows().length; this.visibleStart = Math.max(0, count - 35); this.visibleEnd = count; }
     if (follow) void this.updateComplete.then(() => { const b = this.shadowRoot?.querySelector<HTMLElement>('.body'); if (b) b.scrollTop = b.scrollHeight; });
   }
   private markdown(block: Block, index: number) {
@@ -571,7 +683,8 @@ export class MuxSDKChat extends LitElement {
     const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
     return `${finished === undefined ? 'Working' : 'Worked'} for ${duration}`;
   }
-  private transcript() {
+  private transcriptRows(): TranscriptRow[] {
+    if (this.rowsCache?.blocks === this.blocks) return this.rowsCache.rows;
     const work = new Map<number, Block[]>();
     for (const block of this.blocks) if (block.kind === 'thinking' || block.kind === 'tool') {
       const items = work.get(block.turn) || [];
@@ -579,16 +692,52 @@ export class MuxSDKChat extends LitElement {
       work.set(block.turn, items);
     }
     const shown = new Set<number>();
-    return this.blocks.map(block => {
+    const rows: TranscriptRow[] = [];
+    for (const block of this.blocks) {
       if (block.kind === 'thinking' || block.kind === 'tool') {
-        if (shown.has(block.turn)) return nothing;
+        if (shown.has(block.turn)) continue;
         shown.add(block.turn);
-        return html`<div class="block work"><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
-          if ((event.currentTarget as HTMLDetailsElement).open) this.workExpanded.add(block.turn); else this.workExpanded.delete(block.turn);
-        }}><summary><span>${this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${(work.get(block.turn) || []).map(item => html`<div class="work-item">${this.support(item)}</div>`)}</div></details></div>`;
+        rows.push({ key:`work-${block.turn}`, block, work:work.get(block.turn) });
+      } else {
+        rows.push({ key:`block-${block.key}`, block });
       }
-      return html`<div class="block ${block.kind}">${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
-    });
+    }
+    this.rowsCache = { blocks:this.blocks, rows };
+    return rows;
+  }
+  private rowHeight(row: TranscriptRow) { return this.rowHeights.get(row.key) || (row.work ? 50 : row.block.kind === 'user' ? 75 : 118); }
+  private updateVisibleRows() {
+    const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+    if (!body) return;
+    const rows = this.transcriptRows();
+    const top = Math.max(0, body.scrollTop - 700);
+    const bottom = body.scrollTop + body.clientHeight + 700;
+    let offset = 0, start = 0;
+    while (start < rows.length && offset + this.rowHeight(rows[start]) < top) offset += this.rowHeight(rows[start++]);
+    let end = start;
+    while (end < rows.length && offset < bottom) offset += this.rowHeight(rows[end++]);
+    if (start !== this.visibleStart) this.visibleStart = start;
+    if (end !== this.visibleEnd) this.visibleEnd = end;
+  }
+  private onBodyScroll() {
+    this.updateVisibleRows();
+    const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+    if (body && body.scrollTop < 450 && this.hasOlder) void this.loadOlder();
+  }
+  private transcript() {
+    const rows = this.transcriptRows();
+    const start = Math.min(this.visibleStart, rows.length);
+    const end = Math.min(Math.max(this.visibleEnd, start), rows.length);
+    let before = 0, after = 0;
+    for (let i = 0; i < start; i++) before += this.rowHeight(rows[i]);
+    for (let i = end; i < rows.length; i++) after += this.rowHeight(rows[i]);
+    return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map(row => {
+      const block = row.block;
+      return row.work ? html`<div class="block work" data-row-key=${row.key}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
+        if ((event.currentTarget as HTMLDetailsElement).open) this.workExpanded.add(block.turn); else this.workExpanded.delete(block.turn);
+      }}><summary><span>${this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${row.work.map(item => html`<div class="work-item">${this.support(item)}</div>`)}</div></details></div>`
+        : html`<div class="block ${block.kind}" data-row-key=${row.key}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
+    })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
   private async send() {
     const content = this.draft.trim();
@@ -616,8 +765,8 @@ export class MuxSDKChat extends LitElement {
   }
   override render() { return html`
     <div class="topbar">${this.selectedAgent ? html`<nav class="breadcrumbs" aria-label="Agent lineage"><button @click=${() => { this.selectedAgent=''; this.agentNotice=''; }}>${this.chat?.title || 'Root session'}</button><span>›</span><strong>${this.agents().find(agent => agent.id === this.selectedAgent)?.name || 'Agent'}</strong></nav>` : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>▥</button></div>
-    <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
-      ${this.selectedAgent ? (() => { const agent=this.agents().find(item => item.id === this.selectedAgent); return agent ? html`<div class="agent-chat"><div class="speaker">${agent.name} · ${agent.status}</div>${agent.legs.map(leg => html`<div class="instruction">${leg.task}</div><div class="reply">${leg.reply || agent.progress || 'The delegated agent is working. Its result returns through the root session.'}</div>`)}${!agent.legs.length ? html`<div class="reply">${agent.progress || 'The native harness reported this agent. Its result returns through the root session.'}</div>` : nothing}</div>` : html`<div class="block">Agent unavailable in this session.</div>`; })() : html`${this.agents().length ? html`<section class="agent-list" aria-label="Delegated sub-agents"><h2>Delegated sub-agents</h2>${this.agents().map(agent => html`<button class="agent-link" @click=${() => { this.selectedAgent=agent.id; this.agentNotice=''; }}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</section>` : nothing}${this.blocks.length ? this.transcript() : html`<div class="block">Starting the SDK session…</div>`}`}
+    <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body" @scroll=${this.onBodyScroll}>
+      ${this.selectedAgent ? (() => { const agent=this.agents().find(item => item.id === this.selectedAgent); return agent ? html`<div class="agent-chat"><div class="speaker">${agent.name} · ${agent.status}</div>${agent.legs.map(leg => html`<div class="instruction">${leg.task}</div><div class="reply">${leg.reply || agent.progress || 'The delegated agent is working. Its result returns through the root session.'}</div>`)}${!agent.legs.length ? html`<div class="reply">${agent.progress || 'The native harness reported this agent. Its result returns through the root session.'}</div>` : nothing}</div>` : html`<div class="block">Agent unavailable in this session.</div>`; })() : html`${this.agents().length ? html`<section class="agent-list" aria-label="Delegated sub-agents"><h2>Delegated sub-agents</h2>${this.agents().map(agent => html`<button class="agent-link" @click=${() => { this.selectedAgent=agent.id; this.agentNotice=''; }}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</section>` : nothing}${this.loadingOlder ? html`<div class="block">Loading older messages…</div>` : nothing}${this.blocks.length ? this.transcript() : html`<div class="block">Loading recent messages…</div>`}`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
     </div><div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${(e: InputEvent) => { this.agentDraft=(e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraft.trim()}>Send to root ↗</button></div>` : html`
