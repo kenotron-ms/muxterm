@@ -2192,15 +2192,17 @@ class QuietDisplay:
 
 
 class SDKChatSession:
-    def __init__(self, session_id, cwd, bundle="anchors", provider=""):
+    def __init__(self, session_id, cwd, bundle="anchors", provider="", model="", effort=""):
         self.id, self.cwd = session_id, cwd
         self.bundle, self.provider = bundle or "anchors", provider or ""
+        self.selected_model, self.effort = model or "", effort or ""
         self.session = self.runtime = self.task = self.store = None
         self.active = set()
         self.partial = ""
         self.model = ""
         self.available_providers = []
         self.available_bundles = []
+        self.model_rows = None
         self.closed = False
         self.turn_started = None
         self.first_token_seen = False
@@ -2285,8 +2287,7 @@ class SDKChatSession:
         )})
         providers = cfg.get("providers") or []
         self.available_providers = sorted(set(entry.get("module", "") for entry in providers if entry.get("module")))
-        # A chat runs with one provider. Mounting every configured provider
-        # makes the first turn query unused model catalogs and delays the reply.
+        # A chat runs with one provider. Mounting unused providers delays replies.
         if not self.provider and providers:
             self.provider = providers[0].get("module") or providers[0].get("instance_id") or ""
         selected = [entry for entry in providers if entry.get("module") == self.provider
@@ -2296,6 +2297,13 @@ class SDKChatSession:
         cfg["providers"] = selected
         prepared.mount_plan["providers"] = copy.deepcopy(selected)
         prepared.bundle.providers = copy.deepcopy(selected)
+        if self.selected_model:
+            for entries in (cfg["providers"], prepared.mount_plan["providers"], prepared.bundle.providers):
+                for entry in entries:
+                    entry.setdefault("config", {})["default_model"] = self.selected_model
+                    if self.effort:
+                        entry["config"]["reasoning_effort"] = self.effort
+
         cfg = expand_env_vars(cfg)
         # SDK chats run in this serve process. Pin their MCP subprocess to the
         # binary that spawned this sidecar; PATH may resolve another muxterm.
@@ -2494,7 +2502,9 @@ class SDKChatSession:
             self.turn_started = time.monotonic()
             self.first_token_seen = False
         self.active.add(input_id)
-        frame(self.id, "input.accepted", inputId=input_id, kind=kind, source=source, text=display_content)
+        frame(self.id, "input.accepted", inputId=input_id, kind=kind, source=source, text=display_content,
+              attachments=[{"id": item["id"], "name": item["name"], "kind": item["kind"]}
+                           for item in attachments])
         return {"status": "accepted", "inputId": input_id}
 
     async def close(self):
@@ -2520,7 +2530,8 @@ async def command(cmd):
         if sid not in SDK_CHAT_SESSIONS:
             cwd = cmd.get("cwd")
             if not cwd or not Path(cwd).is_dir(): raise ValueError("Amplifier project folder unavailable")
-            session = SDKChatSession(sid, cwd, cmd.get("bundle") or "anchors", cmd.get("provider") or "")
+            session = SDKChatSession(sid, cwd, cmd.get("bundle") or "anchors", cmd.get("provider") or "",
+                                     cmd.get("model") or "", cmd.get("effort") or "")
             await session.build()
             SDK_CHAT_SESSIONS[sid] = session
         return {"sessionId": sid, "capabilities": CAPS}
@@ -2531,17 +2542,53 @@ async def command(cmd):
         active_provider = session.provider or next(
             (name for name in session.available_providers if name == active_name or name.endswith("-" + active_name)),
             active_name)
+        provider = next(iter((session.session.coordinator.get("providers") or {}).values()), None)
+        active_model = session.model.split("/", 1)[-1]
+        rows = self_rows = session.model_rows
+        if self_rows is None:
+            rows = []
+        if provider is not None and self_rows is None:
+            try:
+                listed = await asyncio.wait_for(provider.list_models(), timeout=12)
+                for item in listed:
+                    capabilities = set(getattr(item, "capabilities", ()) or ())
+                    if "tools" not in capabilities or "streaming" not in capabilities:
+                        continue
+                    model_id = str(item.id)
+                    efforts = []
+                    if active_provider == "provider-anthropic" and hasattr(provider, "_get_capabilities"):
+                        caps = provider._get_capabilities(model_id)
+                        if getattr(caps, "supports_output_config", False):
+                            efforts = list(getattr(caps, "supported_efforts", ()))
+                    elif active_provider == "provider-openai":
+                        if model_id == "gpt-6-astra": efforts = ["low", "medium", "high", "xhigh", "max"]
+                        elif model_id in ("gpt-6-sol", "gpt-6-luna"): efforts = ["low", "medium", "high", "xhigh", "max"]
+                        elif model_id in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"): efforts = ["low", "medium", "high", "xhigh", "max"]
+                        elif model_id.startswith("gpt-5.5-pro"): efforts = ["medium", "high", "xhigh"]
+                    rows.append({"id": model_id, "label": str(item.display_name), "efforts": efforts})
+            except Exception:
+                pass
+            session.model_rows = rows
+        if not any(row["id"] == active_model for row in rows):
+            rows.insert(0, {"id": active_model, "label": active_model, "efforts": []})
         return {"bundle": session.bundle, "provider": active_provider,
-                "model": session.model, "bundles": session.available_bundles,
-                "providers": session.available_providers}
+                "model": active_model, "effort": session.effort, "models": rows,
+                "bundles": session.available_bundles, "providers": session.available_providers}
     if op == "select":
         if session.active: raise RuntimeError("finish the current Amplifier turn before changing settings")
         bundle = cmd.get("bundle") or session.bundle
         provider = cmd.get("provider") or session.provider
         current = await command({"op": "settings", "sessionId": sid})
-        if bundle == session.bundle and provider == current["provider"]:
-            return await command({"op": "settings", "sessionId": sid})
-        replacement = SDKChatSession(sid, session.cwd, bundle, provider)
+        switched = bundle != session.bundle or provider != current["provider"]
+        model = "" if switched else (cmd.get("model") or current["model"])
+        effort = "" if switched else (cmd.get("effort") or "")
+        if not switched and model == current["model"] and effort == current["effort"]:
+            return current
+        if not switched:
+            selected = next((row for row in current["models"] if row["id"] == model), None)
+            if selected is None or (effort and effort not in selected["efforts"]):
+                raise ValueError("unsupported model or effort for the active Amplifier provider")
+        replacement = SDKChatSession(sid, session.cwd, bundle, provider, model, effort)
         try:
             await replacement.build()
         except BaseException:

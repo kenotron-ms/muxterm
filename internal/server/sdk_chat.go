@@ -33,6 +33,8 @@ type sdkChat struct {
 	Harness      string    `json:"harness"`
 	Bundle       string    `json:"bundle,omitempty"`
 	Provider     string    `json:"provider,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Effort       string    `json:"effort,omitempty"`
 	NativeID     string    `json:"nativeId,omitempty"`
 	State        string    `json:"state"`
 	CreatedAt    time.Time `json:"createdAt"`
@@ -46,26 +48,35 @@ type sdkProject struct {
 	Path string `json:"path"`
 }
 type sdkEvent struct {
-	SessionID    string          `json:"sessionId"`
-	Type         string          `json:"type"`
-	NativeID     string          `json:"nativeId,omitempty"`
-	InputID      string          `json:"inputId,omitempty"`
-	InputIDs     []string        `json:"inputIds,omitempty"`
-	GenerationID string          `json:"generationId,omitempty"`
-	Delivery     string          `json:"delivery,omitempty"`
-	Persisted    *bool           `json:"persisted,omitempty"`
-	Kind         string          `json:"kind,omitempty"`
-	Source       string          `json:"source,omitempty"`
-	Text         string          `json:"text,omitempty"`
-	Name         string          `json:"name,omitempty"`
-	Provider     string          `json:"provider,omitempty"`
-	Model        string          `json:"model,omitempty"`
-	ToolID       string          `json:"toolId,omitempty"`
-	Message      string          `json:"message,omitempty"`
-	Raw          json.RawMessage `json:"raw,omitempty"`
-	Failed       bool            `json:"failed,omitempty"`
+
+	SessionID    string                 `json:"sessionId"`
+	Type         string                 `json:"type"`
+	NativeID     string                 `json:"nativeId,omitempty"`
+	InputID      string                 `json:"inputId,omitempty"`
+	InputIDs     []string               `json:"inputIds,omitempty"`
+	GenerationID string                 `json:"generationId,omitempty"`
+	Delivery     string                 `json:"delivery,omitempty"`
+	Persisted    *bool                  `json:"persisted,omitempty"`
+	Kind         string                 `json:"kind,omitempty"`
+	Source       string                 `json:"source,omitempty"`
+	Text         string                 `json:"text,omitempty"`
+	Name         string                 `json:"name,omitempty"`
+	ToolID       string                 `json:"toolId,omitempty"`
+	Message      string                 `json:"message,omitempty"`
+	Model        string                 `json:"model,omitempty"`
+	Provider     string                 `json:"provider,omitempty"`
+	Bundle       string                 `json:"bundle,omitempty"`
+	Raw          json.RawMessage        `json:"raw,omitempty"`
+	Failed       bool                   `json:"failed,omitempty"`
+	Attachments  []sdkDisplayAttachment `json:"attachments,omitempty"`
+}
+type sdkDisplayAttachment struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
 }
 type sdkInputAttachment struct {
+	ID   string `json:"id"`
 	Path string `json:"path"`
 	Name string `json:"name"`
 	Kind string `json:"kind"`
@@ -86,7 +97,7 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 		if err != nil {
 			return nil, fmt.Errorf("attachment %q cannot be read: %w", id, err)
 		}
-		items = append(items, sdkInputAttachment{Path: path, Name: meta.Filename, Kind: meta.Kind})
+		items = append(items, sdkInputAttachment{ID: id, Path: path, Name: meta.Filename, Kind: meta.Kind})
 	}
 	return items, nil
 }
@@ -504,7 +515,7 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider)})
+	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort})
 	return err
 }
 
@@ -514,7 +525,7 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	c := h.chats[id]
 	h.mu.Unlock()
-	if c == nil || c.Harness != "amplifier" {
+	if c == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -525,36 +536,126 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "GET" {
-		result, err := h.call(ctx, "settings", map[string]any{"sessionId": id})
+		operation := "options"
+		if c.Harness == "amplifier" {
+			operation = "settings"
+		}
+		result, err := h.call(ctx, operation, map[string]any{"sessionId": id})
 		if err != nil {
 			http.Error(w, err.Error(), 502)
 			return
 		}
-		writeSDKJSON(w, 200, json.RawMessage(result))
+		var settings map[string]any
+		if err := json.Unmarshal(result, &settings); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if c.Model != "" {
+			settings["model"] = c.Model
+		}
+		if c.Effort != "" {
+			settings["effort"] = c.Effort
+		}
+		writeSDKJSON(w, 200, settings)
 		return
 	}
 	if r.Method != "PATCH" {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	var req struct{ Bundle, Provider string }
-	if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req) != nil ||
-		len(req.Bundle) > 256 || len(req.Provider) > 128 {
-		http.Error(w, "invalid Amplifier settings", 400)
+	var fields map[string]string
+	if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&fields) != nil {
+		http.Error(w, "invalid chat settings", 400)
 		return
 	}
-	result, err := h.call(ctx, "select", map[string]any{"sessionId": id, "bundle": req.Bundle, "provider": req.Provider})
+	var req struct{ Bundle, Provider, Model, Effort string }
+	req.Bundle, req.Provider, req.Model, req.Effort = fields["bundle"], fields["provider"], fields["model"], fields["effort"]
+	if len(req.Bundle) > 256 || len(req.Provider) > 128 || len(req.Model) > 128 || len(req.Effort) > 32 {
+		http.Error(w, "invalid chat settings", 400)
+		return
+	}
+	operation := "options"
+	if c.Harness == "amplifier" {
+		operation = "settings"
+	}
+	available, err := h.call(ctx, operation, map[string]any{"sessionId": id})
+	if err != nil {
+		http.Error(w, err.Error(), 502)
+		return
+	}
+	var current struct {
+		Bundle   string `json:"bundle"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		Effort   string `json:"effort"`
+		Models   []struct {
+			ID      string   `json:"id"`
+			Efforts []string `json:"efforts"`
+		} `json:"models"`
+		Bundles   []string `json:"bundles"`
+		Providers []string `json:"providers"`
+	}
+	if json.Unmarshal(available, &current) != nil {
+		http.Error(w, "invalid harness settings", 502)
+		return
+	}
+	if req.Bundle == "" {
+		req.Bundle = current.Bundle
+	}
+	if req.Provider == "" {
+		req.Provider = current.Provider
+	}
+	if _, ok := fields["model"]; !ok {
+		req.Model = c.Model
+		if req.Model == "" {
+			req.Model = current.Model
+		}
+	}
+	if _, ok := fields["effort"]; !ok {
+		req.Effort = c.Effort
+		if req.Effort == "" {
+			req.Effort = current.Effort
+		}
+	}
+	if c.Harness == "amplifier" {
+		valid := func(values []string, value string) bool {
+			for _, item := range values {
+				if item == value {
+					return true
+				}
+			}
+			return false
+		}
+		if !valid(current.Bundles, req.Bundle) || !valid(current.Providers, req.Provider) {
+			http.Error(w, "unavailable Amplifier bundle or provider", 422)
+			return
+		}
+	}
+	if req.Model != "" && req.Model != current.Model {
+		found := false
+		for _, model := range current.Models {
+			if model.ID == req.Model {
+				found = true
+				break
+			}
+		}
+		if !found && c.Harness != "amplifier" {
+			http.Error(w, "unavailable model", 422)
+			return
+		}
+	}
+	result, err := h.call(ctx, "select", map[string]any{"sessionId": id, "bundle": req.Bundle, "provider": req.Provider, "model": req.Model, "effort": req.Effort})
 	if err != nil {
 		http.Error(w, err.Error(), 422)
 		return
 	}
-	var selected struct{ Bundle, Provider string }
+	var selected struct{ Bundle, Provider, Model, Effort string }
 	if err := json.Unmarshal(result, &selected); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	h.mu.Lock()
-	c.Bundle, c.Provider = selected.Bundle, selected.Provider
+	c.Bundle, c.Provider, c.Model, c.Effort = selected.Bundle, selected.Provider, selected.Model, selected.Effort
 	err = h.saveLocked(c)
 	h.mu.Unlock()
 	if err != nil {
@@ -955,7 +1056,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 502)
 			return
 		}
-		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": req.Content, "attachments": attachments}})
+		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": req.Content, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
 		if err != nil {
 			http.Error(w, err.Error(), 422)
 			return

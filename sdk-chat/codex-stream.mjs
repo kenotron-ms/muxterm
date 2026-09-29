@@ -64,9 +64,27 @@ export class CodexStream {
     const result = await this.request(this.session.nativeId ? 'thread/resume' : 'thread/start',
       this.session.nativeId ? { threadId: this.session.nativeId, ...options } : options);
     this.session.nativeId = result.thread.id;
+    this.session.model ||= result.thread.model || '';
+    this.session.effort ||= result.thread.reasoningEffort || '';
     this.emit(this.session.id, 'session.started', { nativeId: result.thread.id,
       capabilities: { approvals: false, transcript_read: false, interrupt: true,
         live_input: false, attributed_service_input: false, native_steering: true } });
+  }
+
+  async options() {
+    await this.ready;
+    const models = [];
+    let cursor = null;
+    do {
+      const page = await this.request('model/list', { cursor, includeHidden: false, limit: 100 });
+      for (const model of page.data || []) if (!model.hidden) models.push({
+        id: model.model || model.id, label: model.displayName || model.model || model.id,
+        efforts: (model.supportedReasoningEfforts || []).map(option => option.reasoningEffort),
+        defaultEffort: model.defaultReasoningEffort || '',
+      });
+      cursor = page.nextCursor;
+    } while (cursor);
+    return { model: this.session.model || '', effort: this.session.effort || '', models };
   }
 
   async run(input) {
@@ -88,6 +106,8 @@ export class CodexStream {
       for (const item of attachments) if (item.kind === 'image') turnInput.push({ type: 'localImage', path: item.path });
       const result = await this.request('turn/start', { threadId: this.session.nativeId,
         summary: 'detailed',
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.effort ? { effort: input.effort } : {}),
         input: turnInput });
       this.turnId = result.turn.id;
     } catch (error) {
