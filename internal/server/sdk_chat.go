@@ -644,6 +644,17 @@ func (s *Server) handleSDKFolders(w http.ResponseWriter, r *http.Request) {
 	}
 	path = filepath.Clean(path)
 	entries, err := os.ReadDir(path)
+	// A requested folder may be a new project directory. Let the picker browse
+	// its nearest existing parent; the browser keeps the requested chat target.
+	if os.IsNotExist(err) {
+		for parent := filepath.Dir(path); parent != path; parent = filepath.Dir(path) {
+			path = parent
+			entries, err = os.ReadDir(path)
+			if !os.IsNotExist(err) {
+				break
+			}
+		}
+	}
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
