@@ -2434,11 +2434,17 @@ class SDKChatSession:
                       model=str(getattr(provider, "model", None) or
                                 getattr(provider, "default_model", "")))
             return cont
+        async def goal_progress(event, data):
+            frame(self.id, "goal.progress", goalState=str(data.get("state") or ""),
+                  goalReason=str(data.get("reason") or ""),
+                  goalSummary=str(data.get("summary") or ""), raw=data)
+            return cont
         hooks.register("llm:stream_block_delta", delta, name="sdk-chat-delta")
         hooks.register("provider:request", provider_request, name="sdk-chat-provider-request")
         hooks.register("tool:pre", tool_start, name="sdk-chat-tool-start")
         hooks.register("tool:post", tool_end, name="sdk-chat-tool-end")
         hooks.register("tool:error", tool_end, name="sdk-chat-tool-error")
+        hooks.register("orchestrator:goal_progress", goal_progress, name="sdk-chat-goal-progress")
 
     def observe(self, event):
         kind = event.get("type")
@@ -2504,6 +2510,13 @@ class SDKChatSession:
             raise ValueError("service input requires a distinct non-authorizing source")
         if kind == "steer" and source not in ("user", "browser"):
             raise ValueError("steer input requires a human source")
+        goal = value.get("goal") or ""
+        if goal:
+            if kind != "user" or self.active or self.session.coordinator.session_state.get("goal"):
+                raise ValueError("goal requires a new idle user turn")
+            self.session.coordinator.session_state["goal"] = {
+                "condition": goal, "turns_used": 0, "cap": None,
+            }
         await self.runtime.submit(Input(kind=kind, text=content,
                                         source=source if kind == "service" else "user", id=input_id,
                                         attachments=tuple(images)))
@@ -2533,6 +2546,8 @@ async def command(cmd):
     if op == "capabilities": return {"capabilities": CAPS}
     if op in ("start", "resume"):
         if cmd.get("harness") != "amplifier": raise ValueError("unsupported harness")
+        if cmd.get("approval") not in ("", "never"):
+            raise ValueError("amplifier has no chat approval translation")
         previous = SDK_CHAT_SESSIONS.get(sid)
         if previous and previous.closed and previous.task and previous.task.done():
             del SDK_CHAT_SESSIONS[sid]

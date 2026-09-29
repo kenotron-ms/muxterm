@@ -33,6 +33,11 @@ type sdkChat struct {
 	TitleSource  string    `json:"titleSource,omitempty"`
 	UserTurns    int       `json:"userTurns,omitempty"`
 	Harness      string    `json:"harness"`
+	Approval     string    `json:"approval,omitempty"`
+	Goal         string    `json:"goal,omitempty"`
+	GoalState    string    `json:"goalState,omitempty"`
+	GoalReason   string    `json:"goalReason,omitempty"`
+	GoalSummary  string    `json:"goalSummary,omitempty"`
 	Bundle       string    `json:"bundle,omitempty"`
 	Provider     string    `json:"provider,omitempty"`
 	Model        string    `json:"model,omitempty"`
@@ -50,7 +55,6 @@ type sdkProject struct {
 	Path string `json:"path"`
 }
 type sdkEvent struct {
-
 	SessionID    string                 `json:"sessionId"`
 	Type         string                 `json:"type"`
 	NativeID     string                 `json:"nativeId,omitempty"`
@@ -69,6 +73,9 @@ type sdkEvent struct {
 	Provider     string                 `json:"provider,omitempty"`
 	Bundle       string                 `json:"bundle,omitempty"`
 	Raw          json.RawMessage        `json:"raw,omitempty"`
+	GoalState    string                 `json:"goalState,omitempty"`
+	GoalReason   string                 `json:"goalReason,omitempty"`
+	GoalSummary  string                 `json:"goalSummary,omitempty"`
 	Failed       bool                   `json:"failed,omitempty"`
 	Attachments  []sdkDisplayAttachment `json:"attachments,omitempty"`
 }
@@ -236,6 +243,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	case "turn.completed":
 		c.State = "ready"
 		c.LastActivity = "Turn completed"
+	case "goal.progress":
+		c.GoalState, c.GoalReason, c.GoalSummary = event.GoalState, event.GoalReason, event.GoalSummary
+		c.LastActivity = "Goal: " + event.GoalState
 	case "turn.cancelled":
 		c.State = "ready"
 		c.LastActivity = "Turn stopped by user"
@@ -545,7 +555,7 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort})
+	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": c.Approval})
 	return err
 }
 
@@ -852,7 +862,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, rows)
 		return
 	}
-	var req struct{ WorkspaceID, ProjectPath, Harness, Provider, Prompt string }
+	var req struct{ WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval string }
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
@@ -861,9 +871,27 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		http.Error(w, "prompt required", 400)
+	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" {
+		http.Error(w, "prompt or goal required", 400)
 		return
+	}
+	if req.Goal != "" && req.Harness != "amplifier" {
+		http.Error(w, "goal requires amplifier", 400)
+		return
+	}
+	if req.Approval != "" && req.Approval != "prompt" && req.Approval != "never" {
+		http.Error(w, "approval must be prompt or never", 400)
+		return
+	}
+	if req.Approval != "" && req.Harness == "amplifier" {
+		http.Error(w, "amplifier has no chat approval translation", 400)
+		return
+	}
+	if req.Approval == "" {
+		req.Approval = "never"
+	}
+	if req.Goal != "" {
+		req.Prompt = req.Goal
 	}
 	// Older clients omit provider. Resolve that omission to the harness's
 	// actual default before persisting the chat or starting its SDK session.
@@ -918,7 +946,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
-	c := &sdkChat{ID: sdkID(), WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, State: "starting", CreatedAt: time.Now().UTC()}
+	c := &sdkChat{ID: sdkID(), WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	h.chats[c.ID] = c
 	err := h.saveLocked(c)
@@ -929,13 +957,13 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "provider": amplifierProviderModule(c.Harness, c.Provider)}); err != nil {
+	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "provider": amplifierProviderModule(c.Harness, c.Provider), "approval": c.Approval}); err != nil {
 		h.appendEvent(sdkEvent{SessionID: c.ID, Type: "error", Message: err.Error()})
 		http.Error(w, fmt.Sprintf("chat %s could not start: %v", c.ID, err), 502)
 		return
 	}
 	openingID := sdkID()
-	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": req.Prompt}})
+	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": req.Prompt, "goal": req.Goal}})
 	if err == nil {
 		var ack struct{ Status, InputID string }
 		err = json.Unmarshal(result, &ack)

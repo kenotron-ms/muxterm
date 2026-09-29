@@ -5,7 +5,7 @@ bundle:
   description: |
     muxterm's chief-of-staff bundle. A dispatcher, not a coding agent: the
     muxterm MCP tools plus read_file, glob, grep, web_search, web_fetch and
-    todo, and nothing that can edit, run, or delegate outside a visible pane.
+    todo, and nothing that can edit, run, or delegate outside a visible Chat or deliberate terminal pane.
 
     Loaded by the chief-of-staff sidecar (internal/cos/sidecar/main.py). The
     sidecar shipped on --bundle anchors until v0.20.0, which gave it bash,

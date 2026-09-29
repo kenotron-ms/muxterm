@@ -14,10 +14,10 @@ bundle:
 # `session.muxterm_cos.tools` at the bottom before adding anything here.
 # ---------------------------------------------------------------------------
 tools:
-  # The muxterm tools. This is the CoS's actual job: spawn_lane starts work,
-  # fleet_status is how it knows what is happening, send_input/session_send
-  # relay the human's answers into a lane, lane_transcript reads what a lane
-  # is saying.
+  # The muxterm tools. This is the CoS's actual job: spawn_chat starts work in project Chats,
+  # read_chat_session shows its output and goal verdict, and spawn_lane
+  # remains for deliberate terminal work. fleet_status and lane_transcript
+  # inspect those terminal lanes.
   #
   # `mcp_muxterm_*` below is a PREFIX, so a muxterm tool added later is granted
   # mechanically, without an edit here. That is deliberate (see the trailing `*`
@@ -153,7 +153,7 @@ hooks:
 #   load_skill    skills write files and assume a working directory: goalify
 #                 writes .amplifier/goals/<slug>.md as step 1 of its own
 #                 procedure. The CoS has no business writing there, and does
-#                 not need to -- spawn_lane takes `goal` as a STRING, so no
+#                 not need to -- spawn_chat takes `goal` as a STRING, so no
 #                 file is ever in the loop. The discipline that skill encodes
 #                 ships as context instead (cos-stop-conditions.md).
 #   mode          meaningless for an agent with no editing tools to gate, and
