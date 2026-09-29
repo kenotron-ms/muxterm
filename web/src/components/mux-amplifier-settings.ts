@@ -79,7 +79,7 @@ export class MuxAmplifierSettings extends LitElement {
         <label>Provider<select .value=${this.provider} @change=${(e: Event) => { this.provider = (e.target as HTMLSelectElement).value; this.pending(true); }}>
           ${this.settings.providers.map(v => html`<option value=${v} ?selected=${this.provider === v}>${providerLabel(v)}</option>`)}
         </select></label>
-        <div class="note">${this.settings.model}</div>
+        <div class="note">Current model: ${this.settings.model}</div>
         <button ?disabled=${this.loading || this.turnBusy} @click=${() => void this.save()}>Apply to chat</button>
         ${this.bundle !== this.settings.bundle || this.provider !== this.settings.provider ? html`<div class="note">Apply this selection before sending.</div>` : nothing}
         ${this.turnBusy ? html`<div class="note">Finish this turn before switching.</div>` : nothing}
