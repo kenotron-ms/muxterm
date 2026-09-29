@@ -2201,6 +2201,7 @@ class SDKChatSession:
         self.closed = False
         self.turn_started = None
         self.first_token_seen = False
+        self.cancel_requested = False
 
     @staticmethod
     def image_content(command, coordinator):
@@ -2401,9 +2402,10 @@ class SDKChatSession:
         except Exception as exc:
             frame(self.id, "error", message=f"Amplifier transcript persistence failed: {exc}")
         finished = event.get("type") == "generation.finished"
-        frame(self.id, "generation.finished" if finished else "error", inputIds=ids,
-              generationId=event.get("generation_id"), persisted=persisted,
-              message=event.get("error_type", ""))
+        if not (self.cancel_requested and not finished):
+            frame(self.id, "generation.finished" if finished else "error", inputIds=ids,
+                  generationId=event.get("generation_id"), persisted=persisted,
+                  message=event.get("error_type", ""))
         if finished:
             frame(self.id, "turn.completed", inputIds=ids, generationId=event.get("generation_id"), persisted=persisted)
         self.active.difference_update(ids)
@@ -2449,8 +2451,12 @@ class SDKChatSession:
         self.closed = True
         if self.task and not self.task.done():
             from amplifier_module_loop_live.runtime import Input
-            await self.runtime.submit(Input(kind="stop", id=f"close-{self.id}"))
-            await asyncio.wait_for(self.task, timeout=5)
+            await self.runtime.submit(Input(kind="stop", target="cancel", id=f"close-{self.id}"))
+            try:
+                await asyncio.wait_for(self.task, timeout=5)
+            except asyncio.TimeoutError:
+                self.task.cancel()
+                await asyncio.gather(self.task, return_exceptions=True)
 
 
 async def command(cmd):
@@ -2458,6 +2464,9 @@ async def command(cmd):
     if op == "capabilities": return {"capabilities": CAPS}
     if op in ("start", "resume"):
         if cmd.get("harness") != "amplifier": raise ValueError("unsupported harness")
+        previous = SDK_CHAT_SESSIONS.get(sid)
+        if previous and previous.closed and previous.task and previous.task.done():
+            del SDK_CHAT_SESSIONS[sid]
         if sid not in SDK_CHAT_SESSIONS:
             cwd = cmd.get("cwd")
             if not cwd or not Path(cwd).is_dir(): raise ValueError("Amplifier project folder unavailable")
@@ -2494,7 +2503,13 @@ async def command(cmd):
         return await command({"op": "settings", "sessionId": sid})
     if op == "send": return await session.send(cmd.get("input") or {})
     if op == "interrupt":
-        return await session.send({"kind": "stop", "source": "browser", "id": f"interrupt-{sid}"})
+        if not session.active: raise ValueError("No active Amplifier turn to stop")
+        stopped_ids = list(session.active)
+        session.cancel_requested = True
+        await session.close()
+        frame(sid, "turn.cancelled", inputIds=stopped_ids, message="Stopped by user")
+        session.active.clear()
+        return {"status": "accepted"}
     if op == "events": return {"status": "streaming"}
     if op == "close":
         await session.close(); del SDK_CHAT_SESSIONS[sid]; return {"status": "closed"}

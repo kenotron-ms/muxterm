@@ -206,6 +206,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	case "turn.completed":
 		c.State = "ready"
 		c.LastActivity = "Turn completed"
+	case "turn.cancelled":
+		c.State = "ready"
+		c.LastActivity = "Turn stopped by user"
 	case "error":
 		c.State = "failed"
 		c.LastActivity = "Error: " + sdkPreview(event.Message, 160)
@@ -656,6 +659,7 @@ func (s *Server) handleSDKFolders(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSDKJSON(w, 200, map[string]any{"path": path, "base": base, "parent": filepath.Dir(path), "folders": folders})
 }
+
 // Amplifier selects provider modules by module ID. New chats store short
 // provider names; composer changes persist the module ID returned by Amplifier.
 func amplifierProviderModule(harness, provider string) string {
@@ -793,7 +797,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unsupported: attributed service input", 422)
 			return
 		}
-		if req.Kind != "user" && req.Kind != "service" && !(c.Harness == "amplifier" && (req.Kind == "steer" || req.Kind == "cancel_job" || req.Kind == "stop")) {
+		if req.Kind != "user" && req.Kind != "service" && req.Kind != "steer" && !(c.Harness == "amplifier" && (req.Kind == "cancel_job" || req.Kind == "stop")) {
 			http.Error(w, "unsupported input kind", 422)
 			return
 		}
@@ -803,6 +807,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(req.Attachments) > 0 && req.Kind != "user" {
 			http.Error(w, "attachments require a user message", 422)
+			return
+		}
+		if req.Kind == "steer" && c.State != "working" {
+			http.Error(w, "No active turn to steer", 409)
 			return
 		}
 		attachments, err := s.resolveSDKAttachments(req.Attachments)
@@ -830,6 +838,36 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 	}
 }
+func (s *Server) handleSDKChatInterrupt(w http.ResponseWriter, r *http.Request) {
+	h := s.sdkChats
+	id := r.PathValue("id")
+	h.mu.Lock()
+	c := h.chats[id]
+	if c == nil {
+		h.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	chat := *c
+	h.mu.Unlock()
+	if chat.State != "working" {
+		http.Error(w, "No active turn to stop", 409)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := h.resume(ctx, &chat); err != nil {
+		http.Error(w, err.Error(), 502)
+		return
+	}
+	result, err := h.call(ctx, "interrupt", map[string]any{"sessionId": id})
+	if err != nil {
+		http.Error(w, err.Error(), 502)
+		return
+	}
+	writeSDKJSON(w, 202, json.RawMessage(result))
+}
+
 func (s *Server) handleSDKChatEvents(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	id := r.PathValue("id")

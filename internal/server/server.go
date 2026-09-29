@@ -391,6 +391,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("POST /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/interrupt", protect(http.HandlerFunc(s.handleSDKChatInterrupt)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/events", protect(http.HandlerFunc(s.handleSDKChatEvents)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/control-send", protect(http.HandlerFunc(s.handleSDKControlSend)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/control-history", protect(http.HandlerFunc(s.handleSDKControlHistory)))

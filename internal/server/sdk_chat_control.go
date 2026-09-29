@@ -134,7 +134,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 	kind := "user"
-	if chat.Harness == "amplifier" && chat.State == "working" {
+	if chat.State == "working" {
 		kind = "steer"
 	}
 	result, err := h.call(ctx, "send", map[string]any{"sessionId": id,
@@ -183,7 +183,7 @@ func (s *Server) handleSDKControlHistory(w http.ResponseWriter, r *http.Request)
 	events := make([]sdkEvent, 0, len(lines))
 	for _, line := range lines {
 		var event sdkEvent
-		if json.Unmarshal([]byte(line), &event) == nil && (event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "assistant.delta" || event.Type == "tool.started" || event.Type == "tool.completed" || event.Type == "turn.completed" || event.Type == "error" || event.Type == "session.uncertain") {
+		if json.Unmarshal([]byte(line), &event) == nil && (event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "assistant.delta" || event.Type == "tool.started" || event.Type == "tool.completed" || event.Type == "turn.continued" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain") {
 			events = append(events, event)
 		}
 	}
