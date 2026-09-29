@@ -425,7 +425,7 @@ func (s *hookReportStore) projectAll() {
 	changed := false
 	for alias, record := range reg.Sessions {
 		wasTerminal := sessionStateIsTerminal(record.Row.State)
-		if !wasTerminal && !hookRecordProcessLive(record) {
+		if !wasTerminal && !hookRecordProcessVerifiedLive(record) {
 			record.Row = endedSessionRow(record.Row)
 			reg.Sessions[alias] = record
 			changed = true
@@ -450,6 +450,14 @@ func hookRecordProcessLive(record sessionRecord) bool {
 	}
 	start, ok := processStartTime(record.PID)
 	return !ok || start == record.PIDStart
+}
+
+func hookRecordProcessVerifiedLive(record sessionRecord) bool {
+	if record.PID <= 0 || record.PIDStart == 0 || !processLive(record.PID) {
+		return false
+	}
+	start, ok := processStartTime(record.PID)
+	return ok && start == record.PIDStart
 }
 
 // pruneDeadProjections keeps the durable hook registry available for managed

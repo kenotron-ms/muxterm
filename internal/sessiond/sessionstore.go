@@ -175,6 +175,14 @@ func snapshotPIDMatches(snap sessionSnapshot) bool {
 	return start == snap.PIDStart
 }
 
+func snapshotPIDVerifiedLive(snap sessionSnapshot) bool {
+	if snap.PID <= 0 || snap.PIDStart == 0 || !processLive(snap.PID) {
+		return false
+	}
+	start, ok := processStartTime(snap.PID)
+	return ok && start == snap.PIDStart
+}
+
 // sessionStore holds the change gate for session-state pushes.
 //
 // It deliberately does NOT cache the snapshots themselves. The spool directory
@@ -355,9 +363,10 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 		}
 
 		if processLive(snap.PID) {
-			if !snapshotPIDMatches(snap) {
-				// This PID now belongs to someone else. Keep the history, but
-				// never present it as current work or attach it to that process.
+			if !snapshotPIDVerifiedLive(snap) {
+				// A live PID without a matching start time cannot establish
+				// that this session is still running. Keep the history without
+				// claiming work or attaching it to that process.
 				rows = append(rows, endedSessionRow(snap.SessionState))
 				continue
 			}
