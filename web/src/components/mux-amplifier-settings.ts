@@ -5,6 +5,7 @@ import { apiPath } from '../lib/base-path.js';
 type Settings = { bundle: string; provider: string; model: string; bundles: string[]; providers: string[] };
 const providerLabel = (provider: string): string =>
   provider === 'provider-anthropic' ? 'Anthropic' : provider === 'provider-openai' ? 'OpenAI' : provider;
+const primaryProviders = ['provider-anthropic', 'provider-openai'];
 
 @customElement('mux-amplifier-settings')
 export class MuxAmplifierSettings extends LitElement {
@@ -87,7 +88,10 @@ export class MuxAmplifierSettings extends LitElement {
           ${this.settings.bundles.map(v => html`<option value=${v} ?selected=${this.bundle === v}>${v}</option>`)}
         </select></label>
         <label>Provider<select .value=${this.provider} @change=${(e: Event) => { this.provider = (e.target as HTMLSelectElement).value; this.pending(true); }}>
-          ${this.settings.providers.map(v => html`<option value=${v} ?selected=${this.provider === v}>${providerLabel(v)}</option>`)}
+          ${[...new Set([...primaryProviders, ...this.settings.providers])].map(v => {
+            const available = this.settings!.providers.includes(v);
+            return html`<option value=${v} ?selected=${this.provider === v} ?disabled=${!available}>${providerLabel(v)}${available ? '' : ' — unavailable for this bundle'}</option>`;
+          })}
         </select></label>
         <div class="note">Current model: ${this.settings.model}</div>
         <button ?disabled=${this.loading || this.turnBusy} @click=${() => void this.save()}>Apply to chat</button>
