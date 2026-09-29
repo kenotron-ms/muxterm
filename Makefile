@@ -54,7 +54,8 @@ XDG_RUNTIME_DIR="$${TMPDIR:-/tmp}"; \
 XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR%/}/muxterm-$(1)"; \
 XDG_DATA_HOME="$$XDG_RUNTIME_DIR/data"; \
 MUXTERM_COS_SESSION_ID="$(2)"; \
-export XDG_RUNTIME_DIR XDG_DATA_HOME MUXTERM_COS_SESSION_ID; \
+MUXTERM_DEV_INSTANCE=1; \
+export XDG_RUNTIME_DIR XDG_DATA_HOME MUXTERM_COS_SESSION_ID MUXTERM_DEV_INSTANCE; \
 case "$$XDG_RUNTIME_DIR" in \
   /run/user/*|"$$HOME"/.local/share*) \
     echo "refusing: dev isolation resolved to $$XDG_RUNTIME_DIR, which looks like production state"; \
