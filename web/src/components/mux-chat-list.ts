@@ -234,7 +234,7 @@ export class MuxChatWorkspace extends LitElement {
 @customElement('mux-chat-list')
 export class MuxChatList extends LitElement {
   @state() private version = 0;
-  @state() private selectedSession = '';
+  @property() selectedSession = '';
   private unsub?: () => void;
   private readonly onChatOpen = (event: Event) => {
     const id = (event as CustomEvent<{ sessionId: string }>).detail?.sessionId;
@@ -251,12 +251,8 @@ export class MuxChatList extends LitElement {
   `;
   override connectedCallback() {
     super.connectedCallback();
-    this.selectedSession = (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? '';
     this.addEventListener('chat-open', this.onChatOpen);
-    this.unsub=sdkChats.subscribe(() => {
-      this.selectedSession = (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? this.selectedSession;
-      this.version++;
-    });
+    this.unsub=sdkChats.subscribe(() => this.version++);
     void sdkChats.refresh();
   }
   override disconnectedCallback() { this.removeEventListener('chat-open', this.onChatOpen); this.unsub?.(); super.disconnectedCallback(); }

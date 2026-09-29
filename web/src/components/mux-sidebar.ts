@@ -1443,6 +1443,7 @@ export class MuxSidebar extends LitElement {
 
   /** Key chord shown on the Start card, e.g. "ctrl+`". */
   @property({ type: String }) homeKey = '';
+  @property({ type: String }) selectedSDKChat = '';
 
   /**
    * Render as the narrow-mode DRAWER rather than as the desktop column.
@@ -2831,7 +2832,7 @@ export class MuxSidebar extends LitElement {
         <span class="new-chat-action-mark">＋</span><span>New Chat</span>
       </button>
       <div class="tab-content">
-        <mux-chat-list></mux-chat-list>
+        <mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list>
         <div class="terminal-heading">Terminals</div>
         ${this._renderWorkspaces()}
       </div>
