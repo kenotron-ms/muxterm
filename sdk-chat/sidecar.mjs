@@ -2,7 +2,7 @@
 import net from 'node:net';
 import { unlink } from 'node:fs/promises';
 import { CodexStream } from './codex-stream.mjs';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 
 const socketPath = process.argv[2];
 if (!socketPath) throw new Error('Unix socket path required');
@@ -29,6 +29,16 @@ function inputMessage(input) {
   return { type: 'user', message: { role: 'user', content: attachmentPrompt(input) }, parent_tool_use_id: null,
     origin: input.kind === 'service' ? { kind: 'task-notification', subkind: input.source || 'muxterm' } : { kind: 'human' },
     uuid: input.id, ...(input.kind === 'service' ? { priority: 'now', client_composed: true } : {}) };
+}
+async function suggestClaudeTitle(inputs, cwd) {
+  const prompt = 'Give this conversation a specific, sentence-case sidebar title of 3–5 words, at most 28 characters. Use a concrete action and object. Describe the actual task or purpose, not a greeting or the first line. Output the title only.\n\nHuman messages, oldest first:\n' +
+    inputs.map(input => `- ${input}`).join('\n');
+  const titleQuery = query({ prompt, options: { cwd, tools: [], maxTurns: 1, persistSession: false } });
+  let answer = '';
+  for await (const msg of titleQuery) {
+    if (msg.type === 'assistant') answer = (msg.message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('');
+  }
+  return answer.trim();
 }
 function queue(s, input) {
   s.inputs.push(inputMessage(input));
@@ -147,6 +157,25 @@ async function command(cmd) {
     }
     s.model = model; s.effort = effort;
     return { ...options, model, effort };
+  }
+  if (op === 'title') {
+    if (s.harness === 'codex') {
+      s.codex ||= new CodexStream(s, emit);
+      return s.codex.title(cmd.mode, cmd.name);
+    }
+    if (!s.nativeId) throw new Error('Claude native session ID unavailable');
+    if (cmd.mode === 'suggest') return { name: await suggestClaudeTitle(cmd.inputs || [], s.cwd) };
+    if (cmd.mode === 'manual') await renameSession(s.nativeId, cmd.name, { dir: s.cwd });
+    if (cmd.mode === 'generated') {
+      const existing = await getSessionInfo(s.nativeId, { dir: s.cwd });
+      if (existing?.customTitle) return { name: existing.customTitle, source: 'manual' };
+      await renameSession(s.nativeId, cmd.name, { dir: s.cwd });
+      return { name: cmd.name, source: 'generated' };
+    }
+    const info = await getSessionInfo(s.nativeId, { dir: s.cwd });
+    return { name: info?.customTitle || info?.summary || '',
+      source: info?.customTitle ? 'manual' : info?.summary && info.summary !== info.firstPrompt ? 'native' : '',
+      firstPrompt: info?.firstPrompt || '' };
   }
   if (op === 'send') {
     if (!input?.id || (!input?.content && !input?.attachments?.length) || !['user', 'service', 'steer'].includes(input.kind)) throw new Error('Invalid input');

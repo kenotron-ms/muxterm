@@ -13,6 +13,8 @@ export class MuxChatWorkspace extends LitElement {
   @state() private open = true;
   @state() private menuOpen = false;
   @state() private error = '';
+  @state() private renamingId = '';
+  @state() private renameDraft = '';
 
   private readonly closeMenuOnOutsidePointer = (event: PointerEvent) => {
     if (this.menuOpen && !event.composedPath().includes(this)) this.menuOpen = false;
@@ -50,12 +52,18 @@ export class MuxChatWorkspace extends LitElement {
     .menu button { width:100%; padding:8px; text-align:left; border-radius:5px; }
     .menu button:hover { background:rgba(255,255,255,.09); }
     .chats { margin:0 0 6px 24px; }
-    .chat { width:100%; min-height:31px; padding:5px 8px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:6px; }
+    .chat-row { display:flex; align-items:center; border-radius:6px; }
+    .chat-row:hover { background:rgba(255,255,255,.07); }
+    .chat { flex:1; min-width:0; min-height:31px; padding:5px 8px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:6px; }
     .chat[selected] { background:rgba(122,162,247,.16); }
     .title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .harness { color:var(--chrome-text-dim,#9299a5); font-size:10px; }
     .status { width:5px; height:5px; border-radius:50%; background:#697386; flex:none; }
     .status.working { background:#7dcba1; }
+    .rename-chat { flex:none; opacity:0; padding:4px 7px; border-radius:5px; }
+    .chat-row:hover .rename-chat,.rename-chat:focus-visible { opacity:1; }
+    .rename-chat:hover { background:rgba(255,255,255,.1); }
+    .rename-input { width:100%; min-width:0; border:1px solid #8aa9eb; border-radius:4px; padding:3px 5px; background:var(--chrome-bar,#252b38); color:inherit; font:inherit; }
     .error { color:#e6a5a5; padding:5px; }
   `;
 
@@ -63,6 +71,14 @@ export class MuxChatWorkspace extends LitElement {
     this.menuOpen = false;
     if (!this.model.project) return;
     try { await sdkChats.removeProject(this.model.id); }
+    catch (error) { this.error = String(error); }
+  }
+
+  private async saveRename() {
+    const id = this.renamingId;
+    const title = this.renameDraft.trim();
+    if (!id || !title) return;
+    try { await sdkChats.rename(id, title); this.renamingId = ''; this.error = ''; }
     catch (error) { this.error = String(error); }
   }
 
@@ -79,9 +95,12 @@ export class MuxChatWorkspace extends LitElement {
       </div>
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       ${this.open ? html`<div class="chats">${repeat(row.chats, chat => chat.id, chat => html`
-        <button class="chat" ?selected=${this.selectedSession === chat.id} title=${chat.title} @click=${() => this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:chat.id}, bubbles:true, composed:true }))}>
-          <span class="status ${chat.state}" title=${chat.state}></span><span class="title">${chat.title}</span><span class="harness">${harnessLabel(chat.harness)}</span>
-        </button>`)}
+        <div class="chat-row">
+          ${this.renamingId === chat.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e: Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="rename-chat" style="opacity:1" aria-label="Save chat name" @click=${() => void this.saveRename()}>✓</button>` : html`
+            <button class="chat" ?selected=${this.selectedSession === chat.id} title=${chat.title} @click=${() => this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:chat.id}, bubbles:true, composed:true }))}>
+              <span class="status ${chat.state}" title=${chat.state}></span><span class="title">${chat.title}</span><span class="harness">${harnessLabel(chat.harness)}</span>
+            </button><button class="rename-chat" aria-label=${`Rename ${chat.title}`} title="Rename chat" @click=${() => { this.renamingId = chat.id; this.renameDraft = chat.title; }}>✎</button>`}
+        </div>`)}
       </div>` : nothing}
     `;
   }

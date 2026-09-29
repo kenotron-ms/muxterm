@@ -30,6 +30,8 @@ type sdkChat struct {
 	WorkspaceID  string    `json:"workspaceId,omitempty"`
 	ProjectPath  string    `json:"projectPath"`
 	Title        string    `json:"title"`
+	TitleSource  string    `json:"titleSource,omitempty"`
+	UserTurns    int       `json:"userTurns,omitempty"`
 	Harness      string    `json:"harness"`
 	Bundle       string    `json:"bundle,omitempty"`
 	Provider     string    `json:"provider,omitempty"`
@@ -103,19 +105,22 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 }
 
 type sdkChatHost struct {
-	mu       sync.Mutex
-	dir      string
-	socket   string
-	process  *exec.Cmd
-	done     chan struct{}
-	running  bool
-	cosRelay *cosRelay
-	ampSup   *cos.Supervisor
-	ampOnce  sync.Once
-	ampErr   error
-	chats    map[string]*sdkChat
-	projects map[string]*sdkProject
-	streams  map[string]map[chan sdkEvent]struct{}
+	mu          sync.Mutex
+	nameLocks   map[string]*sync.Mutex
+	dir         string
+	socket      string
+	process     *exec.Cmd
+	done        chan struct{}
+	running     bool
+	cosRelay    *cosRelay
+	ampSup      *cos.Supervisor
+	ampOnce     sync.Once
+	ampErr      error
+	chats       map[string]*sdkChat
+	projects    map[string]*sdkProject
+	streams     map[string]map[chan sdkEvent]struct{}
+	nameStreams map[chan string]struct{}
+	naming      map[string]bool
 }
 
 func sdkDataDir() string {
@@ -127,7 +132,7 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}}
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}}
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	entries, _ := os.ReadDir(h.dir)
 	// A catalog is authoritative once written. A removed project must stay
@@ -172,6 +177,14 @@ func newSDKChatHost() *sdkChatHost {
 	return h
 }
 func sdkID() string { var b [16]byte; _, _ = rand.Read(b[:]); return hex.EncodeToString(b[:]) }
+func (h *sdkChatHost) nameLock(id string) *sync.Mutex {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.nameLocks[id] == nil {
+		h.nameLocks[id] = &sync.Mutex{}
+	}
+	return h.nameLocks[id]
+}
 func (h *sdkChatHost) saveLocked(c *sdkChat) error {
 	if err := os.MkdirAll(h.dir, 0700); err != nil {
 		return err
@@ -213,6 +226,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.State = "working"
 		c.LastActivity = "Working on: " + sdkPreview(event.Text, 160)
 		c.LastOutput = ""
+		if event.Kind == "user" {
+			c.UserTurns++
+		}
 	case "tool.started":
 		c.LastActivity = "Running tool: " + event.Name
 	case "assistant.delta":
@@ -245,6 +261,20 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			close(ch)
 			delete(h.streams[event.SessionID], ch)
 		}
+	}
+	if event.Type == "session.renamed" {
+		for ch := range h.nameStreams {
+			select {
+			case ch <- event.SessionID:
+			default:
+				close(ch)
+				delete(h.nameStreams, ch)
+			}
+		}
+	}
+	if event.Type == "turn.completed" && c.UserTurns >= 2 && (c.TitleSource == "" || c.TitleSource == "opening") && !h.naming[c.ID] {
+		h.naming[c.ID] = true
+		go h.nameAfterTurns(c.ID)
 	}
 	h.mu.Unlock()
 }
@@ -888,7 +918,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
-	c := &sdkChat{ID: sdkID(), WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, Title: title, Harness: req.Harness, Provider: req.Provider, State: "starting", CreatedAt: time.Now().UTC()}
+	c := &sdkChat{ID: sdkID(), WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	h.chats[c.ID] = c
 	err := h.saveLocked(c)
@@ -1003,6 +1033,40 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		writeSDKJSON(w, 200, c)
+	case "PATCH":
+		var req struct {
+			Title string `json:"title"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req) != nil ||
+			strings.TrimSpace(req.Title) == "" || len([]rune(req.Title)) > 80 {
+			http.Error(w, "title must be 1-80 characters", 400)
+			return
+		}
+		name := strings.TrimSpace(req.Title)
+		nameLock := h.nameLock(id)
+		nameLock.Lock()
+		defer nameLock.Unlock()
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+		defer cancel()
+		if err := h.resume(ctx, c); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		if _, err := h.call(ctx, "title", map[string]any{"sessionId": id, "mode": "manual", "name": name}); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		h.mu.Lock()
+		c.Title, c.TitleSource = name, "manual"
+		err := h.saveLocked(c)
+		updated := *c
+		h.mu.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		h.appendEvent(sdkEvent{SessionID: id, Type: "session.renamed", Name: name})
+		writeSDKJSON(w, 200, updated)
 	case "POST":
 		var req struct {
 			Kind, Source, ID, Content string
@@ -1094,6 +1158,42 @@ func (s *Server) handleSDKChatInterrupt(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeSDKJSON(w, 202, json.RawMessage(result))
+}
+
+func (s *Server) handleSDKChatNameEvents(w http.ResponseWriter, r *http.Request) {
+	h := s.sdkChats
+	ch := make(chan string, 32)
+	h.mu.Lock()
+	h.nameStreams[ch] = struct{}{}
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		if _, ok := h.nameStreams[ch]; ok {
+			delete(h.nameStreams, ch)
+			close(ch)
+		}
+		h.mu.Unlock()
+	}()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	fmt.Fprint(w, ": connected\n\n")
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	for {
+		select {
+		case id, ok := <-ch:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]string{"id": id}))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (s *Server) handleSDKChatEvents(w http.ResponseWriter, r *http.Request) {

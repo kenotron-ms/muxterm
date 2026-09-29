@@ -1,0 +1,211 @@
+package server
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+	"unicode"
+)
+
+// A name is chosen once, after two accepted human turns. Claude's native AI
+// title is preferred when present. SDK sessions without one use a separate
+// title turn (Claude's SDK for Claude; ephemeral Codex for Codex/Amplifier),
+// then write the result through the harness's native naming surface.
+func (h *sdkChatHost) nameAfterTurns(id string) {
+	defer func() { h.mu.Lock(); delete(h.naming, id); h.mu.Unlock() }()
+	nameLock := h.nameLock(id)
+	nameLock.Lock()
+	defer nameLock.Unlock()
+	h.mu.Lock()
+	c := h.chats[id]
+	if c == nil || (c.TitleSource != "" && c.TitleSource != "opening") {
+		h.mu.Unlock()
+		return
+	}
+	chat := *c
+	h.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	defer cancel()
+	if err := h.resume(ctx, &chat); err != nil {
+		return
+	}
+	raw, err := h.call(ctx, "title", map[string]any{"sessionId": id, "mode": "read"})
+	if err != nil {
+		return
+	}
+	var native struct{ Name, Source, FirstPrompt string }
+	if json.Unmarshal(raw, &native) != nil {
+		return
+	}
+	name := ""
+	source := ""
+	if native.Source == "manual" && strings.TrimSpace(native.Name) != "" {
+		name, source = native.Name, "manual"
+	} else if candidate := shortPurposeTitle(native.Name); candidate != "" &&
+		(native.Source == "native" || native.Source == "generated") &&
+		!strings.EqualFold(strings.TrimSpace(native.Name), strings.TrimSpace(native.FirstPrompt)) {
+		name, source = candidate, "native"
+	}
+	if name == "" {
+		inputs, readErr := h.namingInputs(id)
+		if readErr != nil || len(inputs) < 2 {
+			return
+		}
+		if chat.Harness == "claude" {
+			var suggested struct{ Name string }
+			raw, err = h.call(ctx, "title", map[string]any{"sessionId": id, "mode": "suggest", "inputs": inputs})
+			if err == nil {
+				err = json.Unmarshal(raw, &suggested)
+			}
+			name = shortPurposeTitle(suggested.Name)
+		} else {
+			name, err = generatePurposeTitle(ctx, chat.ProjectPath, inputs)
+		}
+		if err != nil || name == "" {
+			return
+		}
+		source = "generated"
+	}
+	if name == "" {
+		return
+	}
+	h.mu.Lock()
+	c = h.chats[id]
+	stillOpening := c != nil && (c.TitleSource == "" || c.TitleSource == "opening")
+	h.mu.Unlock()
+	if !stillOpening {
+		return
+	}
+	if source == "generated" {
+		generated := name
+		raw, err = h.call(ctx, "title", map[string]any{"sessionId": id, "mode": "generated", "name": name})
+		if err != nil {
+			return
+		}
+		var applied struct{ Name, Source string }
+		if json.Unmarshal(raw, &applied) != nil || applied.Name == "" {
+			return
+		}
+		name = applied.Name
+		if applied.Source == "manual" {
+			source = "manual"
+		}
+		if applied.Source != "manual" && applied.Name != generated {
+			return
+		}
+	}
+	h.mu.Lock()
+	c = h.chats[id]
+	if c == nil || (c.TitleSource != "" && c.TitleSource != "opening") {
+		h.mu.Unlock()
+		return
+	}
+	c.Title, c.TitleSource = name, source
+	err = h.saveLocked(c)
+	h.mu.Unlock()
+	if err == nil {
+		h.appendEvent(sdkEvent{SessionID: id, Type: "session.renamed", Name: name})
+	}
+}
+
+func (h *sdkChatHost) namingInputs(id string) ([]string, error) {
+	f, err := os.Open(filepath.Join(h.dir, id+".ndjson"))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64<<10), 2<<20)
+	var inputs []string
+	for scanner.Scan() {
+		var ev sdkEvent
+		if json.Unmarshal(scanner.Bytes(), &ev) == nil && ev.Type == "input.accepted" && ev.Kind == "user" {
+			if input := strings.TrimSpace(ev.Text); input != "" {
+				inputs = append(inputs, input)
+			}
+		}
+	}
+	if len(inputs) > 4 {
+		inputs = inputs[len(inputs)-4:]
+	}
+	return inputs, scanner.Err()
+}
+
+func shortPurposeTitle(s string) string {
+	s = strings.TrimSpace(strings.Trim(s, "\"'`#*"))
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) == 0 || strings.ContainsAny(s, "\n\r") {
+		return ""
+	}
+	if strings.IndexFunc(s, unicode.IsLower) == -1 {
+		s = strings.ToLower(s)
+	}
+	r := []rune(s)
+	if len(r) == 0 {
+		return ""
+	}
+	r[0] = unicode.ToUpper(r[0])
+	s = string(r)
+	if len([]rune(s)) > 28 {
+		parts := strings.Fields(s)
+		s = ""
+		for _, part := range parts {
+			if len([]rune(strings.TrimSpace(s+" "+part))) > 28 {
+				break
+			}
+			if s != "" {
+				s += " "
+			}
+			s += part
+		}
+	}
+	if len(strings.Fields(s)) < 2 {
+		return ""
+	}
+	for _, generic := range []string{"Hello there", "Just chatting", "New chat", "Quick question", "How can i", "Ready to help"} {
+		if strings.EqualFold(s, generic) {
+			return ""
+		}
+	}
+	return strings.TrimRight(s, ".:;,- ")
+}
+
+func generatePurposeTitle(ctx context.Context, cwd string, inputs []string) (string, error) {
+	var prompt strings.Builder
+	prompt.WriteString("Give this conversation a specific, sentence-case sidebar title of 3–5 words, at most 28 characters. Use a concrete action and object. Describe the actual task or purpose, not a greeting, the first line, or the assistant's response. Output the title only. Do not use tools.\n\nHuman messages, oldest first:\n")
+	for _, input := range inputs {
+		prompt.WriteString("- ")
+		prompt.WriteString(input)
+		prompt.WriteByte('\n')
+	}
+	cmd := exec.CommandContext(ctx, "codex", "exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "-s", "read-only", "-C", cwd, "-")
+	cmd.Stdin = strings.NewReader(prompt.String())
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", errors.New("title generation failed: " + err.Error() + ": " + sdkTail(stderr.String(), 300))
+	}
+	var title string
+	scanner := bufio.NewScanner(&stdout)
+	scanner.Buffer(make([]byte, 64<<10), 2<<20)
+	for scanner.Scan() {
+		var item struct {
+			Type string
+			Item struct{ Type, Text string }
+		}
+		if json.Unmarshal(scanner.Bytes(), &item) == nil && item.Type == "item.completed" && item.Item.Type == "agent_message" {
+			title = item.Item.Text
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return shortPurposeTitle(title), nil
+}
