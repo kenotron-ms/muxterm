@@ -29,6 +29,7 @@ type sdkChat struct {
 	ID               string    `json:"id"`
 	WorkspaceID      string    `json:"workspaceId,omitempty"`
 	ProjectPath      string    `json:"projectPath"`
+	SourceFolders    []string  `json:"sourceFolders,omitempty"`
 	Title            string    `json:"title"`
 	TitleSource      string    `json:"titleSource,omitempty"`
 	TitleCheckedTurn int       `json:"titleCheckedTurn,omitempty"`
@@ -48,15 +49,19 @@ type sdkChat struct {
 	NativeID         string    `json:"nativeId,omitempty"`
 	State            string    `json:"state"`
 	Archived         bool      `json:"archived,omitempty"`
+	Pinned           bool      `json:"pinned,omitempty"`
+	WorkMode         string    `json:"workMode,omitempty"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt,omitempty"`
 	LastActivity     string    `json:"lastActivity,omitempty"`
 	LastOutput       string    `json:"lastOutput,omitempty"`
 }
 type sdkProject struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Path string `json:"path"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Path          string   `json:"path"`
+	SourceFolders []string `json:"sourceFolders,omitempty"`
+	Pinned        bool     `json:"pinned,omitempty"`
 }
 type sdkEvent struct {
 	SessionID       string                 `json:"sessionId"`
@@ -572,7 +577,7 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never", "permission": c.Permission, "mode": c.Mode})
+	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never", "permission": c.Permission, "mode": c.Mode})
 	return err
 }
 
@@ -783,6 +788,30 @@ func writeSDKJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
+func sdkProjectFolders(primary string, folders []string) ([]string, error) {
+	seen := map[string]bool{primary: true}
+	result := make([]string, 0, len(folders))
+	if len(folders) > 20 {
+		return nil, errors.New("at most 20 source folders are allowed")
+	}
+	for _, folder := range folders {
+		if !filepath.IsAbs(folder) {
+			return nil, errors.New("source folders must be absolute paths")
+		}
+		folder = filepath.Clean(folder)
+		if seen[folder] {
+			continue
+		}
+		info, err := os.Stat(folder)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("source folder is not an existing directory: %s", folder)
+		}
+		seen[folder] = true
+		result = append(result, folder)
+	}
+	return result, nil
+}
+
 func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == http.MethodGet {
@@ -795,19 +824,32 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, rows)
 		return
 	}
-	var req struct{ Name, Path string }
+	var req struct {
+		Name, Path    string
+		SourceFolders []string
+	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil || !filepath.IsAbs(req.Path) {
 		http.Error(w, "absolute project path required", 400)
 		return
 	}
 	req.Path = filepath.Clean(req.Path)
+	folders, err := sdkProjectFolders(req.Path, req.SourceFolders)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if len([]rune(req.Name)) > 80 {
+		http.Error(w, "project name must be at most 80 characters", 400)
+		return
+	}
 	if req.Name == "" {
 		req.Name = filepath.Base(req.Path)
 	}
-	p := &sdkProject{ID: sdkID(), Name: req.Name, Path: req.Path}
+	p := &sdkProject{ID: sdkID(), Name: req.Name, Path: req.Path, SourceFolders: folders}
 	h.mu.Lock()
 	h.projects[p.ID] = p
-	err := h.saveProjectsLocked()
+	err = h.saveProjectsLocked()
 	if err != nil {
 		delete(h.projects, p.ID)
 	}
@@ -821,6 +863,78 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSDKProject(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	id := r.PathValue("id")
+	if r.Method == http.MethodPatch {
+		var req struct {
+			Name          *string   `json:"name"`
+			Path          *string   `json:"path"`
+			SourceFolders *[]string `json:"sourceFolders"`
+			Pinned        *bool     `json:"pinned"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		if req.Name != nil {
+			*req.Name = strings.TrimSpace(*req.Name)
+			if *req.Name == "" || len([]rune(*req.Name)) > 80 {
+				http.Error(w, "project name must be 1-80 characters", 400)
+				return
+			}
+		}
+		if req.Path != nil {
+			if !filepath.IsAbs(*req.Path) {
+				http.Error(w, "absolute primary folder required", 400)
+				return
+			}
+			*req.Path = filepath.Clean(*req.Path)
+			info, err := os.Stat(*req.Path)
+			if err != nil || !info.IsDir() {
+				http.Error(w, "primary folder must exist", 400)
+				return
+			}
+		}
+		h.mu.Lock()
+		p := h.projects[id]
+		if p == nil {
+			h.mu.Unlock()
+			http.NotFound(w, r)
+			return
+		}
+		previous := *p
+		primary := p.Path
+		if req.Path != nil {
+			primary = *req.Path
+		}
+		folders := p.SourceFolders
+		if req.SourceFolders != nil {
+			folders = *req.SourceFolders
+		}
+		folders, err := sdkProjectFolders(primary, folders)
+		if err != nil {
+			h.mu.Unlock()
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		p.Path, p.SourceFolders = primary, folders
+		if req.Name != nil {
+			p.Name = *req.Name
+		}
+		if req.Pinned != nil {
+			p.Pinned = *req.Pinned
+		}
+		err = h.saveProjectsLocked()
+		if err != nil {
+			*p = previous
+		}
+		updated := *p
+		h.mu.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeSDKJSON(w, 200, updated)
+		return
+	}
 	h.mu.Lock()
 	p := h.projects[id]
 	if p == nil {
@@ -936,7 +1050,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, rows)
 		return
 	}
-	var req struct{ WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval string }
+	var req struct{ WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode string }
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
@@ -983,15 +1097,27 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "provider does not match harness", 400)
 		return
 	}
+	sourceFolders := []string{}
 	if req.WorkspaceID != "" {
 		h.mu.Lock()
 		p := h.projects[req.WorkspaceID]
+		if p != nil {
+			sourceFolders = append(sourceFolders, p.SourceFolders...)
+		}
 		h.mu.Unlock()
 		if p == nil {
 			http.Error(w, "project not found", 404)
 			return
 		}
 		req.ProjectPath = p.Path
+	}
+	if req.WorkMode != "" && req.WorkMode != "local" && req.WorkMode != "worktree" {
+		http.Error(w, "work mode must be local or worktree", 400)
+		return
+	}
+	if req.WorkMode == "worktree" && req.WorkspaceID == "" {
+		http.Error(w, "choose a project to create a worktree", 400)
+		return
 	}
 	if req.ProjectPath == "" {
 		s.cfgMu.RLock()
@@ -1006,7 +1132,24 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.ProjectPath = filepath.Clean(req.ProjectPath)
-	if err := os.MkdirAll(req.ProjectPath, 0755); err != nil {
+	chatID := sdkID()
+	if req.WorkMode == "worktree" {
+		root, err := exec.CommandContext(r.Context(), "git", "-C", req.ProjectPath, "rev-parse", "--show-toplevel").Output()
+		if err != nil || strings.TrimSpace(string(root)) != req.ProjectPath {
+			http.Error(w, "the project's primary folder must be a Git repository root to create a worktree", 400)
+			return
+		}
+		worktree := filepath.Join(filepath.Dir(req.ProjectPath), filepath.Base(req.ProjectPath)+"-worktrees", "muxterm-"+chatID[:8])
+		if err := os.MkdirAll(filepath.Dir(worktree), 0755); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if output, err := exec.CommandContext(r.Context(), "git", "-C", req.ProjectPath, "worktree", "add", "--detach", worktree, "HEAD").CombinedOutput(); err != nil {
+			http.Error(w, "cannot create worktree: "+strings.TrimSpace(string(output)), 400)
+			return
+		}
+		req.ProjectPath = worktree
+	} else if err := os.MkdirAll(req.ProjectPath, 0755); err != nil {
 		http.Error(w, "cannot create project folder: "+err.Error(), 400)
 		return
 	}
@@ -1014,7 +1157,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
-	c := &sdkChat{ID: sdkID(), WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
+	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	h.chats[c.ID] = c
 	err := h.saveLocked(c)
@@ -1025,7 +1168,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "provider": amplifierProviderModule(c.Harness, c.Provider), "approval": c.Approval}); err != nil {
+	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "provider": amplifierProviderModule(c.Harness, c.Provider), "approval": c.Approval}); err != nil {
 		h.appendEvent(sdkEvent{SessionID: c.ID, Type: "error", Message: err.Error()})
 		http.Error(w, fmt.Sprintf("chat %s could not start: %v", c.ID, err), 502)
 		return
@@ -1133,18 +1276,24 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Title    string `json:"title"`
 			Archived *bool  `json:"archived"`
+			Pinned   *bool  `json:"pinned"`
 		}
 		if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req) != nil {
 			http.Error(w, "invalid JSON", 400)
 			return
 		}
-		if req.Archived != nil && req.Title == "" {
+		if (req.Archived != nil || req.Pinned != nil) && req.Title == "" {
 			h.mu.Lock()
-			previous := c.Archived
-			c.Archived = *req.Archived
+			previousArchived, previousPinned := c.Archived, c.Pinned
+			if req.Archived != nil {
+				c.Archived = *req.Archived
+			}
+			if req.Pinned != nil {
+				c.Pinned = *req.Pinned
+			}
 			err := h.saveLocked(c)
 			if err != nil {
-				c.Archived = previous
+				c.Archived, c.Pinned = previousArchived, previousPinned
 			}
 			updated := *c
 			if err == nil {

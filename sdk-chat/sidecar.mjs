@@ -65,7 +65,7 @@ async function runClaude(s) {
   const toolNames = new Map();
   const agentTools = new Set();
   let thinkingStreamed = false;
-  const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, resume: s.nativeId || undefined,
+  const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, additionalDirectories: s.sourceFolders, resume: s.nativeId || undefined,
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: muxtermMcpEnv } },
     includePartialMessages: true, permissionMode: s.permission === 'read-only' ? 'plan' : 'bypassPermissions', allowDangerouslySkipPermissions: true,
     thinking: { type: 'adaptive', display: 'summarized' }, effort: 'high', maxTurns: 20 } });
@@ -142,7 +142,7 @@ async function command(cmd) {
     if (harness !== 'codex' && harness !== 'claude') throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
-    const s = { id: sessionId, harness, cwd, nativeId, approval: cmd.approval, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
+    const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
     if (harness === 'claude') void runClaude(s);
     if (op === 'start') emit(sessionId, 'session.started', { capabilities: capabilities(harness), pendingNativeId: true });
