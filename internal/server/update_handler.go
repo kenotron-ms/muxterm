@@ -32,7 +32,7 @@ func writeUpdateError(w http.ResponseWriter, code int, reason string) {
 //
 // AuthMiddleware protects this route at mux registration.
 func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
-	st, _ := update.Check(r.Context(), s.version)
+	st, _ := update.CheckForServer(r.Context(), s.version, s.noAuth)
 	writeUpdateJSON(w, http.StatusOK, st)
 }
 
@@ -63,7 +63,7 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 
 	// Check hands back the release it resolved, so the install below reuses
 	// that exact release instead of fetching it again.
-	st, rel := update.Check(r.Context(), s.version)
+	st, rel := update.CheckForServer(r.Context(), s.version, s.noAuth)
 	if !st.CanUpdate {
 		reason := st.Reason
 		if reason == "" {

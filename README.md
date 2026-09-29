@@ -42,7 +42,10 @@ under the same user (`~/.cache/muxterm/github-release.json` on Linux). It
 revalidates expired entries with GitHub's ETag and pauses requests until the
 reported reset when the API rate limit is exhausted. Set `GITHUB_TOKEN` (or
 `GH_TOKEN`) in the server environment to use an authenticated GitHub budget;
-the token is never written to the cache. Development builds, `make dev` and
+the token is never written to the cache. GitHub only guarantees that an
+unchanged `304` response is free of primary-rate-limit cost when the request
+is authenticated; an unauthenticated `304` can still spend the shared IP
+budget. Development builds, `--no-auth` servers, `make dev` and
 `make dev-local` instances, and CI jobs skip release checks. Set
 `MUXTERM_DISABLE_UPDATE_CHECK=1` for other short-lived instances.
 
