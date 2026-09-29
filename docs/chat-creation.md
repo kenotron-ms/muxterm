@@ -12,3 +12,4 @@ default_base_home_folder = "/home/ken/work"
 ```
 
 When this setting is absent, the server uses its home directory. Ungrouped chats use the same folder by default, and the folder can be changed on the new chat screen.
+If the configured folder does not exist yet, the picker browses its nearest existing parent while keeping the new folder in the Folder control. Sending the first message creates it.

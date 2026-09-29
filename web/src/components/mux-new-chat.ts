@@ -68,12 +68,12 @@ export class MuxNewChat extends LitElement {
     super.connectedCallback();
     this.unsub = sdkChats.subscribe(() => this.requestUpdate());
     void sdkChats.refresh();
-    void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) this.folder = listing.path; }).catch(error => { this.error = String(error); });
+    void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) this.folder = listing.base; }).catch(error => { this.error = String(error); });
   }
   override disconnectedCallback() { this.unsub?.(); super.disconnectedCallback(); }
   override firstUpdated() { this.shadowRoot?.querySelector('textarea')?.focus(); }
   private async browse(path = this.folder) {
-    try { this.listing = await sdkChats.folders(path); this.folder = this.listing.path; this.onFolderChanged(); this.pickerOpen = true; this.error = ''; }
+    try { this.listing = await sdkChats.folders(path); if (this.listing.path === path) { this.folder = this.listing.path; this.onFolderChanged(); } this.pickerOpen = true; this.error = ''; }
     catch (error) { this.error = String(error); }
   }
   private onFolderChanged() {
