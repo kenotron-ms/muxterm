@@ -330,6 +330,9 @@ func (s *hookReportStore) accept(reportID string, report HookReport) error {
 	if !ValidMode(record.Row.Mode) || !ValidState(record.Row.State) || !ValidWaitingFor(record.Row.WaitingFor) {
 		return errors.New("set contains an invalid mode, state, or waiting_for value")
 	}
+	if record.PID <= 0 && !sessionStateIsTerminal(record.Row.State) {
+		record.Row = endedSessionRow(record.Row)
+	}
 	reg.Sessions[alias] = record
 	reg.Events[eventKey] = record.Row.SessionID
 	if err := s.saveRegistry(reg); err != nil {
@@ -419,13 +422,42 @@ func (s *hookReportStore) projectAll() {
 	if err != nil {
 		return
 	}
-	for _, record := range reg.Sessions {
-		if deadTerminalHookRecord(record) {
+	changed := false
+	for alias, record := range reg.Sessions {
+		wasTerminal := sessionStateIsTerminal(record.Row.State)
+		if !wasTerminal && !hookRecordProcessVerifiedLive(record) {
+			record.Row = endedSessionRow(record.Row)
+			reg.Sessions[alias] = record
+			changed = true
+		}
+		if wasTerminal && deadTerminalHookRecord(record) {
 			_ = RemoveSessionSnapshot(record.Row.SessionID)
 			continue
 		}
 		_ = s.project(record)
 	}
+	if changed {
+		_ = s.saveRegistry(reg)
+	}
+}
+
+func hookRecordProcessLive(record sessionRecord) bool {
+	if record.PID <= 0 || !processLive(record.PID) {
+		return false
+	}
+	if record.PIDStart == 0 {
+		return true // An old record lacks a stronger identity: fail closed.
+	}
+	start, ok := processStartTime(record.PID)
+	return !ok || start == record.PIDStart
+}
+
+func hookRecordProcessVerifiedLive(record sessionRecord) bool {
+	if record.PID <= 0 || record.PIDStart == 0 || !processLive(record.PID) {
+		return false
+	}
+	start, ok := processStartTime(record.PID)
+	return ok && start == record.PIDStart
 }
 
 // pruneDeadProjections keeps the durable hook registry available for managed
@@ -451,6 +483,9 @@ func (s *hookReportStore) pruneDeadProjections() {
 }
 
 func deadTerminalHookRecord(record sessionRecord) bool {
+	if record.Row.State == SessionStateStopped && record.Row.Doing == "Session process ended" {
+		return false // A crash ending stays visible until the owner clears it.
+	}
 	if !sessionStateIsTerminal(record.Row.State) || record.PID <= 0 {
 		return false
 	}
@@ -468,11 +503,7 @@ func deadTerminalHookRecord(record sessionRecord) bool {
 }
 
 func (s *hookReportStore) project(record sessionRecord) error {
-	pid := record.PID
-	if pid <= 0 {
-		pid = os.Getpid()
-	}
-	_, err := writeSessionSnapshot(record.Row, pid, record.PIDStart, record.SID)
+	_, err := writeSessionSnapshot(record.Row, record.PID, record.PIDStart, record.SID)
 	return err
 }
 

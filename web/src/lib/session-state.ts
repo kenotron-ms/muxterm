@@ -265,7 +265,7 @@ export function groupFor(s: SessionState): HomeGroup {
  */
 export function needsInput(s: SessionState): boolean {
   if (s.state === 'blocked') return true;
-  return s.mode === 'autonomous' && s.state === 'stopped';
+  return s.mode === 'autonomous' && s.state === 'stopped' && s.workspaceId !== null && s.paneId !== null;
 }
 
 /** Count of sessions needing input, for the sidebar Start card. */

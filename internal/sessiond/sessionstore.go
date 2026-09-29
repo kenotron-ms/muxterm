@@ -175,6 +175,14 @@ func snapshotPIDMatches(snap sessionSnapshot) bool {
 	return start == snap.PIDStart
 }
 
+func snapshotPIDVerifiedLive(snap sessionSnapshot) bool {
+	if snap.PID <= 0 || snap.PIDStart == 0 || !processLive(snap.PID) {
+		return false
+	}
+	start, ok := processStartTime(snap.PID)
+	return ok && start == snap.PIDStart
+}
+
 // sessionStore holds the change gate for session-state pushes.
 //
 // It deliberately does NOT cache the snapshots themselves. The spool directory
@@ -321,8 +329,13 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 			continue
 		}
 		if snap.PID <= 0 {
-			// Not attributable to any process, now or ever.
-			_ = os.Remove(path)
+			// An ending needs no process identity; an unverified active
+			// declaration cannot be shown as current work.
+			if sessionStateIsTerminal(snap.State) {
+				rows = append(rows, snap.SessionState)
+			} else {
+				rows = append(rows, endedSessionRow(snap.SessionState))
+			}
 			continue
 		}
 		if owners == nil {
@@ -350,12 +363,11 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 		}
 
 		if processLive(snap.PID) {
-			if !snapshotPIDMatches(snap) {
-				// The pid is live but it is somebody ELSE now: this snapshot
-				// outlived its session and the kernel handed the number on.
-				// Publishing it would pin a dead session's row to an unrelated
-				// terminal, indistinguishable from a real one.
-				_ = os.Remove(path)
+			if !snapshotPIDVerifiedLive(snap) {
+				// A live PID without a matching start time cannot establish
+				// that this session is still running. Keep the history without
+				// claiming work or attaching it to that process.
+				rows = append(rows, endedSessionRow(snap.SessionState))
 				continue
 			}
 			pane, ok := placeSnapshot(snap, owners)
@@ -374,9 +386,9 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 			continue
 		}
 
-		// A non-terminal declaration whose process is gone was killed and has
-		// no current state left to report.
-		_ = os.Remove(path)
+		// The producer did not get to write its ending. Keep a clearable,
+		// honest record instead of silently dropping it or showing working.
+		rows = append(rows, endedSessionRow(snap.SessionState))
 	}
 
 	// Second phase: per pane, decide which of its snapshots to publish.
@@ -439,6 +451,20 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 		return rows[i].SessionID < rows[j].SessionID
 	})
 	return rows, true
+}
+
+func endedSessionRow(row SessionState) SessionState {
+	row.State = SessionStateStopped
+	row.WaitingFor = ""
+	row.Doing = "Session process ended"
+	if row.Todo != nil {
+		copy := *row.Todo
+		copy.Current = ""
+		row.Todo = &copy
+	}
+	row.PaneID = 0
+	row.WorkspaceID = ""
+	return row
 }
 
 // lastDeclarationFor returns what the session running in a pane last said

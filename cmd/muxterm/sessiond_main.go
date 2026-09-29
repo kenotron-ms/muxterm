@@ -28,10 +28,7 @@ func runSessiond(_ Config) error {
 
 // serveSessiond is the testable core of the daemon entrypoint. It ensures the
 // socket's parent directory exists, constructs the frozen Phase-1 server,
-// attempts a tmux-continuum-style boot-time restore from the last snapshot
-// (a no-op when disabled or when no usable snapshot exists -- ListenAndServe's
-// own EnsureDefault call falls back to today's cold-start blank workspace in
-// that case, unchanged), starts the periodic snapshot writer, and runs the
+// starts the periodic snapshot writer, and runs the
 // server until ctx is cancelled. Binding and stale-socket cleanup are owned by
 // the daemon (NewServer/ListenAndServe) per the frozen contract; this returns
 // nil on a graceful (ctx-driven) shutdown, after a best-effort final snapshot
@@ -52,9 +49,10 @@ func serveSessiond(ctx context.Context, socketPath string) error {
 	writerCtx, stopWriter := context.WithCancel(ctx)
 	defer stopWriter()
 
-	if n := srv.RestoreFromSnapshot(cfg.Restore.Enabled, snapshotPath); n > 0 {
-		log.Printf("sessiond: restored %d workspace(s) from %s", n, snapshotPath)
-	}
+	// A daemon restart cannot re-adopt a pane's old process. Restoring the
+	// snapshot starts a NEW PTY and previously replayed agent argv or an
+	// amplifier resume command. Keep the snapshot as historical data, but
+	// never turn daemon startup into a new agent dispatch.
 	if cfg.Restore.Enabled {
 		snapshotWriterDone = sessiond.StartSnapshotWriter(writerCtx, srv.Registry(), cfg.Restore.SnapshotInterval, snapshotPath)
 	}
