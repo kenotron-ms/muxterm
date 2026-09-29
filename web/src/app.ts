@@ -46,6 +46,7 @@ import './components/mux-new-chat.js';
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
 import { cosStore } from './lib/cos-store.js';
+import { sdkChats } from './lib/sdk-chats.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
 
@@ -832,6 +833,8 @@ export class MuxApp extends LitElement {
   private _unsubscribe: (() => void) | null = null;
   private _unsubHomeSessions: (() => void) | null = null;
   private _unsubCos: (() => void) | null = null;
+  private _unsubCosChatCreation: (() => void) | null = null;
+  private _operatorSpawnCalls = new Set<string>();
   private _controller: WorkspaceController | null = null;
   private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
   private _disposePaneFocusListeners: (() => void) | null = null;
@@ -1000,6 +1003,19 @@ export class MuxApp extends LitElement {
     // the overlay opens: cosStore negotiates capability before it either
     // subscribes to explicit unscoped legacy COS or selects one v2 thread.
     cosStore.attach(this._socket);
+    // Operator creates Chats through MCP in the serve process. Refresh the
+    // browser's chat catalog when that tool completes so the new chat appears
+    // beside one created through the browser's New Chat flow.
+    this._unsubCosChatCreation = cosStore.onEvent((event) => {
+      const callId = typeof event.call_id === 'string' ? event.call_id : '';
+      if (event.ev === 'tool_start' && callId &&
+          (event.name === 'mcp_muxterm_spawn_chat' || event.name === 'spawn_chat')) {
+        this._operatorSpawnCalls.add(callId);
+      } else if (event.ev === 'tool_end' && this._operatorSpawnCalls.delete(callId) && event.ok === true) {
+        // tool_end has no name; its call_id links it to tool_start.
+        void sdkChats.refresh();
+      }
+    });
     // A launch lands on the Dashboard, not on whichever pane the composition
     // happens to make active. Here, immediately after the store the Dashboard
     // reads is wired -- and NOT on the socket's connect callback. See below.
@@ -1320,6 +1336,9 @@ export class MuxApp extends LitElement {
     this._unsubHomeSessions = null;
     this._unsubCos?.();
     this._unsubCos = null;
+    this._unsubCosChatCreation?.();
+    this._unsubCosChatCreation = null;
+    this._operatorSpawnCalls.clear();
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
