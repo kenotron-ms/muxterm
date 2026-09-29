@@ -11,7 +11,7 @@ import { homeSessions } from '../lib/home-sessions.js';
 import type { SessionRunState } from '../lib/session-state.js';
 import { needsInputByWorkspace, needsInputCount } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
-import { Download, Ellipsis, SquareTerminal } from 'lucide';
+import { ChevronDown, Download, Ellipsis, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { previewStore, type PreviewEntry, type PreviewMode } from '../lib/preview-store.js';
@@ -126,6 +126,8 @@ interface CardState {
    * whole feature exists to break.
    */
   completion: SessiondWorkspaceCompletion | null;
+  /** Declared lanes occupying this terminal workspace. */
+  lanes: string[];
   /** Highest-signal declared session state in this workspace. */
   sessionState: SessionRunState | null;
 }
@@ -500,6 +502,7 @@ export class MuxSidebar extends LitElement {
       text-overflow: ellipsis;
       min-width: 0;
     }
+    .ws-lane { color: var(--chrome-text-dim); font-weight: 500; }
 
     .ws-rename-input {
       flex: 1;
@@ -1984,6 +1987,8 @@ export class MuxSidebar extends LitElement {
         needs: needsByWs.get(id) ?? 0,
         paneCount: active ? panes.length : ws.paneCount,
         completion: ws.completion ?? null,
+        lanes: homeSessions.sessions.filter((session) => session.workspaceId === id)
+          .map((session) => `${session.name} · p${session.paneId ?? '?'}`),
         sessionState:
           homeSessions.sessions.find((session) => session.workspaceId === id && session.state === 'blocked')?.state ??
           homeSessions.sessions.find((session) => session.workspaceId === id && session.state === 'working')?.state ??
@@ -2453,7 +2458,8 @@ export class MuxSidebar extends LitElement {
           : html`<span
               class="ws-name"
               @dblclick="${(e: Event) => this._startRename(e, card.id)}"
-              >${card.label}</span
+              title="${card.lanes.length ? `${card.label}: ${card.lanes.join(', ')}` : card.label}"
+              >${card.label}${card.lanes.length ? html`<span class="ws-lane"> · ${card.lanes[0]}${card.lanes.length > 1 ? ` +${card.lanes.length - 1}` : ''}</span>` : ''}</span
             >`}
         <span class="ws-panes" aria-label="${card.paneCount} panes">${card.paneCount}</span>
         <button
@@ -2636,7 +2642,7 @@ export class MuxSidebar extends LitElement {
             <span class="hg-type">${hostTypeLabel(group.host)}</span>
           </div>
           <span class="hg-status ${group.state ?? 'local'}">${group.state ?? 'local'}</span>
-          <span class="hg-chev" aria-hidden="true">▾</span>
+          <span class="hg-chev" aria-hidden="true">${icon(ChevronDown, { size: 13 })}</span>
           <button
             type="button"
             class="hg-remove-btn"
