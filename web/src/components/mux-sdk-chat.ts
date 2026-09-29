@@ -192,8 +192,10 @@ export class MuxSDKChat extends LitElement {
       const response = await fetch(apiPath('/api/sdk-chat-attachments'), {
         method: 'POST', headers: { 'X-Muxterm-Chat-Attachment': '1' }, body: form,
       });
-      const payload = await response.json() as { id?: string; kind?: string; reason?: string };
-      if (!response.ok) throw new Error(payload.reason || `Upload failed (${response.status})`);
+      const body = await response.text();
+      let payload: { id?: string; kind?: string; reason?: string } = {};
+      try { payload = JSON.parse(body) as typeof payload; } catch { /* Preserve non-JSON server errors below. */ }
+      if (!response.ok) throw new Error(payload.reason || body.trim() || `Upload failed (${response.status})`);
       if (!payload.id || !payload.kind) throw new Error('Upload response lacked attachment details');
       if (!this.attachments.some(a => a.localId === item.localId)) return;
       this.attachments = this.attachments.map(a => a.localId === item.localId
