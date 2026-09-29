@@ -2305,16 +2305,22 @@ class SDKChatSession:
                         entry["config"]["reasoning_effort"] = self.effort
 
         cfg = expand_env_vars(cfg)
-        # SDK chats run in this serve process. Pin their MCP subprocess to the
-        # binary that spawned this sidecar; PATH may resolve another muxterm.
+        # Every SDK chat bundle gets the same muxterm MCP surface as Codex and
+        # Claude. A project bundle may have no tool-mcp mount of its own.
         mcp_bin = os.environ.get("MUXTERM_CHAT_MCP_BIN")
-        if mcp_bin:
-            for tool_plan in (cfg.get("tools", []), prepared.mount_plan.get("tools", [])):
-                for entry in tool_plan:
-                    if entry.get("module") == "tool-mcp":
-                        server = entry.get("config", {}).get("servers", {}).get("muxterm")
-                        if isinstance(server, dict):
-                            server["command"] = mcp_bin
+        if not mcp_bin or not Path(mcp_bin).is_file():
+            raise RuntimeError("muxterm SDK chat MCP binary unavailable")
+        mcp_tool = {"module": "tool-mcp",
+                    "source": "git+https://github.com/microsoft/amplifier-module-tool-mcp@main",
+                    "config": {"servers": {"muxterm": {"command": mcp_bin, "args": ["mcp"]}}}}
+        for tool_plan in (cfg.setdefault("tools", []), prepared.mount_plan.setdefault("tools", []),
+                          prepared.bundle.tools):
+            entry = next((tool for tool in tool_plan if tool.get("module") == "tool-mcp"), None)
+            if entry is None:
+                tool_plan.append(copy.deepcopy(mcp_tool))
+            else:
+                entry.setdefault("config", {}).setdefault("servers", {})["muxterm"] = {
+                    "command": mcp_bin, "args": ["mcp"]}
         live = {"module": "loop-live", "source": LOOP_LIVE_SOURCE,
                 "config": {"background_tools": [], "background_delegate": False}}
         cfg.setdefault("session", {})["orchestrator"] = live
