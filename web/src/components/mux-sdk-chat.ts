@@ -157,7 +157,11 @@ export class MuxSDKChat extends LitElement {
     window.addEventListener('drop', this.preventFileNavigation);
     window.addEventListener('drop', this.resetDrop);
     window.addEventListener('dragend', this.resetDrop);
-    this.unsubscribeChats = sdkChats.subscribe(() => this.requestUpdate());
+    this.unsubscribeChats = sdkChats.subscribe(() => {
+      const updated = sdkChats.chats.find(chat => chat.id === this.sessionId);
+      if (updated && this.chat?.title !== updated.title) this.chat = this.chat ? { ...this.chat, title: updated.title } : updated;
+      this.requestUpdate();
+    });
     this.connect();
   }
   override disconnectedCallback() {
