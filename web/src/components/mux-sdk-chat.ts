@@ -41,7 +41,6 @@ export class MuxSDKChat extends LitElement {
   private parsers = new Map<number, MarkdownStream>();
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
   private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
-  private expanded = new Set<number>();
   private workExpanded = new Set<number>();
   private turnStarted = new Map<number, number>();
   private turnFinished = new Map<number, number>();
@@ -296,7 +295,7 @@ export class MuxSDKChat extends LitElement {
   }
   private connect() {
     if (!this.isConnected || !this.sessionId) return;
-    this.stream?.close(); this.blocks = []; this.trajectory = []; this.selectedAgent = ''; this.parsers.clear(); this.expanded.clear(); this.workExpanded.clear(); this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now(); this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.pendingInputs.clear(); this.error = ''; this.settingsPending = false; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
+    this.stream?.close(); this.blocks = []; this.trajectory = []; this.selectedAgent = ''; this.parsers.clear(); this.workExpanded.clear(); this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now(); this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.pendingInputs.clear(); this.error = ''; this.settingsPending = false; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
     const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/events`));
     source.addEventListener('snapshot', e => { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; this.busy = this.chat.state === 'working'; });
     source.addEventListener('sdk', e => this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent));
@@ -572,9 +571,7 @@ export class MuxSDKChat extends LitElement {
     const output = block.done ? this.detail(this.toolOutput(block.output)) : 'Running…';
     const truncated = output.match(/\n(… truncated after [^\n]+)$/);
     const state = failed ? 'Failed' : block.done ? 'Completed' : 'Running';
-    return html`<details class="support ${thinking ? 'thinking' : `tool ${failed ? 'failed' : block.done ? 'completed' : 'running'}`}" ?open=${this.expanded.has(block.key)} @toggle=${(e: globalThis.Event) => {
-      if ((e.currentTarget as HTMLDetailsElement).open) this.expanded.add(block.key); else this.expanded.delete(block.key);
-    }}><summary><span class="chevron" aria-hidden="true">${icon(ChevronRight, { size: 12 })}</span><span class="kind-icon" aria-hidden="true">${icon(thinking ? Brain : Terminal, { size: 13 })}</span><span class="summary-name">${thinking ? 'Thinking' : block.name || 'Tool'}</span>${!thinking && typeof hint === 'string' ? html`<span class="tool-hint" title=${hint}>${hint}</span>` : nothing}<span class="summary-hint">${thinking ? `${block.text.length} characters` : html`<span class="state-icon" aria-hidden="true">${icon(failed ? CircleX : block.done ? Check : LoaderCircle, { size: 12 })}</span>${state}`}</span></summary><div class="detail">${thinking
+    return html`<details class="support ${thinking ? 'thinking' : `tool ${failed ? 'failed' : block.done ? 'completed' : 'running'}`}" open><summary><span class="chevron" aria-hidden="true">${icon(ChevronRight, { size: 12 })}</span><span class="kind-icon" aria-hidden="true">${icon(thinking ? Brain : Terminal, { size: 13 })}</span><span class="summary-name">${thinking ? 'Thinking' : block.name || 'Tool'}</span>${!thinking && typeof hint === 'string' ? html`<span class="tool-hint" title=${hint}>${hint}</span>` : nothing}<span class="summary-hint">${thinking ? `${block.text.length} characters` : html`<span class="state-icon" aria-hidden="true">${icon(failed ? CircleX : block.done ? Check : LoaderCircle, { size: 12 })}</span>${state}`}</span></summary><div class="detail">${thinking
       ? html`<pre>${block.text}</pre>`
       : html`<div class="detail-label">Tool</div><pre>${block.name || 'Tool'}</pre><div class="detail-label">Input arguments</div><pre>${this.detail(input)}</pre><div class="detail-label">Output / result</div><pre>${truncated ? output.slice(0, -truncated[0].length) : output}</pre>${truncated ? html`<div class="truncation">${truncated[1]}</div>` : nothing}`}
     </div></details>`;
@@ -624,7 +621,11 @@ export class MuxSDKChat extends LitElement {
         const items = work.get(block.turn) || [];
         const active = this.turnFinished.get(block.turn) === undefined;
         return html`<div class="block work"><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
-          if ((event.currentTarget as HTMLDetailsElement).open) this.workExpanded.add(block.turn); else this.workExpanded.delete(block.turn);
+          const disclosure = event.currentTarget as HTMLDetailsElement;
+          if (disclosure.open) {
+            this.workExpanded.add(block.turn);
+            disclosure.querySelectorAll<HTMLDetailsElement>('details.support').forEach(item => { item.open = true; });
+          } else this.workExpanded.delete(block.turn);
         }}><summary>${active ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${active && items.length === 1 && items[0].kind === 'progress' && items[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(items)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${items.some(item => item.kind !== 'progress') ? items.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${active ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`;
       }
       return html`<div class="block ${block.kind}">${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
