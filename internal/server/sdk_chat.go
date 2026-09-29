@@ -555,7 +555,11 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": c.Approval})
+	approval := c.Approval
+	if approval == "" && c.Harness != "amplifier" {
+		approval = "never"
+	} // legacy chats used unattended permissions
+	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": approval})
 	return err
 }
 
@@ -887,7 +891,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "amplifier has no chat approval translation", 400)
 		return
 	}
-	if req.Approval == "" {
+	if req.Approval == "" && req.Harness != "amplifier" {
 		req.Approval = "never"
 	}
 	if req.Goal != "" {

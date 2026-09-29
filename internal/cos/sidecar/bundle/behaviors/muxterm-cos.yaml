@@ -50,7 +50,7 @@ tools:
           # that spawned this sidecar without being told where that is.
 
   # read_file. Routing decisions need some ground truth -- which repo is this,
-  # what does that design doc actually say -- before a lane is spawned against
+  # what does that design doc actually say -- before a destination is chosen against
   # a guess. write_file and edit_file ride along inside this module and are
   # withheld by name below; that is a module-granularity limitation, not a
   # decision to allow writes.
@@ -62,12 +62,12 @@ tools:
     source: git+https://github.com/microsoft/amplifier-module-tool-search@main
 
   # web_search, web_fetch. Research in service of dispatching -- reading what
-  # an error actually means before choosing which lane gets it.
+  # an error actually means before choosing which chat gets it.
   - module: tool-web
     source: git+https://github.com/microsoft/amplifier-module-tool-web@main
 
   # todo. Tracking what it dispatched, across a conversation that outlives any
-  # single lane.
+  # single chat.
   - module: tool-todo
     source: git+https://github.com/microsoft/amplifier-module-tool-todo@main
 
@@ -142,8 +142,8 @@ hooks:
 #                 prefix on this session's own `doing` line. It is also the
 #                 reflex tool every amplifier agent reaches for first, so
 #                 leaving it mounted means Operator quietly works in
-#                 the shadows while the fleet view stays empty. spawn_lane is
-#                 the only delegation path.
+#                 the shadows while the fleet view stays empty. spawn_chat is
+#                 the default delegation path; spawn_lane remains for terminals.
 #   bash          doing the lane's work, unobserved. See run_command above.
 #   write_file    doing the lane's work.
 #   edit_file     doing the lane's work.

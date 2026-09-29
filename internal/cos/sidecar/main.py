@@ -2517,9 +2517,14 @@ class SDKChatSession:
             self.session.coordinator.session_state["goal"] = {
                 "condition": goal, "turns_used": 0, "cap": None,
             }
-        await self.runtime.submit(Input(kind=kind, text=content,
-                                        source=source if kind == "service" else "user", id=input_id,
-                                        attachments=tuple(images)))
+        try:
+            await self.runtime.submit(Input(kind=kind, text=content,
+                                            source=source if kind == "service" else "user", id=input_id,
+                                            attachments=tuple(images)))
+        except BaseException:
+            if goal:
+                self.session.coordinator.session_state["goal"] = None
+            raise
         if kind == "user":
             self.turn_started = time.monotonic()
             self.first_token_seen = False
