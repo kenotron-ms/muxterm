@@ -54,9 +54,13 @@ export class MuxNewChat extends LitElement {
     .picker-create { display:flex; gap:6px; padding:8px; border-bottom:1px solid var(--chrome-border,#475067); }
     .picker-create input { flex:1; }
     .folder-entry { display:block; width:100%; text-align:left; }
-    .composer { display:flex; align-items:flex-end; gap:10px; border:1px solid var(--chrome-border,#475067); border-radius:16px; background:rgba(0,0,0,.15); padding:12px; }
-    textarea { flex:1; min-width:0; min-height:66px; max-height:220px; resize:vertical; border:0; outline:0; color:inherit; background:transparent; font:14px/1.5 system-ui,sans-serif; }
-    .send { width:34px; height:34px; border:0; border-radius:50%; background:#9bb8f7; color:#152032; font-size:19px; }
+    .composer { display:flex; flex-direction:column; gap:7px; border:1px solid var(--chrome-border,#475067); border-radius:18px; background:var(--chrome-bar,#202632); padding:13px 14px 9px; transition:border-color .15s,box-shadow .15s; }
+    .composer:focus-within { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 58%,var(--chrome-border,#475067)); box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent,#9bb8f7) 14%,transparent); }
+    textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:34px; height:34px; max-height:220px; resize:none; border:0; outline:0; padding:3px 0; color:inherit; background:transparent; font:14px/1.55 system-ui,sans-serif; overflow-y:auto; }
+    textarea::placeholder { color:var(--chrome-text-dim,#a9b0c0); opacity:.8; }
+    .send { align-self:flex-end; width:34px; height:34px; border:0; border-radius:10px; background:var(--chrome-accent,#9bb8f7); color:#152032; font-size:20px; line-height:1; }
+    .send:hover:not(:disabled) { filter:brightness(1.1); }
+    .send:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
     .send:disabled { opacity:.4; cursor:default; }
     .error { margin:10px 0; color:#e6a5a5; }
     .hint { margin:10px 3px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
@@ -72,6 +76,13 @@ export class MuxNewChat extends LitElement {
   }
   override disconnectedCallback() { this.unsub?.(); super.disconnectedCallback(); }
   override firstUpdated() { this.shadowRoot?.querySelector('textarea')?.focus(); }
+  override updated(changed: Map<string, unknown>) { if (changed.has('prompt')) this.sizeTextarea(); }
+  private sizeTextarea() {
+    const textarea = this.shadowRoot?.querySelector('textarea');
+    if (!textarea) return;
+    textarea.style.height = '34px';
+    textarea.style.height = `${Math.min(220, Math.max(34, textarea.scrollHeight))}px`;
+  }
   private async browse(path = this.folder) {
     try { this.listing = await sdkChats.folders(path); if (this.listing.path === path) { this.folder = this.listing.path; this.onFolderChanged(); } this.pickerOpen = true; this.error = ''; }
     catch (error) { this.error = String(error); }
