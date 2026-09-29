@@ -41,6 +41,7 @@ export class MuxSDKChatSettings extends LitElement {
     .hint { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
     .check { color:var(--chrome-accent,#9bb8f7); font-weight:700; }
     .group { margin:2px 4px 8px; }
+    .model-list { max-height:190px; overflow-y:auto; scrollbar-width:thin; }
     .slider { padding:4px 10px 13px; }
     .slider-header { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
     input[type=range] { width:100%; margin:12px 0 4px; accent-color:var(--chrome-accent,#9bb8f7); cursor:pointer; }
@@ -106,7 +107,7 @@ export class MuxSDKChatSettings extends LitElement {
         ${(['codex','claude','amplifier'] as const).map(value => this.choice(value[0].toUpperCase() + value.slice(1), value === this.harness ? 'Current conversation' : 'Start a new conversation', this.harness === value, true, () => { if (value !== this.harness) this.switchHarness(value); }))}
         ${this.harness === 'amplifier' ? html`<div class="divider"></div><div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="divider"></div><div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : 'Anthropic'} · managed by ${this.harness}</div>`}
         <div class="divider"></div><div class="heading">Model</div>
-        ${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}
+        <div class="model-list">${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}</div>
         ${efforts.length > 1 ? html`<div class="divider"></div><div class="slider"><div class="slider-header"><span>Thinking</span><span>${efforts[effortIndex]}</span></div><input type="range" aria-label="Thinking effort" min="0" max=${efforts.length - 1} step="1" .value=${String(effortIndex)} ?disabled=${this.loading || this.turnBusy} @change=${(event: Event) => void this.select({ effort:efforts[Number((event.target as HTMLInputElement).value)] })}><div class="slider-ends"><span>${efforts[0]}</span><span>${efforts[efforts.length - 1]}</span></div></div>` : nothing}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></details>`;
