@@ -262,6 +262,13 @@ func (h *sdkChatHost) ensure(harness string) error {
 	cmd := exec.Command("node", path, h.socket)
 	cmd.Dir = filepath.Dir(path)
 	cmd.Stderr = os.Stderr
+	// Give SDK chats the MCP server belonging to this serve process. Looking up
+	// `muxterm` on PATH can connect a dev chat to the installed production server.
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd.Env = append(os.Environ(), "MUXTERM_CHAT_MCP_BIN="+self)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
