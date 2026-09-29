@@ -839,7 +839,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "message or attachment required", 422)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		// A cold Amplifier resume can take longer than ten seconds before it can
+		// accept the input. Keep the HTTP request open until the harness returns
+		// its receipt so the browser does not invite a duplicate retry.
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 		defer cancel()
 		if err := h.resume(ctx, c); err != nil {
 			http.Error(w, err.Error(), 502)
