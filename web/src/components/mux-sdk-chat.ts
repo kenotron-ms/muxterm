@@ -4,10 +4,11 @@ import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
-import './mux-amplifier-settings.js';
+import './mux-sdk-chat-settings.js';
 
-type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean };
-type Block = { key: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean };
+type DisplayAttachment = { id: string; name: string; kind: string };
+type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
+type Block = { key: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
@@ -43,6 +44,8 @@ export class MuxSDKChat extends LitElement {
     .block { max-width:780px; width:100%; align-self:center; }
     .user { display:flex; justify-content:flex-end; }
     .bubble { max-width:min(82%,660px); padding:10px 14px; border-radius:15px; background:rgba(122,162,247,.14); white-space:pre-wrap; overflow-wrap:anywhere; }
+    .bubble img { display:block; max-width:min(100%,320px); max-height:260px; border-radius:9px; margin-top:8px; object-fit:contain; }
+    .bubble a { display:block; margin-top:7px; color:#b7c9ed; }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; margin-bottom:7px; }
     .text { overflow-wrap:anywhere; }
     .text :is(p,pre) { margin:0 0 10px; }
@@ -58,7 +61,7 @@ export class MuxSDKChat extends LitElement {
     .composer-wrap { padding:0 clamp(24px,8vw,120px) 18px; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 9px; }
     .attachment { display:flex; align-items:center; gap:8px; max-width:100%; padding:6px 8px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
-    .attachment img { width:64px; height:64px; object-fit:cover; border-radius:6px; }
+    .attachment img { width:96px; height:72px; object-fit:contain; border-radius:6px; background:#fff; }
     .attachment .filename { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .attachment .status { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
     .attachment .status.failed { color:#f0aaa8; }
@@ -69,10 +72,10 @@ export class MuxSDKChat extends LitElement {
     .file-input { display:none; }
     .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed #9bb8f7; border-radius:16px; background:rgba(25,35,60,.92); color:#d9e5ff; font-size:22px; pointer-events:none; }
     .composer { max-width:780px; margin:auto; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:rgba(0,0,0,.15); padding:11px 12px; }
-    .composer-row { display:flex; align-items:flex-end; gap:10px; }
-    .composer-controls { display:flex; align-items:center; gap:8px; margin-top:8px; }
+    .composer-row { display:flex; align-items:flex-start; gap:8px; }
+    .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:7px; }
     .composer-controls .send { margin-left:auto; }
-    textarea { flex:1; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; height:46px; }
+    textarea { flex:1; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; min-height:38px; height:38px; padding:9px 0 0; box-sizing:border-box; }
     .send { width:31px; height:31px; border-radius:50%; border:0; background:#9bb8f7; color:#152032; font-size:18px; }
     .send:disabled { opacity:.38; }
     .drawer { width:min(32vw,420px); min-width:220px; border-left:1px solid var(--chrome-border,#343a4c); background:var(--chrome-bar,#202632); }
@@ -111,7 +114,7 @@ export class MuxSDKChat extends LitElement {
       let at = anchor === undefined ? this.turnStart : blocks.findIndex(b => b.key === anchor);
       if (at < 0) at = this.turnStart;
       while (blocks[at]?.kind === 'user') at++;
-      blocks.splice(at, 0, { key:++this.nextBlockKey, kind:'user', text:event.text || '' });
+      blocks.splice(at, 0, { key:++this.nextBlockKey, kind:'user', text:event.text || '', attachments:event.attachments || [] });
       if (at < this.turnStart) this.turnStart++;
       this.busy = true;
     }
@@ -157,6 +160,11 @@ export class MuxSDKChat extends LitElement {
     let parser = this.parsers.get(index);
     if (!parser) { parser = new MarkdownStream(); this.parsers.set(index, parser); }
     return renderSegments(parser.update(block.text, !block.done));
+  }
+  private userBubble(block: Block) {
+    return html`<div class="bubble">${block.text}${block.attachments?.map(attachment => attachment.kind === 'image'
+      ? html`<img src=${apiPath(`/api/sdk-chat-attachments/${encodeURIComponent(attachment.id)}`)} alt=${attachment.name} loading="lazy">`
+      : html`<a href=${apiPath(`/api/sdk-chat-attachments/${encodeURIComponent(attachment.id)}`)} target="_blank" rel="noopener">${attachment.name}</a>`)}</div>`;
   }
   private hasFiles(event: DragEvent) { return Array.from(event.dataTransfer?.types || []).includes('Files'); }
   private onDragEnter(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth++; this.dropActive = true; }
@@ -269,7 +277,7 @@ export class MuxSDKChat extends LitElement {
   override render() { return html`
     <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${() => { this.drawerOpen = !this.drawerOpen; }}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
-      ${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? html`<div class="bubble">${b.text}</div>` : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b, b.key) : html`<div class="error">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
+      ${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? this.userBubble(b) : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b, b.key) : html`<div class="error">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
     </div><div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
@@ -278,8 +286,8 @@ export class MuxSDKChat extends LitElement {
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
-      <div class="composer-row"><textarea aria-label="Message" placeholder="Message ${this.chat?.harness || 'agent'}…" .value=${this.draft} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
-      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>Attach</button>${this.chat?.harness === 'amplifier' ? html`<mux-amplifier-settings .sessionId=${this.sessionId} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-amplifier-settings>` : nothing}<button class="send" aria-label="Send message" ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.busy || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
+      <div class="composer-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>Attach</button><textarea aria-label="Message" placeholder="Message ${this.chat?.harness || 'agent'}…" .value=${this.draft} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
+      <div class="composer-controls"><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings><button class="send" aria-label="Send message" ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.busy || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
     </div></div></div>
       ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" data-dockview-host-seam></aside>` : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`; }
