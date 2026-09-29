@@ -119,10 +119,23 @@ export class CodexStream {
   async steer(input) {
     await this.ready;
     if (!this.turnId || !this.session.busy) throw new Error('No active Codex turn to steer');
-    await this.request('turn/steer', { threadId: this.session.nativeId,
-      expectedTurnId: this.turnId, input: [{ type: 'text', text: input.content, text_elements: [] }] });
-    this.inputIds.push(input.id);
-    this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: 'steer', source: input.source, text: input.content });
+    // turn/steer waits for the current model request to finish. Stop that
+    // request and continue on the same thread while retaining streamed text.
+    const turnId = this.turnId;
+    const ended = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.steeringResolve = null; reject(new Error('Codex turn did not stop for steering')); }, 15000);
+      this.steeringResolve = () => { clearTimeout(timer); resolve(); };
+    });
+    try {
+      await this.request('turn/interrupt', { threadId: this.session.nativeId, turnId });
+      await ended;
+      await this.run(input);
+      this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: 'steer', source: input.source, text: input.content });
+    } catch (error) {
+      this.steeringResolve?.();
+      this.steeringResolve = null;
+      throw error;
+    }
   }
 
   onLine(line) {
@@ -168,8 +181,14 @@ export class CodexStream {
       this.emit(this.session.id, 'tool.completed', { name: tool.name, toolId: p.item.id,
         raw: tool.output, failed: p.item.status === 'failed' || !!p.item.error });
     } else if (method === 'turn/completed') {
-      this.session.busy = false;
       this.turnId = null;
+      if (this.steeringResolve) {
+        const resolve = this.steeringResolve;
+        this.steeringResolve = null;
+        resolve();
+        return;
+      }
+      this.session.busy = false;
       this.emit(this.session.id, this.cancelRequested || p.turn.status === 'interrupted' ? 'turn.cancelled'
         : p.turn.status === 'completed' ? 'turn.completed' : 'error',
         { inputIds: this.inputIds, message: p.turn.error?.message || p.turn.status });
@@ -186,6 +205,7 @@ export class CodexStream {
   close() { this.process.kill('SIGTERM'); }
 
   fail(error) {
+    this.steeringResolve?.();
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
     if (this.session.busy) {
