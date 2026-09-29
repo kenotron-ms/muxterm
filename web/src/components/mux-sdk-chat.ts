@@ -13,7 +13,7 @@ type AgentLeg = { task: string; reply: string; status: string };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[] };
 type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'progress' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
 import { icon } from '../lib/icons.js';
-import { Brain, Check, ChevronDown, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
+import { Brain, Check, ChevronDown, CircleX, Terminal, LoaderCircle } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
@@ -117,23 +117,19 @@ export class MuxSDKChat extends LitElement {
     .text .md-table { border-collapse:collapse; }
     .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--chrome-border,#41485f); text-align:left; }
     .text .md-th { background:var(--chrome-bar,#202632); }
-    details.support { color:var(--chrome-text-dim,#b2bdd3); font-size:12px; }
-    details.support summary { cursor:pointer; display:flex; align-items:center; gap:8px; min-height:30px; max-width:100%; box-sizing:border-box; list-style:none; }
-    details.support summary::-webkit-details-marker { display:none; }
-    details.support summary:focus-visible { outline:2px solid #9bb8f7; outline-offset:2px; border-radius:5px; }
-    .support .chevron { display:inline-flex; flex:none; opacity:.6; transition:transform .15s ease; }
-    .support[open] .chevron { transform:rotate(90deg); }
+    .support { width:100%; color:var(--chrome-text-dim,#b2bdd3); font-size:12px; }
+    .support-heading { display:flex; align-items:center; gap:8px; min-height:30px; max-width:100%; box-sizing:border-box; }
     .support .kind-icon, .support .state-icon { display:inline-flex; align-items:center; flex:none; }
     .support .summary-name { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
     .support .summary-hint { margin-left:auto; flex:none; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
     .tool-hint { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    details.support.thinking { max-width:min(100%,650px); }
-    details.support.thinking summary { color:#aaa1c4; padding:1px 3px; gap:7px; width:max-content; max-width:100%; }
+    .support.thinking { max-width:min(100%,650px); }
+    .support.thinking .support-heading { color:#aaa1c4; padding:1px 3px; gap:7px; width:max-content; max-width:100%; }
     .thinking .kind-icon { color:#a99bd0; }
     .thinking .summary-name { font-style:italic; }
     .thinking .summary-hint { color:#88849c; margin-left:0; }
-    details.support.tool { border:1px solid var(--chrome-border,#41485f); border-radius:7px; background:rgba(122,162,247,.035); max-width:560px; }
-    details.support.tool summary { color:#b7c9ed; padding:2px 9px; }
+    .support.tool { border:1px solid var(--chrome-border,#41485f); border-radius:7px; background:rgba(122,162,247,.035); max-width:560px; }
+    .support.tool .support-heading { color:#b7c9ed; padding:2px 9px; }
     .tool .kind-icon { color:#8da6d2; }
     .tool .summary-name { font:600 11px/1.4 ui-monospace,monospace; }
     .tool .summary-hint { display:flex; align-items:center; gap:4px; }
@@ -142,7 +138,6 @@ export class MuxSDKChat extends LitElement {
     .tool.failed .summary-hint { color:#e6a5a5; }
     .tool.running .summary-hint { color:#b7c9ed; }
     .detail { padding:4px 12px 11px; max-width:100%; }
-    details.support[open] { width:100%; }
     .thinking .detail { padding:3px 12px 8px 22px; border-left:1px solid #6f648c; margin-left:10px; }
     .detail-label { color:#9cbaf5; font-weight:600; margin:9px 0 4px; }
     .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,.2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
@@ -571,10 +566,10 @@ export class MuxSDKChat extends LitElement {
     const output = block.done ? this.detail(this.toolOutput(block.output)) : 'Running…';
     const truncated = output.match(/\n(… truncated after [^\n]+)$/);
     const state = failed ? 'Failed' : block.done ? 'Completed' : 'Running';
-    return html`<details class="support ${thinking ? 'thinking' : `tool ${failed ? 'failed' : block.done ? 'completed' : 'running'}`}" open><summary><span class="chevron" aria-hidden="true">${icon(ChevronRight, { size: 12 })}</span><span class="kind-icon" aria-hidden="true">${icon(thinking ? Brain : Terminal, { size: 13 })}</span><span class="summary-name">${thinking ? 'Thinking' : block.name || 'Tool'}</span>${!thinking && typeof hint === 'string' ? html`<span class="tool-hint" title=${hint}>${hint}</span>` : nothing}<span class="summary-hint">${thinking ? `${block.text.length} characters` : html`<span class="state-icon" aria-hidden="true">${icon(failed ? CircleX : block.done ? Check : LoaderCircle, { size: 12 })}</span>${state}`}</span></summary><div class="detail">${thinking
+    return html`<section class="support ${thinking ? 'thinking' : `tool ${failed ? 'failed' : block.done ? 'completed' : 'running'}`}" aria-label=${thinking ? 'Thinking detail' : `${block.name || 'Tool'} detail`}><div class="support-heading"><span class="kind-icon" aria-hidden="true">${icon(thinking ? Brain : Terminal, { size: 13 })}</span><span class="summary-name">${thinking ? 'Thinking' : block.name || 'Tool'}</span>${!thinking && typeof hint === 'string' ? html`<span class="tool-hint" title=${hint}>${hint}</span>` : nothing}<span class="summary-hint">${thinking ? `${block.text.length} characters` : html`<span class="state-icon" aria-hidden="true">${icon(failed ? CircleX : block.done ? Check : LoaderCircle, { size: 12 })}</span>${state}`}</span></div><div class="detail">${thinking
       ? html`<pre>${block.text}</pre>`
       : html`<div class="detail-label">Tool</div><pre>${block.name || 'Tool'}</pre><div class="detail-label">Input arguments</div><pre>${this.detail(input)}</pre><div class="detail-label">Output / result</div><pre>${truncated ? output.slice(0, -truncated[0].length) : output}</pre>${truncated ? html`<div class="truncation">${truncated[1]}</div>` : nothing}`}
-    </div></details>`;
+    </div></section>`;
   }
   private workedLabel(turn: number) {
     const started = this.turnStarted.get(turn);
@@ -622,10 +617,7 @@ export class MuxSDKChat extends LitElement {
         const active = this.turnFinished.get(block.turn) === undefined;
         return html`<div class="block work"><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
           const disclosure = event.currentTarget as HTMLDetailsElement;
-          if (disclosure.open) {
-            this.workExpanded.add(block.turn);
-            disclosure.querySelectorAll<HTMLDetailsElement>('details.support').forEach(item => { item.open = true; });
-          } else this.workExpanded.delete(block.turn);
+          if (disclosure.open) this.workExpanded.add(block.turn); else this.workExpanded.delete(block.turn);
         }}><summary>${active ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${active && items.length === 1 && items[0].kind === 'progress' && items[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(items)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${items.some(item => item.kind !== 'progress') ? items.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${active ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`;
       }
       return html`<div class="block ${block.kind}">${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
