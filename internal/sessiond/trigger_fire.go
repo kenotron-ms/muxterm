@@ -157,7 +157,7 @@ func (s *Server) spawnTriggerLane(t Trigger) (wsID string, paneID int, err error
 			m.PaneID = id
 			s.broadcast(wsID, m)
 		},
-		"", // cwd: no override, matching a live-created pane.
+		s.reg.ProjectPath(wsID), // match interactive panes in a folder-bound workspace.
 	)
 	if perr != nil {
 		// A FAILED FIRE LEAVES NOTHING BEHIND, on the same reasoning spawn_lane
