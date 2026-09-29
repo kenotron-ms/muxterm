@@ -27,7 +27,7 @@ export class MuxSDKChatSettings extends LitElement {
     summary:hover, summary:focus-visible, details[open] summary { background:rgba(255,255,255,.08); border-color:var(--chrome-border,#41485f); outline:none; }
     .summary-text { min-width:0; overflow:hidden; text-overflow:ellipsis; }
     .chevron { color:var(--chrome-text-dim,#9aa3b8); font-size:15px; }
-    .panel { position:absolute; z-index:30; bottom:40px; width:min(350px,calc(100vw - 44px)); max-height:min(65vh,520px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px rgba(0,0,0,.45); }
+    .panel { position:absolute; z-index:30; bottom:40px; width:min(350px,calc(100vw - 44px)); max-height:min(72vh,640px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px rgba(0,0,0,.45); }
     .permission-picker .panel { left:0; }
     .model-picker .panel { right:0; }
     .heading { padding:9px 10px 5px; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
