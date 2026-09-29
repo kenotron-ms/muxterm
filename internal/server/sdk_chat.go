@@ -42,6 +42,8 @@ type sdkChat struct {
 	Provider     string    `json:"provider,omitempty"`
 	Model        string    `json:"model,omitempty"`
 	Effort       string    `json:"effort,omitempty"`
+	Permission   string    `json:"permission,omitempty"`
+	Mode         string    `json:"mode,omitempty"`
 	NativeID     string    `json:"nativeId,omitempty"`
 	State        string    `json:"state"`
 	Archived     bool      `json:"archived,omitempty"`
@@ -557,7 +559,7 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never"})
+	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never", "permission": c.Permission, "mode": c.Mode})
 	return err
 }
 
@@ -598,6 +600,10 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 		if c.Effort != "" {
 			settings["effort"] = c.Effort
 		}
+		settings["permission"] = sdkPermission(c)
+		settings["mode"] = sdkMode(c)
+		settings["permissions"] = sdkPermissions(c.Harness)
+		settings["modes"] = sdkModes(c.Harness)
 		writeSDKJSON(w, 200, settings)
 		return
 	}
@@ -608,6 +614,17 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 	var fields map[string]string
 	if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&fields) != nil {
 		http.Error(w, "invalid chat settings", 400)
+		return
+	}
+	permission, mode := sdkPermission(c), sdkMode(c)
+	if value, ok := fields["permission"]; ok {
+		permission = value
+	}
+	if value, ok := fields["mode"]; ok {
+		mode = value
+	}
+	if !sdkContains(sdkPermissions(c.Harness), permission) || !sdkContains(sdkModes(c.Harness), mode) || (c.Harness == "claude" && ((permission == "read-only") != (mode == "plan"))) {
+		http.Error(w, "unsupported permission or mode for this harness", 422)
 		return
 	}
 	var req struct{ Bundle, Provider, Model, Effort string }
@@ -686,7 +703,7 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	result, err := h.call(ctx, "select", map[string]any{"sessionId": id, "bundle": req.Bundle, "provider": req.Provider, "model": req.Model, "effort": req.Effort})
+	result, err := h.call(ctx, "select", map[string]any{"sessionId": id, "bundle": req.Bundle, "provider": req.Provider, "model": req.Model, "effort": req.Effort, "permission": permission, "mode": mode})
 	if err != nil {
 		http.Error(w, err.Error(), 422)
 		return
@@ -698,13 +715,55 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	c.Bundle, c.Provider, c.Model, c.Effort = selected.Bundle, selected.Provider, selected.Model, selected.Effort
+	c.Permission, c.Mode = permission, mode
 	err = h.saveLocked(c)
 	h.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	writeSDKJSON(w, 200, json.RawMessage(result))
+	var response map[string]any
+	if json.Unmarshal(result, &response) != nil {
+		response = map[string]any{}
+	}
+	response["permission"], response["mode"] = permission, mode
+	response["permissions"], response["modes"] = sdkPermissions(c.Harness), sdkModes(c.Harness)
+	writeSDKJSON(w, 200, response)
+}
+func sdkPermission(c *sdkChat) string {
+	if c.Permission != "" {
+		return c.Permission
+	}
+	return "full-permission"
+}
+func sdkMode(c *sdkChat) string {
+	if c.Mode != "" {
+		return c.Mode
+	}
+	return "agent"
+}
+func sdkPermissions(harness string) []string {
+	if harness == "codex" {
+		return []string{"read-only", "workspace-write", "full-permission"}
+	}
+	if harness == "claude" {
+		return []string{"read-only", "full-permission"}
+	}
+	return []string{"full-permission"}
+}
+func sdkModes(harness string) []string {
+	if harness == "amplifier" {
+		return []string{"agent"}
+	}
+	return []string{"agent", "plan"}
+}
+func sdkContains(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 func writeSDKJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")

@@ -58,9 +58,9 @@ export class CodexStream {
   }
 
   async initialize() {
-    await this.request('initialize', { clientInfo: { name: 'muxterm', title: 'muxterm SDK chat', version: '1' }, capabilities: null });
+    await this.request('initialize', { clientInfo: { name: 'muxterm', title: 'muxterm SDK chat', version: '1' }, capabilities: { experimentalApi: true } });
     this.process.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
-    const options = { cwd: this.session.cwd, approvalPolicy: 'never', sandbox: 'danger-full-access' };
+    const options = { cwd: this.session.cwd, approvalPolicy: 'never', sandbox: this.sandboxName() };
     const result = await this.request(this.session.nativeId ? 'thread/resume' : 'thread/start',
       this.session.nativeId ? { threadId: this.session.nativeId, ...options } : options);
     this.session.nativeId = result.thread.id;
@@ -87,6 +87,17 @@ export class CodexStream {
     return { model: this.session.model || '', effort: this.session.effort || '', models };
   }
 
+  sandboxName() {
+    return this.session.permission === 'read-only' ? 'read-only'
+      : this.session.permission === 'workspace-write' ? 'workspace-write' : 'danger-full-access';
+  }
+
+  sandboxPolicy() {
+    return this.session.permission === 'read-only' ? { type: 'readOnly', networkAccess: false }
+      : this.session.permission === 'workspace-write' ? { type: 'workspaceWrite', writableRoots: [this.session.cwd], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
+      : { type: 'dangerFullAccess' };
+  }
+
   async run(input) {
     await this.ready;
     this.session.busy = true;
@@ -104,8 +115,11 @@ export class CodexStream {
         : input.content;
       const turnInput = [{ type: 'text', text: prompt, text_elements: [] }];
       for (const item of attachments) if (item.kind === 'image') turnInput.push({ type: 'localImage', path: item.path });
+      const model = input.model || this.session.model;
       const result = await this.request('turn/start', { threadId: this.session.nativeId,
         summary: 'detailed',
+        approvalPolicy: 'never', sandboxPolicy: this.sandboxPolicy(),
+        ...(model ? { collaborationMode: { mode: this.session.mode === 'plan' ? 'plan' : 'default', settings: { model, reasoning_effort: input.effort || this.session.effort || null, developer_instructions: null } } } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { effort: input.effort } : {}),
         input: turnInput });

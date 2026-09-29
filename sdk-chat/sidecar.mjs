@@ -66,7 +66,7 @@ async function runClaude(s) {
   let thinkingStreamed = false;
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, resume: s.nativeId || undefined,
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: muxtermMcpEnv } },
-    includePartialMessages: true, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true,
+    includePartialMessages: true, permissionMode: s.permission === 'read-only' ? 'plan' : 'bypassPermissions', allowDangerouslySkipPermissions: true,
     thinking: { type: 'adaptive', display: 'summarized' }, effort: 'high', maxTurns: 20 } });
   s.query = q;
   try {
@@ -125,7 +125,7 @@ async function command(cmd) {
     if (harness !== 'codex' && harness !== 'claude') throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
-    const s = { id: sessionId, harness, cwd, nativeId, approval: cmd.approval, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: '', effort: '' };
+    const s = { id: sessionId, harness, cwd, nativeId, approval: cmd.approval, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
     if (harness === 'claude') void runClaude(s);
     if (op === 'start') emit(sessionId, 'session.started', { capabilities: capabilities(harness), pendingNativeId: true });
@@ -155,8 +155,10 @@ async function command(cmd) {
     if (s.harness === 'claude') {
       if (model !== s.model) await s.query.setModel(model || undefined);
       if (effort !== s.effort) await s.query.applyFlagSettings({ effortLevel: effort || null });
+      if (cmd.permission && cmd.permission !== s.permission) await s.query.setPermissionMode(cmd.permission === 'read-only' ? 'plan' : 'bypassPermissions');
     }
     s.model = model; s.effort = effort;
+    s.permission = cmd.permission || s.permission; s.mode = cmd.mode || s.mode;
     return { ...options, model, effort };
   }
   if (op === 'title') {

@@ -2609,15 +2609,12 @@ async def command(cmd):
                         continue
                     model_id = str(item.id)
                     efforts = []
-                    if active_provider == "provider-anthropic" and hasattr(provider, "_get_capabilities"):
+                    if hasattr(provider, "_get_capabilities"):
                         caps = provider._get_capabilities(model_id)
                         if getattr(caps, "supports_output_config", False):
                             efforts = list(getattr(caps, "supported_efforts", ()))
-                    elif active_provider == "provider-openai":
-                        if model_id == "gpt-6-astra": efforts = ["low", "medium", "high", "xhigh", "max"]
-                        elif model_id in ("gpt-6-sol", "gpt-6-luna"): efforts = ["low", "medium", "high", "xhigh", "max"]
-                        elif model_id in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"): efforts = ["low", "medium", "high", "xhigh", "max"]
-                        elif model_id.startswith("gpt-5.5-pro"): efforts = ["medium", "high", "xhigh"]
+                    if not efforts:
+                        efforts = list(getattr(item, "supported_efforts", ()) or ())
                     rows.append({"id": model_id, "label": str(item.display_name), "efforts": efforts})
             except Exception:
                 pass
