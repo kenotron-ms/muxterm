@@ -42,6 +42,7 @@ sys.stdout = sys.stderr
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
+import base64  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import signal  # noqa: E402
@@ -2208,6 +2209,27 @@ class SDKChatSession:
         self.turn_started = None
         self.first_token_seen = False
 
+    @staticmethod
+    def image_content(command, coordinator):
+        """Give loop-live a native image block instead of only a file path."""
+        blocks = [{"type": "text", "text": command.text}]
+        for item in command.attachments:
+            data = Path(item["path"]).read_bytes()
+            if data.startswith(b"\x89PNG\r\n\x1a\n"):
+                media_type = "image/png"
+            elif data.startswith(b"\xff\xd8\xff"):
+                media_type = "image/jpeg"
+            elif data.startswith((b"GIF87a", b"GIF89a")):
+                media_type = "image/gif"
+            elif data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+                media_type = "image/webp"
+            else:
+                raise ValueError("Unsupported attached image format")
+            blocks.append({"type": "image", "source": {"type": "base64",
+                           "media_type": media_type,
+                           "data": base64.b64encode(data).decode("ascii")}})
+        return blocks
+
     async def build(self):
         build_start = time.monotonic()
         from amplifier_app_cli.lib.settings import AppSettings, SettingsPaths
@@ -2311,6 +2333,7 @@ class SDKChatSession:
         timing("sdk.loop_live_mount", mount_start)
         self.runtime = Runtime(session_id=self.id, observer=self.observe)
         self.session.coordinator.register_capability("live.runtime", self.runtime)
+        self.session.coordinator.register_capability("live.attachments.encode", self.image_content)
         if transcript:
             context = self.session.coordinator.get("context")
             if context is None or not hasattr(context, "set_messages"):
@@ -2398,16 +2421,19 @@ class SDKChatSession:
         content = value.get("content", "")
         display_content = content
         attachments = value.get("attachments") or []
-        if attachments:
+        files = [item for item in attachments if item["kind"] != "image"]
+        images = [item for item in attachments if item["kind"] == "image"]
+        if files:
             manifest = "\n".join(
                 f'- {json.dumps(item["name"])} ({item["kind"]}): {json.dumps(item["path"])}'
-                for item in attachments
+                for item in files
             )
             content = (content or "Please inspect the attached files.") + (
                 "\n\nAttached files on the local filesystem (absolute paths):\n"
-                + manifest + "\nRead the files at these paths before answering. "
-                "Inspect each image's contents."
+                + manifest + "\nRead the files at these paths before answering."
             )
+        if images:
+            content = (content or "Please inspect the attached images.") + "\n\nImages are attached directly to this message."
         if kind not in ("user", "steer", "service", "cancel_job", "stop"):
             raise ValueError(f"unsupported Amplifier input kind: {kind}")
         if not input_id or (kind not in ("stop", "cancel_job") and not content):
@@ -2417,7 +2443,8 @@ class SDKChatSession:
         if kind == "steer" and source not in ("user", "browser"):
             raise ValueError("steer input requires a human source")
         await self.runtime.submit(Input(kind=kind, text=content,
-                                        source=source if kind == "service" else "user", id=input_id))
+                                        source=source if kind == "service" else "user", id=input_id,
+                                        attachments=tuple(images)))
         if kind == "user":
             self.turn_started = time.monotonic()
             self.first_token_seen = False
