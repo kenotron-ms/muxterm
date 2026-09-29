@@ -8,7 +8,7 @@ import './mux-sdk-chat-settings.js';
 import './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
-type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
+type SDKEvent = { type: string; at?: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
 type Block = { key: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
 import { icon } from '../lib/icons.js';
 import { Brain, Check, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
@@ -19,6 +19,7 @@ export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
   @state() private chat?: SDKChat;
   @state() private blocks: Block[] = [];
+  @state() private trajectory: SDKEvent[] = [];
   @state() private draft = '';
   @state() private error = '';
   @state() private busy = false;
@@ -254,7 +255,7 @@ export class MuxSDKChat extends LitElement {
   }
   private connect() {
     if (!this.isConnected || !this.sessionId) return;
-    this.stream?.close(); this.blocks = []; this.parsers.clear(); this.expanded.clear(); this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.error = ''; this.settingsPending = false; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
+    this.stream?.close(); this.blocks = []; this.trajectory = []; this.parsers.clear(); this.expanded.clear(); this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.error = ''; this.settingsPending = false; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
     const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/events`));
     source.addEventListener('snapshot', e => { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; this.busy = this.chat.state === 'working'; });
     source.addEventListener('sdk', e => this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent));
@@ -262,6 +263,8 @@ export class MuxSDKChat extends LitElement {
     this.stream = source;
   }
   private onEvent(event: SDKEvent) {
+    if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type))
+      this.trajectory = [...this.trajectory, event];
     const blocks = [...this.blocks];
     if (event.type === 'input.accepted') {
       if (event.kind === 'steer') {
@@ -496,6 +499,6 @@ export class MuxSDKChat extends LitElement {
 
 
     </div></div></div>
-      ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .harness=${this.chat?.harness || ''} .tasks=${this.planTasks()} .touched=${this.touchedFiles()}></mux-sdk-utility></aside>` : nothing}
+      ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .harness=${this.chat?.harness || ''} .tasks=${this.planTasks()} .touched=${this.touchedFiles()} .events=${this.trajectory}></mux-sdk-utility></aside>` : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`; }
 }

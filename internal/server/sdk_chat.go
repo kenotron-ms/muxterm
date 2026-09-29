@@ -53,6 +53,7 @@ type sdkEvent struct {
 
 	SessionID    string                 `json:"sessionId"`
 	Type         string                 `json:"type"`
+	At           time.Time              `json:"at,omitempty"`
 	NativeID     string                 `json:"nativeId,omitempty"`
 	InputID      string                 `json:"inputId,omitempty"`
 	InputIDs     []string               `json:"inputIds,omitempty"`
@@ -211,6 +212,9 @@ func (h *sdkChatHost) saveProjectsLocked() error {
 	return os.Rename(tmp, filepath.Join(h.dir, "projects.json"))
 }
 func (h *sdkChatHost) appendEvent(event sdkEvent) {
+	if event.At.IsZero() {
+		event.At = time.Now().UTC()
+	}
 	h.mu.Lock()
 	c := h.chats[event.SessionID]
 	if c == nil {
