@@ -218,10 +218,16 @@ type Status struct {
 // The release is nil whenever no lookup happened or the lookup failed — a dev
 // build or a populated Error. It is always non-nil when CanUpdate is true.
 func Check(ctx context.Context, current string) (Status, *Release) {
+	return CheckForServer(ctx, current, false)
+}
+
+// CheckForServer skips release lookups for unauthenticated development servers.
+// The --no-auth switch is restricted to local, ephemeral instances.
+func CheckForServer(ctx context.Context, current string, noAuth bool) (Status, *Release) {
 	method, reason := Platform()
 	st := Status{CurrentVersion: current, Method: method}
 
-	if IsDev(current) || strings.HasSuffix(filepath.Base(os.Args[0]), ".test") ||
+	if noAuth || IsDev(current) || strings.HasSuffix(filepath.Base(os.Args[0]), ".test") ||
 		os.Getenv("MUXTERM_DEV_INSTANCE") == "1" ||
 		os.Getenv("MUXTERM_DISABLE_UPDATE_CHECK") == "1" || os.Getenv("CI") != "" {
 		// Short-circuit before any network call. Development and ephemeral
