@@ -2201,6 +2201,7 @@ class SDKChatSession:
         self.closed = False
         self.turn_started = None
         self.first_token_seen = False
+        self.thinking_streamed = False
 
     async def build(self):
         build_start = time.monotonic()
@@ -2329,11 +2330,21 @@ class SDKChatSession:
         if hooks is None: raise RuntimeError("Amplifier hook registry unavailable")
         cont = HookResult(action="continue")
         async def delta(event, data):
-            if data.get("block_type") != "thinking" and data.get("text"):
+            if data.get("block_type") == "thinking" and data.get("text"):
+                self.thinking_streamed = True
+                frame(self.id, "assistant.thinking", text=data["text"])
+            elif data.get("text"):
                 if not self.first_token_seen and self.turn_started is not None:
                     self.first_token_seen = True
                     timing("sdk.first_token", self.turn_started)
                 frame(self.id, "assistant.delta", text=data["text"])
+            return cont
+        async def thinking_end(event, data):
+            block = data.get("block")
+            if not self.thinking_streamed and isinstance(block, dict) and block.get("type") == "thinking":
+                text = block.get("thinking") or block.get("text")
+                if text:
+                    frame(self.id, "assistant.thinking", text=text)
             return cont
         async def tool_start(event, data):
             frame(self.id, "tool.started", toolId=str(data.get("tool_call_id") or ""),
@@ -2341,9 +2352,11 @@ class SDKChatSession:
             return cont
         async def tool_end(event, data):
             frame(self.id, "tool.completed", toolId=str(data.get("tool_call_id") or ""),
-                  name=str(data.get("tool_name") or "Tool"))
+                  name=str(data.get("tool_name") or "Tool"), raw=data.get("result") or data.get("error"),
+                  isError=event == "tool:error")
             return cont
         hooks.register("llm:stream_block_delta", delta, name="sdk-chat-delta")
+        hooks.register("llm:content_block:end", thinking_end, name="sdk-chat-thinking-fallback")
         hooks.register("tool:pre", tool_start, name="sdk-chat-tool-start")
         hooks.register("tool:post", tool_end, name="sdk-chat-tool-end")
         hooks.register("tool:error", tool_end, name="sdk-chat-tool-error")
@@ -2412,6 +2425,7 @@ class SDKChatSession:
         if kind == "user":
             self.turn_started = time.monotonic()
             self.first_token_seen = False
+            self.thinking_streamed = False
         self.active.add(input_id)
         frame(self.id, "input.accepted", inputId=input_id, kind=kind, source=source, text=display_content)
         return {"status": "accepted", "inputId": input_id}

@@ -29,6 +29,7 @@ function inputMessage(input) {
     uuid: input.id, ...(input.kind === 'service' ? { priority: 'now', client_composed: true } : {}) };
 }
 function queue(s, input) {
+  s.thinkingStreamed = false;
   s.inputs.push(inputMessage(input));
   s.wake?.(); s.wake = null;
 }
@@ -39,8 +40,10 @@ async function* claudeInputs(s) {
   }
 }
 async function runClaude(s) {
+  const toolNames = new Map();
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, resume: s.nativeId || undefined,
     includePartialMessages: true, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true,
+    thinking: { type: 'enabled', budgetTokens: 2048, display: 'summarized' }, effort: 'high',
     maxTurns: 20 } });
   s.query = q;
   try {
@@ -52,11 +55,19 @@ async function runClaude(s) {
         const event = msg.event;
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta')
           emit(s.id, 'assistant.delta', { text: event.delta.text });
+        else if (event?.type === 'content_block_delta' && event.delta?.type === 'thinking_delta')
+          { s.thinkingStreamed = true; emit(s.id, 'assistant.thinking', { text: event.delta.thinking }); }
         else if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use')
-          emit(s.id, 'tool.started', { toolId: event.content_block.id, name: event.content_block.name, raw: event.content_block });
+          { toolNames.set(event.content_block.id, event.content_block.name);
+            emit(s.id, 'tool.started', { toolId: event.content_block.id, name: event.content_block.name, raw: event.content_block.input }); }
       } else if (msg.type === 'assistant') {
+        if (!s.thinkingStreamed) for (const block of msg.message?.content || []) if (block.type === 'thinking' && block.thinking)
+          emit(s.id, 'assistant.thinking', { text: block.thinking });
         for (const block of msg.message?.content || []) if (block.type === 'tool_use')
-          emit(s.id, 'tool.completed', { toolId: block.id, name: block.name, raw: block });
+          emit(s.id, 'tool.started', { toolId: block.id, name: block.name, raw: block.input });
+      } else if (msg.type === 'user') {
+        for (const block of msg.message?.content || []) if (block.type === 'tool_result')
+          emit(s.id, 'tool.completed', { toolId: block.tool_use_id, name: toolNames.get(block.tool_use_id) || 'Tool', raw: block.content, isError: !!block.is_error });
       } else if (msg.type === 'result') {
         // The SDK's result echoes the UUIDs of user inputs the native turn
         // consumed. A local input queue is not proof that a turn was accepted.
@@ -115,6 +126,7 @@ async function command(cmd) {
       s.busy = true;
       await new Promise((resolve, reject) => {
         s.pendingInputs.set(input.id, { input, resolve, reject });
+        emit(sessionId, 'input.queued', { inputId: input.id, kind: input.kind, source: input.source, text: input.content });
         queue(s, input);
       });
     }
@@ -133,6 +145,7 @@ async function command(cmd) {
 }
 const server = net.createServer(client => {
   clients.add(client); let buffer = '';
+  client.on('error', () => { clients.delete(client); client.destroy(); });
   client.on('data', chunk => {
     buffer += chunk;
     for (;;) {

@@ -183,7 +183,7 @@ func (s *Server) handleSDKControlHistory(w http.ResponseWriter, r *http.Request)
 	events := make([]sdkEvent, 0, len(lines))
 	for _, line := range lines {
 		var event sdkEvent
-		if json.Unmarshal([]byte(line), &event) == nil && (event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "assistant.delta" || event.Type == "tool.started" || event.Type == "tool.completed" || event.Type == "turn.completed" || event.Type == "error" || event.Type == "session.uncertain") {
+		if json.Unmarshal([]byte(line), &event) == nil && (event.Type == "input.queued" || event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "assistant.delta" || event.Type == "assistant.thinking" || event.Type == "tool.started" || event.Type == "tool.completed" || event.Type == "turn.completed" || event.Type == "error" || event.Type == "session.uncertain") {
 			events = append(events, event)
 		}
 	}

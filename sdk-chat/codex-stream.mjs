@@ -3,6 +3,17 @@ import { createRequire } from 'node:module';
 import readline from 'node:readline';
 
 const codexCLI = createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js');
+function toolDetails(item, completed) {
+  if (item.type === 'commandExecution') return {
+    name: 'Command', input: { command: item.command, cwd: item.cwd },
+    output: { exitCode: item.exitCode, output: item.aggregatedOutput },
+  };
+  if (item.type === 'mcpToolCall') return {
+    name: item.server ? `${item.server}: ${item.tool}` : item.tool || 'MCP tool',
+    input: item.arguments, output: { result: item.result, error: item.error },
+  };
+  return { name: item.type, input: item, output: completed ? item : undefined };
+}
 
 // The Codex SDK's runStreamed() uses `codex exec --experimental-json`, which
 // reports completed agent messages but no text deltas. The app-server protocol
@@ -14,6 +25,7 @@ export class CodexStream {
     this.pending = new Map();
     this.nextId = 0;
     this.textByItem = new Map();
+    this.reasoningItems = new Set();
     this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio'], {
       cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -39,7 +51,8 @@ export class CodexStream {
   async initialize() {
     await this.request('initialize', { clientInfo: { name: 'muxterm', title: 'muxterm SDK chat', version: '1' }, capabilities: null });
     this.process.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
-    const options = { cwd: this.session.cwd, approvalPolicy: 'never', sandbox: 'danger-full-access' };
+    const options = { cwd: this.session.cwd, approvalPolicy: 'never', sandbox: 'danger-full-access',
+      config: { model_reasoning_summary: 'detailed' } };
     const result = await this.request(this.session.nativeId ? 'thread/resume' : 'thread/start',
       this.session.nativeId ? { threadId: this.session.nativeId, ...options } : options);
     this.session.nativeId = result.thread.id;
@@ -53,6 +66,7 @@ export class CodexStream {
     this.session.busy = true;
     this.inputId = input.id;
     this.textByItem.clear();
+    this.reasoningItems.clear();
     try {
       const attachments = input.attachments || [];
       const manifest = attachments.map(a => `- ${JSON.stringify(a.name)} (${a.kind}): ${JSON.stringify(a.path)}`).join('\n');
@@ -86,6 +100,13 @@ export class CodexStream {
     if (method === 'item/agentMessage/delta') {
       this.textByItem.set(p.itemId, (this.textByItem.get(p.itemId) || '') + p.delta);
       if (p.delta) this.emit(this.session.id, 'assistant.delta', { text: p.delta });
+    } else if (method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
+      if (p.delta) { this.reasoningItems.add(p.itemId); this.emit(this.session.id, 'assistant.thinking', { text: p.delta }); }
+    } else if (method === 'item/completed' && p.item?.type === 'reasoning') {
+      // Older app-server versions only publish the completed summary.
+      const summary = p.item.summary || p.item.summaryText;
+      if (Array.isArray(summary) && summary.length && !this.reasoningItems.has(p.item.id))
+        this.emit(this.session.id, 'assistant.thinking', { text: summary.map(part => typeof part === 'string' ? part : part.text || '').join('\n') });
     } else if (method === 'item/completed' && p.item?.type === 'agentMessage') {
       // Keep compatibility with an older app-server that only sends a final item.
       const sent = this.textByItem.get(p.item.id) || '';
@@ -93,9 +114,12 @@ export class CodexStream {
       const rest = full.startsWith(sent) ? full.slice(sent.length) : full;
       if (rest) this.emit(this.session.id, 'assistant.delta', { text: rest });
     } else if (method === 'item/started' && p.item?.type !== 'agentMessage' && p.item?.type !== 'reasoning' && p.item?.type !== 'userMessage') {
-      this.emit(this.session.id, 'tool.started', { name: p.item.type, toolId: p.item.id, raw: p.item });
+      const tool = toolDetails(p.item, false);
+      this.emit(this.session.id, 'tool.started', { name: tool.name, toolId: p.item.id, raw: tool.input });
     } else if (method === 'item/completed' && p.item?.type !== 'agentMessage' && p.item?.type !== 'reasoning' && p.item?.type !== 'userMessage') {
-      this.emit(this.session.id, 'tool.completed', { name: p.item.type, toolId: p.item.id, raw: p.item });
+      const tool = toolDetails(p.item, true);
+      this.emit(this.session.id, 'tool.completed', { name: tool.name, toolId: p.item.id, raw: tool.output,
+        isError: p.item.status === 'failed' || !!p.item.error });
     } else if (method === 'turn/completed') {
       this.session.busy = false;
       this.turnId = null;

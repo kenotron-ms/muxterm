@@ -6,8 +6,37 @@ import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import './mux-amplifier-settings.js';
 
-type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; message?: string; kind?: string; raw?: unknown };
-type Block = { kind: 'user' | 'assistant' | 'tool' | 'error'; text: string; name?: string; id?: string; done?: boolean };
+type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; inputId?: string; message?: string; kind?: string; raw?: unknown; isError?: boolean };
+type Block = { kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; isError?: boolean };
+function detail(value: unknown): string {
+  if (value === undefined || value === null) return 'No details supplied by the harness.';
+  if (typeof value === 'string') return value || '(empty)';
+  return JSON.stringify(value, null, 2) || '(empty)';
+}
+function outputDetail(value: unknown): string {
+  if (Array.isArray(value)) return value.map(item => item && typeof item === 'object' && 'text' in item ? String(item.text) : detail(item)).join('\n');
+  if (value && typeof value === 'object') {
+    const result = value as Record<string, unknown>;
+    if (typeof result.output === 'string') return `${result.output}${typeof result.exitCode === 'number' ? `\nExit code: ${result.exitCode}` : ''}`;
+    if (result.output && typeof result.output === 'object') {
+      const output = result.output as Record<string, unknown>;
+      if (typeof output.content === 'string') return output.content;
+      if (typeof output.stdout === 'string') return `${output.stdout}${output.stderr ? `\nStderr:\n${output.stderr}` : ''}${typeof output.returncode === 'number' ? `\nExit code: ${output.returncode}` : ''}`;
+    }
+  }
+  return detail(value);
+}
+function excerpt(value: unknown, output = false): string {
+  const text = output ? outputDetail(value) : detail(value);
+  const limit = 12000;
+  return text.length > limit ? `${text.slice(0, limit)}\n… truncated after ${limit.toLocaleString()} characters (${text.length.toLocaleString()} total)` : text;
+}
+function toolHint(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const fields = value as Record<string, unknown>;
+  const hint = fields.command || fields.file_path || fields.path || fields.url;
+  return typeof hint === 'string' ? hint : '';
+}
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
@@ -23,6 +52,7 @@ export class MuxSDKChat extends LitElement {
   private dragDepth = 0;
   private stream?: EventSource;
   private parsers = new Map<number, MarkdownStream>();
+  private expanded = new Set<number>();
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
   static styles = css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-bg,#1a1c28); color:var(--chrome-text-bright,#d9def0); font:13px/1.55 system-ui,sans-serif; }
@@ -40,9 +70,19 @@ export class MuxSDKChat extends LitElement {
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; margin-bottom:7px; }
     .text { overflow-wrap:anywhere; }
     .text :is(p,pre) { margin:0 0 10px; }
-    .tool { border-left:2px solid #7384a5; padding:5px 12px; color:var(--chrome-text-dim,#b2bdd3); font:12px ui-monospace,monospace; }
-    .block.tool > .tool { border-left-color:transparent; }
-    .tool-name { color:#b7c9ed; }
+    .support { border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:rgba(128,145,180,.065); color:#aebbd8; font-size:12px; }
+    .support summary { cursor:pointer; padding:8px 12px; display:flex; align-items:center; gap:8px; list-style:none; }
+    .support summary::-webkit-details-marker { display:none; }
+    .support summary::before { content:'▸'; color:#9bb8f7; transition:transform .15s; }
+    .support[open] summary::before { transform:rotate(90deg); }
+    .support summary:hover { color:var(--chrome-text-bright,#d9def0); }
+    .support .hint { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#9baac9; }
+    .support .subline { margin-left:auto; white-space:nowrap; color:#9baac9; }
+    .support-content { padding:0 13px 12px 27px; }
+    .support-content .label { color:#b7c9ed; font-weight:600; margin:9px 0 4px; }
+    .support-content pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:350px; overflow:auto; margin:0; padding:9px 10px; border-radius:6px; background:rgba(0,0,0,.2); font:12px/1.5 ui-monospace,monospace; color:var(--chrome-text-bright,#d9def0); }
+    .thought { color:#cbd5eb; overflow-wrap:anywhere; }
+    .thought :is(p,pre) { margin:0 0 8px; }
     .error { color:#e6a5a5; }
     .composer-wrap { padding:0 clamp(24px,8vw,120px) 18px; }
     .attachments { max-width:780px; margin:0 auto 8px; display:flex; flex-wrap:wrap; gap:8px; }
@@ -78,7 +118,7 @@ export class MuxSDKChat extends LitElement {
   override willUpdate(changed: Map<string, unknown>) { if (changed.has('sessionId')) this.connect(); }
   private connect() {
     if (!this.isConnected || !this.sessionId) return;
-    this.stream?.close(); this.blocks = []; this.parsers.clear(); this.error = ''; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
+    this.stream?.close(); this.blocks = []; this.parsers.clear(); this.expanded.clear(); this.error = ''; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
     const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/events`));
     source.addEventListener('snapshot', e => { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; });
     source.addEventListener('sdk', e => this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent));
@@ -87,17 +127,29 @@ export class MuxSDKChat extends LitElement {
   }
   private onEvent(event: SDKEvent) {
     const blocks = [...this.blocks];
-    if (event.type === 'input.accepted') { blocks.push({ kind:'user', text:event.text || '' }); this.busy = true; }
+    if (event.type === 'input.queued' || event.type === 'input.accepted') {
+      if (!blocks.some(b => b.kind === 'user' && b.id === event.inputId))
+        blocks.push({ kind:'user', id:event.inputId, text:event.text || '' });
+      this.busy = true;
+    }
     else if (event.type === 'assistant.delta') {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
       else blocks.push({ kind:'assistant', text:event.text || '' });
-    } else if (event.type === 'tool.started') blocks.push({ kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId });
+    } else if (event.type === 'assistant.thinking') {
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === 'thinking' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
+      else blocks.push({ kind:'thinking', text:event.text || '' });
+    } else if (event.type === 'tool.started') {
+      const index = blocks.findIndex(b => b.kind === 'tool' && b.id === event.toolId && !b.done);
+      if (index >= 0) blocks[index] = { ...blocks[index], name:event.name || blocks[index].name, input:event.raw ?? blocks[index].input };
+      else blocks.push({ kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw });
+    }
     else if (event.type === 'tool.completed') {
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId && !blocks[i].done) { index = i; break; }
-      if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:'Completed' };
-      else blocks.push({ kind:'tool', text:'Completed', name:event.name || 'Tool', id:event.toolId, done:true });
-    } else if (event.type === 'turn.completed') { this.busy = false; for (const b of blocks) if (b.kind === 'assistant') b.done = true; void sdkChats.refresh(); }
+      if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:event.isError ? 'Failed' : 'Completed', output:event.raw, isError:event.isError };
+      else blocks.push({ kind:'tool', text:event.isError ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, output:event.raw, isError:event.isError });
+    } else if (event.type === 'turn.completed') { this.busy = false; for (const b of blocks) if (b.kind === 'assistant' || b.kind === 'thinking') b.done = true; void sdkChats.refresh(); }
     else if (event.type === 'error' || event.type === 'session.uncertain') { blocks.push({ kind:'error', text:event.message || 'Session error' }); this.busy = false; void sdkChats.refresh(); }
     this.blocks = blocks;
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
@@ -108,6 +160,14 @@ export class MuxSDKChat extends LitElement {
     let parser = this.parsers.get(index);
     if (!parser) { parser = new MarkdownStream(); this.parsers.set(index, parser); }
     return renderSegments(parser.update(block.text, !block.done));
+  }
+  private onToggle(index: number, event: Event) {
+    if ((event.currentTarget as HTMLDetailsElement).open) this.expanded.add(index);
+    else this.expanded.delete(index);
+  }
+  private support(block: Block, index: number) {
+    if (block.kind === 'thinking') return html`<details class="support" ?open=${this.expanded.has(index)} @toggle=${(e: Event) => this.onToggle(index, e)}><summary>Thinking <span class="subline">${block.text.length.toLocaleString()} characters</span></summary><div class="support-content thought">${this.markdown(block, index)}</div></details>`;
+    return html`<details class="support" ?open=${this.expanded.has(index)} @toggle=${(e: Event) => this.onToggle(index, e)}><summary><strong>${block.name || 'Tool'}</strong> <span class="hint">${toolHint(block.input)}</span><span class="subline">${block.text}</span></summary><div class="support-content"><div class="label">Tool</div><pre>${block.name || 'Tool'}</pre><div class="label">Arguments</div><pre>${excerpt(block.input)}</pre><div class="label">${block.isError ? 'Error' : 'Output'}</div><pre>${block.done ? excerpt(block.output, true) : 'Waiting for result…'}</pre></div></details>`;
   }
   private hasFiles(event: DragEvent) { return Array.from(event.dataTransfer?.types || []).includes('Files'); }
   private onDragEnter(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth++; this.dropActive = true; }
@@ -169,7 +229,7 @@ export class MuxSDKChat extends LitElement {
   override render() { return html`
     <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${this.chat?.projectPath || ''}</span>${this.chat?.harness === 'amplifier' ? html`<mux-amplifier-settings .sessionId=${this.sessionId} .turnBusy=${this.busy}></mux-amplifier-settings>` : nothing}<button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${() => { this.drawerOpen = !this.drawerOpen; }}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
-      ${this.blocks.length ? this.blocks.map((b, i) => html`<div class="block ${b.kind}">${b.kind === 'user' ? html`<div class="bubble">${b.text}</div>` : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, i)}</div>` : b.kind === 'tool' ? html`<div class="tool"><span class="tool-name">${b.name}</span> · ${b.text}</div>` : html`<div class="error">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
+      ${this.blocks.length ? this.blocks.map((b, i) => html`<div class="block ${b.kind}">${b.kind === 'user' ? html`<div class="bubble">${b.text}</div>` : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, i)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b, i) : html`<div class="error">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
     </div><div class="composer-wrap">
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
