@@ -1090,10 +1090,9 @@ export class AppletDashboard extends LitElement implements AppletElement {
    * ACTIVE: refresh the clock and re-render, exactly as before.
    *
    * INACTIVE: count the sessions that want a human, and if that count ROSE,
-   * say so. Nothing else. No _fleetVersion bump, so lit never schedules an
-   * update; no render, so no DOM is touched; no fetch, no timer, no animation.
-   * An inactive Dashboard's entire response to a fleet change is one integer
-   * comparison.
+   * say so. A pending optimistic clear also expires when its session resumes.
+   * No _fleetVersion bump, so lit never schedules an update; no render, so
+   * no DOM is touched; no fetch, no timer, no animation.
    *
    * THIS IS THE FILE'S ONE EXCEPTION TO THE CONTRACT'S TEETH, and it is worth
    * naming precisely rather than leaving for someone to find. The rule is: an
@@ -1105,7 +1104,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
    * blocked while you were reading a diff on another tab, which is the entire
    * point of the flag: a flag you only get when you look is not a flag.
    *
-   * THE COST, NAMED: it is a listener, and listeners are how "costs nothing"
+   * THE COST, NAMED: it is a listener plus a scan only while an optimistic
+   * clear is pending, and listeners are how "costs nothing"
    * turns into "costs everything" one reasonable exception at a time. A future
    * applet that wants one has to make this same argument -- opens nothing,
    * polls nothing, paints nothing, and the feature is impossible without it.
@@ -1115,6 +1115,17 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const n = this.needsInput;
     const rose = n > this._needsInput;
     this._needsInput = n;
+    // The hide belongs to the terminal record that was cleared. A new live
+    // generation with the same session ID ends that hide, including when the
+    // Dashboard is inactive and only its store listener is running.
+    if (this._hiddenFinished.size) {
+      const resumed = new Set(homeSessions.sessions
+        .filter((s) => this._hiddenFinished.has(s.sessionId) && !['done', 'failed', 'stopped'].includes(s.state))
+        .map((s) => s.sessionId));
+      if (resumed.size) {
+        this._hiddenFinished = new Set([...this._hiddenFinished].filter((id) => !resumed.has(id)));
+      }
+    }
 
     if (!this.active) {
       if (rose) this._raiseAttention(n);
@@ -1304,7 +1315,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
       DASHBOARD_GROUPS.map((g) => [g, [] as SessionState[]]),
     );
     for (const s of homeSessions.sessions) {
-      if (!this._hiddenFinished.has(s.sessionId)) byGroup.get(dashboardGroupFor(s))?.push(s);
+      // Clearing is an optimistic hide for a terminal record only. A human
+      // may later resume the same session ID; its new live row must reappear.
+      if (this._hiddenFinished.has(s.sessionId) && ['done', 'failed', 'stopped'].includes(s.state)) continue;
+      byGroup.get(dashboardGroupFor(s))?.push(s);
     }
     const total = homeSessions.sessions.length;
     const freshness = homeSessions.snapshotStatus;
