@@ -234,7 +234,12 @@ export class MuxChatWorkspace extends LitElement {
 @customElement('mux-chat-list')
 export class MuxChatList extends LitElement {
   @state() private version = 0;
+  @state() private selectedSession = '';
   private unsub?: () => void;
+  private readonly onChatOpen = (event: Event) => {
+    const id = (event as CustomEvent<{ sessionId: string }>).detail?.sessionId;
+    if (id) this.selectedSession = id;
+  };
   static styles = css`
     :host { display:block; color:var(--chrome-text-dim,#9299a5); font:12px/1.35 system-ui,sans-serif; }
     .heading { padding:9px 5px 3px; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
@@ -244,8 +249,17 @@ export class MuxChatList extends LitElement {
     .pin-row span:not(.pin-icon) { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pin-icon { display:flex; flex:none; color:#aab8d8; }
   `;
-  override connectedCallback() { super.connectedCallback(); this.unsub=sdkChats.subscribe(() => this.version++); void sdkChats.refresh(); }
-  override disconnectedCallback() { this.unsub?.(); super.disconnectedCallback(); }
+  override connectedCallback() {
+    super.connectedCallback();
+    this.selectedSession = (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? '';
+    this.addEventListener('chat-open', this.onChatOpen);
+    this.unsub=sdkChats.subscribe(() => {
+      this.selectedSession = (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? this.selectedSession;
+      this.version++;
+    });
+    void sdkChats.refresh();
+  }
+  override disconnectedCallback() { this.removeEventListener('chat-open', this.onChatOpen); this.unsub?.(); super.disconnectedCallback(); }
   private locateProject(id: string) {
     this.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace').forEach(row => { if (row.model.id === id) row.reveal(); });
   }
@@ -264,7 +278,7 @@ export class MuxChatList extends LitElement {
     return html`
       ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<button class="pin-row" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}><span class="pin-icon">${icon(item.kind === 'project' ? Folder : MessageSquare,{size:15})}</span><span>${item.name}</span></button>`)}</div>` : nothing}
       <div class="heading">Chats</div>
-      ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${(window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? ''}></mux-chat-workspace>`)}
+      ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
     `;
   }
 }
