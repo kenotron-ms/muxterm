@@ -3,6 +3,17 @@ import { customElement, state } from 'lit/decorators.js';
 import { sdkChats, type FolderListing } from '../lib/sdk-chats.js';
 import { LAUNCHABLE_HARNESSES, harnessLabel, type HarnessName } from '../lib/harness.js';
 
+type ProviderName = 'openai' | 'anthropic' | 'configured';
+const PROVIDERS: { value: ProviderName; label: string; harnesses: HarnessName[] }[] = [
+  { value: 'openai', label: 'OpenAI', harnesses: ['codex', 'amplifier'] },
+  { value: 'anthropic', label: 'Anthropic', harnesses: ['claude', 'amplifier'] },
+  { value: 'configured', label: 'Configured (Amplifier)', harnesses: ['amplifier'] },
+];
+const providerFor = (harness: HarnessName): ProviderName =>
+  harness === 'codex' ? 'openai' : harness === 'claude' ? 'anthropic' : 'configured';
+const providerAvailable = (harness: HarnessName, provider: ProviderName): boolean =>
+  PROVIDERS.some(choice => choice.value === provider && choice.harnesses.includes(harness));
+
 @customElement('mux-new-chat')
 export class MuxNewChat extends LitElement {
   @state() private projectId = 'ungrouped';
@@ -10,7 +21,8 @@ export class MuxNewChat extends LitElement {
   @state() private projectName = '';
   @state() private newFolderName = '';
   @state() private harness: HarnessName = 'codex';
-  @state() private provider = 'openai';
+  @state() private provider: ProviderName = 'openai';
+  @state() private providerNotice = '';
   @state() private prompt = '';
   @state() private listing?: FolderListing;
   @state() private pickerOpen = false;
@@ -48,6 +60,8 @@ export class MuxNewChat extends LitElement {
     .send:disabled { opacity:.4; cursor:default; }
     .error { margin:10px 0; color:#e6a5a5; }
     .hint { margin:10px 3px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
+    .provider-note { margin:-6px 0 14px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
+    .provider-change { color:var(--chrome-text-bright,#e2e6f1); }
   `;
 
   override connectedCallback() {
@@ -74,15 +88,24 @@ export class MuxNewChat extends LitElement {
   }
   private onHarnessChange(value: HarnessName) {
     this.harness = value;
-    this.provider = value === 'codex' ? 'openai' : value === 'claude' ? 'anthropic' : 'configured';
+    if (!providerAvailable(value, this.provider)) {
+      this.provider = providerFor(value);
+      this.providerNotice = `Provider changed to ${PROVIDERS.find(provider => provider.value === this.provider)!.label} for ${harnessLabel(value)}.`;
+    } else this.providerNotice = '';
   }
-  private onProviderChange(value: string) {
-    this.provider = value;
-    this.harness = value === 'openai' ? 'codex' : value === 'anthropic' ? 'claude' : 'amplifier';
+  private onProviderChange(value: ProviderName) {
+    if (providerAvailable(this.harness, value)) {
+      this.provider = value;
+      this.providerNotice = '';
+    }
   }
   private async send() {
     const prompt = this.prompt.trim();
     if (!prompt || this.busy) return;
+    if (!providerAvailable(this.harness, this.provider)) {
+      this.error = 'Choose a provider available for the selected harness.';
+      return;
+    }
     this.busy = true; this.error = '';
     try {
       let workspaceId: string | undefined;
@@ -107,12 +130,11 @@ export class MuxNewChat extends LitElement {
         </select></label>
         <label class="folder">Folder<div class="folder-line"><input aria-label="Folder" .value=${this.folder} @input=${(e:Event) => { this.folder = (e.target as HTMLInputElement).value; this.onFolderChanged(); }}><button class="browse" aria-label="Browse server folders" @click=${() => void this.browse()}>Browse</button></div></label>
         <label class="harness">Harness<select aria-label="Harness" .value=${this.harness} @change=${(e:Event) => this.onHarnessChange((e.target as HTMLSelectElement).value as HarnessName)}>${LAUNCHABLE_HARNESSES.map(h => html`<option value=${h} ?selected=${this.harness === h}>${harnessLabel(h)}</option>`)}</select></label>
-        <label class="provider">Provider<select aria-label="Provider" .value=${this.provider} @change=${(e:Event) => this.onProviderChange((e.target as HTMLSelectElement).value)}>
-          <option value="openai" ?selected=${this.provider === 'openai'}>OpenAI</option>
-          <option value="anthropic" ?selected=${this.provider === 'anthropic'}>Anthropic</option>
-          <option value="configured" ?selected=${this.provider === 'configured'}>Configured (Amplifier)</option>
+        <label class="provider">Provider<select aria-label="Provider" .value=${this.provider} @change=${(e:Event) => this.onProviderChange((e.target as HTMLSelectElement).value as ProviderName)}>
+          ${PROVIDERS.map(provider => html`<option value=${provider.value} ?selected=${this.provider === provider.value} ?disabled=${!providerAvailable(this.harness, provider.value)} title=${providerAvailable(this.harness, provider.value) ? '' : `Unavailable for ${harnessLabel(this.harness)}`}>${provider.label}${providerAvailable(this.harness, provider.value) ? '' : ` — unavailable for ${harnessLabel(this.harness)}`}</option>`)}
         </select></label>
       </div>
+      <div class="provider-note" role="status">${this.providerNotice ? html`<span class="provider-change">${this.providerNotice}</span>` : this.harness === 'amplifier' ? 'Amplifier uses the selected provider from its configured bundle.' : `Providers unavailable for ${harnessLabel(this.harness)} remain visible in the list.`}</div>
       ${this.projectId === 'new' ? html`<label>Project name <input aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as HTMLInputElement).value; }}></label>` : nothing}
       ${this.pickerOpen && this.listing ? html`<div class="picker" aria-label="Server folder picker"><div class="picker-head"><button aria-label="Parent folder" @click=${() => void this.browse(this.listing!.parent)}>↑</button><span>${this.listing.path}</span><button @click=${() => { this.pickerOpen = false; }}>Choose this folder</button></div><div class="picker-create"><input aria-label="New folder name" placeholder="New folder name" .value=${this.newFolderName} @input=${(e:Event) => { this.newFolderName = (e.target as HTMLInputElement).value; }}><button @click=${() => { if (!this.newFolderName.trim() || this.newFolderName.includes('/')) return; this.folder = `${this.listing!.path.replace(/\/$/,'')}/${this.newFolderName.trim()}`; this.onFolderChanged(); this.pickerOpen = false; }}>Use new folder</button></div>${this.listing.folders.map(name => html`<button class="folder-entry" @click=${() => void this.browse(`${this.listing!.path.replace(/\/$/,'')}/${name}`)}>▸ ${name}</button>`)}</div>` : nothing}
       <div class="composer"><textarea aria-label="First message" placeholder="Ask anything…" .value=${this.prompt} @input=${(e:Event) => { this.prompt = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><button class="send" aria-label="Send message" ?disabled=${!this.prompt.trim() || this.busy} @click=${() => void this.send()}>↑</button></div>
