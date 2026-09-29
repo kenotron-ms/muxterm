@@ -2226,9 +2226,11 @@ def sdk_provider_context(messages, provider):
             )]
             omitted += len(content) - len(blocks)
             if len(blocks) != len(content):
-                clean = {**clean, "content": blocks}
+                clean = ({**clean, "content": blocks} if blocks else
+                         {key: value for key, value in clean.items() if key != "content"})
             if not blocks and not message.get("tool_calls"):
                 continue
+        # The Anthropic provider also reads this older separate thinking field.
         legacy = message.get("thinking_block")
         if isinstance(legacy, dict) and legacy.get("type") == "thinking" and not (
             isinstance(legacy.get("signature"), str) and legacy["signature"]
