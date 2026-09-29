@@ -75,7 +75,8 @@ export class MuxSDKChat extends LitElement {
     details.support[open] { width:100%; }
     details.support.tool[open] .detail { border-left:1px solid var(--chrome-border,#41485f); margin-left:7px; }
     .detail-label { color:#9cbaf5; font-weight:600; margin:9px 0 4px; }
-    .detail pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
+    .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,.2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
+    .truncation { padding:6px 10px 0; color:#d7bc8b; font:11px/1.5 ui-monospace,monospace; }
     .error { color:#e6a5a5; }
     .composer-wrap { padding:0 clamp(24px,8vw,120px) 18px; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 9px; }
@@ -286,6 +287,7 @@ export class MuxSDKChat extends LitElement {
     if (typeof raw.output === 'string') return `Exit code: ${raw.exitCode ?? 'unknown'} · ${raw.status || 'unknown'}\n\n${raw.output}`;
     if (raw.output && typeof raw.output === 'object') {
       const output = raw.output as Record<string, unknown>;
+      if (typeof output.content === 'string') return output.content;
       if ('stdout' in output || 'stderr' in output) return `Exit code: ${output.returncode ?? 'unknown'}\n${output.stderr ? `stderr:\n${output.stderr}\n` : ''}\n${output.stdout || ''}`;
     }
     return value;
@@ -300,18 +302,21 @@ export class MuxSDKChat extends LitElement {
     return !!output && typeof output === 'object' && typeof (output as Record<string, unknown>).returncode === 'number'
       && (output as Record<string, unknown>).returncode !== 0;
   }
-  private support(block: Block, index: number) {
+  private support(block: Block) {
     const thinking = block.kind === 'thinking';
     const input = this.toolInput(block.input);
-    const hint = input && typeof input === 'object' ? (input as Record<string, unknown>).command || (input as Record<string, unknown>).file_path || (input as Record<string, unknown>).path : undefined;
+    const fields = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+    const hint = fields.command || fields.file_path || fields.path || fields.url;
 
     const failed = !thinking && this.toolFailed(block);
     const words = block.text.trim().split(/\s+/).filter(Boolean).length;
-    return html`<details class="support ${thinking ? 'thinking' : 'tool'} ${failed ? 'failed' : ''}" ?open=${this.expanded.has(index)} @toggle=${(e: globalThis.Event) => {
-      if ((e.currentTarget as HTMLDetailsElement).open) this.expanded.add(index); else this.expanded.delete(index);
+    const output = block.done ? this.detail(this.toolOutput(block.output)) : 'Running…';
+    const truncated = output.match(/\n(… truncated after [^\n]+)$/);
+    return html`<details class="support ${thinking ? 'thinking' : 'tool'} ${failed ? 'failed' : ''}" ?open=${this.expanded.has(block.key)} @toggle=${(e: globalThis.Event) => {
+      if ((e.currentTarget as HTMLDetailsElement).open) this.expanded.add(block.key); else this.expanded.delete(block.key);
     }}><summary><span class="support-icon" aria-hidden="true">${thinking ? '◌' : failed ? '×' : block.done ? '›' : '·'}</span><span class="support-title">${thinking ? 'Thinking' : block.name || 'Tool'}</span>${!thinking && typeof hint === 'string' ? html`<span class="tool-hint">${hint}</span>` : nothing}<span class="support-meta">${thinking ? `${words} words` : block.done ? failed ? 'Failed' : 'Succeeded' : 'Running'}</span><span class="support-chevron" aria-hidden="true">▸</span></summary><div class="detail">${thinking
       ? html`<pre>${block.text}</pre>`
-      : html`<div class="detail-label">Input arguments</div><pre>${this.detail(input)}</pre><div class="detail-label">Output / result</div><pre>${block.done ? this.detail(this.toolOutput(block.output)) : 'Running…'}</pre>`}
+      : html`<div class="detail-label">Tool</div><pre>${block.name || 'Tool'}</pre><div class="detail-label">Input arguments</div><pre>${this.detail(input)}</pre><div class="detail-label">Output / result</div><pre>${truncated ? output.slice(0, -truncated[0].length) : output}</pre>${truncated ? html`<div class="truncation">${truncated[1]}</div>` : nothing}`}
     </div></details>`;
   }
   private async send() {
@@ -341,7 +346,7 @@ export class MuxSDKChat extends LitElement {
   override render() { return html`
     <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${() => { this.drawerOpen = !this.drawerOpen; }}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
-      ${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? html`<div class="bubble">${b.text}</div>` : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b, b.key) : html`<div class="${b.kind}">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
+      ${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? html`<div class="bubble">${b.text}</div>` : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b) : html`<div class="${b.kind}">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
     </div><div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
