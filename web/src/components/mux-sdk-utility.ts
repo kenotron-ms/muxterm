@@ -1,6 +1,6 @@
 import { LitElement, html, render, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { DockviewComponent, type IContentRenderer, type SerializedDockview } from 'dockview-core';
+import { DockviewComponent, type IContentRenderer, type ITabRenderer, type TabPartInitParameters, type SerializedDockview } from 'dockview-core';
 import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import { apiPath } from '../lib/base-path.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
@@ -20,6 +20,25 @@ class UtilityPanel implements IContentRenderer {
     this.element.setAttribute('aria-label', `${id} panel`);
   }
   init() { this.owner.paint(this); }
+}
+
+class UtilityTab implements ITabRenderer {
+  readonly element = document.createElement('div');
+  private readonly label = document.createElement('div');
+  private titleChanged?: { dispose(): void };
+  constructor() {
+    this.element.className = 'dv-default-tab';
+    this.label.className = 'dv-default-tab-content';
+    this.element.appendChild(this.label);
+    this.element.addEventListener('mousedown', event => {
+      if (event.button === 1) { event.preventDefault(); event.stopPropagation(); }
+    });
+  }
+  init(params: TabPartInitParameters) {
+    this.label.textContent = params.title;
+    this.titleChanged = params.api.onDidTitleChange(({title}) => { this.label.textContent = title; });
+  }
+  dispose() { this.titleChanged?.dispose(); }
 }
 
 @customElement('mux-sdk-utility')
@@ -51,7 +70,7 @@ export class MuxSDKUtility extends LitElement {
     style.textContent = `${dockviewCss}\n${this.surfaceCSS}`;
     this.appendChild(style);
     const host = document.createElement('div'); host.className = 'utility-dock'; this.appendChild(host);
-    this.dv = new DockviewComponent(host, { createComponent: opts => {
+    this.dv = new DockviewComponent(host, { defaultTabComponent:'utility-tab', createTabComponent: () => new UtilityTab(), createComponent: opts => {
       const panel = new UtilityPanel(opts.id, this); this.panels.set(opts.id, panel); return panel;
     }});
     let restored = false;

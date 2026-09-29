@@ -202,7 +202,10 @@ export class MuxSDKChat extends LitElement {
       if (!raw || typeof raw !== 'object') continue;
       const data = raw as Record<string, unknown>;
       add(data.file_path); add(data.path);
-      if (typeof data.patch === 'string') for (const match of data.patch.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)) add(match[1]);
+      for (const source of [data.patch, data.code, data.source, data.input]) {
+        if (typeof source !== 'string') continue;
+        for (const match of source.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)) add(match[1]);
+      }
     }
     return [...found].slice(-30).reverse();
   }
