@@ -115,8 +115,12 @@ func newSDKChatHost() *sdkChatHost {
 	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}}
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	entries, _ := os.ReadDir(h.dir)
+	// A catalog is authoritative once written. A removed project must stay
+	// removed even when an older chat record still names its former ID.
+	hasProjectCatalog := false
 	for _, e := range entries {
 		if e.Name() == "projects.json" {
+			hasProjectCatalog = true
 			data, err := os.ReadFile(filepath.Join(h.dir, e.Name()))
 			if err == nil {
 				_ = json.Unmarshal(data, &h.projects)
@@ -143,9 +147,11 @@ func newSDKChatHost() *sdkChatHost {
 	}
 	// Old chat records already carried a workspace ID. Preserve that identity
 	// while moving project metadata into its own durable catalog.
-	for _, c := range h.chats {
-		if c.WorkspaceID != "" && h.projects[c.WorkspaceID] == nil {
-			h.projects[c.WorkspaceID] = &sdkProject{ID: c.WorkspaceID, Name: filepath.Base(c.ProjectPath), Path: c.ProjectPath}
+	if !hasProjectCatalog {
+		for _, c := range h.chats {
+			if c.WorkspaceID != "" && h.projects[c.WorkspaceID] == nil {
+				h.projects[c.WorkspaceID] = &sdkProject{ID: c.WorkspaceID, Name: filepath.Base(c.ProjectPath), Path: c.ProjectPath}
+			}
 		}
 	}
 	return h
@@ -588,14 +594,24 @@ func (s *Server) handleSDKProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(h.projects, id)
+	err := h.saveProjectsLocked()
+	if err != nil {
+		h.projects[id] = p
+		h.mu.Unlock()
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	// Only muxterm's metadata changes. The folder and native session remain intact.
+	// The catalog is committed first so a stale chat record cannot recreate a
+	// removed project after a crash or an individual chat write failure.
 	for _, c := range h.chats {
 		if c.WorkspaceID == id {
 			c.WorkspaceID = ""
-			_ = h.saveLocked(c)
+			if saveErr := h.saveLocked(c); saveErr != nil && err == nil {
+				err = saveErr
+			}
 		}
 	}
-	err := h.saveProjectsLocked()
 	h.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
