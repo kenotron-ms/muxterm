@@ -721,6 +721,8 @@ export class MuxApp extends LitElement {
   @state()
   private _showDashboard = false;
   @state() private _sdkChatId: string | null = null;
+  @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
+  @state() private _newChatFolder = '';
 
   /**
    * Whether the boot-surface decision has already been made for THIS instance.
@@ -1649,8 +1651,8 @@ export class MuxApp extends LitElement {
             : '',
           )}
           ${this._sdkChatId && !this._showDashboard ? this._sdkChatId === 'new' ? html`
-            <mux-new-chat @chat-created=${this._onChatOpen}></mux-new-chat>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-created=${this._onChatOpen}></mux-sdk-chat>` : ''}
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} @chat-created=${this._onChatOpen}></mux-new-chat>` : html`
+            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-switch-harness=${this._onChatSwitchHarness}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -2528,6 +2530,8 @@ export class MuxApp extends LitElement {
   };
 
   private _onChatNew = (): void => {
+    this._newChatHarness = 'codex';
+    this._newChatFolder = '';
     this._sdkChatId = 'new';
     this._onDashboardHide();
     this._fleetOpen = false;
@@ -2586,6 +2590,14 @@ export class MuxApp extends LitElement {
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
     this._onDashboardHide();
     this._fleetOpen = false;
+  };
+
+  private _onChatSwitchHarness = (e: Event): void => {
+    const detail = (e as CustomEvent<{ harness: 'codex' | 'claude' | 'amplifier'; projectPath: string }>).detail;
+    if (!detail?.harness) return;
+    this._newChatHarness = detail.harness;
+    this._newChatFolder = detail.projectPath;
+    this._sdkChatId = 'new';
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {

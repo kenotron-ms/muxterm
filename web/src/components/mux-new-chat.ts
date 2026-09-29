@@ -1,5 +1,5 @@
 import { LitElement, css, html, nothing } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, type FolderListing } from '../lib/sdk-chats.js';
 import { LAUNCHABLE_HARNESSES, harnessLabel, type HarnessName } from '../lib/harness.js';
 
@@ -16,6 +16,8 @@ const providerAvailable = (harness: HarnessName, provider: ProviderName): boolea
 
 @customElement('mux-new-chat')
 export class MuxNewChat extends LitElement {
+  @property() initialHarness: HarnessName = 'codex';
+  @property() initialFolder = '';
   @state() private projectId = 'ungrouped';
   @state() private folder = '';
   @state() private projectName = '';
@@ -70,6 +72,9 @@ export class MuxNewChat extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    this.harness = this.initialHarness;
+    this.provider = providerFor(this.harness);
+    if (this.initialFolder) this.folder = this.initialFolder;
     this.unsub = sdkChats.subscribe(() => this.requestUpdate());
     void sdkChats.refresh();
     void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) this.folder = listing.base; }).catch(error => { this.error = String(error); });

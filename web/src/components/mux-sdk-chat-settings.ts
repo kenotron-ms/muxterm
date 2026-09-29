@@ -1,7 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
-import { sdkChats } from '../lib/sdk-chats.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
 type Settings = { model: string; effort: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[]; permission: string; mode: string; permissions: string[]; modes: string[] };
@@ -76,15 +75,9 @@ export class MuxSDKChatSettings extends LitElement {
     } catch (error) { this.error = String(error); }
     finally { this.loading = false; this.pending(false); }
   }
-  private async switchHarness(harness: string) {
-    if (this.turnBusy || this.loading || !this.projectPath) return;
-    this.loading = true; this.error = '';
-    try {
-      const provider = harness === 'codex' ? 'openai' : harness === 'claude' ? 'anthropic' : 'configured';
-      const chat = await sdkChats.create({ projectPath:this.projectPath, harness, provider, prompt:'' });
-      this.dispatchEvent(new CustomEvent('chat-created', { detail:{ sessionId:chat.id }, bubbles:true, composed:true }));
-    } catch (error) { this.error = String(error); }
-    finally { this.loading = false; }
+  private switchHarness(harness: string) {
+    if (this.turnBusy || this.loading) return;
+    this.dispatchEvent(new CustomEvent('chat-switch-harness', { detail:{ harness, projectPath:this.projectPath }, bubbles:true, composed:true }));
   }
   private choice(name: string, hint: string, selected: boolean, available: boolean, action: () => void) {
     return html`<button class="choice ${selected ? 'selected' : ''}" ?disabled=${!available || this.loading || this.turnBusy} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span><span class="hint">${available ? hint : 'Unavailable for this harness'}</span></span>${selected ? html`<span class="check">✓</span>` : nothing}</button>`;
@@ -110,7 +103,7 @@ export class MuxSDKChatSettings extends LitElement {
       </div></details>
       <details class="picker model-picker" aria-label="Harness, provider, model and thinking"><summary><span aria-hidden="true">✧</span><span class="summary-text">${model?.label || s.model || this.harness}</span><span class="chevron">⌄</span></summary><div class="panel">
         <div class="heading">Harness</div>
-        ${(['codex','claude','amplifier'] as const).map(value => this.choice(value[0].toUpperCase() + value.slice(1), value === this.harness ? 'Current conversation' : 'Start a new conversation', this.harness === value, true, () => { if (value !== this.harness) void this.switchHarness(value); }))}
+        ${(['codex','claude','amplifier'] as const).map(value => this.choice(value[0].toUpperCase() + value.slice(1), value === this.harness ? 'Current conversation' : 'Start a new conversation', this.harness === value, true, () => { if (value !== this.harness) this.switchHarness(value); }))}
         ${this.harness === 'amplifier' ? html`<div class="divider"></div><div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="divider"></div><div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : 'Anthropic'} · managed by ${this.harness}</div>`}
         <div class="divider"></div><div class="heading">Model</div>
         ${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}

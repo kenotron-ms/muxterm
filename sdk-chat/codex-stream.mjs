@@ -58,7 +58,7 @@ export class CodexStream {
   }
 
   async initialize() {
-    await this.request('initialize', { clientInfo: { name: 'muxterm', title: 'muxterm SDK chat', version: '1' }, capabilities: null });
+    await this.request('initialize', { clientInfo: { name: 'muxterm', title: 'muxterm SDK chat', version: '1' }, capabilities: { experimentalApi: true } });
     this.process.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
     const options = { cwd: this.session.cwd, approvalPolicy: 'never', sandbox: this.sandboxName() };
     const result = await this.request(this.session.nativeId ? 'thread/resume' : 'thread/start',
