@@ -205,8 +205,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns37Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 37 tools
+// TestMCPToolsListReturns40Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 40 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
@@ -226,8 +226,9 @@ func assertToolNames(t *testing.T, got, want []string) {
 // file to the human in the Viewer, took it to 29. The trigger quartet
 // (create_trigger, list_triggers, set_trigger_enabled, delete_trigger), which
 // starts lanes on a schedule or a file change with no human present, took it
-// to 33. The four Chat control tools took it to 37.
-func TestMCPToolsListReturns37Tools(t *testing.T) {
+// to 33. The four Chat control tools took it to 37. The three Chat discovery
+// tools took it to 40.
+func TestMCPToolsListReturns40Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "")
 
@@ -263,7 +264,10 @@ func TestMCPToolsListReturns37Tools(t *testing.T) {
 		"publish_folder",
 		"list_publications",
 		"revoke_publication",
-		// 4 serve-owned Chat control tools.
+		// 7 serve-owned Chat control and discovery tools.
+		"list_chats",
+		"search_chats",
+		"list_projects",
 		"list_chat_sessions",
 		"spawn_chat",
 		"send_chat_message",
@@ -339,7 +343,10 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		"publish_folder",
 		"list_publications",
 		"revoke_publication",
-		// 4 Chat tools, available inside a session for cross-chat handoffs.
+		// 7 Chat tools, available inside a session for cross-chat handoffs.
+		"list_chats",
+		"search_chats",
+		"list_projects",
 		"list_chat_sessions",
 		"spawn_chat",
 		"send_chat_message",
