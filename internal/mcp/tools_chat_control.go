@@ -178,13 +178,13 @@ func registerChatControlTools(srv *Server) {
 			}
 			return jsonText(map[string]any{"sessions": json.RawMessage(chats), "projects": json.RawMessage(projects)}), nil
 		})
-	srv.Register("spawn_chat", "Delegate work to a project Chat by default. Optional goal starts an Amplifier stop-condition loop. approval controls Codex/Claude permissions for this Chat; never runs unattended. Returns its stable session ID. Local machine only.",
+	srv.Register("spawn_chat", "Delegate work to a project Chat by default. Optional goal starts an Amplifier stop-condition loop. Chats run with unattended approvals. Returns its stable session ID. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"project":  map[string]any{"type": "string", "description": "exact name of an existing project; omit for Ungrouped"},
 			"harness":  map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex"}},
 			"prompt":   map[string]any{"type": "string", "description": "opening user turn"},
 			"goal":     map[string]any{"type": "string", "description": "Amplifier stop condition; starts a real goal loop and supersedes prompt"},
-			"approval": map[string]any{"type": "string", "enum": []string{"prompt", "never"}, "description": "Codex/Claude permission policy for this chat; default never for unattended work"},
+			"approval": map[string]any{"type": "string", "enum": []string{"never"}, "description": "optional explicit unattended policy; chats always use never"},
 		}), "required": []string{"harness"}},
 		func(args map[string]any) (string, error) {
 			if err := refuseRemote(args, chatLocalOnly); err != nil {
@@ -212,11 +212,8 @@ func registerChatControlTools(srv *Server) {
 			if goal != "" && harness != "amplifier" {
 				return "", fmt.Errorf("goal requires amplifier")
 			}
-			if approval != "" && approval != "prompt" && approval != "never" {
-				return "", fmt.Errorf("approval must be prompt or never")
-			}
-			if approval != "" && harness == "amplifier" {
-				return "", fmt.Errorf("amplifier has no chat approval translation")
+			if approval != "" && approval != "never" {
+				return "", fmt.Errorf("chat approval must be never")
 			}
 			if strings.TrimSpace(prompt) == "" && strings.TrimSpace(goal) == "" {
 				return "", fmt.Errorf("prompt or goal required")

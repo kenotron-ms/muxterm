@@ -2175,12 +2175,23 @@ def frame(session_id, event_type, **data):
                         "type": event_type, **data})
 
 
-class DenyApproval:
-    async def request_approval(self, prompt, options, timeout, default):
-        denied = next((o for o in options if str(o).lower().startswith(("deny", "no", "reject"))), None)
-        if denied is None:
-            raise PermissionError("Amplifier approval requires Go authorization")
-        return denied
+class UnattendedChatApproval:
+    async def request_approval(self, *args):
+        # Amplifier calls this as an ApprovalSystem for hook prompts and as
+        # an ApprovalProvider for tool gates. Neither path can await a person
+        # inside an unattended chat.
+        if len(args) == 1:
+            from amplifier_core import ApprovalResponse
+            return ApprovalResponse(approved=True, reason="Chat runs unattended")
+        if len(args) == 4:
+            _prompt, options, _timeout, _default = args
+            affirmative = ("allow always", "allow once", "allow", "yes", "approve", "continue", "proceed")
+            choice = next((option for word in affirmative for option in options
+                           if str(option).lower().startswith(word)), None)
+            if choice is None:
+                raise PermissionError("approval request has no affirmative option")
+            return choice
+        raise TypeError("unsupported approval request")
 
 
 class QuietDisplay:
@@ -2358,7 +2369,7 @@ class SDKChatSession:
         try:
             os.chdir(self.cwd)
             try:
-                self.session = await _create_bundle_session(sc, self.id, DenyApproval(), QuietDisplay(),
+                self.session = await _create_bundle_session(sc, self.id, UnattendedChatApproval(), QuietDisplay(),
                                                             Console(quiet=True, file=devnull))
             except BaseException as exc:
                 raise RuntimeError(f"bundle '{self.bundle}' provider '{self.provider or 'default'}' failed to load: {exc}") from exc
@@ -2366,6 +2377,9 @@ class SDKChatSession:
             os.chdir(previous_cwd)
             devnull.close()
         timing("sdk.session_creation_provider_init", create_start)
+        register_approval = self.session.coordinator.get_capability("approval.register_provider")
+        if register_approval:
+            register_approval(UnattendedChatApproval())
         providers = self.session.coordinator.get("providers") or {}
         self.model = next((f"{name}/{getattr(p, 'model', None) or getattr(p, 'default_model', '')}"
                            for name, p in providers.items()
@@ -2551,8 +2565,8 @@ async def command(cmd):
     if op == "capabilities": return {"capabilities": CAPS}
     if op in ("start", "resume"):
         if cmd.get("harness") != "amplifier": raise ValueError("unsupported harness")
-        if cmd.get("approval") not in (None, ""):
-            raise ValueError("amplifier has no chat approval translation")
+        if cmd.get("approval") != "never":
+            raise ValueError("Invalid chat approval policy")
         previous = SDK_CHAT_SESSIONS.get(sid)
         if previous and previous.closed and previous.task and previous.task.done():
             del SDK_CHAT_SESSIONS[sid]

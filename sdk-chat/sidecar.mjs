@@ -66,8 +66,7 @@ async function runClaude(s) {
   let thinkingStreamed = false;
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, resume: s.nativeId || undefined,
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: muxtermMcpEnv } },
-    includePartialMessages: true, permissionMode: s.approval === 'prompt' ? 'default' : 'bypassPermissions',
-    allowDangerouslySkipPermissions: s.approval !== 'prompt',
+    includePartialMessages: true, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true,
     thinking: { type: 'adaptive', display: 'summarized' }, effort: 'high', maxTurns: 20 } });
   s.query = q;
   try {
@@ -125,7 +124,7 @@ async function command(cmd) {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
     if (harness !== 'codex' && harness !== 'claude') throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
-    if (cmd.approval !== 'prompt' && cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
+    if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
     const s = { id: sessionId, harness, cwd, nativeId, approval: cmd.approval, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: '', effort: '' };
     sessions.set(sessionId, s);
     if (harness === 'claude') void runClaude(s);

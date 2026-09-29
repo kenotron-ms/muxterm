@@ -166,6 +166,7 @@ func newSDKChatHost() *sdkChatHost {
 		}
 		var chat sdkChat
 		if json.Unmarshal(data, &chat) == nil && chat.ID != "" {
+			chat.Approval = "never"
 			if chat.State == "working" || chat.State == "starting" {
 				chat.State = "uncertain"
 			}
@@ -555,11 +556,7 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	approval := c.Approval
-	if approval == "" && c.Harness != "amplifier" {
-		approval = "never" // legacy chats used unattended permissions
-	}
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": approval})
+	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never"})
 	return err
 }
 
@@ -883,17 +880,11 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "goal requires amplifier", 400)
 		return
 	}
-	if req.Approval != "" && req.Approval != "prompt" && req.Approval != "never" {
-		http.Error(w, "approval must be prompt or never", 400)
+	if req.Approval != "" && req.Approval != "never" {
+		http.Error(w, "chat approval must be never", 400)
 		return
 	}
-	if req.Approval != "" && req.Harness == "amplifier" {
-		http.Error(w, "amplifier has no chat approval translation", 400)
-		return
-	}
-	if req.Approval == "" && req.Harness != "amplifier" {
-		req.Approval = "never"
-	}
+	req.Approval = "never"
 	if req.Goal != "" {
 		req.Prompt = req.Goal
 	}
