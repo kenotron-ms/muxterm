@@ -20,7 +20,14 @@ function projectFor(path: string, projects: SDKProject[]): SDKProject | undefine
 function laneOrigin(origin: string): string {
   if (origin.startsWith('trigger:')) return `Automation · ${origin.slice(8)}`;
   if (origin === 'trigger') return 'Automation';
+  if (origin === 'cli') return 'Started from CLI';
+  if (origin === 'agent') return 'Started by agent';
+  if (origin === 'browser') return 'Started in browser';
   return origin || 'Origin unknown';
+}
+
+function folderLabel(path: string): string {
+  return path.replace(/\/$/, '').split('/').pop() || path || 'Unknown';
 }
 
 function displayHarness(harness: string): string {
@@ -81,6 +88,8 @@ export class MuxChatWorkspace extends LitElement {
     .body { flex:1; min-width:0; }
     .title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
     .details { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-dim,#aab2c1); font-size:10px; }
+    .location { color:var(--chrome-text-bright,#d8dce5); }
+    .origin { color:#a8d9bd; }
     .kind { color:#a8d9bd; font-size:10px; flex:none; }
     .status { width:5px; height:5px; margin-top:6px; border-radius:50%; background:#697386; flex:none; }
     .status.working { background:#7dcba1; }
@@ -133,8 +142,8 @@ export class MuxChatWorkspace extends LitElement {
           <span class="status ${item.state}" title=${item.state}></span>
           <span class="body"><span class="title">${item.title}</span>
             <span class="details">${row.project?.name || 'Ungrouped'} · ${displayHarness(item.harness)}</span>
-            <span class="details" title=${item.path || 'Folder unknown'}>${item.path || 'Folder unknown'}</span>
-            ${item.kind === 'lane' ? html`<span class="details">${item.terminal ? `Live terminal · ${item.workspaceId} / pane ${item.paneId}` : 'Terminal unavailable'} · ${laneOrigin(item.origin)}</span>` : nothing}
+            <span class="details location" title=${item.path || 'Folder unknown'}>Folder: ${folderLabel(item.path)}</span>
+            ${item.kind === 'lane' ? html`<span class="details">${item.terminal ? `Live terminal · ${item.workspaceId} / pane ${item.paneId}` : 'Terminal unavailable'}</span><span class="details origin" title=${laneOrigin(item.origin)}>${laneOrigin(item.origin)}</span>` : nothing}
           </span><span class="kind">${item.kind === 'lane' ? 'Lane' : 'Chat'}</span>
         </button>${item.kind === 'chat' ? html`<button class="rename-chat" aria-label=${`Rename ${item.title}`} title="Rename chat" @click=${() => { this.renamingId = item.id; this.renameDraft = item.title; }}>✎</button>` : nothing}`}
         </div>`)}
@@ -166,13 +175,16 @@ export class MuxChatList extends LitElement {
     for (const session of homeSessions.sessions) {
       const workspaceId = session.workspaceId || '';
       const paneId = session.paneId;
-      if (workspaceId && paneId !== null) reportedPanes.add(`${workspaceId}:${paneId}`);
+      // Fleet also reports SDK Chats, which have no terminal coordinates and
+      // already have a Chat row above. They must not become phantom Lanes.
+      if (!workspaceId || paneId === null) continue;
+      reportedPanes.add(`${workspaceId}:${paneId}`);
       const workspace = store.workspaces.find(ws => ws.workspaceId === workspaceId);
       const pane = workspace?.panes?.find(pane => pane.paneId === paneId);
-      const terminal = !!workspaceId && paneId !== null && (isRemoteId(workspaceId) || !!workspace?.panes?.some(pane => pane.paneId === paneId));
+      const terminal = isRemoteId(workspaceId) || !!pane;
       rows.push({ kind:'lane', id:session.sessionId, path:session.project || pane?.cwd || workspace?.projectPath || '',
-        title:session.name || session.label || `Pane ${paneId ?? '?'}`, harness:session.harness || '', state:session.state,
-        origin:session.origin || '', workspaceId, paneId:paneId ?? 0, terminal,
+        title:session.name || session.label || pane?.title || `Pane ${paneId ?? '?'}`, harness:session.harness || pane?.harness || '', state:session.state,
+        origin:session.origin || pane?.origin || '', workspaceId, paneId:paneId ?? 0, terminal,
         updatedAt:(session.updatedAt || 0) * 1000 });
     }
     // Pane inventory arrives before the harness's own Fleet declaration.
@@ -181,7 +193,10 @@ export class MuxChatList extends LitElement {
       rows.push({ kind:'lane', id:`${workspace.workspaceId}:${pane.paneId}`, path:pane.cwd || workspace.projectPath || '', title:pane.title || `${workspace.name || workspace.workspaceId} · pane ${pane.paneId}`,
         harness:pane.harness, state:'working', origin:pane.origin || '', workspaceId:workspace.workspaceId, paneId:pane.paneId, terminal:true, updatedAt:0 });
     }
-    rows.sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
+    // Keep live terminals visible ahead of historical Chats even before the
+    // harness publishes a Fleet timestamp. The pane inventory has no clock.
+    rows.sort((a, b) => Number(b.kind === 'lane' && b.terminal) - Number(a.kind === 'lane' && a.terminal)
+      || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
     const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project,
       rows:rows.filter(row => row.kind === 'chat' ? row.chat.workspaceId === project.id : projectFor(row.path, projects)?.id === project.id) }));
     groups.push({ id:'ungrouped', name:'Ungrouped', rows:rows.filter(row => row.kind === 'chat'
