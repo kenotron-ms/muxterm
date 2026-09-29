@@ -1650,7 +1650,7 @@ export class MuxApp extends LitElement {
           )}
           ${this._sdkChatId && !this._showDashboard ? this._sdkChatId === 'new' ? html`
             <mux-new-chat @chat-created=${this._onChatOpen}></mux-new-chat>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-created=${this._onChatOpen}></mux-sdk-chat>` : ''}
         </div>
 
       </div>

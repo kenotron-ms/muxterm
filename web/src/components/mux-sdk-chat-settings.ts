@@ -1,48 +1,59 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
+import { sdkChats } from '../lib/sdk-chats.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
-type Settings = { model: string; effort: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[] };
-const providerLabel = (provider: string) => provider === 'provider-anthropic' ? 'Anthropic' : provider === 'provider-openai' ? 'OpenAI' : provider;
-const primaryProviders = ['provider-anthropic', 'provider-openai'];
+type Settings = { model: string; effort: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[]; permission: string; mode: string; permissions: string[]; modes: string[] };
+const permissionLabels: Record<string, string> = { 'read-only':'Read only', 'workspace-write':'Workspace write', 'full-permission':'Full permission' };
+const permissionHints: Record<string, string> = { 'read-only':'Inspect and plan without writing files', 'workspace-write':'Edit files in this workspace', 'full-permission':'Access the full environment' };
+const providerLabel = (value: string) => value === 'provider-anthropic' ? 'Anthropic' : value === 'provider-openai' ? 'OpenAI' : value.replace(/^provider-/, '');
 
 @customElement('mux-sdk-chat-settings')
 export class MuxSDKChatSettings extends LitElement {
   @property() sessionId = '';
   @property() harness = '';
+  @property() projectPath = '';
   @property({ type:Boolean }) turnBusy = false;
   @state() private settings?: Settings;
   @state() private loading = false;
   @state() private error = '';
   private requestVersion = 0;
   static styles = css`
-    :host { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; min-width:0; font:12px system-ui,sans-serif; }
-    label { display:flex; align-items:center; gap:5px; color:var(--chrome-text-dim,#9aa3b8); white-space:nowrap; }
-    select { max-width:190px; min-width:58px; height:30px; padding:2px 20px 2px 5px; color:var(--chrome-text-bright,#d9def0); background:transparent; border:1px solid transparent; border-radius:7px; font:inherit; cursor:pointer; }
-    select:hover, select:focus-visible { background:rgba(255,255,255,.06); border-color:var(--chrome-border,#41485f); outline:none; }
-    select:disabled { opacity:.5; cursor:not-allowed; }
-    .advanced { position:relative; }
-    .advanced summary { display:flex; align-items:center; gap:6px; max-width:190px; height:30px; padding:0 7px; border-radius:7px; color:var(--chrome-text-dim,#9aa3b8); cursor:pointer; list-style:none; }
-    .advanced summary::-webkit-details-marker { display:none; }
-    .advanced summary:hover, .advanced summary:focus-visible, .advanced[open] summary { background:rgba(255,255,255,.06); color:var(--chrome-text-bright,#d9def0); outline:none; }
-    .advanced summary span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .advanced summary::after { content:'⌄'; font-size:15px; }
-    .advanced-panel { position:absolute; z-index:12; left:0; bottom:35px; display:grid; gap:9px; width:max-content; max-width:min(310px,80vw); padding:12px; border:1px solid var(--chrome-border,#41485f); border-radius:11px; background:var(--chrome-bar,#202632); box-shadow:0 16px 40px rgba(0,0,0,.35); }
-    .advanced-panel label { justify-content:space-between; gap:14px; }
-    .advanced-panel select { max-width:190px; border-color:var(--chrome-border,#41485f); }
-    .status { color:var(--chrome-text-dim,#9aa3b8); }
-    .error { color:#f1aaaa; white-space:normal; }
+    :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:8px; font:12px/1.4 system-ui,sans-serif; }
+    .picker { position:relative; min-width:0; }
+    .model-picker { margin-left:auto; }
+    summary { display:flex; align-items:center; gap:7px; height:32px; max-width:min(290px,40vw); box-sizing:border-box; padding:0 10px; border:1px solid transparent; border-radius:10px; color:var(--chrome-text-bright,#d9def0); cursor:pointer; list-style:none; white-space:nowrap; }
+    summary::-webkit-details-marker { display:none; }
+    summary:hover, summary:focus-visible, details[open] summary { background:rgba(255,255,255,.08); border-color:var(--chrome-border,#41485f); outline:none; }
+    .summary-text { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .chevron { color:var(--chrome-text-dim,#9aa3b8); font-size:15px; }
+    .panel { position:absolute; z-index:30; bottom:40px; width:min(350px,calc(100vw - 44px)); max-height:min(65vh,520px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px rgba(0,0,0,.45); }
+    .permission-picker .panel { left:0; }
+    .model-picker .panel { right:0; }
+    .heading { padding:9px 10px 5px; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
+    .divider { height:1px; margin:7px 5px; background:var(--chrome-border,#41485f); }
+    .choice { display:flex; align-items:center; gap:9px; width:100%; min-height:37px; border:0; border-radius:9px; padding:7px 10px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:inherit; text-align:left; cursor:pointer; }
+    .choice:hover:not(:disabled), .choice:focus-visible { background:rgba(255,255,255,.08); outline:none; }
+    .choice.selected { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 15%,transparent); }
+    .choice:disabled { opacity:.46; cursor:default; }
+    .choice-main { display:grid; gap:2px; min-width:0; flex:1; }
+    .choice-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .hint { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
+    .check { color:var(--chrome-accent,#9bb8f7); font-weight:700; }
+    .group { margin:2px 4px 8px; }
+    .slider { padding:4px 10px 13px; }
+    .slider-header { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
+    input[type=range] { width:100%; margin:12px 0 4px; accent-color:var(--chrome-accent,#9bb8f7); cursor:pointer; }
+    .slider-ends { display:flex; justify-content:space-between; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; }
+    .notice { padding:9px 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
+    .error { color:#f1aaaa; padding:7px 10px; overflow-wrap:anywhere; }
+    .busy { opacity:.55; }
   `;
   override updated(changed: Map<string, unknown>) {
-    if (changed.has('sessionId') && this.sessionId) {
-      this.settings = undefined; this.error = '';
-      void this.load(this.sessionId);
-    }
+    if (changed.has('sessionId') && this.sessionId) { this.settings = undefined; this.error = ''; void this.load(this.sessionId); }
   }
-  private pending(value: boolean) {
-    this.dispatchEvent(new CustomEvent('settings-pending', { detail:value, bubbles:true, composed:true }));
-  }
+  private pending(value: boolean) { this.dispatchEvent(new CustomEvent('settings-pending', { detail:value, bubbles:true, composed:true })); }
   private async load(sessionId: string) {
     const version = ++this.requestVersion;
     this.loading = true;
@@ -51,49 +62,60 @@ export class MuxSDKChatSettings extends LitElement {
       if (!response.ok) throw new Error(await response.text());
       const settings = await response.json() as Settings;
       if (this.sessionId === sessionId && this.requestVersion === version) this.settings = settings;
-    } catch (error) {
-      if (this.sessionId === sessionId && this.requestVersion === version) this.error = String(error);
-    } finally { if (this.requestVersion === version) this.loading = false; }
+    } catch (error) { if (this.sessionId === sessionId && this.requestVersion === version) this.error = String(error); }
+    finally { if (this.requestVersion === version) this.loading = false; }
   }
   private async select(change: Record<string, string>) {
     if (this.loading || this.turnBusy || !this.settings) return;
     this.loading = true; this.error = ''; this.pending(true);
     try {
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/settings`), {
-        method:'PATCH', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(change),
-      });
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/settings`), { method:'PATCH', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(change) });
       if (!response.ok) throw new Error(await response.text());
       this.settings = await response.json() as Settings;
       this.dispatchEvent(new CustomEvent('settings-changed', { detail:this.settings, bubbles:true, composed:true }));
     } catch (error) { this.error = String(error); }
     finally { this.loading = false; this.pending(false); }
   }
+  private async switchHarness(harness: string) {
+    if (this.turnBusy || this.loading || !this.projectPath) return;
+    this.loading = true; this.error = '';
+    try {
+      const provider = harness === 'codex' ? 'openai' : harness === 'claude' ? 'anthropic' : 'configured';
+      const chat = await sdkChats.create({ projectPath:this.projectPath, harness, provider, prompt:'' });
+      this.dispatchEvent(new CustomEvent('chat-created', { detail:{ sessionId:chat.id }, bubbles:true, composed:true }));
+    } catch (error) { this.error = String(error); }
+    finally { this.loading = false; }
+  }
+  private choice(name: string, hint: string, selected: boolean, available: boolean, action: () => void) {
+    return html`<button class="choice ${selected ? 'selected' : ''}" ?disabled=${!available || this.loading || this.turnBusy} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span><span class="hint">${available ? hint : 'Unavailable for this harness'}</span></span>${selected ? html`<span class="check">✓</span>` : nothing}</button>`;
+  }
   override render() {
-    const settings = this.settings;
-    if (!settings) return html`<span class="${this.error ? 'error' : 'status'}">${this.error || 'Loading settings…'}</span>`;
-    const selectedModel = settings.models.find(model => model.id === settings.model);
-    const models = selectedModel ? settings.models : [{ id:settings.model, label:settings.model, efforts:[] }, ...settings.models];
-    const disabled = this.loading || this.turnBusy;
+    const s = this.settings;
+    if (!s) return html`<span class="notice ${this.error ? 'error' : ''}">${this.error || 'Loading controls…'}</span>`;
+    const model = s.models.find(item => item.id === s.model);
+    const models = model ? s.models : s.model ? [{ id:s.model, label:s.model, efforts:[] }, ...s.models] : s.models;
+    const efforts = model?.efforts || [];
+    const effortIndex = Math.max(0, efforts.indexOf(s.effort || model?.defaultEffort || efforts[0]));
+    const permission = s.permission || 'full-permission';
+    const mode = s.mode || 'agent';
     return html`
-      ${models.length ? html`<label>Model <select aria-label="Model" .value=${settings.model} ?disabled=${disabled} @change=${(event: Event) => {
-        const model = (event.target as HTMLSelectElement).value;
-        const option = settings.models.find(item => item.id === model);
-        void this.select({ model, effort:option?.defaultEffort || '' });
-      }}>${models.map(model => html`<option value=${model.id} ?selected=${model.id === settings.model}>${model.label}</option>`)}</select></label>` : nothing}
-      ${selectedModel?.efforts?.length ? html`<label>Thinking <select aria-label="Thinking effort" .value=${settings.effort || ''} ?disabled=${disabled} @change=${(event: Event) => void this.select({ effort:(event.target as HTMLSelectElement).value })}>
-        <option value="" ?selected=${!settings.effort}>Default</option>${selectedModel.efforts.map(effort => html`<option value=${effort} ?selected=${effort === settings.effort}>${effort}</option>`)}
-      </select></label>` : nothing}
-      ${this.harness === 'amplifier' ? html`<details class="advanced"><summary aria-label="Amplifier bundle and provider" title="Bundle and provider"><span>${settings.bundle || 'Bundle'} · ${providerLabel(settings.provider || 'Provider')}</span></summary><div class="advanced-panel">
-        <label>Bundle <select aria-label="Amplifier bundle" .value=${settings.bundle || ''} ?disabled=${disabled} @change=${(event: Event) => void this.select({ bundle:(event.target as HTMLSelectElement).value })}>
-          ${(settings.bundles || []).map(bundle => html`<option value=${bundle} ?selected=${bundle === settings.bundle}>${bundle}</option>`)}
-        </select></label>
-        <label>Provider <select aria-label="Amplifier provider" .value=${settings.provider || ''} ?disabled=${disabled} @change=${(event: Event) => void this.select({ provider:(event.target as HTMLSelectElement).value })}>
-          ${[...new Set([...primaryProviders, ...(settings.providers || [])])].map(provider => {
-            const available = (settings.providers || []).includes(provider);
-            return html`<option value=${provider} ?selected=${provider === settings.provider} ?disabled=${!available}>${providerLabel(provider)}${available ? '' : ' — unavailable for this bundle'}</option>`;
-          })}
-        </select></label></div></details>` : nothing}
-      ${this.loading ? html`<span class="status">Applying…</span>` : nothing}
-      ${this.error ? html`<span class="error" role="alert">${this.error}</span>` : nothing}`;
+      <details class="picker permission-picker" aria-label="Permission and mode"><summary><span aria-hidden="true">◈</span><span class="summary-text">${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}</span><span class="chevron">⌄</span></summary><div class="panel">
+        <div class="heading">Permission</div>
+        ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
+        <div class="divider"></div><div class="heading">Mode</div>
+        ${this.choice('Agent', 'Work with the selected permission', mode === 'agent', s.modes.includes('agent') && (this.harness !== 'claude' || permission !== 'read-only'), () => void this.select({ mode:'agent' }))}
+        ${this.choice('Plan', 'Explore and prepare a plan', mode === 'plan', s.modes.includes('plan') && (this.harness !== 'claude' || permission === 'read-only'), () => void this.select({ mode:'plan' }))}
+        ${this.harness === 'amplifier' ? html`<div class="notice">Amplifier currently exposes its bundle’s tool access only.</div>` : nothing}
+        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+      </div></details>
+      <details class="picker model-picker" aria-label="Harness, provider, model and thinking"><summary><span aria-hidden="true">✧</span><span class="summary-text">${model?.label || s.model || this.harness}</span><span class="chevron">⌄</span></summary><div class="panel">
+        <div class="heading">Harness</div>
+        ${(['codex','claude','amplifier'] as const).map(value => this.choice(value[0].toUpperCase() + value.slice(1), value === this.harness ? 'Current conversation' : 'Start a new conversation', this.harness === value, true, () => { if (value !== this.harness) void this.switchHarness(value); }))}
+        ${this.harness === 'amplifier' ? html`<div class="divider"></div><div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="divider"></div><div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : 'Anthropic'} · managed by ${this.harness}</div>`}
+        <div class="divider"></div><div class="heading">Model</div>
+        ${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}
+        ${efforts.length > 1 ? html`<div class="divider"></div><div class="slider"><div class="slider-header"><span>Thinking</span><span>${efforts[effortIndex]}</span></div><input type="range" aria-label="Thinking effort" min="0" max=${efforts.length - 1} step="1" .value=${String(effortIndex)} ?disabled=${this.loading || this.turnBusy} @change=${(event: Event) => void this.select({ effort:efforts[Number((event.target as HTMLInputElement).value)] })}><div class="slider-ends"><span>${efforts[0]}</span><span>${efforts[efforts.length - 1]}</span></div></div>` : nothing}
+        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+      </div></details>`;
   }
 }
