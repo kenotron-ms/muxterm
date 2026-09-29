@@ -57,6 +57,8 @@ type sdkEvent struct {
 	Source       string          `json:"source,omitempty"`
 	Text         string          `json:"text,omitempty"`
 	Name         string          `json:"name,omitempty"`
+	Provider     string          `json:"provider,omitempty"`
+	Model        string          `json:"model,omitempty"`
 	ToolID       string          `json:"toolId,omitempty"`
 	Message      string          `json:"message,omitempty"`
 	Raw          json.RawMessage `json:"raw,omitempty"`

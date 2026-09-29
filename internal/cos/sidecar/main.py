@@ -2396,7 +2396,19 @@ class SDKChatSession:
                   name=str(data.get("tool_name") or "Tool"), raw=data.get("result") or data.get("error"),
                   failed=event == "tool:error")
             return cont
+        async def provider_request(event, data):
+            # Record the mounted provider at the request boundary. Explicit
+            # selections mount exactly one module; a label alone cannot prove
+            # which provider handled a turn. Never include provider config.
+            providers = self.session.coordinator.get("providers") or {}
+            if len(providers) == 1:
+                name, provider = next(iter(providers.items()))
+                frame(self.id, "provider.request", provider=name,
+                      model=str(getattr(provider, "model", None) or
+                                getattr(provider, "default_model", "")))
+            return cont
         hooks.register("llm:stream_block_delta", delta, name="sdk-chat-delta")
+        hooks.register("provider:request", provider_request, name="sdk-chat-provider-request")
         hooks.register("tool:pre", tool_start, name="sdk-chat-tool-start")
         hooks.register("tool:post", tool_end, name="sdk-chat-tool-end")
         hooks.register("tool:error", tool_end, name="sdk-chat-tool-error")
