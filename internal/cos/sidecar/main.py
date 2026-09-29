@@ -2551,7 +2551,7 @@ async def command(cmd):
     if op == "capabilities": return {"capabilities": CAPS}
     if op in ("start", "resume"):
         if cmd.get("harness") != "amplifier": raise ValueError("unsupported harness")
-        if cmd.get("approval") not in ("", "never"):
+        if cmd.get("approval") not in (None, ""):
             raise ValueError("amplifier has no chat approval translation")
         previous = SDK_CHAT_SESSIONS.get(sid)
         if previous and previous.closed and previous.task and previous.task.done():
