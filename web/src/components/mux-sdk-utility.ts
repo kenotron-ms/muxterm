@@ -11,8 +11,8 @@ type Task = { content: string; status: string };
 type Entry = { name: string; dir: boolean };
 type Listing = { root: string; path: string; entries: Entry[] };
 type Pull = { number: number; title: string; state: string; branch: string; url: string };
-type TrajectoryEvent = { type: string; at?: string; text?: string; name?: string; toolId?: string; raw?: unknown; kind?: string; failed?: boolean; message?: string };
-type TrajectoryRecord = { id: number; turn: number; kind: string; label: string; start?: number; end?: number; input?: unknown; output?: unknown; status: string };
+type TrajectoryEvent = { type: string; at?: string; text?: string; name?: string; toolId?: string; raw?: unknown; kind?: string; failed?: boolean; complete?: boolean; message?: string; childSessionId?: string; agent?: string };
+type TrajectoryRecord = { id: number; turn: number; kind: string; label: string; start?: number; end?: number; input?: unknown; output?: unknown; status: string; childId?: string };
 const KEY = 'muxterm.sdk.utility.layout.';
 
 class UtilityPanel implements IContentRenderer {
@@ -181,6 +181,14 @@ export class MuxSDKUtility extends LitElement {
         const target = [...records].reverse().find(row => row.kind === 'Tool' && row.status === 'running' && row.label === (event.name || 'Tool'));
         if (target) { target.end = at; target.output = event.raw; target.status = event.failed ? 'failed' : 'completed'; }
         else records.push({ id:records.length, turn, kind:'Tool', label:event.name || 'Tool', end:at, output:event.raw, status:event.failed ? 'failed' : 'completed' });
+      } else if (event.type === 'delegate.spawned') {
+        records.push({ id:records.length, turn, kind:'Sub-agent', label:event.agent || 'Agent', start:at, input:event.childSessionId, status:'running', childId:event.childSessionId });
+      } else if (event.type === 'delegate.message') {
+        const target = [...records].reverse().find(row => row.kind === 'Sub-agent' && row.childId === event.childSessionId);
+        if (target) target.output = event.complete ? event.text : String(target.output || '') + (event.text || '');
+      } else if (event.type === 'delegate.completed') {
+        const target = [...records].reverse().find(row => row.kind === 'Sub-agent' && row.childId === event.childSessionId && row.status === 'running');
+        if (target) { target.end = at; target.status = event.failed ? 'failed' : 'completed'; }
       } else if (event.type === 'turn.completed' || event.type === 'turn.cancelled' || event.type === 'error') {
         for (const row of records) if (row.turn === turn && row.status === 'streaming') row.status = 'completed';
         records.push({ id:records.length, turn, kind:'Step', label:event.type === 'error' ? event.message || 'Error' : event.type === 'turn.cancelled' ? 'Stopped' : 'Completed', end:at, status:event.type });
@@ -201,7 +209,7 @@ export class MuxSDKUtility extends LitElement {
     return html`<section class="utility-content trajectory"><h2>Trajectory</h2><p class="empty">Turn ledger and recorded timing</p>
       ${dated.length ? html`<div class="trajectory-overview" aria-label="Timing overview">${dated.map(row => html`<button class="trajectory-mark ${row.kind.toLowerCase()}" style=${`left:${((row.start ?? row.end ?? first)-first)/span*100}%;width:${Math.max(2,((row.end ?? row.start ?? first)-(row.start ?? row.end ?? first))/span*100)}%`} title=${`${row.kind}: ${row.label.slice(0,80)}`} @click=${() => { this.selectedRecord=row.id; this.paintAll(); }}></button>`)}</div><div class="trajectory-scale">${new Date(first).toLocaleTimeString()} → ${new Date(last).toLocaleTimeString()}</div>` : nothing}
       <input class="trajectory-search" type="search" aria-label="Search trajectory" placeholder="Search records" .value=${this.trajectorySearch} @input=${(e: InputEvent) => { this.trajectorySearch=(e.target as HTMLInputElement).value; this.paintAll(); }}>
-      ${visible.length ? html`<div class="trajectory-ledger">${visible.map(row => html`<button class="trajectory-row ${this.selectedRecord === row.id ? 'selected' : ''}" @click=${() => { this.selectedRecord=row.id; this.paintAll(); }}><span class="trajectory-time">${row.start === undefined ? '—' : new Date(row.start).toLocaleTimeString()}</span><span class="trajectory-kind">${row.kind}</span><span class="trajectory-label">${row.label.slice(0,180)}</span><span class="trajectory-duration">${row.start !== undefined && row.end !== undefined && row.status !== 'running' ? `${Math.max(0,row.end-row.start)} ms` : row.status}</span></button>`)}</div>` : html`<p class="empty">${records.length ? 'No matching records.' : 'No session activity recorded yet.'}</p>`}
+      ${visible.length ? html`<div class="trajectory-ledger">${visible.map((row, index) => html`${(index === 0 || visible[index-1].turn !== row.turn) ? html`<div class="trajectory-turn">Turn ${row.turn || 1}</div>` : nothing}<button class="trajectory-row ${this.selectedRecord === row.id ? 'selected' : ''}" @click=${() => { this.selectedRecord=row.id; this.paintAll(); }}><span class="trajectory-time">${row.start === undefined ? '—' : new Date(row.start).toLocaleTimeString()}</span><span class="trajectory-kind">${row.kind}</span><span class="trajectory-label">${row.label.slice(0,180)}</span><span class="trajectory-duration">${row.start !== undefined && row.end !== undefined && row.status !== 'running' ? `${Math.max(0,row.end-row.start)} ms` : row.status}</span></button>`)}</div>` : html`<p class="empty">${records.length ? 'No matching records.' : 'No session activity recorded yet.'}</p>`}
       ${selected ? html`<div class="trajectory-inspector"><h3>${selected.kind} · Turn ${selected.turn}</h3><p>${selected.status}${selected.start !== undefined ? ` · ${new Date(selected.start).toLocaleString()}` : ''}</p><h3>Input</h3><pre>${detail(selected.input)}</pre><h3>Output</h3><pre>${detail(selected.output)}</pre></div>` : nothing}
     </section>`;
   }
@@ -226,9 +234,11 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .trajectory-overview { position:relative; height:36px; margin:14px 0 4px; background:#151b28; border:1px solid #41485f; border-radius:6px; overflow:hidden; }
     mux-sdk-utility .trajectory-mark { position:absolute; top:5px; height:26px; border:0; border-radius:3px; background:#7896d9; opacity:.85; min-width:2px; padding:0; }
     mux-sdk-utility .trajectory-mark.tool { background:#c2a570; top:10px; height:16px; } mux-sdk-utility .trajectory-mark.thinking { background:#aa93ca; top:14px; height:10px; }
+    mux-sdk-utility .trajectory-mark.sub-agent { background:#79bdab; top:7px; height:22px; }
     mux-sdk-utility .trajectory-scale { color:#97a5bc; font:10px ui-monospace,monospace; margin-bottom:14px; }
     mux-sdk-utility .trajectory-search { width:100%; box-sizing:border-box; border:1px solid #41485f; border-radius:6px; padding:7px 9px; background:#151b28; color:inherit; margin-bottom:12px; }
     mux-sdk-utility .trajectory-ledger { border-top:1px solid #41485f; }
+    mux-sdk-utility .trajectory-turn { padding:8px 3px 5px; color:#b4c4e2; background:#242e3e; border-bottom:1px solid #41485f; font-size:11px; font-weight:650; }
     mux-sdk-utility .trajectory-row { display:grid; grid-template-columns:70px 65px minmax(0,1fr) 60px; gap:6px; align-items:start; width:100%; padding:8px 4px; border:0; border-bottom:1px solid #394354; background:transparent; color:inherit; text-align:left; cursor:pointer; font:11px/1.4 system-ui,sans-serif; }
     mux-sdk-utility .trajectory-row:hover, mux-sdk-utility .trajectory-row.selected { background:#35445f; }
     mux-sdk-utility .trajectory-time, mux-sdk-utility .trajectory-duration { color:#9aa9c0; font:10px/1.5 ui-monospace,monospace; }

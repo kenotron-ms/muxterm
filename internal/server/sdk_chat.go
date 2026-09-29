@@ -73,6 +73,7 @@ type sdkEvent struct {
 	Bundle          string                 `json:"bundle,omitempty"`
 	Raw             json.RawMessage        `json:"raw,omitempty"`
 	Failed          bool                   `json:"failed,omitempty"`
+	Complete        bool                   `json:"complete,omitempty"`
 	Attachments     []sdkDisplayAttachment `json:"attachments,omitempty"`
 }
 type sdkDisplayAttachment struct {

@@ -8,7 +8,9 @@ import './mux-sdk-chat-settings.js';
 import './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
-type SDKEvent = { type: string; at?: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[]; childSessionId?: string; parentSessionId?: string; agent?: string };
+type SDKEvent = { type: string; at?: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; complete?: boolean; attachments?: DisplayAttachment[]; childSessionId?: string; parentSessionId?: string; agent?: string };
+type AgentLeg = { task: string; reply: string; status: string };
+type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[] };
 type Block = { key: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
 import { icon } from '../lib/icons.js';
 import { Brain, Check, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
@@ -278,7 +280,7 @@ export class MuxSDKChat extends LitElement {
     this.stream = source;
   }
   private onEvent(event: SDKEvent) {
-    if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type))
+    if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'delegate.message', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type))
       this.trajectory = [...this.trajectory, event];
     const blocks = [...this.blocks];
     if (event.type === 'input.accepted') {
@@ -456,21 +458,40 @@ export class MuxSDKChat extends LitElement {
     return !!output && typeof output === 'object' && typeof (output as Record<string, unknown>).returncode === 'number'
       && (output as Record<string, unknown>).returncode !== 0;
   }
-  private agents() {
+  private agents(): AgentView[] {
     const delegates = this.trajectory.filter(event => event.type === 'delegate.spawned');
-    return this.blocks.filter(block => block.kind === 'tool' && /(^|[:._-])(delegate|spawn_agent|task|collabagenttoolcall)(\b|[:._-])/i.test(block.name || '')).map(block => {
+    const byId = new Map<string, AgentView>();
+    const add = (id: string, name: string, parentId: string) => {
+      let agent = byId.get(id);
+      if (!agent) { agent = { id, name, parentId, status:'Running', progress:'', legs:[] }; byId.set(id, agent); }
+      if (name && name !== 'Agent') agent.name = name;
+      return agent;
+    };
+    for (const block of this.blocks.filter(block => block.kind === 'tool' && /^(delegate|Agent|Task|subAgentActivity)$/i.test(block.name || ''))) {
       const input = this.toolInput(block.input);
       const fields = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+      if (block.name === 'subAgentActivity' && fields.kind !== 'started') continue;
       const spawned = delegates.find(event => event.toolId === block.id);
       const output = this.toolOutput(block.output);
       const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
       const body = result.output && typeof result.output === 'object' ? result.output as Record<string, unknown> : result;
-      const id = spawned?.childSessionId || (typeof body.session_id === 'string' ? body.session_id : '') || block.id || String(block.key);
-      const name = spawned?.agent || (typeof fields.agent === 'string' ? fields.agent : typeof fields.subagent_type === 'string' ? fields.subagent_type : block.name || 'Agent');
-      const task = fields.instruction || fields.prompt || fields.description || fields.task || fields.message;
+      const id = spawned?.childSessionId || (typeof body.session_id === 'string' ? body.session_id : '') || (typeof fields.agentThreadId === 'string' ? fields.agentThreadId : '') || block.id || String(block.key);
+      const name = (typeof fields.agent === 'string' ? fields.agent : '') || (typeof fields.subagent_type === 'string' ? fields.subagent_type : '') || spawned?.agent || (typeof fields.agentPath === 'string' ? fields.agentPath : '') || block.name || 'Agent';
+      const task = fields.instruction || fields.prompt || fields.description || fields.task || fields.message || fields.agentPath;
       const reply = body.response || body.output || output;
-      return { id, parentId:spawned?.parentSessionId || this.sessionId, name, task:typeof task === 'string' ? task : this.detail(input), reply:block.done ? this.detail(reply) : '', status:block.done ? this.toolFailed(block) ? 'Failed' : 'Completed' : 'Running' };
-    });
+      const agent = add(id, name, spawned?.parentSessionId || this.sessionId);
+      const status = block.done ? this.toolFailed(block) ? 'Failed' : 'Completed' : 'Running';
+      agent.legs.push({ task:typeof task === 'string' ? task : this.detail(input), reply:block.done ? this.detail(reply) : '', status });
+      agent.status = status;
+    }
+    for (const event of delegates) if (event.childSessionId) add(event.childSessionId, event.agent || 'Agent', event.parentSessionId || this.sessionId);
+    for (const event of this.trajectory) if (event.childSessionId) {
+      const agent = byId.get(event.childSessionId);
+      if (!agent) continue;
+      if (event.type === 'delegate.message') agent.progress = event.complete ? event.text || '' : agent.progress + (event.text || '');
+      if (event.type === 'delegate.completed') agent.status = event.failed ? 'Failed' : 'Completed';
+    }
+    return [...byId.values()];
   }
   private async steerAgent() {
     const agent = this.agents().find(item => item.id === this.selectedAgent);
@@ -529,7 +550,7 @@ export class MuxSDKChat extends LitElement {
   override render() { return html`
     <div class="topbar">${this.selectedAgent ? html`<nav class="breadcrumbs" aria-label="Agent lineage"><button @click=${() => { this.selectedAgent=''; this.agentNotice=''; }}>${this.chat?.title || 'Root session'}</button><span>›</span><strong>${this.agents().find(agent => agent.id === this.selectedAgent)?.name || 'Agent'}</strong></nav>` : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
-      ${this.selectedAgent ? (() => { const agent=this.agents().find(item => item.id === this.selectedAgent); return agent ? html`<div class="agent-chat"><div class="speaker">${agent.name} · ${agent.status}</div><div class="instruction">${agent.task}</div><div class="reply">${agent.reply || 'The delegated agent is working. Its result returns through the root session.'}</div></div>` : html`<div class="block">Agent unavailable in this session.</div>`; })() : html`${this.agents().length ? html`<section class="agent-list" aria-label="Delegated sub-agents"><h2>Delegated sub-agents</h2>${this.agents().map(agent => html`<button class="agent-link" @click=${() => { this.selectedAgent=agent.id; this.agentNotice=''; }}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</section>` : nothing}${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? this.userBubble(b) : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b) : html`<div class="${b.kind}">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}`}
+      ${this.selectedAgent ? (() => { const agent=this.agents().find(item => item.id === this.selectedAgent); return agent ? html`<div class="agent-chat"><div class="speaker">${agent.name} · ${agent.status}</div>${agent.legs.map(leg => html`<div class="instruction">${leg.task}</div><div class="reply">${leg.reply || agent.progress || 'The delegated agent is working. Its result returns through the root session.'}</div>`)}${!agent.legs.length ? html`<div class="reply">${agent.progress || 'The native harness reported this agent. Its result returns through the root session.'}</div>` : nothing}</div>` : html`<div class="block">Agent unavailable in this session.</div>`; })() : html`${this.agents().length ? html`<section class="agent-list" aria-label="Delegated sub-agents"><h2>Delegated sub-agents</h2>${this.agents().map(agent => html`<button class="agent-link" @click=${() => { this.selectedAgent=agent.id; this.agentNotice=''; }}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</section>` : nothing}${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? this.userBubble(b) : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b) : html`<div class="${b.kind}">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
     </div><div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${(e: InputEvent) => { this.agentDraft=(e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span><button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraft.trim()}>Send to root ↗</button></div>` : html`
@@ -540,7 +561,7 @@ export class MuxSDKChat extends LitElement {
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
       <div class="composer-row"><textarea aria-label=${this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
-      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.busy ? html`${this.draft.trim() ? html`<button class="steer" aria-label="Steer running turn" ?disabled=${this.stopping || this.attachments.length > 0} @click=${() => void this.send()}>Steer ↗</button>` : nothing}<button class="stop" aria-label="Stop current turn" title="Stop current turn" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : html`<button class="send" aria-label="Send message" ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button>`}</div>`}
+      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.busy ? html`${this.draft.trim() ? html`<button class="steer" aria-label="Steer running turn" ?disabled=${this.stopping || this.attachments.length > 0} @click=${() => void this.send()}>Steer ↗</button>` : nothing}<button class="stop" aria-label="Stop current turn" title="Stop current turn" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : html`<button class="send" aria-label="Send message" ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button>`}</div>`}
 
 
     </div></div></div>
