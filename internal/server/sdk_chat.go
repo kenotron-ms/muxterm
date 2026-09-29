@@ -674,6 +674,15 @@ func (s *Server) handleSDKFolders(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			folders = append(folders, entry.Name())
+			continue
+		}
+		// ReadDir reports symlinks separately. A link to a directory is still
+		// a browsable server folder, including common linked work directories.
+		if entry.Type()&os.ModeSymlink != 0 {
+			info, statErr := os.Stat(filepath.Join(path, entry.Name()))
+			if statErr == nil && info.IsDir() {
+				folders = append(folders, entry.Name())
+			}
 		}
 	}
 	writeSDKJSON(w, 200, map[string]any{"path": path, "base": base, "parent": filepath.Dir(path), "folders": folders})
