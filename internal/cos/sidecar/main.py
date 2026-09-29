@@ -2207,6 +2207,8 @@ class SDKChatSession:
         self.turn_started = None
         self.first_token_seen = False
         self.cancel_requested = False
+        self.steering = False
+        self.finish_task = None
 
     @staticmethod
     def image_content(command, coordinator):
@@ -2448,7 +2450,7 @@ class SDKChatSession:
                   source=event.get("source"), delivery=event.get("delivery"),
                   sequence=event.get("sequence"))
         elif kind in ("generation.finished", "generation.failed", "generation.detached"):
-            asyncio.create_task(self.finish(event))
+            self.finish_task = asyncio.create_task(self.finish(event))
 
     async def finish(self, event):
         if self.turn_started is not None:
@@ -2466,13 +2468,14 @@ class SDKChatSession:
         except Exception as exc:
             frame(self.id, "error", message=f"Amplifier transcript persistence failed: {exc}")
         finished = event.get("type") == "generation.finished"
-        if not (self.cancel_requested and not finished):
+        if not self.steering and not (self.cancel_requested and not finished):
             frame(self.id, "generation.finished" if finished else "error", inputIds=ids,
                   generationId=event.get("generation_id"), persisted=persisted,
                   message=event.get("error_type", ""))
-        if finished:
+        if finished and not self.steering:
             frame(self.id, "turn.completed", inputIds=ids, generationId=event.get("generation_id"), persisted=persisted)
-        self.active.difference_update(ids)
+        if self.steering: self.active.clear()
+        else: self.active.difference_update(ids)
 
     async def send(self, value):
         from amplifier_module_loop_live.runtime import Input
@@ -2614,7 +2617,22 @@ async def command(cmd):
         await session.close()
         SDK_CHAT_SESSIONS[sid] = replacement
         return await command({"op": "settings", "sessionId": sid})
-    if op == "send": return await session.send(cmd.get("input") or {})
+    if op == "send":
+        value = cmd.get("input") or {}
+        if value.get("kind") == "steer" and session.active:
+            session.steering = session.cancel_requested = True
+            await session.close()
+            if session.finish_task: await session.finish_task
+            replacement = SDKChatSession(sid, session.cwd, session.bundle, session.provider,
+                                         session.selected_model, session.effort)
+            try:
+                await replacement.build()
+            except BaseException as exc:
+                frame(sid, "error", message=f"Amplifier steering could not resume: {exc}")
+                raise
+            SDK_CHAT_SESSIONS[sid] = replacement
+            return await replacement.send(value)
+        return await session.send(value)
     if op == "interrupt":
         if not session.active: raise ValueError("No active Amplifier turn to stop")
         stopped_ids = list(session.active)

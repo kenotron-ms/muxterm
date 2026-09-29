@@ -198,7 +198,8 @@ async function command(cmd) {
         if (input.kind === 'steer') await s.codex.steer(input);
         else await s.codex.run(input);
       } catch (error) {
-        if (input.kind !== 'steer') s.busy = false;
+        s.busy = false;
+        if (input.kind === 'steer') emit(sessionId, 'error', { message: String(error) });
         throw error;
       }
     } else {

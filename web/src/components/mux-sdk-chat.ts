@@ -143,13 +143,19 @@ export class MuxSDKChat extends LitElement {
   private onEvent(event: SDKEvent) {
     const blocks = [...this.blocks];
     if (event.type === 'input.accepted') {
-      // The harness can stream a fast reply before its send receipt arrives.
-      const anchor = event.inputId ? this.completedInputAnchors.get(event.inputId) : undefined;
-      let at = anchor === undefined ? this.turnStart : blocks.findIndex(b => b.key === anchor);
-      if (at < 0) at = this.turnStart;
-      while (blocks[at]?.kind === 'user') at++;
-      blocks.splice(at, 0, { key:++this.nextBlockKey, kind:'user', text:event.text || '', attachments:event.attachments || [] });
-      if (at < this.turnStart) this.turnStart++;
+      if (event.kind === 'steer') {
+        const last = blocks[blocks.length - 1];
+        if (last?.kind === 'assistant') blocks[blocks.length - 1] = { ...last, done:true };
+        blocks.push({ key:++this.nextBlockKey, kind:'user', text:event.text || '' });
+      } else {
+        // The harness can stream a fast reply before its send receipt arrives.
+        const anchor = event.inputId ? this.completedInputAnchors.get(event.inputId) : undefined;
+        let at = anchor === undefined ? this.turnStart : blocks.findIndex(b => b.key === anchor);
+        if (at < 0) at = this.turnStart;
+        while (blocks[at]?.kind === 'user') at++;
+        blocks.splice(at, 0, { key:++this.nextBlockKey, kind:'user', text:event.text || '', attachments:event.attachments || [] });
+        if (at < this.turnStart) this.turnStart++;
+      }
       this.busy = true;
     }
     else if (event.type === 'assistant.delta') {
