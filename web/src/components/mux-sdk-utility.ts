@@ -12,7 +12,7 @@ type Entry = { name: string; dir: boolean };
 type Listing = { root: string; path: string; entries: Entry[] };
 type Pull = { number: number; title: string; state: string; branch: string; url: string };
 type TrajectoryEvent = { type: string; at?: string; text?: string; name?: string; toolId?: string; raw?: unknown; kind?: string; failed?: boolean; complete?: boolean; message?: string; childSessionId?: string; agent?: string };
-type TrajectoryRecord = { id: number; turn: number; kind: string; label: string; start?: number; end?: number; input?: unknown; output?: unknown; status: string; childId?: string };
+type TrajectoryRecord = { id: number; turn: number; kind: string; label: string; start?: number; end?: number; input?: unknown; output?: unknown; status: string; childId?: string; toolId?: string };
 const KEY = 'muxterm.sdk.utility.layout.';
 
 class UtilityPanel implements IContentRenderer {
@@ -181,8 +181,10 @@ export class MuxSDKUtility extends LitElement {
         const target = [...records].reverse().find(row => row.kind === 'Tool' && row.status === 'running' && row.label === (event.name || 'Tool'));
         if (target) { target.end = at; target.output = event.raw; target.status = event.failed ? 'failed' : 'completed'; }
         else records.push({ id:records.length, turn, kind:'Tool', label:event.name || 'Tool', end:at, output:event.raw, status:event.failed ? 'failed' : 'completed' });
+        const child = [...records].reverse().find(row => row.kind === 'Sub-agent' && row.toolId === event.toolId);
+        if (child && child.output === undefined) child.output = event.raw;
       } else if (event.type === 'delegate.spawned') {
-        records.push({ id:records.length, turn, kind:'Sub-agent', label:event.agent || 'Agent', start:at, input:event.childSessionId, status:'running', childId:event.childSessionId });
+        records.push({ id:records.length, turn, kind:'Sub-agent', label:event.agent || 'Agent', start:at, input:event.childSessionId, status:'running', childId:event.childSessionId, toolId:event.toolId });
       } else if (event.type === 'delegate.message') {
         const target = [...records].reverse().find(row => row.kind === 'Sub-agent' && row.childId === event.childSessionId);
         if (target) target.output = event.complete ? event.text : String(target.output || '') + (event.text || '');

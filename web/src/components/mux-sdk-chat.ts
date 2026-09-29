@@ -481,7 +481,7 @@ export class MuxSDKChat extends LitElement {
       const reply = body.response || body.output || output;
       const agent = add(id, name, spawned?.parentSessionId || this.sessionId);
       const status = block.done ? this.toolFailed(block) ? 'Failed' : 'Completed' : 'Running';
-      agent.legs.push({ task:typeof task === 'string' ? task : this.detail(input), reply:block.done ? this.detail(reply) : '', status });
+      agent.legs.push({ task:typeof task === 'string' ? task : this.detail(input), reply:block.done && block.name !== 'subAgentActivity' ? this.detail(reply) : '', status });
       agent.status = status;
     }
     for (const event of delegates) if (event.childSessionId) add(event.childSessionId, event.agent || 'Agent', event.parentSessionId || this.sessionId);
