@@ -18,7 +18,7 @@ function broadcast(message) {
 }
 const capabilities = harness => harness === 'claude'
   ? { approvals: false, transcript_read: true, interrupt: true, live_input: true, attributed_service_input: true, native_steering: false }
-  : { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: false };
+  : { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: true };
 function attachmentPrompt(input) {
   const items = input.attachments || [];
   if (!items.length) return input.content;
@@ -37,7 +37,17 @@ function queue(s, input) {
 async function* claudeInputs(s) {
   while (!s.closed) {
     if (!s.inputs.length) await new Promise(resolve => { s.wake = resolve; });
-    while (s.inputs.length) yield s.inputs.shift();
+    while (s.inputs.length) {
+      const input = s.inputs.shift();
+      const pending = s.pendingInputs.get(input.uuid);
+      if (pending) {
+        s.pendingInputs.delete(input.uuid);
+        emit(s.id, 'input.accepted', { inputId: input.uuid, kind: pending.input.kind,
+          source: pending.input.source, text: pending.input.content });
+        pending.resolve();
+      }
+      yield input;
+    }
   }
 }
 async function runClaude(s) {
@@ -78,16 +88,16 @@ async function runClaude(s) {
         // The SDK's result echoes the UUIDs of user inputs the native turn
         // consumed. A local input queue is not proof that a turn was accepted.
         const accepted = msg.user_message_uuids || (msg.user_message_uuid ? [msg.user_message_uuid] : []);
-        for (const id of accepted) {
-          const pending = s.pendingInputs.get(id);
-          if (!pending) continue;
-          s.pendingInputs.delete(id);
-          emit(s.id, 'input.accepted', { inputId: id, kind: pending.input.kind,
-            source: pending.input.source, text: pending.input.content });
-          pending.resolve();
-        }
-        s.busy = false;
-        emit(s.id, msg.subtype === 'success' ? 'turn.completed' : 'error', { inputIds: msg.user_message_uuids, message: msg.subtype });
+        const steeringAbort = s.steering && !s.cancelRequested && msg.subtype !== 'success';
+        for (const id of accepted) s.inFlightInputs.delete(id);
+        if (s.cancelRequested || (msg.subtype !== 'success' && !steeringAbort)) s.inFlightInputs.clear();
+        s.busy = s.inFlightInputs.size > 0;
+        emit(s.id, steeringAbort ? 'turn.continued'
+          : s.cancelRequested || msg.subtype === 'interrupted' ? 'turn.cancelled'
+          : msg.subtype === 'success' ? (s.busy ? 'turn.continued' : 'turn.completed') : 'error',
+          { inputIds: accepted, message: msg.subtype });
+        s.cancelRequested = false;
+        s.steering = false;
       }
     }
   } catch (error) { s.busy = false; emit(s.id, 'error', { message: String(error) }); }
@@ -103,7 +113,7 @@ async function command(cmd) {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
     if (harness !== 'codex' && harness !== 'claude') throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
-    const s = { id: sessionId, harness, cwd, nativeId, inputs: [], pendingInputs: new Map(), busy: false, closed: false };
+    const s = { id: sessionId, harness, cwd, nativeId, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false };
     sessions.set(sessionId, s);
     if (harness === 'claude') void runClaude(s);
     if (op === 'start') emit(sessionId, 'session.started', { capabilities: capabilities(harness), pendingNativeId: true });
@@ -112,34 +122,56 @@ async function command(cmd) {
   const s = sessions.get(sessionId);
   if (!s) throw new Error('Session is not resident; resume it first');
   if (op === 'send') {
-    if (!input?.id || (!input?.content && !input?.attachments?.length) || !['user', 'service'].includes(input.kind)) throw new Error('Invalid input');
+    if (!input?.id || (!input?.content && !input?.attachments?.length) || !['user', 'service', 'steer'].includes(input.kind)) throw new Error('Invalid input');
     if (input.kind === 'service' && !capabilities(s.harness).attributed_service_input)
       throw new Error('unsupported: attributed service input');
-    if (s.busy && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');
+    if (input.kind === 'steer' && !s.busy) throw new Error('No active turn to steer');
+    if (s.busy && input.kind !== 'steer' && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');
     if (s.harness === 'codex') {
       // Codex has not accepted a turn until app-server answers turn/start.
       // Returning before that answer used to turn a failed native submission
       // into a false successful receipt in muxterm's durable control ledger.
-      s.busy = true;
+      if (input.kind !== 'steer') s.busy = true;
       try {
         s.codex ||= new CodexStream(s, emit);
-        await s.codex.run(input);
+        if (input.kind === 'steer') await s.codex.steer(input);
+        else await s.codex.run(input);
       } catch (error) {
-        s.busy = false;
+        if (input.kind !== 'steer') s.busy = false;
         throw error;
       }
     } else {
       s.busy = true;
-      await new Promise((resolve, reject) => {
-        s.pendingInputs.set(input.id, { input, resolve, reject });
-        queue(s, input);
-      });
+      s.inFlightInputs.add(input.id);
+      try {
+        if (input.kind === 'steer') {
+          // Streaming text has no request boundary at which Claude can fold a
+          // queued correction. Abort that generation, then continue with the
+          // correction while keeping its already-streamed transcript visible.
+          s.steering = true;
+          await s.query.interrupt();
+          if (s.cancelRequested) throw new Error('Steer was cancelled');
+        }
+        await new Promise((resolve, reject) => {
+          s.pendingInputs.set(input.id, { input, resolve, reject });
+          queue(s, input);
+        });
+      } catch (error) { s.inFlightInputs.delete(input.id); s.steering = false; throw error; }
     }
-    if (s.harness === 'codex') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.content });
+    if (s.harness === 'codex' && input.kind !== 'steer') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.content });
     return { status: 'accepted', inputId: input.id };
   }
   if (op === 'interrupt') {
-    if (s.harness === 'codex') await s.codex?.interrupt(); else await s.query?.interrupt();
+    if (!s.busy) throw new Error('No active turn to stop');
+    if (s.harness === 'codex') await s.codex?.interrupt();
+    else {
+      s.cancelRequested = true;
+      s.inputs.length = 0;
+      s.inFlightInputs.clear();
+      for (const pending of s.pendingInputs.values()) pending.reject(new Error('Input cancelled'));
+      s.pendingInputs.clear();
+      await s.query?.interrupt({ cancelQueued: true });
+    }
     return { status: 'accepted' };
   }
   if (op === 'close') {

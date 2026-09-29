@@ -27,6 +27,8 @@ export class CodexStream {
     this.textByItem = new Map();
     this.reasoningByItem = new Map();
     this.phaseByItem = new Map();
+    this.inputIds = [];
+    this.cancelRequested = false;
     const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpConfig = muxterm ? ['-c', `mcp_servers.muxterm.command=${JSON.stringify(muxterm)}`,
       '-c', 'mcp_servers.muxterm.args=["mcp"]'] : [];
@@ -64,13 +66,15 @@ export class CodexStream {
     this.session.nativeId = result.thread.id;
     this.emit(this.session.id, 'session.started', { nativeId: result.thread.id,
       capabilities: { approvals: false, transcript_read: false, interrupt: true,
-        live_input: false, attributed_service_input: false, native_steering: false } });
+        live_input: false, attributed_service_input: false, native_steering: true } });
   }
 
   async run(input) {
     await this.ready;
     this.session.busy = true;
     this.inputId = input.id;
+    this.inputIds = [input.id];
+    this.cancelRequested = false;
     this.textByItem.clear();
     this.reasoningByItem.clear();
     this.phaseByItem.clear();
@@ -90,6 +94,15 @@ export class CodexStream {
       this.session.busy = false;
       throw error;
     }
+  }
+
+  async steer(input) {
+    await this.ready;
+    if (!this.turnId || !this.session.busy) throw new Error('No active Codex turn to steer');
+    await this.request('turn/steer', { threadId: this.session.nativeId,
+      expectedTurnId: this.turnId, input: [{ type: 'text', text: input.content, text_elements: [] }] });
+    this.inputIds.push(input.id);
+    this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: 'steer', source: input.source, text: input.content });
   }
 
   onLine(line) {
@@ -137,13 +150,17 @@ export class CodexStream {
     } else if (method === 'turn/completed') {
       this.session.busy = false;
       this.turnId = null;
-      this.emit(this.session.id, p.turn.status === 'completed' ? 'turn.completed' : 'error',
-        { inputIds: [this.inputId], message: p.turn.error?.message || p.turn.status });
+      this.emit(this.session.id, this.cancelRequested || p.turn.status === 'interrupted' ? 'turn.cancelled'
+        : p.turn.status === 'completed' ? 'turn.completed' : 'error',
+        { inputIds: this.inputIds, message: p.turn.error?.message || p.turn.status });
     }
   }
 
   async interrupt() {
-    if (this.turnId) await this.request('turn/interrupt', { threadId: this.session.nativeId, turnId: this.turnId });
+    if (this.turnId) {
+      await this.request('turn/interrupt', { threadId: this.session.nativeId, turnId: this.turnId });
+      this.cancelRequested = true;
+    }
   }
 
   close() { this.process.kill('SIGTERM'); }
