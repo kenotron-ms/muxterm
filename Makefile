@@ -38,6 +38,8 @@ DEV_LOCAL_COS_SESSION ?= muxterm-cos-dev
 #     (snapshotDir(), DefaultCompletionsPath()). Without it a dev sessiond
 #     RESTORES PRODUCTION'S WORKSPACES at boot and OVERWRITES production's
 #     restore-snapshot.json periodically and on shutdown.
+#   XDG_CONFIG_HOME  -- local settings for the dev server, including the chat
+#     folder-picker base. Keep verification settings away from the live config.
 #   MUXTERM_COS_SESSION_ID -- the chief-of-staff transcript, which lives in
 #     amplifier's session store under $$HOME and honours NO XDG variable, so
 #     the session id is the only lever that separates it.
@@ -53,15 +55,16 @@ unset INVOCATION_ID; \
 XDG_RUNTIME_DIR="$${TMPDIR:-/tmp}"; \
 XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR%/}/muxterm-$(1)"; \
 XDG_DATA_HOME="$$XDG_RUNTIME_DIR/data"; \
+XDG_CONFIG_HOME="$$XDG_RUNTIME_DIR/config"; \
 MUXTERM_COS_SESSION_ID="$(2)"; \
 MUXTERM_DEV_INSTANCE=1; \
-export XDG_RUNTIME_DIR XDG_DATA_HOME MUXTERM_COS_SESSION_ID MUXTERM_DEV_INSTANCE; \
+export XDG_RUNTIME_DIR XDG_DATA_HOME XDG_CONFIG_HOME MUXTERM_COS_SESSION_ID MUXTERM_DEV_INSTANCE; \
 case "$$XDG_RUNTIME_DIR" in \
   /run/user/*|"$$HOME"/.local/share*) \
     echo "refusing: dev isolation resolved to $$XDG_RUNTIME_DIR, which looks like production state"; \
     exit 1;; \
 esac; \
-mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME";
+mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME" "$$XDG_CONFIG_HOME";
 endef
 
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.

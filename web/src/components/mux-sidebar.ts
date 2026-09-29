@@ -1189,22 +1189,21 @@ export class MuxSidebar extends LitElement {
       flex: 0 0 var(--sidebar-global-action-height);
       height: var(--sidebar-global-action-height);
       margin: 0 7px;
-      padding: 0 6px;
-      border: 0;
-      background: transparent;
-      color: color-mix(in srgb, var(--chrome-text-bright) 72%, var(--chrome-text-dim));
+      padding: 0 10px;
+      border: 1px solid var(--chrome-border);
+      border-radius: 7px;
+      background: var(--sidebar-hover);
+      color: var(--chrome-text-bright);
       display: flex;
       align-items: center;
       gap: 7px;
       text-align: left;
-      font: 780 9.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
-      letter-spacing: 0.075em;
-      text-transform: uppercase;
+      font: 650 11px/1 Inter, ui-sans-serif, system-ui, sans-serif;
       cursor: pointer;
     }
 
-    .new-chat-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
-    .new-chat-action-mark { color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright)); font-size: 14px; }
+    .new-chat-action:hover { color: var(--sidebar-text); border-color: var(--chrome-accent); }
+    .new-chat-action-mark { color: var(--chrome-accent); font-size: 16px; }
 
     .hostgroup { margin: var(--sidebar-group-gap) 0 0; }
     .hostgroup:first-child { margin-top: 11px; }
@@ -2308,16 +2307,6 @@ export class MuxSidebar extends LitElement {
     this.dispatchEvent(
       new CustomEvent('workspace-create', {
         detail: { host },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
-  /** "+ Connect machine" — opens the connect dialog, which lives in app.ts. */
-  private _onConnectMachine(): void {
-    this.dispatchEvent(
-      new CustomEvent('connect-machine', {
         bubbles: true,
         composed: true,
       }),

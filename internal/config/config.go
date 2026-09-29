@@ -60,10 +60,8 @@ type CosConfig struct {
 // can see, so it is an operator decision, never one anyone backs into.
 //
 // MUXTERM_COS_ATTACHMENTS=1|0 overrides Enabled for one process. It exists
-// because `make dev-local` isolates XDG_RUNTIME_DIR and XDG_DATA_HOME but
-// deliberately does NOT isolate XDG_CONFIG_HOME: verifying this feature must
-// never require editing the real ~/.config/muxterm/config.toml that the
-// production server reads. Same family as MUXTERM_COS_SESSION_ID.
+// because a one-process override is useful even when `make dev-local` keeps
+// runtime, data, and config files in its own instance directory.
 type CosAttachmentsConfig struct {
 	// Enabled gates the whole capability. When false the upload route
 	// answers 404, cos-turn rejects any attachment id, and the browser

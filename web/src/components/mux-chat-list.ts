@@ -118,7 +118,7 @@ export class MuxChatWorkspace extends LitElement {
     const row = this.model;
     return html`
       <div class="row ${row.project ? '' : 'ungrouped'}">
-        <button class="group" title=${row.project?.path || 'Sessions outside known projects'} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.menuOpen = false; }}>
+        <button class="group" title=${row.name} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.menuOpen = false; }}>
           ${row.project ? this.open ? html`<svg class="folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v2M3 20l3-9h15l-3 9H3Z"/></svg>` : html`<svg class="folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5Z"/></svg>` : html`<span aria-hidden="true">◌</span>`}
           <span class="name">${row.name}</span><span class="chevron">${this.open ? '⌄' : '›'}</span>
         </button>
@@ -133,7 +133,6 @@ export class MuxChatWorkspace extends LitElement {
           <span class="status ${item.state}" title=${item.state}></span>
           <span class="body"><span class="title">${item.title}</span>
             <span class="details">${row.project?.name || 'Ungrouped'} · ${displayHarness(item.harness)}</span>
-            <span class="details" title=${item.path || 'Folder unknown'}>${item.path || 'Folder unknown'}</span>
             ${item.kind === 'lane' ? html`<span class="details">${item.terminal ? `Live terminal · ${item.workspaceId} / pane ${item.paneId}` : 'Terminal unavailable'} · ${laneOrigin(item.origin)}</span>` : nothing}
           </span><span class="kind">${item.kind === 'lane' ? 'Lane' : 'Chat'}</span>
         </button>${item.kind === 'chat' ? html`<button class="rename-chat" aria-label=${`Rename ${item.title}`} title="Rename chat" @click=${() => { this.renamingId = item.id; this.renameDraft = item.title; }}>✎</button>` : nothing}`}
