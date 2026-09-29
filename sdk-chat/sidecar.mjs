@@ -44,7 +44,7 @@ async function runClaude(s) {
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, resume: s.nativeId || undefined,
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: muxtermMcpEnv } },
     includePartialMessages: true, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true,
-    thinking: { type: 'enabled', budgetTokens: 2048, display: 'summarized' }, maxTurns: 20 } });
+    thinking: { type: 'enabled', budgetTokens: 2048, display: 'summarized' }, effort: 'high', maxTurns: 20 } });
   s.query = q;
   try {
     for await (const msg of q) {
