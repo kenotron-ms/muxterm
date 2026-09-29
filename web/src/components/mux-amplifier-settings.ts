@@ -3,6 +3,8 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 
 type Settings = { bundle: string; provider: string; model: string; bundles: string[]; providers: string[] };
+const providerLabel = (provider: string): string =>
+  provider === 'provider-anthropic' ? 'Anthropic' : provider === 'provider-openai' ? 'OpenAI' : provider;
 
 @customElement('mux-amplifier-settings')
 export class MuxAmplifierSettings extends LitElement {
@@ -67,7 +69,7 @@ export class MuxAmplifierSettings extends LitElement {
     finally { this.loading = false; }
   }
   override render() { return html`
-    <button class="summary" aria-label="Change Amplifier bundle and provider" aria-expanded=${this.open} @click=${() => { this.open = !this.open; if (this.open && !this.settings && !this.loading) void this.load(this.sessionId); }}>Bundle: ${this.settings?.bundle || (this.loading ? 'Loading…' : 'Unavailable')} · Provider: ${this.settings?.provider || '—'} ▾</button>
+    <button class="summary" aria-label="Change Amplifier bundle and provider" aria-expanded=${this.open} @click=${() => { this.open = !this.open; if (this.open && !this.settings && !this.loading) void this.load(this.sessionId); }}>Bundle: ${this.settings?.bundle || (this.loading ? 'Loading…' : 'Unavailable')} · Provider: ${this.settings?.provider ? providerLabel(this.settings.provider) : '—'} ▾</button>
     ${this.open ? html`<div class="panel" aria-label="Amplifier settings">
       ${this.loading && !this.settings ? html`Loading…` : nothing}
       ${this.settings ? html`
@@ -75,7 +77,7 @@ export class MuxAmplifierSettings extends LitElement {
           ${this.settings.bundles.map(v => html`<option value=${v} ?selected=${this.bundle === v}>${v}</option>`)}
         </select></label>
         <label>Provider<select .value=${this.provider} @change=${(e: Event) => { this.provider = (e.target as HTMLSelectElement).value; this.pending(true); }}>
-          ${this.settings.providers.map(v => html`<option value=${v} ?selected=${this.provider === v}>${v}</option>`)}
+          ${this.settings.providers.map(v => html`<option value=${v} ?selected=${this.provider === v}>${providerLabel(v)}</option>`)}
         </select></label>
         <div class="note">${this.settings.model}</div>
         <button ?disabled=${this.loading || this.turnBusy} @click=${() => void this.save()}>Apply to chat</button>
