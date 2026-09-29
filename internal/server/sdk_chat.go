@@ -633,8 +633,8 @@ func (s *Server) handleSDKFolders(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSDKJSON(w, 200, map[string]any{"path": path, "base": base, "parent": filepath.Dir(path), "folders": folders})
 }
-// Amplifier selects provider modules by module ID; the new-chat labels are
-// shared with the vendor SDK harnesses and are stored on the chat record.
+// Amplifier selects provider modules by module ID. New chats store short
+// provider names; composer changes persist the module ID returned by Amplifier.
 func amplifierProviderModule(harness, provider string) string {
 	if harness != "amplifier" {
 		return provider
@@ -644,8 +644,12 @@ func amplifierProviderModule(harness, provider string) string {
 		return "provider-openai"
 	case "anthropic":
 		return "provider-anthropic"
-	default:
+	case "configured", "":
 		return ""
+	default:
+		// Preserve an explicit module ID on resume. Amplifier rejects an
+		// unavailable module instead of silently using its default provider.
+		return provider
 	}
 }
 
