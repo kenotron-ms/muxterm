@@ -1558,6 +1558,7 @@ export class MuxApp extends LitElement {
             .showLauncher="${this._showDashboard}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @chat-open="${this._onChatOpen}"
+            @home-open="${this._onHomeOpen}"
             @chat-new="${this._onChatNew}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
@@ -1679,6 +1680,7 @@ export class MuxApp extends LitElement {
                 .previewsVisible="${this._drawerOpen}"
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @chat-open="${this._onChatOpen}"
+                @home-open="${this._onHomeOpen}"
                 @chat-new="${this._onChatNew}"
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
@@ -2555,6 +2557,8 @@ export class MuxApp extends LitElement {
   private _onHomeOpen = (e: Event): void => {
     const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
     if (!d) return;
+    this._sdkChatId = null;
+    (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = '';
     // "Go to that pane" cannot mean anything while an opaque overlay is still
     // covering the dock the pane lives in. The door closes; the dock, which
     // was never unmounted, is simply uncovered.

@@ -721,6 +721,8 @@ type PaneInfo struct {
 	Rows     int    `json:"rows,omitempty"`
 	Title    string `json:"title,omitempty"`
 	Harness  string `json:"harness,omitempty"`
+	Cwd      string `json:"cwd,omitempty"` // folder used to start the pane
+	Origin   string `json:"origin,omitempty"` // browser, agent, cli, or trigger:<id>
 	TotalSeq uint64 `json:"totalSeq,omitempty"` // exact byte length of the replay data for this pane
 
 	// Layout placement (only present on pane-added events from create-pane requests
