@@ -12,11 +12,6 @@ interface ChatRow { kind: 'chat'; id: string; chat: SDKChat; path: string; title
 type SessionRow = ChatRow | LaneRow;
 interface ChatGroup { id: string; name: string; project?: SDKProject; rows: SessionRow[] }
 
-function projectFor(path: string, projects: SDKProject[]): SDKProject | undefined {
-  return projects.filter(project => path === project.path || path.startsWith(project.path.replace(/\/$/, '') + '/'))
-    .sort((a, b) => b.path.length - a.path.length || a.id.localeCompare(b.id))[0];
-}
-
 function laneOrigin(origin: string): string {
   if (origin.startsWith('trigger:')) return `Automation · ${origin.slice(8)}`;
   if (origin === 'trigger') return 'Automation';
@@ -133,7 +128,6 @@ export class MuxChatWorkspace extends LitElement {
           <span class="status ${item.state}" title=${item.state}></span>
           <span class="body"><span class="title">${item.title}</span>
             <span class="details">${row.project?.name || 'Ungrouped'} · ${displayHarness(item.harness)}</span>
-            <span class="details" title=${item.path || 'Folder unknown'}>${item.path || 'Folder unknown'}</span>
             ${item.kind === 'lane' ? html`<span class="details">${item.terminal ? `Live terminal · ${item.workspaceId} / pane ${item.paneId}` : 'Terminal unavailable'} · ${laneOrigin(item.origin)}</span>` : nothing}
           </span><span class="kind">${item.kind === 'lane' ? 'Lane' : 'Chat'}</span>
         </button>${item.kind === 'chat' ? html`<button class="rename-chat" aria-label=${`Rename ${item.title}`} title="Rename chat" @click=${() => { this.renamingId = item.id; this.renameDraft = item.title; }}>✎</button>` : nothing}`}
@@ -170,6 +164,9 @@ export class MuxChatList extends LitElement {
       const workspace = store.workspaces.find(ws => ws.workspaceId === workspaceId);
       const pane = workspace?.panes?.find(pane => pane.paneId === paneId);
       const terminal = !!workspaceId && paneId !== null && (isRemoteId(workspaceId) || !!workspace?.panes?.some(pane => pane.paneId === paneId));
+      // Fleet can report an SDK chat's harness as a detached lane. It has no
+      // terminal to open here and otherwise duplicates the actual chat row.
+      if (!terminal) continue;
       rows.push({ kind:'lane', id:session.sessionId, path:session.project || pane?.cwd || workspace?.projectPath || '',
         title:session.name || session.label || `Pane ${paneId ?? '?'}`, harness:session.harness || '', state:session.state,
         origin:session.origin || '', workspaceId, paneId:paneId ?? 0, terminal,
@@ -182,11 +179,14 @@ export class MuxChatList extends LitElement {
         harness:pane.harness, state:'working', origin:pane.origin || '', workspaceId:workspace.workspaceId, paneId:pane.paneId, terminal:true, updatedAt:0 });
     }
     rows.sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
+    // SDK projects are identified by ID. A terminal lane has no SDK project
+    // association, so its directory cannot safely assign it to one of two
+    // projects that happen to use the same folder.
     const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project,
-      rows:rows.filter(row => row.kind === 'chat' ? row.chat.workspaceId === project.id : projectFor(row.path, projects)?.id === project.id) }));
+      rows:rows.filter(row => row.kind === 'chat' && row.chat.workspaceId === project.id) }));
     groups.push({ id:'ungrouped', name:'Ungrouped', rows:rows.filter(row => row.kind === 'chat'
       ? !row.chat.workspaceId || !projects.some(project => project.id === row.chat.workspaceId)
-      : !projectFor(row.path, projects)) });
+      : true) });
     return html`<div class="heading">Chats</div>${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${(window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? ''}></mux-chat-workspace>`)}`;
   }
 }

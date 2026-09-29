@@ -89,13 +89,12 @@ export class MuxNewChat extends LitElement {
   }
   private onFolderChanged() {
     const selected = sdkChats.projects.find(p => p.id === this.projectId);
-    if (selected && selected.path !== this.folder) this.projectId = 'new';
+    if (selected && selected.path !== this.folder) this.projectId = 'ungrouped';
   }
   private onProjectChange(value: string) {
     this.projectId = value;
     const project = sdkChats.projects.find(p => p.id === value);
     if (project) this.folder = project.path;
-    else if (value === 'ungrouped' && this.listing) this.folder = this.listing.base;
   }
   private onHarnessChange(value: HarnessName) {
     this.harness = value;
