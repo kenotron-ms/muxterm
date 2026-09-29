@@ -192,10 +192,10 @@ func (s *Server) handleSDKControlHistory(w http.ResponseWriter, r *http.Request)
 		if event.Type == "assistant.delta" {
 			output.WriteString(event.Text)
 		}
-		if event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain" {
+		if event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "goal.progress" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain" {
 			milestones = append(milestones, event)
 		}
-		if event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "assistant.delta" || event.Type == "tool.started" || event.Type == "tool.completed" || event.Type == "turn.continued" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain" {
+		if event.Type == "input.accepted" || event.Type == "input.delivered" || event.Type == "assistant.delta" || event.Type == "tool.started" || event.Type == "tool.completed" || event.Type == "goal.progress" || event.Type == "turn.continued" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain" {
 			events = append(events, event)
 		}
 	}

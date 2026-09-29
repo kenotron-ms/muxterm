@@ -178,12 +178,14 @@ func registerChatControlTools(srv *Server) {
 			}
 			return jsonText(map[string]any{"sessions": json.RawMessage(chats), "projects": json.RawMessage(projects)}), nil
 		})
-	srv.Register("spawn_chat", "Create a normal Chat with an opening turn in a named project (or Ungrouped when project is omitted). Returns its stable session ID. Local machine only.",
+	srv.Register("spawn_chat", "Delegate work to a project Chat by default. Optional goal starts an Amplifier stop-condition loop. Chats run with unattended approvals. Returns its stable session ID. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
-			"project": map[string]any{"type": "string", "description": "exact name of an existing project; omit for Ungrouped"},
-			"harness": map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex"}},
-			"prompt":  map[string]any{"type": "string", "description": "opening user turn"},
-		}), "required": []string{"harness", "prompt"}},
+			"project":  map[string]any{"type": "string", "description": "exact name of an existing project; omit for Ungrouped"},
+			"harness":  map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex"}},
+			"prompt":   map[string]any{"type": "string", "description": "opening user turn"},
+			"goal":     map[string]any{"type": "string", "description": "Amplifier stop condition; starts a real goal loop and supersedes prompt"},
+			"approval": map[string]any{"type": "string", "enum": []string{"never"}, "description": "optional explicit unattended policy; chats always use never"},
+		}), "required": []string{"harness"}},
 		func(args map[string]any) (string, error) {
 			if err := refuseRemote(args, chatLocalOnly); err != nil {
 				return "", err
@@ -196,17 +198,34 @@ func registerChatControlTools(srv *Server) {
 				return "", fmt.Errorf("unsupported harness %q", harness)
 			}
 			prompt, err := argString(args, "prompt")
+			if err != nil && args["prompt"] != nil {
+				return "", err
+			}
+			goal, _, err := argStringOptional(args, "goal")
 			if err != nil {
 				return "", err
 			}
-			if strings.TrimSpace(prompt) == "" {
-				return "", fmt.Errorf("prompt required")
+			approval, _, err := argStringOptional(args, "approval")
+			if err != nil {
+				return "", err
+			}
+			if goal != "" && harness != "amplifier" {
+				return "", fmt.Errorf("goal requires amplifier")
+			}
+			if approval != "" && approval != "never" {
+				return "", fmt.Errorf("chat approval must be never")
+			}
+			if strings.TrimSpace(prompt) == "" && strings.TrimSpace(goal) == "" {
+				return "", fmt.Errorf("prompt or goal required")
+			}
+			if goal != "" {
+				prompt = goal
 			}
 			project, _, err := argStringOptional(args, "project")
 			if err != nil {
 				return "", err
 			}
-			payload := map[string]any{"harness": harness, "prompt": prompt}
+			payload := map[string]any{"harness": harness, "prompt": prompt, "goal": goal, "approval": approval}
 			if project != "" {
 				body, err := pt.doRequest(http.MethodGet, "/api/sdk-projects", nil)
 				if err != nil {

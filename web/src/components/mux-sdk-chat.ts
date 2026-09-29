@@ -8,7 +8,7 @@ import './mux-sdk-chat-settings.js';
 import './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
-type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
+type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type Block = { key: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
 import { icon } from '../lib/icons.js';
 import { Brain, Check, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
@@ -321,6 +321,10 @@ export class MuxSDKChat extends LitElement {
       blocks.push({ key:++this.nextBlockKey, kind:'status', text:'Stopped by you · partial output kept' });
       this.turnStart = blocks.length;
       void sdkChats.refresh();
+    }
+    else if (event.type === 'goal.progress') {
+      if (this.chat) this.chat = { ...this.chat, goalState: event.goalState, goalReason: event.goalReason, goalSummary: event.goalSummary };
+      if (event.goalState !== 'continuing') blocks.push({ key:++this.nextBlockKey, kind:'status', text:`Goal ${event.goalState || 'updated'}: ${event.goalSummary || event.goalReason || ''}` });
     }
     else if (event.type === 'session.renamed') { void sdkChats.refresh(); }
     else if (event.type === 'error' || event.type === 'session.uncertain') { blocks.push({ key:++this.nextBlockKey, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.busy = false; void sdkChats.refresh(); }

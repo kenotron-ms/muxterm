@@ -1,7 +1,7 @@
 # Writing a stop condition
 
-Every `spawn_lane(..., goal=...)` you make is a stop condition you wrote. The
-lane runs unattended until an evaluator decides that condition is met, so a
+Every `spawn_chat(..., goal=...)` or deliberate `spawn_lane(..., goal=...)` you make is a stop condition you wrote. The
+goal runs unattended until an evaluator decides that condition is met, so a
 badly-formed one does not fail loudly — it runs forever, or it stops on the
 first turn. Check every condition against the rules below before you send it.
 
@@ -82,5 +82,5 @@ KNOWN (speed aid only, not a criterion):
 - <fact already established, so the lane does not re-derive it>
 ```
 
-`spawn_lane` takes this as a plain string. There is no file to write, and you
+`spawn_chat` and `spawn_lane` take this as a plain string. There is no file to write, and you
 have no tool to write one with.
