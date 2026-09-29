@@ -2,9 +2,30 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { sdkChats, type SDKChat, type SDKProject } from '../lib/sdk-chats.js';
+import { homeSessions } from '../lib/home-sessions.js';
+import { store } from '../state.js';
+import { isRemoteId } from '../lib/host-ref.js';
 import { harnessLabel } from '../lib/harness.js';
 
-interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[] }
+interface LaneRow { kind: 'lane'; id: string; title: string; path: string; harness: string; state: string; origin: string; workspaceId: string; paneId: number; terminal: boolean; updatedAt: number }
+interface ChatRow { kind: 'chat'; id: string; chat: SDKChat; path: string; title: string; harness: string; state: string; updatedAt: number }
+type SessionRow = ChatRow | LaneRow;
+interface ChatGroup { id: string; name: string; project?: SDKProject; rows: SessionRow[] }
+
+function projectFor(path: string, projects: SDKProject[]): SDKProject | undefined {
+  return projects.filter(project => path === project.path || path.startsWith(project.path.replace(/\/$/, '') + '/'))
+    .sort((a, b) => b.path.length - a.path.length || a.id.localeCompare(b.id))[0];
+}
+
+function laneOrigin(origin: string): string {
+  if (origin.startsWith('trigger:')) return `Automation · ${origin.slice(8)}`;
+  if (origin === 'trigger') return 'Automation';
+  return origin || 'Origin unknown';
+}
+
+function displayHarness(harness: string): string {
+  return harness === 'codex' || harness === 'claude' || harness === 'amplifier' ? harnessLabel(harness) : harness || 'Harness unknown';
+}
 
 @customElement('mux-chat-workspace')
 export class MuxChatWorkspace extends LitElement {
@@ -50,11 +71,14 @@ export class MuxChatWorkspace extends LitElement {
     .menu button { width:100%; padding:8px; text-align:left; border-radius:5px; }
     .menu button:hover { background:rgba(255,255,255,.09); }
     .chats { margin:0 0 6px 24px; }
-    .chat { width:100%; min-height:31px; padding:5px 8px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:6px; }
+    .chat { width:100%; min-height:55px; padding:5px 8px; text-align:left; border-radius:6px; display:flex; align-items:flex-start; gap:6px; }
+    .chat.lane { border-left:2px solid #7dcba1; }
     .chat[selected] { background:rgba(122,162,247,.16); }
-    .title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .harness { color:var(--chrome-text-dim,#9299a5); font-size:10px; }
-    .status { width:5px; height:5px; border-radius:50%; background:#697386; flex:none; }
+    .body { flex:1; min-width:0; }
+    .title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    .details { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-dim,#aab2c1); font-size:10px; }
+    .kind { color:#a8d9bd; font-size:10px; flex:none; }
+    .status { width:5px; height:5px; margin-top:6px; border-radius:50%; background:#697386; flex:none; }
     .status.working { background:#7dcba1; }
     .error { color:#e6a5a5; padding:5px; }
   `;
@@ -66,11 +90,19 @@ export class MuxChatWorkspace extends LitElement {
     catch (error) { this.error = String(error); }
   }
 
+  private openRow(row: SessionRow) {
+    if (row.kind === 'chat') {
+      this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:row.id}, bubbles:true, composed:true }));
+    } else if (row.terminal) {
+      this.dispatchEvent(new CustomEvent('home-open', { detail:{workspaceId:row.workspaceId, paneId:row.paneId}, bubbles:true, composed:true }));
+    }
+  }
+
   override render() {
     const row = this.model;
     return html`
       <div class="row ${row.project ? '' : 'ungrouped'}">
-        <button class="group" title=${row.project?.name || 'Chats without a project'} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.menuOpen = false; }}>
+        <button class="group" title=${row.project?.path || 'Sessions outside known projects'} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.menuOpen = false; }}>
           ${row.project ? this.open ? html`<svg class="folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v2M3 20l3-9h15l-3 9H3Z"/></svg>` : html`<svg class="folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5Z"/></svg>` : html`<span aria-hidden="true">◌</span>`}
           <span class="name">${row.name}</span><span class="chevron">${this.open ? '⌄' : '›'}</span>
         </button>
@@ -78,9 +110,14 @@ export class MuxChatWorkspace extends LitElement {
         ${this.menuOpen ? html`<div class="menu" role="menu"><button role="menuitem" @click=${() => void this.removeProject()}>Remove this project</button></div>` : nothing}
       </div>
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-      ${this.open ? html`<div class="chats">${repeat(row.chats, chat => chat.id, chat => html`
-        <button class="chat" ?selected=${this.selectedSession === chat.id} title=${chat.title} @click=${() => this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:chat.id}, bubbles:true, composed:true }))}>
-          <span class="status ${chat.state}" title=${chat.state}></span><span class="title">${chat.title}</span><span class="harness">${harnessLabel(chat.harness)}</span>
+      ${this.open ? html`<div class="chats">${repeat(row.rows, item => `${item.kind}:${item.id}`, item => html`
+        <button class="chat ${item.kind}" ?selected=${this.selectedSession === item.id} ?disabled=${item.kind === 'lane' && !item.terminal} title=${`${item.title}\n${item.path || 'Folder unknown'}`} @click=${() => this.openRow(item)}>
+          <span class="status ${item.state}" title=${item.state}></span>
+          <span class="body"><span class="title">${item.title}</span>
+            <span class="details">${row.project?.name || 'Ungrouped'} · ${displayHarness(item.harness)}</span>
+            <span class="details" title=${item.path || 'Folder unknown'}>${item.path || 'Folder unknown'}</span>
+            ${item.kind === 'lane' ? html`<span class="details">${item.terminal ? `Live terminal · ${item.workspaceId} / pane ${item.paneId}` : 'Terminal unavailable'} · ${laneOrigin(item.origin)}</span>` : nothing}
+          </span><span class="kind">${item.kind === 'lane' ? 'Lane' : 'Chat'}</span>
         </button>`)}
       </div>` : nothing}
     `;
@@ -90,20 +127,47 @@ export class MuxChatWorkspace extends LitElement {
 @customElement('mux-chat-list')
 export class MuxChatList extends LitElement {
   @state() private version = 0;
-  private unsub?: () => void;
+  private unsubs: (() => void)[] = [];
   static styles = css`
     :host { display:block; color:var(--chrome-text-dim,#9299a5); font:12px/1.35 system-ui,sans-serif; }
     .heading { padding:9px 12px 3px; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
   `;
-  override connectedCallback() { super.connectedCallback(); this.unsub = sdkChats.subscribe(() => this.version++); void sdkChats.refresh(); }
-  override disconnectedCallback() { this.unsub?.(); super.disconnectedCallback(); }
+  override connectedCallback() {
+    super.connectedCallback();
+    const update = () => this.version++;
+    this.unsubs = [sdkChats.subscribe(update), homeSessions.subscribe(update), store.subscribe(update)];
+    void sdkChats.refresh();
+  }
+  override disconnectedCallback() { this.unsubs.forEach(unsub => unsub()); this.unsubs = []; super.disconnectedCallback(); }
   override render() {
     void this.version;
     const projects = [...sdkChats.projects].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-    const chats = [...sdkChats.chats].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
-    const projectIds = new Set(projects.map(project => project.id));
-    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:chats.filter(chat => chat.workspaceId === project.id) }));
-    groups.push({ id:'ungrouped', name:'Ungrouped', chats:chats.filter(chat => !chat.workspaceId || !projectIds.has(chat.workspaceId)) });
+    const rows: SessionRow[] = sdkChats.chats.map(chat => ({ kind:'chat', id:chat.id, chat, path:chat.projectPath, title:chat.title, harness:chat.harness, state:chat.state, updatedAt:Date.parse(chat.createdAt) || 0 }));
+    const reportedPanes = new Set<string>();
+    for (const session of homeSessions.sessions) {
+      const workspaceId = session.workspaceId || '';
+      const paneId = session.paneId;
+      if (workspaceId && paneId !== null) reportedPanes.add(`${workspaceId}:${paneId}`);
+      const workspace = store.workspaces.find(ws => ws.workspaceId === workspaceId);
+      const pane = workspace?.panes?.find(pane => pane.paneId === paneId);
+      const terminal = !!workspaceId && paneId !== null && (isRemoteId(workspaceId) || !!workspace?.panes?.some(pane => pane.paneId === paneId));
+      rows.push({ kind:'lane', id:session.sessionId, path:session.project || pane?.cwd || workspace?.projectPath || '',
+        title:session.name || session.label || `Pane ${paneId ?? '?'}`, harness:session.harness || '', state:session.state,
+        origin:session.origin || '', workspaceId, paneId:paneId ?? 0, terminal,
+        updatedAt:(session.updatedAt || 0) * 1000 });
+    }
+    // Pane inventory arrives before the harness's own Fleet declaration.
+    for (const workspace of store.workspaces) for (const pane of workspace.panes || []) {
+      if (!pane.harness || reportedPanes.has(`${workspace.workspaceId}:${pane.paneId}`)) continue;
+      rows.push({ kind:'lane', id:`${workspace.workspaceId}:${pane.paneId}`, path:pane.cwd || workspace.projectPath || '', title:pane.title || `${workspace.name || workspace.workspaceId} · pane ${pane.paneId}`,
+        harness:pane.harness, state:'working', origin:pane.origin || '', workspaceId:workspace.workspaceId, paneId:pane.paneId, terminal:true, updatedAt:0 });
+    }
+    rows.sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
+    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project,
+      rows:rows.filter(row => row.kind === 'chat' ? row.chat.workspaceId === project.id : projectFor(row.path, projects)?.id === project.id) }));
+    groups.push({ id:'ungrouped', name:'Ungrouped', rows:rows.filter(row => row.kind === 'chat'
+      ? !row.chat.workspaceId || !projects.some(project => project.id === row.chat.workspaceId)
+      : !projectFor(row.path, projects)) });
     return html`<div class="heading">Chats</div>${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${(window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? ''}></mux-chat-workspace>`)}`;
   }
 }

@@ -223,6 +223,8 @@ export interface SessiondPaneInfo {
   rows: number;
   title?: string;
   harness?: 'amplifier' | 'claude' | 'codex';
+  cwd?: string;
+  origin?: string;
   clientRef?: string;
   /** Absolute byte sequence of the first replayed byte for this pane.
    *  Omitted (undefined) when 0. Set by the server on each composition reply

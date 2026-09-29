@@ -44,6 +44,7 @@ type Pane struct {
 	LocalID     int
 	Title       string // settable; OSC 0/2 title capture is a later phase
 	chatHarness string // one of the three sidebar harnesses when launched directly
+	launchCwd   string // folder used to start the pane; session reports may refine it later
 
 	// titleOrigin says whether Title was chosen by a person or derived by the
 	// daemon, and is guarded by mu exactly like Title itself -- the two are
@@ -231,6 +232,7 @@ func NewPane(
 	p := &Pane{
 		LocalID:            localID,
 		chatHarness:        chatHarness,
+		launchCwd:          c.Dir,
 		cols:               cols,
 		rows:               rows,
 		cmd:                c,
@@ -640,7 +642,7 @@ func (p *Pane) snapshotState() (title string, origin nameOrigin, cols, rows int,
 // Info returns a frozen snapshot of this pane's identity and dimensions.
 func (p *Pane) Info() PaneInfo {
 	p.mu.Lock()
-	cols, rows, title := p.cols, p.rows, p.Title
+	cols, rows, title, origin := p.cols, p.rows, p.Title, p.launchOrigin
 	p.mu.Unlock()
 	return PaneInfo{
 		PaneID:  p.LocalID,
@@ -648,6 +650,8 @@ func (p *Pane) Info() PaneInfo {
 		Rows:    rows,
 		Title:   title,
 		Harness: p.chatHarness,
+		Cwd:     p.launchCwd,
+		Origin:  origin,
 	}
 }
 
