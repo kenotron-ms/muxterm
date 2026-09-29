@@ -5,6 +5,7 @@ import { renderSegments } from '../lib/markdown-view.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import './mux-sdk-chat-settings.js';
+import './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
 type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
@@ -23,6 +24,8 @@ export class MuxSDKChat extends LitElement {
   @state() private busy = false;
   @state() private stopping = false;
   @state() private drawerOpen = false;
+  @state() private drawerWidth = 0;
+  private resizingDrawer = false;
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   @state() private settingsPending = false;
@@ -142,8 +145,11 @@ export class MuxSDKChat extends LitElement {
     .steer + .stop { margin-left:0; }
     .composer button:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
     .status { color:#e6bd8d; font-size:12px; }
-    .drawer { width:min(32vw,420px); min-width:220px; border-left:1px solid var(--chrome-border,#343a4c); background:var(--chrome-bar,#202632); }
-    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 12px 12px; } .drawer { position:absolute; right:0; top:44px; bottom:0; width:min(80vw,420px); box-shadow:-10px 0 30px #0008; } }
+    .drawer { position:relative; flex:none; width:var(--utility-width); min-width:0; border-left:1px solid var(--chrome-border,#343a4c); background:var(--chrome-bar,#202632); animation:drawer-in .16s ease-out; }
+    .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
+    .drawer-resizer:hover, .drawer-resizer:focus-visible { background:rgba(155,184,247,.25); outline:none; }
+    @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
+    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 12px 12px; } .drawer { position:absolute; right:0; top:44px; bottom:0; box-shadow:-10px 0 30px #0008; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -173,6 +179,78 @@ export class MuxSDKChat extends LitElement {
     if (!textarea) return;
     textarea.style.height = '34px';
     textarea.style.height = `${Math.min(220, Math.max(34, textarea.scrollHeight))}px`;
+  }
+  private drawerKey() { return `muxterm.sdk.utility.width.${this.sessionId}`; }
+  private widthLimits() {
+    const available = this.shadowRoot?.querySelector<HTMLElement>('.layout')?.clientWidth || this.clientWidth || window.innerWidth;
+    return { min: Math.min(280, available * .6), max: available <= 700 ? available * .9 : Math.max(280, available - 480), available };
+  }
+  private openDrawer() {
+    if (this.drawerOpen) { this.drawerOpen = false; return; }
+    const { min, max, available } = this.widthLimits();
+    let stored = 0;
+    try { stored = Number(localStorage.getItem(this.drawerKey())) || 0; } catch { /* private browsing */ }
+    this.drawerWidth = Math.round(Math.max(min, Math.min(max, stored || available / 2)));
+    this.drawerOpen = true;
+  }
+  private startDrawerResize(event: PointerEvent) {
+    event.preventDefault();
+    this.resizingDrawer = true;
+    const handle = event.currentTarget as HTMLElement;
+    handle.setPointerCapture(event.pointerId);
+  }
+  private moveDrawerResize(event: PointerEvent) {
+    if (!this.resizingDrawer) return;
+    const { min, max } = this.widthLimits();
+    const right = this.shadowRoot?.querySelector<HTMLElement>('.layout')?.getBoundingClientRect().right || window.innerWidth;
+    this.drawerWidth = Math.round(Math.max(min, Math.min(max, right - event.clientX)));
+  }
+  private endDrawerResize() {
+    if (!this.resizingDrawer) return;
+    this.resizingDrawer = false;
+    try { localStorage.setItem(this.drawerKey(), String(this.drawerWidth)); } catch { /* private browsing */ }
+  }
+  private planTasks(): { content: string; status: string }[] {
+    let latest: { content: string; status: string }[] = [];
+    for (const block of this.blocks) {
+      if (block.kind !== 'tool' || !/update_plan|todowrite|tool-todo|(^|[:_ ])todo($|[:_ ])/i.test(block.name || '')) continue;
+      let raw = block.input;
+      if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
+      const fields = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+      const result = block.output && typeof block.output === 'object' ? block.output as Record<string, unknown> : {};
+      const resultBody = result.output && typeof result.output === 'object' ? result.output as Record<string, unknown> : {};
+      const items = resultBody.todos || fields.plan || fields.todos || fields.tasks;
+      if (!Array.isArray(items)) continue;
+      const parsed = items.flatMap(item => {
+        if (!item || typeof item !== 'object') return [];
+        const row = item as Record<string, unknown>;
+        const content = row.step || row.content || row.task || row.title;
+        return typeof content === 'string' && content.trim() ? [{ content, status: typeof row.status === 'string' ? row.status : 'pending' }] : [];
+      });
+      if (parsed.length) latest = parsed;
+    }
+    return latest;
+  }
+  private touchedFiles(): string[] {
+    const found = new Set<string>();
+    const root = this.chat?.projectPath?.replace(/\/$/, '') || '';
+    const add = (candidate: unknown) => {
+      if (typeof candidate !== 'string' || !candidate) return;
+      const rel = root && candidate.startsWith(root + '/') ? candidate.slice(root.length + 1) : candidate;
+      if (!rel.startsWith('/') && !rel.split('/').includes('..') && rel !== '.') found.add(rel);
+    };
+    for (const block of this.blocks) {
+      if (block.kind !== 'tool') continue;
+      const raw = block.input;
+      if (!raw || typeof raw !== 'object') continue;
+      const data = raw as Record<string, unknown>;
+      add(data.file_path); add(data.path);
+      for (const source of [data.patch, data.code, data.source, data.input]) {
+        if (typeof source !== 'string') continue;
+        for (const match of source.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)) add(match[1]);
+      }
+    }
+    return [...found].slice(-30).reverse();
   }
   private connect() {
     if (!this.isConnected || !this.sessionId) return;
@@ -402,7 +480,7 @@ export class MuxSDKChat extends LitElement {
     finally { this.stopping = false; }
   }
   override render() { return html`
-    <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${() => { this.drawerOpen = !this.drawerOpen; }}>▥</button></div>
+    <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
       ${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? this.userBubble(b) : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b) : html`<div class="${b.kind}">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
@@ -418,6 +496,6 @@ export class MuxSDKChat extends LitElement {
 
 
     </div></div></div>
-      ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" data-dockview-host-seam></aside>` : nothing}
+      ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .harness=${this.chat?.harness || ''} .tasks=${this.planTasks()} .touched=${this.touchedFiles()}></mux-sdk-utility></aside>` : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`; }
 }
