@@ -2434,11 +2434,24 @@ class SDKChatSession:
                       model=str(getattr(provider, "model", None) or
                                 getattr(provider, "default_model", "")))
             return cont
+        async def delegate_spawned(event, data):
+            frame(self.id, "delegate.spawned", childSessionId=str(data.get("sub_session_id") or ""),
+                  parentSessionId=str(data.get("parent_session_id") or self.id),
+                  agent=str(data.get("agent") or "Agent"), toolId=str(data.get("tool_call_id") or ""))
+            return cont
+        async def delegate_completed(event, data):
+            frame(self.id, "delegate.completed", childSessionId=str(data.get("sub_session_id") or ""),
+                  parentSessionId=str(data.get("parent_session_id") or self.id),
+                  agent=str(data.get("agent") or "Agent"), toolId=str(data.get("tool_call_id") or ""),
+                  failed=not bool(data.get("success")))
+            return cont
         hooks.register("llm:stream_block_delta", delta, name="sdk-chat-delta")
         hooks.register("provider:request", provider_request, name="sdk-chat-provider-request")
         hooks.register("tool:pre", tool_start, name="sdk-chat-tool-start")
         hooks.register("tool:post", tool_end, name="sdk-chat-tool-end")
         hooks.register("tool:error", tool_end, name="sdk-chat-tool-error")
+        hooks.register("delegate:agent_spawned", delegate_spawned, name="sdk-chat-delegate-spawned")
+        hooks.register("delegate:agent_completed", delegate_completed, name="sdk-chat-delegate-completed")
 
     def observe(self, event):
         kind = event.get("type")

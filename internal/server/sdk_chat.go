@@ -50,28 +50,30 @@ type sdkProject struct {
 	Path string `json:"path"`
 }
 type sdkEvent struct {
-
-	SessionID    string                 `json:"sessionId"`
-	Type         string                 `json:"type"`
-	At           time.Time              `json:"at,omitempty"`
-	NativeID     string                 `json:"nativeId,omitempty"`
-	InputID      string                 `json:"inputId,omitempty"`
-	InputIDs     []string               `json:"inputIds,omitempty"`
-	GenerationID string                 `json:"generationId,omitempty"`
-	Delivery     string                 `json:"delivery,omitempty"`
-	Persisted    *bool                  `json:"persisted,omitempty"`
-	Kind         string                 `json:"kind,omitempty"`
-	Source       string                 `json:"source,omitempty"`
-	Text         string                 `json:"text,omitempty"`
-	Name         string                 `json:"name,omitempty"`
-	ToolID       string                 `json:"toolId,omitempty"`
-	Message      string                 `json:"message,omitempty"`
-	Model        string                 `json:"model,omitempty"`
-	Provider     string                 `json:"provider,omitempty"`
-	Bundle       string                 `json:"bundle,omitempty"`
-	Raw          json.RawMessage        `json:"raw,omitempty"`
-	Failed       bool                   `json:"failed,omitempty"`
-	Attachments  []sdkDisplayAttachment `json:"attachments,omitempty"`
+	SessionID       string                 `json:"sessionId"`
+	Type            string                 `json:"type"`
+	At              time.Time              `json:"at,omitempty"`
+	NativeID        string                 `json:"nativeId,omitempty"`
+	InputID         string                 `json:"inputId,omitempty"`
+	InputIDs        []string               `json:"inputIds,omitempty"`
+	GenerationID    string                 `json:"generationId,omitempty"`
+	Delivery        string                 `json:"delivery,omitempty"`
+	Persisted       *bool                  `json:"persisted,omitempty"`
+	Kind            string                 `json:"kind,omitempty"`
+	Source          string                 `json:"source,omitempty"`
+	Text            string                 `json:"text,omitempty"`
+	Name            string                 `json:"name,omitempty"`
+	ToolID          string                 `json:"toolId,omitempty"`
+	ChildSessionID  string                 `json:"childSessionId,omitempty"`
+	ParentSessionID string                 `json:"parentSessionId,omitempty"`
+	Agent           string                 `json:"agent,omitempty"`
+	Message         string                 `json:"message,omitempty"`
+	Model           string                 `json:"model,omitempty"`
+	Provider        string                 `json:"provider,omitempty"`
+	Bundle          string                 `json:"bundle,omitempty"`
+	Raw             json.RawMessage        `json:"raw,omitempty"`
+	Failed          bool                   `json:"failed,omitempty"`
+	Attachments     []sdkDisplayAttachment `json:"attachments,omitempty"`
 }
 type sdkDisplayAttachment struct {
 	ID   string `json:"id"`
