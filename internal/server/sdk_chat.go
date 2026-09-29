@@ -701,11 +701,25 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "prompt required", 400)
 		return
 	}
-	if req.Provider != "" && req.Provider != "openai" && req.Provider != "anthropic" && req.Provider != "configured" {
+	// Older clients omit provider. Resolve that omission to the harness's
+	// actual default before persisting the chat or starting its SDK session.
+	if req.Provider == "" {
+		switch req.Harness {
+		case "codex":
+			req.Provider = "openai"
+		case "claude":
+			req.Provider = "anthropic"
+		case "amplifier":
+			req.Provider = "configured"
+		}
+	}
+	if req.Provider != "openai" && req.Provider != "anthropic" && req.Provider != "configured" {
 		http.Error(w, "unsupported provider", 400)
 		return
 	}
-	if req.Provider == "openai" && req.Harness == "claude" || req.Provider == "anthropic" && req.Harness == "codex" || req.Provider == "configured" && req.Harness != "amplifier" {
+	if (req.Provider == "openai" && req.Harness == "claude") ||
+		(req.Provider == "anthropic" && req.Harness == "codex") ||
+		(req.Provider == "configured" && req.Harness != "amplifier") {
 		http.Error(w, "provider does not match harness", 400)
 		return
 	}
