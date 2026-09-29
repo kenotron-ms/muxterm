@@ -234,7 +234,7 @@ func registerChatControlTools(srv *Server) {
 			}
 			return string(result), nil
 		})
-	srv.Register("send_chat_message", "Submit a durable, idempotent turn to a Chat by stable ID. While Amplifier is running it is live steering. Reuse client_ref to query the same receipt; uncertain never retries the input.",
+	srv.Register("send_chat_message", "Submit a durable, idempotent turn to a Chat by stable ID. While Amplifier is running, steering is delivered at its next request boundary. Accepted proves admission, not completion; read_chat_session shows delivery and output. Reuse client_ref to query the same receipt; uncertain never retries the input.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"session_id": map[string]any{"type": "string"},
 			"client_ref": map[string]any{"type": "string", "description": "caller-chosen stable idempotency key; reuse exactly on uncertain results"},
@@ -263,7 +263,7 @@ func registerChatControlTools(srv *Server) {
 			}
 			return string(result), nil
 		})
-	srv.Register("read_chat_session", "Read a Chat's recent persisted input, assistant output, completion, and error events by stable ID. Local machine only.",
+	srv.Register("read_chat_session", "Read a Chat's recent persisted events and output by stable ID. Milestones retain input acceptance, delivery, and completion across long streamed replies. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"session_id": map[string]any{"type": "string"}}), "required": []string{"session_id"}},
 		func(args map[string]any) (string, error) {
 			if err := refuseRemote(args, chatLocalOnly); err != nil {
