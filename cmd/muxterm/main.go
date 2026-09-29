@@ -540,6 +540,15 @@ func runLocal(cfg Config) error {
 // and blocks until shutdown. The daemon is ensured lazily by the dialer (per
 // browser), which is a no-op under systemd where the daemon is its own unit.
 func runServe(cfg Config) error {
+	// Resolve the installed instance's address before loading any instance
+	// state. A second listener is a separate instance even when its parent
+	// shell inherited the production XDG environment.
+	installed, malformed, _ := config.LoadStrictServer(config.DefaultPath())
+	if !malformed && cfg.Addr != "" && differentListenPort(cfg.Addr, installed.Server.Addr) && !alreadyIsolatedServeInstance() {
+		if err := scopeServeInstance(cfg.Addr); err != nil {
+			return err
+		}
+	}
 	// LoadStrictServer, not Load: a malformed config file degrades every
 	// section to defaults, and for [server] that silently moves the
 	// listener and clears behind_reverse_proxy (re-enabling the loopback
