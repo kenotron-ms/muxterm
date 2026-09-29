@@ -182,6 +182,8 @@ type Config struct {
 	// SDKOnly starts the supervised sidecar for SDK chats without mounting the
 	// separate chief-of-staff session, which SDK chats never use.
 	SDKOnly bool
+	// MCPBinary pins SDK chats' muxterm MCP tool server to this serve process.
+	MCPBinary string
 	// SessionID is the amplifier session id (default DefaultSessionID).
 	SessionID string
 	// Bundle names the amplifier bundle; empty lets the sidecar choose.
@@ -1201,6 +1203,9 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 		env = append(env, item)
 	}
 	cmd.Env = append(env, "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=utf-8")
+	if s.cfg.MCPBinary != "" {
+		cmd.Env = append(cmd.Env, "MUXTERM_CHAT_MCP_BIN="+s.cfg.MCPBinary)
+	}
 	// Graceful first: a cancelled context sends SIGTERM, and WaitDelay is what
 	// escalates to SIGKILL five seconds later if the sidecar ignores it.
 	//

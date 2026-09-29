@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -294,8 +295,13 @@ func (h *sdkChatHost) ensure(harness string) error {
 }
 func (h *sdkChatHost) ensureAmplifier() error {
 	h.ampOnce.Do(func() {
+		self, err := os.Executable()
+		if err != nil {
+			h.ampErr = err
+			return
+		}
 		sup := cos.New(cos.Config{SDKOnly: true, SessionID: "muxterm-sdk-host-" + sdkID(),
-			StatePath: "-", Logf: log.Printf})
+			StatePath: "-", Logf: log.Printf, MCPBinary: self})
 		if err := sup.Start(context.Background()); err != nil {
 			h.ampErr = err
 			return
@@ -656,6 +662,7 @@ func (s *Server) handleSDKFolders(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSDKJSON(w, 200, map[string]any{"path": path, "base": base, "parent": filepath.Dir(path), "folders": folders})
 }
+
 // Amplifier selects provider modules by module ID. New chats store short
 // provider names; composer changes persist the module ID returned by Amplifier.
 func amplifierProviderModule(harness, provider string) string {
@@ -760,6 +767,75 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeSDKJSON(w, 201, c)
+}
+
+// Search the existing per-chat event journals without changing their format.
+// Only accepted input and assistant text are searchable; tool payloads and
+// thinking events are excluded. A small overlap catches phrases split across
+// assistant.delta frames within one turn.
+func (s *Server) handleSDKChatContentSearch(w http.ResponseWriter, r *http.Request) {
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	if query == "" || len(query) > 512 {
+		http.Error(w, "query must be 1-512 bytes", http.StatusBadRequest)
+		return
+	}
+	h := s.sdkChats
+	h.mu.Lock()
+	ids := make([]string, 0, len(h.chats))
+	for id := range h.chats {
+		ids = append(ids, id)
+	}
+	h.mu.Unlock()
+	sort.Strings(ids)
+	matches := []string{}
+	for _, id := range ids {
+		file, err := os.Open(filepath.Join(h.dir, id+".ndjson"))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64<<10), 16<<20)
+		assistantTail := ""
+		matched := false
+		for scanner.Scan() {
+			var event sdkEvent
+			if json.Unmarshal(scanner.Bytes(), &event) != nil {
+				continue
+			}
+			switch event.Type {
+			case "input.accepted":
+				assistantTail = ""
+				matched = strings.Contains(strings.ToLower(event.Text), query)
+			case "assistant.delta":
+				text := assistantTail + strings.ToLower(event.Text)
+				matched = strings.Contains(text, query)
+				if len(text) >= len(query) {
+					assistantTail = text[len(text)-len(query)+1:]
+				} else {
+					assistantTail = text
+				}
+			case "turn.completed", "error":
+				assistantTail = ""
+			}
+			if matched {
+				break
+			}
+		}
+		scanErr := scanner.Err()
+		_ = file.Close()
+		if scanErr != nil {
+			http.Error(w, scanErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if matched {
+			matches = append(matches, id)
+		}
+	}
+	writeSDKJSON(w, http.StatusOK, map[string]any{"ids": matches})
 }
 func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats

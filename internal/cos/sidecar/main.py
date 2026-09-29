@@ -2268,6 +2268,16 @@ class SDKChatSession:
             prepared.mount_plan["providers"] = selected
             prepared.bundle.providers = list(selected)
         cfg = expand_env_vars(cfg)
+        # SDK chats run in this serve process. Pin their MCP subprocess to the
+        # binary that spawned this sidecar; PATH may resolve another muxterm.
+        mcp_bin = os.environ.get("MUXTERM_CHAT_MCP_BIN")
+        if mcp_bin:
+            for tool_plan in (cfg.get("tools", []), prepared.mount_plan.get("tools", [])):
+                for entry in tool_plan:
+                    if entry.get("module") == "tool-mcp":
+                        server = entry.get("config", {}).get("servers", {}).get("muxterm")
+                        if isinstance(server, dict):
+                            server["command"] = mcp_bin
         live = {"module": "loop-live", "source": LOOP_LIVE_SOURCE,
                 "config": {"background_tools": [], "background_delegate": False}}
         cfg.setdefault("session", {})["orchestrator"] = live
