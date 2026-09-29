@@ -1,6 +1,6 @@
 import { apiPath } from './base-path.js';
-export interface SDKChat { id: string; workspaceId?: string; projectPath: string; title: string; harness: 'codex' | 'claude' | 'amplifier'; provider?: string; nativeId?: string; state: string; createdAt: string; archived?: boolean; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string }
-export interface SDKProject { id: string; name: string; path: string }
+export interface SDKChat { id: string; workspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: 'codex' | 'claude' | 'amplifier'; provider?: string; nativeId?: string; state: string; createdAt: string; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string }
+export interface SDKProject { id: string; name: string; path: string; sourceFolders?: string[]; pinned?: boolean }
 export interface FolderListing { path: string; base: string; parent: string; folders: string[] }
 class SDKChatStore {
   chats: SDKChat[] = [];
@@ -25,7 +25,7 @@ class SDKChatStore {
     this.projects = await projects.json() as SDKProject[];
     for (const fn of this.listeners) fn();
   }
-  async create(request: { workspaceId?: string; projectPath?: string; harness: string; provider: string; prompt: string }) {
+  async create(request: { workspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; prompt: string }) {
     const response = await fetch(apiPath('/api/sdk-chats'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
     if (!response.ok) throw new Error(await response.text());
     const chat = await response.json() as SDKChat;
@@ -42,12 +42,22 @@ class SDKChatStore {
     if (!response.ok) throw new Error(await response.text());
     await this.refresh();
   }
-  async createProject(path: string, name = '') {
-    const response = await fetch(apiPath('/api/sdk-projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name }) });
+  async setPinned(id: string, pinned: boolean) {
+    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned }) });
+    if (!response.ok) throw new Error(await response.text());
+    await this.refresh();
+  }
+  async createProject(path: string, name = '', sourceFolders: string[] = []) {
+    const response = await fetch(apiPath('/api/sdk-projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name, sourceFolders }) });
     if (!response.ok) throw new Error(await response.text());
     const project = await response.json() as SDKProject;
     await this.refresh();
     return project;
+  }
+  async updateProject(id: string, changes: Partial<Pick<SDKProject, 'name' | 'path' | 'sourceFolders' | 'pinned'>>) {
+    const response = await fetch(apiPath(`/api/sdk-projects/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+    if (!response.ok) throw new Error(await response.text());
+    await this.refresh();
   }
   async removeProject(id: string) {
     const response = await fetch(apiPath(`/api/sdk-projects/${encodeURIComponent(id)}`), { method: 'DELETE' });

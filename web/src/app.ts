@@ -723,6 +723,7 @@ export class MuxApp extends LitElement {
   @state() private _sdkChatId: string | null = null;
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
+  @state() private _newChatProject = '';
 
   /**
    * Whether the boot-surface decision has already been made for THIS instance.
@@ -1562,6 +1563,7 @@ export class MuxApp extends LitElement {
             @chat-open="${this._onChatOpen}"
             @home-open="${this._onHomeOpen}"
             @chat-new="${this._onChatNew}"
+            @chat-new-project="${this._onChatNewProject}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
@@ -1651,7 +1653,7 @@ export class MuxApp extends LitElement {
             : '',
           )}
           ${this._sdkChatId && !this._showDashboard ? this._sdkChatId === 'new' ? html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} @chat-created=${this._onChatOpen}></mux-new-chat>` : html`
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} @chat-created=${this._onChatOpen}></mux-new-chat>` : html`
             <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-switch-harness=${this._onChatSwitchHarness}></mux-sdk-chat>` : ''}
         </div>
 
@@ -1684,6 +1686,7 @@ export class MuxApp extends LitElement {
                 @chat-open="${this._onChatOpen}"
                 @home-open="${this._onHomeOpen}"
                 @chat-new="${this._onChatNew}"
+                @chat-new-project="${this._onChatNewProject}"
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
                 @launcher-action="${this._onLauncherAction}"
@@ -2532,10 +2535,15 @@ export class MuxApp extends LitElement {
   private _onChatNew = (): void => {
     this._newChatHarness = 'codex';
     this._newChatFolder = '';
+    this._newChatProject = '';
     this._sdkChatId = 'new';
     this._onDashboardHide();
     this._fleetOpen = false;
     this._closeDrawer();
+  };
+  private _onChatNewProject = (event: CustomEvent<{ projectId: string }>): void => {
+    this._onChatNew();
+    this._newChatProject = event.detail.projectId;
   };
 
   /**

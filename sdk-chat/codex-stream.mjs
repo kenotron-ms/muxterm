@@ -61,7 +61,7 @@ export class CodexStream {
   async initialize() {
     await this.request('initialize', { clientInfo: { name: 'muxterm', title: 'muxterm SDK chat', version: '1' }, capabilities: { experimentalApi: true } });
     this.process.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
-    const options = { cwd: this.session.cwd, approvalPolicy: 'never', sandbox: this.sandboxName() };
+    const options = { cwd: this.session.cwd, additionalDirectories: this.session.sourceFolders, approvalPolicy: 'never', sandbox: this.sandboxName() };
     const result = await this.request(this.session.nativeId ? 'thread/resume' : 'thread/start',
       this.session.nativeId ? { threadId: this.session.nativeId, ...options } : options);
     this.session.nativeId = result.thread.id;
@@ -95,7 +95,7 @@ export class CodexStream {
 
   sandboxPolicy() {
     return this.session.permission === 'read-only' ? { type: 'readOnly', networkAccess: false }
-      : this.session.permission === 'workspace-write' ? { type: 'workspaceWrite', writableRoots: [this.session.cwd], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
+      : this.session.permission === 'workspace-write' ? { type: 'workspaceWrite', writableRoots: [this.session.cwd, ...this.session.sourceFolders], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
       : { type: 'dangerFullAccess' };
   }
 
