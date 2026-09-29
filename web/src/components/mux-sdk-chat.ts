@@ -9,6 +9,8 @@ import './mux-sdk-chat-settings.js';
 type DisplayAttachment = { id: string; name: string; kind: string };
 type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
 type Block = { key: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
+import { icon } from '../lib/icons.js';
+import { Brain, Check, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
@@ -54,30 +56,33 @@ export class MuxSDKChat extends LitElement {
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; margin-bottom:7px; }
     .text { overflow-wrap:anywhere; }
     .text :is(p,pre) { margin:0 0 10px; }
-    details.support { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; }
-    details.support summary { cursor:pointer; display:flex; align-items:center; gap:8px; min-height:24px; width:fit-content; max-width:100%; list-style:none; }
+    details.support { color:var(--chrome-text-dim,#b2bdd3); font-size:12px; }
+    details.support summary { cursor:pointer; display:flex; align-items:center; gap:8px; min-height:30px; max-width:100%; box-sizing:border-box; list-style:none; }
     details.support summary::-webkit-details-marker { display:none; }
-    .tool-hint { color:var(--chrome-text-dim,#9aa3b8); overflow-wrap:anywhere; }
-
-    details.support summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
-    .support-icon { flex:none; width:14px; text-align:center; font:13px/1 ui-monospace,monospace; }
-    .support-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .support-meta { flex:none; font-size:11px; }
-    .support-chevron { flex:none; font-size:10px; opacity:.7; transition:transform .15s ease; }
-    details.support[open] .support-chevron { transform:rotate(90deg); }
-    details.support.thinking { border-left:2px solid color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 55%,transparent); padding-left:9px; }
-    details.support.thinking summary { color:var(--chrome-text-dim,#9aa3b8); font-style:italic; }
-    details.support.thinking .support-icon { font-style:normal; }
-    details.support.thinking .support-meta { opacity:.78; font-style:normal; }
-    details.support.tool summary { padding:2px 9px 2px 7px; border:1px solid var(--chrome-border,#41485f); border-radius:5px; background:var(--chrome-bar,#202632); color:#b7c9ed; font-style:normal; }
-    details.support.tool .support-icon { color:#9cbaf5; }
-    details.support.tool .support-title { font-weight:600; }
-    details.support.tool .support-meta { color:var(--chrome-text-dim,#9aa3b8); }
-    details.support.tool.failed summary { border-color:color-mix(in srgb,#e6a5a5 45%,var(--chrome-border,#41485f)); }
-    details.support.tool.failed .support-icon, details.support.tool.failed .support-meta { color:#e6a5a5; }
-    .detail { padding:7px 12px 10px; max-width:100%; }
+    details.support summary:focus-visible { outline:2px solid #9bb8f7; outline-offset:2px; border-radius:5px; }
+    .support .chevron { display:inline-flex; flex:none; opacity:.6; transition:transform .15s ease; }
+    .support[open] .chevron { transform:rotate(90deg); }
+    .support .kind-icon, .support .state-icon { display:inline-flex; align-items:center; flex:none; }
+    .support .summary-name { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .support .summary-hint { margin-left:auto; flex:none; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
+    .tool-hint { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
+    details.support.thinking { max-width:min(100%,650px); }
+    details.support.thinking summary { color:#aaa1c4; padding:1px 3px; gap:7px; width:max-content; max-width:100%; }
+    .thinking .kind-icon { color:#a99bd0; }
+    .thinking .summary-name { font-style:italic; }
+    .thinking .summary-hint { color:#88849c; margin-left:0; }
+    details.support.tool { border:1px solid var(--chrome-border,#41485f); border-radius:7px; background:rgba(122,162,247,.035); max-width:560px; }
+    details.support.tool summary { color:#b7c9ed; padding:2px 9px; }
+    .tool .kind-icon { color:#8da6d2; }
+    .tool .summary-name { font:600 11px/1.4 ui-monospace,monospace; }
+    .tool .summary-hint { display:flex; align-items:center; gap:4px; }
+    .tool.completed .summary-hint { color:#9aaac9; }
+    .tool.failed { border-color:rgba(230,165,165,.35); }
+    .tool.failed .summary-hint { color:#e6a5a5; }
+    .tool.running .summary-hint { color:#b7c9ed; }
+    .detail { padding:4px 12px 11px; max-width:100%; }
     details.support[open] { width:100%; }
-    details.support.tool[open] .detail { border-left:1px solid var(--chrome-border,#41485f); margin-left:7px; }
+    .thinking .detail { padding:3px 12px 8px 22px; border-left:1px solid #6f648c; margin-left:10px; }
     .detail-label { color:#9cbaf5; font-weight:600; margin:9px 0 4px; }
     .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,.2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
     .truncation { padding:6px 10px 0; color:#d7bc8b; font:11px/1.5 ui-monospace,monospace; }
@@ -311,7 +316,7 @@ export class MuxSDKChat extends LitElement {
     if (block.failed) return true;
     if (!block.done || !block.output || typeof block.output !== 'object') return false;
     const result = block.output as Record<string, unknown>;
-    if (result.status === 'failed' || result.is_error === true || result.isError === true) return true;
+    if (result.status === 'failed' || result.is_error === true || result.isError === true || result.error) return true;
     if (typeof result.exitCode === 'number' && result.exitCode !== 0) return true;
     const output = result.output;
     return !!output && typeof output === 'object' && typeof (output as Record<string, unknown>).returncode === 'number'
@@ -324,12 +329,12 @@ export class MuxSDKChat extends LitElement {
     const hint = fields.command || fields.file_path || fields.path || fields.url;
 
     const failed = !thinking && this.toolFailed(block);
-    const words = block.text.trim().split(/\s+/).filter(Boolean).length;
     const output = block.done ? this.detail(this.toolOutput(block.output)) : 'Running…';
     const truncated = output.match(/\n(… truncated after [^\n]+)$/);
-    return html`<details class="support ${thinking ? 'thinking' : 'tool'} ${failed ? 'failed' : ''}" ?open=${this.expanded.has(block.key)} @toggle=${(e: globalThis.Event) => {
+    const state = failed ? 'Failed' : block.done ? 'Completed' : 'Running';
+    return html`<details class="support ${thinking ? 'thinking' : `tool ${failed ? 'failed' : block.done ? 'completed' : 'running'}`}" ?open=${this.expanded.has(block.key)} @toggle=${(e: globalThis.Event) => {
       if ((e.currentTarget as HTMLDetailsElement).open) this.expanded.add(block.key); else this.expanded.delete(block.key);
-    }}><summary><span class="support-icon" aria-hidden="true">${thinking ? '◌' : failed ? '×' : block.done ? '›' : '·'}</span><span class="support-title">${thinking ? 'Thinking' : block.name || 'Tool'}</span>${!thinking && typeof hint === 'string' ? html`<span class="tool-hint">${hint}</span>` : nothing}<span class="support-meta">${thinking ? `${words} words` : block.done ? failed ? 'Failed' : 'Succeeded' : 'Running'}</span><span class="support-chevron" aria-hidden="true">▸</span></summary><div class="detail">${thinking
+    }}><summary><span class="chevron" aria-hidden="true">${icon(ChevronRight, { size: 12 })}</span><span class="kind-icon" aria-hidden="true">${icon(thinking ? Brain : Terminal, { size: 13 })}</span><span class="summary-name">${thinking ? 'Thinking' : block.name || 'Tool'}</span>${!thinking && typeof hint === 'string' ? html`<span class="tool-hint" title=${hint}>${hint}</span>` : nothing}<span class="summary-hint">${thinking ? `${block.text.length} characters` : html`<span class="state-icon" aria-hidden="true">${icon(failed ? CircleX : block.done ? Check : LoaderCircle, { size: 12 })}</span>${state}`}</span></summary><div class="detail">${thinking
       ? html`<pre>${block.text}</pre>`
       : html`<div class="detail-label">Tool</div><pre>${block.name || 'Tool'}</pre><div class="detail-label">Input arguments</div><pre>${this.detail(input)}</pre><div class="detail-label">Output / result</div><pre>${truncated ? output.slice(0, -truncated[0].length) : output}</pre>${truncated ? html`<div class="truncation">${truncated[1]}</div>` : nothing}`}
     </div></details>`;
