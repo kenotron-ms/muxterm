@@ -17,14 +17,19 @@ export class MuxChatWorkspace extends LitElement {
   private readonly closeMenuOnOutsidePointer = (event: PointerEvent) => {
     if (this.menuOpen && !event.composedPath().includes(this)) this.menuOpen = false;
   };
+  private readonly closeMenuOnEscape = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') this.menuOpen = false;
+  };
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener('pointerdown', this.closeMenuOnOutsidePointer);
+    document.addEventListener('keydown', this.closeMenuOnEscape);
   }
 
   override disconnectedCallback() {
     document.removeEventListener('pointerdown', this.closeMenuOnOutsidePointer);
+    document.removeEventListener('keydown', this.closeMenuOnEscape);
     super.disconnectedCallback();
   }
 
@@ -65,7 +70,7 @@ export class MuxChatWorkspace extends LitElement {
     const row = this.model;
     return html`
       <div class="row ${row.project ? '' : 'ungrouped'}">
-        <button class="group" title=${row.project?.path || 'Chats without a project'} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.menuOpen = false; }}>
+        <button class="group" title=${row.project?.name || 'Chats without a project'} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.menuOpen = false; }}>
           ${row.project ? this.open ? html`<svg class="folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v2M3 20l3-9h15l-3 9H3Z"/></svg>` : html`<svg class="folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5Z"/></svg>` : html`<span aria-hidden="true">◌</span>`}
           <span class="name">${row.name}</span><span class="chevron">${this.open ? '⌄' : '›'}</span>
         </button>
@@ -94,8 +99,11 @@ export class MuxChatList extends LitElement {
   override disconnectedCallback() { this.unsub?.(); super.disconnectedCallback(); }
   override render() {
     void this.version;
-    const groups: ChatGroup[] = sdkChats.projects.map(project => ({ id:project.id, name:project.name, project, chats:sdkChats.chats.filter(c => c.workspaceId === project.id) }));
-    groups.push({ id:'ungrouped', name:'Ungrouped', chats:sdkChats.chats.filter(c => !c.workspaceId || !sdkChats.projects.some(p => p.id === c.workspaceId)) });
+    const projects = [...sdkChats.projects].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    const chats = [...sdkChats.chats].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+    const projectIds = new Set(projects.map(project => project.id));
+    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:chats.filter(chat => chat.workspaceId === project.id) }));
+    groups.push({ id:'ungrouped', name:'Ungrouped', chats:chats.filter(chat => !chat.workspaceId || !projectIds.has(chat.workspaceId)) });
     return html`<div class="heading">Chats</div>${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${(window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat ?? ''}></mux-chat-workspace>`)}`;
   }
 }

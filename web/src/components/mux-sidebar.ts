@@ -1185,7 +1185,7 @@ export class MuxSidebar extends LitElement {
       display: none;
     }
 
-    .global-connect {
+    .new-chat-action {
       flex: 0 0 var(--sidebar-global-action-height);
       height: var(--sidebar-global-action-height);
       margin: 0 7px;
@@ -1203,8 +1203,8 @@ export class MuxSidebar extends LitElement {
       cursor: pointer;
     }
 
-    .global-connect:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
-    .global-connect-mark { color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright)); font-size: 14px; }
+    .new-chat-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
+    .new-chat-action-mark { color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright)); font-size: 14px; }
 
     .hostgroup { margin: var(--sidebar-group-gap) 0 0; }
     .hostgroup:first-child { margin-top: 11px; }
@@ -2811,8 +2811,8 @@ export class MuxSidebar extends LitElement {
         .split="${split}"
         @start-click="${() => this._onStartClick()}"
       ></mux-start-card>
-      <button class="global-connect" title="New chat" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
-        <span class="global-connect-mark">＋</span><span>New Chat</span>
+      <button class="new-chat-action" title="New chat" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
+        <span class="new-chat-action-mark">＋</span><span>New Chat</span>
       </button>
       <div class="tab-content">
         <mux-chat-list></mux-chat-list>

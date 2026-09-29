@@ -23,6 +23,7 @@ export class MuxSDKChat extends LitElement {
   @state() private settingsPending = false;
   private dragDepth = 0;
   private stream?: EventSource;
+  private unsubscribeChats?: () => void;
   private parsers = new Map<number, MarkdownStream>();
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
   private expanded = new Set<number>();
@@ -80,11 +81,13 @@ export class MuxSDKChat extends LitElement {
     super.connectedCallback();
     window.addEventListener('dragover', this.preventFileNavigation);
     window.addEventListener('drop', this.preventFileNavigation);
+    this.unsubscribeChats = sdkChats.subscribe(() => this.requestUpdate());
     this.connect();
   }
   override disconnectedCallback() {
     window.removeEventListener('dragover', this.preventFileNavigation);
     window.removeEventListener('drop', this.preventFileNavigation);
+    this.unsubscribeChats?.();
     this.stream?.close();
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
     super.disconnectedCallback();
@@ -263,7 +266,7 @@ export class MuxSDKChat extends LitElement {
     } catch (error) { this.error = String(error); this.draft = content; }
   }
   override render() { return html`
-    <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${this.chat?.projectPath || ''}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${() => { this.drawerOpen = !this.drawerOpen; }}>▥</button></div>
+    <div class="topbar"><h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1><span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${() => { this.drawerOpen = !this.drawerOpen; }}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
       ${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? html`<div class="bubble">${b.text}</div>` : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b, b.key) : html`<div class="error">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
