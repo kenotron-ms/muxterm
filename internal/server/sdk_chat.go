@@ -39,6 +39,7 @@ type sdkChat struct {
 	Effort       string    `json:"effort,omitempty"`
 	NativeID     string    `json:"nativeId,omitempty"`
 	State        string    `json:"state"`
+	Archived     bool      `json:"archived,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt,omitempty"`
 	LastActivity string    `json:"lastActivity,omitempty"`
@@ -50,7 +51,6 @@ type sdkProject struct {
 	Path string `json:"path"`
 }
 type sdkEvent struct {
-
 	SessionID    string                 `json:"sessionId"`
 	Type         string                 `json:"type"`
 	NativeID     string                 `json:"nativeId,omitempty"`
@@ -1035,10 +1035,41 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, c)
 	case "PATCH":
 		var req struct {
-			Title string `json:"title"`
+			Title    string `json:"title"`
+			Archived *bool  `json:"archived"`
 		}
-		if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req) != nil ||
-			strings.TrimSpace(req.Title) == "" || len([]rune(req.Title)) > 80 {
+		if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req) != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		if req.Archived != nil && req.Title == "" {
+			h.mu.Lock()
+			previous := c.Archived
+			c.Archived = *req.Archived
+			err := h.saveLocked(c)
+			if err != nil {
+				c.Archived = previous
+			}
+			updated := *c
+			if err == nil {
+				for ch := range h.nameStreams {
+					select {
+					case ch <- id:
+					default:
+						close(ch)
+						delete(h.nameStreams, ch)
+					}
+				}
+			}
+			h.mu.Unlock()
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			writeSDKJSON(w, 200, updated)
+			return
+		}
+		if strings.TrimSpace(req.Title) == "" || len([]rune(req.Title)) > 80 {
 			http.Error(w, "title must be 1-80 characters", 400)
 			return
 		}

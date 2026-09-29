@@ -1206,6 +1206,16 @@ export class MuxSidebar extends LitElement {
     .new-chat-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
     .new-chat-action-mark { color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright)); font-size: 14px; }
 
+    .terminal-heading {
+      margin-top: 13px;
+      padding: 12px 5px 2px;
+      border-top: 1px solid var(--sidebar-edge);
+      color: var(--chrome-text-dim, #9299a5);
+      font-size: 10px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
     .hostgroup { margin: var(--sidebar-group-gap) 0 0; }
     .hostgroup:first-child { margin-top: 11px; }
     .workspace-groups.busy {
@@ -2816,6 +2826,7 @@ export class MuxSidebar extends LitElement {
       </button>
       <div class="tab-content">
         <mux-chat-list></mux-chat-list>
+        <div class="terminal-heading">Terminals</div>
         ${this._renderWorkspaces()}
       </div>
       ${this._renderFooter()}

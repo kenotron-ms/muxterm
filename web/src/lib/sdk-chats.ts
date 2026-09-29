@@ -1,5 +1,5 @@
 import { apiPath } from './base-path.js';
-export interface SDKChat { id: string; workspaceId?: string; projectPath: string; title: string; harness: 'codex' | 'claude' | 'amplifier'; provider?: string; nativeId?: string; state: string; createdAt: string }
+export interface SDKChat { id: string; workspaceId?: string; projectPath: string; title: string; harness: 'codex' | 'claude' | 'amplifier'; provider?: string; nativeId?: string; state: string; createdAt: string; archived?: boolean }
 export interface SDKProject { id: string; name: string; path: string }
 export interface FolderListing { path: string; base: string; parent: string; folders: string[] }
 class SDKChatStore {
@@ -34,6 +34,11 @@ class SDKChatStore {
   }
   async rename(id: string, title: string) {
     const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
+    if (!response.ok) throw new Error(await response.text());
+    await this.refresh();
+  }
+  async setArchived(id: string, archived: boolean) {
+    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived }) });
     if (!response.ok) throw new Error(await response.text());
     await this.refresh();
   }
