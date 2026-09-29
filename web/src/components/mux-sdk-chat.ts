@@ -27,6 +27,7 @@ export class MuxSDKChat extends LitElement {
   private unsubscribeChats?: () => void;
   private parsers = new Map<number, MarkdownStream>();
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
+  private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
   private expanded = new Set<number>();
   private nextBlockKey = 0;
   private turnStart = 0;
@@ -110,12 +111,16 @@ export class MuxSDKChat extends LitElement {
     super.connectedCallback();
     window.addEventListener('dragover', this.preventFileNavigation);
     window.addEventListener('drop', this.preventFileNavigation);
+    window.addEventListener('drop', this.resetDrop);
+    window.addEventListener('dragend', this.resetDrop);
     this.unsubscribeChats = sdkChats.subscribe(() => this.requestUpdate());
     this.connect();
   }
   override disconnectedCallback() {
     window.removeEventListener('dragover', this.preventFileNavigation);
     window.removeEventListener('drop', this.preventFileNavigation);
+    window.removeEventListener('drop', this.resetDrop);
+    window.removeEventListener('dragend', this.resetDrop);
     this.unsubscribeChats?.();
     this.stream?.close();
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
@@ -203,7 +208,7 @@ export class MuxSDKChat extends LitElement {
   private onDragLeave(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth = Math.max(0, this.dragDepth - 1); if (!this.dragDepth) this.dropActive = false; }
   private onDrop(event: DragEvent) {
     if (!this.hasFiles(event)) return;
-    event.preventDefault(); event.stopPropagation(); this.dragDepth = 0; this.dropActive = false;
+    event.preventDefault(); event.stopPropagation(); this.resetDrop();
     this.addFiles(Array.from(event.dataTransfer?.files || []));
   }
   private onPick(event: Event) {
