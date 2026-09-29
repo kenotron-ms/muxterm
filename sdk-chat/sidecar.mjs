@@ -63,6 +63,7 @@ async function* claudeInputs(s) {
 }
 async function runClaude(s) {
   const toolNames = new Map();
+  const agentTools = new Set();
   let thinkingStreamed = false;
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, resume: s.nativeId || undefined,
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: muxtermMcpEnv } },
@@ -77,23 +78,39 @@ async function runClaude(s) {
       } else if (msg.type === 'stream_event') {
         const event = msg.event;
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta')
-          emit(s.id, 'assistant.delta', { text: event.delta.text });
+          emit(s.id, msg.parent_tool_use_id ? 'delegate.message' : 'assistant.delta',
+            { text: event.delta.text, ...(msg.parent_tool_use_id ? { childSessionId: msg.parent_tool_use_id } : {}) });
         else if (event?.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') {
           thinkingStreamed = true;
           emit(s.id, 'thinking.delta', { text: event.delta.thinking });
         }
         else if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use')
           { toolNames.set(event.content_block.id, event.content_block.name);
+            if (event.content_block.name === 'Agent' || event.content_block.name === 'Task') {
+              agentTools.add(event.content_block.id);
+              emit(s.id, 'delegate.spawned', { childSessionId: event.content_block.id,
+                parentSessionId: s.id, agent: event.content_block.name, toolId: event.content_block.id });
+            }
             emit(s.id, 'tool.started', { toolId: event.content_block.id, name: event.content_block.name, raw: event.content_block.input }); }
       } else if (msg.type === 'assistant') {
         if (!thinkingStreamed) for (const block of msg.message?.content || []) if (block.type === 'thinking' && block.thinking)
           emit(s.id, 'thinking.delta', { text: block.thinking });
-        for (const block of msg.message?.content || []) if (block.type === 'tool_use')
+        for (const block of msg.message?.content || []) if (block.type === 'tool_use') {
+          if ((block.name === 'Agent' || block.name === 'Task') && !agentTools.has(block.id)) {
+            agentTools.add(block.id);
+            emit(s.id, 'delegate.spawned', { childSessionId: block.id,
+              parentSessionId: s.id, agent: block.name, toolId: block.id });
+          }
           emit(s.id, 'tool.started', { toolId: block.id, name: block.name, raw: block.input });
+        }
       } else if (msg.type === 'user') {
-        for (const block of msg.message?.content || []) if (block.type === 'tool_result')
+        for (const block of msg.message?.content || []) if (block.type === 'tool_result') {
           emit(s.id, 'tool.completed', { toolId: block.tool_use_id,
             name: toolNames.get(block.tool_use_id) || 'Tool', raw: block.content, failed: !!block.is_error });
+          if (agentTools.has(block.tool_use_id)) emit(s.id, 'delegate.completed', {
+            childSessionId: block.tool_use_id, parentSessionId: s.id,
+            agent: toolNames.get(block.tool_use_id) || 'Agent', toolId: block.tool_use_id, failed: !!block.is_error });
+        }
       } else if (msg.type === 'result') {
         thinkingStreamed = false;
         // The SDK's result echoes the UUIDs of user inputs the native turn

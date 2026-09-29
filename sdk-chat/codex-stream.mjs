@@ -29,6 +29,7 @@ export class CodexStream {
     this.phaseByItem = new Map();
     this.inputIds = [];
     this.cancelRequested = false;
+    this.childThreads = new Map();
     const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpConfig = muxterm ? ['-c', `mcp_servers.muxterm.command=${JSON.stringify(muxterm)}`,
       '-c', 'mcp_servers.muxterm.args=["mcp"]'] : [];
@@ -164,7 +165,24 @@ export class CodexStream {
       return;
     }
     const { method, params: p } = message;
-    if (!p || p.threadId !== this.session.nativeId) return;
+    if (!p) return;
+    const childId = this.childThreads.has(p.threadId) ? p.threadId : null;
+    if (childId) {
+      if (method === 'item/agentMessage/delta' && p.delta)
+        this.emit(this.session.id, 'delegate.message', { childSessionId: childId, text: p.delta });
+      else if (method === 'item/completed' && p.item?.type === 'agentMessage' && p.item.text)
+        this.emit(this.session.id, 'delegate.message', { childSessionId: childId, text: p.item.text, complete: true });
+      return;
+    }
+    if (p.threadId !== this.session.nativeId) return;
+    if (method === 'item/started' && p.item?.type === 'subAgentActivity' && p.item.kind === 'started' && p.item.agentThreadId) {
+      this.childThreads.set(p.item.agentThreadId, p.item.agentPath || 'Agent');
+      this.emit(this.session.id, 'delegate.spawned', { childSessionId: p.item.agentThreadId,
+        parentSessionId: this.session.id, agent: p.item.agentPath || 'Agent', toolId: p.item.id });
+    } else if (method === 'item/started' && p.item?.type === 'subAgentActivity' && p.item.kind === 'completed' && p.item.agentThreadId) {
+      this.emit(this.session.id, 'delegate.completed', { childSessionId: p.item.agentThreadId,
+        parentSessionId: this.session.id, agent: p.item.agentPath || this.childThreads.get(p.item.agentThreadId) || 'Agent', toolId: p.item.id });
+    }
     if (method === 'item/started' && p.item?.type === 'agentMessage') {
       this.phaseByItem.set(p.item.id, p.item.phase);
     } else if (method === 'item/agentMessage/delta') {
