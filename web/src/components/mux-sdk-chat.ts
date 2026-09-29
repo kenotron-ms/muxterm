@@ -11,9 +11,9 @@ type DisplayAttachment = { id: string; name: string; kind: string };
 type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[] };
-type Block = { key: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
+type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
 import { icon } from '../lib/icons.js';
-import { Brain, Check, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
+import { Brain, Check, ChevronDown, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
@@ -42,6 +42,12 @@ export class MuxSDKChat extends LitElement {
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
   private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
   private expanded = new Set<number>();
+  private workExpanded = new Set<number>();
+  private turnStarted = new Map<number, number>();
+  private turnFinished = new Map<number, number>();
+  private currentTurn = 0;
+  @state() private now = Date.now();
+  private clock?: ReturnType<typeof setInterval>;
   private nextBlockKey = 0;
   private turnStart = 0;
   private completedInputAnchors = new Map<string, number>();
@@ -68,8 +74,14 @@ export class MuxSDKChat extends LitElement {
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
     .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable; }
     .block { max-width:760px; width:100%; align-self:center; margin-bottom:28px; box-sizing:border-box; }
-    .block.tool, .block.thinking { margin-bottom:4px; }
-    .block.tool + .block.assistant, .block.thinking + .block.assistant { margin-top:18px; }
+    .block.work { margin-top:-12px; margin-bottom:20px; }
+    .work-disclosure summary { display:flex; align-items:center; gap:5px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:12px; list-style:none; cursor:pointer; }
+    .work-disclosure summary::-webkit-details-marker { display:none; }
+    .work-disclosure summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
+    .work-disclosure summary svg { opacity:.7; transition:transform .15s ease; }
+    .work-disclosure[open] summary svg { transform:rotate(180deg); }
+    .work-items { padding:12px 0 2px; }
+    .work-item { margin-bottom:5px; }
     .user { display:flex; justify-content:flex-end; }
     .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:rgba(122,162,247,.13); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
@@ -180,6 +192,7 @@ export class MuxSDKChat extends LitElement {
       if (updated && this.chat?.title !== updated.title) this.chat = this.chat ? { ...this.chat, title: updated.title } : updated;
       this.requestUpdate();
     });
+    this.clock = setInterval(() => { if (this.busy) this.now = Date.now(); }, 1000);
     this.connect();
   }
   override disconnectedCallback() {
@@ -188,6 +201,7 @@ export class MuxSDKChat extends LitElement {
     window.removeEventListener('drop', this.resetDrop);
     window.removeEventListener('dragend', this.resetDrop);
     this.unsubscribeChats?.();
+    if (this.clock) clearInterval(this.clock);
     this.stream?.close();
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
     super.disconnectedCallback();
@@ -276,7 +290,7 @@ export class MuxSDKChat extends LitElement {
   }
   private connect() {
     if (!this.isConnected || !this.sessionId) return;
-    this.stream?.close(); this.blocks = []; this.trajectory = []; this.selectedAgent = ''; this.parsers.clear(); this.expanded.clear(); this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.error = ''; this.settingsPending = false; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
+    this.stream?.close(); this.blocks = []; this.trajectory = []; this.selectedAgent = ''; this.parsers.clear(); this.expanded.clear(); this.workExpanded.clear(); this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now(); this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.error = ''; this.settingsPending = false; this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
     const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/events`));
     source.addEventListener('snapshot', e => { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; this.busy = this.chat.state === 'working'; });
     source.addEventListener('sdk', e => this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent));
@@ -287,43 +301,57 @@ export class MuxSDKChat extends LitElement {
     if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'delegate.message', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type))
       this.trajectory = [...this.trajectory, event];
     const blocks = [...this.blocks];
+    const eventTime = Date.parse(event.at || '') || Date.now();
+    const markStart = (turn: number) => {
+      const previous = this.turnStarted.get(turn);
+      if (previous === undefined || eventTime < previous) this.turnStarted.set(turn, eventTime);
+    };
     if (event.type === 'input.accepted') {
       if (event.kind === 'steer') {
         const last = blocks[blocks.length - 1];
         if (last?.kind === 'assistant') blocks[blocks.length - 1] = { ...last, done:true };
-        blocks.push({ key:++this.nextBlockKey, kind:'user', text:event.text || '' });
+        markStart(this.currentTurn);
+        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'user', text:event.text || '' });
       } else {
         // The harness can stream a fast reply before its send receipt arrives.
         const anchor = event.inputId ? this.completedInputAnchors.get(event.inputId) : undefined;
+        const anchoredTurn = anchor === undefined ? undefined : blocks.find(b => b.key === anchor)?.turn;
         let at = anchor === undefined ? this.turnStart : blocks.findIndex(b => b.key === anchor);
         if (at < 0) at = this.turnStart;
         while (blocks[at]?.kind === 'user') at++;
-        blocks.splice(at, 0, { key:++this.nextBlockKey, kind:'user', text:event.text || '', attachments:event.attachments || [] });
+        const turn = anchoredTurn ?? blocks[at]?.turn ?? this.currentTurn;
+        markStart(turn);
+        blocks.splice(at, 0, { key:++this.nextBlockKey, turn, kind:'user', text:event.text || '', attachments:event.attachments || [] });
         if (at < this.turnStart) this.turnStart++;
+        if (turn === this.currentTurn) this.busy = true;
       }
-      this.busy = true;
+      if (event.kind === 'steer') this.busy = true;
     }
     else if (event.type === 'assistant.delta') {
+      markStart(this.currentTurn);
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
-      else blocks.push({ key:++this.nextBlockKey, kind:'assistant', text:event.text || '' });
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'assistant', text:event.text || '' });
     } else if (event.type === 'thinking.delta') {
+      markStart(this.currentTurn);
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'thinking') blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
-      else blocks.push({ key:++this.nextBlockKey, kind:'thinking', text:event.text || '' });
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'thinking', text:event.text || '' });
     } else if (event.type === 'tool.started') {
+      markStart(this.currentTurn);
       // Text before a tool call was an interim progress note, not the final answer.
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
       const existing = blocks.findIndex(b => b.kind === 'tool' && b.id === event.toolId && !b.done);
       if (existing >= 0) blocks[existing] = { ...blocks[existing], name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input };
-      else blocks.push({ key:++this.nextBlockKey, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw });
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw });
     }
     else if (event.type === 'tool.completed') {
+      markStart(this.currentTurn);
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId && !blocks[i].done) { index = i; break; }
       if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:event.failed ? 'Failed' : 'Completed', failed:event.failed,
         output:event.raw };
-      else blocks.push({ key:++this.nextBlockKey, kind:'tool', text:event.failed ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, failed:event.failed,
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:event.failed ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, failed:event.failed,
         output:event.raw });
     } else if (event.type === 'tool.result') {
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId) { index = i; break; }
@@ -332,26 +360,30 @@ export class MuxSDKChat extends LitElement {
       for (const b of blocks) if (b.kind === 'assistant') b.done = true;
     } else if (event.type === 'turn.completed') {
       this.busy = false;
+      this.turnFinished.set(this.currentTurn, eventTime);
       for (const b of blocks) if (b.kind === 'assistant') b.done = true;
       const anchor = blocks[this.turnStart]?.key;
       if (anchor !== undefined) for (const id of event.inputIds || []) this.completedInputAnchors.set(id, anchor);
       this.turnStart = blocks.length;
+      this.currentTurn++;
       void sdkChats.refresh();
     }
     else if (event.type === 'turn.cancelled') {
       this.busy = false;
+      this.turnFinished.set(this.currentTurn, eventTime);
       this.stopping = false;
       for (const b of blocks) if (b.kind === 'assistant') b.done = true;
-      blocks.push({ key:++this.nextBlockKey, kind:'status', text:'Stopped by you · partial output kept' });
+      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:'Stopped by you · partial output kept' });
       this.turnStart = blocks.length;
+      this.currentTurn++;
       void sdkChats.refresh();
     }
     else if (event.type === 'goal.progress') {
       if (this.chat) this.chat = { ...this.chat, goalState: event.goalState, goalReason: event.goalReason, goalSummary: event.goalSummary };
-      if (event.goalState !== 'continuing') blocks.push({ key:++this.nextBlockKey, kind:'status', text:`Goal ${event.goalState || 'updated'}: ${event.goalSummary || event.goalReason || ''}` });
+      if (event.goalState !== 'continuing') blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:`Goal ${event.goalState || 'updated'}: ${event.goalSummary || event.goalReason || ''}` });
     }
     else if (event.type === 'session.renamed') { void sdkChats.refresh(); }
-    else if (event.type === 'error' || event.type === 'session.uncertain') { blocks.push({ key:++this.nextBlockKey, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.busy = false; void sdkChats.refresh(); }
+    else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; void sdkChats.refresh(); }
     this.blocks = blocks;
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     const follow = !body || body.scrollHeight - body.scrollTop - body.clientHeight < 100;
@@ -531,6 +563,33 @@ export class MuxSDKChat extends LitElement {
       : html`<div class="detail-label">Tool</div><pre>${block.name || 'Tool'}</pre><div class="detail-label">Input arguments</div><pre>${this.detail(input)}</pre><div class="detail-label">Output / result</div><pre>${truncated ? output.slice(0, -truncated[0].length) : output}</pre>${truncated ? html`<div class="truncation">${truncated[1]}</div>` : nothing}`}
     </div></details>`;
   }
+  private workedLabel(turn: number) {
+    const started = this.turnStarted.get(turn);
+    const finished = this.turnFinished.get(turn);
+    if (started === undefined) return finished === undefined ? 'Working…' : 'Worked';
+    const seconds = Math.max(1, Math.round(((finished ?? this.now) - started) / 1000));
+    const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    return `${finished === undefined ? 'Working' : 'Worked'} for ${duration}`;
+  }
+  private transcript() {
+    const work = new Map<number, Block[]>();
+    for (const block of this.blocks) if (block.kind === 'thinking' || block.kind === 'tool') {
+      const items = work.get(block.turn) || [];
+      items.push(block);
+      work.set(block.turn, items);
+    }
+    const shown = new Set<number>();
+    return this.blocks.map(block => {
+      if (block.kind === 'thinking' || block.kind === 'tool') {
+        if (shown.has(block.turn)) return nothing;
+        shown.add(block.turn);
+        return html`<div class="block work"><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
+          if ((event.currentTarget as HTMLDetailsElement).open) this.workExpanded.add(block.turn); else this.workExpanded.delete(block.turn);
+        }}><summary><span>${this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${(work.get(block.turn) || []).map(item => html`<div class="work-item">${this.support(item)}</div>`)}</div></details></div>`;
+      }
+      return html`<div class="block ${block.kind}">${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
+    });
+  }
   private async send() {
     const content = this.draft.trim();
     if ((!content && !this.attachments.length) || this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || a.error) || (this.busy && this.attachments.length > 0)) return;
@@ -558,7 +617,7 @@ export class MuxSDKChat extends LitElement {
   override render() { return html`
     <div class="topbar">${this.selectedAgent ? html`<nav class="breadcrumbs" aria-label="Agent lineage"><button @click=${() => { this.selectedAgent=''; this.agentNotice=''; }}>${this.chat?.title || 'Root session'}</button><span>›</span><strong>${this.agents().find(agent => agent.id === this.selectedAgent)?.name || 'Agent'}</strong></nav>` : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body">
-      ${this.selectedAgent ? (() => { const agent=this.agents().find(item => item.id === this.selectedAgent); return agent ? html`<div class="agent-chat"><div class="speaker">${agent.name} · ${agent.status}</div>${agent.legs.map(leg => html`<div class="instruction">${leg.task}</div><div class="reply">${leg.reply || agent.progress || 'The delegated agent is working. Its result returns through the root session.'}</div>`)}${!agent.legs.length ? html`<div class="reply">${agent.progress || 'The native harness reported this agent. Its result returns through the root session.'}</div>` : nothing}</div>` : html`<div class="block">Agent unavailable in this session.</div>`; })() : html`${this.agents().length ? html`<section class="agent-list" aria-label="Delegated sub-agents"><h2>Delegated sub-agents</h2>${this.agents().map(agent => html`<button class="agent-link" @click=${() => { this.selectedAgent=agent.id; this.agentNotice=''; }}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</section>` : nothing}${this.blocks.length ? this.blocks.map(b => html`<div class="block ${b.kind}">${b.kind === 'user' ? this.userBubble(b) : b.kind === 'assistant' ? html`<div class="speaker">${this.chat?.harness}</div><div class="text">${this.markdown(b, b.key)}</div>` : b.kind === 'tool' || b.kind === 'thinking' ? this.support(b) : html`<div class="${b.kind}">${b.text}</div>`}</div>`) : html`<div class="block">Starting the SDK session…</div>`}`}
+      ${this.selectedAgent ? (() => { const agent=this.agents().find(item => item.id === this.selectedAgent); return agent ? html`<div class="agent-chat"><div class="speaker">${agent.name} · ${agent.status}</div>${agent.legs.map(leg => html`<div class="instruction">${leg.task}</div><div class="reply">${leg.reply || agent.progress || 'The delegated agent is working. Its result returns through the root session.'}</div>`)}${!agent.legs.length ? html`<div class="reply">${agent.progress || 'The native harness reported this agent. Its result returns through the root session.'}</div>` : nothing}</div>` : html`<div class="block">Agent unavailable in this session.</div>`; })() : html`${this.agents().length ? html`<section class="agent-list" aria-label="Delegated sub-agents"><h2>Delegated sub-agents</h2>${this.agents().map(agent => html`<button class="agent-link" @click=${() => { this.selectedAgent=agent.id; this.agentNotice=''; }}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</section>` : nothing}${this.blocks.length ? this.transcript() : html`<div class="block">Starting the SDK session…</div>`}`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
     </div><div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${(e: InputEvent) => { this.agentDraft=(e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraft.trim()}>Send to root ↗</button></div>` : html`
