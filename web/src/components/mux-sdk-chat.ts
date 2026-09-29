@@ -4,6 +4,8 @@ import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
+import { icon } from '../lib/icons.js';
+import { Brain, Check, ChevronRight, CircleX, Terminal, LoaderCircle } from 'lucide';
 import './mux-amplifier-settings.js';
 
 type SDKEvent = { type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean };
@@ -39,19 +41,40 @@ export class MuxSDKChat extends LitElement {
     .drawer-toggle { border:0; background:transparent; color:#9cbaf5; padding:7px; }
     .layout { display:flex; flex:1; min-height:0; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
-    .body { flex:1; min-height:0; overflow:auto; padding:32px clamp(24px,8vw,120px) 55px; display:flex; flex-direction:column; gap:24px; }
-    .block { max-width:780px; width:100%; align-self:center; }
+    .body { flex:1; min-height:0; overflow:auto; padding:32px clamp(24px,8vw,120px) 55px; display:flex; flex-direction:column; }
+    .block { max-width:780px; width:100%; align-self:center; margin-bottom:24px; }
+    .block.thinking, .block.tool { margin-bottom:5px; }
+    .block.assistant { margin-top:13px; }
     .user { display:flex; justify-content:flex-end; }
     .bubble { max-width:min(82%,660px); padding:10px 14px; border-radius:15px; background:rgba(122,162,247,.14); white-space:pre-wrap; overflow-wrap:anywhere; }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; margin-bottom:7px; }
     .text { overflow-wrap:anywhere; }
     .text :is(p,pre) { margin:0 0 10px; }
-    details.support { border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:rgba(122,162,247,.045); color:var(--chrome-text-dim,#b2bdd3); font-size:12px; }
-    details.support summary { cursor:pointer; padding:7px 11px; color:#b7c9ed; list-style:none; }
+    details.support { color:var(--chrome-text-dim,#b2bdd3); font-size:12px; }
+    details.support summary { cursor:pointer; display:flex; align-items:center; gap:8px; min-height:30px; box-sizing:border-box; list-style:none; }
     details.support summary::-webkit-details-marker { display:none; }
-    details.support summary::before { content:'▸'; display:inline-block; margin-right:8px; }
-    details.support[open] summary::before { transform:rotate(90deg); }
-    .detail { padding:0 12px 10px; }
+    details.support summary:focus-visible { outline:2px solid #9bb8f7; outline-offset:2px; border-radius:5px; }
+    .support .chevron { display:inline-flex; flex:none; opacity:.6; transition:transform .15s ease; }
+    .support[open] .chevron { transform:rotate(90deg); }
+    .support .kind-icon, .support .state-icon { display:inline-flex; align-items:center; flex:none; }
+    .support .summary-name { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .support .summary-hint { margin-left:auto; flex:none; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
+    details.support.thinking { max-width:min(100%,650px); }
+    details.support.thinking summary { color:#aaa1c4; padding:1px 3px; gap:7px; width:max-content; max-width:100%; }
+    .thinking .kind-icon { color:#a99bd0; }
+    .thinking .summary-name { font-style:italic; }
+    .thinking .summary-hint { color:#88849c; margin-left:0; }
+    details.support.tool { border:1px solid var(--chrome-border,#41485f); border-radius:7px; background:rgba(122,162,247,.035); max-width:560px; }
+    details.support.tool summary { color:#b7c9ed; padding:2px 9px; }
+    .tool .kind-icon { color:#8da6d2; }
+    .tool .summary-name { font:600 11px/1.4 ui-monospace,monospace; }
+    .tool .summary-hint { display:flex; align-items:center; gap:4px; }
+    .tool.completed .summary-hint { color:#9aaac9; }
+    .tool.failed { border-color:rgba(230,165,165,.35); }
+    .tool.failed .summary-hint { color:#e6a5a5; }
+    .tool.running .summary-hint { color:#b7c9ed; }
+    .detail { padding:4px 12px 11px; }
+    .thinking .detail { padding:3px 12px 8px 22px; border-left:1px solid #6f648c; margin-left:10px; }
     .detail-label { color:#9cbaf5; font-weight:600; margin:9px 0 4px; }
     .detail pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
     .error { color:#e6a5a5; }
@@ -243,12 +266,25 @@ export class MuxSDKChat extends LitElement {
     }
     return value;
   }
+  private toolFailed(block: Block): boolean {
+    if (block.failed) return true;
+    if (!block.done || !block.output || typeof block.output !== 'object') return false;
+    const result = block.output as Record<string, unknown>;
+    if (result.status === 'failed' || result.is_error === true || result.error) return true;
+    if (typeof result.exitCode === 'number' && result.exitCode !== 0) return true;
+    if (result.output && typeof result.output === 'object') {
+      const output = result.output as Record<string, unknown>;
+      if (typeof output.returncode === 'number' && output.returncode !== 0) return true;
+    }
+    return false;
+  }
   private support(block: Block, index: number) {
     const thinking = block.kind === 'thinking';
-    const label = thinking ? `Thinking · ${block.text.length} characters` : `${block.name || 'Tool'} · ${block.text}`;
-    return html`<details class="support" ?open=${this.expanded.has(index)} @toggle=${(e: globalThis.Event) => {
+    const failed = this.toolFailed(block);
+    const state = failed ? 'Failed' : block.done ? 'Completed' : 'Running';
+    return html`<details class="support ${thinking ? 'thinking' : `tool ${failed ? 'failed' : block.done ? 'completed' : 'running'}`}" ?open=${this.expanded.has(index)} @toggle=${(e: globalThis.Event) => {
       if ((e.currentTarget as HTMLDetailsElement).open) this.expanded.add(index); else this.expanded.delete(index);
-    }}><summary>${label}</summary><div class="detail">${thinking
+    }}><summary><span class="chevron" aria-hidden="true">${icon(ChevronRight, { size: 12 })}</span><span class="kind-icon" aria-hidden="true">${icon(thinking ? Brain : Terminal, { size: 13 })}</span><span class="summary-name">${thinking ? 'Thinking' : block.name || 'Tool'}</span><span class="summary-hint">${thinking ? `${block.text.length} characters` : html`<span class="state-icon" aria-hidden="true">${icon(failed ? CircleX : block.done ? Check : LoaderCircle, { size: 12 })}</span>${state}`}</span></summary><div class="detail">${thinking
       ? html`<pre>${block.text}</pre>`
       : html`<div class="detail-label">Input arguments</div><pre>${this.detail(this.toolInput(block.input))}</pre><div class="detail-label">Output / result</div><pre>${block.done ? this.detail(this.toolOutput(block.output)) : 'Running…'}</pre>`}
     </div></details>`;
