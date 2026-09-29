@@ -216,12 +216,13 @@ export class CodexStream {
     }
   }
 
-  async title(mode, name) {
+  async title(mode, name, previousName) {
     await this.ready;
     const current = await this.request('thread/read', { threadId: this.session.nativeId, includeTurns: false });
     const existing = current.thread?.name || '';
     if (mode === 'read') return { name: existing, source: existing ? 'manual' : '' };
-    if (mode === 'generated' && existing) return { name: existing, source: 'manual' };
+    if (mode === 'generated' && existing && existing !== previousName)
+      return { name: existing, source: 'manual' };
     await this.request('thread/name/set', { threadId: this.session.nativeId, name });
     return { name, source: mode === 'manual' ? 'manual' : 'generated' };
   }
