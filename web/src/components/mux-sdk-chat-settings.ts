@@ -18,6 +18,20 @@ export class MuxSDKChatSettings extends LitElement {
   @state() private loading = false;
   @state() private error = '';
   private requestVersion = 0;
+  private readonly closePickersOnOutsidePointer = (event: PointerEvent) => {
+    const path = event.composedPath();
+    this.renderRoot.querySelectorAll<HTMLDetailsElement>('.picker[open]').forEach(picker => {
+      if (!path.includes(picker)) picker.open = false;
+    });
+  };
+  override connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener('pointerdown', this.closePickersOnOutsidePointer);
+  }
+  override disconnectedCallback() {
+    document.removeEventListener('pointerdown', this.closePickersOnOutsidePointer);
+    super.disconnectedCallback();
+  }
   static styles = css`
     ${subtleScrollbars}
     :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:8px; font:12px/1.4 system-ui,sans-serif; }

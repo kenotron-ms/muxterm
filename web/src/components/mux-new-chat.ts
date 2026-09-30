@@ -38,8 +38,15 @@ export class MuxNewChat extends LitElement {
   @state() private busy = false;
   @state() private error = '';
   private unsub?: () => void;
-  private readonly closeProjectPicker = (event: PointerEvent) => {
-    if (!event.composedPath().includes(this)) this.projectPickerOpen = false;
+  private readonly closeDropdowns = (event: PointerEvent) => {
+    const path = event.composedPath();
+    const inside = (selector: string) => {
+      const element = this.renderRoot.querySelector(selector);
+      return element !== null && path.includes(element);
+    };
+    if (this.projectPickerOpen && !inside('.project-picker')) this.projectPickerOpen = false;
+    if (this.pickerOpen && !inside('.picker') && !inside('.browse')) this.pickerOpen = false;
+    if (this.locationOpen && !inside('.location-settings')) this.locationOpen = false;
   };
 
   static styles = css`
@@ -115,12 +122,12 @@ export class MuxNewChat extends LitElement {
     this.provider = providerFor(this.harness);
     if (this.initialFolder) this.folder = this.initialFolder;
     if (this.initialProject) this.projectId = this.initialProject;
-    document.addEventListener('pointerdown', this.closeProjectPicker);
+    document.addEventListener('pointerdown', this.closeDropdowns);
     this.unsub = sdkChats.subscribe(() => this.requestUpdate());
     void sdkChats.refresh().then(() => { const project = sdkChats.projects.find(p => p.id === this.projectId); if (project) this.folder = project.path; });
     void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) this.folder = listing.base; }).catch(error => { this.error = String(error); });
   }
-  override disconnectedCallback() { this.unsub?.(); document.removeEventListener('pointerdown', this.closeProjectPicker); super.disconnectedCallback(); }
+  override disconnectedCallback() { this.unsub?.(); document.removeEventListener('pointerdown', this.closeDropdowns); super.disconnectedCallback(); }
   override firstUpdated() { this.shadowRoot?.querySelector('textarea')?.focus(); }
   override updated(changed: Map<string, unknown>) { if (changed.has('prompt')) this.sizeTextarea(); }
   private sizeTextarea() {

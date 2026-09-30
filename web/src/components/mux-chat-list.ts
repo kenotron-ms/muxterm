@@ -27,7 +27,15 @@ export class MuxChatWorkspace extends LitElement {
   @state() private renameDraft = '';
 
   private readonly onOutsidePointer = (event: PointerEvent) => {
-    if (!event.composedPath().includes(this)) { this.menuFor = ''; this.contextMenu = false; }
+    const path = event.composedPath();
+    const menu = this.renderRoot.querySelector('.menu');
+    const trigger = this.menuFor === 'project' ? this.renderRoot.querySelector('.row .action.more') : null;
+    if (this.menuFor && ![menu, trigger].some(el => el !== null && path.includes(el))) this.closeMenu();
+    const browser = this.renderRoot.querySelector('.browser');
+    const browseButtons = this.renderRoot.querySelectorAll('[aria-label="Browse primary folders"], [aria-label="Browse source folders"]');
+    if (this.editListing && !(browser && path.includes(browser)) && ![...browseButtons].some(el => path.includes(el))) {
+      this.editListing = undefined;
+    }
   };
   private readonly onEscape = (event: KeyboardEvent) => {
     if (event.key === 'Escape') { this.menuFor = ''; this.contextMenu = false; this.renamingId = ''; }
