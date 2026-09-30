@@ -283,21 +283,19 @@ export class MuxSDKChat extends LitElement {
     .send:disabled { opacity:.38; cursor:default; }
     .voice-text { white-space:pre-wrap; overflow-wrap:anywhere; }
     .send.voice-idle { transition:width .3s ease,border-radius .3s ease,background .3s ease; }
-    .send.voice-active { width:86px; border-radius:11px; display:flex; gap:7px; font-size:13px; font-weight:650; transition:width .3s ease,border-radius .3s ease,background .3s ease; }
+    .send.voice-active { width:86px; border-radius:11px; display:flex; align-items:center; justify-content:center; gap:7px; font-size:13px; font-weight:650; transition:width .3s ease,border-radius .3s ease,background .3s ease; }
     .voice-bars { display:inline-flex; align-items:center; justify-content:center; gap:2px; height:20px; }
-    .voice-bars i { display:block; width:3px; border-radius:99px; background:currentColor; }
-    .voice-bars i:nth-child(1), .voice-bars i:nth-child(5) { height:7px; }
-    .voice-bars i:nth-child(2), .voice-bars i:nth-child(4) { height:13px; }
-    .voice-bars i:nth-child(3) { height:19px; }
-    .voice-active .voice-bars i { animation:voice-bar 1s ease-in-out infinite alternate; }
-    .voice-active .voice-bars i:nth-child(2), .voice-active .voice-bars i:nth-child(4) { animation-delay:.15s; }
-    .voice-active .voice-bars i:nth-child(3) { animation-delay:.3s; }
-    @keyframes voice-bar { from { transform:scaleY(.55); } to { transform:scaleY(1); } }
+    .voice-bars i { display:block; width:3px; border-radius:99px; background:currentColor; transition:height .075s ease-out; }
+    .voice-bars i:nth-child(1) { height:8px; }
+    .voice-bars i:nth-child(2) { height:17px; }
+    .voice-bars i:nth-child(3) { height:11px; }
+    .voice-bars i:nth-child(4) { height:20px; }
+    .voice-bars i:nth-child(5) { height:13px; }
     .voice-compose-row { min-height:34px; display:flex; align-items:center; gap:9px; color:var(--chrome-text-dim,#9aa3b8); }
     .voice-compose-row .voice-label { flex:1; font-size:14px; }
     .voice-compose-row .voice-mic { font-size:18px; line-height:1; }
     .voice-compose-row .voice-attach { flex:none; width:30px; height:30px; border:0; background:transparent; color:inherit; font-size:22px; line-height:1; }
-    @media (prefers-reduced-motion:reduce) { .voice-active .voice-bars i { animation:none; } }
+    @media (prefers-reduced-motion:reduce) { .voice-bars i { transition:none; } }
     .stop { border:1px solid #bd7280; background:#8c3d4e; color:white; font-size:15px; }
     .stop:hover:not(:disabled) { background:#a34c5d; }
     .stop:disabled { opacity:.6; }
@@ -442,7 +440,7 @@ export class MuxSDKChat extends LitElement {
     if (!this.isConnected || !this.sessionId || this.activeSession === this.sessionId) return;
     this.persistTranscriptCache();
     this.voice?.stop();
-    this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; });
+    this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
     this.activeSession = this.sessionId;
     const epoch = ++this.historyEpoch;
     this.historyAbort?.abort();
@@ -1335,6 +1333,11 @@ export class MuxSDKChat extends LitElement {
     if (this.draft.trim() || this.attachments.length || this.settingsPending) return;
     try { await this.voice.start(); this.error = ''; }
     catch (error) { this.error = error instanceof Error ? error.message : 'Voice could not start.'; }
+  }
+  private updateVoiceLevels(levels: readonly number[]) {
+    const bars = this.renderRoot.querySelectorAll<HTMLElement>('.send.voice-active .voice-bars i');
+    const resting = [5, 8, 4, 7, 6];
+    bars.forEach((bar, index) => { bar.style.height = `${Math.round(resting[index] + Math.min(1, levels[index] || 0) * 13)}px`; });
   }
   private sendVoiceButton() {
     const bars = html`<span class="voice-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>`;
