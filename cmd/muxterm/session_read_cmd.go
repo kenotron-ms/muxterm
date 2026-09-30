@@ -35,8 +35,9 @@ func runSessionRead(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm session read <session-id> [--last N] [--json]")
 		fmt.Fprintln(os.Stdout, "")
-		fmt.Fprintln(os.Stdout, "Print the last few turns a session exchanged, read from its harness's own")
-		fmt.Fprintln(os.Stdout, "on-disk transcript (amplifier, claude and codex are understood).")
+		fmt.Fprintln(os.Stdout, "Print the last few turns a session exchanged. The first read imports a bounded")
+		fmt.Fprintln(os.Stdout, "tail from the harness transcript into muxterm's durable journal (Amplifier,")
+		fmt.Fprintln(os.Stdout, "Claude and Codex are understood); later detail reads use that journal.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "THIS IS A TAIL. Only the end of the file is read (a bounded window, at most")
 		fmt.Fprintln(os.Stdout, "4 MB however large the file), and each turn's text is clipped to 400")
