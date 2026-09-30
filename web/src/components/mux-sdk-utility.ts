@@ -217,6 +217,11 @@ export class MuxSDKUtility extends LitElement {
   }
   private surfaceCSS = `
     mux-sdk-utility { display:block; min-width:0; height:100%; background:#202632; color:#d9def0; font:13px/1.5 system-ui,sans-serif; }
+    mux-sdk-utility * { scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 34%,transparent) transparent; }
+    mux-sdk-utility *::-webkit-scrollbar { width:6px; height:6px; }
+    mux-sdk-utility *::-webkit-scrollbar-track { background:transparent; }
+    mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 34%,transparent); border-radius:999px; }
+    mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 58%,transparent); }
     mux-sdk-utility .utility-dock { width:100%; height:100%; }
     mux-sdk-utility .dv-dockview { --dv-background-color:#202632; --dv-tabs-and-actions-container-background-color:#252c3a; --dv-activegroup-visiblepanel-tab-background-color:#35445f; --dv-inactivegroup-visiblepanel-tab-background-color:#2b3548; --dv-activegroup-visiblepanel-tab-color:#eef2ff; --dv-inactivegroup-visiblepanel-tab-color:#c1cbdd; --dv-separator-border:1px solid #41485f; }
     mux-sdk-utility .utility-panel { width:100%; height:100%; overflow:auto; }

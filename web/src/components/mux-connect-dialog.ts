@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
@@ -162,6 +163,7 @@ function countLabel(n: number, singular: string): string {
 @customElement('mux-connect-dialog')
 export class MuxConnectDialog extends LitElement {
   static styles = css`
+    ${subtleScrollbars}
     /* Tokens the wireframe assumes. --ink-3 is defined the same way
        mux-home.ts defines it: a mix of the CHROME text tokens, never of the
        terminal palette, so it holds its contrast in every theme. */

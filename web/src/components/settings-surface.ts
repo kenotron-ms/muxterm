@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
@@ -204,6 +205,7 @@ async function remoteErrorText(res: Response): Promise<string> {
 @customElement('mux-settings-surface')
 export class MuxSettingsSurface extends LitElement {
   static styles = css`
+    ${subtleScrollbars}
     :host {
       display: flex;
       flex-direction: column;

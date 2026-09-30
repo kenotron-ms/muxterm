@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 /**
  * mux-home.ts — the home view.
  *
@@ -357,6 +358,7 @@ export class MuxHome extends LitElement {
   private _now = Math.floor(Date.now() / 1000);
 
   static styles = css`
+    ${subtleScrollbars}
     *,
     *::before,
     *::after {

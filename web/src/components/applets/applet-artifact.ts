@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../../lib/subtle-scrollbars.js';
 /**
  * applet-artifact.ts -- the Viewer. One file, shown the way a recipient of a
  * published link would see it.
@@ -189,6 +190,7 @@ export class AppletArtifact extends LitElement implements AppletElement {
   }
 
   static override styles = [
+    subtleScrollbars,
     appletControlStyles,
     css`
       *,

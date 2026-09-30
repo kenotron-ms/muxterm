@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import type {
@@ -21,6 +22,7 @@ const REASON_LABELS: Record<CloseRiskReason, string> = {
 @customElement('close-confirmation-modal')
 export class CloseConfirmationModal extends LitElement {
   static styles = css`
+    ${subtleScrollbars}
     dialog {
       width: min(480px, calc(100vw - 32px));
       max-height: min(80dvh, 640px);

@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 /**
  * mux-pane-picker.ts — the narrow-mode breadcrumb, and the PANE SHEET it opens.
  *
@@ -39,6 +40,7 @@ const CHECK_MARK = '✓';
 @customElement('mux-pane-picker')
 export class MuxPanePicker extends LitElement {
   static styles = css`
+    ${subtleScrollbars}
     :host {
       /* Derived, never invented. --edge is deliberately a heavier mix than
          --chrome-border: the scroll edge has to out-weigh the hairline

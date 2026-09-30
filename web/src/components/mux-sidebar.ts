@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, unsafeCSS, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { store } from '../state.js';
@@ -337,6 +338,7 @@ function hostTypeLabel(host: string): 'Local' | 'SSH' | 'Remote daemon' {
 @customElement('mux-sidebar')
 export class MuxSidebar extends LitElement {
   static styles = css`
+    ${subtleScrollbars}
     :host {
       display: flex;
       flex-direction: column;
@@ -1178,8 +1180,6 @@ export class MuxSidebar extends LitElement {
 
     .tab-content {
       padding: 0 7px 14px;
-      scrollbar-width: thin;
-      scrollbar-color: color-mix(in srgb, var(--chrome-border) 65%, var(--chrome-text-dim)) transparent;
     }
 
     .sb-heading,

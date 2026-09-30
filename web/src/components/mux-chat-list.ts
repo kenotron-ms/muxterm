@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
@@ -45,6 +46,7 @@ export class MuxChatWorkspace extends LitElement {
   reveal() { this.open = true; this.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
 
   static styles = css`
+    ${subtleScrollbars}
     :host { display:block; margin:2px 0; font:12px/1.35 system-ui,sans-serif; color:var(--chrome-text-bright,#d8dce5); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
     .row,.chat-row { display:flex; align-items:center; min-height:30px; border-radius:6px; position:relative; }
@@ -241,6 +243,7 @@ export class MuxChatList extends LitElement {
     if (id) this.selectedSession = id;
   };
   static styles = css`
+    ${subtleScrollbars}
     :host { display:block; color:var(--chrome-text-dim,#9299a5); font:12px/1.35 system-ui,sans-serif; }
     .heading { padding:9px 5px 3px; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
     .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--chrome-border,#3b4355); }

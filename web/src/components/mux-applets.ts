@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 /**
  * mux-applets.ts -- Mission Control's applet HOST.
  *
@@ -246,6 +247,7 @@ export class MuxApplets extends LitElement {
   private _parked = new Map<AppletId, string>();
 
   static styles = css`
+    ${subtleScrollbars}
     *,
     *::before,
     *::after {

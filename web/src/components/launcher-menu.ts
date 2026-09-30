@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
@@ -13,6 +14,7 @@ export type LauncherAction =
 @customElement('mux-launcher-menu')
 export class MuxLauncherMenu extends LitElement {
   static styles = css`
+    ${subtleScrollbars}
     :host {
       --edge: color-mix(in srgb, var(--chrome-border) 40%, var(--chrome-text-dim));
       --row-h: 56px;

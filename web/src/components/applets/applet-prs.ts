@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../../lib/subtle-scrollbars.js';
 /**
  * applet-prs.ts -- the pull requests muxterm's own sessions opened.
  *
@@ -196,6 +197,7 @@ export class AppletPRs extends LitElement implements AppletElement {
   }
 
   static override styles = [
+    subtleScrollbars,
     appletControlStyles,
     css`
     *,
