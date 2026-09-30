@@ -48,6 +48,8 @@ export class MuxSDKChat extends LitElement {
   @state() private agentPanelOpen = false;
   @state() private agentDraft = '';
   @state() private agentNotice = '';
+  @state() private recoveryRequired = false;
+  @state() private recoveryPrepared = false;
   @state() private draft = '';
   @state() private error = '';
   @state() private busy = false;
@@ -140,6 +142,11 @@ export class MuxSDKChat extends LitElement {
     .agent-step { margin:12px 0; padding:10px 12px; border:1px solid #41485f; border-radius:9px; background:#222b3c; }
     .agent-step pre { margin:6px 0 0; max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.5 ui-monospace,monospace; }
     .agent-notice { color:#aabbd6; font-size:12px; }
+    .recovery { max-width:760px; width:calc(100% - 48px); box-sizing:border-box; align-self:center; margin:12px auto 0; padding:12px 14px; border:1px solid #806c4c; border-radius:9px; background:#302b29; color:#e4d6bf; }
+    .recovery strong { display:block; margin-bottom:3px; }
+    .recovery p { margin:0 0 9px; }
+    .recovery button { border:1px solid #a38b65; border-radius:6px; padding:5px 9px; background:#40372f; color:#f0dfc3; }
+    .recovery button:hover { background:#534535; }
     h1 { font-size:14px; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .meta { margin-left:auto; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
     button { font:inherit; cursor:pointer; }
@@ -267,7 +274,10 @@ export class MuxSDKChat extends LitElement {
     window.addEventListener('pagehide', this.persistTranscriptCache);
     this.unsubscribeChats = sdkChats.subscribe(() => {
       const updated = sdkChats.chats.find(chat => chat.id === this.sessionId);
-      if (updated && this.chat?.title !== updated.title) this.chat = this.chat ? { ...this.chat, title: updated.title } : updated;
+      if (updated) {
+        this.chat = updated;
+        this.recoveryRequired = updated.state === 'uncertain';
+      }
       this.requestUpdate();
     });
     this.clock = setInterval(() => { if (this.busy) this.now = Date.now(); }, 1000);
@@ -393,9 +403,11 @@ export class MuxSDKChat extends LitElement {
     this.fillingRecent = false; this.restoringScroll = false; this.historyUserInteracted = false; this.olderTask = undefined;
     this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
     this.selectedAgent = ''; this.agentPanelOpen = false; this.parentScrollTop = 0; this.agentEvents = null;
+    this.recoveryPrepared = false;
     this.error = ''; this.settingsPending = false;
     const cached = readTranscriptCache(this.sessionId);
     this.chat = sdkChats.chats.find(c => c.id === this.sessionId) || cached?.chat;
+    this.recoveryRequired = this.chat?.state === 'uncertain';
     this.busy = this.chat?.state === 'working';
     if (cached?.blocks.length) {
       this.blocks = cached.blocks;
@@ -720,6 +732,8 @@ export class MuxSDKChat extends LitElement {
       if (previous === undefined || eventTime < previous) this.turnStarted.set(turn, eventTime);
     };
     if (event.type === 'input.accepted') {
+      this.recoveryRequired = false;
+      this.recoveryPrepared = false;
       const pendingKey = event.inputId ? this.pendingInputs.get(event.inputId) : undefined;
       if (event.inputId) this.pendingInputs.delete(event.inputId);
       const pendingIndex = pendingKey === undefined ? -1 : blocks.findIndex(block => block.key === pendingKey);
@@ -814,7 +828,7 @@ export class MuxSDKChat extends LitElement {
       if (event.goalState !== 'continuing') blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:`Goal ${event.goalState || 'updated'}: ${event.goalSummary || event.goalReason || ''}` });
     }
     else if (event.type === 'session.renamed') { if (!this.replaying) void sdkChats.refresh(); }
-    else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (!this.replaying) void sdkChats.refresh(); }
+    else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
     this.blocks = blocks;
     if (this.replaying) return;
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
@@ -1197,6 +1211,16 @@ export class MuxSDKChat extends LitElement {
       if (!wasBusy) { this.busy = false; this.turnStarted.delete(this.currentTurn); }
     }
   }
+  private prepareRecovery() {
+    if (this.selectedAgent) this.returnToParent();
+    if (!this.recoveryPrepared) {
+      const lastRequest = [...this.blocks].reverse().find(block => block.kind === 'user' && block.turn === this.currentTurn - 1)?.text.trim();
+      const instruction = 'The previous turn stopped unexpectedly. Inspect the current state and recent work before acting. Continue only what remains from my previous request; verify before repeating any action. Tell me what you recovered.';
+      this.draft = `${instruction}${lastRequest ? `\n\nPrevious request for reference:\n${lastRequest}` : ''}${this.draft.trim() ? `\n\nAdditional note:\n${this.draft.trim()}` : ''}`;
+      this.recoveryPrepared = true;
+    }
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
+  }
   private async stop() {
     if (!this.busy || this.stopping) return;
     this.stopping = true;
@@ -1214,6 +1238,7 @@ export class MuxSDKChat extends LitElement {
     <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${agents.length ? html`<div class="agent-bar"><div class="agent-bar-inner"><button class="agent-toggle" aria-label=${`Agents: ${running} running, ${agents.length - running} finished`} aria-expanded=${this.agentPanelOpen} @click=${() => { this.agentPanelOpen = !this.agentPanelOpen; }}>${running ? html`<span class="running" aria-hidden="true"></span>` : nothing}Agents · ${running ? `${running} running` : `${agents.length} completed`} ${icon(ChevronDown, { size: 14 })}</button>${this.agentPanelOpen ? html`<div class="agent-list" aria-label="Delegated sub-agents">${agents.map(agent => html`<button class="agent-link" @click=${() => this.openAgent(agent.id)}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</div>` : nothing}</div></div>` : nothing}
+      ${this.recoveryRequired ? html`<div class="recovery" role="status"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : html`${this.hasOlder ? html`<button class="history-more" ?disabled=${this.loadingOlder} @click=${() => void this.loadOlder()}>${this.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}</button>` : nothing}${this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry connection</button>` : nothing}</div>` : nothing}
