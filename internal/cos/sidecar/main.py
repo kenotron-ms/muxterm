@@ -2202,6 +2202,45 @@ class QuietDisplay:
     def pop_nesting(self): self.nesting_depth = max(0, self.nesting_depth - 1)
 
 
+def sdk_provider_context(messages, provider):
+    """Keep unsigned reasoning out of Anthropic requests after a provider switch.
+
+    OpenAI thinking blocks in saved Amplifier history have no Anthropic
+    signature. Anthropic interprets them as native thinking blocks and rejects
+    the entire request. Preserve the stored transcript and all text/tool history.
+    """
+    if provider != "provider-anthropic":
+        return messages, 0
+    context = []
+    omitted = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            context.append(message)
+            continue
+        clean = message
+        content = message.get("content")
+        if isinstance(content, list):
+            blocks = [block for block in content if not (
+                isinstance(block, dict) and block.get("type") == "thinking"
+                and not (isinstance(block.get("signature"), str) and block["signature"])
+            )]
+            omitted += len(content) - len(blocks)
+            if len(blocks) != len(content):
+                clean = ({**clean, "content": blocks} if blocks else
+                         {key: value for key, value in clean.items() if key != "content"})
+            if not blocks and not message.get("tool_calls"):
+                continue
+        # The Anthropic provider also reads this older separate thinking field.
+        legacy = message.get("thinking_block")
+        if isinstance(legacy, dict) and legacy.get("type") == "thinking" and not (
+            isinstance(legacy.get("signature"), str) and legacy["signature"]
+        ):
+            clean = {key: value for key, value in clean.items() if key != "thinking_block"}
+            omitted += 1
+        context.append(clean)
+    return context, omitted
+
+
 class SDKChatSession:
     def __init__(self, session_id, cwd, bundle="anchors", provider="", model="", effort=""):
         self.id, self.cwd = session_id, cwd
@@ -2345,6 +2384,9 @@ class SDKChatSession:
             transcript, _ = self.store.load(self.id)
             if not isinstance(transcript, list):
                 raise RuntimeError("stored Amplifier transcript is invalid; refusing replay")
+            transcript, omitted = sdk_provider_context(transcript, self.provider)
+            if omitted:
+                logger.info("SDK chat %s omitted %d unsigned thinking blocks from Anthropic context", self.id, omitted)
         cfg["working_dir"] = self.cwd
         cfg.setdefault("root_session_id", self.id)
         cfg.setdefault("application_host", "muxterm-sdk-chat")
