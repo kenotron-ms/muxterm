@@ -14,7 +14,7 @@ type AgentView = { id: string; parentId: string; name: string; status: string; p
 type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'progress' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[] };
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
-type CachedTranscript = { blocks: Block[] };
+type CachedTranscript = { blocks: Block[]; chat?: SDKChat };
 const transcriptCache = new Map<string, CachedTranscript>();
 const transcriptCacheKey = (id: string) => `muxterm-chat-transcript:${id}`;
 function readTranscriptCache(id: string): CachedTranscript | undefined {
@@ -22,7 +22,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   if (memory) return memory;
   try {
     const parsed = JSON.parse(sessionStorage.getItem(transcriptCacheKey(id)) || 'null') as CachedTranscript | null;
-    if (parsed && Array.isArray(parsed.blocks) && parsed.blocks.every(block =>
+    if (parsed && (!parsed.chat || parsed.chat.id === id) && Array.isArray(parsed.blocks) && parsed.blocks.every(block =>
       (block.kind === 'user' || block.kind === 'assistant') && typeof block.text === 'string' &&
       Number.isSafeInteger(block.turn) && Number.isSafeInteger(block.key))) {
       transcriptCache.set(id, parsed);
@@ -375,9 +375,9 @@ export class MuxSDKChat extends LitElement {
     this.fillingRecent = false; this.restoringScroll = false; this.historyUserInteracted = false; this.olderTask = undefined;
     this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
     this.selectedAgent = ''; this.error = ''; this.settingsPending = false;
-    this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
-    this.busy = this.chat?.state === 'working';
     const cached = readTranscriptCache(this.sessionId);
+    this.chat = sdkChats.chats.find(c => c.id === this.sessionId) || cached?.chat;
+    this.busy = this.chat?.state === 'working';
     if (cached?.blocks.length) {
       this.blocks = cached.blocks;
       this.currentTurn = Math.max(...cached.blocks.map(block => block.turn));
@@ -397,16 +397,17 @@ export class MuxSDKChat extends LitElement {
     const blocks = this.blocks.filter(block => (block.kind === 'user' || block.kind === 'assistant') && !pending.has(block.key))
       .slice(-80).map(block => ({ key:block.key, turn:block.turn, kind:block.kind, text:block.text, done:block.done, attachments:block.attachments }));
     if (!blocks.length) return;
-    let encoded = JSON.stringify({ blocks });
+    const chat = this.chat?.id === this.activeSession ? this.chat : undefined;
+    let encoded = JSON.stringify({ blocks, chat });
     while (encoded.length > 400_000 && blocks.length > 1) {
       blocks.shift();
-      encoded = JSON.stringify({ blocks });
+      encoded = JSON.stringify({ blocks, chat });
     }
     if (encoded.length > 400_000) {
       blocks[0].text = `…${blocks[0].text.slice(-200_000)}`;
-      encoded = JSON.stringify({ blocks });
+      encoded = JSON.stringify({ blocks, chat });
     }
-    const snapshot = { blocks } as CachedTranscript;
+    const snapshot = { blocks, chat } as CachedTranscript;
     transcriptCache.set(this.activeSession, snapshot);
     try { sessionStorage.setItem(transcriptCacheKey(this.activeSession), encoded); } catch { /* storage can be unavailable */ }
   };
