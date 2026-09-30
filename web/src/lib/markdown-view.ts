@@ -8,7 +8,8 @@
  * every piece of model text is an INTERPOLATION, which Lit escapes. Markup in
  * a message is therefore text by construction rather than by an allow-list --
  * there is no innerHTML on this path, no unsafeHTML import, and nothing to
- * misconfigure. Raw HTML tokens are rendered as the characters they are.
+ * misconfigure. Mermaid's generated SVG is displayed as an inert image by the
+ * diagram component. Raw HTML tokens are rendered as the characters they are.
  *
  * The one hole Lit does not close is `href`: Lit does not sanitize attribute
  * values, so `[click](javascript:...)` would arrive intact. isSafeHref() is
@@ -68,6 +69,8 @@ export interface MdLinkPolicy {
   /** Same-origin URL inside the publication, or null to refuse. */
   resolve(raw: string): string | null;
   reference?(href: string, label: string): TemplateResult | null;
+  /** Chat policies opt in; published documents keep Mermaid as code. */
+  diagrams?: boolean;
 }
 
 // marked's token shapes are structurally simple but its exported unions are
@@ -202,6 +205,12 @@ function renderBlockToken(t: AnyToken, streaming: boolean, policy?: MdLinkPolicy
     }
 
     case 'code':
+      if (t.lang?.trim().toLowerCase() === 'mermaid' && (!policy || policy.diagrams)) {
+        return html`<mux-mermaid-diagram
+          .source=${t.text ?? ''}
+          .streaming=${streaming}
+        ></mux-mermaid-diagram>`;
+      }
       // data-streaming marks a fence whose closer has not arrived. It is a
       // real signal (tests assert on it) and a styling hook, not decoration.
       return html`<pre
