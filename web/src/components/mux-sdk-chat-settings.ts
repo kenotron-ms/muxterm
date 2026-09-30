@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
 type Settings = { model: string; effort: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[]; permission: string; mode: string; permissions: string[]; modes: string[] };
@@ -12,21 +13,20 @@ const providerLabel = (value: string) => value === 'provider-anthropic' ? 'Anthr
 export class MuxSDKChatSettings extends LitElement {
   @property() sessionId = '';
   @property() harness = '';
-  @property() projectPath = '';
   @property({ type:Boolean }) turnBusy = false;
   @state() private settings?: Settings;
   @state() private loading = false;
   @state() private error = '';
   private requestVersion = 0;
   static styles = css`
+    ${subtleScrollbars}
     :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:8px; font:12px/1.4 system-ui,sans-serif; }
     .picker { position:relative; min-width:0; }
     .model-picker { margin-left:auto; }
-    summary { display:flex; align-items:center; gap:7px; height:32px; max-width:min(290px,40vw); box-sizing:border-box; padding:0 10px; border:1px solid transparent; border-radius:10px; color:var(--chrome-text-bright,#d9def0); cursor:pointer; list-style:none; white-space:nowrap; }
+    summary { display:flex; align-items:center; height:32px; max-width:min(290px,40vw); box-sizing:border-box; padding:0 10px; border:1px solid transparent; border-radius:10px; color:var(--chrome-text-bright,#d9def0); cursor:pointer; list-style:none; white-space:nowrap; }
     summary::-webkit-details-marker { display:none; }
     summary:hover, summary:focus-visible, details[open] summary { background:rgba(255,255,255,.08); border-color:var(--chrome-border,#41485f); outline:none; }
     .summary-text { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-    .chevron { color:var(--chrome-text-dim,#9aa3b8); font-size:15px; }
     .panel { position:absolute; z-index:30; bottom:40px; width:min(350px,calc(100vw - 44px)); max-height:min(72vh,640px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px rgba(0,0,0,.45); }
     .permission-picker .panel { left:0; }
     .model-picker .panel { right:0; }
@@ -41,7 +41,7 @@ export class MuxSDKChatSettings extends LitElement {
     .hint { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
     .check { color:var(--chrome-accent,#9bb8f7); font-weight:700; }
     .group { margin:2px 4px 8px; }
-    .model-list { max-height:190px; overflow-y:auto; scrollbar-width:thin; }
+    .model-list { max-height:190px; overflow-y:auto; }
     .slider { padding:4px 10px 13px; }
     .slider-header { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
     input[type=range] { width:100%; margin:12px 0 4px; accent-color:var(--chrome-accent,#9bb8f7); cursor:pointer; }
@@ -76,10 +76,6 @@ export class MuxSDKChatSettings extends LitElement {
     } catch (error) { this.error = String(error); }
     finally { this.loading = false; this.pending(false); }
   }
-  private switchHarness(harness: string) {
-    if (this.turnBusy || this.loading) return;
-    this.dispatchEvent(new CustomEvent('chat-switch-harness', { detail:{ harness, projectPath:this.projectPath }, bubbles:true, composed:true }));
-  }
   private choice(name: string, hint: string, selected: boolean, available: boolean, action: () => void) {
     return html`<button class="choice ${selected ? 'selected' : ''}" ?disabled=${!available || this.loading || this.turnBusy} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span><span class="hint">${available ? hint : 'Unavailable for this harness'}</span></span>${selected ? html`<span class="check">✓</span>` : nothing}</button>`;
   }
@@ -93,7 +89,7 @@ export class MuxSDKChatSettings extends LitElement {
     const permission = s.permission || 'full-permission';
     const mode = s.mode || 'agent';
     return html`
-      <details class="picker permission-picker" aria-label="Permission and mode"><summary><span aria-hidden="true">◈</span><span class="summary-text">${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}</span><span class="chevron">⌄</span></summary><div class="panel">
+      <details class="picker permission-picker" aria-label="Permission and mode"><summary><span class="summary-text">${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}</span></summary><div class="panel">
         <div class="heading">Permission</div>
         ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
         <div class="divider"></div><div class="heading">Mode</div>
@@ -102,10 +98,8 @@ export class MuxSDKChatSettings extends LitElement {
         ${this.harness === 'amplifier' ? html`<div class="notice">Amplifier currently exposes its bundle’s tool access only.</div>` : nothing}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></details>
-      <details class="picker model-picker" aria-label="Harness, provider, model and thinking"><summary><span aria-hidden="true">✧</span><span class="summary-text">${model?.label || s.model || this.harness}</span><span class="chevron">⌄</span></summary><div class="panel">
-        <div class="heading">Harness</div>
-        ${(['codex','claude','amplifier'] as const).map(value => this.choice(value[0].toUpperCase() + value.slice(1), value === this.harness ? 'Current conversation' : 'Start a new conversation', this.harness === value, true, () => { if (value !== this.harness) this.switchHarness(value); }))}
-        ${this.harness === 'amplifier' ? html`<div class="divider"></div><div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="divider"></div><div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : 'Anthropic'} · managed by ${this.harness}</div>`}
+      <details class="picker model-picker" aria-label="Provider, model and thinking"><summary><span class="summary-text">${model?.label || s.model || this.harness}</span></summary><div class="panel">
+        ${this.harness === 'amplifier' ? html`<div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : 'Anthropic'} · managed by ${this.harness}</div>`}
         <div class="divider"></div><div class="heading">Model</div>
         <div class="model-list">${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}</div>
         ${efforts.length > 1 ? html`<div class="divider"></div><div class="slider"><div class="slider-header"><span>Thinking</span><span>${efforts[effortIndex]}</span></div><input type="range" aria-label="Thinking effort" min="0" max=${efforts.length - 1} step="1" .value=${String(effortIndex)} ?disabled=${this.loading || this.turnBusy} @change=${(event: Event) => void this.select({ effort:efforts[Number((event.target as HTMLInputElement).value)] })}><div class="slider-ends"><span>${efforts[0]}</span><span>${efforts[efforts.length - 1]}</span></div></div>` : nothing}

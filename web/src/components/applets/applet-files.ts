@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../../lib/subtle-scrollbars.js';
 /**
  * applet-files.ts -- the worktree, as an applet.
  *
@@ -416,6 +417,7 @@ export class AppletFiles extends LitElement implements AppletElement {
   }
 
   static override styles = [
+    subtleScrollbars,
     appletControlStyles,
     css`
     *,

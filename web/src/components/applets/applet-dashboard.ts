@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../../lib/subtle-scrollbars.js';
 /**
  * applet-dashboard.ts -- the fleet, as an applet.
  *
@@ -170,6 +171,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
   private _now = Math.floor(Date.now() / 1000);
 
   static styles = css`
+    ${subtleScrollbars}
     *,
     *::before,
     *::after {

@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 
@@ -24,6 +25,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 @customElement('mux-reconnect-overlay')
 export class MuxReconnectOverlay extends LitElement {
   static styles = css`
+    ${subtleScrollbars}
     .overlay {
       position: fixed;
       inset: 0;

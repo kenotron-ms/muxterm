@@ -1,3 +1,4 @@
+import { subtleScrollbars } from './lib/subtle-scrollbars.js';
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { cache } from 'lit/directives/cache.js';
@@ -188,6 +189,7 @@ export function installKeybindings(actions: UIActions): () => void {
 @customElement('mux-app')
 export class MuxApp extends LitElement {
   static styles = css`
+    ${subtleScrollbars}
     :host {
       --main-header-inline-padding: 24px;
       display: flex;
@@ -1669,7 +1671,7 @@ export class MuxApp extends LitElement {
           )}
           ${this._sdkChatId && !this._showDashboard ? this._sdkChatId === 'new' ? html`
             <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} @chat-created=${this._onChatOpen}></mux-new-chat>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-switch-harness=${this._onChatSwitchHarness}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -2626,15 +2628,6 @@ export class MuxApp extends LitElement {
     this._onDashboardHide();
     this._fleetOpen = false;
     this._closeDrawer();
-  };
-
-  private _onChatSwitchHarness = (e: Event): void => {
-    const detail = (e as CustomEvent<{ harness: 'codex' | 'claude' | 'amplifier'; projectPath: string }>).detail;
-    if (!detail?.harness) return;
-    this._newChatHarness = detail.harness;
-    this._newChatFolder = detail.projectPath;
-    this._sdkChatId = 'new';
-    rememberSelectedChat(null);
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {

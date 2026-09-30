@@ -1,3 +1,4 @@
+import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 /**
  * mux-cos.ts -- Mission Control. ONE surface.
  *
@@ -270,6 +271,7 @@ export class MuxCos extends LitElement {
   private _activeApplet: AppletId | '' = '';
 
   static styles = css`
+    ${subtleScrollbars}
     .operator-reference {
       display: inline-flex;
       max-width: 100%;
