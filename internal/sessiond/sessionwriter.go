@@ -137,3 +137,16 @@ func writeSessionSnapshot(row SessionState, pid int, start uint64, sid int) (str
 	}
 	return path, nil
 }
+
+// RemoveSessionSnapshot deletes a projected session snapshot when its owner
+// withdraws the row while the attributed process is still running.
+func RemoveSessionSnapshot(sessionID string) error {
+	if !ValidSessionID(sessionID) {
+		return fmt.Errorf("invalid session id %q", sessionID)
+	}
+	err := os.Remove(filepath.Join(SessionStateDir(), sessionID+".json"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
