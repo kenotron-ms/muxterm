@@ -92,6 +92,10 @@ export class MuxNewChat extends LitElement {
     .send:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
     .send:disabled { opacity:.4; cursor:default; }
     .error { margin:10px 0; color:#e6a5a5; }
+    .receipt { display:flex; align-items:center; gap:8px; margin:12px 2px 0; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; }
+    .receipt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--chrome-accent,#9bb8f7); animation:receipt-pulse 1.35s ease-in-out infinite; }
+    @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
+    @media (prefers-reduced-motion:reduce) { .receipt::before { animation:none; } }
     .location-note { margin:6px 2px 15px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
     .provider-note { display:flex; flex-direction:column; gap:2px; margin:-6px 0 14px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
     .provider-change { color:var(--chrome-text-bright,#e2e6f1); }
@@ -155,6 +159,7 @@ export class MuxNewChat extends LitElement {
     }
     this.busy = true; this.error = '';
     try {
+      await this.updateComplete;
       let workspaceId: string | undefined;
       if (this.projectId === 'new') {
         if (!this.folder.startsWith('/')) throw new Error('Choose an absolute folder for the new project.');
@@ -191,6 +196,7 @@ export class MuxNewChat extends LitElement {
       ${this.projectId === 'new' ? html`<label>Project name <input aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as HTMLInputElement).value; }}></label>` : nothing}
       ${this.pickerOpen && this.listing ? html`<div class="picker" aria-label="Server folder picker"><div class="picker-head"><button aria-label="Parent folder" @click=${() => void this.browse(this.listing!.parent)}>↑</button><span>${this.listing.path}</span><button @click=${() => { this.pickerOpen = false; }}>Choose this folder</button></div><div class="picker-create"><input aria-label="New folder name" placeholder="New folder name" .value=${this.newFolderName} @input=${(e:Event) => { this.newFolderName = (e.target as HTMLInputElement).value; }}><button @click=${() => { if (!this.newFolderName.trim() || this.newFolderName.includes('/')) return; this.folder = `${this.listing!.path.replace(/\/$/,'')}/${this.newFolderName.trim()}`; this.onFolderChanged(); this.pickerOpen = false; }}>Use new folder</button></div>${this.listing.folders.map(name => html`<button class="folder-entry" @click=${() => void this.browse(`${this.listing!.path.replace(/\/$/,'')}/${name}`)}>▸ ${name}</button>`)}</div>` : nothing}
       <div class="composer"><textarea aria-label="First message" placeholder="Ask anything…" .value=${this.prompt} @input=${(e:Event) => { this.prompt = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><button class="send" aria-label="Send message" ?disabled=${!this.prompt.trim() || this.busy} @click=${() => void this.send()}>↑</button></div>
+      ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
     </div></div>
   `; }
