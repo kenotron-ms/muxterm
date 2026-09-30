@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -123,13 +124,15 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		var header struct {
-			SessionID string    `json:"sessionId"`
-			At        time.Time `json:"at"`
-			Type      string    `json:"type"`
-			Text      string    `json:"text"`
-			Name      string    `json:"name"`
-			ToolID    string    `json:"toolId"`
-			Failed    bool      `json:"failed"`
+			SessionID      string    `json:"sessionId"`
+			At             time.Time `json:"at"`
+			Type           string    `json:"type"`
+			Text           string    `json:"text"`
+			Name           string    `json:"name"`
+			ToolID         string    `json:"toolId"`
+			ChildSessionID string    `json:"childSessionId"`
+			Kind           string    `json:"kind"`
+			Failed         bool      `json:"failed"`
 		}
 		if err := json.Unmarshal(line, &header); err != nil {
 			http.Error(w, "invalid history event", 500)
@@ -146,16 +149,18 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		flushAssistant()
-		if header.Type == "tool.started" || header.Type == "tool.completed" {
+		if header.Type == "tool.started" || header.Type == "tool.completed" || header.Type == "delegate.step" {
 			encoded, _ := json.Marshal(struct {
-				SessionID string    `json:"sessionId"`
-				At        time.Time `json:"at"`
-				Type      string    `json:"type"`
-				Name      string    `json:"name"`
-				ToolID    string    `json:"toolId"`
-				Failed    bool      `json:"failed"`
-				Summary   bool      `json:"summary"`
-			}{header.SessionID, header.At, header.Type, header.Name, header.ToolID, header.Failed, true})
+				SessionID      string    `json:"sessionId"`
+				At             time.Time `json:"at"`
+				Type           string    `json:"type"`
+				Name           string    `json:"name"`
+				ToolID         string    `json:"toolId"`
+				ChildSessionID string    `json:"childSessionId,omitempty"`
+				Kind           string    `json:"kind,omitempty"`
+				Failed         bool      `json:"failed"`
+				Summary        bool      `json:"summary"`
+			}{header.SessionID, header.At, header.Type, header.Name, header.ToolID, header.ChildSessionID, header.Kind, header.Failed, true})
 			events = append(events, encoded)
 		} else {
 			events = append(events, json.RawMessage(line))
@@ -167,11 +172,78 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 
 func sdkMessageHistoryEvent(eventType string) bool {
 	switch eventType {
-	case "input.accepted", "assistant.delta", "tool.started", "tool.completed", "turn.completed", "turn.cancelled", "turn.continued", "error", "session.uncertain", "goal.progress", "session.renamed", "delegate.spawned", "delegate.completed", "delegate.message":
+	case "input.accepted", "assistant.delta", "tool.started", "tool.completed", "turn.completed", "turn.cancelled", "turn.continued", "error", "session.uncertain", "goal.progress", "session.renamed", "delegate.spawned", "delegate.completed", "delegate.message", "delegate.step":
 		return true
 	default:
 		return false
 	}
+}
+
+// The chat opens at its recent tail. This small, separately fetched index keeps
+// older delegated work discoverable without loading every transcript page.
+func (s *Server) handleSDKChatAgents(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	h := s.sdkChats
+	h.mu.Lock()
+	_, exists := h.chats[id]
+	h.mu.Unlock()
+	if !exists {
+		http.NotFound(w, r)
+		return
+	}
+	file, err := os.Open(filepath.Join(h.dir, id+".ndjson"))
+	if errors.Is(err, os.ErrNotExist) {
+		writeSDKJSON(w, http.StatusOK, []sdkEvent{})
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer file.Close()
+	h.mu.Lock()
+	info, err := file.Stat()
+	h.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	reader := bufio.NewReader(io.NewSectionReader(file, 0, info.Size()))
+	candidates := make([]sdkEvent, 0)
+	toolIDs := make(map[string]bool)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > 0 && line[len(line)-1] == '\n' {
+			var event sdkEvent
+			if err := json.Unmarshal(line, &event); err != nil {
+				http.Error(w, "invalid delegation history event", 500)
+				return
+			}
+			if strings.HasPrefix(event.Type, "delegate.") {
+				candidates = append(candidates, event)
+				if event.Type == "delegate.spawned" && event.ToolID != "" {
+					toolIDs[event.ToolID] = true
+				}
+			} else if event.Type == "tool.started" || event.Type == "tool.completed" {
+				candidates = append(candidates, event)
+			}
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				http.Error(w, readErr.Error(), 500)
+				return
+			}
+			break
+		}
+	}
+	// Keep raw child steps so the work view can show commands and output.
+	events := make([]sdkEvent, 0, len(candidates))
+	for _, event := range candidates {
+		if strings.HasPrefix(event.Type, "delegate.") || (toolIDs[event.ToolID] && event.ToolID != "") {
+			events = append(events, event)
+		}
+	}
+	writeSDKJSON(w, http.StatusOK, events)
 }
 
 // sdkStreamLog streams exactly the bytes after cursor. The subscriber is

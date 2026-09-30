@@ -172,6 +172,19 @@ export class CodexStream {
         this.emit(this.session.id, 'delegate.message', { childSessionId: childId, text: p.delta });
       else if (method === 'item/completed' && p.item?.type === 'agentMessage' && p.item.text)
         this.emit(this.session.id, 'delegate.message', { childSessionId: childId, text: p.item.text, complete: true });
+      // Codex reports this item's lifecycle through kind on item/started.
+      else if (method === 'item/started' && p.item?.type === 'subAgentActivity' && p.item.agentThreadId) {
+        if (p.item.kind === 'started') {
+          this.childThreads.set(p.item.agentThreadId, p.item.agentPath || 'Agent');
+          this.emit(this.session.id, 'delegate.spawned', { childSessionId: p.item.agentThreadId,
+            parentSessionId: childId, agent: p.item.agentPath || 'Agent', toolId: p.item.id });
+        } else if (p.item.kind === 'completed') this.emit(this.session.id, 'delegate.completed', {
+          childSessionId: p.item.agentThreadId, parentSessionId: childId,
+          agent: p.item.agentPath || this.childThreads.get(p.item.agentThreadId) || 'Agent', toolId: p.item.id });
+      } else if ((method === 'item/started' || method === 'item/completed') && p.item?.id && !['agentMessage', 'reasoning', 'subAgentActivity'].includes(p.item.type)) {
+        this.emit(this.session.id, 'delegate.step', { childSessionId: childId, toolId: p.item.id,
+          name: p.item.type || 'Work', kind: method === 'item/started' ? 'started' : 'completed', raw: p.item });
+      }
       return;
     }
     if (p.threadId !== this.session.nativeId) return;
