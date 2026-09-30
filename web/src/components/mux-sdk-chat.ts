@@ -103,6 +103,13 @@ export class MuxSDKChat extends LitElement {
   private unsubscribeChats?: () => void;
   private parsers = new Map<number, MarkdownStream>();
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
+  private readonly closeAgentListOnOutsidePointer = (event: PointerEvent) => {
+    if (!this.agentPanelOpen) return;
+    const path = event.composedPath();
+    const list = this.renderRoot.querySelector('.agent-list');
+    const trigger = this.renderRoot.querySelector('.agent-toggle');
+    if (![list, trigger].some(el => el !== null && path.includes(el))) this.agentPanelOpen = false;
+  };
   private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
   private workExpanded = new Set<number>();
   private turnStarted = new Map<number, number>();
@@ -273,6 +280,7 @@ export class MuxSDKChat extends LitElement {
   `;
   override connectedCallback() {
     super.connectedCallback();
+    document.addEventListener('pointerdown', this.closeAgentListOnOutsidePointer);
     window.addEventListener('dragover', this.preventFileNavigation);
     window.addEventListener('drop', this.preventFileNavigation);
     window.addEventListener('drop', this.resetDrop);
@@ -290,6 +298,7 @@ export class MuxSDKChat extends LitElement {
     this.connect();
   }
   override disconnectedCallback() {
+    document.removeEventListener('pointerdown', this.closeAgentListOnOutsidePointer);
     this.persistTranscriptCache();
     window.removeEventListener('pagehide', this.persistTranscriptCache);
     window.removeEventListener('dragover', this.preventFileNavigation);

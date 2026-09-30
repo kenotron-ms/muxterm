@@ -1558,10 +1558,12 @@ export class MuxSidebar extends LitElement {
   /** Touch activation focuses the row before its click; do not treat that as keyboard intent. */
   private _touchFocusGuard = false;
 
-  private _onOutsideClick = (e: MouseEvent): void => {
-    if (this._menuOpen && !e.composedPath().includes(this)) {
-      this._menuOpen = false;
-    }
+  private _onOutsideClick = (e: PointerEvent): void => {
+    if (!this._menuOpen) return;
+    const path = e.composedPath();
+    const menu = this.renderRoot.querySelector('.menu-anchor');
+    const trigger = this.renderRoot.querySelector('.launcher-btn');
+    if (![menu, trigger].some((el) => el !== null && path.includes(el))) this._menuOpen = false;
   };
 
   private _onLauncherAction(e: Event): void {
@@ -1581,7 +1583,7 @@ export class MuxSidebar extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    document.addEventListener('mousedown', this._onOutsideClick);
+    document.addEventListener('pointerdown', this._onOutsideClick);
 
     // Subscribe to store changes and trigger re-render by bumping _version.
     this._unsub = store.subscribe(() => {
@@ -1621,7 +1623,7 @@ export class MuxSidebar extends LitElement {
   }
 
   override disconnectedCallback(): void {
-    document.removeEventListener('mousedown', this._onOutsideClick);
+    document.removeEventListener('pointerdown', this._onOutsideClick);
     super.disconnectedCallback();
     this._unsub?.();
     this._unsub = null;

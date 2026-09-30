@@ -1663,7 +1663,7 @@ export class MuxCos extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    document.addEventListener('mousedown', this._onOutsideClick);
+    document.addEventListener('pointerdown', this._onOutsideClick);
     this._unsubReferences = store.subscribe(() => this.requestUpdate());
     this._unsub = cosStore.subscribe(() => {
       this._syncTicker();
@@ -1707,7 +1707,7 @@ export class MuxCos extends LitElement {
   }
 
   override disconnectedCallback(): void {
-    document.removeEventListener('mousedown', this._onOutsideClick);
+    document.removeEventListener('pointerdown', this._onOutsideClick);
     document.removeEventListener('keydown', this._onDocKey);
     this._unsubReferences?.();
     this._unsubReferences = null;
@@ -2552,39 +2552,18 @@ export class MuxCos extends LitElement {
     this._menuOpen = !this._menuOpen;
   };
 
-  /**
-   * Dismiss the housekeeping menu on a press anywhere outside it.
-   *
-   * <mux-sidebar> installs the same document listener for the same reason. The
-   * PREDICATE differs on purpose: that menu's outside is outside the element,
-   * while this one floats over its own component, so
-   * `!composedPath().includes(this)` would leave it hanging over the fleet,
-   * the transcript and the composer -- everything a user is likely to press
-   * next. What counts as outside here is "not the menu, and not the button
-   * that opened it".
-   *
-   * mousedown rather than click: the toggle stops propagation on the click,
-   * and a press that starts a drag or lands on a scrollbar never produces one.
-   * The dots button is excluded so its own click still closes the menu instead
-   * of re-opening what this had just closed.
-   */
-  private _onOutsideClick = (e: MouseEvent): void => {
+  /** Dismiss each menu when a press lands outside that menu and its trigger. */
+  private _onOutsideClick = (e: PointerEvent): void => {
     if (!this._menuOpen && !this._primaryMenuOpen) return;
     const path = e.composedPath();
     const pressed = (sel: string): boolean => {
       const el = this.renderRoot.querySelector(sel);
       return el !== null && path.includes(el);
     };
-    if (
-      pressed('.menu') ||
-      pressed('.dots') ||
-      pressed('.primary-menu') ||
-      pressed('.primary-control')
-    ) {
-      return;
+    if (this._menuOpen && !pressed('.menu') && !pressed('.dots')) this._menuOpen = false;
+    if (this._primaryMenuOpen && !pressed('.primary-menu') && !pressed('.primary-control')) {
+      this._primaryMenuOpen = false;
     }
-    this._menuOpen = false;
-    this._primaryMenuOpen = false;
   };
 
   private _ask(which: Housekeeping): void {
