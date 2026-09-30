@@ -180,7 +180,7 @@ export class CodexStream {
         } else if (p.item.kind === 'completed') this.emit(this.session.id, 'delegate.completed', {
           childSessionId: p.item.agentThreadId, parentSessionId: childId,
           agent: p.item.agentPath || this.childThreads.get(p.item.agentThreadId) || 'Agent', toolId: p.item.id });
-      } else if ((method === 'item/started' || method === 'item/completed') && p.item?.id && !['agentMessage', 'reasoning'].includes(p.item.type)) {
+      } else if ((method === 'item/started' || method === 'item/completed') && p.item?.id && !['agentMessage', 'reasoning', 'subAgentActivity'].includes(p.item.type)) {
         this.emit(this.session.id, 'delegate.step', { childSessionId: childId, toolId: p.item.id,
           name: p.item.type || 'Work', kind: method === 'item/started' ? 'started' : 'completed', raw: p.item });
       }

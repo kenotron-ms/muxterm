@@ -238,7 +238,7 @@ func (s *Server) handleSDKChatAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	events := make([]sdkEvent, 0, len(candidates))
 	for _, event := range candidates {
-		if strings.HasPrefix(event.Type, "delegate.") || toolIDs[event.ToolID] && event.ToolID != "" {
+		if strings.HasPrefix(event.Type, "delegate.") || (toolIDs[event.ToolID] && event.ToolID != "") {
 			events = append(events, event)
 		}
 	}

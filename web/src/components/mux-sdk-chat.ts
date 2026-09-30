@@ -11,7 +11,7 @@ import './mux-sdk-utility.js';
 type DisplayAttachment = { id: string; name: string; kind: string };
 type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
-type AgentStep = { id: string; name: string; status: string; detail?: unknown; summary?: boolean };
+type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[] };
 type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[] };
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
@@ -993,14 +993,14 @@ export class MuxSDKChat extends LitElement {
       if (event.type === 'delegate.step') {
         const id = event.toolId || `${agent.steps.length}`;
         const step = agent.steps.find(item => item.id === id);
-        if (step) { step.status = event.kind === 'completed' ? 'Completed' : 'Running'; step.detail = event.raw ?? step.detail; step.summary = event.summary && step.detail === undefined; }
-        else agent.steps.push({ id, name:event.name || 'Work', status:event.kind === 'completed' ? 'Completed' : 'Running', detail:event.raw, summary:event.summary });
+        if (step) { step.status = event.kind === 'completed' ? 'Completed' : 'Running'; step.detail = event.raw ?? step.detail; }
+        else agent.steps.push({ id, name:event.name || 'Work', status:event.kind === 'completed' ? 'Completed' : 'Running', detail:event.raw });
       }
     }
     return [...byId.values()];
   }
   private openAgent(id: string) {
-    this.parentScrollTop = this.shadowRoot?.querySelector<HTMLElement>('.body')?.scrollTop || 0;
+    if (!this.selectedAgent) this.parentScrollTop = this.shadowRoot?.querySelector<HTMLElement>('.body')?.scrollTop || 0;
     this.selectedAgent = id;
     this.agentPanelOpen = false;
     this.agentNotice = '';
@@ -1052,7 +1052,7 @@ export class MuxSDKChat extends LitElement {
     return html`<div class="agent-chat">
       <div class="speaker">${agent.name} · ${agent.status}</div>
       ${task && task !== 'undefined' ? html`<div class="instruction">${task}</div>` : nothing}
-      ${agent.steps.length ? html`<div class="speaker">Recorded work</div>${agent.steps.map(step => html`<div class="agent-step"><strong>${step.name} · ${step.status}</strong>${step.detail !== undefined ? html`<pre>${this.agentStepDetail(step)}</pre>` : step.summary ? html`<p>Loading work details…</p>` : nothing}</div>`)}` : html`<div class="agent-step">${this.agentEvents ? 'No individual steps were reported by this harness.' : 'Loading recorded work…'}</div>`}
+      ${agent.steps.length ? html`<div class="speaker">Recorded work</div>${agent.steps.map(step => html`<div class="agent-step"><strong>${step.name} · ${step.status}</strong>${step.detail !== undefined ? html`<pre>${this.agentStepDetail(step)}</pre>` : nothing}</div>`)}` : html`<div class="agent-step">${this.agentEvents ? 'No individual steps were reported by this harness.' : 'Loading recorded work…'}</div>`}
       <div class="speaker">Result</div><div class="reply">${reply || (agent.status === 'Running' || !this.agentEvents || this.busy ? 'Waiting for the delegated agent’s result…' : 'No result text was reported.')}</div>
     </div>`;
   }
