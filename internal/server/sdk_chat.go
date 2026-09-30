@@ -233,6 +233,20 @@ func (h *sdkChatHost) saveProjectsLocked() error {
 	}
 	return os.Rename(tmp, filepath.Join(h.dir, "projects.json"))
 }
+
+// notifyCatalogLocked invalidates every browser's chat list after a persisted
+// catalog change. The existing name-events stream carries these invalidations;
+// its payload is only a hint, and clients fetch the authoritative catalog.
+func (h *sdkChatHost) notifyCatalogLocked(id string) {
+	for ch := range h.nameStreams {
+		select {
+		case ch <- id:
+		default:
+			close(ch)
+			delete(h.nameStreams, ch)
+		}
+	}
+}
 func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	if event.At.IsZero() {
 		event.At = time.Now().UTC()
@@ -291,15 +305,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			delete(h.streams[event.SessionID], ch)
 		}
 	}
-	if event.Type == "session.renamed" {
-		for ch := range h.nameStreams {
-			select {
-			case ch <- event.SessionID:
-			default:
-				close(ch)
-				delete(h.nameStreams, ch)
-			}
-		}
+	switch event.Type {
+	case "session.renamed", "input.accepted", "turn.completed", "turn.cancelled", "error", "session.uncertain", "goal.progress":
+		h.notifyCatalogLocked(event.SessionID)
 	}
 	// Name the opening input as soon as it is accepted, while its turn keeps
 	// running. Revisit the subject after completed human turns 2, 5, 8, ...
@@ -858,6 +866,9 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	h.mu.Lock()
+	h.notifyCatalogLocked(p.ID)
+	h.mu.Unlock()
 	writeSDKJSON(w, 201, p)
 }
 func (s *Server) handleSDKProject(w http.ResponseWriter, r *http.Request) {
@@ -932,6 +943,9 @@ func (s *Server) handleSDKProject(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		h.mu.Lock()
+		h.notifyCatalogLocked(id)
+		h.mu.Unlock()
 		writeSDKJSON(w, 200, updated)
 		return
 	}
@@ -966,6 +980,9 @@ func (s *Server) handleSDKProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	h.mu.Lock()
+	h.notifyCatalogLocked(id)
+	h.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) handleSDKFolders(w http.ResponseWriter, r *http.Request) {
@@ -1166,6 +1183,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	h.mu.Lock()
+	h.notifyCatalogLocked(c.ID)
+	h.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "provider": amplifierProviderModule(c.Harness, c.Provider), "approval": c.Approval}); err != nil {
@@ -1297,14 +1317,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			}
 			updated := *c
 			if err == nil {
-				for ch := range h.nameStreams {
-					select {
-					case ch <- id:
-					default:
-						close(ch)
-						delete(h.nameStreams, ch)
-					}
-				}
+				h.notifyCatalogLocked(id)
 			}
 			h.mu.Unlock()
 			if err != nil {

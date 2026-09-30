@@ -1575,7 +1575,7 @@ export class MuxApp extends LitElement {
             .homeActive="${this._showDashboard}"
             .selectedSDKChat="${selectedSDKChat}"
             .homeKey="${store.config.keys.toggleHome}"
-            .showLauncher="${this._showDashboard}"
+            .showLauncher="${this._showDashboard || !!this._sdkChatId}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @chat-open="${this._onChatOpen}"
             @home-open="${this._onHomeOpen}"
