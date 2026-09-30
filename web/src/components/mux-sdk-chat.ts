@@ -204,7 +204,8 @@ export class MuxSDKChat extends LitElement {
     .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,.2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
     .truncation { padding:6px 10px 0; color:#d7bc8b; font:11px/1.5 ui-monospace,monospace; }
     .error { color:#e6a5a5; }
-    .composer-wrap { padding:0 24px 18px; }
+    /* Match the body's 10px scrollbar gutter after the composer's 15px text inset. */
+    .composer-wrap { padding:0 19px 18px; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 11px; }
     .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
     .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:6px; background:rgba(255,255,255,.05); }
@@ -218,7 +219,8 @@ export class MuxSDKChat extends LitElement {
     .attach-button:hover, .attach-button:focus-visible { background:var(--chrome-bar,#202632); outline:none; }
     .file-input { display:none; }
     .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed #9bb8f7; border-radius:16px; background:rgba(25,35,60,.92); color:#d9e5ff; font-size:22px; pointer-events:none; }
-    .composer { box-sizing:border-box; max-width:760px; margin:auto; border:1px solid var(--chrome-border,#41485f); border-radius:18px; background:var(--chrome-bar,#202632); padding:13px 14px 9px; box-shadow:0 8px 28px rgba(0,0,0,.08); transition:border-color .15s,box-shadow .15s; }
+    /* The border extends 15px beyond each 760px transcript edge so typed text aligns with replies. */
+    .composer { box-sizing:border-box; max-width:790px; margin:auto; border:1px solid var(--chrome-border,#41485f); border-radius:18px; background:var(--chrome-bar,#202632); padding:13px 14px 9px; box-shadow:0 8px 28px rgba(0,0,0,.08); transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 58%,var(--chrome-border,#41485f)); box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent,#9bb8f7) 14%,transparent); }
     .composer-row { display:flex; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
@@ -240,7 +242,7 @@ export class MuxSDKChat extends LitElement {
     .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:rgba(155,184,247,.25); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
-    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 12px 12px; } .drawer { position:absolute; right:0; top:44px; bottom:0; box-shadow:-10px 0 30px #0008; } }
+    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { position:absolute; right:0; top:44px; bottom:0; box-shadow:-10px 0 30px #0008; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
