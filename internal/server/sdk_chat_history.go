@@ -172,7 +172,7 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 
 func sdkMessageHistoryEvent(eventType string) bool {
 	switch eventType {
-	case "input.accepted", "assistant.delta", "tool.started", "tool.completed", "turn.completed", "turn.cancelled", "turn.continued", "error", "session.uncertain", "goal.progress", "session.renamed", "delegate.spawned", "delegate.completed", "delegate.message", "delegate.step":
+	case "input.accepted", "assistant.delta", "voice.input.delta", "voice.output.delta", "task.cancel.requested", "tool.started", "tool.completed", "turn.completed", "turn.cancelled", "turn.continued", "error", "session.uncertain", "goal.progress", "session.renamed", "delegate.spawned", "delegate.completed", "delegate.message", "delegate.step":
 		return true
 	default:
 		return false

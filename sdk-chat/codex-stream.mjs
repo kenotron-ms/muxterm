@@ -145,7 +145,7 @@ export class CodexStream {
       await this.request('turn/interrupt', { threadId: this.session.nativeId, turnId });
       await ended;
       await this.run(input);
-      this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: 'steer', source: input.source, text: input.content });
+      this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: 'steer', source: input.source, text: input.displayContent || input.content });
     } catch (error) {
       this.steeringResolve?.();
       this.steeringResolve = null;

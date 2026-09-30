@@ -53,7 +53,7 @@ async function* claudeInputs(s) {
       if (pending) {
         s.pendingInputs.delete(input.uuid);
         emit(s.id, 'input.accepted', { inputId: input.uuid, kind: pending.input.kind,
-          source: pending.input.source, text: pending.input.content,
+          source: pending.input.source, text: pending.input.displayContent || pending.input.content,
           attachments: (pending.input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
         pending.resolve();
       }
@@ -241,7 +241,7 @@ async function command(cmd) {
         });
       } catch (error) { s.inFlightInputs.delete(input.id); s.steering = false; throw error; }
     }
-    if (s.harness === 'codex' && input.kind !== 'steer') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.content,
+    if (s.harness === 'codex' && input.kind !== 'steer') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.displayContent || input.content,
       attachments: (input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
 
     return { status: 'accepted', inputId: input.id };

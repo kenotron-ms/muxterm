@@ -2556,7 +2556,7 @@ class SDKChatSession:
         from amplifier_module_loop_live.runtime import Input
         kind, source, input_id = value.get("kind"), value.get("source"), value.get("id")
         content = value.get("content", "")
-        display_content = content
+        display_content = value.get("displayContent", content)
         attachments = value.get("attachments") or []
         files = [item for item in attachments if item["kind"] != "image"]
         images = [item for item in attachments if item["kind"] == "image"]
@@ -2577,7 +2577,7 @@ class SDKChatSession:
             raise ValueError("input id and content required")
         if kind == "service" and (not source or source in ("user", "browser", "system", "developer")):
             raise ValueError("service input requires a distinct non-authorizing source")
-        if kind == "steer" and source not in ("user", "browser"):
+        if kind == "steer" and source not in ("user", "browser", "voice"):
             raise ValueError("steer input requires a human source")
         goal = value.get("goal") or ""
         if goal:
