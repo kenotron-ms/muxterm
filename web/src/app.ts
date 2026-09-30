@@ -48,6 +48,19 @@ import { homeSessions } from './lib/home-sessions.js';
 import { cosStore } from './lib/cos-store.js';
 import { sdkChats } from './lib/sdk-chats.js';
 import { remotesStore } from './lib/remotes-store.js';
+const selectedChatStorageKey = 'muxterm:selected-sdk-chat';
+function rememberSelectedChat(id: string | null): void {
+  try {
+    if (id) sessionStorage.setItem(selectedChatStorageKey, id);
+    else sessionStorage.removeItem(selectedChatStorageKey);
+  } catch { /* storage can be unavailable */ }
+}
+function restoreSelectedChat(): string | null {
+  try {
+    const id = sessionStorage.getItem(selectedChatStorageKey);
+    return id && id.length < 128 ? id : null;
+  } catch { return null; }
+}
 import type { SessionState } from './lib/session-state.js';
 
 
@@ -2407,6 +2420,12 @@ export class MuxApp extends LitElement {
   private _applyBootSurface(): void {
     if (this._bootSurfaceApplied) return;
     this._bootSurfaceApplied = true;
+    const selectedChat = restoreSelectedChat();
+    if (selectedChat) {
+      this._sdkChatId = selectedChat;
+      (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = selectedChat;
+      return;
+    }
     if (!customElements.get('mux-cos')) return;
     this._showDashboard = true;
     // Subscribe once because the single conversation is the visible boot
@@ -2422,6 +2441,7 @@ export class MuxApp extends LitElement {
    */
   private _onDashboardShow = (): void => {
     this._showDashboard = true;
+    rememberSelectedChat(null);
     // On a phone the Dashboard card IS the drawer's top row, so the Dashboard
     // would open underneath the drawer that asked for it.
     this._closeDrawer();
@@ -2435,6 +2455,7 @@ export class MuxApp extends LitElement {
   private _onDashboardHide = (): void => {
     if (!this._showDashboard) return;
     this._showDashboard = false;
+    if (this._sdkChatId && this._sdkChatId !== 'new') rememberSelectedChat(this._sdkChatId);
     // A sheet is scoped to the surface that owns it. Leaving _fleetOpen true
     // here would put the title bar's button in an expanded state for a
     // popover the browser closed when its host left the DOM.
@@ -2540,6 +2561,7 @@ export class MuxApp extends LitElement {
     this._newChatFolder = '';
     this._newChatProject = '';
     this._sdkChatId = 'new';
+    rememberSelectedChat(null);
     this._onDashboardHide();
     this._fleetOpen = false;
     this._closeDrawer();
@@ -2573,6 +2595,7 @@ export class MuxApp extends LitElement {
     const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
     if (!d) return;
     this._sdkChatId = null;
+    rememberSelectedChat(null);
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = '';
     // "Go to that pane" cannot mean anything while an opaque overlay is still
     // covering the dock the pane lives in. The door closes; the dock, which
@@ -2598,6 +2621,7 @@ export class MuxApp extends LitElement {
     const detail = (e as CustomEvent<{ sessionId: string }>).detail;
     if (!detail?.sessionId) return;
     this._sdkChatId = detail.sessionId;
+    rememberSelectedChat(detail.sessionId);
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
     this._onDashboardHide();
     this._fleetOpen = false;
@@ -2609,6 +2633,7 @@ export class MuxApp extends LitElement {
     this._newChatHarness = detail.harness;
     this._newChatFolder = detail.projectPath;
     this._sdkChatId = 'new';
+    rememberSelectedChat(null);
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
@@ -2617,6 +2642,7 @@ export class MuxApp extends LitElement {
     // or the click would land on a workspace nobody can see.
     this._onDashboardHide();
     this._sdkChatId = null;
+    rememberSelectedChat(null);
     this._closeDrawer();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive

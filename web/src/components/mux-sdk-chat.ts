@@ -14,6 +14,23 @@ type AgentView = { id: string; parentId: string; name: string; status: string; p
 type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'progress' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[] };
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
+type CachedTranscript = { blocks: Block[]; chat?: SDKChat };
+const transcriptCache = new Map<string, CachedTranscript>();
+const transcriptCacheKey = (id: string) => `muxterm-chat-transcript:${id}`;
+function readTranscriptCache(id: string): CachedTranscript | undefined {
+  const memory = transcriptCache.get(id);
+  if (memory) return memory;
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(transcriptCacheKey(id)) || 'null') as CachedTranscript | null;
+    if (parsed && (!parsed.chat || parsed.chat.id === id) && Array.isArray(parsed.blocks) && parsed.blocks.every(block =>
+      (block.kind === 'user' || block.kind === 'assistant') && typeof block.text === 'string' &&
+      Number.isSafeInteger(block.turn) && Number.isSafeInteger(block.key))) {
+      transcriptCache.set(id, parsed);
+      return parsed;
+    }
+  } catch { /* storage can be unavailable */ }
+  return undefined;
+}
 import { icon } from '../lib/icons.js';
 import { Brain, Check, ChevronDown, CircleX, Terminal, LoaderCircle } from 'lucide';
 
@@ -39,6 +56,12 @@ export class MuxSDKChat extends LitElement {
   @state() private settingsPending = false;
   private dragDepth = 0;
   private stream?: EventSource;
+  private reconnectTimer?: number;
+  private cacheTimer?: number;
+  private streamCursor = 0;
+  private reconnectFailures = 0;
+  private streamOpenedAt = 0;
+  @state() private reconnectFailed = false;
   private historyAbort?: AbortController;
   private historyEpoch = 0;
   private activeSession = '';
@@ -223,6 +246,7 @@ export class MuxSDKChat extends LitElement {
     window.addEventListener('drop', this.preventFileNavigation);
     window.addEventListener('drop', this.resetDrop);
     window.addEventListener('dragend', this.resetDrop);
+    window.addEventListener('pagehide', this.persistTranscriptCache);
     this.unsubscribeChats = sdkChats.subscribe(() => {
       const updated = sdkChats.chats.find(chat => chat.id === this.sessionId);
       if (updated && this.chat?.title !== updated.title) this.chat = this.chat ? { ...this.chat, title: updated.title } : updated;
@@ -232,6 +256,8 @@ export class MuxSDKChat extends LitElement {
     this.connect();
   }
   override disconnectedCallback() {
+    this.persistTranscriptCache();
+    window.removeEventListener('pagehide', this.persistTranscriptCache);
     window.removeEventListener('dragover', this.preventFileNavigation);
     window.removeEventListener('drop', this.preventFileNavigation);
     window.removeEventListener('drop', this.resetDrop);
@@ -241,6 +267,8 @@ export class MuxSDKChat extends LitElement {
     this.historyEpoch++;
     this.historyAbort?.abort();
     this.stream?.close();
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.cacheTimer) clearTimeout(this.cacheTimer);
     this.rowObserver.disconnect();
     this.activeSession = '';
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
@@ -332,19 +360,60 @@ export class MuxSDKChat extends LitElement {
   }
   private connect() {
     if (!this.isConnected || !this.sessionId || this.activeSession === this.sessionId) return;
+    this.persistTranscriptCache();
     this.activeSession = this.sessionId;
     const epoch = ++this.historyEpoch;
     this.historyAbort?.abort();
     this.historyAbort = new AbortController();
     this.stream?.close(); this.stream = undefined;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.cacheTimer) clearTimeout(this.cacheTimer);
+    this.reconnectTimer = undefined; this.cacheTimer = undefined;
+    this.streamCursor = 0; this.reconnectFailures = 0; this.reconnectFailed = false;
     this.resetTranscript();
     this.loadedEvents = []; this.liveEvents = []; this.historyFrom = 0; this.historyTo = 0; this.hasOlder = false; this.loadingOlder = false; this.loadingDetails = false; this.detailsLoaded = false;
     this.fillingRecent = false; this.restoringScroll = false; this.historyUserInteracted = false; this.olderTask = undefined;
     this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
     this.selectedAgent = ''; this.error = ''; this.settingsPending = false;
-    this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
+    const cached = readTranscriptCache(this.sessionId);
+    this.chat = sdkChats.chats.find(c => c.id === this.sessionId) || cached?.chat;
     this.busy = this.chat?.state === 'working';
+    if (cached?.blocks.length) {
+      this.blocks = cached.blocks;
+      this.currentTurn = Math.max(...cached.blocks.map(block => block.turn));
+      this.nextBlockKey = Math.max(...cached.blocks.map(block => block.key));
+      this.visibleEnd = this.transcriptRows().length;
+      void this.updateComplete.then(() => {
+        if (epoch !== this.historyEpoch || this.historyUserInteracted) return;
+        const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+        if (body) body.scrollTop = body.scrollHeight;
+      });
+    }
     void this.loadRecent(this.sessionId, epoch, this.historyAbort.signal);
+  }
+  private persistTranscriptCache = () => {
+    if (!this.activeSession) return;
+    const pending = new Set(this.pendingInputs.values());
+    const blocks = this.blocks.filter(block => (block.kind === 'user' || block.kind === 'assistant') && !pending.has(block.key))
+      .slice(-80).map(block => ({ key:block.key, turn:block.turn, kind:block.kind, text:block.text, done:block.done, attachments:block.attachments }));
+    if (!blocks.length) return;
+    const chat = this.chat?.id === this.activeSession ? this.chat : undefined;
+    let encoded = JSON.stringify({ blocks, chat });
+    while (encoded.length > 400_000 && blocks.length > 1) {
+      blocks.shift();
+      encoded = JSON.stringify({ blocks, chat });
+    }
+    if (encoded.length > 400_000) {
+      blocks[0].text = `…${blocks[0].text.slice(-200_000)}`;
+      encoded = JSON.stringify({ blocks, chat });
+    }
+    const snapshot = { blocks, chat } as CachedTranscript;
+    transcriptCache.set(this.activeSession, snapshot);
+    try { sessionStorage.setItem(transcriptCacheKey(this.activeSession), encoded); } catch { /* storage can be unavailable */ }
+  };
+  private queueTranscriptCache() {
+    if (this.cacheTimer) return;
+    this.cacheTimer = window.setTimeout(() => { this.cacheTimer = undefined; this.persistTranscriptCache(); }, 150);
   }
   private resetTranscript() {
     this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear();
@@ -353,13 +422,33 @@ export class MuxSDKChat extends LitElement {
   }
   private async loadRecent(id: string, epoch: number, signal: AbortSignal) {
     try {
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?view=messages`), { signal });
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?view=messages`), { signal, cache:'no-store' });
       if (!response.ok) throw new Error(`History request failed (${response.status})`);
       const page = await response.json() as HistoryPage;
       if (epoch !== this.historyEpoch) return;
-      this.historyFrom = page.from; this.historyTo = page.to; this.hasOlder = page.hasMore;
-      this.loadedEvents = page.events;
+      let from = page.from, hasMore = page.hasMore;
+      let events = page.events;
+      // Keep the cached transcript visible while sparse recent pages fill in.
+      const cachedTurns = new Set(this.blocks.filter(block => block.kind === 'user').map(block => block.turn)).size;
+      const targetTurns = Math.min(4, cachedTurns);
+      const userTurns = () => events.filter(event => event.type === 'input.accepted' && event.kind !== 'steer').length;
+      while (hasMore && userTurns() < targetTurns) {
+        const olderResponse = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${from}&view=messages`), { signal, cache:'no-store' });
+        if (!olderResponse.ok) throw new Error(`History request failed (${olderResponse.status})`);
+        const older = await olderResponse.json() as HistoryPage;
+        if (epoch !== this.historyEpoch) return;
+        if (older.from >= from) throw new Error('History pages did not advance.');
+        from = older.from; hasMore = older.hasMore; events = [...older.events, ...events];
+      }
+      if (cachedTurns && !events.some(event => event.type === 'input.accepted' || event.type === 'assistant.delta')) {
+        throw new Error('The history response contained no displayable messages.');
+      }
+      this.historyFrom = from; this.historyTo = page.to; this.hasOlder = hasMore;
+      this.loadedEvents = events; this.liveEvents = [];
+      this.streamCursor = page.to;
+      this.reconnectFailures = 0; this.reconnectFailed = false; this.error = '';
       this.replayEvents();
+      this.queueTranscriptCache();
       this.busy = this.chat?.state === 'working';
       const rows = this.transcriptRows();
       this.visibleStart = rows.length <= 80 ? 0 : Math.max(0, rows.length - 35); this.visibleEnd = rows.length;
@@ -367,19 +456,65 @@ export class MuxSDKChat extends LitElement {
       if (epoch !== this.historyEpoch) return;
       const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
       if (body && !this.historyUserInteracted) body.scrollTop = body.scrollHeight;
-      // Events written after the page's byte offset are replayed before live
-      // delivery. This also covers the gap while this request was in flight.
-      const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/events?after=${page.to}`));
-      source.addEventListener('snapshot', e => { if (epoch !== this.historyEpoch) return; this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; this.busy = this.chat.state === 'working'; });
-      source.addEventListener('sdk', e => { if (epoch !== this.historyEpoch) return; this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent); });
-      source.onerror = () => { if (epoch === this.historyEpoch) this.error = 'Connection to the chat stream was interrupted.'; };
-      if (epoch !== this.historyEpoch) source.close(); else {
-        this.stream = source;
-        void this.fillRecentHistory(epoch);
-      }
-    } catch (error) {
-      if (epoch === this.historyEpoch && !signal.aborted) this.error = String(error);
+      // The byte offset precedes any events written during the history fetch.
+      this.openStream(id, epoch);
+      void this.fillRecentHistory(epoch);
+    } catch {
+      if (epoch === this.historyEpoch && !signal.aborted) this.scheduleReconnect(epoch, () => void this.loadRecent(id, epoch, signal));
     }
+  }
+  private openStream(id: string, epoch: number) {
+    if (epoch !== this.historyEpoch) return;
+    const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/events?after=${this.streamCursor}`));
+    this.stream = source;
+    this.streamOpenedAt = Date.now();
+    source.onopen = () => { if (this.stream === source) this.streamOpenedAt = Date.now(); };
+    source.addEventListener('snapshot', e => {
+      if (epoch !== this.historyEpoch || this.stream !== source) return;
+      try { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; }
+      catch { this.failStream(source, id, epoch); return; }
+      this.busy = this.chat.state === 'working';
+    });
+    source.addEventListener('sdk', e => {
+      if (epoch !== this.historyEpoch || this.stream !== source) return;
+      const message = e as MessageEvent;
+      const cursor = Number(message.lastEventId);
+      if (!Number.isSafeInteger(cursor) || cursor <= 0) { this.failStream(source, id, epoch); return; }
+      if (cursor <= this.streamCursor) return;
+      try { this.onEvent(JSON.parse(message.data) as SDKEvent); }
+      catch { this.failStream(source, id, epoch); return; }
+      this.streamCursor = cursor;
+      this.reconnectFailures = 0;
+      this.queueTranscriptCache();
+    });
+    source.onerror = () => this.failStream(source, id, epoch);
+  }
+  private failStream(source: EventSource, id: string, epoch: number) {
+    if (epoch !== this.historyEpoch || this.stream !== source) return;
+    source.close(); this.stream = undefined;
+    if (Date.now() - this.streamOpenedAt > 10_000) this.reconnectFailures = 0;
+    this.scheduleReconnect(epoch, () => this.openStream(id, epoch));
+  }
+  private scheduleReconnect(epoch: number, retry: () => void) {
+    if (epoch !== this.historyEpoch) return;
+    this.reconnectFailures++;
+    if (this.reconnectFailures >= 7) {
+      this.reconnectFailed = true;
+      this.error = 'Unable to reconnect to this chat. Check your connection, then retry.';
+      return;
+    }
+    const delay = Math.min(8_000, 500 * 2 ** (this.reconnectFailures - 1));
+    this.reconnectTimer = window.setTimeout(() => { this.reconnectTimer = undefined; retry(); }, delay);
+  }
+  private retryConnection() {
+    this.historyEpoch++;
+    this.historyAbort?.abort();
+    this.stream?.close(); this.stream = undefined;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined; this.reconnectFailures = 0; this.reconnectFailed = false; this.error = '';
+    this.historyAbort = new AbortController();
+    this.hasOlder = false; this.fillingRecent = false; this.loadingOlder = false; this.loadingDetails = false; this.restoringScroll = false; this.olderTask = undefined;
+    void this.loadRecent(this.sessionId, this.historyEpoch, this.historyAbort.signal);
   }
   private replayEvents() {
     const busy = this.busy;
@@ -946,7 +1081,7 @@ export class MuxSDKChat extends LitElement {
     <div class="topbar">${this.selectedAgent ? html`<nav class="breadcrumbs" aria-label="Agent lineage"><button @click=${() => { this.selectedAgent=''; this.agentNotice=''; }}>${this.chat?.title || 'Root session'}</button><span>›</span><strong>${this.agents().find(agent => agent.id === this.selectedAgent)?.name || 'Agent'}</strong></nav>` : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? (() => { const agent=this.agents().find(item => item.id === this.selectedAgent); return agent ? html`<div class="agent-chat"><div class="speaker">${agent.name} · ${agent.status}</div>${agent.legs.map(leg => html`<div class="instruction">${leg.task}</div><div class="reply">${leg.reply || agent.progress || 'The delegated agent is working. Its result returns through the root session.'}</div>`)}${!agent.legs.length ? html`<div class="reply">${agent.progress || 'The native harness reported this agent. Its result returns through the root session.'}</div>` : nothing}</div>` : html`<div class="block">Agent unavailable in this session.</div>`; })() : html`${this.agents().length ? html`<section class="agent-list" aria-label="Delegated sub-agents"><h2>Delegated sub-agents</h2>${this.agents().map(agent => html`<button class="agent-link" @click=${() => { this.selectedAgent=agent.id; this.agentNotice=''; }}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</section>` : nothing}${this.hasOlder ? html`<button class="history-more" ?disabled=${this.loadingOlder} @click=${() => void this.loadOlder()}>${this.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}</button>` : nothing}${this.blocks.length ? this.transcript() : html`<div class="block">Loading recent messages…</div>`}`}
-      ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
+      ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry connection</button>` : nothing}</div>` : nothing}
     </div><div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${(e: InputEvent) => { this.agentDraft=(e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraft.trim()}>Send to root ↗</button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
