@@ -204,9 +204,6 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 	return sb, nil
 }
 
-// CallID is the realtime call this sideband is attached to.
-func (s *Sideband) CallID() string { return s.callID }
-
 // Close tears the sideband down. Idempotent.
 func (s *Sideband) Close() {
 	s.mu.Lock()
@@ -746,15 +743,6 @@ func (s *Sideband) inject(text, instructions string) {
 		},
 	})
 	s.requestResponse(instructions)
-}
-
-// Notify is the server's way in: it makes the voice session say something
-// that originated outside the conversation entirely.
-func (s *Sideband) Notify(text, instructions string) {
-	if s.isClosed() {
-		return
-	}
-	s.inject(text, instructions)
 }
 
 func (s *Sideband) send(msg map[string]any) {

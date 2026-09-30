@@ -258,27 +258,6 @@ func (s *attentionStore) Append(r AttentionRecord) AttentionRecord {
 	return r
 }
 
-// Unresolved returns every record whose condition still stands, oldest first.
-// This is what the notice pump reads.
-func (s *attentionStore) Unresolved() []AttentionRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]AttentionRecord, 0, len(s.records))
-	for _, r := range s.records {
-		if !r.Resolved {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-// All returns every record, oldest first.
-func (s *attentionStore) All() []AttentionRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]AttentionRecord(nil), s.records...)
-}
-
 // ResolveBlocked marks this session's outstanding `blocked` records as no
 // longer standing, and reports whether anything changed.
 //

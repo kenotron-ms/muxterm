@@ -82,10 +82,3 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(persisted) //nolint:errcheck
 }
-
-// GetCurrentConfig returns a copy of the server's current resolved config.
-func (s *Server) GetCurrentConfig() muxcfg.Config {
-	s.cfgMu.RLock()
-	defer s.cfgMu.RUnlock()
-	return s.cfg
-}

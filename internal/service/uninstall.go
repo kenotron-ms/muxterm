@@ -39,17 +39,3 @@ func uninstallDarwin(plistPath string, cmd Commander) error {
 	}
 	return nil
 }
-
-func IsInstalled() bool {
-	var path string
-	switch DetectPlatform() {
-	case "linux":
-		path = SystemdUnitPath()
-	case "darwin":
-		path = LaunchdPlistPath()
-	default:
-		return false
-	}
-	_, err := os.Stat(path)
-	return err == nil
-}
