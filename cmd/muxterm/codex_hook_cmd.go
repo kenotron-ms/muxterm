@@ -140,15 +140,17 @@ func codexReport(p codexHookPayload, raw []byte) (sessiond.HookReport, error) {
 		if len(input.Plan) > 0 {
 			todo := &sessiond.TodoProgress{Total: len(input.Plan)}
 			for _, item := range input.Plan {
+				text := firstCodexLine(item.Step, 240)
 				switch item.Status {
 				case "completed":
 					todo.Done++
 				case "in_progress":
-					todo.Current = firstCodexLine(item.Step, 240)
+					todo.Current = text
 				case "pending":
 				default:
 					return sessiond.HookReport{}, fmt.Errorf("unknown Codex plan status %q", item.Status)
 				}
+				todo.Items = append(todo.Items, sessiond.TodoItem{Text: text, Status: item.Status})
 			}
 			patch.Todo = todo
 			if todo.Current != "" {

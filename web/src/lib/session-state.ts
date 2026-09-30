@@ -88,12 +88,13 @@ export function isKnownHarness(h: string | undefined): h is KnownHarness {
  * distinguish "thinking" from "waiting for you", which is why this declared
  * channel exists.
  */
-/**
- * A session's progress through its own declared task list.
- *
- * Counts, not the items: a card needs a fraction and one line, and shipping
- * every lane's whole plan to render "3/10" would be paid for on every change.
- */
+/** One item in a session's declared plan. */
+export interface TodoItem {
+  text: string;
+  status: 'completed' | 'in_progress' | 'pending';
+}
+
+/** A session's progress through its own declared task list. */
 export interface TodoProgress {
   /** Completed items. */
   done: number;
@@ -105,6 +106,8 @@ export interface TodoProgress {
    * all-complete list, not a gap to paper over.
    */
   current?: string;
+  /** Complete declared list. Absent only on snapshots from older producers. */
+  items?: TodoItem[];
 }
 
 export interface SessionState {

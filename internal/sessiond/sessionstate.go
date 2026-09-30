@@ -114,12 +114,16 @@ func ValidWaitingFor(w string) bool {
 	return false
 }
 
-// TodoProgress is a session's progress through its own declared task list.
-//
-// Counts, not the list. The card needs a fraction and one line of text, and
-// carrying fifty items to render "3/10" would put the whole plan of every lane
-// on the wire on every change for nothing. A consumer wanting the items reads
-// the session's own transcript.
+// TodoItem is one task exactly as its producer declared it.
+type TodoItem struct {
+	Text   string `json:"text"`
+	Status string `json:"status"`
+}
+
+// TodoProgress is a session's progress through its own declared task list. It
+// carries both summary numbers and the complete declared list.
+// Items are optional for compatibility with snapshots written before the full
+// list joined the protocol.
 type TodoProgress struct {
 	// Done is how many items are completed; Total is how many exist. Rendered
 	// as "3/10". Total is never 0 in a published record -- a producer that
@@ -131,7 +135,8 @@ type TodoProgress struct {
 	// form ("Cutting the release"). Empty when nothing is in progress, which
 	// is a real state: a list that is all-pending or all-complete has an
 	// honest fraction and no current item.
-	Current string `json:"current,omitempty"`
+	Current string     `json:"current,omitempty"`
+	Items   []TodoItem `json:"items,omitempty"`
 }
 
 // SessionState is one row of the home view: everything known about a single
