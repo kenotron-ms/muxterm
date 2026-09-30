@@ -8,10 +8,10 @@ import './mux-sdk-chat-settings.js';
 import './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
-type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
+type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[] };
-type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'progress' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
+type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'progress' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[] };
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
 import { icon } from '../lib/icons.js';
@@ -43,10 +43,18 @@ export class MuxSDKChat extends LitElement {
   private historyEpoch = 0;
   private activeSession = '';
   private historyFrom = 0;
+  private historyTo = 0;
   @state() private hasOlder = false;
   @state() private loadingOlder = false;
+  @state() private loadingDetails = false;
   private loadedEvents: SDKEvent[] = [];
+  private liveEvents: SDKEvent[] = [];
+  private detailsLoaded = false;
   private replaying = false;
+  private fillingRecent = false;
+  private restoringScroll = false;
+  private historyUserInteracted = false;
+  private olderTask?: Promise<boolean>;
   private rowHeights = new Map<string, number>();
   private rowsCache?: { blocks: Block[]; rows: TranscriptRow[] };
   @state() private visibleStart = 0;
@@ -97,7 +105,9 @@ export class MuxSDKChat extends LitElement {
     .drawer-toggle { border:0; background:transparent; color:#9cbaf5; padding:7px; }
     .layout { display:flex; flex:1; min-height:0; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
-    .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable; }
+    .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable; overflow-anchor:none; }
+    .history-more { align-self:center; flex:none; margin:0 0 24px; padding:7px 14px; border:1px solid var(--chrome-border,#41485f); border-radius:7px; background:var(--chrome-bar,#202632); color:var(--chrome-text-dim,#b2bdd3); }
+    .history-more:disabled { opacity:.65; cursor:default; }
     .virtual-spacer { width:1px; flex:none; pointer-events:none; }
     .block { max-width:760px; width:100%; align-self:center; margin-bottom:28px; box-sizing:border-box; }
     .block.work { margin-top:-12px; margin-bottom:20px; }
@@ -328,7 +338,8 @@ export class MuxSDKChat extends LitElement {
     this.historyAbort = new AbortController();
     this.stream?.close(); this.stream = undefined;
     this.resetTranscript();
-    this.loadedEvents = []; this.historyFrom = 0; this.hasOlder = false; this.loadingOlder = false;
+    this.loadedEvents = []; this.liveEvents = []; this.historyFrom = 0; this.historyTo = 0; this.hasOlder = false; this.loadingOlder = false; this.loadingDetails = false; this.detailsLoaded = false;
+    this.fillingRecent = false; this.restoringScroll = false; this.historyUserInteracted = false; this.olderTask = undefined;
     this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
     this.selectedAgent = ''; this.error = ''; this.settingsPending = false;
     this.chat = sdkChats.chats.find(c => c.id === this.sessionId);
@@ -342,27 +353,30 @@ export class MuxSDKChat extends LitElement {
   }
   private async loadRecent(id: string, epoch: number, signal: AbortSignal) {
     try {
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history`), { signal });
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?view=messages`), { signal });
       if (!response.ok) throw new Error(`History request failed (${response.status})`);
       const page = await response.json() as HistoryPage;
       if (epoch !== this.historyEpoch) return;
-      this.historyFrom = page.from; this.hasOlder = page.hasMore;
+      this.historyFrom = page.from; this.historyTo = page.to; this.hasOlder = page.hasMore;
       this.loadedEvents = page.events;
       this.replayEvents();
       this.busy = this.chat?.state === 'working';
       const rows = this.transcriptRows();
-      this.visibleStart = Math.max(0, rows.length - 35); this.visibleEnd = rows.length;
+      this.visibleStart = rows.length <= 80 ? 0 : Math.max(0, rows.length - 35); this.visibleEnd = rows.length;
       await this.updateComplete;
       if (epoch !== this.historyEpoch) return;
       const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
-      if (body) body.scrollTop = body.scrollHeight;
+      if (body && !this.historyUserInteracted) body.scrollTop = body.scrollHeight;
       // Events written after the page's byte offset are replayed before live
       // delivery. This also covers the gap while this request was in flight.
       const source = new EventSource(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/events?after=${page.to}`));
       source.addEventListener('snapshot', e => { if (epoch !== this.historyEpoch) return; this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; this.busy = this.chat.state === 'working'; });
       source.addEventListener('sdk', e => { if (epoch !== this.historyEpoch) return; this.onEvent(JSON.parse((e as MessageEvent).data) as SDKEvent); });
       source.onerror = () => { if (epoch === this.historyEpoch) this.error = 'Connection to the chat stream was interrupted.'; };
-      if (epoch !== this.historyEpoch) source.close(); else this.stream = source;
+      if (epoch !== this.historyEpoch) source.close(); else {
+        this.stream = source;
+        void this.fillRecentHistory(epoch);
+      }
     } catch (error) {
       if (epoch === this.historyEpoch && !signal.aborted) this.error = String(error);
     }
@@ -375,42 +389,156 @@ export class MuxSDKChat extends LitElement {
     this.replaying = false;
     this.busy = busy;
   }
-  private async loadOlder() {
-    if (!this.hasOlder || this.loadingOlder || !this.activeSession) return;
+  private async fillRecentHistory(epoch: number) {
+    if (this.fillingRecent) return;
+    this.fillingRecent = true;
+    try {
+      // A page is bounded by events, not turns. A long streaming answer can
+      // consume the whole page and leave no scrollbar to reveal older turns.
+      for (let pages = 0; pages < 32 && epoch === this.historyEpoch && this.hasOlder; pages++) {
+        const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+        if (!body) break;
+        const turns = new Set(this.blocks.filter(block => block.kind === 'user').map(block => block.turn)).size;
+        if (turns >= 4 && body.scrollHeight > body.clientHeight + 160) break;
+        if (!await this.loadOlder()) break;
+        // Let the browser paint each page before reading another one.
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      }
+    } finally {
+      if (epoch === this.historyEpoch) {
+        this.fillingRecent = false;
+        // ResizeObserver replaces row estimates after the first paint. Keep
+        // the newest answer in view until those measurements have settled.
+        for (let frame = 0; frame < 3; frame++) {
+          await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+          await this.updateComplete;
+          if (epoch !== this.historyEpoch || this.historyUserInteracted) break;
+          const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+          if (body) body.scrollTop = body.scrollHeight;
+        }
+      }
+    }
+  }
+  private scrollAnchor(body: HTMLElement) {
+    const { top, bottom: viewportBottom } = body.getBoundingClientRect();
+    for (const row of body.querySelectorAll<HTMLElement>('[data-row-index]')) {
+      const bounds = row.getBoundingClientRect();
+      if (bounds.bottom > top && bounds.top < viewportBottom) return { index:Number(row.dataset.rowIndex), bottom:bounds.bottom - top };
+    }
+    return undefined;
+  }
+  private restoreScrollAnchor(body: HTMLElement, index: number, bottom: number) {
+    const row = body.querySelector<HTMLElement>(`[data-row-index="${index}"]`);
+    if (row) body.scrollTop += row.getBoundingClientRect().bottom - body.getBoundingClientRect().top - bottom;
+  }
+  private loadOlder(): Promise<boolean> {
+    if (this.olderTask) return this.olderTask;
+    const task = this.fetchOlder();
+    this.olderTask = task;
+    void task.finally(() => { if (this.olderTask === task) this.olderTask = undefined; });
+    return task;
+  }
+  private async fetchOlder(): Promise<boolean> {
+    if (!this.hasOlder || this.loadingOlder || this.loadingDetails || !this.activeSession) return false;
     const epoch = this.historyEpoch;
     const id = this.activeSession;
     const before = this.historyFrom;
-    const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
-    const previousHeight = body?.scrollHeight || 0;
-    const previousTop = body?.scrollTop || 0;
     this.loadingOlder = true;
     try {
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${before}`), { signal: this.historyAbort?.signal });
+      const view = this.detailsLoaded ? '' : '&view=messages';
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${before}${view}`), { signal: this.historyAbort?.signal });
       if (!response.ok) throw new Error(`Older history request failed (${response.status})`);
       const page = await response.json() as HistoryPage;
-      if (epoch !== this.historyEpoch) return;
+      if (epoch !== this.historyEpoch) return false;
+      await this.updateComplete;
+      if (epoch !== this.historyEpoch) return false;
       this.historyFrom = page.from; this.hasOlder = page.hasMore;
-      this.loadedEvents = [...page.events, ...this.loadedEvents];
-      this.rowHeights.clear();
-      this.replayEvents();
-      const rows = this.transcriptRows();
-      this.visibleStart = Math.max(0, rows.length - 45); this.visibleEnd = rows.length;
+      this.loadingOlder = false;
+      await this.replayWithAnchor([...page.events, ...this.loadedEvents], epoch, true);
+      return true;
+    } catch (error) {
+      if (epoch === this.historyEpoch && !this.historyAbort?.signal.aborted) this.error = String(error);
+      return false;
+    } finally {
+      if (epoch === this.historyEpoch) { this.loadingOlder = false; this.restoringScroll = false; }
+    }
+  }
+  private async replayWithAnchor(events: SDKEvent[], epoch: number, prepending = false) {
+    const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+    const oldRows = this.transcriptRows();
+    const anchor = body && this.scrollAnchor(body);
+    const oldStart = this.visibleStart, oldEnd = this.visibleEnd;
+    const oldHeights = this.rowHeights;
+    const expanded = new Set(this.workExpanded);
+    const oldTurn = this.currentTurn;
+    this.loadedEvents = events;
+    this.replayEvents();
+    const turnShift = prepending ? this.currentTurn - oldTurn : 0;
+    this.workExpanded = new Set([...expanded].map(turn => turn + turnShift));
+    const rows = this.transcriptRows();
+    const shift = rows.length - oldRows.length;
+    this.rowHeights = new Map();
+    for (let i = 0; i < oldRows.length; i++) {
+      const height = oldHeights.get(oldRows[i].key);
+      if (height !== undefined && rows[i + shift]) this.rowHeights.set(rows[i + shift].key, height);
+    }
+    this.visibleStart = rows.length <= 80 ? 0 : Math.max(0, oldStart + shift);
+    this.visibleEnd = rows.length <= 80 ? rows.length : Math.min(rows.length, oldEnd + shift);
+    this.restoringScroll = true;
+    try {
       await this.updateComplete;
       if (epoch !== this.historyEpoch) return;
       const current = this.shadowRoot?.querySelector<HTMLElement>('.body');
-      if (current) current.scrollTop = previousTop + current.scrollHeight - previousHeight;
+      if (current && anchor) this.restoreScrollAnchor(current, anchor.index + shift, anchor.bottom);
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      await this.updateComplete;
+      if (epoch !== this.historyEpoch) return;
+      if (current && anchor) this.restoreScrollAnchor(current, anchor.index + shift, anchor.bottom);
       this.updateVisibleRows();
+      await this.updateComplete;
+      if (epoch === this.historyEpoch && current && anchor) this.restoreScrollAnchor(current, anchor.index + shift, anchor.bottom);
+    } finally {
+      if (epoch === this.historyEpoch) this.restoringScroll = false;
+    }
+  }
+  private async loadDetails() {
+    if (this.detailsLoaded || this.loadingDetails) return;
+    const epoch = this.historyEpoch;
+    this.loadingDetails = true;
+    try {
+      await this.olderTask;
+      if (epoch !== this.historyEpoch) return;
+      const from = this.historyFrom, to = this.historyTo;
+      const id = this.activeSession;
+      const pages: SDKEvent[][] = [];
+      let cursor = to;
+      while (cursor > from) {
+        const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${cursor}`), { signal:this.historyAbort?.signal });
+        if (!response.ok) throw new Error(`Work details request failed (${response.status})`);
+        const page = await response.json() as HistoryPage;
+        if (epoch !== this.historyEpoch) return;
+        if (page.from >= cursor || page.from < from) throw new Error('Work detail pages did not align with loaded history.');
+        pages.push(page.events);
+        cursor = page.from;
+      }
+      this.detailsLoaded = true;
+      this.loadingDetails = false;
+      await this.replayWithAnchor([...pages.reverse().flat(), ...this.liveEvents], epoch);
     } catch (error) {
       if (epoch === this.historyEpoch && !this.historyAbort?.signal.aborted) this.error = String(error);
     } finally {
-      if (epoch === this.historyEpoch) this.loadingOlder = false;
+      if (epoch === this.historyEpoch) this.loadingDetails = false;
     }
   }
   private onEvent(event: SDKEvent) {
-    if (!this.replaying) this.loadedEvents.push(event);
-    if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'delegate.message', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type))
-      this.trajectory = [...this.trajectory, event];
-    const blocks = [...this.blocks];
+    if (!this.replaying) { this.loadedEvents.push(event); this.liveEvents.push(event); }
+    if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'delegate.message', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type)) {
+      if (this.replaying) this.trajectory.push(event);
+      else this.trajectory = [...this.trajectory, event];
+    }
+    // A history replay renders once at the end; cloning every intermediate
+    // block array makes a long transcript quadratic before the first paint.
+    const blocks = this.replaying ? this.blocks : [...this.blocks];
     const eventTime = Date.parse(event.at || '') || Date.now();
     const markStart = (turn: number) => {
       const previous = this.turnStarted.get(turn);
@@ -463,15 +591,15 @@ export class MuxSDKChat extends LitElement {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
       const existing = blocks.findIndex(b => b.kind === 'tool' && b.id === event.toolId && !b.done);
-      if (existing >= 0) blocks[existing] = { ...blocks[existing], name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input };
-      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw });
+      if (existing >= 0) blocks[existing] = { ...blocks[existing], name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input, summary:event.summary || blocks[existing].summary };
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw, summary:event.summary });
     }
     else if (event.type === 'tool.completed') {
       markStart(this.currentTurn);
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId && !blocks[i].done) { index = i; break; }
-      if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:event.failed ? 'Failed' : 'Completed', failed:event.failed,
+      if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:event.failed ? 'Failed' : 'Completed', failed:event.failed, summary:event.summary || blocks[index].summary,
         output:event.raw };
-      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:event.failed ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, failed:event.failed,
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:event.failed ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, failed:event.failed, summary:event.summary,
         output:event.raw });
     } else if (event.type === 'tool.result') {
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId) { index = i; break; }
@@ -508,7 +636,7 @@ export class MuxSDKChat extends LitElement {
     if (this.replaying) return;
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     const follow = !body || body.scrollHeight - body.scrollTop - body.clientHeight < 100;
-    if (follow) { const count = this.transcriptRows().length; this.visibleStart = Math.max(0, count - 35); this.visibleEnd = count; }
+    if (follow) { const count = this.transcriptRows().length; this.visibleStart = count <= 80 ? 0 : Math.max(0, count - 35); this.visibleEnd = count; }
     if (follow) void this.updateComplete.then(() => { const b = this.shadowRoot?.querySelector<HTMLElement>('.body'); if (b) b.scrollTop = b.scrollHeight; });
   }
   private markdown(block: Block, index: number) {
@@ -740,6 +868,11 @@ export class MuxSDKChat extends LitElement {
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     if (!body) return;
     const rows = this.transcriptRows();
+    if (rows.length <= 80) {
+      if (this.visibleStart !== 0) this.visibleStart = 0;
+      if (this.visibleEnd !== rows.length) this.visibleEnd = rows.length;
+      return;
+    }
     const top = Math.max(0, body.scrollTop - 700);
     const bottom = body.scrollTop + body.clientHeight + 700;
     let offset = 0, start = 0;
@@ -750,9 +883,11 @@ export class MuxSDKChat extends LitElement {
     if (end !== this.visibleEnd) this.visibleEnd = end;
   }
   private onBodyScroll() {
-    this.updateVisibleRows();
+    // Prepending changes spacer heights before the anchor is restored. Keep
+    // its row mounted until the restoration finishes.
+    if (!this.restoringScroll) this.updateVisibleRows();
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
-    if (body && body.scrollTop < 450 && this.hasOlder) void this.loadOlder();
+    if (!this.restoringScroll && !this.fillingRecent && body && body.scrollHeight > body.clientHeight && body.scrollTop < 450 && this.hasOlder) void this.loadOlder();
   }
   private transcript() {
     const rows = this.transcriptRows();
@@ -761,12 +896,13 @@ export class MuxSDKChat extends LitElement {
     let before = 0, after = 0;
     for (let i = 0; i < start; i++) before += this.rowHeight(rows[i]);
     for (let i = end; i < rows.length; i++) after += this.rowHeight(rows[i]);
-    return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map(row => {
+    return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map((row, offset) => {
       const block = row.block;
-      return row.work ? html`<div class="block work" data-row-key=${row.key}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
-        if ((event.currentTarget as HTMLDetailsElement).open) this.workExpanded.add(block.turn); else this.workExpanded.delete(block.turn);
-      }}><summary>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(row.work)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${row.work.some(item => item.kind !== 'progress') ? row.work.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${this.turnFinished.get(block.turn) === undefined ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`
-        : html`<div class="block ${block.kind}" data-row-key=${row.key}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
+      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
+        if ((event.currentTarget as HTMLDetailsElement).open) { this.workExpanded.add(block.turn); if (!this.detailsLoaded) void this.loadDetails(); }
+        else this.workExpanded.delete(block.turn);
+      }}><summary>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(row.work)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${row.work.some(item => item.summary) && !this.detailsLoaded ? html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : 'Work details load when opened.'}</div>` : row.work.some(item => item.kind !== 'progress') ? row.work.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : !this.detailsLoaded ? 'Work details load when opened.' : this.turnFinished.get(block.turn) === undefined ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`
+        : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
   private async send() {
@@ -808,8 +944,8 @@ export class MuxSDKChat extends LitElement {
   }
   override render() { return html`
     <div class="topbar">${this.selectedAgent ? html`<nav class="breadcrumbs" aria-label="Agent lineage"><button @click=${() => { this.selectedAgent=''; this.agentNotice=''; }}>${this.chat?.title || 'Root session'}</button><span>›</span><strong>${this.agents().find(agent => agent.id === this.selectedAgent)?.name || 'Agent'}</strong></nav>` : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>▥</button></div>
-    <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body" @scroll=${this.onBodyScroll}>
-      ${this.selectedAgent ? (() => { const agent=this.agents().find(item => item.id === this.selectedAgent); return agent ? html`<div class="agent-chat"><div class="speaker">${agent.name} · ${agent.status}</div>${agent.legs.map(leg => html`<div class="instruction">${leg.task}</div><div class="reply">${leg.reply || agent.progress || 'The delegated agent is working. Its result returns through the root session.'}</div>`)}${!agent.legs.length ? html`<div class="reply">${agent.progress || 'The native harness reported this agent. Its result returns through the root session.'}</div>` : nothing}</div>` : html`<div class="block">Agent unavailable in this session.</div>`; })() : html`${this.agents().length ? html`<section class="agent-list" aria-label="Delegated sub-agents"><h2>Delegated sub-agents</h2>${this.agents().map(agent => html`<button class="agent-link" @click=${() => { this.selectedAgent=agent.id; this.agentNotice=''; }}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</section>` : nothing}${this.loadingOlder ? html`<div class="block">Loading older messages…</div>` : nothing}${this.blocks.length ? this.transcript() : html`<div class="block">Loading recent messages…</div>`}`}
+    <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat"><div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
+      ${this.selectedAgent ? (() => { const agent=this.agents().find(item => item.id === this.selectedAgent); return agent ? html`<div class="agent-chat"><div class="speaker">${agent.name} · ${agent.status}</div>${agent.legs.map(leg => html`<div class="instruction">${leg.task}</div><div class="reply">${leg.reply || agent.progress || 'The delegated agent is working. Its result returns through the root session.'}</div>`)}${!agent.legs.length ? html`<div class="reply">${agent.progress || 'The native harness reported this agent. Its result returns through the root session.'}</div>` : nothing}</div>` : html`<div class="block">Agent unavailable in this session.</div>`; })() : html`${this.agents().length ? html`<section class="agent-list" aria-label="Delegated sub-agents"><h2>Delegated sub-agents</h2>${this.agents().map(agent => html`<button class="agent-link" @click=${() => { this.selectedAgent=agent.id; this.agentNotice=''; }}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</section>` : nothing}${this.hasOlder ? html`<button class="history-more" ?disabled=${this.loadingOlder} @click=${() => void this.loadOlder()}>${this.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}</button>` : nothing}${this.blocks.length ? this.transcript() : html`<div class="block">Loading recent messages…</div>`}`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}</div>` : nothing}
     </div><div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${(e: InputEvent) => { this.agentDraft=(e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraft.trim()}>Send to root ↗</button></div>` : html`

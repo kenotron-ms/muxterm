@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 const sdkHistoryPageSize = 150
@@ -80,6 +81,18 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid history cursor", 400)
 			return
 		}
+		if end > 0 && end < info.Size() {
+			var previous [1]byte
+			if _, err := file.ReadAt(previous[:], end-1); err != nil || previous[0] != '\n' {
+				http.Error(w, "history cursor is not line aligned", 400)
+				return
+			}
+		}
+	}
+	view := r.URL.Query().Get("view")
+	if view != "" && view != "messages" {
+		http.Error(w, "invalid history view", 400)
+		return
 	}
 	start, err := sdkPageStart(file, end, sdkHistoryPageSize)
 	if err != nil {
@@ -92,12 +105,73 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	events := make([]json.RawMessage, 0, sdkHistoryPageSize)
+	var assistant *sdkEvent
+	flushAssistant := func() {
+		if assistant == nil {
+			return
+		}
+		encoded, _ := json.Marshal(assistant)
+		events = append(events, encoded)
+		assistant = nil
+	}
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
-		if len(line) > 0 {
+		if len(line) == 0 {
+			continue
+		}
+		if view != "messages" {
+			events = append(events, json.RawMessage(line))
+			continue
+		}
+		var header struct {
+			SessionID string    `json:"sessionId"`
+			At        time.Time `json:"at"`
+			Type      string    `json:"type"`
+			Text      string    `json:"text"`
+			Name      string    `json:"name"`
+			ToolID    string    `json:"toolId"`
+			Failed    bool      `json:"failed"`
+		}
+		if err := json.Unmarshal(line, &header); err != nil {
+			http.Error(w, "invalid history event", 500)
+			return
+		}
+		if !sdkMessageHistoryEvent(header.Type) {
+			continue
+		}
+		if header.Type == "assistant.delta" {
+			if assistant == nil {
+				assistant = &sdkEvent{SessionID: header.SessionID, At: header.At, Type: header.Type}
+			}
+			assistant.Text += header.Text
+			continue
+		}
+		flushAssistant()
+		if header.Type == "tool.started" || header.Type == "tool.completed" {
+			encoded, _ := json.Marshal(struct {
+				SessionID string    `json:"sessionId"`
+				At        time.Time `json:"at"`
+				Type      string    `json:"type"`
+				Name      string    `json:"name"`
+				ToolID    string    `json:"toolId"`
+				Failed    bool      `json:"failed"`
+				Summary   bool      `json:"summary"`
+			}{header.SessionID, header.At, header.Type, header.Name, header.ToolID, header.Failed, true})
+			events = append(events, encoded)
+		} else {
 			events = append(events, json.RawMessage(line))
 		}
 	}
+	flushAssistant()
 	writeSDKJSON(w, http.StatusOK, map[string]any{"from": start, "to": end, "hasMore": start > 0, "events": events})
+}
+
+func sdkMessageHistoryEvent(eventType string) bool {
+	switch eventType {
+	case "input.accepted", "assistant.delta", "tool.started", "tool.completed", "turn.completed", "turn.cancelled", "turn.continued", "error", "session.uncertain", "goal.progress", "session.renamed", "delegate.spawned", "delegate.completed", "delegate.message":
+		return true
+	default:
+		return false
+	}
 }
 
 // sdkStreamLog streams exactly the bytes after cursor. The subscriber is
