@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
+import '../lib/mermaid-diagram.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import './mux-sdk-chat-settings.js';
@@ -61,6 +62,7 @@ export class MuxSDKChat extends LitElement {
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   @state() private settingsPending = false;
+  @state() private showScrollBottom = false;
   private dragDepth = 0;
   private stream?: EventSource;
   private reconnectTimer?: number;
@@ -165,6 +167,8 @@ export class MuxSDKChat extends LitElement {
     .layout { display:flex; flex:1; min-height:0; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
     .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable both-edges; overflow-anchor:none; }
+    .scroll-bottom-row { position:relative; z-index:2; height:0; }
+    .scroll-bottom { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); border:1px solid var(--chrome-border,#41485f); border-radius:999px; padding:7px 13px; background:var(--chrome-bar,#202632); color:var(--chrome-text-bright,#d9def0); box-shadow:0 4px 16px #0006; white-space:nowrap; }
     .history-more { align-self:center; flex:none; margin:0 0 24px; padding:7px 14px; border:1px solid var(--chrome-border,#41485f); border-radius:7px; background:var(--chrome-bar,#202632); color:var(--chrome-text-dim,#b2bdd3); }
     .history-more:disabled { opacity:.65; cursor:default; }
     .virtual-spacer { width:1px; flex:none; pointer-events:none; }
@@ -419,7 +423,7 @@ export class MuxSDKChat extends LitElement {
     this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
     this.selectedAgent = ''; this.agentPanelOpen = false; this.parentScrollTop = 0; this.agentEvents = null; this.agentHistoryError = '';
     this.recoveryPrepared = false;
-    this.error = ''; this.settingsPending = false;
+    this.error = ''; this.settingsPending = false; this.showScrollBottom = false;
     const cached = readTranscriptCache(this.sessionId);
     this.chat = sdkChats.chats.find(c => c.id === this.sessionId) || cached?.chat;
     this.recoveryRequired = this.chat?.state === 'uncertain';
@@ -854,7 +858,13 @@ export class MuxSDKChat extends LitElement {
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     const follow = !body || body.scrollHeight - body.scrollTop - body.clientHeight < 100;
     if (follow) { const count = this.transcriptRows().length; this.visibleStart = count <= 80 ? 0 : Math.max(0, count - 35); this.visibleEnd = count; }
-    if (follow) void this.updateComplete.then(() => { const b = this.shadowRoot?.querySelector<HTMLElement>('.body'); if (b) b.scrollTop = b.scrollHeight; });
+    void this.updateComplete.then(() => {
+      if (follow) {
+        const b = this.shadowRoot?.querySelector<HTMLElement>('.body');
+        if (b) b.scrollTop = b.scrollHeight;
+      }
+      this.updateScrollBottomVisibility();
+    });
   }
   private markdown(block: Block, index: number) {
     let parser = this.parsers.get(index);
@@ -1179,8 +1189,26 @@ export class MuxSDKChat extends LitElement {
     // Prepending changes spacer heights before the anchor is restored. Keep
     // its row mounted until the restoration finishes.
     if (!this.restoringScroll) this.updateVisibleRows();
+    if (!this.restoringScroll) this.updateScrollBottomVisibility();
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     if (!this.restoringScroll && !this.fillingRecent && body && body.scrollHeight > body.clientHeight && body.scrollTop < 450 && this.hasOlder) void this.loadOlder();
+  }
+  private updateScrollBottomVisibility() {
+    const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+    this.showScrollBottom = !!body && body.scrollHeight - body.scrollTop - body.clientHeight > 100;
+  }
+  private async scrollToBottom() {
+    const session = this.activeSession;
+    if (!this.selectedAgent) {
+      const count = this.transcriptRows().length;
+      this.visibleStart = count <= 80 ? 0 : Math.max(0, count - 35);
+      this.visibleEnd = count;
+    }
+    await this.updateComplete;
+    if (session !== this.activeSession) return;
+    const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+    if (body) body.scrollTop = body.scrollHeight;
+    this.updateScrollBottomVisibility();
   }
   private transcript(agents: AgentView[]) {
     const rows = this.transcriptRows();
@@ -1218,7 +1246,7 @@ export class MuxSDKChat extends LitElement {
     if (!wasBusy) { this.busy = true; this.turnStarted.set(this.currentTurn, Date.now()); }
     this.draft = '';
     try {
-      await this.updateComplete;
+      await this.scrollToBottom();
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind, source:'browser', id, content, attachments: sent.map(a => a.id) }) });
       if (!response.ok) throw new Error(await response.text());
       for (const item of sent) if (item.preview) URL.revokeObjectURL(item.preview);
@@ -1263,7 +1291,7 @@ export class MuxSDKChat extends LitElement {
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : html`${this.hasOlder ? html`<button class="history-more" ?disabled=${this.loadingOlder} @click=${() => void this.loadOlder()}>${this.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}</button>` : nothing}${this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry connection</button>` : nothing}</div>` : nothing}
-    </div><div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
+    </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${(e: InputEvent) => { this.agentDraft=(e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraft.trim()}>Send to root ↗</button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
         ${a.preview ? html`<img src=${a.preview} alt=${a.file.name}>` : nothing}

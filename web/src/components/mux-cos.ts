@@ -91,6 +91,7 @@ import './mux-voice-orb.js';
 import './mux-applets.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
+import '../lib/mermaid-diagram.js';
 import { operatorReference } from '../lib/operator-reference.js';
 import { store } from '../state.js';
 
@@ -112,7 +113,7 @@ function renderMarkdown(block: object, text: string, streaming: boolean): Templa
     s = new MarkdownStream();
     parsers.set(block, s);
   }
-  return renderSegments(s.update(text, streaming), { resolve: () => null, reference: operatorReference });
+  return renderSegments(s.update(text, streaming), { resolve: () => null, reference: operatorReference, diagrams: true });
 }
 
 /** mm:ss for the approval countdown. Clamped at zero, never negative. */

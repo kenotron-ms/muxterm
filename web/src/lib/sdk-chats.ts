@@ -7,10 +7,12 @@ class SDKChatStore {
   projects: SDKProject[] = [];
   private listeners = new Set<() => void>();
   private nameEvents?: EventSource;
+  private refreshGeneration = 0;
   subscribe(fn: () => void) {
     this.listeners.add(fn);
     if (!this.nameEvents) {
       this.nameEvents = new EventSource(apiPath('/api/sdk-chat-names/events'));
+      this.nameEvents.onopen = () => { void this.refresh(); };
       this.nameEvents.onmessage = () => { void this.refresh(); };
     }
     return () => {
@@ -19,10 +21,13 @@ class SDKChatStore {
     };
   }
   async refresh() {
+    const generation = ++this.refreshGeneration;
     const [response, projects] = await Promise.all([fetch(apiPath('/api/sdk-chats')), fetch(apiPath('/api/sdk-projects'))]);
     if (!response.ok || !projects.ok) return;
-    this.chats = await response.json() as SDKChat[];
-    this.projects = await projects.json() as SDKProject[];
+    const [chats, projectRows] = await Promise.all([response.json() as Promise<SDKChat[]>, projects.json() as Promise<SDKProject[]>]);
+    if (generation !== this.refreshGeneration) return;
+    this.chats = chats;
+    this.projects = projectRows;
     for (const fn of this.listeners) fn();
   }
   async create(request: { workspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; prompt: string }) {
