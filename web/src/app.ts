@@ -2625,6 +2625,7 @@ export class MuxApp extends LitElement {
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
     this._onDashboardHide();
     this._fleetOpen = false;
+    this._closeDrawer();
   };
 
   private _onChatSwitchHarness = (e: Event): void => {
