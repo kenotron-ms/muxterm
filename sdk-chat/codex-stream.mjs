@@ -172,6 +172,7 @@ export class CodexStream {
         this.emit(this.session.id, 'delegate.message', { childSessionId: childId, text: p.delta });
       else if (method === 'item/completed' && p.item?.type === 'agentMessage' && p.item.text)
         this.emit(this.session.id, 'delegate.message', { childSessionId: childId, text: p.item.text, complete: true });
+      // Codex reports this item's lifecycle through kind on item/started.
       else if (method === 'item/started' && p.item?.type === 'subAgentActivity' && p.item.agentThreadId) {
         if (p.item.kind === 'started') {
           this.childThreads.set(p.item.agentThreadId, p.item.agentPath || 'Agent');

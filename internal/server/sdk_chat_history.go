@@ -236,6 +236,7 @@ func (s *Server) handleSDKChatAgents(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// Keep raw child steps so the work view can show commands and output.
 	events := make([]sdkEvent, 0, len(candidates))
 	for _, event := range candidates {
 		if strings.HasPrefix(event.Type, "delegate.") || (toolIDs[event.ToolID] && event.ToolID != "") {

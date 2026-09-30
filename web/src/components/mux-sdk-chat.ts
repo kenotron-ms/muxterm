@@ -44,6 +44,7 @@ export class MuxSDKChat extends LitElement {
   @state() private blocks: Block[] = [];
   @state() private trajectory: SDKEvent[] = [];
   @state() private agentEvents: SDKEvent[] | null = null;
+  @state() private agentHistoryError = '';
   @state() private selectedAgent = '';
   @state() private agentPanelOpen = false;
   @state() private agentDraft = '';
@@ -127,6 +128,9 @@ export class MuxSDKChat extends LitElement {
     .agent-toggle:hover,.agent-toggle:focus-visible { background:#35445f; }
     .agent-toggle .running { width:7px; height:7px; border-radius:50%; background:#9bb8f7; }
     .agent-list { max-height:220px; overflow:auto; margin:5px 0 1px; padding:6px; border:1px solid #41485f; border-radius:9px; background:#222b3c; }
+    .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:7px 0; color:#e8a9aa; font-size:12px; }
+    .agent-history-error button { border:0; padding:2px 4px; background:transparent; color:#b7c9ed; }
+    .agent-history-error button:hover { text-decoration:underline; }
     .agent-link { width:100%; display:flex; align-items:center; gap:8px; border:0; border-radius:6px; padding:7px; background:transparent; color:#d9def0; text-align:left; }
     .agent-link:hover { background:#35445f; } .agent-link span:last-child { margin-left:auto; color:#9aa9c0; font-size:11px; }
     .delegate-card { max-width:560px; border:1px solid #41485f; border-radius:9px; padding:10px 12px; background:#222b3c; }
@@ -402,7 +406,7 @@ export class MuxSDKChat extends LitElement {
     this.loadedEvents = []; this.liveEvents = []; this.historyFrom = 0; this.historyTo = 0; this.hasOlder = false; this.loadingOlder = false; this.loadingDetails = false; this.detailsLoaded = false;
     this.fillingRecent = false; this.restoringScroll = false; this.historyUserInteracted = false; this.olderTask = undefined;
     this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
-    this.selectedAgent = ''; this.agentPanelOpen = false; this.parentScrollTop = 0; this.agentEvents = null;
+    this.selectedAgent = ''; this.agentPanelOpen = false; this.parentScrollTop = 0; this.agentEvents = null; this.agentHistoryError = '';
     this.recoveryPrepared = false;
     this.error = ''; this.settingsPending = false;
     const cached = readTranscriptCache(this.sessionId);
@@ -424,11 +428,13 @@ export class MuxSDKChat extends LitElement {
     void this.loadAgentHistory(this.sessionId, epoch, this.historyAbort.signal);
   }
   private async loadAgentHistory(id: string, epoch: number, signal: AbortSignal) {
+    this.agentHistoryError = '';
     try {
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/agents`), { signal, cache:'no-store' });
       if (!response.ok) throw new Error(`Agent history request failed (${response.status})`);
       const saved = await response.json() as SDKEvent[];
       if (epoch !== this.historyEpoch) return;
+      this.agentHistoryError = '';
       const seen = new Set<string>();
       this.agentEvents = [...saved, ...this.liveEvents.filter(event => event.type.startsWith('delegate.') || event.type === 'tool.started' || event.type === 'tool.completed')]
         .filter(event => {
@@ -438,8 +444,11 @@ export class MuxSDKChat extends LitElement {
           return true;
         });
     } catch (error) {
-      if (epoch === this.historyEpoch && !signal.aborted) this.error = String(error);
+      if (epoch === this.historyEpoch && !signal.aborted) this.agentHistoryError = String(error);
     }
+  }
+  private retryAgentHistory() {
+    if (this.historyAbort) void this.loadAgentHistory(this.sessionId, this.historyEpoch, this.historyAbort.signal);
   }
   private persistTranscriptCache = () => {
     if (!this.activeSession) return;
@@ -1052,7 +1061,7 @@ export class MuxSDKChat extends LitElement {
     return html`<div class="agent-chat">
       <div class="speaker">${agent.name} · ${agent.status}</div>
       ${task && task !== 'undefined' ? html`<div class="instruction">${task}</div>` : nothing}
-      ${agent.steps.length ? html`<div class="speaker">Recorded work</div>${agent.steps.map(step => html`<div class="agent-step"><strong>${step.name} · ${step.status}</strong>${step.detail !== undefined ? html`<pre>${this.agentStepDetail(step)}</pre>` : nothing}</div>`)}` : html`<div class="agent-step">${this.agentEvents ? 'No individual steps were reported by this harness.' : 'Loading recorded work…'}</div>`}
+      ${agent.steps.length ? html`<div class="speaker">Recorded work</div>${agent.steps.map(step => html`<div class="agent-step"><strong>${step.name} · ${step.status}</strong>${step.detail !== undefined ? html`<pre>${this.agentStepDetail(step)}</pre>` : nothing}</div>`)}` : html`<div class="agent-step">${this.agentHistoryError ? 'Saved work could not be loaded.' : this.agentEvents ? 'No individual steps were reported by this harness.' : 'Loading recorded work…'}</div>`}
       <div class="speaker">Result</div><div class="reply">${reply || (agent.status === 'Running' || !this.agentEvents || this.busy ? 'Waiting for the delegated agent’s result…' : 'No result text was reported.')}</div>
     </div>`;
   }
@@ -1238,7 +1247,8 @@ export class MuxSDKChat extends LitElement {
     <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>▥</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${agents.length ? html`<div class="agent-bar"><div class="agent-bar-inner"><button class="agent-toggle" aria-label=${`Agents: ${running} running, ${agents.length - running} finished`} aria-expanded=${this.agentPanelOpen} @click=${() => { this.agentPanelOpen = !this.agentPanelOpen; }}>${running ? html`<span class="running" aria-hidden="true"></span>` : nothing}Agents · ${running ? `${running} running` : `${agents.length} completed`} ${icon(ChevronDown, { size: 14 })}</button>${this.agentPanelOpen ? html`<div class="agent-list" aria-label="Delegated sub-agents">${agents.map(agent => html`<button class="agent-link" @click=${() => this.openAgent(agent.id)}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</div>` : nothing}</div></div>` : nothing}
-      ${this.recoveryRequired ? html`<div class="recovery" role="status"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}
+      ${this.agentHistoryError ? html`<div class="agent-history-error" role="alert">Saved agent work could not be loaded. <button @click=${this.retryAgentHistory}>Retry</button></div>` : nothing}
+      ${this.recoveryRequired ? html`<div class="recovery" role="alert"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : html`${this.hasOlder ? html`<button class="history-more" ?disabled=${this.loadingOlder} @click=${() => void this.loadOlder()}>${this.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}</button>` : nothing}${this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry connection</button>` : nothing}</div>` : nothing}
