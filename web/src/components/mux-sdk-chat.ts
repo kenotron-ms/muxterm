@@ -8,7 +8,6 @@ import { apiPath } from '../lib/base-path.js';
 import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
 import './mux-sdk-chat-settings.js';
-import './mux-voice-orb.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import './mux-sdk-utility.js';
 
@@ -283,18 +282,22 @@ export class MuxSDKChat extends LitElement {
     .send:hover:not(:disabled) { filter:brightness(1.1); }
     .send:disabled { opacity:.38; cursor:default; }
     .voice-text { white-space:pre-wrap; overflow-wrap:anywhere; }
-    .send.voice-idle { --orb-box:29px; --orb-d:21px; overflow:visible; transition:width .3s ease,border-radius .3s ease,background .3s ease; }
+    .send.voice-idle { transition:width .3s ease,border-radius .3s ease,background .3s ease; }
     .send.voice-active { width:86px; border-radius:11px; display:flex; gap:7px; font-size:13px; font-weight:650; transition:width .3s ease,border-radius .3s ease,background .3s ease; }
-    .voice-dots { display:inline-flex; align-items:center; gap:3px; height:16px; }
-    .voice-dots i { width:4px; height:4px; border-radius:50%; background:currentColor; animation:voice-dot 1s ease-in-out infinite; }
-    .voice-dots i:nth-child(2) { animation-delay:.13s; }
-    .voice-dots i:nth-child(3) { animation-delay:.26s; }
-    @keyframes voice-dot { 0%,80%,100% { transform:scale(.7); opacity:.55; } 40% { transform:scale(1.35); opacity:1; } }
+    .voice-bars { display:inline-flex; align-items:center; justify-content:center; gap:2px; height:20px; }
+    .voice-bars i { display:block; width:3px; border-radius:99px; background:currentColor; }
+    .voice-bars i:nth-child(1), .voice-bars i:nth-child(5) { height:7px; }
+    .voice-bars i:nth-child(2), .voice-bars i:nth-child(4) { height:13px; }
+    .voice-bars i:nth-child(3) { height:19px; }
+    .voice-active .voice-bars i { animation:voice-bar 1s ease-in-out infinite alternate; }
+    .voice-active .voice-bars i:nth-child(2), .voice-active .voice-bars i:nth-child(4) { animation-delay:.15s; }
+    .voice-active .voice-bars i:nth-child(3) { animation-delay:.3s; }
+    @keyframes voice-bar { from { transform:scaleY(.55); } to { transform:scaleY(1); } }
     .voice-compose-row { min-height:34px; display:flex; align-items:center; gap:9px; color:var(--chrome-text-dim,#9aa3b8); }
     .voice-compose-row .voice-label { flex:1; font-size:14px; }
     .voice-compose-row .voice-mic { font-size:18px; line-height:1; }
     .voice-compose-row .voice-attach { flex:none; width:30px; height:30px; border:0; background:transparent; color:inherit; font-size:22px; line-height:1; }
-    @media (prefers-reduced-motion:reduce) { .voice-dots i { animation:none; } }
+    @media (prefers-reduced-motion:reduce) { .voice-active .voice-bars i { animation:none; } }
     .stop { border:1px solid #bd7280; background:#8c3d4e; color:white; font-size:15px; }
     .stop:hover:not(:disabled) { background:#a34c5d; }
     .stop:disabled { opacity:.6; }
@@ -1334,8 +1337,9 @@ export class MuxSDKChat extends LitElement {
     catch (error) { this.error = error instanceof Error ? error.message : 'Voice could not start.'; }
   }
   private sendVoiceButton() {
-    if (this.voiceState !== 'idle') return html`<button class="send voice-active" aria-label="Stop voice mode" title="Stop voice mode" @click=${() => void this.toggleVoice()}><span class="voice-dots" aria-hidden="true"><i></i><i></i><i></i></span>Stop</button>`;
-    if (!this.draft.trim() && !this.attachments.length && this.voiceAvailable) return html`<button class="send voice-idle" aria-label="Start voice mode" title="Start voice mode" ?disabled=${this.settingsPending} @click=${() => void this.toggleVoice()}><mux-voice-orb state="idle" .level=${0}></mux-voice-orb></button>`;
+    const bars = html`<span class="voice-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>`;
+    if (this.voiceState !== 'idle') return html`<button class="send voice-active" aria-label="Stop voice mode" title="Stop voice mode" @click=${() => void this.toggleVoice()}>${bars}Stop</button>`;
+    if (!this.draft.trim() && !this.attachments.length && this.voiceAvailable) return html`<button class="send voice-idle" aria-label="Start voice mode" title="Start voice mode" ?disabled=${this.settingsPending} @click=${() => void this.toggleVoice()}>${bars}</button>`;
     if (this.busy && !this.draft.trim() && !this.attachments.length) return nothing;
     return html`<button class="send" aria-label=${this.busy ? 'Steer running turn' : 'Send message'} ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.stopping || this.settingsPending || (this.busy && this.attachments.length > 0) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button>`;
   }
