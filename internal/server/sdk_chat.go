@@ -300,13 +300,12 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			}
 		}
 	}
-	// Revisit the subject after the second human turn, then every third
-	// completed human turn. The work runs outside the chat event path.
-	if event.Type == "turn.completed" && c.UserTurns >= 2 && (c.UserTurns-2)%3 == 0 && c.TitleSource != "manual" && c.TitleCheckedTurn < c.UserTurns && !h.naming[c.ID] {
-		c.TitleCheckedTurn = c.UserTurns
-		_ = h.saveLocked(c)
-		h.naming[c.ID] = true
-		go h.nameAfterTurns(c.ID)
+	// Name the opening input as soon as it is accepted, while its turn keeps
+	// running. Revisit the subject after completed human turns 2, 5, 8, ...
+	// All title calls run outside the chat event path.
+	if (event.Type == "input.accepted" && event.Kind == "user" && c.UserTurns == 1) ||
+		(event.Type == "turn.completed" && c.UserTurns >= 2 && (c.UserTurns-2)%3 == 0) {
+		h.scheduleNamingLocked(c)
 	}
 	h.mu.Unlock()
 }

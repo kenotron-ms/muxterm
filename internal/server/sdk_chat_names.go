@@ -14,11 +14,27 @@ import (
 	"unicode"
 )
 
-// A title is checked after human turns 2, 5, 8, and so on. Native titles can
-// supply the first subject; later checks use the recent conversation to follow
-// subject changes. This runs asynchronously, with one check in flight per chat.
+// The opening input is named immediately; completed turns 2, 5, 8, ... are
+// checked again so the title can follow subject changes. One check runs per chat.
+func (h *sdkChatHost) scheduleNamingLocked(c *sdkChat) {
+	if c.TitleSource == "manual" || c.TitleCheckedTurn >= c.UserTurns || h.naming[c.ID] {
+		return
+	}
+	c.TitleCheckedTurn = c.UserTurns
+	_ = h.saveLocked(c)
+	h.naming[c.ID] = true
+	go h.nameAfterTurns(c.ID)
+}
+
 func (h *sdkChatHost) nameAfterTurns(id string) {
-	defer func() { h.mu.Lock(); delete(h.naming, id); h.mu.Unlock() }()
+	defer func() {
+		h.mu.Lock()
+		delete(h.naming, id)
+		if c := h.chats[id]; c != nil && c.State == "ready" && c.UserTurns >= 2 && (c.UserTurns-2)%3 == 0 {
+			h.scheduleNamingLocked(c)
+		}
+		h.mu.Unlock()
+	}()
 	nameLock := h.nameLock(id)
 	nameLock.Lock()
 	defer nameLock.Unlock()
@@ -58,7 +74,7 @@ func (h *sdkChatHost) nameAfterTurns(id string) {
 	}
 	if name == "" {
 		inputs, readErr := h.namingInputs(id)
-		if readErr != nil || len(inputs) < 2 {
+		if readErr != nil || len(inputs) == 0 {
 			return
 		}
 		name, err = generatePurposeTitle(ctx, chat.ProjectPath, inputs)
