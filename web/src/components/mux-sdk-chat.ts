@@ -204,7 +204,7 @@ export class MuxSDKChat extends LitElement {
     .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,.2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
     .truncation { padding:6px 10px 0; color:#d7bc8b; font:11px/1.5 ui-monospace,monospace; }
     .error { color:#e6a5a5; }
-    /* Match the body's 10px scrollbar gutter after the composer's 15px text inset. */
+    /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { padding:0 19px 18px; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 11px; }
     .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
