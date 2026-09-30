@@ -1035,12 +1035,18 @@ export class MuxSDKChat extends LitElement {
     for (let i = end; i < rows.length; i++) after += this.rowHeight(rows[i]);
     return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map((row, offset) => {
       const block = row.block;
-      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
-        if ((event.currentTarget as HTMLDetailsElement).open) { this.workExpanded.add(block.turn); if (!this.detailsLoaded) void this.loadDetails(); }
-        else this.workExpanded.delete(block.turn);
-      }}><summary>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(row.work)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${row.work.some(item => item.summary) && !this.detailsLoaded ? html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : 'Work details load when opened.'}</div>` : row.work.some(item => item.kind !== 'progress') ? row.work.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : !this.detailsLoaded ? 'Work details load when opened.' : this.turnFinished.get(block.turn) === undefined ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`
+      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(row.work)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${row.work.some(item => item.summary) && !this.detailsLoaded ? html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : 'Work details load when opened.'}</div>` : row.work.some(item => item.kind !== 'progress') ? row.work.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : !this.detailsLoaded ? 'Work details load when opened.' : this.turnFinished.get(block.turn) === undefined ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`
         : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
+  }
+  private toggleWorkDisclosure(turn: number, event: MouseEvent) {
+    event.preventDefault();
+    if (this.workExpanded.has(turn)) this.workExpanded.delete(turn);
+    else {
+      this.workExpanded.add(turn);
+      if (!this.detailsLoaded) void this.loadDetails();
+    }
+    this.requestUpdate();
   }
   private async send() {
     const content = this.draft.trim();
