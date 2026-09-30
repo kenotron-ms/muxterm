@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1474,6 +1475,19 @@ func (s *Server) handleSDKChatNameEvents(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleSDKChatEvents(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	id := r.PathValue("id")
+	afterValue := r.URL.Query().Get("after")
+	var after int64
+	if afterValue != "" {
+		var err error
+		after, err = strconv.ParseInt(afterValue, 10, 64)
+		if err != nil || after < 0 {
+			http.Error(w, "invalid event cursor", 400)
+			return
+		}
+		if last, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil && last > after {
+			after = last
+		}
+	}
 	h.mu.Lock()
 	c := h.chats[id]
 	if c == nil {
@@ -1486,7 +1500,23 @@ func (s *Server) handleSDKChatEvents(w http.ResponseWriter, r *http.Request) {
 		h.streams[id] = map[chan sdkEvent]struct{}{}
 	}
 	h.streams[id][ch] = struct{}{}
-	data, _ := os.ReadFile(filepath.Join(h.dir, id+".ndjson"))
+	path := filepath.Join(h.dir, id+".ndjson")
+	var end int64
+	if info, err := os.Stat(path); err == nil {
+		end = info.Size()
+	}
+	if afterValue != "" && after > end {
+		delete(h.streams[id], ch)
+		close(ch)
+		h.mu.Unlock()
+		http.Error(w, "event cursor beyond log", 400)
+		return
+	}
+	chat := *c
+	var data []byte
+	if afterValue == "" {
+		data, _ = os.ReadFile(path)
+	}
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
@@ -1498,24 +1528,37 @@ func (s *Server) handleSDKChatEvents(w http.ResponseWriter, r *http.Request) {
 	}()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", jsonString(c))
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if line != "" {
-			fmt.Fprintf(w, "event: sdk\ndata: %s\n\n", line)
+	fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", jsonString(chat))
+	if afterValue != "" {
+		if _, err := sdkStreamLog(w, path, after, end); err != nil {
+			return
+		}
+	} else {
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if line != "" {
+				fmt.Fprintf(w, "event: sdk\ndata: %s\n\n", line)
+			}
 		}
 	}
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
+	cursor := end
 	for {
 		select {
-		case event, ok := <-ch:
+		case _, ok := <-ch:
 			if !ok {
 				return
 			}
-			fmt.Fprintf(w, "event: sdk\ndata: %s\n\n", jsonString(event))
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
+			h.mu.Lock()
+			info, statErr := os.Stat(path)
+			h.mu.Unlock()
+			if statErr == nil {
+				next, err := sdkStreamLog(w, path, cursor, info.Size())
+				cursor = next
+				if err != nil {
+					return
+				}
 			}
 		case <-r.Context().Done():
 			return

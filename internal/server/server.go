@@ -397,6 +397,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/interrupt", protect(http.HandlerFunc(s.handleSDKChatInterrupt)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/events", protect(http.HandlerFunc(s.handleSDKChatEvents)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/history", protect(http.HandlerFunc(s.handleSDKChatHistory)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/files", protect(http.HandlerFunc(s.handleSDKUtilityFiles)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/file", protect(http.HandlerFunc(s.handleSDKUtilityFile)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/raw", protect(http.HandlerFunc(s.handleSDKUtilityRaw)))
@@ -444,6 +445,27 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// what the child's Pdeathsig is for (internal/cos/pdeathsig_linux.go).
 	defer s.hub.CloseCos()
 	defer s.sdkChats.close()
+	// Harness services have no browser owner. Bring them up with the server so
+	// opening a chat only reads its Go-owned history and never starts a provider.
+	prewarmDone := make(chan struct{})
+	defer func() { <-prewarmDone }()
+	go func() {
+		defer close(prewarmDone)
+		var workers sync.WaitGroup
+		for _, harness := range []string{"codex", "amplifier"} {
+			workers.Add(1)
+			go func(harness string) {
+				defer workers.Done()
+				if ctx.Err() != nil {
+					return
+				}
+				if err := s.sdkChats.ensure(harness); err != nil {
+					log.Printf("sdk chat %s prewarm: %v", harness, err)
+				}
+			}(harness)
+		}
+		workers.Wait()
+	}()
 
 	// Operator lifecycle notices are enabled unless explicitly disabled.
 	// This connects the fleet's existing terminal signals to the conversation.

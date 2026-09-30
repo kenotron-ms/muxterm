@@ -1540,6 +1540,7 @@ export class MuxApp extends LitElement {
     // They have no terminal and should not render as blank tiles.
     const panes = store.panes.filter((p) => p.paneId >= 0);
     const isWide = this._layoutMode === 'wide';
+    const selectedSDKChat = this._sdkChatId && this._sdkChatId !== 'new' ? this._sdkChatId : '';
 
     return html`
       ${!isWide ? html`<mux-title-bar
@@ -1557,6 +1558,7 @@ export class MuxApp extends LitElement {
         ${isWide ? html`
           <mux-sidebar
             .homeActive="${this._showDashboard}"
+            .selectedSDKChat="${selectedSDKChat}"
             .homeKey="${store.config.keys.toggleHome}"
             .showLauncher="${this._showDashboard}"
             @workspace-switch="${this._onWorkspaceSelected}"
@@ -1680,6 +1682,7 @@ export class MuxApp extends LitElement {
             >
               <mux-sidebar
                 .homeActive="${this._showDashboard}"
+                .selectedSDKChat="${selectedSDKChat}"
                 .homeKey="${''}"
                 .previewsVisible="${this._drawerOpen}"
                 @workspace-switch="${this._onWorkspaceSelected}"
