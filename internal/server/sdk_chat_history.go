@@ -94,26 +94,10 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid history view", 400)
 		return
 	}
-	start := int64(0)
-	if value := r.URL.Query().Get("from"); value != "" {
-		start, err = strconv.ParseInt(value, 10, 64)
-		if err != nil || start < 0 || start > end || end-start > 32<<20 {
-			http.Error(w, "invalid history range", 400)
-			return
-		}
-		if start > 0 {
-			var previous [1]byte
-			if _, err := file.ReadAt(previous[:], start-1); err != nil || previous[0] != '\n' {
-				http.Error(w, "history range is not line aligned", 400)
-				return
-			}
-		}
-	} else {
-		start, err = sdkPageStart(file, end, sdkHistoryPageSize)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
+	start, err := sdkPageStart(file, end, sdkHistoryPageSize)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
 	}
 	data := make([]byte, end-start)
 	if _, err := file.ReadAt(data, start); err != nil && !errors.Is(err, io.EOF) {
@@ -163,7 +147,15 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		flushAssistant()
 		if header.Type == "tool.started" || header.Type == "tool.completed" {
-			encoded, _ := json.Marshal(sdkEvent{SessionID: header.SessionID, At: header.At, Type: header.Type, Name: header.Name, ToolID: header.ToolID, Failed: header.Failed})
+			encoded, _ := json.Marshal(struct {
+				SessionID string    `json:"sessionId"`
+				At        time.Time `json:"at"`
+				Type      string    `json:"type"`
+				Name      string    `json:"name"`
+				ToolID    string    `json:"toolId"`
+				Failed    bool      `json:"failed"`
+				Summary   bool      `json:"summary"`
+			}{header.SessionID, header.At, header.Type, header.Name, header.ToolID, header.Failed, true})
 			events = append(events, encoded)
 		} else {
 			events = append(events, json.RawMessage(line))

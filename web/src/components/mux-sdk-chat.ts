@@ -8,10 +8,10 @@ import './mux-sdk-chat-settings.js';
 import './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
-type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
+type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[] };
-type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'progress' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; attachments?: DisplayAttachment[] };
+type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'progress' | 'error' | 'status'; text: string; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[] };
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
 import { icon } from '../lib/icons.js';
@@ -454,7 +454,7 @@ export class MuxSDKChat extends LitElement {
       if (epoch !== this.historyEpoch) return false;
       this.historyFrom = page.from; this.hasOlder = page.hasMore;
       this.loadingOlder = false;
-      await this.replayWithAnchor([...page.events, ...this.loadedEvents], epoch);
+      await this.replayWithAnchor([...page.events, ...this.loadedEvents], epoch, true);
       return true;
     } catch (error) {
       if (epoch === this.historyEpoch && !this.historyAbort?.signal.aborted) this.error = String(error);
@@ -463,16 +463,18 @@ export class MuxSDKChat extends LitElement {
       if (epoch === this.historyEpoch) { this.loadingOlder = false; this.restoringScroll = false; }
     }
   }
-  private async replayWithAnchor(events: SDKEvent[], epoch: number) {
+  private async replayWithAnchor(events: SDKEvent[], epoch: number, prepending = false) {
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     const oldRows = this.transcriptRows();
     const anchor = body && this.scrollAnchor(body);
     const oldStart = this.visibleStart, oldEnd = this.visibleEnd;
     const oldHeights = this.rowHeights;
     const expanded = new Set(this.workExpanded);
+    const oldTurn = this.currentTurn;
     this.loadedEvents = events;
     this.replayEvents();
-    this.workExpanded = expanded;
+    const turnShift = prepending ? this.currentTurn - oldTurn : 0;
+    this.workExpanded = new Set([...expanded].map(turn => turn + turnShift));
     const rows = this.transcriptRows();
     const shift = rows.length - oldRows.length;
     this.rowHeights = new Map();
@@ -493,6 +495,8 @@ export class MuxSDKChat extends LitElement {
       if (epoch !== this.historyEpoch) return;
       if (current && anchor) this.restoreScrollAnchor(current, anchor.index + shift, anchor.bottom);
       this.updateVisibleRows();
+      await this.updateComplete;
+      if (epoch === this.historyEpoch && current && anchor) this.restoreScrollAnchor(current, anchor.index + shift, anchor.bottom);
     } finally {
       if (epoch === this.historyEpoch) this.restoringScroll = false;
     }
@@ -505,13 +509,21 @@ export class MuxSDKChat extends LitElement {
       await this.olderTask;
       if (epoch !== this.historyEpoch) return;
       const from = this.historyFrom, to = this.historyTo;
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.activeSession)}/history?from=${from}&before=${to}`), { signal:this.historyAbort?.signal });
-      if (!response.ok) throw new Error(`Work details request failed (${response.status})`);
-      const page = await response.json() as HistoryPage;
-      if (epoch !== this.historyEpoch) return;
+      const id = this.activeSession;
+      const pages: SDKEvent[][] = [];
+      let cursor = to;
+      while (cursor > from) {
+        const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${cursor}`), { signal:this.historyAbort?.signal });
+        if (!response.ok) throw new Error(`Work details request failed (${response.status})`);
+        const page = await response.json() as HistoryPage;
+        if (epoch !== this.historyEpoch) return;
+        if (page.from >= cursor || page.from < from) throw new Error('Work detail pages did not align with loaded history.');
+        pages.push(page.events);
+        cursor = page.from;
+      }
       this.detailsLoaded = true;
       this.loadingDetails = false;
-      await this.replayWithAnchor([...page.events, ...this.liveEvents], epoch);
+      await this.replayWithAnchor([...pages.reverse().flat(), ...this.liveEvents], epoch);
     } catch (error) {
       if (epoch === this.historyEpoch && !this.historyAbort?.signal.aborted) this.error = String(error);
     } finally {
@@ -520,9 +532,13 @@ export class MuxSDKChat extends LitElement {
   }
   private onEvent(event: SDKEvent) {
     if (!this.replaying) { this.loadedEvents.push(event); this.liveEvents.push(event); }
-    if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'delegate.message', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type))
-      this.trajectory = [...this.trajectory, event];
-    const blocks = [...this.blocks];
+    if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'delegate.message', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type)) {
+      if (this.replaying) this.trajectory.push(event);
+      else this.trajectory = [...this.trajectory, event];
+    }
+    // A history replay renders once at the end; cloning every intermediate
+    // block array makes a long transcript quadratic before the first paint.
+    const blocks = this.replaying ? this.blocks : [...this.blocks];
     const eventTime = Date.parse(event.at || '') || Date.now();
     const markStart = (turn: number) => {
       const previous = this.turnStarted.get(turn);
@@ -575,15 +591,15 @@ export class MuxSDKChat extends LitElement {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
       const existing = blocks.findIndex(b => b.kind === 'tool' && b.id === event.toolId && !b.done);
-      if (existing >= 0) blocks[existing] = { ...blocks[existing], name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input };
-      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw });
+      if (existing >= 0) blocks[existing] = { ...blocks[existing], name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input, summary:event.summary || blocks[existing].summary };
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw, summary:event.summary });
     }
     else if (event.type === 'tool.completed') {
       markStart(this.currentTurn);
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId && !blocks[i].done) { index = i; break; }
-      if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:event.failed ? 'Failed' : 'Completed', failed:event.failed,
+      if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:event.failed ? 'Failed' : 'Completed', failed:event.failed, summary:event.summary || blocks[index].summary,
         output:event.raw };
-      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:event.failed ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, failed:event.failed,
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:event.failed ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, failed:event.failed, summary:event.summary,
         output:event.raw });
     } else if (event.type === 'tool.result') {
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId) { index = i; break; }
@@ -867,7 +883,9 @@ export class MuxSDKChat extends LitElement {
     if (end !== this.visibleEnd) this.visibleEnd = end;
   }
   private onBodyScroll() {
-    this.updateVisibleRows();
+    // Prepending changes spacer heights before the anchor is restored. Keep
+    // its row mounted until the restoration finishes.
+    if (!this.restoringScroll) this.updateVisibleRows();
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     if (!this.restoringScroll && !this.fillingRecent && body && body.scrollHeight > body.clientHeight && body.scrollTop < 450 && this.hasOlder) void this.loadOlder();
   }
@@ -883,7 +901,7 @@ export class MuxSDKChat extends LitElement {
       return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)} @toggle=${(event: Event) => {
         if ((event.currentTarget as HTMLDetailsElement).open) { this.workExpanded.add(block.turn); if (!this.detailsLoaded) void this.loadDetails(); }
         else this.workExpanded.delete(block.turn);
-      }}><summary>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(row.work)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${row.work.some(item => item.kind !== 'progress') ? row.work.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : !this.detailsLoaded ? 'Work details load when opened.' : this.turnFinished.get(block.turn) === undefined ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`
+      }}><summary>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(row.work)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${row.work.some(item => item.summary) && !this.detailsLoaded ? html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : 'Work details load when opened.'}</div>` : row.work.some(item => item.kind !== 'progress') ? row.work.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : !this.detailsLoaded ? 'Work details load when opened.' : this.turnFinished.get(block.turn) === undefined ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`
         : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? html`<div class="text">${this.markdown(block, block.key)}</div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
