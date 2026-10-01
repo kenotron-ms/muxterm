@@ -1737,6 +1737,20 @@ func ResolveInterpreter(override string) (path, source string, err error) {
 	return p, "python3 on PATH", nil
 }
 
+// CheckAmplifierCLI reports a missing CLI before the sidecar can exit without
+// leaving a useful browser event. It does not open a conversation.
+func CheckAmplifierCLI(ctx context.Context, override string) error {
+	python, _, err := ResolveInterpreter(override)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, python, "-c", "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('amplifier_app_cli') else 1)") //nolint:gosec // interpreter is resolver-produced
+	if err := cmd.Run(); err != nil {
+		return errors.New("Amplifier CLI is unavailable in the selected Python interpreter; install Amplifier, run amplifier init, then restart muxterm")
+	}
+	return nil
+}
+
 // resolveExecutable turns a user-supplied interpreter into an absolute path,
 // accepting either a bare name on PATH or a filesystem path.
 func resolveExecutable(name string) (string, error) {

@@ -1670,7 +1670,7 @@ export class MuxApp extends LitElement {
             : '',
           )}
           ${this._sdkChatId && !this._showDashboard ? this._sdkChatId === 'new' ? html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} @chat-created=${this._onChatOpen}></mux-new-chat>` : html`
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} @chat-created=${this._onChatOpen} @chat-cancel=${this._onChatCancel}></mux-new-chat>` : html`
             <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
         </div>
 
@@ -2628,6 +2628,11 @@ export class MuxApp extends LitElement {
     this._onDashboardHide();
     this._fleetOpen = false;
     this._closeDrawer();
+  };
+
+  private _onChatCancel = (): void => {
+    this._sdkChatId = null;
+    rememberSelectedChat(null);
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
