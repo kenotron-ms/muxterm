@@ -52,7 +52,8 @@ export class MuxNewChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-bg,#1a1c28); color:var(--chrome-text-bright,#e2e6f1); font:13px/1.5 system-ui,sans-serif; }
-    .top { padding:14px 24px; border-bottom:1px solid var(--chrome-border,#343a4c); font-size:14px; font-weight:600; }
+    .top { padding:14px 24px; border-bottom:1px solid var(--chrome-border,#343a4c); font-size:14px; font-weight:600; display:flex; justify-content:space-between; align-items:center; }
+    .top button { border:0; background:transparent; color:inherit; cursor:pointer; }
     .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:24px; }
     .content { width:min(100%,780px); }
     h1 { font-size:28px; font-weight:600; margin:0 0 20px; }
@@ -112,6 +113,8 @@ export class MuxNewChat extends LitElement {
     .location-fields { display:grid; gap:9px; padding:11px 0 4px; }
     .location-note { margin:0; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
     .provider-note { margin:0 2px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
+    .setup { margin:0 0 16px; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; }
+    .setup code,.setup a { color:var(--chrome-text-bright,#e2e6f1); }
     .provider-change { color:var(--chrome-text-bright,#e2e6f1); }
     @media(max-width:550px) { .main { padding:16px; } h1 { font-size:24px; } .controls { gap:6px; } .controls select { max-width:125px; } .project-trigger { max-width:135px; } }
   `;
@@ -154,8 +157,12 @@ export class MuxNewChat extends LitElement {
     if (value === 'ungrouped' || value === 'new') this.workMode = 'local';
   }
   private onHarnessChange(value: HarnessName) {
+    const previous = this.harness;
     this.harness = value;
-    if (!providerAvailable(value, this.provider)) {
+    if (value === 'amplifier' && previous !== 'amplifier') {
+      this.provider = 'configured';
+      this.providerNotice = 'Amplifier will use the provider configured in its bundle.';
+    } else if (!providerAvailable(value, this.provider)) {
       this.provider = providerFor(value);
       this.providerNotice = `Provider changed to ${PROVIDERS.find(provider => provider.value === this.provider)!.label} for ${harnessLabel(value)}.`;
     } else this.providerNotice = '';
@@ -183,13 +190,13 @@ export class MuxNewChat extends LitElement {
       } else if (this.projectId !== 'ungrouped') workspaceId = this.projectId;
       const chat = await sdkChats.create({ workspaceId, projectPath:this.folder, workMode:this.workMode, harness:this.harness, provider:this.provider, prompt });
       this.dispatchEvent(new CustomEvent('chat-created', { detail:{sessionId:chat.id}, bubbles:true, composed:true }));
-    } catch (error) { this.error = String(error); }
+    } catch (error) { this.error = error instanceof Error ? error.message.trim() : String(error); }
     finally { this.busy = false; }
   }
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
     return html`
-    <div class="top">New Chat</div>
+    <div class="top">New Chat <button type="button" @click=${() => this.dispatchEvent(new CustomEvent('chat-cancel', { bubbles:true, composed:true }))}>Use terminal instead</button></div>
     <div class="main"><div class="content">
       <h1>What would you like to do?</h1>
       <div class="composer">
@@ -218,6 +225,12 @@ export class MuxNewChat extends LitElement {
           </div>
         </details>
       </div>
+      <p class="setup">${this.harness === 'amplifier'
+        ? html`Before starting: <a href="https://github.com/microsoft/amplifier-app-cli#installation" target="_blank" rel="noopener noreferrer">install Amplifier</a>, run <code>amplifier init</code> in a terminal to configure a provider and model, then restart muxterm.`
+        : this.harness === 'codex'
+          ? html`Before starting: install Node.js and npm, then sign in with <code>codex login</code> in a terminal. Selecting OpenAI here uses that existing login.`
+          : html`Before starting: install Node.js, npm, and Claude Code, then run <code>claude</code> in a terminal to sign in. Selecting Anthropic here uses that existing login.`}
+        Settings → AI stores a separate key; it does not sign in this harness.</p>
       ${this.providerNotice ? html`<div class="provider-note" role="status"><span class="provider-change">${this.providerNotice}</span></div>` : nothing}
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}

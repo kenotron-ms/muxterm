@@ -91,6 +91,7 @@ import './mux-voice-orb.js';
 import './mux-applets.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
+import { chatMarkdownPolicy } from '../lib/chat-markdown-policy.js';
 import '../lib/mermaid-diagram.js';
 import { operatorReference } from '../lib/operator-reference.js';
 import { store } from '../state.js';
@@ -113,7 +114,7 @@ function renderMarkdown(block: object, text: string, streaming: boolean): Templa
     s = new MarkdownStream();
     parsers.set(block, s);
   }
-  return renderSegments(s.update(text, streaming), { resolve: () => null, reference: operatorReference, diagrams: true });
+  return renderSegments(s.update(text, streaming), { ...chatMarkdownPolicy, reference: operatorReference, diagrams: true });
 }
 
 /** mm:ss for the approval countdown. Clamped at zero, never negative. */
@@ -763,6 +764,8 @@ export class MuxCos extends LitElement {
       text-underline-offset: 2px;
       overflow-wrap: anywhere;
     }
+    .md .md-image-link { display: inline-block; max-width: 100%; }
+    .md .md-img { display: block; max-width: 100%; max-height: min(420px, 55vh); width: auto; height: auto; object-fit: contain; border: 1px solid var(--chrome-border); border-radius: var(--r-ctl); }
     .md .md-ul,
     .md .md-ol {
       margin: 0 0 var(--s-4);
@@ -1024,6 +1027,10 @@ export class MuxCos extends LitElement {
       background: color-mix(in srgb, var(--fail) 8%, var(--surface));
       padding: var(--s-4) var(--s-5);
     }
+    .fatal button { display: block; margin-top: var(--s-4); border: 1px solid currentColor; border-radius: var(--r-ctl); background: transparent; color: inherit; padding: var(--s-2) var(--s-4); cursor: pointer; }
+    .setup-required { color: var(--ink-2); border-color: var(--edge); background: var(--surface); }
+    .setup-required strong { display: block; color: var(--ink-1); margin-bottom: var(--s-2); }
+    .setup-required a { display: block; margin-top: var(--s-4); color: var(--ink-1); }
 
     /* -- EMPTY STATE ------------------------------------------------------ */
     .zero {
@@ -2042,11 +2049,12 @@ export class MuxCos extends LitElement {
   private _renderThread(): TemplateResult {
     const turns = cosStore.turns;
     const fault = cosStore.fault;
+    const setupRequired = !!fault?.fatal && (fault.code === 'startup_failed' || fault.code === 'provider_setup_required' || fault.message.startsWith('Mission Control needs'));
     return html`
-      ${turns.length === 0 && !this._confirm ? this._renderZero() : nothing}
+      ${turns.length === 0 && !this._confirm && !fault?.fatal ? this._renderZero() : nothing}
       ${turns.map((t) => this._renderTurn(t))}
       ${fault && fault.fatal
-        ? html`<div class="fatal" role="alert">${fault.message}</div>`
+        ? html`<div class="fatal ${setupRequired ? 'setup-required' : ''}" role="${setupRequired ? 'status' : 'alert'}">${setupRequired ? html`<strong>Finish setting up Mission Control</strong>` : nothing}${fault.message}${setupRequired ? html`<a href="https://github.com/microsoft/amplifier-app-cli#installation" target="_blank" rel="noopener noreferrer">Amplifier setup guide</a>` : nothing}<button type="button" @click="${() => this.dispatchEvent(new CustomEvent('home-dismiss', { bubbles: true, composed: true }))}">Open terminal</button></div>`
         : nothing}
       ${fault && !fault.fatal ? html`<div class="notice">${fault.message}</div>` : nothing}
       ${this._confirm !== null ? this._renderConfirm(this._confirm) : nothing}

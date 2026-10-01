@@ -337,6 +337,15 @@ func (r *cosRelay) get() (*cos.Supervisor, error) {
 			r.mu.Unlock()
 			return
 		}
+		checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer checkCancel()
+		if err := cos.CheckAmplifierCLI(checkCtx, r.cfg.Python); err != nil {
+			r.mu.Lock()
+			r.err = err
+			r.mu.Unlock()
+			r.releaseRootLock()
+			return
+		}
 		sup := cos.New(r.cfg)
 		if err := sup.Start(context.Background()); err != nil {
 			r.mu.Lock()
@@ -840,7 +849,13 @@ func (c *Client) cosFinishSubscribe(relay *cosRelay, generation uint64) {
 	sup, err := relay.get()
 	if err != nil {
 		if c.cosFinishStartup(generation, nil) {
-			c.sendCosSubscribeResult(false, "Mission Control could not start", "", false)
+			message := "Mission Control could not start. Your terminals are still available."
+			if strings.Contains(err.Error(), "no python interpreter found") || strings.Contains(err.Error(), "Amplifier CLI is unavailable") {
+				message = "Mission Control needs the Amplifier CLI and a configured provider. Install Amplifier, run amplifier init in a terminal, then restart muxterm and reopen this page."
+			} else if strings.Contains(err.Error(), "requires a provider/model from Amplifier AppSettings") {
+				message = "Mission Control needs a configured Amplifier provider. Run amplifier init in a terminal, then restart muxterm and reopen this page."
+			}
+			c.sendCosSubscribeResult(false, message, "", false)
 		}
 		return
 	}

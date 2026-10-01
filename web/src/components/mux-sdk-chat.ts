@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
+import { chatMarkdownPolicy } from '../lib/chat-markdown-policy.js';
 import '../lib/mermaid-diagram.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
@@ -219,6 +220,8 @@ export class MuxSDKChat extends LitElement {
     .text .md-pre code { color:inherit; font:12.5px/1.6 ui-monospace,monospace; white-space:pre; }
     .text .md-pre[data-streaming] { border-bottom-color:var(--chrome-accent,#9bb8f7); }
     .text .md-link { color:var(--chrome-accent,#9bb8f7); text-decoration:underline; text-underline-offset:3px; }
+    .text .md-image-link { display:inline-block; max-width:100%; }
+    .text .md-img { display:block; max-width:100%; max-height:min(420px,55vh); width:auto; height:auto; object-fit:contain; border:1px solid var(--chrome-border,#41485f); border-radius:8px; }
     .text .md-ul, .text .md-ol { margin:0 0 16px; padding-left:25px; }
     .text .md-li { margin:5px 0; }
     .text .md-li .md-p { margin:0; }
@@ -960,7 +963,7 @@ export class MuxSDKChat extends LitElement {
   private markdown(block: Block, index: number) {
     let parser = this.parsers.get(index);
     if (!parser) { parser = new MarkdownStream(); this.parsers.set(index, parser); }
-    return renderSegments(parser.update(block.text, !block.done));
+    return renderSegments(parser.update(block.text, !block.done), chatMarkdownPolicy);
   }
   private userBubble(block: Block) {
     return html`<div class="bubble">${block.text}${block.attachments?.map(attachment => attachment.kind === 'image'

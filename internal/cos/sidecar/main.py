@@ -937,6 +937,18 @@ class Sidecar:
         # A bare Foundation session can mount with no configured provider.
         if self._model_name() == "unknown":
             raise RuntimeError("loop-live requires a provider/model from Amplifier AppSettings")
+        # Non-interactive first run can select Ollama with no reachable model.
+        # Check before Mission Control reports ready to the browser.
+        mounted_providers = session.coordinator.get("providers") or {}
+        for name, provider in mounted_providers.items():
+            if "ollama" not in str(name).lower() and "ollama" not in type(provider).__module__.lower():
+                continue
+            try:
+                models = await asyncio.wait_for(provider.list_models(), timeout=15)
+            except Exception as exc:
+                raise RuntimeError("Ollama is selected but no models are available; start Ollama and pull a model, or run amplifier init to choose another provider") from exc
+            if not models:
+                raise RuntimeError("Ollama is selected but no models are available; start Ollama and pull a model, or run amplifier init to choose another provider")
         # Mount the selected orchestrator before any execution starts.
         from amplifier_module_loop_live import mount as mount_loop_live
         from amplifier_module_loop_live.runtime import Runtime

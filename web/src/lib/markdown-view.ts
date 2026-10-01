@@ -23,6 +23,7 @@
  */
 import { html, nothing, type TemplateResult } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
+import '../components/mux-chat-remote-image.js';
 import type { MdSegment, Token } from './markdown-stream';
 
 /**
@@ -67,7 +68,9 @@ export function isSafeHref(url: string): boolean {
  */
 export interface MdLinkPolicy {
   /** Same-origin URL inside the publication, or null to refuse. */
-  resolve(raw: string): string | null;
+  resolve?(raw: string): string | null;
+  image?(raw: string): string | null;
+  remoteImages?: boolean;
   reference?(href: string, label: string): TemplateResult | null;
   /** Chat policies opt in; published documents keep Mermaid as code. */
   diagrams?: boolean;
@@ -142,7 +145,7 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
       // next. It opens in the same tab, because staying in place is what
       // makes a set of documents read as a site rather than as a pile of
       // files. Anything the policy refuses falls through unchanged.
-      const inTree = policy?.resolve(href) ?? null;
+      const inTree = policy?.resolve?.(href) ?? null;
       if (inTree !== null) {
         return html`<a class="md-link md-link-tree" href="${inTree}" rel="noopener"
           >${renderInline(t.tokens, policy)}</a
@@ -158,9 +161,16 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
       // or outward-pointing source is still drawn as its alt text and fetched
       // not at all, so a published document cannot become a beacon that
       // reports who opened the link.
-      const src = policy?.resolve(t.href ?? '') ?? null;
+      const href = t.href ?? '';
+      const src = policy?.image ? policy.image(href) : policy?.resolve?.(href) ?? null;
       if (src !== null) {
-        return html`<img class="md-img" src="${src}" alt="${t.text ?? ''}" loading="lazy" />`;
+        const picture = html`<img class="md-img" src="${src}" alt="${t.text ?? ''}" loading="lazy" />`;
+        return policy?.image
+          ? html`<a class="md-image-link" href="${src}" target="_blank" rel="noopener noreferrer">${picture}</a>`
+          : picture;
+      }
+      if (policy?.remoteImages && /^https?:\/\//i.test(href.trim())) {
+        return html`<mux-chat-remote-image .src="${href.trim()}" .alt="${t.text ?? ''}"></mux-chat-remote-image>`;
       }
       return html`<span class="md-nolink">${t.text ?? ''}</span>`;
     }

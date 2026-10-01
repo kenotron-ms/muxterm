@@ -186,6 +186,19 @@ export interface CosFault {
   fatal: boolean;
 }
 
+function setupFault(message: string): string | null {
+  if (message.includes('Ollama is selected but no models are available')) {
+    return 'Mission Control needs a reachable Ollama model. Start Ollama and pull a model, or run amplifier init to choose another provider, then restart muxterm and reopen this page.';
+  }
+  if (message.includes('requires a provider/model from Amplifier AppSettings')) {
+    return 'Mission Control needs a configured Amplifier provider and model. Run amplifier init in a terminal, then restart muxterm and reopen this page.';
+  }
+  if (message.includes("No module named 'amplifier_app_cli'")) {
+    return 'Mission Control needs the Amplifier CLI. Install Amplifier, run amplifier init in a terminal, then restart muxterm and reopen this page.';
+  }
+  return null;
+}
+
 interface PendingAdmission {
   readonly clientRef: string;
   readonly draftRevision: number;
@@ -1261,7 +1274,19 @@ export class CosStore {
         }
         if (fatal) {
           this._setStatus('down');
-          this._fault = { code, message, fatal: true };
+          const providerGuidance = setupFault(message);
+          const startupFailure = !turnId && this._turns.length === 0 &&
+            (code === 'sidecar_exit' || code === 'sidecar_unavailable');
+          const startupGuidance = startupFailure
+            ? 'Mission Control could not start. Check Amplifier setup with amplifier init and inspect muxterm logs, then restart muxterm and reopen this page.'
+            : null;
+          if (providerGuidance || startupGuidance || this._fault?.code !== 'provider_setup_required') {
+            this._fault = {
+              code: providerGuidance ? 'provider_setup_required' : startupGuidance ? 'startup_failed' : code,
+              message: providerGuidance || startupGuidance || message,
+              fatal: true,
+            };
+          }
           // Nothing is coming back for anything still in flight.
           for (const t of this._turns) {
             if (t.status === 'pending' || t.status === 'streaming') {

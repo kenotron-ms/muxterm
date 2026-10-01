@@ -309,7 +309,9 @@ func isProbablyUTF8Text(buf []byte) bool {
 // than merely intended: without it a browser may sniff an attachment's bytes,
 // decide they are HTML, and act on that decision.
 //
-// ⛔ THE SIZE BOUND DELIBERATELY DOES NOT APPLY HERE, and that is not a hole.
+// The optional max_bytes bound protects inline chat images. Without it,
+// downloads remain unbounded and resumable.
+// ⛔ THE SIZE BOUND DELIBERATELY DOES NOT APPLY HERE by default, and that is not a hole.
 // publicationMaxBytes bounds what is RENDERED, because rendering means holding
 // the whole thing in memory and handing it to a parser. Saving a file means
 // neither: the bytes are streamed straight to the socket. Bounding a download
@@ -321,6 +323,17 @@ func (s *Server) handleArtifactRaw(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeArtifactError(w, code, err)
 		return
+	}
+	if r.URL.Query().Has("max_bytes") {
+		maxBytes, _, limitErr := artifactReadLimit(r)
+		if limitErr != nil {
+			writeArtifactError(w, http.StatusBadRequest, limitErr)
+			return
+		}
+		if fi.Size() > maxBytes {
+			writeArtifactError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("image is larger than the %d-byte inline limit", maxBytes))
+			return
+		}
 	}
 
 	f, err := os.Open(p)

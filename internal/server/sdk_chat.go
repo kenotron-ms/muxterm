@@ -259,6 +259,14 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		h.mu.Unlock()
 		return
 	}
+	if event.Type == "error" {
+		switch {
+		case c.Harness == "codex" && strings.Contains(event.Message, "Missing bearer or basic authentication"):
+			event.Message = "Codex authentication failed. Run codex login in a terminal, then send a new message here."
+		case c.Harness == "claude" && (strings.Contains(event.Message, "authentication_error") || strings.Contains(event.Message, "Invalid API key")):
+			event.Message = "Claude Code authentication failed. Run claude in a terminal to sign in, then send a new message here."
+		}
+	}
 	if event.NativeID != "" {
 		c.NativeID = event.NativeID
 	}
@@ -390,6 +398,12 @@ func (h *sdkChatHost) ensure(harness string) error {
 }
 func (h *sdkChatHost) ensureAmplifier() error {
 	h.ampOnce.Do(func() {
+		checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer checkCancel()
+		if err := cos.CheckAmplifierCLI(checkCtx, ""); err != nil {
+			h.ampErr = err
+			return
+		}
 		self, err := os.Executable()
 		if err != nil {
 			h.ampErr = err
@@ -1157,6 +1171,12 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.ProjectPath = filepath.Clean(req.ProjectPath)
+	// A missing runtime is a setup failure, not a conversation. Check before
+	// writing a chat record or creating a worktree.
+	if err := h.ensure(req.Harness); err != nil {
+		http.Error(w, err.Error(), 503)
+		return
+	}
 	chatID := sdkID()
 	if req.WorkMode == "worktree" {
 		root, err := exec.CommandContext(r.Context(), "git", "-C", req.ProjectPath, "rev-parse", "--show-toplevel").Output()

@@ -24,6 +24,16 @@ bash install.sh
 
 **No sudo required.** The binary installs to `~/.local/bin` and PATH is configured automatically.
 
+Terminal and workspace features work without an AI provider. AI setup is optional:
+
+| Conversation | First-time setup |
+| --- | --- |
+| Mission Control and Amplifier chats | [Install Amplifier](https://github.com/microsoft/amplifier-app-cli#installation), run `amplifier init` to choose a provider and model, then restart muxterm. If you choose Ollama, start its server and pull a model first. |
+| Codex chats | Install Node.js and npm, install Codex, then run `codex login` in a terminal. |
+| Claude Code chats | Install Node.js and npm, install Claude Code, then run `claude` in a terminal to sign in. |
+
+The Anthropic key in muxterm's Settings → AI is separate from those logins.
+
 **To run as a background service** (persists across reboots):
 ```bash
 muxterm install
