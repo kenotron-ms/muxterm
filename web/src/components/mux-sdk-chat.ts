@@ -76,6 +76,8 @@ export class MuxSDKChat extends LitElement {
   private reconnectFailures = 0;
   private streamOpenedAt = 0;
   @state() private reconnectFailed = false;
+  private idleSuspended = false;
+  private lastActivationAt = Date.now();
   private historyAbort?: AbortController;
   private historyEpoch = 0;
   private activeSession = '';
@@ -311,6 +313,10 @@ export class MuxSDKChat extends LitElement {
   `;
   override connectedCallback() {
     super.connectedCallback();
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
+    window.addEventListener('focus', this.resumeConnection);
+    window.addEventListener('online', this.onOnline);
+    window.addEventListener('pageshow', this.resumeConnection);
     window.addEventListener('keydown', this.stopVoiceOnEscape);
     document.addEventListener('pointerdown', this.closeAgentListOnOutsidePointer);
     window.addEventListener('dragover', this.preventFileNavigation);
@@ -331,6 +337,10 @@ export class MuxSDKChat extends LitElement {
     void fetchVoiceStatus().then(status => { this.voiceAvailable = status.enabled && !status.restartRequired; });
   }
   override disconnectedCallback() {
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    window.removeEventListener('focus', this.resumeConnection);
+    window.removeEventListener('online', this.onOnline);
+    window.removeEventListener('pageshow', this.resumeConnection);
     window.removeEventListener('keydown', this.stopVoiceOnEscape);
     document.removeEventListener('pointerdown', this.closeAgentListOnOutsidePointer);
     this.persistTranscriptCache();
@@ -352,6 +362,32 @@ export class MuxSDKChat extends LitElement {
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
     super.disconnectedCallback();
   }
+  private readonly onVisibilityChange = () => {
+    if (!document.hidden) { this.resumeConnection(); return; }
+    this.idleSuspended = true;
+    this.historyEpoch++;
+    this.historyAbort?.abort();
+    this.stream?.close(); this.stream = undefined;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    this.reconnectFailures = 0;
+    if (this.reconnectFailed) { this.reconnectFailed = false; this.error = ''; }
+  };
+  private readonly resumeConnection = () => {
+    const away = Date.now() - this.lastActivationAt;
+    this.lastActivationAt = Date.now();
+    if (!this.isConnected || !this.activeSession || document.hidden) return;
+    // A sleeping browser may resume without a visibility change or an SSE error.
+    if (this.idleSuspended || this.reconnectFailed || away > 60_000 || (this.reconnectFailures > 0 && !this.reconnectTimer)) {
+      this.idleSuspended = false;
+      this.retryConnection();
+    }
+  };
+  private readonly onOnline = () => {
+    if (!this.isConnected || !this.activeSession || document.hidden) return;
+    this.idleSuspended = false;
+    this.retryConnection();
+  };
   override willUpdate(changed: Map<string, unknown>) { if (changed.has('sessionId')) this.connect(); }
   override updated(changed: Map<string, unknown>) {
     if (changed.has('draft')) this.sizeTextarea();
@@ -450,6 +486,7 @@ export class MuxSDKChat extends LitElement {
     if (this.cacheTimer) clearTimeout(this.cacheTimer);
     this.reconnectTimer = undefined; this.cacheTimer = undefined;
     this.streamCursor = 0; this.reconnectFailures = 0; this.reconnectFailed = false;
+    this.idleSuspended = false;
     this.resetTranscript();
     this.loadedEvents = []; this.liveEvents = []; this.historyFrom = 0; this.historyTo = 0; this.hasOlder = false; this.loadingOlder = false; this.loadingDetails = false; this.detailsLoaded = false;
     this.fillingRecent = false; this.restoringScroll = false; this.historyUserInteracted = false; this.olderTask = undefined;
@@ -472,8 +509,11 @@ export class MuxSDKChat extends LitElement {
         if (body) body.scrollTop = body.scrollHeight;
       });
     }
-    void this.loadRecent(this.sessionId, epoch, this.historyAbort.signal);
-    void this.loadAgentHistory(this.sessionId, epoch, this.historyAbort.signal);
+    if (document.hidden) this.idleSuspended = true;
+    else {
+      void this.loadRecent(this.sessionId, epoch, this.historyAbort.signal);
+      void this.loadAgentHistory(this.sessionId, epoch, this.historyAbort.signal);
+    }
   }
   private async loadAgentHistory(id: string, epoch: number, signal: AbortSignal) {
     this.agentHistoryError = '';
@@ -580,6 +620,7 @@ export class MuxSDKChat extends LitElement {
       if (epoch !== this.historyEpoch || this.stream !== source) return;
       try { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; }
       catch { this.failStream(source, id, epoch); return; }
+      if (this.reconnectFailed) { this.reconnectFailed = false; this.error = ''; }
       this.busy = this.chat.state === 'working';
     });
     source.addEventListener('sdk', e => {
@@ -604,11 +645,11 @@ export class MuxSDKChat extends LitElement {
   }
   private scheduleReconnect(epoch: number, retry: () => void) {
     if (epoch !== this.historyEpoch) return;
-    this.reconnectFailures++;
+    if (document.hidden) { this.idleSuspended = true; return; }
+    this.reconnectFailures = Math.min(this.reconnectFailures + 1, 8);
     if (this.reconnectFailures >= 7) {
       this.reconnectFailed = true;
-      this.error = 'Unable to reconnect to this chat. Check your connection, then retry.';
-      return;
+      this.error = 'Chat is offline. Reconnecting automatically…';
     }
     const delay = Math.min(8_000, 500 * 2 ** (this.reconnectFailures - 1));
     this.reconnectTimer = window.setTimeout(() => { this.reconnectTimer = undefined; retry(); }, delay);
@@ -622,6 +663,7 @@ export class MuxSDKChat extends LitElement {
     this.historyAbort = new AbortController();
     this.hasOlder = false; this.fillingRecent = false; this.loadingOlder = false; this.loadingDetails = false; this.restoringScroll = false; this.olderTask = undefined;
     void this.loadRecent(this.sessionId, this.historyEpoch, this.historyAbort.signal);
+    void this.loadAgentHistory(this.sessionId, this.historyEpoch, this.historyAbort.signal);
   }
   private replayEvents() {
     const busy = this.busy;
@@ -1361,7 +1403,7 @@ export class MuxSDKChat extends LitElement {
       ${this.recoveryRequired ? html`<div class="recovery" role="alert"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : html`${this.hasOlder ? html`<button class="history-more" ?disabled=${this.loadingOlder} @click=${() => void this.loadOlder()}>${this.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}</button>` : nothing}${this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}`}
-      ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry connection</button>` : nothing}</div>` : nothing}
+      ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${(e: InputEvent) => { this.agentDraft=(e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraft.trim()}>Send to root ↗</button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
