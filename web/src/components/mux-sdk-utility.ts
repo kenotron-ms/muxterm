@@ -1,8 +1,10 @@
 import { LitElement, html, render, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { DockviewComponent, type IContentRenderer, type ITabRenderer, type TabPartInitParameters, type SerializedDockview } from 'dockview-core';
+import { Folder, GitPullRequest, ListTodo, Route, type IconNode } from 'lucide';
 import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import { apiPath } from '../lib/base-path.js';
+import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import type { Artifact } from '../lib/artifact-api.js';
@@ -14,6 +16,7 @@ type Pull = { number: number; title: string; state: string; branch: string; url:
 type TrajectoryEvent = { type: string; at?: string; text?: string; name?: string; toolId?: string; raw?: unknown; kind?: string; failed?: boolean; complete?: boolean; message?: string; childSessionId?: string; agent?: string };
 type TrajectoryRecord = { id: number; turn: number; kind: string; label: string; start?: number; end?: number; input?: unknown; output?: unknown; status: string; childId?: string; toolId?: string };
 const KEY = 'muxterm.sdk.utility.layout.';
+const TAB_ICONS: Record<string, IconNode> = { plan: ListTodo, files: Folder, pr: GitPullRequest, trajectory: Route };
 
 class UtilityPanel implements IContentRenderer {
   readonly element = document.createElement('div');
@@ -27,18 +30,26 @@ class UtilityPanel implements IContentRenderer {
 class UtilityTab implements ITabRenderer {
   readonly element = document.createElement('div');
   private readonly label = document.createElement('div');
+  private readonly glyph = document.createElement('span');
+  private readonly title = document.createElement('span');
   private titleChanged?: { dispose(): void };
   constructor() {
     this.element.className = 'dv-default-tab';
-    this.label.className = 'dv-default-tab-content';
+    this.label.className = 'dv-default-tab-content utility-tab-label';
+    this.glyph.className = 'utility-tab-icon';
+    this.glyph.setAttribute('aria-hidden', 'true');
+    this.label.append(this.glyph, this.title);
     this.element.appendChild(this.label);
     this.element.addEventListener('mousedown', event => {
       if (event.button === 1) { event.preventDefault(); event.stopPropagation(); }
     });
   }
   init(params: TabPartInitParameters) {
-    this.label.textContent = params.title;
-    this.titleChanged = params.api.onDidTitleChange(({title}) => { this.label.textContent = title; });
+    const nodes = TAB_ICONS[params.api.id];
+    if (nodes) render(icon(nodes, { size: 14 }), this.glyph);
+    else this.glyph.hidden = true;
+    this.title.textContent = params.title;
+    this.titleChanged = params.api.onDidTitleChange(({title}) => { this.title.textContent = title; });
   }
   dispose() { this.titleChanged?.dispose(); }
 }
@@ -224,6 +235,9 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 58%,transparent); }
     mux-sdk-utility .utility-dock { width:100%; height:100%; }
     mux-sdk-utility .dv-dockview { --dv-background-color:#202632; --dv-tabs-and-actions-container-background-color:#252c3a; --dv-activegroup-visiblepanel-tab-background-color:#35445f; --dv-inactivegroup-visiblepanel-tab-background-color:#2b3548; --dv-activegroup-visiblepanel-tab-color:#eef2ff; --dv-inactivegroup-visiblepanel-tab-color:#c1cbdd; --dv-separator-border:1px solid #41485f; }
+    mux-sdk-utility .dv-tab { padding-inline:14px; }
+    mux-sdk-utility .utility-tab-label { display:inline-flex; align-items:center; gap:5px; }
+    mux-sdk-utility .utility-tab-icon { display:inline-flex; flex:none; align-items:center; }
     mux-sdk-utility .utility-panel { width:100%; height:100%; overflow:auto; }
     mux-sdk-utility h2 { font-size:14px; margin:0 0 12px; } mux-sdk-utility h2 small { font-size:11px; color:#96a4bc; font-weight:400; margin-left:8px; }
     mux-sdk-utility h3 { font-size:12px; margin:18px 0 7px; } mux-sdk-utility .utility-content { padding:20px; }

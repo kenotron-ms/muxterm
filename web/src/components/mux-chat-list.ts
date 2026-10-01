@@ -66,7 +66,10 @@ export class MuxChatWorkspace extends LitElement {
     .name { font-weight:600; }
     .archived .name { color:var(--chrome-text-dim,#aab2c1); }
     .action { display:inline-flex; align-items:center; justify-content:center; width:25px; height:25px; flex:none; border-radius:5px; color:var(--chrome-text-dim,#aab2c1); opacity:0; }
-    .row:hover .action,.chat-row:hover .action,.row:focus-within .action,.chat-row:focus-within .action { opacity:1; }
+    .row:hover .action,.row:focus-within .action { opacity:1; }
+    .chat-row .action { display:none; opacity:1; }
+    .chat-row .action.more { display:inline-flex; }
+    .chat-row:hover .action,.chat-row:has(.chat:focus-visible) .action { display:inline-flex; }
     .action:hover { background:rgba(255,255,255,.12); color:inherit; }
     .more { opacity:1; }
     .menu { position:absolute; z-index:30; top:28px; right:4px; min-width:180px; padding:5px; background:var(--chrome-bar,#252b38); border:1px solid var(--chrome-border,#3b4355); border-radius:9px; box-shadow:0 12px 28px #0008; }
@@ -76,11 +79,12 @@ export class MuxChatWorkspace extends LitElement {
     .menu .danger { color:#e6a5a5; }
     .chats { margin:0 0 5px; }
     .chat { flex:1; min-width:0; min-height:28px; padding:3px 5px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:7px; }
-    .chat[selected] { background:rgba(122,162,247,.16); }
+    .chat-row[selected] { background:rgba(122,162,247,.16); }
     .status { width:6px; height:6px; border-radius:50%; background:#697386; flex:none; }
     .status.working { background:#7dcba1; }
     .title { font-weight:550; }
     .harness { color:var(--chrome-text-dim,#aab2c1); font-size:10px; flex:none; text-transform:lowercase; }
+    .chat-row:hover .harness,.chat-row:has(.chat:focus-visible) .harness { display:none; }
     .rename-input,.editor input { min-width:0; border:1px solid #60749b; border-radius:5px; padding:6px 7px; background:var(--chrome-bar,#252b38); color:inherit; font:inherit; }
     .rename-input { flex:1; margin:3px 5px; }
     .editor { margin:4px 5px 10px 20px; padding:12px; border:1px solid var(--chrome-border,#3b4355); border-radius:9px; background:var(--chrome-bar,#252b38); display:grid; gap:9px; }
@@ -227,9 +231,9 @@ export class MuxChatWorkspace extends LitElement {
       </div>` : nothing}
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       ${this.open ? html`<div class="chats">${repeat(group.chats, chat => chat.id, chat => html`
-        <div class="chat-row" @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
+        <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="action more" aria-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</button>` : html`
-            <button class="chat" ?selected=${this.selectedSession === chat.id} title=${`${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
+            <button class="chat" title=${`${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
               <span class="status ${chat.state}" title=${chat.state}></span><span class="title">${chat.title}</span><span class="harness">${chat.harness}</span>
             </button>
             <button class="action" aria-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} title=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</button>
