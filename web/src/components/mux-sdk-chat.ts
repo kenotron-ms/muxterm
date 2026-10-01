@@ -37,7 +37,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { Brain, Check, ChevronDown, CircleX, Terminal, LoaderCircle, Mic } from 'lucide';
+import { Brain, Check, ChevronDown, CircleX, Terminal, LoaderCircle, Mic, PanelRight } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
@@ -140,7 +140,7 @@ export class MuxSDKChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-bg,#1a1c28); color:var(--chrome-text-bright,#d9def0); font:13px/1.55 system-ui,sans-serif; }
-    .topbar { min-height:44px; display:flex; align-items:center; gap:12px; padding:0 22px; border-bottom:1px solid var(--chrome-border,#343a4c); }
+    .topbar { box-sizing:border-box; height:42px; flex:none; display:flex; align-items:center; gap:12px; padding:0 12px 0 22px; border-bottom:1px solid var(--chrome-border,#343a4c); }
     .breadcrumbs { display:flex; align-items:center; gap:7px; min-width:0; }
     .breadcrumbs button { border:0; padding:4px; border-radius:5px; background:transparent; color:#a9c5fa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
     .breadcrumbs button:hover { background:#35445f; }
@@ -174,9 +174,8 @@ export class MuxSDKChat extends LitElement {
     .recovery button { border:1px solid #a38b65; border-radius:6px; padding:5px 9px; background:#40372f; color:#f0dfc3; }
     .recovery button:hover { background:#534535; }
     h1 { font-size:14px; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .meta { margin-left:auto; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
     button { font:inherit; cursor:pointer; }
-    .drawer-toggle { border:0; background:transparent; color:#9cbaf5; padding:7px; }
+    .drawer-toggle { margin-left:auto; border:0; background:transparent; color:#9cbaf5; padding:7px; }
     .layout { display:flex; flex:1; min-height:0; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
     .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable both-edges; overflow-anchor:none; }
@@ -309,7 +308,7 @@ export class MuxSDKChat extends LitElement {
     .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:rgba(155,184,247,.25); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
-    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { position:absolute; right:0; top:44px; bottom:0; box-shadow:-10px 0 30px #0008; } }
+    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { position:absolute; right:0; top:42px; bottom:0; box-shadow:-10px 0 30px #0008; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -1396,7 +1395,7 @@ export class MuxSDKChat extends LitElement {
     const agents = this.agents();
     const running = agents.filter(agent => agent.status === 'Running').length;
     return html`
-    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<span class="meta">${this.chat?.harness || ''} · ${sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped'}</span><button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>▥</button></div>
+    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>${icon(PanelRight, { size: 16 })}</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${agents.length ? html`<div class="agent-bar"><div class="agent-bar-inner"><button class="agent-toggle" aria-label=${`Agents: ${running} running, ${agents.length - running} finished`} aria-expanded=${this.agentPanelOpen} @click=${() => { this.agentPanelOpen = !this.agentPanelOpen; }}>${running ? html`<span class="running" aria-hidden="true"></span>` : nothing}Agents · ${running ? `${running} running` : `${agents.length} completed`} ${icon(ChevronDown, { size: 14 })}</button>${this.agentPanelOpen ? html`<div class="agent-list" aria-label="Delegated sub-agents">${agents.map(agent => html`<button class="agent-link" @click=${() => this.openAgent(agent.id)}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</div>` : nothing}</div></div>` : nothing}
       ${this.agentHistoryError ? html`<div class="agent-history-error" role="alert">Saved agent work could not be loaded. <button @click=${this.retryAgentHistory}>Retry</button></div>` : nothing}
