@@ -168,6 +168,13 @@ func sdkVoiceEventTail(path string) []byte {
 // chronological voice excerpt with the next human input, while keeping the
 // visible user message and its authorization separate from that excerpt.
 func (h *sdkChatHost) recentVoiceContext(id string) string {
+	h.mu.Lock()
+	chat := h.chats[id]
+	hasVoiceHistory := chat != nil && chat.HasVoiceHistory
+	h.mu.Unlock()
+	if !hasVoiceHistory {
+		return ""
+	}
 	data := sdkVoiceEventTail(filepath.Join(h.dir, id+".ndjson"))
 	if len(data) == 0 {
 		return ""
@@ -301,7 +308,7 @@ func (h *sdkVoiceHost) connect(ctx context.Context, chatID, offer string) (strin
 	return answer.Transport.SDP, answer.Session.ID, nil
 }
 
-func (h *sdkVoiceHost) end(chatID, providerID string) {
+func (h *sdkVoiceHost) end(chatID, providerID string) bool {
 	h.mu.Lock()
 	call := h.calls[chatID]
 	if call != nil && call.providerID == providerID {
@@ -313,6 +320,7 @@ func (h *sdkVoiceHost) end(chatID, providerID string) {
 	if call != nil {
 		call.close()
 	}
+	return call != nil
 }
 
 func (h *sdkVoiceHost) close() {
@@ -356,7 +364,15 @@ func (c *sdkVoiceCall) sendAtRevision(kind, delegationID, content string, revisi
 }
 
 func (c *sdkVoiceCall) read() {
-	defer c.host.end(c.chatID, c.providerID)
+	normalClose := false
+	defer func() {
+		unexpected := !normalClose && c.ctx.Err() == nil
+		wasCurrent := c.host.end(c.chatID, c.providerID)
+		if unexpected && wasCurrent {
+			c.host.chats.appendEvent(sdkEvent{SessionID: c.chatID, Type: "voice.session.error",
+				GenerationID: c.providerID, Message: "Voice connection lost. Start voice again to continue."})
+		}
+	}()
 	for {
 		_, data, err := c.conn.Read(c.ctx)
 		if err != nil {
@@ -405,6 +421,7 @@ func (c *sdkVoiceCall) read() {
 				go c.delegateAfterTranscripts(ev.Delegation.ID, from, to)
 			}
 		case "session.closed":
+			normalClose = true
 			return
 		}
 	}

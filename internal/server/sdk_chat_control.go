@@ -137,9 +137,13 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	if chat.State == "working" {
 		kind = "steer"
 	}
+	voiceContext := ""
+	if s.sdkVoice != nil {
+		voiceContext = h.recentVoiceContext(id)
+	}
 	result, err := h.call(ctx, "send", map[string]any{"sessionId": id,
 		"input": map[string]any{"kind": kind, "source": "user", "id": receipt.InputID,
-			"content": sdkTaskInputWithVoiceContext(req.Content, h.recentVoiceContext(id)), "displayContent": req.Content}})
+			"content": sdkTaskInputWithVoiceContext(req.Content, voiceContext), "displayContent": req.Content}})
 	var ack struct{ Status, InputID string }
 	if err == nil {
 		err = json.Unmarshal(result, &ack)

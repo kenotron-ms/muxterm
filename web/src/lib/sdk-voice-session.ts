@@ -22,6 +22,8 @@ export class SDKVoiceSession {
   private lastMeterUpdate = 0;
   state: SDKVoiceState = 'idle';
 
+  get providerSessionId(): string { return this.providerId; }
+
   constructor(chatId: string, onState: (state: SDKVoiceState) => void, onLevels: (levels: readonly number[]) => void) {
     this.chatId = chatId;
     this.onState = onState;

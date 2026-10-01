@@ -56,6 +56,7 @@ type sdkChat struct {
 	UpdatedAt        time.Time `json:"updatedAt,omitempty"`
 	LastActivity     string    `json:"lastActivity,omitempty"`
 	LastOutput       string    `json:"lastOutput,omitempty"`
+	HasVoiceHistory  bool      `json:"hasVoiceHistory,omitempty"`
 }
 type sdkProject struct {
 	ID            string   `json:"id"`
@@ -262,6 +263,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.NativeID = event.NativeID
 	}
 	c.UpdatedAt = time.Now().UTC()
+	if event.Type == "voice.input.delta" || event.Type == "voice.output.delta" {
+		c.HasVoiceHistory = true
+	}
 	switch event.Type {
 	case "input.accepted":
 		c.State = "working"
@@ -1414,7 +1418,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content := req.Content
-		if req.Kind == "user" || req.Kind == "steer" {
+		if (req.Kind == "user" || req.Kind == "steer") && s.sdkVoice != nil {
 			content = sdkTaskInputWithVoiceContext(content, h.recentVoiceContext(id))
 		}
 		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": content, "displayContent": req.Content, "attachments": attachments, "model": c.Model, "effort": c.Effort}})

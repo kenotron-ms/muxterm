@@ -12,7 +12,7 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
-type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; message?: string; kind?: string; source?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
+type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[] };
@@ -896,6 +896,10 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'task.cancel.requested') {
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:'Task cancellation requested.' });
+    }
+    else if (event.type === 'voice.session.error') {
+      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:event.message || 'Voice connection lost.' });
+      if (!this.replaying && event.generationId && this.voice?.providerSessionId === event.generationId) this.voice.stop();
     }
     else if (event.type === 'session.renamed') { if (!this.replaying) void sdkChats.refresh(); }
     else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
