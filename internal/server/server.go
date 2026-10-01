@@ -141,7 +141,8 @@ type Server struct {
 	// voice owns the opt-in realtime speech-to-speech capability. nil
 	// unless [voice] is enabled and valid; the routes are registered only
 	// alongside it, so a nil here means the paths do not exist.
-	voice *voice.Manager
+	voice    *voice.Manager
+	sdkVoice *sdkVoiceHost
 
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
@@ -307,6 +308,17 @@ func New(cfg Config) *Server {
 	// Opt-in realtime voice. Registered only when [voice] is enabled and
 	// valid -- see internal/server/voice.go.
 	s.registerVoiceRoutes(s.cfg.Voice, protect)
+	if s.voice != nil {
+		chatVoice, err := newSDKVoiceHost(s.cfg.Voice, s.sdkChats)
+		if err != nil {
+			log.Printf("sdk voice: unavailable: %v", err)
+		} else {
+			s.sdkVoice = chatVoice
+			s.sdkChats.onEvent = chatVoice.onChatEvent
+			s.mux.Handle("POST /api/sdk-chats/{id}/voice/sdp", protect(http.HandlerFunc(s.handleSDKVoiceSDP)))
+			s.mux.Handle("POST /api/sdk-chats/{id}/voice/end", protect(http.HandlerFunc(s.handleSDKVoiceEnd)))
+		}
+	}
 
 	// Voice CREDENTIALS, registered unconditionally -- unlike the routes
 	// above, whose whole job is to be absent when voice is off. Configuring
@@ -446,6 +458,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// what the child's Pdeathsig is for (internal/cos/pdeathsig_linux.go).
 	defer s.hub.CloseCos()
 	defer s.sdkChats.close()
+	if s.sdkVoice != nil {
+		defer s.sdkVoice.close()
+	}
 	// Harness services have no browser owner. Bring them up with the server so
 	// opening a chat only reads its Go-owned history and never starts a provider.
 	prewarmDone := make(chan struct{})

@@ -56,6 +56,7 @@ type sdkChat struct {
 	UpdatedAt        time.Time `json:"updatedAt,omitempty"`
 	LastActivity     string    `json:"lastActivity,omitempty"`
 	LastOutput       string    `json:"lastOutput,omitempty"`
+	HasVoiceHistory  bool      `json:"hasVoiceHistory,omitempty"`
 }
 type sdkProject struct {
 	ID            string   `json:"id"`
@@ -143,6 +144,7 @@ type sdkChatHost struct {
 	streams     map[string]map[chan sdkEvent]struct{}
 	nameStreams map[chan string]struct{}
 	naming      map[string]bool
+	onEvent     func(sdkEvent)
 }
 
 func sdkDataDir() string {
@@ -261,6 +263,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.NativeID = event.NativeID
 	}
 	c.UpdatedAt = time.Now().UTC()
+	if event.Type == "voice.input.delta" || event.Type == "voice.output.delta" {
+		c.HasVoiceHistory = true
+	}
 	switch event.Type {
 	case "input.accepted":
 		c.State = "working"
@@ -317,6 +322,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		h.scheduleNamingLocked(c)
 	}
 	h.mu.Unlock()
+	if h.onEvent != nil {
+		h.onEvent(event)
+	}
 }
 func sdkPreview(text string, limit int) string {
 	return strings.TrimSpace(sdkTail(text, limit))
@@ -1409,7 +1417,11 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 502)
 			return
 		}
-		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": req.Content, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
+		content := req.Content
+		if (req.Kind == "user" || req.Kind == "steer") && s.sdkVoice != nil {
+			content = sdkTaskInputWithVoiceContext(content, h.recentVoiceContext(id))
+		}
+		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": content, "displayContent": req.Content, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
 		if err != nil {
 			http.Error(w, err.Error(), 422)
 			return
