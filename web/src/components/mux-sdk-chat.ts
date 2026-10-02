@@ -240,7 +240,6 @@ export class MuxSDKChat extends LitElement {
     .tool-detail-title { color:var(--chrome-text-bright,#d9def0); font-size:12px; font-weight:600; }
     .detail-label { color:#9cbaf5; font-weight:600; margin:9px 0 4px; }
     .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,.2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
-    .truncation { padding:6px 10px 0; color:#d7bc8b; font:11px/1.5 ui-monospace,monospace; }
     .error { color:#e6a5a5; }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { padding:0 19px 18px; }
@@ -875,9 +874,12 @@ export class MuxSDKChat extends LitElement {
       if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
     } else if (event.type === 'work.activity') {
       const activities = this.turnActivities.get(this.currentTurn) || [];
-      const existing = activities.find(item => item.toolId === event.toolId && !!event.toolId);
+      // Anonymous completions belong to the latest unfinished anonymous call.
+      const existing = event.toolId
+        ? activities.find(item => item.toolId === event.toolId)
+        : event.kind === 'completed' ? [...activities].reverse().find(item => !item.toolId && !item.done) : undefined;
       if (existing) { existing.name = event.name || existing.name; existing.done = event.kind === 'completed'; existing.failed = !!event.failed; }
-      else activities.push({ name:event.name || 'Tool', toolId:event.toolId || `${activities.length}`, done:event.kind === 'completed', failed:!!event.failed });
+      else activities.push({ name:event.name || 'Tool', toolId:event.toolId || '', done:event.kind === 'completed', failed:!!event.failed });
       this.turnActivities.set(this.currentTurn, activities);
     } else if (event.type === 'thinking.delta') {
       markStart(this.currentTurn);
