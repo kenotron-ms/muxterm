@@ -138,6 +138,23 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid history event", 500)
 			return
 		}
+		// The root needs only an activity label and the boundary between
+		// interim and final assistant text. Tool arguments and output stay lazy.
+		if header.Type == "tool.started" || header.Type == "tool.completed" {
+			flushAssistant()
+			if header.Type == "tool.started" {
+				events = append(events, json.RawMessage(`{"type":"assistant.interim"}`))
+			}
+			activity, _ := json.Marshal(struct {
+				Type   string `json:"type"`
+				Name   string `json:"name"`
+				ToolID string `json:"toolId"`
+				Kind   string `json:"kind"`
+				Failed bool   `json:"failed"`
+			}{"work.activity", header.Name, header.ToolID, strings.TrimPrefix(header.Type, "tool."), header.Failed})
+			events = append(events, activity)
+			continue
+		}
 		if !sdkMessageHistoryEvent(header.Type) {
 			continue
 		}
@@ -149,22 +166,7 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		flushAssistant()
-		if header.Type == "tool.started" || header.Type == "tool.completed" || header.Type == "delegate.step" {
-			encoded, _ := json.Marshal(struct {
-				SessionID      string    `json:"sessionId"`
-				At             time.Time `json:"at"`
-				Type           string    `json:"type"`
-				Name           string    `json:"name"`
-				ToolID         string    `json:"toolId"`
-				ChildSessionID string    `json:"childSessionId,omitempty"`
-				Kind           string    `json:"kind,omitempty"`
-				Failed         bool      `json:"failed"`
-				Summary        bool      `json:"summary"`
-			}{header.SessionID, header.At, header.Type, header.Name, header.ToolID, header.ChildSessionID, header.Kind, header.Failed, true})
-			events = append(events, encoded)
-		} else {
-			events = append(events, json.RawMessage(line))
-		}
+		events = append(events, json.RawMessage(line))
 	}
 	flushAssistant()
 	writeSDKJSON(w, http.StatusOK, map[string]any{"from": start, "to": end, "hasMore": start > 0, "events": events})
@@ -172,7 +174,7 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 
 func sdkMessageHistoryEvent(eventType string) bool {
 	switch eventType {
-	case "input.accepted", "assistant.delta", "voice.input.delta", "voice.output.delta", "voice.session.error", "task.cancel.requested", "tool.started", "tool.completed", "turn.completed", "turn.cancelled", "turn.continued", "error", "session.uncertain", "goal.progress", "session.renamed", "delegate.spawned", "delegate.completed", "delegate.message", "delegate.step":
+	case "input.accepted", "assistant.delta", "voice.input.delta", "voice.output.delta", "voice.session.error", "task.cancel.requested", "turn.completed", "turn.cancelled", "turn.continued", "error", "session.uncertain", "goal.progress", "session.renamed", "delegate.spawned", "delegate.completed":
 		return true
 	default:
 		return false
