@@ -16,8 +16,9 @@ type DisplayAttachment = { id: string; name: string; kind: string };
 type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
-type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[] };
+type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
 type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status'; text: string; channel?: 'voice' | 'task'; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[] };
+type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
 type CachedTranscript = { blocks: Block[]; chat?: SDKChat };
@@ -38,7 +39,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { Brain, Check, ChevronDown, CircleX, Terminal, LoaderCircle, Mic, PanelRight } from 'lucide';
+import { BookOpen, Bot, Brain, ChevronDown, ChevronRight, FilePenLine, Globe, Mic, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
@@ -50,7 +51,6 @@ export class MuxSDKChat extends LitElement {
   @state() private agentEvents: SDKEvent[] | null = null;
   @state() private agentHistoryError = '';
   @state() private selectedAgent = '';
-  @state() private agentPanelOpen = false;
   @state() private agentDraft = '';
   @state() private agentNotice = '';
   @state() private recoveryRequired = false;
@@ -113,13 +113,6 @@ export class MuxSDKChat extends LitElement {
   private unsubscribeChats?: () => void;
   private parsers = new Map<number, MarkdownStream>();
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
-  private readonly closeAgentListOnOutsidePointer = (event: PointerEvent) => {
-    if (!this.agentPanelOpen) return;
-    const path = event.composedPath();
-    const list = this.renderRoot.querySelector('.agent-list');
-    const trigger = this.renderRoot.querySelector('.agent-toggle');
-    if (![list, trigger].some(el => el !== null && path.includes(el))) this.agentPanelOpen = false;
-  };
   private readonly stopVoiceOnEscape = (event: KeyboardEvent) => {
     if (event.key === 'Escape' && this.voiceState !== 'idle') {
       event.preventDefault();
@@ -128,8 +121,11 @@ export class MuxSDKChat extends LitElement {
   };
   private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
   private workExpanded = new Set<number>();
+  private activityExpanded = new Set<number>();
+  private stepExpanded = new Set<string>();
   private turnStarted = new Map<number, number>();
   private turnFinished = new Map<number, number>();
+  private turnActivities = new Map<number, { name: string; toolId: string; done: boolean; failed: boolean }[]>();
   private currentTurn = 0;
   @state() private now = Date.now();
   private clock?: ReturnType<typeof setInterval>;
@@ -145,23 +141,21 @@ export class MuxSDKChat extends LitElement {
     .breadcrumbs { display:flex; align-items:center; gap:7px; min-width:0; }
     .breadcrumbs button { border:0; padding:4px; border-radius:5px; background:transparent; color:#a9c5fa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
     .breadcrumbs button:hover { background:#35445f; }
-    .agent-bar { flex:none; border-bottom:1px solid var(--chrome-border,#41485f); padding:7px 24px; }
-    .agent-bar-inner { max-width:760px; margin:auto; }
-    .agent-toggle { display:flex; align-items:center; gap:8px; border:0; border-radius:7px; padding:5px 8px; background:transparent; color:#c0cdeb; font-size:12px; font-weight:650; }
-    .agent-toggle:hover,.agent-toggle:focus-visible { background:#35445f; }
-    .agent-toggle .running { width:7px; height:7px; border-radius:50%; background:#9bb8f7; }
-    .agent-list { max-height:220px; overflow:auto; margin:5px 0 1px; padding:6px; border:1px solid #41485f; border-radius:9px; background:#222b3c; }
     .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:7px 0; color:#e8a9aa; font-size:12px; }
     .agent-history-error button { border:0; padding:2px 4px; background:transparent; color:#b7c9ed; }
     .agent-history-error button:hover { text-decoration:underline; }
-    .agent-link { width:100%; display:flex; align-items:center; gap:8px; border:0; border-radius:6px; padding:7px; background:transparent; color:#d9def0; text-align:left; }
-    .agent-link:hover { background:#35445f; } .agent-link span:last-child { margin-left:auto; color:#9aa9c0; font-size:11px; }
-    .delegate-card { max-width:560px; border:1px solid #41485f; border-radius:9px; padding:10px 12px; background:#222b3c; }
-    .delegate-title { display:flex; align-items:center; gap:8px; color:#d9def0; font-size:12px; font-weight:650; }
-    .delegate-title .state { margin-left:auto; color:#aabbd6; font-size:11px; font-weight:500; }
-    .delegate-task { margin:6px 0 8px; color:#aabbd6; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .delegate-open { border:0; padding:2px 0; background:transparent; color:#a9c5fa; font-size:12px; }
-    .delegate-open:hover { text-decoration:underline; }
+    .delegate-card { box-sizing:border-box; display:grid; grid-template-columns:18px minmax(0,1fr) auto; align-items:center; gap:9px; width:100%; max-width:560px; min-height:54px; border:1px solid var(--chrome-border,#41485f); border-radius:9px; padding:7px 10px; background:var(--chrome-bar,#222b3c); color:var(--chrome-text-bright,#d9def0); text-align:left; }
+    .delegate-card:hover { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 45%,var(--chrome-border,#41485f)); background:color-mix(in srgb,var(--chrome-bar,#222b3c) 90%,var(--chrome-accent,#9bb8f7)); }
+    .delegate-card:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
+    .delegate-icon { display:inline-flex; color:var(--chrome-accent,#9bb8f7); }
+    .delegate-copy { display:flex; flex-direction:column; min-width:0; gap:2px; }
+    .delegate-name { font-size:12px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .delegate-task { color:var(--chrome-text-dim,#aabbd6); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .delegate-meta { display:flex; align-items:center; align-self:start; gap:8px; min-height:18px; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; font-variant-numeric:tabular-nums; }
+    .delegate-status-dot { width:7px; height:7px; border-radius:50%; background:#8dc5a7; }
+    .delegate-status-dot.running { background:#9bb8f7; box-shadow:0 0 0 3px #9bb8f723; }
+    .delegate-status-dot.failed { background:#e6a5a5; }
+    .delegate-chevron { display:inline-flex; opacity:.75; }
     .agent-chat { max-width:760px; width:100%; align-self:center; }
     .agent-chat .instruction { padding:13px 16px; border-radius:15px; background:#293a56; margin:10px 0 24px auto; max-width:82%; white-space:pre-wrap; }
     .agent-chat .reply { padding:13px 16px; border-radius:12px; background:#222b3c; white-space:pre-wrap; }
@@ -182,21 +176,18 @@ export class MuxSDKChat extends LitElement {
     .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable both-edges; overflow-anchor:none; }
     .scroll-bottom-row { position:relative; z-index:2; height:0; }
     .scroll-bottom { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); border:1px solid var(--chrome-border,#41485f); border-radius:999px; padding:7px 13px; background:var(--chrome-bar,#202632); color:var(--chrome-text-bright,#d9def0); box-shadow:0 4px 16px #0006; white-space:nowrap; }
-    .history-more { align-self:center; flex:none; margin:0 0 24px; padding:7px 14px; border:1px solid var(--chrome-border,#41485f); border-radius:7px; background:var(--chrome-bar,#202632); color:var(--chrome-text-dim,#b2bdd3); }
-    .history-more:disabled { opacity:.65; cursor:default; }
     .virtual-spacer { width:1px; flex:none; pointer-events:none; }
     .block { max-width:760px; width:100%; align-self:center; margin-bottom:28px; box-sizing:border-box; }
     .block.work { margin-top:-12px; margin-bottom:20px; }
-    .work-disclosure summary { display:flex; align-items:center; gap:7px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:12px; list-style:none; cursor:pointer; }
-    .work-disclosure .activity { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .work-disclosure > summary { display:flex; align-items:center; gap:7px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:12px; list-style:none; cursor:pointer; }
     .work-disclosure .activity-label { flex:none; }
     .work-disclosure .pulse { width:7px; height:7px; flex:none; border-radius:50%; background:#9bb8f7; box-shadow:0 0 0 3px #9bb8f723; animation:activity-pulse 1.35s ease-in-out infinite; }
     @keyframes activity-pulse { 50% { opacity:.35; transform:scale(.7); } }
     @media (prefers-reduced-motion:reduce) { .work-disclosure .pulse { animation:none; } }
-    .work-disclosure summary::-webkit-details-marker { display:none; }
-    .work-disclosure summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
-    .work-disclosure summary svg { opacity:.7; transition:transform .15s ease; }
-    .work-disclosure[open] summary svg { transform:rotate(180deg); }
+    .work-disclosure > summary::-webkit-details-marker { display:none; }
+    .work-disclosure > summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
+    .work-disclosure > summary svg { opacity:.7; transition:transform .15s ease; }
+    .work-disclosure[open] > summary svg { transform:rotate(180deg); }
     .work-items { padding:12px 0 2px; }
     .work-item { margin-bottom:5px; }
     .user { display:flex; justify-content:flex-end; }
@@ -231,28 +222,22 @@ export class MuxSDKChat extends LitElement {
     .text .md-table { border-collapse:collapse; }
     .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--chrome-border,#41485f); text-align:left; }
     .text .md-th { background:var(--chrome-bar,#202632); }
-    .support { width:100%; color:var(--chrome-text-dim,#b2bdd3); font-size:12px; }
-    .support-heading { display:flex; align-items:center; gap:8px; min-height:30px; max-width:100%; box-sizing:border-box; }
-    .support .kind-icon, .support .state-icon { display:inline-flex; align-items:center; flex:none; }
-    .support .summary-name { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-    .support .summary-hint { margin-left:auto; flex:none; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .tool-hint { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .support.thinking { max-width:min(100%,650px); }
-    .support.thinking .support-heading { color:#aaa1c4; padding:1px 3px; gap:7px; width:max-content; max-width:100%; }
-    .thinking .kind-icon { color:#a99bd0; }
-    .thinking .summary-name { font-style:italic; }
-    .thinking .summary-hint { color:#88849c; margin-left:0; }
-    .support.tool { border:1px solid var(--chrome-border,#41485f); border-radius:7px; background:rgba(122,162,247,.035); max-width:560px; }
-    .support.tool .support-heading { color:#b7c9ed; padding:2px 9px; }
-    .tool .kind-icon { color:#8da6d2; }
-    .tool .summary-name { font:600 11px/1.4 ui-monospace,monospace; }
-    .tool .summary-hint { display:flex; align-items:center; gap:4px; }
-    .tool.completed .summary-hint { color:#9aaac9; }
-    .tool.failed { border-color:rgba(230,165,165,.35); }
-    .tool.failed .summary-hint { color:#e6a5a5; }
-    .tool.running .summary-hint { color:#b7c9ed; }
-    .detail { padding:4px 12px 11px; max-width:100%; }
-    .thinking .detail { padding:3px 12px 8px 22px; border-left:1px solid #6f648c; margin-left:10px; }
+    .thinking-entry, .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; }
+    .thinking-entry > summary, .tool-activity > summary, .tool-entry > summary { display:flex; align-items:center; gap:8px; min-height:27px; list-style:none; cursor:pointer; }
+    .thinking-entry > summary::-webkit-details-marker, .tool-activity > summary::-webkit-details-marker, .tool-entry > summary::-webkit-details-marker { display:none; }
+    .thinking-entry > summary:focus-visible, .tool-activity > summary:focus-visible, .tool-entry > summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
+    .thinking-entry > summary:hover, .tool-activity > summary:hover, .tool-entry > summary:hover { color:var(--chrome-text-bright,#d9def0); }
+    .work-icon { display:inline-flex; align-items:center; justify-content:center; width:16px; flex:none; }
+    .work-line { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .work-chevron { display:inline-flex; flex:none; opacity:.65; transition:transform .15s ease; }
+    .thinking-entry[open] > summary .work-chevron, .tool-activity[open] > summary .work-chevron, .tool-entry[open] > summary .work-chevron { transform:rotate(180deg); }
+    .thinking-entry .detail { margin:4px 0 9px 24px; padding:0 0 0 10px; border-left:1px solid var(--chrome-border,#41485f); }
+    .tool-activity { margin-top:11px; }
+    .tool-activity-items { margin:2px 0 0 2px; }
+    .tool-entry > summary { padding-left:22px; }
+    .tool-entry.failed > summary { color:#e6a5a5; }
+    .tool-entry .detail { box-sizing:border-box; max-width:min(100%,650px); margin:5px 0 11px 23px; padding:10px 12px 12px; border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:rgba(122,162,247,.035); }
+    .tool-detail-title { color:var(--chrome-text-bright,#d9def0); font-size:12px; font-weight:600; }
     .detail-label { color:#9cbaf5; font-weight:600; margin:9px 0 4px; }
     .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,.2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
     .truncation { padding:6px 10px 0; color:#d7bc8b; font:11px/1.5 ui-monospace,monospace; }
@@ -320,7 +305,6 @@ export class MuxSDKChat extends LitElement {
     window.addEventListener('online', this.onOnline);
     window.addEventListener('pageshow', this.resumeConnection);
     window.addEventListener('keydown', this.stopVoiceOnEscape);
-    document.addEventListener('pointerdown', this.closeAgentListOnOutsidePointer);
     window.addEventListener('dragover', this.preventFileNavigation);
     window.addEventListener('drop', this.preventFileNavigation);
     window.addEventListener('drop', this.resetDrop);
@@ -344,7 +328,6 @@ export class MuxSDKChat extends LitElement {
     window.removeEventListener('online', this.onOnline);
     window.removeEventListener('pageshow', this.resumeConnection);
     window.removeEventListener('keydown', this.stopVoiceOnEscape);
-    document.removeEventListener('pointerdown', this.closeAgentListOnOutsidePointer);
     this.persistTranscriptCache();
     window.removeEventListener('pagehide', this.persistTranscriptCache);
     window.removeEventListener('dragover', this.preventFileNavigation);
@@ -493,7 +476,7 @@ export class MuxSDKChat extends LitElement {
     this.loadedEvents = []; this.liveEvents = []; this.historyFrom = 0; this.historyTo = 0; this.hasOlder = false; this.loadingOlder = false; this.loadingDetails = false; this.detailsLoaded = false;
     this.fillingRecent = false; this.restoringScroll = false; this.historyUserInteracted = false; this.olderTask = undefined;
     this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
-    this.selectedAgent = ''; this.agentPanelOpen = false; this.parentScrollTop = 0; this.agentEvents = null; this.agentHistoryError = '';
+    this.selectedAgent = ''; this.parentScrollTop = 0; this.agentEvents = null; this.agentHistoryError = '';
     this.recoveryPrepared = false;
     this.error = ''; this.settingsPending = false; this.showScrollBottom = false;
     const cached = readTranscriptCache(this.sessionId);
@@ -565,8 +548,8 @@ export class MuxSDKChat extends LitElement {
     this.cacheTimer = window.setTimeout(() => { this.cacheTimer = undefined; this.persistTranscriptCache(); }, 150);
   }
   private resetTranscript() {
-    this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear();
-    this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now();
+    this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear(); this.activityExpanded.clear(); this.stepExpanded.clear();
+    this.turnStarted.clear(); this.turnFinished.clear(); this.turnActivities.clear(); this.currentTurn = 0; this.now = Date.now();
     this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.pendingInputs.clear(); this.rowsCache = undefined;
   }
   private async loadRecent(id: string, epoch: number, signal: AbortSignal) {
@@ -731,14 +714,14 @@ export class MuxSDKChat extends LitElement {
     const before = this.historyFrom;
     this.loadingOlder = true;
     try {
-      const view = this.detailsLoaded ? '' : '&view=messages';
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${before}${view}`), { signal: this.historyAbort?.signal });
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${before}&view=messages`), { signal: this.historyAbort?.signal });
       if (!response.ok) throw new Error(`Older history request failed (${response.status})`);
       const page = await response.json() as HistoryPage;
       if (epoch !== this.historyEpoch) return false;
       await this.updateComplete;
       if (epoch !== this.historyEpoch) return false;
       this.historyFrom = page.from; this.hasOlder = page.hasMore;
+      this.detailsLoaded = false;
       this.loadingOlder = false;
       await this.replayWithAnchor([...page.events, ...this.loadedEvents], epoch, true);
       return true;
@@ -756,11 +739,18 @@ export class MuxSDKChat extends LitElement {
     const oldStart = this.visibleStart, oldEnd = this.visibleEnd;
     const oldHeights = this.rowHeights;
     const expanded = new Set(this.workExpanded);
+    const expandedActivity = new Set(this.activityExpanded);
+    const expandedSteps = new Set(this.stepExpanded);
     const oldTurn = this.currentTurn;
     this.loadedEvents = events;
     this.replayEvents();
     const turnShift = prepending ? this.currentTurn - oldTurn : 0;
     this.workExpanded = new Set([...expanded].map(turn => turn + turnShift));
+    this.activityExpanded = new Set([...expandedActivity].map(turn => turn + turnShift));
+    this.stepExpanded = new Set([...expandedSteps].map(key => {
+      const [turn, index] = key.split(':');
+      return `${Number(turn) + turnShift}:${index}`;
+    }));
     const rows = this.transcriptRows();
     const shift = rows.length - oldRows.length;
     this.rowHeights = new Map();
@@ -880,6 +870,15 @@ export class MuxSDKChat extends LitElement {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'assistant', channel:'task', text:event.text || '' });
+    } else if (event.type === 'assistant.interim') {
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
+    } else if (event.type === 'work.activity') {
+      const activities = this.turnActivities.get(this.currentTurn) || [];
+      const existing = activities.find(item => item.toolId === event.toolId && !!event.toolId);
+      if (existing) { existing.name = event.name || existing.name; existing.done = event.kind === 'completed'; existing.failed = !!event.failed; }
+      else activities.push({ name:event.name || 'Tool', toolId:event.toolId || `${activities.length}`, done:event.kind === 'completed', failed:!!event.failed });
+      this.turnActivities.set(this.currentTurn, activities);
     } else if (event.type === 'thinking.delta') {
       markStart(this.currentTurn);
       const last = blocks[blocks.length - 1];
@@ -1109,12 +1108,20 @@ export class MuxSDKChat extends LitElement {
       agent.legs.push({ task:typeof task === 'string' ? task : '', reply:block.done && block.name !== 'subAgentActivity' ? this.detail(reply) : '', status });
       agent.status = status;
     }
-    for (const event of delegates) if (event.childSessionId) add(event.childSessionId, event.agent || 'Agent', event.parentSessionId || this.sessionId);
+    for (const event of delegates) if (event.childSessionId) {
+      const agent = add(event.childSessionId, event.agent || 'Agent', event.parentSessionId || this.sessionId);
+      const startedAt = Date.parse(event.at || '');
+      if (Number.isFinite(startedAt) && (agent.startedAt === undefined || startedAt < agent.startedAt)) agent.startedAt = startedAt;
+    }
     for (const event of events) if (event.childSessionId) {
       const agent = byId.get(event.childSessionId);
       if (!agent) continue;
       if (event.type === 'delegate.message') agent.progress = event.complete ? event.text || '' : agent.progress + (event.text || '');
-      if (event.type === 'delegate.completed') agent.status = event.failed ? 'Failed' : 'Completed';
+      if (event.type === 'delegate.completed') {
+        agent.status = event.failed ? 'Failed' : 'Completed';
+        const finishedAt = Date.parse(event.at || '');
+        if (Number.isFinite(finishedAt)) agent.finishedAt = finishedAt;
+      }
       if (event.type === 'delegate.step') {
         const id = event.toolId || `${agent.steps.length}`;
         const step = agent.steps.find(item => item.id === id);
@@ -1127,7 +1134,6 @@ export class MuxSDKChat extends LitElement {
   private openAgent(id: string) {
     if (!this.selectedAgent) this.parentScrollTop = this.shadowRoot?.querySelector<HTMLElement>('.body')?.scrollTop || 0;
     this.selectedAgent = id;
-    this.agentPanelOpen = false;
     this.agentNotice = '';
     if (!this.detailsLoaded) void this.loadDetails();
     void this.updateComplete.then(() => { const body = this.shadowRoot?.querySelector<HTMLElement>('.body'); if (body) body.scrollTop = 0; });
@@ -1152,12 +1158,23 @@ export class MuxSDKChat extends LitElement {
   }
   private agentCard(block: Block, agents: AgentView[]) {
     const agent = agents.find(item => item.id === block.id);
+    const name = agent?.name || block.name || 'Agent';
+    const status = agent?.status || block.text;
+    const duration = this.agentDuration(agent);
     const task = agent?.legs[0]?.task;
-    return html`<section class="delegate-card" aria-label=${`Delegated agent ${agent?.name || block.name || 'Agent'}`}>
-      <div class="delegate-title"><span aria-hidden="true">↳</span><span>${agent?.name || block.name || 'Agent'}</span><span class="state">${agent?.status || block.text}</span></div>
-      ${task && task !== 'undefined' ? html`<div class="delegate-task" title=${task}>${task}</div>` : nothing}
-      <button class="delegate-open" @click=${() => this.openAgent(block.id || '')}>View work →</button>
-    </section>`;
+    const preview = task && task !== 'undefined' ? task : agent?.progress || 'View delegated work';
+    return html`<button class="delegate-card" aria-label=${`View ${name} work, ${status.toLowerCase()}${duration ? `, ${duration}` : ''}`} @click=${() => this.openAgent(block.id || '')}>
+      <span class="delegate-icon" aria-hidden="true">${icon(Bot, { size:16 })}</span>
+      <span class="delegate-copy"><span class="delegate-name">${name}</span><span class="delegate-task" title=${preview}>${preview}</span></span>
+      <span class="delegate-meta"><span class="delegate-status-dot ${status.toLowerCase()}" title=${status} aria-hidden="true"></span>${duration ? html`<span>${duration}</span>` : nothing}<span class="delegate-chevron" aria-hidden="true">${icon(ChevronRight, { size:15 })}</span></span>
+    </button>`;
+  }
+  private agentDuration(agent?: AgentView) {
+    if (agent?.startedAt === undefined) return '';
+    const finishedAt = agent.finishedAt ?? (agent.status === 'Running' ? this.now : undefined);
+    if (finishedAt === undefined) return '';
+    const seconds = Math.max(1, Math.round((finishedAt - agent.startedAt) / 1000));
+    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   }
   private agentStepDetail(step: AgentStep) {
     const item = step.detail && typeof step.detail === 'object' ? step.detail as Record<string, unknown> : null;
@@ -1195,20 +1212,98 @@ export class MuxSDKChat extends LitElement {
       this.agentNotice = 'Steering request sent to the root session.';
     } catch (error) { this.agentNotice = String(error); }
   }
-  private support(block: Block) {
-    const thinking = block.kind === 'thinking';
+  private toolKind(block: { name?: string }): ToolKind {
+    const name = (block.name || '').toLowerCase();
+    if (/web|browse|fetch_url/.test(name)) return 'web';
+    if (/bash|shell|command|exec|terminal/.test(name)) return 'shell';
+    if (/read|view_file|list_dir|list_files/.test(name)) return 'read';
+    if (/grep|search|glob|find/.test(name)) return 'search';
+    if (/write|edit|patch/.test(name)) return 'edit';
+    if (/agent|delegate|task/.test(name)) return 'agent';
+    return 'other';
+  }
+  private toolIcon(kind: ToolKind): IconNode {
+    switch (kind) {
+      case 'shell': return Terminal;
+      case 'read': return BookOpen;
+      case 'search': return Search;
+      case 'web': return Globe;
+      case 'edit': return FilePenLine;
+      case 'agent': return Bot;
+      default: return Wrench;
+    }
+  }
+  private toolFields(block: Block): Record<string, unknown> {
     const input = this.toolInput(block.input);
-    const fields = input && typeof input === 'object' ? input as Record<string, unknown> : {};
-    const hint = fields.command || fields.file_path || fields.path || fields.url;
-
-    const failed = !thinking && this.toolFailed(block);
+    return input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {};
+  }
+  private toolField(fields: Record<string, unknown>, ...names: string[]): string {
+    for (const name of names) if (typeof fields[name] === 'string' && fields[name]) return fields[name] as string;
+    return '';
+  }
+  private toolLine(block: Block) {
+    const kind = this.toolKind(block);
+    const fields = this.toolFields(block);
+    const path = this.toolField(fields, 'file_path', 'path', 'filename', 'uri');
+    const file = path.split('/').pop() || path;
+    const command = this.toolField(fields, 'command', 'cmd');
+    const query = this.toolField(fields, 'query', 'q', 'pattern', 'url');
+    const failed = this.toolFailed(block);
+    if (kind === 'shell') return `${block.done ? failed ? 'Failed' : 'Ran' : 'Running'} ${command || 'a command'}`;
+    if (kind === 'read') return `${block.done ? 'Read' : 'Reading'} ${file || 'a file'}`;
+    if (kind === 'search') return `${block.done ? 'Searched' : 'Searching'} for ${query || 'matches'}${file ? ` in ${file}` : ''}`;
+    if (kind === 'web') return `${block.done ? 'Searched the web' : 'Searching the web'}${query ? ` for ${query}` : ''}`;
+    if (kind === 'edit') return `${block.done ? 'Edited' : 'Editing'} ${file || 'a file'}`;
+    if (kind === 'agent') return `${block.done ? 'Delegated' : 'Delegating'} ${this.toolField(fields, 'description', 'task') || 'an agent'}`;
+    return `${block.name || 'Tool'}${file ? ` ${file}` : query ? ` ${query}` : ''}`;
+  }
+  private activityLineForTools(tools: { name?: string }[]) {
+    const counts = new Map<ToolKind, number>();
+    for (const tool of tools) {
+      const kind = this.toolKind(tool);
+      counts.set(kind, (counts.get(kind) || 0) + 1);
+    }
+    return [...counts].map(([kind, count]) => {
+      if (kind === 'shell') return count === 1 ? 'ran a command' : `ran ${count} commands`;
+      if (kind === 'read') return count === 1 ? 'read a file' : `read ${count} files`;
+      if (kind === 'search') return count === 1 ? 'searched files' : `searched files ${count} times`;
+      if (kind === 'web') return count === 1 ? 'searched the web' : `searched the web ${count} times`;
+      if (kind === 'edit') return count === 1 ? 'edited a file' : `edited ${count} files`;
+      if (kind === 'agent') return count === 1 ? 'delegated an agent' : `delegated ${count} agents`;
+      return count === 1 ? 'used a tool' : `used ${count} tools`;
+    }).join(', ').replace(/^./, first => first.toUpperCase());
+  }
+  private thinkingEntry(block: Block, key: string) {
+    const open = this.stepExpanded.has(key);
+    const firstLine = block.text.trim().split(/\r?\n/).find(Boolean) || 'Thinking…';
+    return html`<details class="thinking-entry" aria-label="Thinking detail" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(Brain, { size: 14 })}</span><span class="work-line" title=${firstLine}>${firstLine}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><pre>${block.text}</pre></div>` : nothing}</details>`;
+  }
+  private toolEntry(block: Block, key: string) {
+    const kind = this.toolKind(block);
+    const label = this.toolLine(block);
+    const open = this.stepExpanded.has(key);
+    const input = this.toolInput(block.input);
+    const fields = this.toolFields(block);
     const output = block.done ? this.detail(this.toolOutput(block.output)) : 'Running…';
-    const truncated = output.match(/\n(… truncated after [^\n]+)$/);
-    const state = failed ? 'Failed' : block.done ? 'Completed' : 'Running';
-    return html`<section class="support ${thinking ? 'thinking' : `tool ${failed ? 'failed' : block.done ? 'completed' : 'running'}`}" aria-label=${thinking ? 'Thinking detail' : `${block.name || 'Tool'} detail`}><div class="support-heading"><span class="kind-icon" aria-hidden="true">${icon(thinking ? Brain : Terminal, { size: 13 })}</span><span class="summary-name">${thinking ? 'Thinking' : block.name || 'Tool'}</span>${!thinking && typeof hint === 'string' ? html`<span class="tool-hint" title=${hint}>${hint}</span>` : nothing}<span class="summary-hint">${thinking ? `${block.text.length} characters` : html`<span class="state-icon" aria-hidden="true">${icon(failed ? CircleX : block.done ? Check : LoaderCircle, { size: 12 })}</span>${state}`}</span></div><div class="detail">${thinking
-      ? html`<pre>${block.text}</pre>`
-      : html`<div class="detail-label">Tool</div><pre>${block.name || 'Tool'}</pre><div class="detail-label">Input arguments</div><pre>${this.detail(input)}</pre><div class="detail-label">Output / result</div><pre>${truncated ? output.slice(0, -truncated[0].length) : output}</pre>${truncated ? html`<div class="truncation">${truncated[1]}</div>` : nothing}`}
-    </div></section>`;
+    const heading = kind === 'shell' ? 'Shell' : kind === 'read' ? 'Read file' : kind === 'search' ? 'Search' : kind === 'web' ? 'Web search' : kind === 'edit' ? 'File change' : kind === 'agent' ? 'Agent' : block.name || 'Tool';
+    const inputLabel = kind === 'shell' ? 'Command' : kind === 'read' || kind === 'edit' ? 'File / input' : kind === 'search' || kind === 'web' ? 'Query / input' : 'Input';
+    const outputLabel = kind === 'shell' ? 'Output' : kind === 'read' ? 'Contents' : kind === 'search' ? 'Matches' : kind === 'web' ? 'Results' : kind === 'agent' ? 'Result' : 'Output';
+    const command = this.toolField(fields, 'command', 'cmd');
+    const inputText = kind === 'shell' && command ? `$ ${command}` : this.detail(input);
+    return html`<details class="tool-entry ${this.toolFailed(block) ? 'failed' : ''}" aria-label=${`${block.name || 'Tool'} detail`} ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(kind), { size: 14 })}</span><span class="work-line" title=${label}>${label}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><div class="tool-detail-title">${heading}</div><div class="detail-label">${inputLabel}</div><pre>${inputText}</pre><div class="detail-label">${outputLabel}</div><pre>${output}</pre></div>` : nothing}</details>`;
+  }
+  private workContent(turn: number, items: Block[]) {
+    const thinking = items.filter(item => item.kind === 'thinking');
+    if (!thinking.length && (items.some(item => item.kind === 'tool') || this.turnActivities.has(turn))) return nothing;
+    return thinking.length ? html`${thinking.map((item, index) => this.thinkingEntry(item, `${turn}:thinking-${index}`))}`
+      : html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : !this.detailsLoaded ? 'Work details load when opened.' : this.turnFinished.get(turn) === undefined ? 'Waiting for activity…' : 'No thinking details were reported.'}</div>`;
+  }
+  private activityContent(turn: number, items: Block[]) {
+    const tools = items.filter(item => item.kind === 'tool');
+    const summary = tools.length ? tools : this.turnActivities.get(turn) || [];
+    if (!summary.length) return nothing;
+    const open = this.activityExpanded.has(turn);
+    return html`<details class="tool-activity" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleActivityDisclosure(turn, event)}><span class="work-icon">${icon(this.toolIcon(this.toolKind(summary[0])), { size: 14 })}</span><span class="work-line">${this.activityLineForTools(summary)}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="tool-activity-items">${tools.length ? tools.map((item, index) => this.toolEntry(item, `${turn}:tool-${index}`)) : html`<div class="work-item">${this.loadingDetails ? 'Loading tool calls…' : 'Tool calls load when opened.'}</div>`}</div>` : nothing}</details>`;
   }
   private workedLabel(turn: number) {
     const started = this.turnStarted.get(turn);
@@ -1217,28 +1312,6 @@ export class MuxSDKChat extends LitElement {
     const seconds = Math.max(1, Math.round(((finished ?? this.now) - started) / 1000));
     const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
     return `${finished === undefined ? 'Working' : 'Worked'} for ${duration}`;
-  }
-  private activityLine(items: Block[]) {
-    const activity = items.filter(item => item.kind === 'tool' || item.kind === 'thinking');
-    const latest = activity[activity.length - 1];
-    if (!latest) {
-      const progress = items.find(item => item.kind === 'progress')?.text;
-      return progress === 'Message received' ? 'Waiting for agent…' : progress || 'Starting…';
-    }
-    if (latest.kind === 'tool') {
-      const name = (latest.name || 'Tool').replace(/^([^:]+):\s+/, '$1.');
-      const input = this.toolInput(latest.input);
-      const fields = input && typeof input === 'object' ? input as Record<string, unknown> : {};
-      const hint = name === 'Command' || name === 'Bash' ? fields.command
-        : ['Read', 'Write', 'Edit', 'Glob'].includes(name) ? fields.file_path || fields.path || fields.pattern
-        : name === 'Grep' ? fields.pattern : undefined;
-      const compact = typeof hint === 'string' ? hint.replace(/\s+/g, ' ').replace(/^\/?(?:bin\/)?(?:ba)?sh -lc ['"]/, '').replace(/['"]$/, '') : '';
-      const label = compact ? `${name}: ${compact}` : name;
-      return `${latest.done ? latest.failed ? 'Failed' : 'Ran' : 'Running'} ${label}`.slice(0, 180);
-    }
-    const lines = latest.text.trim().split('\n').filter(Boolean);
-    const line = lines[lines.length - 1]?.replace(/\s+/g, ' ') || 'Thinking…';
-    return `Thinking · ${line}`.slice(0, 180);
   }
   private transcriptRows(): TranscriptRow[] {
     if (this.rowsCache?.blocks === this.blocks) return this.rowsCache.rows;
@@ -1315,7 +1388,7 @@ export class MuxSDKChat extends LitElement {
     for (let i = end; i < rows.length; i++) after += this.rowHeight(rows[i]);
     return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map((row, offset) => {
       const block = row.block;
-      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span><span class="activity">${this.activityLine(row.work)}</span>${icon(ChevronDown, { size: 14 })}</summary><div class="work-items">${row.work.some(item => item.summary) && !this.detailsLoaded ? html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : 'Work details load when opened.'}</div>` : row.work.some(item => item.kind !== 'progress') ? row.work.filter(item => item.kind !== 'progress').map(item => html`<div class="work-item">${this.support(item)}</div>`) : html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : !this.detailsLoaded ? 'Work details load when opened.' : this.turnFinished.get(block.turn) === undefined ? 'Your message is in the chat. Waiting for activity…' : 'No tool or thinking details were reported.'}</div>`}</div></details></div>`
+      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${this.workExpanded.has(block.turn) ? html`<div class="work-items">${this.workContent(block.turn, row.work)}${this.activityContent(block.turn, row.work)}</div>` : nothing}</details></div>`
         : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>` : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
@@ -1326,6 +1399,21 @@ export class MuxSDKChat extends LitElement {
       this.workExpanded.add(turn);
       if (!this.detailsLoaded) void this.loadDetails();
     }
+    this.requestUpdate();
+  }
+  private toggleActivityDisclosure(turn: number, event: MouseEvent) {
+    event.preventDefault();
+    if (this.activityExpanded.has(turn)) this.activityExpanded.delete(turn);
+    else {
+      this.activityExpanded.add(turn);
+      if (!this.detailsLoaded) void this.loadDetails();
+    }
+    this.requestUpdate();
+  }
+  private toggleStepDisclosure(key: string, event: MouseEvent) {
+    event.preventDefault();
+    if (this.stepExpanded.has(key)) this.stepExpanded.delete(key);
+    else this.stepExpanded.add(key);
     this.requestUpdate();
   }
   private async send() {
@@ -1396,15 +1484,13 @@ export class MuxSDKChat extends LitElement {
   }
   override render() {
     const agents = this.agents();
-    const running = agents.filter(agent => agent.status === 'Running').length;
     return html`
     <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>${icon(PanelRight, { size: 16 })}</button></div>
     <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
-      ${agents.length ? html`<div class="agent-bar"><div class="agent-bar-inner"><button class="agent-toggle" aria-label=${`Agents: ${running} running, ${agents.length - running} finished`} aria-expanded=${this.agentPanelOpen} @click=${() => { this.agentPanelOpen = !this.agentPanelOpen; }}>${running ? html`<span class="running" aria-hidden="true"></span>` : nothing}Agents · ${running ? `${running} running` : `${agents.length} completed`} ${icon(ChevronDown, { size: 14 })}</button>${this.agentPanelOpen ? html`<div class="agent-list" aria-label="Delegated sub-agents">${agents.map(agent => html`<button class="agent-link" @click=${() => this.openAgent(agent.id)}><span>↳</span><span>${agent.name}</span><span>${agent.status}</span></button>`)}</div>` : nothing}</div></div>` : nothing}
       ${this.agentHistoryError ? html`<div class="agent-history-error" role="alert">Saved agent work could not be loaded. <button @click=${this.retryAgentHistory}>Retry</button></div>` : nothing}
       ${this.recoveryRequired ? html`<div class="recovery" role="alert"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
-      ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : html`${this.hasOlder ? html`<button class="history-more" ?disabled=${this.loadingOlder} @click=${() => void this.loadOlder()}>${this.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}</button>` : nothing}${this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}`}
+      ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
       ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${(e: InputEvent) => { this.agentDraft=(e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraft.trim()}>Send to root ↗</button></div>` : html`
