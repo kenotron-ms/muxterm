@@ -397,7 +397,7 @@ export class MuxSidebar extends LitElement {
       background: transparent;
       border: none;
       border-radius: 4px;
-      color: var(--mux-text-bright, #c0caf5);
+      color: var(--chrome-text-bright);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -407,7 +407,7 @@ export class MuxSidebar extends LitElement {
     }
 
     .launcher-btn:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: var(--chrome-hover);
     }
 
     .menu-anchor {
@@ -1152,19 +1152,15 @@ export class MuxSidebar extends LitElement {
       --sidebar-dot-track: 14px;
       --sidebar-row-gap: 5px;
       --sidebar-group-gap: 18px;
-      --sidebar-status-local: #7f8da1;
-      --sidebar-status-connected: #829b91;
-      --sidebar-status-reconnecting: #9a8eaa;
-      --sidebar-status-unreachable: #d08a91;
-      --sidebar-status-never-connected: #778397;
-      --sidebar-bg: #10141f;
-      --sidebar-panel: #121824;
-      --sidebar-hover: #1a2231;
-      --sidebar-edge: #20293a;
-      --sidebar-text: #e7ecf5;
-      --sidebar-bright: #c8d0f0;
-      --sidebar-muted: #8c99ad;
-      --sidebar-faint: #5e6b81;
+      --sidebar-status-local: var(--chrome-text-dim);
+      --sidebar-status-connected: color-mix(in srgb, var(--mux-ok) 65%, var(--chrome-text-bright));
+      --sidebar-status-reconnecting: var(--chrome-driver-accent);
+      --sidebar-status-unreachable: var(--chrome-danger);
+      --sidebar-status-never-connected: var(--chrome-text-dim);
+      --sidebar-bg: var(--chrome-bar);
+      --sidebar-hover: var(--chrome-hover);
+      --sidebar-edge: var(--chrome-border);
+      --sidebar-text: var(--chrome-text-bright);
       background: var(--sidebar-bg);
       border-right-color: var(--sidebar-edge);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -1245,7 +1241,7 @@ export class MuxSidebar extends LitElement {
       position: relative;
     }
 
-    .hg-head:hover { background: var(--sidebar-hover); border-color: #303b4f; }
+    .hg-head:hover { background: var(--sidebar-hover); border-color: var(--sidebar-edge); }
     .hg-ident { min-width: 0; display: flex; align-items: center; gap: 7px; }
     .hg-name,
     .hg-name.remote {
@@ -1255,7 +1251,7 @@ export class MuxSidebar extends LitElement {
       font-weight: 790;
       letter-spacing: 0.025em;
       text-transform: none;
-      color: #d6ddea;
+      color: var(--chrome-text-bright);
     }
 
     .hg-type {

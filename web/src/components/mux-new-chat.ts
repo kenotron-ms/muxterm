@@ -51,7 +51,7 @@ export class MuxNewChat extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-bg,#1a1c28); color:var(--chrome-text-bright,#e2e6f1); font:13px/1.5 system-ui,sans-serif; }
+    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
     .top { padding:14px 24px; border-bottom:1px solid var(--chrome-border,#343a4c); font-size:14px; font-weight:600; display:flex; justify-content:space-between; align-items:center; }
     .top button { border:0; background:transparent; color:inherit; cursor:pointer; }
     .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:24px; }
@@ -91,7 +91,7 @@ export class MuxNewChat extends LitElement {
     .picker-head { display:flex; align-items:center; gap:8px; padding:8px; border-bottom:1px solid var(--chrome-border,#475067); }
     .picker-head span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .picker button { border:0; color:inherit; background:transparent; padding:6px 10px; border-radius:5px; }
-    .picker button:hover { background:rgba(255,255,255,.09); }
+    .picker button:hover { background:var(--chrome-hover); }
     .picker-create { display:flex; gap:6px; padding:8px; border-bottom:1px solid var(--chrome-border,#475067); }
     .picker-create input { flex:1; }
     .folder-entry { display:block; width:100%; text-align:left; }
@@ -99,11 +99,11 @@ export class MuxNewChat extends LitElement {
     .composer:focus-within { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 58%,var(--chrome-border,#475067)); box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent,#9bb8f7) 14%,transparent); }
     textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:100px; height:100px; max-height:220px; resize:none; border:0; outline:0; padding:3px 0; color:inherit; background:transparent; font:16px/1.55 system-ui,sans-serif; overflow-y:auto; }
     textarea::placeholder { color:var(--chrome-text-dim,#a9b0c0); opacity:.8; }
-    .send { flex:none; width:34px; height:34px; border:0; border-radius:10px; background:var(--chrome-accent,#9bb8f7); color:#152032; font-size:20px; line-height:1; }
+    .send { flex:none; width:34px; height:34px; border:0; border-radius:10px; background:var(--chrome-accent); color:var(--chrome-body); font-size:20px; line-height:1; }
     .send:hover:not(:disabled) { filter:brightness(1.1); }
     .send:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
     .send:disabled { opacity:.4; cursor:default; }
-    .error { margin:10px 0; color:#e6a5a5; }
+    .error { margin:10px 0; color:var(--chrome-danger); }
     .receipt { display:flex; align-items:center; gap:8px; margin:12px 2px 0; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; }
     .receipt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--chrome-accent,#9bb8f7); animation:receipt-pulse 1.35s ease-in-out infinite; }
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }

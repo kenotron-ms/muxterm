@@ -58,10 +58,10 @@ export class MuxChatWorkspace extends LitElement {
     :host { display:block; margin:2px 0; font:12px/1.35 system-ui,sans-serif; color:var(--chrome-text-bright,#d8dce5); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
     .row,.chat-row { display:flex; align-items:center; min-height:30px; border-radius:6px; position:relative; }
-    .row:hover,.chat-row:hover { background:rgba(255,255,255,.07); }
+    .row:hover,.chat-row:hover { background:var(--chrome-hover); }
     .group { display:flex; align-items:center; gap:7px; flex:1; min-width:0; padding:5px; text-align:left; }
     .folder { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
-    .folder { width:17px; color:#aab8d8; }
+    .folder { width:17px; color:var(--chrome-text-dim); }
     .name,.title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .name { font-weight:600; }
     .archived .name { color:var(--chrome-text-dim,#aab2c1); }
@@ -70,22 +70,22 @@ export class MuxChatWorkspace extends LitElement {
     .chat-row .action { display:none; opacity:1; }
     .chat-row .action.more { display:inline-flex; }
     .chat-row:hover .action,.chat-row:has(.chat:focus-visible) .action { display:inline-flex; }
-    .action:hover { background:rgba(255,255,255,.12); color:inherit; }
+    .action:hover { background:var(--chrome-hover); color:inherit; }
     .more { opacity:1; }
     .menu { position:absolute; z-index:30; top:28px; right:4px; min-width:180px; padding:5px; background:var(--chrome-bar,#252b38); border:1px solid var(--chrome-border,#3b4355); border-radius:9px; box-shadow:0 12px 28px #0008; }
     .menu.context { top:20px; right:12px; }
     .menu button { display:flex; align-items:center; gap:9px; width:100%; padding:8px; text-align:left; border-radius:5px; }
-    .menu button:hover { background:rgba(255,255,255,.09); }
-    .menu .danger { color:#e6a5a5; }
+    .menu button:hover { background:var(--chrome-hover); }
+    .menu .danger { color:var(--chrome-danger); }
     .chats { margin:0 0 5px; }
     .chat { flex:1; min-width:0; min-height:28px; padding:3px 5px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:7px; }
-    .chat-row[selected] { background:rgba(122,162,247,.16); }
-    .status { width:6px; height:6px; border-radius:50%; background:#697386; flex:none; }
-    .status.working { background:#7dcba1; }
+    .chat-row[selected] { background:color-mix(in srgb, var(--chrome-accent) 18%, var(--chrome-bar)); }
+    .status { width:6px; height:6px; border-radius:50%; background:var(--chrome-text-dim); flex:none; }
+    .status.working { background:var(--mux-ok); }
     .title { font-weight:550; }
     .harness { color:var(--chrome-text-dim,#aab2c1); font-size:10px; flex:none; text-transform:lowercase; }
     .chat-row:hover .harness,.chat-row:has(.chat:focus-visible) .harness { display:none; }
-    .rename-input,.editor input { min-width:0; border:1px solid #60749b; border-radius:5px; padding:6px 7px; background:var(--chrome-bar,#252b38); color:inherit; font:inherit; }
+    .rename-input,.editor input { min-width:0; border:1px solid var(--chrome-border); border-radius:5px; padding:6px 7px; background:var(--chrome-bar); color:inherit; font:inherit; }
     .rename-input { flex:1; margin:3px 5px; }
     .editor { margin:4px 5px 10px 20px; padding:12px; border:1px solid var(--chrome-border,#3b4355); border-radius:9px; background:var(--chrome-bar,#252b38); display:grid; gap:9px; }
     .editor label { display:grid; gap:4px; color:var(--chrome-text-dim,#aab2c1); font-size:11px; }
@@ -94,13 +94,13 @@ export class MuxChatWorkspace extends LitElement {
     .source input { flex:1; }
     .editor-actions { display:flex; justify-content:flex-end; gap:6px; }
     .editor-actions button,.add-source { padding:5px 7px; border-radius:5px; }
-    .editor-actions button:hover,.add-source:hover { background:rgba(255,255,255,.1); }
+    .editor-actions button:hover,.add-source:hover { background:var(--chrome-hover); }
     .browser { display:grid; max-height:200px; overflow:auto; border:1px solid var(--chrome-border,#3b4355); border-radius:6px; padding:4px; }
     .browser button { padding:5px 7px; border-radius:4px; text-align:left; }
-    .browser button:hover { background:rgba(255,255,255,.1); }
+    .browser button:hover { background:var(--chrome-hover); }
     .browser-head { display:flex; align-items:center; gap:4px; }
     .browser-head span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .error { color:#e6a5a5; padding:5px; }
+    .error { color:var(--chrome-danger); padding:5px; }
   `;
 
   private closeMenu() { this.menuFor = ''; this.contextMenu = false; }
@@ -260,9 +260,9 @@ export class MuxChatList extends LitElement {
     .heading { padding:9px 5px 3px; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
     .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--chrome-border,#3b4355); }
     .pin-row { width:100%; display:flex; align-items:center; gap:8px; min-height:29px; padding:4px 5px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-bright,#d8dce5); text-align:left; font:12px system-ui,sans-serif; cursor:pointer; }
-    .pin-row:hover { background:rgba(255,255,255,.07); }
+    .pin-row:hover { background:var(--chrome-hover); }
     .pin-row span:not(.pin-icon) { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .pin-icon { display:flex; flex:none; color:#aab8d8; }
+    .pin-icon { display:flex; flex:none; color:var(--chrome-text-dim); }
   `;
   override connectedCallback() {
     super.connectedCallback();
