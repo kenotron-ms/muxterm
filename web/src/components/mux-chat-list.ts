@@ -214,6 +214,7 @@ export class MuxChatWorkspace extends LitElement {
             <span class="folder">${icon(this.open ? FolderOpen : Folder, { size: 16 })}</span>
             <span class="name">${group.name}</span>
           </button>
+          ${!group.archived ? html`<button class="action" aria-label=${`New chat in ${group.name}`} title=${`New chat in ${group.name}`} @click=${() => this.newProjectChat()}>${icon(Plus,{size:15})}</button>` : nothing}
           ${group.project ? html`
             <button class="action" aria-label=${`${group.project.pinned ? 'Unpin' : 'Pin'} ${group.name}`} title=${group.project.pinned ? 'Unpin project' : 'Pin project'} @click=${() => void this.pinProject()}>${icon(group.project.pinned ? PinOff : Pin,{size:14})}</button>
             <button class="action" aria-label=${`Rename ${group.name}`} title="Rename project" @click=${() => this.startRename('project',group.name)}>${icon(Pencil,{size:14})}</button>

@@ -1,5 +1,6 @@
 import { subtleScrollbars } from './lib/subtle-scrollbars.js';
 import { LitElement, html, css } from 'lit';
+import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
@@ -704,6 +705,7 @@ export class MuxApp extends LitElement {
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
   @state() private _newChatProject = '';
+  @state() private _newChatKey = 0;
 
   /** The initial screen is selected once per page load. */
   private _bootSurfaceApplied = false;
@@ -1524,8 +1526,8 @@ export class MuxApp extends LitElement {
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
               `}
-          ${this._sdkChatId ? this._sdkChatId === 'new' ? html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} @chat-created=${this._onChatOpen} @chat-cancel=${this._onChatCancel}></mux-new-chat>` : html`
+          ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} @chat-created=${this._onChatOpen} @chat-cancel=${this._onChatCancel}></mux-new-chat>`) : html`
             <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
         </div>
 
@@ -2207,6 +2209,7 @@ export class MuxApp extends LitElement {
   }
 
   private _onChatNew = (): void => {
+    this._newChatKey++;
     this._newChatHarness = 'codex';
     this._newChatFolder = '';
     this._newChatProject = '';

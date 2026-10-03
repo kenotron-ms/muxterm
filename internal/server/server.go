@@ -315,6 +315,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/remotes/{id}/provision", protect(http.HandlerFunc(s.handleRemotesProvision)))
 
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
+	s.mux.Handle("GET /api/sdk-chat-start-options", protect(http.HandlerFunc(s.handleSDKChatStartOptions)))
 	s.mux.Handle("GET /api/sdk-chat-names/events", protect(http.HandlerFunc(s.handleSDKChatNameEvents)))
 	s.mux.Handle("GET /api/sdk-chats/search-content", protect(http.HandlerFunc(s.handleSDKChatContentSearch)))
 	if err := chatattachments.RegisterRoutes(s.mux, s.sdkChatAttachments, protect); err != nil {

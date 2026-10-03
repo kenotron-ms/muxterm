@@ -1075,6 +1075,52 @@ func amplifierProviderModule(harness, provider string) string {
 	}
 }
 
+// Only advertise opening choices whose local runtime and credential path are
+// present. A provider call can still fail later, but the composer must not
+// offer choices that this server already knows it cannot start.
+func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Request) {
+	type option struct {
+		Harness  string `json:"harness"`
+		Provider string `json:"provider"`
+	}
+	options := make([]option, 0, 3)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	home, _ := os.UserHomeDir()
+	if s.sdkChats.ensure("codex") == nil {
+		cmd := exec.CommandContext(ctx, "codex", "login", "status")
+		if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "" || cmd.Run() == nil {
+			options = append(options, option{Harness: "codex", Provider: "openai"})
+		}
+	}
+	if s.sdkChats.ensure("claude") == nil {
+		ready := os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
+		if !ready && home != "" {
+			data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+			if err == nil {
+				var settings struct {
+					APIKeyHelper string `json:"apiKeyHelper"`
+				}
+				ready = json.Unmarshal(data, &settings) == nil && strings.TrimSpace(settings.APIKeyHelper) != ""
+			}
+		}
+		if !ready {
+			cmd := exec.CommandContext(ctx, "claude", "auth", "status")
+			ready = cmd.Run() == nil
+		}
+		if ready {
+			options = append(options, option{Harness: "claude", Provider: "anthropic"})
+		}
+	}
+	if home != "" {
+		if info, err := os.Stat(filepath.Join(home, ".amplifier", "settings.yaml")); err == nil && info.Size() > 0 && s.sdkChats.ensure("amplifier") == nil {
+			options = append(options, option{Harness: "amplifier", Provider: "configured"})
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeSDKJSON(w, 200, options)
+}
+
 func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == "GET" {
@@ -1087,7 +1133,10 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, rows)
 		return
 	}
-	var req struct{ WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode string }
+	var req struct {
+		WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode string
+		Attachments                                                                   []string `json:"attachments"`
+	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
@@ -1096,8 +1145,13 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
-	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" {
-		http.Error(w, "prompt or goal required", 400)
+	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" && len(req.Attachments) == 0 {
+		http.Error(w, "message, attachment, or goal required", 400)
+		return
+	}
+	attachments, err := s.resolveSDKAttachments(req.Attachments)
+	if err != nil {
+		http.Error(w, err.Error(), 422)
 		return
 	}
 	if req.Goal != "" && req.Harness != "amplifier" {
@@ -1197,13 +1251,16 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	title := strings.TrimSpace(req.Prompt)
+	if title == "" && len(attachments) > 0 {
+		title = attachments[0].Name
+	}
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
 	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	h.chats[c.ID] = c
-	err := h.saveLocked(c)
+	err = h.saveLocked(c)
 	h.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -1220,7 +1277,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	openingID := sdkID()
-	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": req.Prompt, "goal": req.Goal}})
+	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": req.Prompt, "goal": req.Goal, "attachments": attachments}})
 	if err == nil {
 		var ack struct{ Status, InputID string }
 		err = json.Unmarshal(result, &ack)
