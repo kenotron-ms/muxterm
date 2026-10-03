@@ -390,8 +390,16 @@ func (h *sdkChatHost) ensure(harness string) error {
 	go h.watch(cmd, h.done, "node")
 	select {
 	case err := <-ready:
+		if err != nil {
+			h.running = false
+			h.process = nil
+			_ = cmd.Process.Kill()
+		}
 		return err
 	case <-time.After(3 * time.Second):
+		h.running = false
+		h.process = nil
+		_ = cmd.Process.Kill()
 		return errors.New("SDK sidecar did not open its Unix socket")
 	}
 }
@@ -1084,16 +1092,17 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		Provider string `json:"provider"`
 	}
 	options := make([]option, 0, 3)
+	sdkReady := s.sdkChats.ensure("codex") == nil // Codex and Claude share one Node sidecar.
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	home, _ := os.UserHomeDir()
-	if s.sdkChats.ensure("codex") == nil {
+	if sdkReady {
 		cmd := exec.CommandContext(ctx, "codex", "login", "status")
 		if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "" || cmd.Run() == nil {
 			options = append(options, option{Harness: "codex", Provider: "openai"})
 		}
 	}
-	if s.sdkChats.ensure("claude") == nil {
+	if sdkReady {
 		ready := os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
 		if !ready && home != "" {
 			data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
