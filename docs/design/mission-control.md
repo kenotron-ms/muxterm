@@ -1,5 +1,7 @@
 # Mission Control — the right-hand surface as an applet host
 
+> Historical design record. For current conversation ownership and process boundaries, use [ARCHITECTURE.md](../../ARCHITECTURE.md) and [DESIGN.md](../../DESIGN.md). The prototype and round-by-round statements below describe the state when this design was written.
+
 **Design round one. A prototype and a document. No production behaviour changes.**
 
 Companion artifact: [`mission-control-mock.html`](mission-control-mock.html) — self-contained,

@@ -1,6 +1,8 @@
 # muxterm
 
-A web-first terminal multiplexer. Persistent sessions, split panes, and a browser UI — backed by a custom Go session daemon.
+A browser workspace for persistent terminals and agent work, backed by a Go session daemon.
+
+See [the vision](VISION.md) for the product direction and [the documentation map](docs/README.md) for current guides and historical records.
 
 ## Install
 
@@ -105,13 +107,14 @@ make build
 - **Clean reconnects** — server-side VT emulation replays a live cell-grid snapshot, not raw bytes; full-screen apps restore correctly at any window size
 - **PWA** — installable as a standalone desktop or mobile app; service worker for offline support
 - **Palette-derived chrome** — UI colors are derived from the active terminal palette automatically
-- **Session persistence** — the sessiond daemon detaches from the HTTP server; your shells survive server restarts, deploys, and reboots
-- **Single binary** — Go binary with embedded frontend; no external runtime besides a shell
+- **Session persistence** — sessiond owns PTYs independently of the HTTP server, so shells survive browser disconnects and HTTP server restarts
+- **Embedded frontend** — the Go binary serves the web UI; optional AI features require their respective providers and tools
 - **Auth** — HMAC token-based auth with localhost bypass
 - **Service install** — `muxterm install` sets up systemd (Linux) or launchd (macOS)
 - **Push deploy** — `muxterm deploy user@host` copies the binary and installs remotely
 - **Agent integration (MCP)** — connect any MCP-compatible AI agent to drive workspaces, panes, and terminals
 - **Agent sessions** — Claude, Codex, and Amplifier report native lifecycle hooks into one durable fleet, with terminals as optional attachments
+- **Mission Control** — one persistent Operator conversation alongside the terminal and agent fleet
 
 ## Agent integration (MCP)
 
@@ -196,28 +199,11 @@ brokerage for managed turns and cross-surface terminal takeover remain disabled;
 
 ## Architecture
 
-| Component | Role |
-|-----------|------|
-| `cmd/muxterm/` | CLI — serve, install, uninstall, deploy, sessiond, doctor |
-| `internal/sessiond/` | PTY daemon — workspace/pane registry, VT emulation, reconnect replay |
-| `internal/server/` | HTTP + WebSocket relay, auth, tunnel proxy, public file publishing, static asset serving |
-| `internal/service/` | Cross-platform service install (systemd/launchd) |
-| `internal/deploy/` | Push-to-remote via SSH |
-| `web/src/` | Lit web components, xterm.js terminal rendering, dockview split layout |
-
-### Session daemon
-
-`sessiond` is a separate Unix socket daemon that manages PTYs independently of the HTTP server. Each pane is a real PTY running `$SHELL`. The daemon auto-starts when the first browser client connects, and keeps running when the server restarts.
-
-For reconnect, `sessiond` runs a headless VT emulator (`charmbracelet/x/vt`) per pane with 2000-line scrollback. On attach, it serializes the live cell grid and sends it as a clean replay — so reconnecting to a vim session doesn't produce garbage at the wrong terminal size.
-
-### Protocol
-
-One WebSocket per browser tab, backed by one Unix socket connection to `sessiond`. Frames are binary-prefixed: `[4-byte length][1-byte kind][payload]`. Pane I/O is raw bytes with a 4-byte pane ID prefix. Control messages are JSON. The protocol is frozen — sessiond and the HTTP relay can be updated independently as long as the frame format is stable.
+The browser renders panes with Lit, dockview, and xterm.js. The Go server handles HTTP, authentication, WebSocket relay, and Mission Control. Sessiond owns workspaces, real PTYs, screen replay, pane activity, and agent fleet records. See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and protocol details.
 
 ## Requirements
 
-- **Go** 1.22+
+- **Go** 1.24.2+ (the module selects toolchain 1.24.4)
 - **Node.js** 18+
 
 ## Development
@@ -226,22 +212,21 @@ One WebSocket per browser tab, backed by one Unix socket connection to `sessiond
 # Build everything (frontend + Go binary)
 make build
 
-# Run Go tests
-make test
-
 # Build frontend only
 cd web && npm install && npm run build
 
-# Run frontend tests
-cd web && npm test
-
 # Fast frontend checks (lint + types, no build)
 cd web && npm run check:fast
+
+# Run the isolated development stack at http://127.0.0.1:8313
+make dev-local
 ```
+
+Before running tests or browser verification on a machine with muxterm installed, read [AGENTS.md](AGENTS.md). Some service tests operate on real user services. Do not use production ports `8311` or `9090` for verification.
 
 ## Design
 
-See [docs/design.md](docs/design.md) for architecture details and decision rationale.
+See [DESIGN.md](DESIGN.md) for current interface principles and the [documentation map](docs/README.md) for feature designs and decisions.
 
 ## License
 

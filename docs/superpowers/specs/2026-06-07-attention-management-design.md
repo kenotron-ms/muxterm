@@ -189,7 +189,7 @@ muxterm          dev  ›  build  ▾
 ## Design Tokens
 
 This feature introduces five new CSS custom properties and uses three existing ones.
-The canonical definitions and values live in [DESIGN.md](../../../../DESIGN.md).
+The current definitions and values live in [DESIGN.md](../../../DESIGN.md).
 
 ### New tokens (to be added to `web/src/lib/theme.ts`)
 
