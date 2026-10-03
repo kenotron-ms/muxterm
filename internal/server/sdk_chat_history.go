@@ -49,9 +49,9 @@ func sdkPageStart(file *os.File, end int64, limit int) (int64, error) {
 	return 0, nil
 }
 
-// Message pages start at a user message, so long runs of thinking and tool
-// events cannot make the root transcript appear empty or require dozens of
-// scroll gestures to reach the next conversation turn.
+// Message pages start at the raw page containing a user message, so long runs
+// of thinking and tool events cannot make the root transcript appear empty.
+// Keeping the raw page boundary lets detail loading replay the same range.
 func sdkMessagePageStart(file *os.File, end int64) (int64, error) {
 	cursor, turns := end, 0
 	for cursor > 0 {
@@ -63,24 +63,18 @@ func sdkMessagePageStart(file *os.File, end int64) (int64, error) {
 		if _, err := file.ReadAt(data, start); err != nil && !errors.Is(err, io.EOF) {
 			return 0, err
 		}
-		var messageStarts []int
-		offset := 0
-		for _, line := range bytes.SplitAfter(data, []byte{'\n'}) {
+		for _, line := range bytes.Split(data, []byte{'\n'}) {
 			if bytes.Contains(line, []byte("input.accepted")) {
 				var header struct {
 					Type string `json:"type"`
 				}
 				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" {
-					messageStarts = append(messageStarts, offset)
+					turns++
 				}
 			}
-			offset += len(line)
 		}
-		for i := len(messageStarts) - 1; i >= 0; i-- {
-			turns++
-			if turns == sdkMessageHistoryPageTurns {
-				return start + int64(messageStarts[i]), nil
-			}
+		if turns >= sdkMessageHistoryPageTurns {
+			return start, nil
 		}
 		cursor = start
 	}
