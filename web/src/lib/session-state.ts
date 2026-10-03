@@ -453,7 +453,7 @@ export const FIXTURE_SESSIONS: SessionState[] = [
   {
     sessionId: 'fx-design-notes',
     paneId: 7,
-    workspaceId: 'cos',
+    workspaceId: 'demo',
     harness: 'claude',
     project: '/home/ken/workspace/muxterm',
     name: 'design-notes',

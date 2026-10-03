@@ -3,7 +3,6 @@ package config
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 // The default posture: off, and an off section never blocks startup.
@@ -17,9 +16,6 @@ func TestVoiceDefaultsAreOffAndValid(t *testing.T) {
 	}
 	if d.Voice.EntraScope != DefaultVoiceEntraScope {
 		t.Fatalf("entra_scope default = %q, want %q", d.Voice.EntraScope, DefaultVoiceEntraScope)
-	}
-	if d.Voice.SyncToolTimeout != DefaultVoiceSyncToolTimeout {
-		t.Fatalf("sync_tool_timeout default = %v, want %v", d.Voice.SyncToolTimeout, DefaultVoiceSyncToolTimeout)
 	}
 }
 
@@ -94,13 +90,6 @@ func TestVoiceResolvedFillsOptionals(t *testing.T) {
 	got := VoiceConfig{Enabled: true}.Resolved()
 	if got.EntraScope != DefaultVoiceEntraScope {
 		t.Fatalf("EntraScope = %q, want %q", got.EntraScope, DefaultVoiceEntraScope)
-	}
-	if got.SyncToolTimeout != DefaultVoiceSyncToolTimeout {
-		t.Fatalf("SyncToolTimeout = %v, want %v", got.SyncToolTimeout, DefaultVoiceSyncToolTimeout)
-	}
-	custom := VoiceConfig{EntraScope: "https://other/.default", SyncToolTimeout: time.Second}.Resolved()
-	if custom.EntraScope != "https://other/.default" || custom.SyncToolTimeout != time.Second {
-		t.Fatalf("Resolved must not overwrite explicit values, got %+v", custom)
 	}
 }
 

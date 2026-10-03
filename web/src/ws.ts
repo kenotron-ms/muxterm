@@ -345,16 +345,6 @@ export class MuxSocket {
    */
   onSessionStateSubscribeResult?: (msg: SessiondMessage) => void;
   /**
-   * Fires for every serve-local chief-of-staff frame: cos-subscribe-result and
-   * cos-event. Same direct-callback shape as onSessionState above.
-   *
-   * These are SERVE-LOCAL, not sessiond messages -- the CoS conversation is
-   * owned by the muxterm server, not by any daemon -- so they are routed here
-   * and deliberately NOT forwarded to onSessiondMessage, which would hand the
-   * frozen wire-state store a message type it has no projection for.
-   */
-  onCosFrame?: (frame: Record<string, unknown>) => void;
-  /**
    * Fires on a host-state frame: one remote host's connection state changed
    * (or the server is describing the registry to a freshly attached tab).
    *
@@ -731,89 +721,6 @@ export class MuxSocket {
         reject(error instanceof Error ? error : new Error('The finished lane could not be cleared.'));
       }
     });
-  }
-
-  // --- chief-of-staff senders ----------------------------------------------
-  // Serve-local frames. They never reach sessiond, so they bypass
-  // sendSessiond's frozen SessiondMessage type and go out as plain objects.
-
-  private _sendCos(frame: Record<string, unknown>): boolean {
-    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      try {
-        this._ws.send(JSON.stringify(frame));
-        return true;
-      } catch {
-        // A socket can close between readyState and send(). Callers that hold
-        // a draft/receipt state need a truthful false rather than a phantom
-        // transmission.
-        return false;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Opt this connection in to (or out of) the shared chief-of-staff stream.
-   *
-   * The FIRST `true` is also what starts the sidecar: the server spawns it
-   * lazily, so muxterm pays nothing for a feature nobody opened.
-   */
-  cosSubscribe(on: boolean): void {
-    this._sendCos({ type: 'cos-subscribe', on });
-  }
-
-  /**
-   * Submit one turn. Returns whether it actually went out (see sendSessiond).
-   *
-   * `attachments` names already-staged composer attachments by id. It is
-   * written only when there are some, which keeps the frame byte-identical to
-   * the one every previous version sent for an ordinary typed message. Text
-   * and attachments travel in ONE frame on purpose: the server composes them
-   * into a single prompt, so there is no second message that can be dropped,
-   * reordered, or admitted on its own.
-   */
-  cosTurn(prompt: string, clientRef?: string, attachments?: readonly string[]): boolean {
-    const frame: Record<string, unknown> = {
-      type: 'cos-turn',
-      prompt,
-      client_ref: clientRef ?? '',
-    };
-    if (attachments && attachments.length > 0) frame.attachments = [...attachments];
-    return this._sendCos(frame);
-  }
-
-  /**
-   * Answer an approval_request.
-   *
-   * `approved` is always written, never omitted: a denial is `false`, and the
-   * server treats a missing field as a denial precisely because guessing wrong
-   * here runs the command the user just refused.
-   *
-   * Returns whether it actually went out, and that return is not optional
-   * housekeeping: a caller that assumes it did shows the user a confirmed
-   * security decision the sidecar never received, and the sidecar then times
-   * the request out to DENIED (2.4 law 3). The UI has to be able to tell those
-   * two apart.
-   */
-  cosApproval(requestId: string, approved: boolean, reason = ''): boolean {
-    return this._sendCos({ type: 'cos-approval', request_id: requestId, approved, reason });
-  }
-
-  /** Ask the sidecar to abandon a turn. It ends when its terminal event lands. */
-  cosCancel(turnId: string): void {
-    this._sendCos({ type: 'cos-cancel', turn_id: turnId });
-  }
-
-  /**
-   * Prune the shared transcript. `olderThanDays` of 0 means EVERYTHING.
-   *
-   * Returns whether the request actually went out, so a caller waiting on a
-   * confirm dialog can resolve it rather than spin: the server answers with
-   * cos-clear-result and then a fresh cos-history, but neither arrives if the
-   * socket was down when this was called.
-   */
-  cosClear(olderThanDays: number): boolean {
-    return this._sendCos({ type: 'cos-clear', older_than_days: olderThanDays });
   }
 
   /** Request the list of workspaces. */
@@ -1258,10 +1165,6 @@ export class MuxSocket {
         // the sessiond hook. (Legacy single-key envelopes have no "type" field,
         // so the two paths never collide.)
         if (typeof raw.type === 'string') {
-          if (raw.type.startsWith('cos-')) {
-            this.onCosFrame?.(raw);
-            return;
-          }
           this.onSessiondMessage?.(raw as unknown as SessiondMessage);
           // Relay-only types: dispatch as window CustomEvents so app.ts and
           // mux-dock can handle them without coupling to the socket directly.

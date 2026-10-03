@@ -78,9 +78,6 @@ func (tt *triggerTools) createTrigger(args map[string]any) (string, error) {
 	// shell, so delegating an edit is the obvious way around a block that only
 	// covered this session's own tools. A trigger is that, plus a clock: the
 	// edit happens repeatedly, and at a time nobody chose to be present for.
-	if err := guardCosConfig(prompt, goal); err != nil {
-		return "", err
-	}
 
 	views, err := tt.c.conn.CreateTrigger(sessiond.Trigger{
 		Name:      name,

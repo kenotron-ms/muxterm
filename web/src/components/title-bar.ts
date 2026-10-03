@@ -1,47 +1,12 @@
-/**
- * title-bar.ts -- the NARROW-mode nav bar.
- *
- * TWO SHAPES, because the bar now serves two surfaces.
- *
- * Over a PANE it is what it always was: the drawer button, the brand, the
- * pane breadcrumb, the mic, and the launcher.
- *
- * Over the DASHBOARD it says only where you are and what it can open:
- *
- *     [drawer]  Dashboard                        [fleet]  [launcher]
- *
- * Three things are ABSENT in that second shape, each on purpose. The brand:
- * the Dashboard is a place, and a place gets a name, not a logo. The pane
- * breadcrumb: there is no pane under the Dashboard to be a crumb of. The mic:
- * voice moved down beside the composer, where the thumb already is and where
- * the words it produces are going to land -- dictating from the top of the
- * screen into a box at the bottom of it was always a guess about intent.
- *
- * THE BADGES ARE DOTS, not numbers. The Dashboard shows no counts anywhere,
- * and a bar that still counted would be the one place a number survived --
- * which is worse than either choice made consistently. A dot answers the only
- * question a closed drawer or an unopened sheet can be asked: is there
- * something behind you that wants you.
- *
- * Surface geometry from docs/designs/2026-09-05-mobile-navigation-design.md:
- * the bar is at the TOP because that is where you look, and everything it
- * opens renders at the BOTTOM because that is where a thumb can reach.
- *
- * The fleet sheet itself lives in <mux-cos>'s shadow root, so `popovertarget`
- * cannot reach it from here -- the attribute resolves ids within the
- * INVOKER's root, the same wall the workspace drawer runs into. The intent
- * goes up as `fleet-toggle` and app.ts calls the method; everything the
- * Popover API provides is unaffected by which side asks.
- */
+/** Narrow-mode navigation bar. */
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import './launcher-menu.js';
 import './mux-pane-picker.js';
 import './mic-button.js';
-import './mux-start-card.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis, LayoutGrid, Menu } from 'lucide';
+import { Ellipsis, Menu } from 'lucide';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
@@ -113,6 +78,15 @@ export class MuxTitleBar extends LitElement {
       letter-spacing: 0;
     }
 
+    .chat-title {
+      flex: 1;
+      min-width: 0;
+      padding: 0 6px;
+      color: var(--chrome-text-bright);
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+
     /* The + button left this bar so the breadcrumb could have its width back.
        Measured at 390px, .brand was taking 130px against the breadcrumb's 117
        and handing the win straight back: flex: 0 1 auto shrinks, but its basis
@@ -138,8 +112,7 @@ export class MuxTitleBar extends LitElement {
     }
 
     .launcher-btn,
-    .drawer-btn,
-    .fleet-btn {
+    .drawer-btn {
       position: relative;
       width: var(--nav-h);
       height: var(--nav-h);
@@ -157,16 +130,11 @@ export class MuxTitleBar extends LitElement {
     }
 
     .launcher-btn:hover,
-    .drawer-btn:hover,
-    .fleet-btn:hover {
+    .drawer-btn:hover {
       background: var(--chrome-hover);
     }
 
-    /* D4, restated as a DOT. It used to be a count; the Dashboard shows no
-       counts anywhere, and one surviving number in the nav bar would be
-       worse than either choice made consistently. At zero it is ABSENT,
-       never a grey dot: mux-start-card.ts's own zero-state rule, applied to
-       the bar. */
+    /* Show an attention dot only when a session needs input. */
     .needs-dot {
       position: absolute;
       top: 6px;
@@ -176,26 +144,6 @@ export class MuxTitleBar extends LitElement {
       border-radius: 50%;
       background: var(--mux-warn);
       pointer-events: none;
-    }
-
-    /* Mission Control's own title. Takes the space the brand and the
-       breadcrumb between them used to, because on this surface neither has
-       anything to say. */
-    .title {
-      flex: 1;
-      min-width: 0;
-      font-size: 13.5px;
-      font-weight: 600;
-      line-height: 1;
-      color: var(--chrome-text-bright);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      padding: 0 6px;
-    }
-
-    .fleet-btn[aria-expanded='true'] {
-      background: var(--chrome-hover);
     }
 
     /* The launcher sheet's scrim. ::backdrop belongs to the popover element,
@@ -222,19 +170,7 @@ export class MuxTitleBar extends LitElement {
    */
   @property({ type: Boolean }) drawerOpen = false;
 
-  /**
-   * True while the Dashboard is the thing on screen. Owned by <mux-app>,
-   * which owns the overlay; this element only changes shape for it.
-   */
-  @property({ type: Boolean }) dashboardActive = false;
-
-  /**
-   * True while the Dashboard's fleet sheet is open. Mirrored from the
-   * popover's own toggle event by app.ts rather than set by whatever asked
-   * it to open, so light dismiss and Escape -- which no handler of ours ever
-   * sees -- cannot leave the button out of step with what is on screen.
-   */
-  @property({ type: Boolean }) fleetOpen = false;
+  @property({ type: String }) chatTitle = '';
 
   /** Wide workspace chrome reuses this title bar without a drawer control. */
   @property({ type: Boolean, reflect: true }) desktop = false;
@@ -284,16 +220,7 @@ export class MuxTitleBar extends LitElement {
     this.toggleAttribute('data-launcher-open', (e as ToggleEvent).newState === 'open');
   }
 
-  /**
-   * Whether anything is waiting on a human.
-   *
-   * Derived from needsInputCount() over homeSessions -- the same call, over
-   * the same list, that <mux-start-card> is handed in mux-sidebar -- and then
-   * reduced to a BOOLEAN, because the bar draws a dot and a dot has only two
-   * states. Deriving it here from the one source rather than being passed a
-   * number keeps this indicator and the Dashboard card incapable of
-   * disagreeing about what "needs input" means.
-   */
+  /** Whether any terminal session needs input. */
   private get _needs(): boolean {
     void this._sessionVersion;
     return needsInputCount(homeSessions.sessions) > 0;
@@ -339,21 +266,6 @@ export class MuxTitleBar extends LitElement {
     );
   }
 
-  /**
-   * "Show me the fleet." The sheet is <mux-cos>'s, in its shadow root, so
-   * this reports the intent and app.ts calls the method on the element --
-   * exactly the arrangement the workspace drawer already uses, and for the
-   * same cross-root reason.
-   */
-  private _toggleFleet(): void {
-    this.dispatchEvent(
-      new CustomEvent('fleet-toggle', {
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
   render() {
     const needs = this._needs;
 
@@ -373,32 +285,15 @@ export class MuxTitleBar extends LitElement {
             ${icon(Menu, { size: 20 })}
             ${needs ? html`<span class="needs-dot"></span>` : ''}
           </button>`}
-      ${this.dashboardActive
-        ? html`<span class="title">Mission Control</span>`
-        : html`
-            <div class="brand">
-              <span class="brand-dot"></span>
-              <span title="${window.location.hostname}">${instanceLabel()}</span>
-              <span class="brand-sha">${__GIT_SHA__}</span>
-            </div>
-            <mux-pane-picker></mux-pane-picker>
-          `}
+      ${this.chatTitle
+        ? html`<span class="chat-title">${this.chatTitle}</span>`
+        : html`<div class="brand">
+            <span class="brand-dot"></span>
+            <span title="${window.location.hostname}">${instanceLabel()}</span>
+            <span class="brand-sha">${__GIT_SHA__}</span>
+          </div><mux-pane-picker></mux-pane-picker>`}
       <div class="right">
-        ${this.desktop
-          ? ''
-          : this.dashboardActive
-          ? html`<button
-              class="fleet-btn"
-              type="button"
-              title="Fleet"
-              aria-label="${needs ? 'Sessions need input. Show the fleet.' : 'Show the fleet'}"
-              aria-expanded="${this.fleetOpen ? 'true' : 'false'}"
-              @click="${this._toggleFleet}"
-            >
-              ${icon(LayoutGrid, { size: 18 })}
-              ${needs ? html`<span class="needs-dot"></span>` : ''}
-            </button>`
-          : html`<mux-mic-button></mux-mic-button>`}
+        ${this.desktop || this.chatTitle ? '' : html`<mux-mic-button></mux-mic-button>`}
         ${this.desktop && this.dockActionsVisible
           ? ''
           : html`<button

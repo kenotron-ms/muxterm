@@ -1,5 +1,5 @@
 /**
- * Browser dictation for terminal input and Mission Control composers.
+ * Browser dictation for terminal input and chat composers.
  *
  * A composer capture is explicitly owned by an immutable channel/capture/
  * generation triple. Leaving that channel invalidates the triple before the
@@ -351,7 +351,7 @@ function invalidateIfActive(target?: VoiceTarget): void {
 }
 
 /**
- * Call synchronously before a Mission Control composer channel is left.
+ * Call synchronously before a chat composer channel is left.
  * Already accepted draft text and submitted turns live outside this controller.
  */
 function invalidateComposerChannel(channelId: string): void {

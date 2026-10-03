@@ -42,7 +42,7 @@ func (s *Server) clearFinished(sessionID string) (string, error) {
 	}
 	rows = mergeCompletionRows(rows, s.completions.Pending())
 	found := false
-	for _, row := range excludeOperatorSession(rows) {
+	for _, row := range rows {
 		if row.SessionID != sessionID {
 			continue
 		}

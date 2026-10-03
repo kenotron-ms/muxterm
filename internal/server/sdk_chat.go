@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kenotron-ms/muxterm/internal/cos"
+	"github.com/kenotron-ms/muxterm/internal/amplifierchat"
 	sdkchat "github.com/kenotron-ms/muxterm/sdk-chat"
 )
 
@@ -135,8 +135,7 @@ type sdkChatHost struct {
 	process     *exec.Cmd
 	done        chan struct{}
 	running     bool
-	cosRelay    *cosRelay
-	ampSup      *cos.Supervisor
+	ampSup      *amplifierchat.Host
 	ampOnce     sync.Once
 	ampErr      error
 	chats       map[string]*sdkChat
@@ -400,7 +399,7 @@ func (h *sdkChatHost) ensureAmplifier() error {
 	h.ampOnce.Do(func() {
 		checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer checkCancel()
-		if err := cos.CheckAmplifierCLI(checkCtx, ""); err != nil {
+		if err := amplifierchat.CheckAmplifierCLI(checkCtx); err != nil {
 			h.ampErr = err
 			return
 		}
@@ -409,15 +408,14 @@ func (h *sdkChatHost) ensureAmplifier() error {
 			h.ampErr = err
 			return
 		}
-		sup := cos.New(cos.Config{SDKOnly: true, SessionID: "muxterm-sdk-host-" + sdkID(),
-			StatePath: "-", Logf: log.Printf, MCPBinary: self})
-		if err := sup.Start(context.Background()); err != nil {
+		sup := amplifierchat.New()
+		if err := sup.Start(self); err != nil {
 			h.ampErr = err
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), cos.DefaultReadyTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), amplifierchat.DefaultReadyTimeout)
 		defer cancel()
-		if _, err := sup.WaitReady(ctx); err != nil {
+		if err := sup.WaitReady(ctx); err != nil {
 			h.ampErr = err
 			_ = sup.Close()
 			return
@@ -430,10 +428,10 @@ func (h *sdkChatHost) ensureAmplifier() error {
 	})
 	return h.ampErr
 }
-func (h *sdkChatHost) observeAmplifier(sub *cos.Subscription) {
+func (h *sdkChatHost) observeAmplifier(sub *amplifierchat.Subscription) {
 	defer sub.Close()
 	for ev := range sub.C() {
-		if ev.Ev == cos.EvSidecarUncertain || (ev.Ev == cos.EvError && ev.Code == cos.CodeSidecarExit) {
+		if ev.Ev == amplifierchat.EvSidecarUncertain || (ev.Ev == amplifierchat.EvError && ev.Code == amplifierchat.CodeSidecarExit) {
 			h.mu.Lock()
 			var ids []string
 			for _, c := range h.chats {

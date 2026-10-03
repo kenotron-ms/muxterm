@@ -9,7 +9,7 @@ if (!socketPath) throw new Error('Unix socket path required');
 try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 const sessions = new Map();
 const clients = new Set();
-const muxtermMcpEnv = Object.fromEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME', 'MUXTERM_COS_SESSION_ID']
+const muxtermMcpEnv = Object.fromEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
   .filter(key => process.env[key]).map(key => [key, process.env[key]]));
 const emit = (sessionId, type, data = {}) => broadcast({ v: 1, event: { sessionId, type, ...data } });
 function broadcast(message) {

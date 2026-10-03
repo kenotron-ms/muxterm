@@ -210,7 +210,7 @@ func assertToolNames(t *testing.T, got, want []string) {
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
-// muxterm pane gets. The chief-of-staff sidecar and a shell on a laptop both
+// muxterm pane gets. A chat adapter and a shell on a laptop both
 // see this list. Its lane counterpart is the test below.
 //
 // Tool count history: the count fell from 25 to 17 when a 13-tool family was

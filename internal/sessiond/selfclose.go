@@ -27,9 +27,6 @@ import "fmt"
 //
 //	the browser UI   its close travels browser -> `muxterm serve` -> daemon,
 //	                 and serve is a service process, not a pane process
-//	chief of staff   a sidecar of serve; it closes workspaces it does not
-//	                 occupy, which is exactly the management action it exists
-//	                 to perform
 //	a lane           inside a pane, and answers yes only for its OWN workspace
 //	                 or pane -- it can still close somebody else's as far as
 //	                 this check is concerned, which is what the withheld tool

@@ -1,19 +1,5 @@
 /**
- * home-sessions.ts — the ONE seam between the home view and its data.
- *
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │  WIRING POINT FOR LANE B                                            │
- * │                                                                     │
- * │  Everything that renders session state (mux-home, mux-start-card,   │
- * │  the sidebar badges, the dock tab dots) reads from this store and    │
- * │  nothing else. To go live, call:                                     │
- * │                                                                     │
- * │      homeSessions.set(sessionsFromWire, 'live');                     │
- * │                                                                     │
- * │  from wherever the daemon's session-state frame is handled, and      │
- * │  delete the `homeSessions.seedFixture()` call in app.ts. No          │
- * │  component changes. That is the whole job.                           │
- * └─────────────────────────────────────────────────────────────────────┘
+ * Session state shared by the sidebar, dock, and workspace views.
  *
  * Deliberately NOT folded into state.ts's MuxStore: that store is the frozen
  * projection of the sessiond control protocol, and session state arrives on a

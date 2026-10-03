@@ -144,14 +144,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-	case "cos":
-		if err := runCos(cfg.Args); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-	case "missioncontrol-preview":
-		fmt.Fprintln(os.Stderr, "error: missioncontrol-preview is unsupported; use the shared Mission Control conversation")
-		os.Exit(1)
 	case "amplifier-install":
 		if err := runAmplifierBundleInstall(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -579,14 +571,6 @@ func runServe(cfg Config) error {
 	// actually used downstream describe the same canonical origin.
 	srvCfg := resolveServerConfig(cfg, resolved.Server).Normalize()
 	if err := srvCfg.Validate(); err != nil {
-		return err
-	}
-
-	// Same fail-closed posture for the one Mission Control section that
-	// widens what the Operator can read off this machine's disk. An
-	// out-of-range limit is an error here, not a clamp applied silently
-	// while the operator believes the number they wrote is in force.
-	if err := resolved.Cos.Attachments.Validate(); err != nil {
 		return err
 	}
 

@@ -10,12 +10,10 @@ import (
 	"net"
 	"net/http"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/kenotron-ms/muxterm/internal/cos"
 	"github.com/kenotron-ms/muxterm/internal/mcp"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
@@ -36,7 +34,6 @@ type Client struct {
 	cancel    context.CancelFunc
 	writeMu   sync.Mutex
 	closeOnce sync.Once
-	closeHook func()
 
 	// sessMu guards sessions and unsubscribeRemotes. sessions holds this
 	// browser's daemon links keyed by transport.HostRef.ID; the empty key is
@@ -106,22 +103,6 @@ type Client struct {
 	// arrive. ssRevision orders asynchronous aggregate writes.
 	ssLocalUnavailable bool
 	ssRevision         uint64
-
-	// cosMu guards cosSub and the generation-fenced asynchronous startup for this
-	// connection's opt-in subscription to the
-	// server-owned chief-of-staff event stream (cos.go). nil means "never
-	// subscribed": a connection that never sends cos-subscribe receives no
-	// cos-event and costs nothing. Every subscription is an independent,
-	// droppable view of the ONE shared broker, so a turn submitted in any tab
-	// streams to all of them without this layer fanning anything out.
-	cosMu                  sync.Mutex
-	cosSub                 *cos.Subscription
-	cosSubscribeGeneration uint64
-	cosSubscribePending    bool
-	// cosHistoryEpoch invalidates asynchronous subscription snapshots after
-	// an authoritative clear. It is checked while cosMu is held across the
-	// WebSocket write, so an old snapshot cannot land after the clear result.
-	cosHistoryEpoch uint64
 
 	// attachSeq enforces the frozen "composition FIRST" ordering guarantee
 	// across the goroutine boundary between the daemon connection's read loop
@@ -671,25 +652,6 @@ func (c *Client) route(msg *sessiond.Message) (sess *hostSession, browserWSID st
 // handleTextInput unmarshals a frozen sessiond.Message from the browser and
 // relays it to the daemon, re-emitting the reply with the browser's cid echoed.
 func (c *Client) handleTextInput(data []byte) {
-	// Chief-of-staff frames are SERVE-LOCAL: they are answered here and never
-	// relayed to sessiond, so they are routed off before the sessiond decode
-	// and, deliberately, before the "no daemon connection" guard below. The
-	// CoS is server-owned and reaches muxterm through the MCP server, not
-	// through this client's daemon socket.
-	var probe struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &probe); err == nil {
-		if isCosMessage(probe.Type) {
-			c.handleCosMessage(data)
-			return
-		}
-		if strings.HasPrefix(probe.Type, "missioncontrol-") {
-			c.sendMissionControlUnsupported(probe.Type)
-			return
-		}
-	}
-
 	var msg sessiond.Message
 	if err := json.Unmarshal(data, &msg); err != nil {
 		c.sendError(0, "", fmt.Errorf("invalid JSON: %w", err))
@@ -762,7 +724,7 @@ func (c *Client) handleTextInput(data []byte) {
 			c.sendError(msg.CID, browserWSID, errors.New("workspace screen is unavailable on this daemon"))
 			return
 		}
-		screen, err := screenClient.WorkspaceScreenWithin(msg.WorkspaceID, sessiond.MissionControlReplyTimeout)
+		screen, err := screenClient.WorkspaceScreenWithin(msg.WorkspaceID, sessiond.WorkspaceScreenReplyTimeout)
 		if err != nil {
 			c.sendError(msg.CID, browserWSID, err)
 			return
@@ -1297,9 +1259,6 @@ func (c *Client) sendError(cid uint64, workspaceID string, err error) {
 func (c *Client) close() {
 	c.closeOnce.Do(func() {
 		c.cancel()
-		if c.closeHook != nil {
-			c.closeHook()
-		}
 		if c.conn != nil {
 			c.conn.CloseNow()
 		}
@@ -1318,20 +1277,6 @@ type Hub struct {
 	// nil when the process was wired without a remote transport, which makes
 	// the whole feature inert.
 	remotes *RemoteRegistry
-
-	// cos owns the single, lazily-started chief-of-staff sidecar every
-	// browser tab shares. One per hub, i.e. one per muxterm server -- the
-	// conversation is server-owned, not per-browser, which is why it lives
-	// beside resolvedConfig rather than on the Client. Nothing is spawned
-	// until a browser sends cos-subscribe or cos-turn.
-	cos *cosRelay
-
-	// cosAttachments owns the private, on-disk store behind composer
-	// attachments. It sits beside cos for the same reason: the Mission
-	// Control conversation is server-owned, so the files a person attaches
-	// to it are too. Never nil once the server is constructed -- a disabled
-	// or unavailable store answers "no" rather than being absent.
-	cosAttachments *cosAttachmentStore
 
 	// attachFailures counts CONSECUTIVE attachClient failures across all
 	// browsers, reset by the first success. Guarded by mu.
@@ -1428,101 +1373,6 @@ func (h *Hub) BroadcastAIStatus(status any) {
 	}
 }
 
-// sendVoiceEnded writes the end of a voice session as a text frame. Same
-// serve-local envelope as sendAIStatus ({"voiceEnded":...}, no "type" field,
-// for the reason given there).
-func (c *Client) sendVoiceEnded(sessionID, reason string) {
-	data, err := json.Marshal(map[string]any{
-		"voiceEnded": map[string]string{"session_id": sessionID, "reason": reason},
-	})
-	if err != nil {
-		log.Printf("sendVoiceEnded: marshal error: %v", err)
-		return
-	}
-	if err := c.writeText(data); err != nil {
-		log.Printf("sendVoiceEnded: write error: %v", err)
-	}
-}
-
-// BroadcastVoiceEnded tells every connected browser that a voice session has
-// been torn down server-side.
-//
-// It exists for the spoken exit. When the realtime model hangs up on the
-// user's request, the session ends in THIS process -- but the microphone
-// light, the peer connection and the idle state are all in the page, and a
-// browser left holding a session that no longer exists is the same failure
-// as one that would not end.
-//
-// Broadcast rather than addressed because a voice session is a property of
-// the machine, not of a tab: only one runs at a time, and every tab showing
-// it needs to stop showing it. It carries a session id and a reason -- no
-// credential, no transcript.
-func (h *Hub) BroadcastVoiceEnded(sessionID, reason string) {
-	h.mu.Lock()
-	clients := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		clients = append(clients, c)
-	}
-	h.mu.Unlock()
-
-	for _, c := range clients {
-		c.sendVoiceEnded(sessionID, reason)
-	}
-}
-
-// sendOpenArtifact writes a request to show one local file as a text frame.
-// Same serve-local envelope as sendAIStatus and sendVoiceEnded
-// ({"openArtifact":...}, no "type" field, for the reason given there).
-func (c *Client) sendOpenArtifact(path string) {
-	data, err := json.Marshal(map[string]any{
-		"openArtifact": map[string]string{"path": path},
-	})
-	if err != nil {
-		log.Printf("sendOpenArtifact: marshal error: %v", err)
-		return
-	}
-	if err := c.writeText(data); err != nil {
-		log.Printf("sendOpenArtifact: write error: %v", err)
-	}
-}
-
-// BroadcastOpenArtifact asks every connected browser to show one local file in
-// the artifact viewer, and returns how many were told.
-//
-// WHY THE SERVER PUSHES A VIEW AT ALL. Everything else on this socket is the
-// server reporting what happened. This is the one thing that is a RELAYED
-// HUMAN REQUEST: somebody asked the chief of staff to show them a document,
-// and the only way to answer that is to put the document on their screen. It
-// reaches here from POST /api/artifact/open, which the `view_file` MCP tool
-// calls -- see internal/server/artifact_api.go.
-//
-// Broadcast rather than addressed, for BroadcastVoiceEnded's reason: a person
-// with three tabs open on one machine is one person, and the server has no way
-// to know which tab their eyes are on. Sending to the one that happens to have
-// asked most recently would be a guess that is wrong whenever they moved.
-//
-// It carries a path and nothing else -- no bytes, no credential. The browser
-// then reads the file through /api/artifact under its own session, which is
-// what keeps this frame from being a way to hand a file to a client that could
-// not already have asked for it.
-//
-// The COUNT is returned because zero is the interesting case: an agent that
-// believes it just showed somebody something, with no browser open, has to be
-// told so.
-func (h *Hub) BroadcastOpenArtifact(path string) int {
-	h.mu.Lock()
-	clients := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		clients = append(clients, c)
-	}
-	h.mu.Unlock()
-
-	for _, c := range clients {
-		c.sendOpenArtifact(path)
-	}
-	return len(clients)
-}
-
 // NewHub creates a new Hub that dials a fresh daemon connection per browser via
 // dial. dial may be nil and supplied later via SetDialer. tunnels is nil until
 // set by the caller (server.New sets it via hub.tunnels = tunnels).
@@ -1530,7 +1380,6 @@ func NewHub(dial DialFunc) *Hub {
 	return &Hub{
 		clients: make(map[*Client]bool),
 		dial:    dial,
-		cos:     newCosRelay(),
 	}
 }
 
@@ -1727,19 +1576,9 @@ func (h *Hub) Remove(c *Client) {
 	}
 	delete(h.clients, c)
 	h.mu.Unlock()
-	c.stopCos()
 	c.teardownSessions()
 	c.close()
 }
-
-// CloseCos shuts the chief-of-staff sidecar down if one was ever started, so
-// muxterm does not orphan a python process on exit. Safe to call when no
-// sidecar was launched.
-func (h *Hub) CloseCos() { h.cos.close() }
-
-// StartLifecycleNotices runs the Operator lifecycle notice pump for this
-// server. A no-op when the feature is switched off; see lifecycle_notices.go.
-func (h *Hub) StartLifecycleNotices(ctx context.Context) { h.cos.startLifecycleNotices(ctx) }
 
 // ClientCount returns the number of connected clients.
 func (h *Hub) ClientCount() int {
@@ -1763,13 +1602,6 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(1 << 20) // 1MB
 
 	client := newClient(s.hub, conn)
-	if key, ok := s.filesBrowserKey(r); ok {
-		s.registerFilesBrowser(key, client)
-		client.closeHook = func() {
-			s.unregisterFilesBrowser(key, client)
-			s.filesUploads.cancelOwner(client)
-		}
-	}
 	s.hub.Add(client)
 	go client.readPump()
 	// Started beside readPump, not inside it: Ping waits for a pong that only

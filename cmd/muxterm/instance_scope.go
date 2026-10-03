@@ -29,7 +29,7 @@ func differentListenPort(addr, installedAddr string) bool {
 // runtime tree. Keep that scope so their CLI tools continue to find the same
 // daemon as the browser.
 func alreadyIsolatedServeInstance() bool {
-	if os.Getenv("MUXTERM_DEV_INSTANCE") != "1" || os.Getenv("MUXTERM_COS_SESSION_ID") == "" {
+	if os.Getenv("MUXTERM_DEV_INSTANCE") != "1" {
 		return false
 	}
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
@@ -78,7 +78,6 @@ func scopeServeInstance(addr string) error {
 		"XDG_RUNTIME_DIR":        root,
 		"XDG_DATA_HOME":          filepath.Join(root, "data"),
 		"XDG_CONFIG_HOME":        filepath.Join(root, "config"),
-		"MUXTERM_COS_SESSION_ID": "muxterm-cos-instance-" + port,
 		"MUXTERM_DEV_INSTANCE":   "1",
 	} {
 		if err := os.Setenv(key, value); err != nil {

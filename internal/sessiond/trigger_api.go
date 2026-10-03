@@ -32,7 +32,7 @@ func CheckWorkspaceName(name string) error {
 }
 
 // MaxWorkspaceNameBytes caps a workspace name. Generous for anything a human or
-// a chief of staff would write ("backend auth refresh"), small enough that a
+// an agent would write ("backend auth refresh"), small enough that a
 // name cannot be used as a payload: it is echoed into the daemon registry,
 // every browser's workspace dock, and the daemon's logs.
 const MaxWorkspaceNameBytes = 128

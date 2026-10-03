@@ -7,7 +7,11 @@ import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
-import type { Artifact } from '../lib/artifact-api.js';
+type Artifact = {
+  path: string; name: string; size: number; modified: number;
+  kind: 'markdown' | 'text' | 'image' | 'download'; contentType: string;
+  text: string; tooLarge: boolean; maxBytes: number; binary: boolean;
+};
 
 type Task = { content: string; status: string };
 type Entry = { name: string; dir: boolean };

@@ -12,7 +12,44 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+type artifactResponse struct {
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	Size        int64  `json:"size"`
+	Modified    int64  `json:"modified"` // unix seconds
+	Kind        string `json:"kind"`     // markdown | text | image | download
+	ContentType string `json:"contentType"`
+	Text        string `json:"text"`
+	// TooLarge means no text was returned because the file is beyond the read
+	// bound. It is normally known before a read; a bounded read that catches a
+	// file growing after its stat reports the same metadata-only response.
+	TooLarge bool `json:"tooLarge"`
+	// MaxBytes is the bound itself, on the wire, so the viewer can state the
+	// number it was measured against rather than hard-coding a copy of it.
+	MaxBytes int64 `json:"maxBytes"`
+	// Binary is set when a file classified as text does not decode as UTF-8.
+	// Rendering it anyway produces mojibake, which looks like a broken viewer
+	// rather than an unsuitable file.
+	Binary bool `json:"binary"`
+}
+
+func writeArtifactJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func isProbablyUTF8Text(buf []byte) bool {
+	for _, b := range buf {
+		if b == 0 {
+			return false
+		}
+	}
+	return utf8.Valid(buf)
+}
 
 // SDK utility reads are confined by os.Root, including symlinks and rename races.
 func (s *Server) sdkUtilityRoot(r *http.Request) (*os.Root, string, bool) {

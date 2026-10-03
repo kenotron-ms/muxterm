@@ -1,7 +1,7 @@
 /**
  * markdown-stream.ts -- markdown parsing for text that has not finished arriving.
  *
- * WHY THIS EXISTS. <mux-cos> printed assistant text through one Lit
+ * WHY THIS EXISTS. The chat view printed assistant text through one Lit
  * interpolation, `html`<p class="say">${text}</p>``. Lit escapes an
  * interpolated string -- correct for safety, wrong for reading, because the
  * model writes markdown and the user saw `**this**` as literal source.
@@ -525,7 +525,7 @@ export class MarkdownStream {
   /**
    * Is `text` this instance's source with more appended?
    *
-   * The caller appends: cos-store either does `block.text += delta` on the same
+   * The caller appends: the chat store either does `block.text += delta` on the same
    * object or pushes a NEW block object (which gets its own MarkdownStream via
    * the WeakMap). So divergence should be impossible on the real path, and this
    * is a cheap net rather than a proof -- a full prefix compare would be O(n)

@@ -22,6 +22,34 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/voice"
 )
 
+// maxOfferBytes bounds an SDP offer. Real offers are a few kilobytes.
+const maxOfferBytes = 256 << 10
+
+var voiceContextRedactions = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:authorization|bearer|api[_ -]?key|token|secret|password|cookie)\b(?:\s*(?::|=)\s*|\s+)(?:bearer\s+)?\S+`),
+	regexp.MustCompile(`\b(?:sk|ek|rk|pk)_[A-Za-z0-9_-]{8,}\b`),
+	regexp.MustCompile(`\bresp_[A-Za-z0-9_-]+\b`),
+	regexp.MustCompile(`(?i)\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*\s*=\s*\S+`),
+	regexp.MustCompile(`(?:~|/home/)[^\s"'` + "`" + `<>]+`),
+	regexp.MustCompile(`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`),
+}
+
+func sanitizeVoiceContextText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	for _, pattern := range voiceContextRedactions {
+		text = pattern.ReplaceAllString(text, "[redacted]")
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" || limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
 // GPT-Live is an audio interface to an SDK chat. Its provider session is
 // temporary; the SDK event log remains the conversation across reconnects.
 type sdkVoiceHost struct {

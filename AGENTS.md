@@ -120,37 +120,6 @@ that breaks a test literal builds green. Run `go vet ./...` to catch it.
 
 ## Architectural invariants
 
-### Mission Control conversation ownership
-
-Mission Control is one persistent, capable server-owned COS conversation.
-There is no user-facing Lobby, chat-channel picker, or workspace-to-chat routing
-workflow. Workspaces and panes organize work, not separate Mission Control
-histories. Use the existing COS supervisor, queue, approval broker and native
-SessionStore; do not recreate a channel router behind a feature flag.
-
-Existing catalog metadata is a read-only history-compatibility input. Select
-the established Mission Control session and exact storage scope, retain root
-ownership locks, and leave unrelated histories and catalog bytes untouched.
-Never merge histories, infer session identity from workspace names or `wN`,
-clear storage to make a transition succeed, or silently replace a missing
-persisted conversation. Missing or ambiguous metadata is an explicit error.
-
-Voice Mode is a composer-owned v0.32-compatible vertical slice: the empty Send
-slot holds its orb and any live session immediately takes over the composer.
-`type instead` restores the text composer without ending the call; Escape or the
-orb ends it. It uses only the protected `/api/cos/voice/{token,sdp,end}` browser
-WebRTC path and a server-owned provider sideband. The provider owns ordinary
-turn detection: do not add browser/manual VAD, committed-event response creation,
-delivery policy, owner lease, app operation, or App Voice routes.
-
-Keep one persistent Mission Control conversation and the durable text FIFO/draft
-semantics. One-shot dictation remains independent and draft-only; it never
-auto-sends. User-visible assistant wording is `Operator`; stable historical
-provider tool identifiers retain their wire spelling only. Static checks confirm
-source and build compatibility, but live microphone/WebRTC/provider behavior is
-validated only by the user after release; do not use synthetic media or provider
-fixtures as substitute evidence.
-
 ### Terminal query ownership (CSI 6n, OSC 11;?)
 
 sessiond's `VTBuffer` is authoritative for replying to `CSI 6n` (cursor

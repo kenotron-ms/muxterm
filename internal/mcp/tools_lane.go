@@ -114,7 +114,7 @@ func checkWorkspaceName(name string) error {
 // joined existing work from one that opened a new front.
 //
 // The match is case-sensitive and exact: workspace names are chosen by a human
-// or by the chief of staff, and quietly folding "Backend" into "backend" would
+// or by an agent, and quietly folding "Backend" into "backend" would
 // drop a lane somewhere its author did not ask for. Duplicate names are
 // possible in the daemon's registry; the first match in list order wins.
 func ResolveOrCreateWorkspace(c *sessiond.Client, name string) (id string, created bool, err error) {
@@ -217,9 +217,6 @@ func (lt *laneTools) spawnLane(args map[string]any) (string, error) {
 	// agent WITH a shell. Delegating the edit is the obvious way around a
 	// block that only covered this session's own tools, so the lane's opening
 	// turn and its stop condition are inspected before one is launched.
-	if err := guardCosConfig(prompt, goal); err != nil {
-		return "", err
-	}
 
 	// A LANE THAT CANNOT STOP IS THE EXPENSIVE FAILURE, not a lane that will
 	// not start. Argv validation below catches the second; this catches the
