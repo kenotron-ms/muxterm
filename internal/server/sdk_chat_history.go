@@ -67,8 +67,9 @@ func sdkMessagePageStart(file *os.File, end int64) (int64, error) {
 			if bytes.Contains(line, []byte("input.accepted")) {
 				var header struct {
 					Type string `json:"type"`
+					Kind string `json:"kind"`
 				}
-				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" {
+				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" && header.Kind == "user" {
 					turns++
 				}
 			}
