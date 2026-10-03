@@ -1087,7 +1087,10 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, rows)
 		return
 	}
-	var req struct{ WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode string }
+	var req struct {
+		WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode string
+		Attachments                                                                   []string `json:"attachments"`
+	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
@@ -1096,8 +1099,13 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
-	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" {
-		http.Error(w, "prompt or goal required", 400)
+	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" && len(req.Attachments) == 0 {
+		http.Error(w, "message, attachment, or goal required", 400)
+		return
+	}
+	attachments, err := s.resolveSDKAttachments(req.Attachments)
+	if err != nil {
+		http.Error(w, err.Error(), 422)
 		return
 	}
 	if req.Goal != "" && req.Harness != "amplifier" {
@@ -1197,13 +1205,16 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	title := strings.TrimSpace(req.Prompt)
+	if title == "" && len(attachments) > 0 {
+		title = attachments[0].Name
+	}
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
 	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	h.chats[c.ID] = c
-	err := h.saveLocked(c)
+	err = h.saveLocked(c)
 	h.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -1220,7 +1231,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	openingID := sdkID()
-	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": req.Prompt, "goal": req.Goal}})
+	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": req.Prompt, "goal": req.Goal, "attachments": attachments}})
 	if err == nil {
 		var ack struct{ Status, InputID string }
 		err = json.Unmarshal(result, &ack)
