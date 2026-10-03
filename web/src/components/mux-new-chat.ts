@@ -123,7 +123,9 @@ export class MuxNewChat extends LitElement {
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
     @media (prefers-reduced-motion:reduce) { .receipt::before { animation:none; } }
     .location-settings { position:relative; min-width:0; }
-    .location-settings summary { display:flex; align-items:center; box-sizing:border-box; max-width:150px; height:31px; padding:0 9px; border:1px solid var(--chrome-border,#475067); border-radius:8px; cursor:pointer; color:var(--chrome-text-bright,#e2e6f1); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; list-style:none; }
+    .location-settings summary { display:flex; align-items:center; gap:6px; box-sizing:border-box; max-width:230px; height:31px; padding:0 9px; border:1px solid var(--chrome-border,#475067); border-radius:8px; cursor:pointer; color:var(--chrome-text-bright,#e2e6f1); font-size:12px; white-space:nowrap; list-style:none; }
+    .location-settings .folder-symbol { display:flex; flex:none; color:var(--chrome-accent,#9bb8f7); }
+    .location-settings .folder-label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
     .location-settings summary::-webkit-details-marker { display:none; }
     .location-settings summary:hover,.location-settings[open] summary { border-color:var(--chrome-accent,#9bb8f7); }
     .location-fields { position:absolute; z-index:20; top:37px; left:0; display:grid; gap:9px; box-sizing:border-box; width:min(400px,calc(100vw - 72px)); max-height:300px; overflow:auto; padding:11px; border:1px solid var(--chrome-border,#475067); border-radius:10px; background:var(--chrome-bar,#252a39); box-shadow:0 12px 30px #0009; }
@@ -171,6 +173,23 @@ export class MuxNewChat extends LitElement {
   private onFolderChanged() {
     const selected = sdkChats.projects.find(p => p.id === this.projectId);
     if (selected && selected.path !== this.folder) this.projectId = 'new';
+  }
+  private locationLabel() {
+    if (!this.folder) return 'Choose a folder';
+    const clean = (path: string) => {
+      if (!path.startsWith('/')) return path;
+      const parts: string[] = [];
+      for (const part of path.split('/')) {
+        if (part === '..') parts.pop();
+        else if (part && part !== '.') parts.push(part);
+      }
+      return `/${parts.join('/')}`;
+    };
+    const folder = clean(this.folder);
+    const base = this.listing?.base ? clean(this.listing.base) : '';
+    if (base && folder === base) return base.split('/').filter(Boolean).at(-1) || '/';
+    if (base && folder.startsWith(base === '/' ? '/' : `${base}/`)) return folder.slice(base === '/' ? 1 : base.length + 1);
+    return folder;
   }
   private onProjectChange(value: string) {
     this.projectId = value;
@@ -278,7 +297,7 @@ export class MuxNewChat extends LitElement {
             <div class="project-divider"></div><button class="project-option" role="option" aria-selected=${this.projectId === 'new'} ?selected=${this.projectId === 'new'} @click=${() => this.onProjectChange('new')}>${icon(Plus,{size:16})}<span class="option-copy"><strong>New project</strong><small>Choose its primary folder</small></span></button>
           </div>` : nothing}
         </div></div>
-        <details class="location-settings" ?open=${this.locationOpen} @toggle=${(e: Event) => { this.locationOpen = (e.target as HTMLDetailsElement).open; }}><summary title=${this.folder}>${this.projectId === 'new' ? 'Set up new project' : `Working in ${this.folder || 'choose a folder'}`}</summary>
+        <details class="location-settings" ?open=${this.locationOpen} @toggle=${(e: Event) => { this.locationOpen = (e.target as HTMLDetailsElement).open; }}><summary title=${this.folder}><span class="folder-symbol">${icon(Folder,{size:14})}</span><span class="folder-label">${this.locationLabel()}</span></summary>
           <div class="location-fields">
             <label class="folder">${this.projectId === 'ungrouped' ? 'Folder' : 'Primary folder'}<div class="folder-line"><input aria-label="Primary folder" .value=${this.folder} ?readonly=${this.projectId !== 'ungrouped' && this.projectId !== 'new'} @input=${(e:Event) => { this.folder = (e.target as HTMLInputElement).value; this.onFolderChanged(); }}>${this.projectId === 'ungrouped' || this.projectId === 'new' ? html`<button class="browse" aria-label="Browse server folders" @click=${() => void this.browse()}>Browse</button>` : nothing}</div></label>
             ${this.projectId === 'new' ? html`<label>Project name <input aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as HTMLInputElement).value; }}></label>` : nothing}
