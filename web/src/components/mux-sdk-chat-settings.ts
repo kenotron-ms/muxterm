@@ -39,7 +39,7 @@ export class MuxSDKChatSettings extends LitElement {
     .model-picker { margin-left:auto; }
     summary { display:flex; align-items:center; height:32px; max-width:min(290px,40vw); box-sizing:border-box; padding:0 10px; border:1px solid transparent; border-radius:10px; color:var(--chrome-text-bright,#d9def0); cursor:pointer; list-style:none; white-space:nowrap; }
     summary::-webkit-details-marker { display:none; }
-    summary:hover, summary:focus-visible, details[open] summary { background:rgba(255,255,255,.08); border-color:var(--chrome-border,#41485f); outline:none; }
+    summary:hover, summary:focus-visible, details[open] summary { background:var(--chrome-hover); border-color:var(--chrome-border,#41485f); outline:none; }
     .summary-text { min-width:0; overflow:hidden; text-overflow:ellipsis; }
     .panel { position:absolute; z-index:30; bottom:40px; width:min(350px,calc(100vw - 44px)); max-height:min(72vh,640px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px rgba(0,0,0,.45); }
     .permission-picker .panel { left:0; }
@@ -47,7 +47,7 @@ export class MuxSDKChatSettings extends LitElement {
     .heading { padding:9px 10px 5px; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
     .divider { height:1px; margin:7px 5px; background:var(--chrome-border,#41485f); }
     .choice { display:flex; align-items:center; gap:9px; width:100%; min-height:37px; border:0; border-radius:9px; padding:7px 10px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:inherit; text-align:left; cursor:pointer; }
-    .choice:hover:not(:disabled), .choice:focus-visible { background:rgba(255,255,255,.08); outline:none; }
+    .choice:hover:not(:disabled), .choice:focus-visible { background:var(--chrome-hover); outline:none; }
     .choice.selected { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 15%,transparent); }
     .choice:disabled { opacity:.46; cursor:default; }
     .choice-main { display:grid; gap:2px; min-width:0; flex:1; }
@@ -61,7 +61,7 @@ export class MuxSDKChatSettings extends LitElement {
     input[type=range] { width:100%; margin:12px 0 4px; accent-color:var(--chrome-accent,#9bb8f7); cursor:pointer; }
     .slider-ends { display:flex; justify-content:space-between; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; }
     .notice { padding:9px 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .error { color:#f1aaaa; padding:7px 10px; overflow-wrap:anywhere; }
+    .error { color:var(--chrome-danger); padding:7px 10px; overflow-wrap:anywhere; }
     .busy { opacity:.55; }
   `;
   override updated(changed: Map<string, unknown>) {

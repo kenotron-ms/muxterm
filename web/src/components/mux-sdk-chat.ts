@@ -136,13 +136,13 @@ export class MuxSDKChat extends LitElement {
   private parentScrollTop = 0;
   static styles = css`
     ${subtleScrollbars}
-    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-bg,#1a1c28); color:var(--chrome-text-bright,#d9def0); font:13px/1.55 system-ui,sans-serif; }
+    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright,#d9def0); font:13px/1.55 system-ui,sans-serif; }
     .topbar { box-sizing:border-box; height:42px; flex:none; display:flex; align-items:center; gap:12px; padding:0 12px 0 22px; border-bottom:1px solid var(--chrome-border,#343a4c); }
     .breadcrumbs { display:flex; align-items:center; gap:7px; min-width:0; }
-    .breadcrumbs button { border:0; padding:4px; border-radius:5px; background:transparent; color:#a9c5fa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
-    .breadcrumbs button:hover { background:#35445f; }
-    .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:7px 0; color:#e8a9aa; font-size:12px; }
-    .agent-history-error button { border:0; padding:2px 4px; background:transparent; color:#b7c9ed; }
+    .breadcrumbs button { border:0; padding:4px; border-radius:5px; background:transparent; color:var(--chrome-accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
+    .breadcrumbs button:hover { background:var(--chrome-hover); }
+    .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:7px 0; color:var(--chrome-danger); font-size:12px; }
+    .agent-history-error button { border:0; padding:2px 4px; background:transparent; color:var(--chrome-accent); }
     .agent-history-error button:hover { text-decoration:underline; }
     .delegate-card { box-sizing:border-box; display:grid; grid-template-columns:18px minmax(0,1fr) auto; align-items:center; gap:9px; width:100%; max-width:560px; min-height:54px; border:1px solid var(--chrome-border,#41485f); border-radius:9px; padding:7px 10px; background:var(--chrome-bar,#222b3c); color:var(--chrome-text-bright,#d9def0); text-align:left; }
     .delegate-card:hover { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 45%,var(--chrome-border,#41485f)); background:color-mix(in srgb,var(--chrome-bar,#222b3c) 90%,var(--chrome-accent,#9bb8f7)); }
@@ -152,25 +152,25 @@ export class MuxSDKChat extends LitElement {
     .delegate-name { font-size:12px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .delegate-task { color:var(--chrome-text-dim,#aabbd6); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .delegate-meta { display:flex; align-items:center; align-self:start; gap:8px; min-height:18px; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; font-variant-numeric:tabular-nums; }
-    .delegate-status-dot { width:7px; height:7px; border-radius:50%; background:#8dc5a7; }
-    .delegate-status-dot.running { background:#9bb8f7; box-shadow:0 0 0 3px #9bb8f723; }
-    .delegate-status-dot.failed { background:#e6a5a5; }
+    .delegate-status-dot { width:7px; height:7px; border-radius:50%; background:var(--mux-ok); }
+    .delegate-status-dot.running { background:var(--chrome-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--chrome-accent) 14%,transparent); }
+    .delegate-status-dot.failed { background:var(--chrome-danger); }
     .delegate-chevron { display:inline-flex; opacity:.75; }
     .agent-chat { max-width:760px; width:100%; align-self:center; }
-    .agent-chat .instruction { padding:13px 16px; border-radius:15px; background:#293a56; margin:10px 0 24px auto; max-width:82%; white-space:pre-wrap; }
-    .agent-chat .reply { padding:13px 16px; border-radius:12px; background:#222b3c; white-space:pre-wrap; }
+    .agent-chat .instruction { padding:13px 16px; border-radius:15px; background:color-mix(in srgb,var(--chrome-accent) 16%,var(--chrome-body)); margin:10px 0 24px auto; max-width:82%; white-space:pre-wrap; }
+    .agent-chat .reply { padding:13px 16px; border-radius:12px; background:var(--chrome-bar); white-space:pre-wrap; }
     .agent-chat .reply pre { white-space:pre-wrap; overflow-wrap:anywhere; }
-    .agent-step { margin:12px 0; padding:10px 12px; border:1px solid #41485f; border-radius:9px; background:#222b3c; }
+    .agent-step { margin:12px 0; padding:10px 12px; border:1px solid var(--chrome-border); border-radius:9px; background:var(--chrome-bar); }
     .agent-step pre { margin:6px 0 0; max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.5 ui-monospace,monospace; }
-    .agent-notice { color:#aabbd6; font-size:12px; }
-    .recovery { max-width:760px; width:calc(100% - 48px); box-sizing:border-box; align-self:center; margin:12px auto 0; padding:12px 14px; border:1px solid #806c4c; border-radius:9px; background:#302b29; color:#e4d6bf; }
+    .agent-notice { color:var(--chrome-text-dim); font-size:12px; }
+    .recovery { max-width:760px; width:calc(100% - 48px); box-sizing:border-box; align-self:center; margin:12px auto 0; padding:12px 14px; border:1px solid color-mix(in srgb,var(--mux-warn) 55%,var(--chrome-border)); border-radius:9px; background:color-mix(in srgb,var(--mux-warn) 10%,var(--chrome-body)); color:var(--chrome-text-bright); }
     .recovery strong { display:block; margin-bottom:3px; }
     .recovery p { margin:0 0 9px; }
-    .recovery button { border:1px solid #a38b65; border-radius:6px; padding:5px 9px; background:#40372f; color:#f0dfc3; }
-    .recovery button:hover { background:#534535; }
+    .recovery button { border:1px solid var(--mux-warn); border-radius:6px; padding:5px 9px; background:color-mix(in srgb,var(--mux-warn) 15%,var(--chrome-bar)); color:var(--chrome-text-bright); }
+    .recovery button:hover { background:color-mix(in srgb,var(--mux-warn) 25%,var(--chrome-bar)); }
     h1 { font-size:14px; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     button { font:inherit; cursor:pointer; }
-    .drawer-toggle { margin-left:auto; border:0; background:transparent; color:#9cbaf5; padding:7px; }
+    .drawer-toggle { margin-left:auto; border:0; background:transparent; color:var(--chrome-accent); padding:7px; }
     .layout { display:flex; flex:1; min-height:0; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
     .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable both-edges; overflow-anchor:none; }
@@ -181,7 +181,7 @@ export class MuxSDKChat extends LitElement {
     .block.work { margin-top:-12px; margin-bottom:20px; }
     .work-disclosure > summary { display:flex; align-items:center; gap:7px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:12px; list-style:none; cursor:pointer; }
     .work-disclosure .activity-label { flex:none; }
-    .work-disclosure .pulse { width:7px; height:7px; flex:none; border-radius:50%; background:#9bb8f7; box-shadow:0 0 0 3px #9bb8f723; animation:activity-pulse 1.35s ease-in-out infinite; }
+    .work-disclosure .pulse { width:7px; height:7px; flex:none; border-radius:50%; background:var(--chrome-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--chrome-accent) 14%,transparent); animation:activity-pulse 1.35s ease-in-out infinite; }
     @keyframes activity-pulse { 50% { opacity:.35; transform:scale(.7); } }
     @media (prefers-reduced-motion:reduce) { .work-disclosure .pulse { animation:none; } }
     .work-disclosure > summary::-webkit-details-marker { display:none; }
@@ -191,9 +191,9 @@ export class MuxSDKChat extends LitElement {
     .work-items { padding:12px 0 2px; }
     .work-item { margin-bottom:5px; }
     .user { display:flex; justify-content:flex-end; }
-    .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:rgba(122,162,247,.13); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
+    .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
-    .bubble a { display:block; margin-top:7px; color:#b7c9ed; }
+    .bubble a { display:block; margin-top:7px; color:var(--chrome-accent); }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; font-weight:600; margin-bottom:10px; text-transform:capitalize; }
     .text { color:var(--chrome-text-bright,#d9def0); font-size:14px; line-height:1.68; overflow-wrap:anywhere; }
     .text > :first-child { margin-top:0; }
@@ -235,27 +235,27 @@ export class MuxSDKChat extends LitElement {
     .tool-activity { margin-top:11px; }
     .tool-activity-items { margin:2px 0 0 2px; }
     .tool-entry > summary { padding-left:22px; }
-    .tool-entry.failed > summary { color:#e6a5a5; }
-    .tool-entry .detail { box-sizing:border-box; max-width:min(100%,650px); margin:5px 0 11px 23px; padding:10px 12px 12px; border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:rgba(122,162,247,.035); }
+    .tool-entry.failed > summary { color:var(--chrome-danger); }
+    .tool-entry .detail { box-sizing:border-box; max-width:min(100%,650px); margin:5px 0 11px 23px; padding:10px 12px 12px; border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:color-mix(in srgb,var(--chrome-accent) 5%,var(--chrome-body)); }
     .tool-detail-title { color:var(--chrome-text-bright,#d9def0); font-size:12px; font-weight:600; }
-    .detail-label { color:#9cbaf5; font-weight:600; margin:9px 0 4px; }
-    .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,.2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
-    .error { color:#e6a5a5; }
+    .detail-label { color:var(--chrome-accent); font-weight:600; margin:9px 0 4px; }
+    .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:var(--chrome-bar); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:12px/1.5 ui-monospace,monospace; }
+    .error { color:var(--chrome-danger); }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { padding:0 19px 18px; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 11px; }
     .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
-    .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:6px; background:rgba(255,255,255,.05); }
+    .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:6px; background:var(--chrome-body); }
     .attachment .filename { min-width:0; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
     .attachment .status { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .attachment .status.failed { color:#f0aaa8; }
+    .attachment .status.failed { color:var(--chrome-danger); }
     .attachment button { position:absolute; top:4px; right:4px; width:22px; height:22px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-dim,#9aa3b8); font-size:18px; line-height:20px; }
-    .attachment button:hover { background:rgba(255,255,255,.1); color:inherit; }
+    .attachment button:hover { background:var(--chrome-hover); color:inherit; }
     .attach-button { flex:none; width:34px; height:34px; display:grid; place-items:center; border:0; border-radius:9px; padding:0; background:transparent; color:var(--chrome-text-bright,#d9def0); }
     .attach-button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
     .attach-button:hover, .attach-button:focus-visible { background:var(--chrome-bar,#202632); outline:none; }
     .file-input { display:none; }
-    .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed #9bb8f7; border-radius:16px; background:rgba(25,35,60,.92); color:#d9e5ff; font-size:22px; pointer-events:none; }
+    .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed var(--chrome-accent); border-radius:16px; background:color-mix(in srgb,var(--chrome-body) 92%,transparent); color:var(--chrome-text-bright); font-size:22px; pointer-events:none; }
     /* The border extends 15px beyond each 760px transcript edge so typed text aligns with replies. */
     .composer { box-sizing:border-box; max-width:790px; margin:auto; border:1px solid var(--chrome-border,#41485f); border-radius:18px; background:var(--chrome-bar,#202632); padding:13px 14px 9px; box-shadow:0 8px 28px rgba(0,0,0,.08); transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 58%,var(--chrome-border,#41485f)); box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent,#9bb8f7) 14%,transparent); }
@@ -266,7 +266,7 @@ export class MuxSDKChat extends LitElement {
     textarea { display:block; flex:1; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:14px/1.55 system-ui,sans-serif; min-height:34px; height:34px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
     textarea::placeholder { color:var(--chrome-text-dim,#9aa3b8); opacity:.8; }
     .send, .stop { flex:none; width:34px; height:34px; display:grid; place-items:center; border-radius:10px; }
-    .send { border:0; background:var(--chrome-accent,#9bb8f7); color:#152032; font-size:20px; line-height:1; }
+    .send { border:0; background:var(--chrome-accent,#9bb8f7); color:var(--chrome-body); font-size:20px; line-height:1; }
     .send:hover:not(:disabled) { filter:brightness(1.1); }
     .send:disabled { opacity:.38; cursor:default; }
     .voice-text { white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -284,16 +284,16 @@ export class MuxSDKChat extends LitElement {
     .voice-compose-row .voice-mic { font-size:18px; line-height:1; }
     .voice-compose-row .voice-attach { flex:none; width:30px; height:30px; border:0; background:transparent; color:inherit; font-size:22px; line-height:1; }
     @media (prefers-reduced-motion:reduce) { .voice-bars i { transition:none; } }
-    .stop { border:1px solid #bd7280; background:#8c3d4e; color:white; font-size:15px; }
-    .stop:hover:not(:disabled) { background:#a34c5d; }
+    .stop { border:1px solid var(--chrome-danger); background:var(--chrome-danger); color:var(--chrome-body); font-size:15px; }
+    .stop:hover:not(:disabled) { background:color-mix(in srgb,var(--chrome-danger) 85%,var(--chrome-text-bright)); }
     .stop:disabled { opacity:.6; }
     .steer { margin-left:auto; border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:transparent; color:var(--chrome-text-bright,#d9def0); padding:6px 10px; }
     .steer + .stop { margin-left:0; }
     .composer button:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
-    .status { color:#e6bd8d; font-size:12px; }
+    .status { color:color-mix(in srgb,var(--mux-warn) 70%,var(--chrome-text-bright)); font-size:12px; }
     .drawer { position:relative; flex:none; width:var(--utility-width); min-width:0; border-left:1px solid var(--chrome-border,#343a4c); background:var(--chrome-bar,#202632); animation:drawer-in .16s ease-out; }
     .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
-    .drawer-resizer:hover, .drawer-resizer:focus-visible { background:rgba(155,184,247,.25); outline:none; }
+    .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--chrome-accent) 25%,transparent); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
     @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { position:absolute; right:0; top:42px; bottom:0; box-shadow:-10px 0 30px #0008; } }
   `;

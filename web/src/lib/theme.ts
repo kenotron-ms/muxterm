@@ -34,12 +34,12 @@ const CHROME_LIGHT: ChromeTokens = {
   bar: '#e8e8ed',
   body: '#f2f2f7',
   border: '#c6c6c8',
-  textDim: '#8e8e93',
+  textDim: '#5f6368',
   textBright: '#1c1c1e',
-  accent: '#007aff',
+  accent: '#005bb5',
   driverAccent: '#5856d6',
   hover: '#d8d8de',
-  danger: '#ff3b30',
+  danger: '#b42318',
 };
 
 /** The set of palette names that are considered light themes. */

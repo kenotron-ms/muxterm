@@ -227,44 +227,58 @@ export class MuxSDKUtility extends LitElement {
     </section>`;
   }
   private surfaceCSS = `
-    mux-sdk-utility { display:block; min-width:0; height:100%; background:#202632; color:#d9def0; font:13px/1.5 system-ui,sans-serif; }
+    mux-sdk-utility { display:block; min-width:0; height:100%; background:var(--chrome-bar); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
     mux-sdk-utility * { scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 34%,transparent) transparent; }
     mux-sdk-utility *::-webkit-scrollbar { width:6px; height:6px; }
     mux-sdk-utility *::-webkit-scrollbar-track { background:transparent; }
     mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 34%,transparent); border-radius:999px; }
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 58%,transparent); }
     mux-sdk-utility .utility-dock { width:100%; height:100%; }
-    mux-sdk-utility .dv-dockview { --dv-background-color:#202632; --dv-tabs-and-actions-container-background-color:#252c3a; --dv-activegroup-visiblepanel-tab-background-color:#35445f; --dv-inactivegroup-visiblepanel-tab-background-color:#2b3548; --dv-activegroup-visiblepanel-tab-color:#eef2ff; --dv-inactivegroup-visiblepanel-tab-color:#c1cbdd; --dv-separator-border:1px solid #41485f; }
+    mux-sdk-utility .dv-dockview {
+      --dv-background-color:var(--chrome-bar);
+      --dv-group-view-background-color:var(--chrome-bar);
+      --dv-tabs-and-actions-container-background-color:var(--chrome-bar);
+      --dv-activegroup-visiblepanel-tab-background-color:var(--chrome-hover);
+      --dv-inactivegroup-visiblepanel-tab-background-color:var(--chrome-bar);
+      --dv-activegroup-hiddenpanel-tab-background-color:var(--chrome-bar);
+      --dv-inactivegroup-hiddenpanel-tab-background-color:var(--chrome-bar);
+      --dv-activegroup-visiblepanel-tab-color:var(--chrome-text-bright);
+      --dv-inactivegroup-visiblepanel-tab-color:var(--chrome-text-dim);
+      --dv-activegroup-hiddenpanel-tab-color:var(--chrome-text-dim);
+      --dv-inactivegroup-hiddenpanel-tab-color:var(--chrome-text-dim);
+      --dv-tab-divider-color:var(--chrome-border);
+      --dv-separator-border:1px solid var(--chrome-border);
+    }
     mux-sdk-utility .dv-tab { padding-inline:14px; }
     mux-sdk-utility .utility-tab-label { display:inline-flex; align-items:center; gap:5px; }
     mux-sdk-utility .utility-tab-icon { display:inline-flex; flex:none; align-items:center; }
     mux-sdk-utility .utility-panel { width:100%; height:100%; overflow:auto; }
-    mux-sdk-utility h2 { font-size:14px; margin:0 0 12px; } mux-sdk-utility h2 small { font-size:11px; color:#96a4bc; font-weight:400; margin-left:8px; }
+    mux-sdk-utility h2 { font-size:14px; margin:0 0 12px; } mux-sdk-utility h2 small { font-size:11px; color:var(--chrome-text-dim); font-weight:400; margin-left:8px; }
     mux-sdk-utility h3 { font-size:12px; margin:18px 0 7px; } mux-sdk-utility .utility-content { padding:20px; }
-    mux-sdk-utility .empty { color:#aab5ca; line-height:1.6; } mux-sdk-utility a { color:#abc7ff; }
-    mux-sdk-utility .task-list { padding-left:18px; } mux-sdk-utility .task-list li { margin:10px 0; } mux-sdk-utility .task-state { color:#9bb8f7; font-size:11px; margin-right:9px; text-transform:capitalize; }
+    mux-sdk-utility .empty { color:var(--chrome-text-dim); line-height:1.6; } mux-sdk-utility a { color:var(--chrome-accent); }
+    mux-sdk-utility .task-list { padding-left:18px; } mux-sdk-utility .task-list li { margin:10px 0; } mux-sdk-utility .task-state { color:var(--chrome-accent); font-size:11px; margin-right:9px; text-transform:capitalize; }
     mux-sdk-utility .files-panel { display:grid; grid-template-columns:minmax(125px,36%) minmax(0,1fr); min-height:100%; }
-    mux-sdk-utility .browser { border-right:1px solid #41485f; padding:16px 10px; min-width:0; } mux-sdk-utility .viewer { min-width:0; padding:16px; overflow:auto; }
-    mux-sdk-utility .root { color:#98a8c2; overflow-wrap:anywhere; font:11px/1.4 ui-monospace,monospace; }
-    mux-sdk-utility .path { margin:10px 0; color:#b8c8e4; font:11px ui-monospace,monospace; overflow-wrap:anywhere; }
-    mux-sdk-utility .entry { display:block; width:100%; text-align:left; border:0; background:transparent; color:#d9def0; padding:5px 7px; border-radius:5px; cursor:pointer; overflow-wrap:anywhere; font:12px/1.4 system-ui,sans-serif; }
-    mux-sdk-utility .entry:hover, mux-sdk-utility .entry.selected { background:#35445f; }
+    mux-sdk-utility .browser { border-right:1px solid var(--chrome-border); padding:16px 10px; min-width:0; } mux-sdk-utility .viewer { min-width:0; padding:16px; overflow:auto; }
+    mux-sdk-utility .root { color:var(--chrome-text-dim); overflow-wrap:anywhere; font:11px/1.4 ui-monospace,monospace; }
+    mux-sdk-utility .path { margin:10px 0; color:var(--chrome-text-bright); font:11px ui-monospace,monospace; overflow-wrap:anywhere; }
+    mux-sdk-utility .entry { display:block; width:100%; text-align:left; border:0; background:transparent; color:var(--chrome-text-bright); padding:5px 7px; border-radius:5px; cursor:pointer; overflow-wrap:anywhere; font:12px/1.4 system-ui,sans-serif; }
+    mux-sdk-utility .entry:hover, mux-sdk-utility .entry.selected { background:var(--chrome-hover); }
     mux-sdk-utility .viewer img { max-width:100%; height:auto; } mux-sdk-utility .viewer pre { white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.5 ui-monospace,monospace; }
-    mux-sdk-utility .markdown { overflow-wrap:anywhere; } mux-sdk-utility .markdown pre { padding:10px; background:#151b28; overflow:auto; }
-    mux-sdk-utility .pr-number { font-size:24px; font-weight:700; } mux-sdk-utility .pr-number span { font-size:11px; color:#9bb8f7; font-weight:500; } mux-sdk-utility .branch { color:#aab5ca; }
-    mux-sdk-utility .trajectory-overview { position:relative; height:36px; margin:14px 0 4px; background:#151b28; border:1px solid #41485f; border-radius:6px; overflow:hidden; }
-    mux-sdk-utility .trajectory-mark { position:absolute; top:5px; height:26px; border:0; border-radius:3px; background:#7896d9; opacity:.85; min-width:2px; padding:0; }
-    mux-sdk-utility .trajectory-mark.tool { background:#c2a570; top:10px; height:16px; } mux-sdk-utility .trajectory-mark.thinking { background:#aa93ca; top:14px; height:10px; }
-    mux-sdk-utility .trajectory-mark.sub-agent { background:#79bdab; top:7px; height:22px; }
-    mux-sdk-utility .trajectory-scale { color:#97a5bc; font:10px ui-monospace,monospace; margin-bottom:14px; }
-    mux-sdk-utility .trajectory-search { width:100%; box-sizing:border-box; border:1px solid #41485f; border-radius:6px; padding:7px 9px; background:#151b28; color:inherit; margin-bottom:12px; }
-    mux-sdk-utility .trajectory-ledger { border-top:1px solid #41485f; }
-    mux-sdk-utility .trajectory-turn { padding:8px 3px 5px; color:#b4c4e2; background:#242e3e; border-bottom:1px solid #41485f; font-size:11px; font-weight:650; }
-    mux-sdk-utility .trajectory-row { display:grid; grid-template-columns:70px 65px minmax(0,1fr) 60px; gap:6px; align-items:start; width:100%; padding:8px 4px; border:0; border-bottom:1px solid #394354; background:transparent; color:inherit; text-align:left; cursor:pointer; font:11px/1.4 system-ui,sans-serif; }
-    mux-sdk-utility .trajectory-row:hover, mux-sdk-utility .trajectory-row.selected { background:#35445f; }
-    mux-sdk-utility .trajectory-time, mux-sdk-utility .trajectory-duration { color:#9aa9c0; font:10px/1.5 ui-monospace,monospace; }
-    mux-sdk-utility .trajectory-kind { color:#9bb8f7; } mux-sdk-utility .trajectory-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    mux-sdk-utility .trajectory-inspector { margin-top:18px; border-top:1px solid #41485f; padding-top:4px; } mux-sdk-utility .trajectory-inspector pre { max-height:260px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#151b28; padding:10px; border-radius:6px; font:11px/1.5 ui-monospace,monospace; }
-    @media(max-width:560px) { mux-sdk-utility .files-panel { grid-template-columns:1fr; } mux-sdk-utility .browser { border-right:0; border-bottom:1px solid #41485f; max-height:40vh; overflow:auto; } }
+    mux-sdk-utility .markdown { overflow-wrap:anywhere; } mux-sdk-utility .markdown pre { padding:10px; background:var(--chrome-body); overflow:auto; }
+    mux-sdk-utility .pr-number { font-size:24px; font-weight:700; } mux-sdk-utility .pr-number span { font-size:11px; color:var(--chrome-accent); font-weight:500; } mux-sdk-utility .branch { color:var(--chrome-text-dim); }
+    mux-sdk-utility .trajectory-overview { position:relative; height:36px; margin:14px 0 4px; background:var(--chrome-body); border:1px solid var(--chrome-border); border-radius:6px; overflow:hidden; }
+    mux-sdk-utility .trajectory-mark { position:absolute; top:5px; height:26px; border:0; border-radius:3px; background:var(--chrome-accent); opacity:.85; min-width:2px; padding:0; }
+    mux-sdk-utility .trajectory-mark.tool { background:var(--mux-warn); top:10px; height:16px; } mux-sdk-utility .trajectory-mark.thinking { background:var(--chrome-driver-accent); top:14px; height:10px; }
+    mux-sdk-utility .trajectory-mark.sub-agent { background:var(--mux-ok); top:7px; height:22px; }
+    mux-sdk-utility .trajectory-scale { color:var(--chrome-text-dim); font:10px ui-monospace,monospace; margin-bottom:14px; }
+    mux-sdk-utility .trajectory-search { width:100%; box-sizing:border-box; border:1px solid var(--chrome-border); border-radius:6px; padding:7px 9px; background:var(--chrome-body); color:inherit; margin-bottom:12px; }
+    mux-sdk-utility .trajectory-ledger { border-top:1px solid var(--chrome-border); }
+    mux-sdk-utility .trajectory-turn { padding:8px 3px 5px; color:var(--chrome-text-bright); background:var(--chrome-hover); border-bottom:1px solid var(--chrome-border); font-size:11px; font-weight:650; }
+    mux-sdk-utility .trajectory-row { display:grid; grid-template-columns:70px 65px minmax(0,1fr) 60px; gap:6px; align-items:start; width:100%; padding:8px 4px; border:0; border-bottom:1px solid var(--chrome-border); background:transparent; color:inherit; text-align:left; cursor:pointer; font:11px/1.4 system-ui,sans-serif; }
+    mux-sdk-utility .trajectory-row:hover, mux-sdk-utility .trajectory-row.selected { background:var(--chrome-hover); }
+    mux-sdk-utility .trajectory-time, mux-sdk-utility .trajectory-duration { color:var(--chrome-text-dim); font:10px/1.5 ui-monospace,monospace; }
+    mux-sdk-utility .trajectory-kind { color:var(--chrome-accent); } mux-sdk-utility .trajectory-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    mux-sdk-utility .trajectory-inspector { margin-top:18px; border-top:1px solid var(--chrome-border); padding-top:4px; } mux-sdk-utility .trajectory-inspector pre { max-height:260px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:var(--chrome-body); padding:10px; border-radius:6px; font:11px/1.5 ui-monospace,monospace; }
+    @media(max-width:560px) { mux-sdk-utility .files-panel { grid-template-columns:1fr; } mux-sdk-utility .browser { border-right:0; border-bottom:1px solid var(--chrome-border); max-height:40vh; overflow:auto; } }
   `;
 }
