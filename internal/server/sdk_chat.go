@@ -1075,6 +1075,52 @@ func amplifierProviderModule(harness, provider string) string {
 	}
 }
 
+// Only advertise opening choices whose local runtime and credential path are
+// present. A provider call can still fail later, but the composer must not
+// offer choices that this server already knows it cannot start.
+func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Request) {
+	type option struct {
+		Harness  string `json:"harness"`
+		Provider string `json:"provider"`
+	}
+	options := make([]option, 0, 3)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	home, _ := os.UserHomeDir()
+	if s.sdkChats.ensure("codex") == nil {
+		cmd := exec.CommandContext(ctx, "codex", "login", "status")
+		if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "" || cmd.Run() == nil {
+			options = append(options, option{Harness: "codex", Provider: "openai"})
+		}
+	}
+	if s.sdkChats.ensure("claude") == nil {
+		ready := os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
+		if !ready && home != "" {
+			data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+			if err == nil {
+				var settings struct {
+					APIKeyHelper string `json:"apiKeyHelper"`
+				}
+				ready = json.Unmarshal(data, &settings) == nil && strings.TrimSpace(settings.APIKeyHelper) != ""
+			}
+		}
+		if !ready {
+			cmd := exec.CommandContext(ctx, "claude", "auth", "status")
+			ready = cmd.Run() == nil
+		}
+		if ready {
+			options = append(options, option{Harness: "claude", Provider: "anthropic"})
+		}
+	}
+	if home != "" {
+		if info, err := os.Stat(filepath.Join(home, ".amplifier", "settings.yaml")); err == nil && info.Size() > 0 && s.sdkChats.ensure("amplifier") == nil {
+			options = append(options, option{Harness: "amplifier", Provider: "configured"})
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeSDKJSON(w, 200, options)
+}
+
 func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == "GET" {

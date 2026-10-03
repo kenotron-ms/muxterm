@@ -3,20 +3,12 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, type FolderListing } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
-import { LAUNCHABLE_HARNESSES, harnessLabel, type HarnessName } from '../lib/harness.js';
+import { harnessLabel, type HarnessName } from '../lib/harness.js';
 import { ChevronDown, Folder, Plus } from 'lucide';
 import { icon } from '../lib/icons.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
-const PROVIDERS: { value: ProviderName; label: string; harnesses: HarnessName[] }[] = [
-  { value: 'openai', label: 'OpenAI', harnesses: ['codex', 'amplifier'] },
-  { value: 'anthropic', label: 'Anthropic', harnesses: ['claude', 'amplifier'] },
-  { value: 'configured', label: 'Configured (Amplifier)', harnesses: ['amplifier'] },
-];
-const providerFor = (harness: HarnessName): ProviderName =>
-  harness === 'codex' ? 'openai' : harness === 'claude' ? 'anthropic' : 'configured';
-const providerAvailable = (harness: HarnessName, provider: ProviderName): boolean =>
-  PROVIDERS.some(choice => choice.value === provider && choice.harnesses.includes(harness));
+type StartOption = { harness: HarnessName; provider: ProviderName };
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; uploading: boolean; error?: string };
 
 @customElement('mux-new-chat')
@@ -31,7 +23,7 @@ export class MuxNewChat extends LitElement {
   @state() private newFolderName = '';
   @state() private harness: HarnessName = 'codex';
   @state() private provider: ProviderName = 'openai';
-  @state() private providerNotice = '';
+  @state() private startOptions?: StartOption[];
   @state() private prompt = '';
   @state() private listing?: FolderListing;
   @state() private pickerOpen = false;
@@ -69,7 +61,7 @@ export class MuxNewChat extends LitElement {
     label { display:flex; flex-direction:column; gap:5px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
     .controls label { display:block; }
     .controls .project { min-width:0; }
-    .controls .where,.controls .harness,.controls .provider { min-width:0; }
+    .controls .where,.controls .harness { min-width:0; }
     .composer-actions { display:flex; align-items:center; gap:7px; padding-top:8px; border-top:1px solid var(--chrome-border,#475067); }
     .composer-actions .send { margin-left:auto; }
     select,input { box-sizing:border-box; width:100%; height:37px; border:1px solid var(--chrome-border,#475067); border-radius:8px; background:var(--chrome-bar,#252a39); color:var(--chrome-text-bright,#e2e6f1); padding:7px 9px; font:13px system-ui,sans-serif; }
@@ -136,10 +128,6 @@ export class MuxNewChat extends LitElement {
     .location-settings summary:hover,.location-settings[open] summary { border-color:var(--chrome-accent,#9bb8f7); }
     .location-fields { position:absolute; z-index:20; top:37px; left:0; display:grid; gap:9px; box-sizing:border-box; width:min(400px,calc(100vw - 72px)); max-height:300px; overflow:auto; padding:11px; border:1px solid var(--chrome-border,#475067); border-radius:10px; background:var(--chrome-bar,#252a39); box-shadow:0 12px 30px #0009; }
     .location-note { margin:0; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
-    .provider-note { margin:0 2px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
-    .setup { margin:0 0 16px; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; }
-    .setup code,.setup a { color:var(--chrome-text-bright,#e2e6f1); }
-    .provider-change { color:var(--chrome-text-bright,#e2e6f1); }
     @media(max-width:550px) { .main { padding:16px; } h1 { font-size:24px; } .controls { gap:6px; } .controls select { max-width:125px; } .project-trigger { max-width:135px; } }
   `;
 
@@ -150,7 +138,7 @@ export class MuxNewChat extends LitElement {
     window.addEventListener('drop', this.resetDrop);
     window.addEventListener('dragend', this.resetDrop);
     this.harness = this.initialHarness;
-    this.provider = providerFor(this.harness);
+    void this.loadStartOptions();
     if (this.initialFolder) this.folder = this.initialFolder;
     if (this.initialProject) this.projectId = this.initialProject;
     document.addEventListener('pointerdown', this.closeDropdowns);
@@ -194,20 +182,23 @@ export class MuxNewChat extends LitElement {
     if (value === 'ungrouped' || value === 'new') this.workMode = 'local';
   }
   private onHarnessChange(value: HarnessName) {
-    const previous = this.harness;
-    this.harness = value;
-    if (value === 'amplifier' && previous !== 'amplifier') {
-      this.provider = 'configured';
-      this.providerNotice = 'Amplifier will use the provider configured in its bundle.';
-    } else if (!providerAvailable(value, this.provider)) {
-      this.provider = providerFor(value);
-      this.providerNotice = `Provider changed to ${PROVIDERS.find(provider => provider.value === this.provider)!.label} for ${harnessLabel(value)}.`;
-    } else this.providerNotice = '';
+    const option = this.startOptions?.find(item => item.harness === value);
+    if (!option) return;
+    this.harness = option.harness;
+    this.provider = option.provider;
   }
-  private onProviderChange(value: ProviderName) {
-    if (providerAvailable(this.harness, value)) {
-      this.provider = value;
-      this.providerNotice = '';
+  private async loadStartOptions() {
+    try {
+      const response = await fetch(apiPath('/api/sdk-chat-start-options'));
+      if (!response.ok) throw new Error(await response.text());
+      const options = await response.json() as StartOption[];
+      if (!this.isConnected) return;
+      this.startOptions = options;
+      const selected = options.find(item => item.harness === this.initialHarness) || options[0];
+      if (selected) this.onHarnessChange(selected.harness);
+      else this.error = 'No chat harness is ready on this server.';
+    } catch (error) {
+      if (this.isConnected) this.error = error instanceof Error ? error.message : String(error);
     }
   }
   private onDragEnter(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth++; this.dropActive = true; }
@@ -258,11 +249,7 @@ export class MuxNewChat extends LitElement {
   }
   private async send() {
     const prompt = this.prompt.trim();
-    if ((!prompt && !this.attachments.length) || this.busy || this.attachments.some(a => a.uploading || a.error)) return;
-    if (!providerAvailable(this.harness, this.provider)) {
-      this.error = 'Choose a provider available for the selected harness.';
-      return;
-    }
+    if ((!prompt && !this.attachments.length) || this.busy || !this.startOptions?.some(item => item.harness === this.harness && item.provider === this.provider) || this.attachments.some(a => a.uploading || a.error)) return;
     this.busy = true; this.error = '';
     try {
       await this.updateComplete;
@@ -300,24 +287,14 @@ export class MuxNewChat extends LitElement {
           </div>
         </details>
         <label class="where"><select aria-label="Where to work" .value=${this.workMode} @change=${(e:Event) => { this.workMode = (e.target as HTMLSelectElement).value as 'local' | 'worktree'; }}><option value="local">Local folder</option><option value="worktree" ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'}>New worktree</option></select></label>
-        <label class="harness"><select aria-label="Harness" .value=${this.harness} @change=${(e:Event) => this.onHarnessChange((e.target as HTMLSelectElement).value as HarnessName)}>${LAUNCHABLE_HARNESSES.map(h => html`<option value=${h} ?selected=${this.harness === h}>${harnessLabel(h)}</option>`)}</select></label>
-        <label class="provider"><select aria-label="Provider" .value=${this.provider} @change=${(e:Event) => this.onProviderChange((e.target as HTMLSelectElement).value as ProviderName)}>
-          ${PROVIDERS.map(provider => html`<option value=${provider.value} ?selected=${this.provider === provider.value} ?disabled=${!providerAvailable(this.harness, provider.value)} title=${providerAvailable(this.harness, provider.value) ? '' : `Unavailable for ${harnessLabel(this.harness)}`}>${provider.label}${providerAvailable(this.harness, provider.value) ? '' : ` — unavailable for ${harnessLabel(this.harness)}`}</option>`)}
-        </select></label>
+        ${this.startOptions?.length ? html`<label class="harness"><select aria-label="Harness" .value=${this.harness} @change=${(e:Event) => this.onHarnessChange((e.target as HTMLSelectElement).value as HarnessName)}>${this.startOptions.map(option => html`<option value=${option.harness} ?selected=${this.harness === option.harness}>${harnessLabel(option.harness)}</option>`)}</select></label>` : nothing}
         </div>
         ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button></div>`)}</div>` : nothing}
         <textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${(e:Event) => { this.prompt = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea>
-        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><button class="send" aria-label="Send message" ?disabled=${(!this.prompt.trim() && !this.attachments.length) || this.busy || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
+        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><button class="send" aria-label="Send message" ?disabled=${(!this.prompt.trim() && !this.attachments.length) || this.busy || !this.startOptions?.length || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
 
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
-      <p class="setup">${this.harness === 'amplifier'
-        ? html`Before starting: <a href="https://github.com/microsoft/amplifier-app-cli#installation" target="_blank" rel="noopener noreferrer">install Amplifier</a>, run <code>amplifier init</code> in a terminal to configure a provider and model, then restart muxterm.`
-        : this.harness === 'codex'
-          ? html`Before starting: install Node.js and npm, then sign in with <code>codex login</code> in a terminal. Selecting OpenAI here uses that existing login.`
-          : html`Before starting: install Node.js, npm, and Claude Code, then run <code>claude</code> in a terminal to sign in. Selecting Anthropic here uses that existing login.`}
-        Settings → AI stores a separate key; it does not sign in this harness.</p>
-      ${this.providerNotice ? html`<div class="provider-note" role="status"><span class="provider-change">${this.providerNotice}</span></div>` : nothing}
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
     </div></div>
