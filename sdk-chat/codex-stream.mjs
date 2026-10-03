@@ -33,7 +33,7 @@ export class CodexStream {
     const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpConfig = muxterm ? ['-c', `mcp_servers.muxterm.command=${JSON.stringify(muxterm)}`,
       '-c', 'mcp_servers.muxterm.args=["mcp"]'] : [];
-    for (const key of ['XDG_RUNTIME_DIR', 'XDG_DATA_HOME', 'MUXTERM_COS_SESSION_ID']) {
+    for (const key of ['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']) {
       if (process.env[key]) mcpConfig.push('-c', `mcp_servers.muxterm.env.${key}=${JSON.stringify(process.env[key])}`);
     }
     this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="detailed"', ...mcpConfig], {

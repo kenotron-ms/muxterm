@@ -5,12 +5,10 @@ import { store } from '../state.js';
 import type { SessiondWorkspaceCompletion } from '../types.js';
 import { workspaceLabel } from '../lib/workspace-label.js';
 import './launcher-menu.js';
-import './mux-start-card.js';
 import './mux-chat-list.js';
-import type { StartSplitRow } from './mux-start-card.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import type { SessionRunState } from '../lib/session-state.js';
-import { needsInputByWorkspace, needsInputCount } from '../lib/session-state.js';
+import { needsInputByWorkspace } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
 import { ChevronDown, Download, Ellipsis, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
@@ -252,71 +250,6 @@ function groupCards(cards: CardState[], localName: string): HostGroup[] {
   return groups;
 }
 
-/**
- * The empty split, as ONE array that never changes identity.
- *
- * Lit compares property values by identity, so handing the card a fresh `[]`
- * every render would mark it dirty and re-render it on every sidebar update
- * for a user who has no remotes at all. Same DOM either way — but the zero-
- * remote path is supposed to cost nothing, and a wasted render per frame is
- * not nothing.
- */
-const NO_SPLIT: StartSplitRow[] = [];
-
-/**
- * The Start card's per-machine split (ux D5), and the ONLY producer of it.
- *
- * Never called while `remotesStore.any` is false — the caller passes NO_SPLIT
- * instead, and an empty split renders nothing at all, which is what keeps the
- * card byte-identical for a browser with one machine.
- *
- * Two rules carry the whole feature:
- *
- *   1. A machine that is not CONNECTED contributes `null`, which the card
- *      renders `?`. Never 0. The rows for a dropped host are still cached at
- *      the Go edge (A.4) and still counted in the headline total, so a number
- *      is available here — and it would be a lie, because it describes what
- *      that machine was doing when the link died, not what it is doing now.
- *      Zero is the specific lie that matters: it says "nothing is waiting for
- *      you over there", which is exactly the claim a silent machine cannot
- *      support.
- *   2. The rows are the same machines, in the same order, as groupCards() puts
- *      in the list below — including its one exclusion, an `unreachable` host
- *      holding nothing, which lives in settings rather than the sidebar (ux
- *      failure table). A `?` for a machine with no group would be the card
- *      reporting on something the user cannot see.
- *
- * The counts come from the SAME needsInputByWorkspace() map the card badges and
- * the group marks come from, so per-host and per-workspace answers cannot
- * disagree. What reaches the screen is a dot, a `?`, or nothing -- the card
- * reduces every row, and no number in this function is ever rendered.
- */
-function fleetSplit(needsByWs: Map<string, number>, localName: string): StartSplitRow[] {
-  const perHost = new Map<string, number>();
-  for (const [wsId, n] of needsByWs) {
-    const { host } = parseHostRef(wsId);
-    perHost.set(host, (perHost.get(host) ?? 0) + n);
-  }
-  // Workspace presence per host, from the same list the cards are built from.
-  const populated = new Set<string>();
-  for (const ws of store.workspaces) populated.add(parseHostRef(ws.workspaceId).host);
-
-  // Local is first and is never `?`: its daemon is in this process, so there
-  // is no link that can be down (ux D2).
-  const rows: StartSplitRow[] = [{ name: localName, count: perHost.get('') ?? 0 }];
-  for (const host of remotesStore.hosts) {
-    if (host.state === 'unreachable' && !populated.has(host.id)) continue;
-    rows.push({
-      name: host.name,
-      count: host.state === 'connected' ? (perHost.get(host.id) ?? 0) : null,
-    });
-  }
-  // One row is not a split, it is the headline said twice. Reachable when the
-  // only remote is an `unreachable` one holding nothing: `any` is true, so the
-  // sidebar groups, but there is no second machine worth reporting on.
-  return rows.length > 1 ? rows : NO_SPLIT;
-}
-
 /** "12s" / "4m" / "2h" — the age of a host's current state. */
 function ageLabel(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -523,11 +456,7 @@ export class MuxSidebar extends LitElement {
       box-shadow: 0 0 0 2px var(--chrome-accent)33;
     }
 
-    /* Needs-input mark. A DOT, not a number: the Dashboard shows no counts
-       anywhere, and the sidebar is not allowed to be the one place a number
-       survived. It is still derived from needsInputByWorkspace(), the same
-       call the Dashboard card reduces, so the two cannot disagree about
-       which workspaces are involved. */
+    /* Attention mark for a workspace with a session needing input. */
     .ws-needs {
       flex-shrink: 0;
       width: 6px;
@@ -713,57 +642,6 @@ export class MuxSidebar extends LitElement {
        Exactly one thing in the sidebar may read as "you are here", otherwise
        the ring on the Start card is just a second highlight competing with a
        brighter one and the user reads the workspace as still selected. */
-    :host([home-active]) .ws-card.active {
-      background: var(--chrome-bar);
-      border-color: transparent;
-    }
-
-    :host([home-active]) .ws-card.preview.active {
-      background: var(--mux-bg);
-      border-color: color-mix(in srgb, var(--chrome-border) 60%, var(--chrome-text-dim));
-      box-shadow: 0 1px 3px -1px rgba(0, 0, 0, 0.5);
-    }
-
-    /* Scrim, over the TOP of the tile. Not arbitrary: after bottom-anchoring
-       the crop, the top rows hold the OLDEST content, so the chrome covers the
-       least valuable pixels on the card. */
-    .ws-card.preview.full::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 24px;
-      background: linear-gradient(
-        to bottom,
-        var(--chrome-bar),
-        color-mix(in srgb, var(--chrome-bar) 55%, transparent) 60%,
-        transparent
-      );
-      pointer-events: none;
-      z-index: 1;
-    }
-
-    .ws-card.preview .ws-header {
-      box-sizing: border-box;
-      padding: 0 6px;
-      min-height: 24px;
-      position: relative;
-      z-index: 2;
-    }
-
-    .ws-card.preview.full .ws-header {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      /* Does more work than the scrim for legibility over arbitrary tile
-         content; inherited by the dot and the close x. */
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
-    }
-
-    /* compact: 6 rows is 48px, and a 24px scrim over that is half the card, so
-       the header is stacked above the tile instead of overlaid. */
     .ws-card.preview.compact .ws-header {
       background: var(--chrome-bar);
     }
@@ -1202,6 +1080,7 @@ export class MuxSidebar extends LitElement {
       cursor: pointer;
     }
 
+    .new-chat-action.active { color: var(--sidebar-text); background: var(--sidebar-hover); }
     .new-chat-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
     .new-chat-action-mark { color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright)); font-size: 14px; }
 
@@ -1336,7 +1215,6 @@ export class MuxSidebar extends LitElement {
     }
     .ws-card:hover { background: var(--sidebar-hover); }
     .ws-card.active,
-    :host([home-active]) .ws-card.active { background: color-mix(in srgb, var(--chrome-accent) 12%, var(--chrome-bar)); border: 0; }
     .ws-card.dragging { opacity: 0.95; background: color-mix(in srgb, var(--chrome-accent) 13%, var(--chrome-bar)); box-shadow: 0 12px 28px rgba(0,0,0,.6); z-index: 3; transform: translateY(8px); cursor: grabbing; }
     .ws-card.drop-before::before { content: ''; position: absolute; left: 4px; right: 4px; top: -2px; height: 3px; border-radius: 4px; background: var(--chrome-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--chrome-accent) 13%, transparent); }
     .ws-header { display: contents; }
@@ -1426,19 +1304,7 @@ export class MuxSidebar extends LitElement {
   // State
   // ---------------------------------------------------------------------------
 
-  /**
-   * True while the home view is the thing on screen. Drives the Start card.
-   *
-   * Reflected: the attached workspace card has to stop reading as "you are
-   * here" while home is up (see :host([home-active]) above), and that decision
-   * belongs in CSS next to the .active rules it cancels, not threaded through
-   * every card's class list.
-   */
-  @property({ type: Boolean, reflect: true, attribute: 'home-active' })
-  homeActive = false;
-
-  /** Key chord shown on the Start card, e.g. "ctrl+`". */
-  @property({ type: String }) homeKey = '';
+  @property({ type: Boolean }) newChatActive = false;
   @property({ type: String }) selectedSDKChat = '';
 
   /**
@@ -2227,13 +2093,6 @@ export class MuxSidebar extends LitElement {
     `;
   }
 
-  /** The Start card is the way back to home from anywhere. */
-  private _onStartClick(): void {
-    this.dispatchEvent(
-      new CustomEvent('home-show', { bubbles: true, composed: true }),
-    );
-  }
-
   private _onWsClick(wsId: string): void {
     if (this._dragJustEnded) {
       this._dragJustEnded = false;
@@ -2788,18 +2647,6 @@ export class MuxSidebar extends LitElement {
   override render() {
     void this._version; // suppress unused-variable lint; triggers re-render on store change
 
-    // ONE derivation for the headline total, the spread, and the per-machine
-    // split, so the three numbers on the card are arithmetically incapable of
-    // disagreeing with each other or with the badges below.
-    const sessions = homeSessions.sessions;
-    const needsByWs = needsInputByWorkspace(sessions);
-
-    // THE ZERO-REMOTE GATE for the Start card. NO_SPLIT is the same array
-    // every time, so a browser with no remotes hands the card a value it has
-    // already seen and the card is not even marked dirty. The card's own gate
-    // (`split.length === 0` renders nothing) is the second half of this.
-    const split = remotesStore.any ? fleetSplit(needsByWs, instanceLabel()) : NO_SPLIT;
-
     return html`
       <div class="header">
         <span title="${window.location.hostname}">${instanceLabel()}</span>
@@ -2818,15 +2665,7 @@ export class MuxSidebar extends LitElement {
             </div>`
           : ''}
       </div>
-      <mux-start-card
-        .count="${needsInputCount(sessions)}"
-        .spread="${needsByWs.size}"
-        .active="${this.homeActive}"
-        .hint="${this.homeKey}"
-        .split="${split}"
-        @start-click="${() => this._onStartClick()}"
-      ></mux-start-card>
-      <button class="new-chat-action" title="New chat" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
+      <button class="new-chat-action ${this.newChatActive ? 'active' : ''}" title="New chat" aria-current="${this.newChatActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
         <span class="new-chat-action-mark">＋</span><span>New Chat</span>
       </button>
       <div class="tab-content">

@@ -21,7 +21,7 @@ import (
 //
 // It exists because an agent session cannot otherwise tell. The MCP server a
 // harness starts (`muxterm mcp`) is a plain child process: it sees the same
-// world whether its parent is a lane in a pane, the chief-of-staff sidecar, or
+// world whether its parent is a lane in a pane, a chat adapter, or
 // a shell on a laptop. That distinction decides whether the session is allowed
 // to hold close_workspace and close_pane (internal/mcp/run.go), so something
 // has to carry it, and the pane's own environment is the only channel every

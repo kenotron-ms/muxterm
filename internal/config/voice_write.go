@@ -252,8 +252,6 @@ func renderVoiceSection(v VoiceConfig) string {
 	if v.Voice != "" {
 		fmt.Fprintf(&b, "  voice = %s\n", strconv.Quote(v.Voice))
 	}
-	if v.SyncToolTimeout > 0 {
-		fmt.Fprintf(&b, "  sync_tool_timeout = %s\n", strconv.Quote(v.SyncToolTimeout.String()))
-	}
+
 	return b.String()
 }

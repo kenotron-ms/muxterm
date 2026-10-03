@@ -19,7 +19,7 @@ The sidecar path defaults to the extracted copy embedded in the binary.
 `MUXTERM_SDK_CHAT_SIDECAR` can point to an explicit copy.
 Amplifier runs in the supervised Python sidecar. At startup the sidecar installs
 `amplifier-module-loop-live` into its selected Amplifier CLI interpreter on every boot
-(see `internal/cos/sidecar/loop-live-requirements.txt`). An installation failure stops boot.
+(see `internal/amplifierchat/sidecar/loop-live-requirements.txt`). An installation failure stops boot.
 The sidecar resolves the existing Amplifier CLI settings and fails visibly if
 no provider/model is configured. Live inputs are never replayed after a crash;
 Go marks interrupted turns uncertain.

@@ -1,37 +1,4 @@
-// Package voice is muxterm's realtime speech-to-speech bridge.
-//
-// The shape, in one line: the realtime model is EARS AND A MOUTH, and the
-// Operator keeps its brain.
-//
-//	Browser ──WebRTC (audio only)──▶ realtime endpoint
-//	                                        ▲
-//	muxterm ──────sideband WebSocket────────┘   (tool calls land HERE)
-//	   │
-//	   └──▶ internal/cos.Supervisor ──▶ the existing amplifier session
-//
-// Two channels, ONE realtime session. Audio takes the low-latency direct
-// path between the browser and the vendor; tool calls take the trusted
-// server path, because muxterm's tools run shell commands and tool authority
-// in a browser tab is not something this codebase is willing to hand out.
-// The browser is a pure audio transport and never sees a tool call.
-//
-// Three rules hold everywhere in this package:
-//
-//   - No credential is ever logged, returned in an error string, or written
-//     to disk. The Entra/API credential stays in this process; only the
-//     vendor's short-lived ephemeral secret is ever handed to a browser, and
-//     the platform ENFORCES that split -- an SDP exchange presented with the
-//     long-lived credential is refused with "This operation requires
-//     ephemeral tokens for authentication".
-//   - The synchronous tool path is BOUNDED. A chief-of-staff turn can run
-//     for minutes; a realtime model expects a tool to return in seconds.
-//     Blocking until turn_end is the design that breaks, so the synchronous
-//     path gives up waiting and hands off to the asynchronous one, which
-//     speaks the answer when it lands.
-//   - The call id the sideband attaches to is derived by THIS process from
-//     the vendor's own Location header, never accepted from the browser. A
-//     browser-supplied call id would let a page point muxterm's
-//     tool-executing sideband at a realtime session the page controls.
+// Package voice provides credentials and a client for chat voice sessions.
 package voice
 
 import (

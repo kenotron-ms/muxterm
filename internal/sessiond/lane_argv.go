@@ -97,7 +97,7 @@ func LaneArgv(harness, prompt, goal string) ([]string, error) {
 		// separator a lane whose opening turn happened to start with a dash
 		// would die instantly with a usage message in the pane.
 		//
-		// Route Operator/spawn-lane starts through the same wrapper as manual
+		// Route spawn-lane starts through the same wrapper as manual
 		// launches so both receive the identical invocation-scoped hook layer.
 		self, err := os.Executable()
 		if err != nil {

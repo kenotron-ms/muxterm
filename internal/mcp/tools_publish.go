@@ -13,10 +13,6 @@ import (
 // Publishing a local file -- or a whole local folder -- to an anonymous public
 // URL, from an agent session.
 //
-// These are the reason the feature is useful before any button exists: a
-// chief-of-staff session can publish a file on the user's behalf, tell them
-// what is now exposed, and revoke it -- with no UI at all.
-//
 // LIKE tunnelTools, these talk to the SERVE layer's HTTP API rather than to
 // sessiond, because the publication registry lives in the serve layer. They
 // therefore work whether or not a daemon is running, and they authenticate

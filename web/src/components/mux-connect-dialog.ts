@@ -165,8 +165,7 @@ export class MuxConnectDialog extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     /* Tokens the wireframe assumes. --ink-3 is defined the same way
-       mux-home.ts defines it: a mix of the CHROME text tokens, never of the
-       terminal palette, so it holds its contrast in every theme. */
+       a mix of the chrome text tokens, so it holds its contrast in every theme. */
     :host {
       --ink-3: color-mix(in srgb, var(--chrome-text-dim) 55%, var(--chrome-text-bright));
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

@@ -93,12 +93,6 @@ func (tt *terminalTools) runCommand(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// S1: the chief of staff does not edit its own configuration. See
-	// guard_cos_config.go -- run_command is one of the four tools that can
-	// put bytes into a shell running as this user.
-	if err := guardCosConfig(command); err != nil {
-		return "", err
-	}
 
 	timeoutMs := 30000
 	if v, intErr := argInt(args, "timeout_ms"); intErr == nil {
@@ -217,9 +211,6 @@ func (tt *terminalTools) sendInput(args map[string]any) (string, error) {
 	}
 	// S1. send_input is run_command without the wait: the same bytes reach
 	// the same shell.
-	if err := guardCosConfig(text); err != nil {
-		return "", err
-	}
 
 	var payload []byte
 	if textPresent {

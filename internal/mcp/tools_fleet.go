@@ -170,9 +170,6 @@ func (ft *fleetTools) sessionSend(args map[string]any) (string, error) {
 			return "", fmt.Errorf("argument cursor: expected string, got %T", value)
 		}
 	}
-	if err := guardCosConfig(text); err != nil {
-		return "", err
-	}
 	if ft.c.IsRemote() {
 		return "", errors.New("managed session turns are not available across a remote machine transport")
 	}

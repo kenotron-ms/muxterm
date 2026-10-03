@@ -1,4 +1,4 @@
-.PHONY: build dev dev-local sdk-chat-deps verify-lifecycle install-stable test clean web
+.PHONY: build dev dev-local sdk-chat-deps install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -17,12 +17,11 @@ CADDY := $(shell command -v caddy 2>/dev/null || echo $(HOME)/go/bin/caddy)
 DEV_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 DEV_LOCAL_NAME ?= dev-local
 DEV_LOCAL_ADDR ?= 127.0.0.1:8313
-DEV_LOCAL_COS_SESSION ?= muxterm-cos-dev
 
 # ---------------------------------------------------------------------------
 # DEV_ISOLATE -- the ONE mechanism that separates a dev instance from production.
 #
-#   $(call DEV_ISOLATE,<runtime-dir-suffix>,<cos-session-id>)
+#   $(call DEV_ISOLATE,<runtime-dir-suffix>)
 #
 # Every dev target expands this and no dev target sets XDG_* by hand. That is
 # the entire point: the two variables below are only meaningful TOGETHER, and
@@ -38,9 +37,6 @@ DEV_LOCAL_COS_SESSION ?= muxterm-cos-dev
 #     (snapshotDir(), DefaultCompletionsPath()). Without it a dev sessiond
 #     RESTORES PRODUCTION'S WORKSPACES at boot and OVERWRITES production's
 #     restore-snapshot.json periodically and on shutdown.
-#   MUXTERM_COS_SESSION_ID -- the chief-of-staff transcript, which lives in
-#     amplifier's session store under $$HOME and honours NO XDG variable, so
-#     the session id is the only lever that separates it.
 #   INVOCATION_ID    -- unset because it is INHERITED by every descendant of a
 #     systemd unit, including every shell in every muxterm pane. Leaving it set
 #     makes EnsureDaemon's systemd gate fire for a dev serve that genuinely
@@ -53,9 +49,8 @@ unset INVOCATION_ID; \
 XDG_RUNTIME_DIR="$${TMPDIR:-/tmp}"; \
 XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR%/}/muxterm-$(1)"; \
 XDG_DATA_HOME="$$XDG_RUNTIME_DIR/data"; \
-MUXTERM_COS_SESSION_ID="$(2)"; \
 MUXTERM_DEV_INSTANCE=1; \
-export XDG_RUNTIME_DIR XDG_DATA_HOME MUXTERM_COS_SESSION_ID MUXTERM_DEV_INSTANCE; \
+export XDG_RUNTIME_DIR XDG_DATA_HOME MUXTERM_DEV_INSTANCE; \
 case "$$XDG_RUNTIME_DIR" in \
   /run/user/*|"$$HOME"/.local/share*) \
     echo "refusing: dev isolation resolved to $$XDG_RUNTIME_DIR, which looks like production state"; \
@@ -85,10 +80,10 @@ build: web sdk-chat-deps
 # process wrote production's server.url (redirecting every local CLI helper and
 # the MCP server to the dev instance) and resolved production's restore
 # snapshot. It now takes the same DEV_ISOLATE mechanism as dev-local, with its
-# own runtime dir and cos session so the two dev instances also stay apart.
+# own runtime dir and data tree so the two dev instances stay apart.
 dev: web-public
 	@mkdir -p tmp
-	@$(call DEV_ISOLATE,dev,muxterm-cos-dev-vm) \
+	@$(call DEV_ISOLATE,dev) \
 	echo "  runtime dir   $$XDG_RUNTIME_DIR  (isolated sessiond socket/log/server.url)"; \
 	echo "  data dir      $$XDG_DATA_HOME  (isolated crash-restore snapshot)"; \
 	cd $(WEB_SRC) && npx vite build --watch >/dev/null & VITE_PID=$$!; \
@@ -117,23 +112,7 @@ dev: web-public
 #     crash. Both vars must be overridden together for the isolation claim below
 #     to hold.
 #     With both set, production's sessiond socket, logs, server.url and
-#     restore-snapshot are all out of reach of this target. That is a claim
-#     about those files, not a blanket one: the amplifier session store under
-#     ~/.amplifier is still SHARED (see the cos session note below) -- what
-#     keeps dev and production apart there is the session id, not the path.
-#   - own cos session  MUXTERM_COS_SESSION_ID=muxterm-cos-dev. REQUIRED for the
-#     same reason XDG_DATA_HOME is, and it is the ONLY lever that works here:
-#     the chief-of-staff sidecar's transcript lives in amplifier's session
-#     store, whose base directory is
-#     ~/.amplifier/projects/<cwd-slug>/sessions/<session-id> --
-#     amplifier_app_cli.session_store.SessionStore hardcodes Path.home() and
-#     consults NO environment variable, so neither XDG_DATA_HOME nor
-#     AMPLIFIER_HOME (which amplifier_foundation does honour, but only for its
-#     registry/cache paths) redirects it. Without this override a dev server
-#     and production would resume the SAME session whenever their working
-#     directories resolve to the same project slug, and each turn's
-#     whole-transcript save would erase the other's turns.
-#     `amplifier resume muxterm-cos-dev` reaches the dev conversation.
+#     restore-snapshot are all out of reach of this target.
 #   - INVOCATION_ID is unset. EnsureDaemon refuses to spawn a sessiond when it
 #     is present (it means "systemd already supervises this"), which is correct
 #     for the production unit and wrong here. Any shell inherited from the
@@ -160,7 +139,7 @@ dev: web-public
 # Requires: air (falls back to $(HOME)/go/bin/air if not on PATH).
 dev-local: web-public sdk-chat-deps
 	@mkdir -p tmp
-	@$(call DEV_ISOLATE,$(DEV_LOCAL_NAME),$(DEV_LOCAL_COS_SESSION)) \
+	@$(call DEV_ISOLATE,$(DEV_LOCAL_NAME)) \
 	cd $(WEB_SRC) && npx vite build --watch > ../tmp/dev-local-vite.out 2>&1 & VITE_PID=$$!; \
 	$(AIR) -c .air.local.toml -build.args_bin "serve --addr $(DEV_LOCAL_ADDR) --no-auth" & AIR_PID=$$!; \
 	kill_tree() { \
@@ -173,22 +152,8 @@ dev-local: web-public sdk-chat-deps
 	echo "  vite watch    logging to tmp/dev-local-vite.out"; \
 	echo "  runtime dir   $$XDG_RUNTIME_DIR  (isolated sessiond socket/log)"; \
 	echo "  data dir      $$XDG_DATA_HOME  (isolated crash-restore snapshot)"; \
-	echo "  cos session   $$MUXTERM_COS_SESSION_ID  (isolated chief-of-staff transcript)"; \
 	echo "  production    127.0.0.1:8311 -- untouched"; \
 	wait $$AIR_PID
-
-# Verify Operator lifecycle markers against a real, isolated sessiond.
-#
-# A dev TARGET rather than an ad-hoc shell invocation on purpose: this file's
-# rule is that every dev instance expands DEV_ISOLATE and no dev target sets
-# XDG_* by hand, and a verification run is a dev instance like any other. It
-# binds no port and touches no service, so it can run alongside `make dev-local`
-# without contending for 8313 or its runtime dir.
-verify-lifecycle:
-	@mkdir -p tmp
-	@go build -o tmp/muxterm-verify ./cmd/muxterm
-	@$(call DEV_ISOLATE,lifecycle-verify,muxterm-cos-lifecycle-verify) \
-	MUXTERM_BIN="$$PWD/tmp/muxterm-verify" bash tools/verify-lifecycle-notices.sh
 
 # Build the production binary from origin/main and install to the stable path.
 # This is what systemd runs — separate from ./bin/muxterm used by `make dev`.
@@ -225,8 +190,3 @@ test-web:
 
 clean:
 	rm -rf bin/ web/dist
-
-# Uses the already-running dev-local daemon; never resolves the production socket.
-operator-reference-fixture:
-	@$(call DEV_ISOLATE,dev-local,muxterm-cos-dev) \
-	python3 tools/verify-operator-references.py

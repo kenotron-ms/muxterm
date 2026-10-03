@@ -1,7 +1,6 @@
 import { subtleScrollbars } from './lib/subtle-scrollbars.js';
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import { cache } from 'lit/directives/cache.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
 import { MonitorX } from 'lucide';
@@ -14,8 +13,6 @@ import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme
 import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
 import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
-import { voiceSessionController } from './lib/voice-session-controller.js';
-import { requestArtifactOpen } from './lib/artifact-open.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
 
@@ -41,27 +38,8 @@ import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
 import './components/mux-new-chat.js';
-// <mux-home> is deliberately NOT imported. The Dashboard IS home now (see
-// <mux-cos>), and the two were never meant to be alternatives you could be
-// looking at one of. The component and its standalone demo are untouched.
-import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
-import { cosStore } from './lib/cos-store.js';
-import { sdkChats } from './lib/sdk-chats.js';
 import { remotesStore } from './lib/remotes-store.js';
-const selectedChatStorageKey = 'muxterm:selected-sdk-chat';
-function rememberSelectedChat(id: string | null): void {
-  try {
-    if (id) sessionStorage.setItem(selectedChatStorageKey, id);
-    else sessionStorage.removeItem(selectedChatStorageKey);
-  } catch { /* storage can be unavailable */ }
-}
-function restoreSelectedChat(): string | null {
-  try {
-    const id = sessionStorage.getItem(selectedChatStorageKey);
-    return id && id.length < 128 ? id : null;
-  } catch { return null; }
-}
 import type { SessionState } from './lib/session-state.js';
 
 
@@ -537,7 +515,7 @@ export class MuxApp extends LitElement {
       flex-direction: column;
       overflow: hidden;
       min-width: 0;
-      /* Containing block for <mux-cos>, the Dashboard, which covers the pane
+      /* Containing block for the chat view, which covers the pane
          as an absolute overlay rather than replacing the dock — see render(). */
       position: relative;
     }
@@ -722,50 +700,13 @@ export class MuxApp extends LitElement {
   @state()
   private _drawerOpen = false;
 
-  /**
-   * True while the Dashboard covers the main pane.
-   *
-   * ONE flag where there used to be two. `_showHome` and `_showCos` were
-   * peers -- two opaque overlays over the same box, each closing the other,
-   * which is a z-index argument nobody can see the result of and, worse, two
-   * answers to "where do I go to see what is running". The Dashboard is now
-   * the single surface: a conversation on the left, the fleet on the right.
-   *
-   * The dock underneath is NEVER unmounted while it is up.
-   */
-  @state()
-  private _showDashboard = false;
   @state() private _sdkChatId: string | null = null;
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
   @state() private _newChatProject = '';
 
-  /**
-   * Whether the boot-surface decision has already been made for THIS instance.
-   *
-   * The decision is "once per page load", and connectedCallback is the only
-   * seam that runs once per page load -- but it is not guaranteed to run only
-   * once per instance: a re-inserted <mux-app> runs it again (the _initSplit
-   * note at the end of connectedCallback exists because that has happened).
-   * A re-insertion is not a boot, so it must not re-select anything. This flag
-   * is what makes the difference: a real page load constructs a new instance
-   * with it false; nothing else ever does.
-   *
-   * Deliberately NOT @state: nothing renders it.
-   */
+  /** The initial screen is selected once per page load. */
   private _bootSurfaceApplied = false;
-
-  /**
-   * True while the Dashboard's fleet sheet (portrait) is open.
-   *
-   * Mirrored from the popover's own toggle event, which <mux-cos> re-emits as
-   * `fleet-state`, rather than set by the code that opens it -- so light
-   * dismiss and Escape, which no handler of ours ever sees, cannot leave the
-   * title bar's button out of step with what is on screen. Same arrangement
-   * as _drawerOpen above, for the same reason.
-   */
-  @state()
-  private _fleetOpen = false;
 
   /**
    * A composer dispatch waiting on an attach: where it is going, and what to
@@ -850,9 +791,6 @@ export class MuxApp extends LitElement {
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
   private _unsubHomeSessions: (() => void) | null = null;
-  private _unsubCos: (() => void) | null = null;
-  private _unsubCosChatCreation: (() => void) | null = null;
-  private _operatorSpawnCalls = new Set<string>();
   private _controller: WorkspaceController | null = null;
   private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
   private _disposePaneFocusListeners: (() => void) | null = null;
@@ -969,18 +907,12 @@ export class MuxApp extends LitElement {
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
     disposeKeys = installKeybindings(uiActions);
     disposeHomeToggle?.();
-    disposeHomeToggle = installHomeToggle(store.config.keys.toggleHome, this._toggleHome);
+    disposeHomeToggle = installHomeToggle(store.config.keys.toggleHome, this._onChatNew);
 
     // The home view is fed live from the daemon (see _socket.onSessionState
     // below). Until the first session-state frame arrives the set is unknown:
     // a missing frame must not be rendered as an authoritative empty fleet.
     this._unsubHomeSessions = homeSessions.subscribe(() => {
-      this._version++;
-    });
-    // The conversation coordinator owns capability negotiation and selects
-    // either the legacy unscoped store or one attributed v2 thread. Subscribe
-    // here so the shell observes that state without parsing its wire frames.
-    this._unsubCos = cosStore.subscribe(() => {
       this._version++;
     });
     // Install fixed app-level shortcuts (Cmd+W close, Cmd+T new pane). These
@@ -1017,26 +949,6 @@ export class MuxApp extends LitElement {
     // Sidebar previews are on-demand workspace-screen reads; the store owns the
     // authenticated socket seam and does not subscribe or poll at startup.
     previewStore.attach(this._socket);
-    // Serve-local conversation frames. Nothing is asked of the server until
-    // the overlay opens: cosStore negotiates capability before it either
-    // subscribes to explicit unscoped legacy COS or selects one v2 thread.
-    cosStore.attach(this._socket);
-    // Operator creates Chats through MCP in the serve process. Refresh the
-    // browser's chat catalog when that tool completes so the new chat appears
-    // beside one created through the browser's New Chat flow.
-    this._unsubCosChatCreation = cosStore.onEvent((event) => {
-      const callId = typeof event.call_id === 'string' ? event.call_id : '';
-      if (event.ev === 'tool_start' && callId &&
-          (event.name === 'mcp_muxterm_spawn_chat' || event.name === 'spawn_chat')) {
-        this._operatorSpawnCalls.add(callId);
-      } else if (event.ev === 'tool_end' && this._operatorSpawnCalls.delete(callId) && event.ok === true) {
-        // tool_end has no name; its call_id links it to tool_start.
-        void sdkChats.refresh();
-      }
-    });
-    // A launch lands on the Dashboard, not on whichever pane the composition
-    // happens to make active. Here, immediately after the store the Dashboard
-    // reads is wired -- and NOT on the socket's connect callback. See below.
     this._applyBootSurface();
     // Home view session state. Opt in once per connection; the daemon does no
     // work at all until we ask.
@@ -1282,7 +1194,6 @@ export class MuxApp extends LitElement {
       this._dropPendingDispatch('the connection was lost');
       // The coordinator retains drafts/history but drops connection-scoped
       // selection authority and any unconfirmed receipt claim.
-      cosStore.markDisconnected();
       const interruptedTargets = new Map<string, CloseTarget>();
       for (const [key, request] of this._closeRequests) {
         interruptedTargets.set(key, request.target);
@@ -1316,7 +1227,6 @@ export class MuxApp extends LitElement {
       // stop arriving. Re-send it here, alongside the composition re-sync.
       // Re-negotiate first; this never replays a pending turn. The coordinator
       // explicitly chooses v2 selection or the unscoped legacy fallback.
-      cosStore.markReconnected();
     };
     this._socket.connect();
     this._connectionStatus = 'reconnecting';
@@ -1352,11 +1262,6 @@ export class MuxApp extends LitElement {
     disposeHomeToggle = undefined;
     this._unsubHomeSessions?.();
     this._unsubHomeSessions = null;
-    this._unsubCos?.();
-    this._unsubCos = null;
-    this._unsubCosChatCreation?.();
-    this._unsubCosChatCreation = null;
-    this._operatorSpawnCalls.clear();
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -1366,7 +1271,6 @@ export class MuxApp extends LitElement {
       // Reset its per-connection Fleet revision fence before the old socket is
       // made inert, just as onDisconnect does for an outage.
       homeSessions.markStale();
-      cosStore.markDisconnected();
       this._socket.disconnect();
       this._socket = null;
     }
@@ -1428,7 +1332,7 @@ export class MuxApp extends LitElement {
     //
     // Keyed on the STATE rather than on the two call sites that open a panel
     // (_onLauncherAction, _onConnectMachine), because the three sibling
-    // dismissals below — _onOpenCreateModal, _onDashboardShow,
+    // dismissals below — _onOpenCreateModal, _onChatNew,
     // _onWorkspaceSelected — are exactly the pattern this bug escaped from:
     // a per-call-site `_closeDrawer()` that a fourth surface forgot. Nothing
     // can show a panel without setting this field, so every door, including
@@ -1560,22 +1464,19 @@ export class MuxApp extends LitElement {
     return html`
       ${!isWide ? html`<mux-title-bar
         .drawerOpen="${this._drawerOpen}"
-        .dashboardActive="${this._showDashboard}"
-        .fleetOpen="${this._fleetOpen}"
+        .chatTitle="${this._sdkChatId === 'new' ? 'New Chat' : this._sdkChatId ? 'Chat' : ''}"
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
         @pane-create-request="${this._createPaneOptimistic}"
         @drawer-toggle="${this._onDrawerToggle}"
-        @fleet-toggle="${this._onFleetToggle}"
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
         ${isWide ? html`
           <mux-sidebar
-            .homeActive="${this._showDashboard}"
+            .newChatActive="${this._sdkChatId === 'new'}"
             .selectedSDKChat="${selectedSDKChat}"
-            .homeKey="${store.config.keys.toggleHome}"
-            .showLauncher="${this._showDashboard || !!this._sdkChatId}"
+            .showLauncher="${!!this._sdkChatId}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @chat-open="${this._onChatOpen}"
             @home-open="${this._onHomeOpen}"
@@ -1584,11 +1485,10 @@ export class MuxApp extends LitElement {
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
-            @home-show="${this._onDashboardShow}"
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
-          ${isWide && !this._showDashboard && panes.length === 0
+          ${isWide && !this._sdkChatId && panes.length === 0
             ? html`<mux-title-bar
                 desktop
                 .dockActionsVisible="${false}"
@@ -1616,7 +1516,7 @@ export class MuxApp extends LitElement {
                   .requestedPaneId="${this._requestedPaneId}"
                   .layout="${store.layout}"
                   .narrow="${!isWide}"
-                  .workspaceActionsVisible="${!this._showDashboard}"
+                  .workspaceActionsVisible="${!this._sdkChatId}"
                   @pane-select="${this._onActivePane}"
                   @pane-create="${this._createPaneOptimistic}"
                   @pane-rename="${this._onPaneRename}"
@@ -1624,52 +1524,7 @@ export class MuxApp extends LitElement {
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
               `}
-          <!-- THE DASHBOARD. One surface: a conversation with the chief of
-               staff on the left, the fleet on the right, a shared bar across
-               both -- one --mux-titlebar-height tall, the same token the
-               sidebar header beside it reads -- and a divider you can drag
-               between them.
-
-               Covers .main-pane as an opaque absolute overlay. The dock
-               underneath is NEVER unmounted: unmounting would risk dockview's
-               layout persistence and would silently downgrade the attached
-               workspace's live-colour preview to the monochrome server tile,
-               because previewRegion requires entry.opened
-               (terminal-registry.ts). Keeping it mounted AND laid out also
-               means returning to a pane needs no refit.
-
-               cache(): the Dashboard is TOGGLED, not created and destroyed. A
-               bare ternary swaps the element out of the DOM, which destroys
-               every @state on it -- including the half-typed sentence in the
-               composer and where the user put the divider. Leaving to answer
-               a pane and coming back to an empty box is a data-loss bug, not
-               a re-render. cache() parks the same instance in a fragment
-               (disconnectedCallback still fires, so nothing leaks a live
-               listener) and re-inserts it with its draft intact. Still lazy:
-               nothing is built until the Dashboard is opened the first time.
-
-               No rows are passed in. <mux-cos> subscribes to homeSessions
-               itself -- the ONE seam for session state, exactly as
-               <mux-title-bar> does for its dot -- and reports a card
-               activation as @home-open, the SAME event <mux-home> fires, so
-               there is one handler below and not two ways to reach a pane. -->
-          ${cache(
-            this._showDashboard
-            ? html`
-                <mux-cos
-                  .narrow="${!isWide}"
-                  @home-open="${this._onHomeOpen}"
-                  @home-dismiss="${this._onDashboardHide}"
-                  @fleet-state="${this._onFleetState}"
-                  @session-transcript-request="${this._onSessionTranscriptRequest}"
-                  @session-archive-request="${this._onSessionArchiveRequest}"
-                  @finished-clear-request="${this._onFinishedClearRequest}"
-                  @finished-clear-undo-request="${this._onFinishedClearUndoRequest}"
-                ></mux-cos>
-              `
-            : '',
-          )}
-          ${this._sdkChatId && !this._showDashboard ? this._sdkChatId === 'new' ? html`
+          ${this._sdkChatId ? this._sdkChatId === 'new' ? html`
             <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} @chat-created=${this._onChatOpen} @chat-cancel=${this._onChatCancel}></mux-new-chat>` : html`
             <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
         </div>
@@ -1678,17 +1533,7 @@ export class MuxApp extends LitElement {
 
       ${!isWide
         ? html`
-            <!-- Surface 1. The SAME <mux-sidebar> the wide layout puts in a
-                 Split.js column, in a popover drawer instead: Start card
-                 (the home button, and until now a phone had no door to home
-                 at all), the WORKSPACES heading, the live preview cards, and
-                 "+ New workspace" pinned at the bottom.
-
-                 Deliberately OUTSIDE .content-area. A popover is promoted to
-                 the top layer, so its position in the tree does not decide
-                 where it paints — but it must not be a flex child of the
-                 layout row either, and Split.js must never be able to reach
-                 it (see _initSplit's .content-area > mux-sidebar selector). -->
+            <!-- The mobile workspace and chat sidebar lives in a popover drawer. -->
             <div
               class="drawer"
               popover="auto"
@@ -1696,9 +1541,8 @@ export class MuxApp extends LitElement {
               @toggle="${this._onDrawerPopoverToggle}"
             >
               <mux-sidebar
-                .homeActive="${this._showDashboard}"
+                .newChatActive="${this._sdkChatId === 'new'}"
                 .selectedSDKChat="${selectedSDKChat}"
-                .homeKey="${''}"
                 .previewsVisible="${this._drawerOpen}"
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @chat-open="${this._onChatOpen}"
@@ -1708,7 +1552,6 @@ export class MuxApp extends LitElement {
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
                 @launcher-action="${this._onLauncherAction}"
-                @home-show="${this._onDashboardShow}"
               ></mux-sidebar>
             </div>
           `
@@ -2020,31 +1863,13 @@ export class MuxApp extends LitElement {
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
       disposeHomeToggle?.();
-      disposeHomeToggle = installHomeToggle(cfg.keys.toggleHome, this._toggleHome);
+      disposeHomeToggle = installHomeToggle(cfg.keys.toggleHome, this._onChatNew);
     }
     // {"aiStatus":...} envelope (no "type" field, by design -- see sendAIStatus
     // in ws.go): a key was saved or cleared in this or another tab. Carries the
     // derived status only -- never the key.
     if ('aiStatus' in msg) {
       store.setAIStatus(parseAIStatus(msg['aiStatus']));
-    }
-    // {"voiceEnded":...} envelope (no "type" field, same reason as aiStatus):
-    // a voice session was torn down server-side. That is how the SPOKEN exit
-    // reaches the page — the user asked the model to hang up, it did, and the
-    // microphone light only goes out if this tab follows.
-    if ('voiceEnded' in msg) {
-      const ended = msg['voiceEnded'] as { session_id?: string } | null;
-      voiceSessionController.endedByServer(ended?.session_id ?? '');
-    }
-    // {"openArtifact":...} envelope (no "type" field, same reason as aiStatus):
-    // somebody asked Operator to show them a file. This is the ONE
-    // server push on this socket that is a relayed human request rather than a
-    // report of something that happened, which is why it is allowed to move
-    // the surface -- see lib/artifact-open.ts. It carries a path and no bytes:
-    // the viewer reads the file itself, under this session.
-    if ('openArtifact' in msg) {
-      const open = msg['openArtifact'] as { path?: string } | null;
-      requestArtifactOpen(open?.path ?? '');
     }
   };
 
@@ -2375,197 +2200,17 @@ export class MuxApp extends LitElement {
    * the previous workspace survives for when we switch back.
    */
   // -------------------------------------------------------------------------
-  // The Dashboard
-  // -------------------------------------------------------------------------
-
-  /**
-   * BOOT SURFACE. Once per page load, land on the Dashboard.
-   *
-   * "What is my fleet doing" is the question a cold start is asking, and the
-   * Dashboard is the surface that answers it. What used to happen instead was
-   * not a choice anyone made: `_showDashboard` is initialised to false, so the
-   * dock showed through, and the dock showed `panes[0]` -- state.ts's
-   * Composition case hard-codes `this._activePaneId = this._panes[0]?.paneId`.
-   * "The first terminal" was the arithmetic, not a decision.
-   *
-   * WHAT THIS DOES NOT TOUCH -- the reconnect path. The only other seam that
-   * looks like a "start" is `_socket.onReconnect`, and putting this there
-   * would be the worse bug: since #94 the socket wakes on visibilitychange,
-   * focus and `online`, so reconnects are routine and happen exactly when the
-   * user switches back to the app. Re-selecting there would yank a reader off
-   * the pane they were reading every single time they returned to the tab. A
-   * reconnect is not a boot; it selects nothing, and neither does a server
-   * restart underneath a live page, which reaches the browser as a reconnect.
-   *
-   * WHAT THIS DOES NOT CHANGE -- which pane is active. The dock is never
-   * unmounted and is not consulted here: it still restores the workspace's
-   * saved layout and its active pane underneath. Dismissing the Dashboard
-   * lands on precisely the pane that would have been on screen without this
-   * change. Only what is on TOP at boot is different.
-   *
-   * NO PERSISTED SURFACE EXISTS to respect. The last workspace is persisted
-   * (workspace-controller's localStorage key) and the active pane within a
-   * workspace rides the saved dockview layout -- both still apply. Which
-   * SURFACE was last on screen is persisted nowhere, so there is no stored
-   * user choice for the Dashboard to override, and this change does not
-   * invent one.
-   *
-   * FALLBACK. If the Dashboard element is not defined -- a build where the
-   * import is gone, or a module that failed to evaluate -- there is nothing
-   * to show and `_showDashboard` stays false, which is exactly today's
-   * behaviour: the dock, with its first terminal. Never nothing selected.
-   *
-   * Unlike _onDashboardShow this does NOT focus the composer: at launch on a
-   * phone that raises the soft keyboard over the fleet the user came to look
-   * at, and no one asked to type yet.
-   */
   private _applyBootSurface(): void {
     if (this._bootSurfaceApplied) return;
     this._bootSurfaceApplied = true;
-    const selectedChat = restoreSelectedChat();
-    if (selectedChat) {
-      this._sdkChatId = selectedChat;
-      (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = selectedChat;
-      return;
-    }
-    if (!customElements.get('mux-cos')) return;
-    this._showDashboard = true;
-    // Subscribe once because the single conversation is the visible boot
-    // surface. This does not select or create a workspace chat context.
-    cosStore.open();
+    this._sdkChatId = 'new';
   }
-
-  /**
-   * Dashboard card / ctrl+` -- open the Dashboard from anywhere.
-   *
-   * This starts the one shared conversation if it has not been opened yet.
-   * Reopening the surface keeps the existing subscription, history and draft.
-   */
-  private _onDashboardShow = (): void => {
-    this._showDashboard = true;
-    rememberSelectedChat(null);
-    // On a phone the Dashboard card IS the drawer's top row, so the Dashboard
-    // would open underneath the drawer that asked for it.
-    this._closeDrawer();
-    cosStore.open();
-    void this.updateComplete.then(() => {
-      this.renderRoot.querySelector('mux-cos')?.focusComposer();
-    });
-  };
-
-  /** Esc, or picking a workspace -- back to the dock, which never went away. */
-  private _onDashboardHide = (): void => {
-    if (!this._showDashboard) return;
-    this._showDashboard = false;
-    if (this._sdkChatId && this._sdkChatId !== 'new') rememberSelectedChat(this._sdkChatId);
-    // A sheet is scoped to the surface that owns it. Leaving _fleetOpen true
-    // here would put the title bar's button in an expanded state for a
-    // popover the browser closed when its host left the DOM.
-    this._fleetOpen = false;
-    void this.updateComplete.then(() => {
-      terminalRegistry.focus(store.activePaneId);
-    });
-  };
-
-  private _toggleHome = (): void => {
-    if (this._showDashboard) this._onDashboardHide();
-    else this._onDashboardShow();
-  };
-
-  /**
-   * The title bar's fleet button.
-   *
-   * The sheet lives in <mux-cos>'s shadow root, so `popovertarget` cannot
-   * reach it from the bar -- the attribute resolves ids within the INVOKER's
-   * root. The intent comes up here and this calls the method, exactly as the
-   * workspace drawer already works. Everything the Popover API provides (top
-   * layer, light dismiss, Escape, one-at-a-time) is unaffected by which side
-   * makes the call.
-   */
-  private _onFleetToggle = (): void => {
-    this.renderRoot.querySelector('mux-cos')?.toggleFleet();
-  };
-
-  /** The sheet reporting its own open state. Never set from the other side. */
-  private _onFleetState = (e: Event): void => {
-    this._fleetOpen = (e as CustomEvent<{ open: boolean }>).detail?.open === true;
-  };
-
-  private _onSessionTranscriptRequest = (e: Event): void => {
-    const detail = (e as CustomEvent<{ sessionId?: string; cursor?: string }>).detail;
-    if (!detail?.sessionId || !this._socket?.requestSessionTranscript(detail.sessionId, detail.cursor ?? '')) {
-      window.dispatchEvent(new CustomEvent('session-transcript-result', {
-        detail: { type: 'session-transcript-result', sessionId: detail?.sessionId ?? '', transcriptError: 'Transcript connection is unavailable.' },
-      }));
-    }
-  };
-
-  private _onSessionArchiveRequest = (e: Event): void => {
-    const detail = (e as CustomEvent<{ sessionId?: string; archived?: boolean }>).detail;
-    if (detail?.sessionId) this._socket?.setSessionArchived(detail.sessionId, detail.archived === true);
-  };
-
-  private _onFinishedClearRequest = (e: Event): void => {
-    const rows = (e as CustomEvent<{ rows?: Array<{ workspaceId: string; sessionId: string }> }>).detail?.rows ?? [];
-    const socket = this._socket;
-    if (rows.length === 0) return;
-    if (!socket) {
-      window.dispatchEvent(new CustomEvent('finished-clear-result', {
-        detail: { cleared: 0, clearedRows: [], failedRows: rows, undos: [], error: 'The Fleet connection is unavailable.' },
-      }));
-      return;
-    }
-    void Promise.allSettled(rows.map((row) => socket.clearFinishedSession(row.workspaceId, row.sessionId))).then((results) => {
-      const undos: Array<{ workspaceId: string; sessionId: string; token: string }> = [];
-      const clearedRows: Array<{ workspaceId: string; sessionId: string }> = [];
-      const failedRows: Array<{ workspaceId: string; sessionId: string }> = [];
-      let cleared = 0;
-      let error = '';
-      for (const [index, result] of results.entries()) {
-        if (result.status === 'fulfilled') {
-          cleared++;
-          clearedRows.push(rows[index]);
-          if (result.value.undoToken) undos.push({ workspaceId: result.value.workspaceId, sessionId: rows[index].sessionId, token: result.value.undoToken });
-        } else if (!error) {
-          failedRows.push(rows[index]);
-          error = result.reason instanceof Error ? result.reason.message : 'A finished lane could not be cleared.';
-        } else {
-          failedRows.push(rows[index]);
-        }
-      }
-      window.dispatchEvent(new CustomEvent('finished-clear-result', { detail: { cleared, clearedRows, failedRows, undos, error } }));
-    });
-  };
-
-  private _onFinishedClearUndoRequest = (e: Event): void => {
-    const undos = (e as CustomEvent<{ undos?: Array<{ workspaceId: string; sessionId: string; token: string }> }>).detail?.undos ?? [];
-    const socket = this._socket;
-    if (undos.length === 0) return;
-    if (!socket) {
-      window.dispatchEvent(new CustomEvent('finished-clear-undo-result', {
-        detail: { restored: 0, sessionIds: [], error: 'The Fleet connection is unavailable.' },
-      }));
-      return;
-    }
-    void Promise.allSettled(undos.map((undo) => socket.undoFinishedClear(undo.workspaceId, undo.token))).then((results) => {
-      const restored = results.filter((result) => result.status === 'fulfilled').length;
-      const failure = results.find((result) => result.status === 'rejected');
-      const error = failure?.status === 'rejected'
-        ? (failure.reason instanceof Error ? failure.reason.message : 'Undo failed.')
-        : '';
-      const sessionIds = results.flatMap((result, index) => result.status === 'fulfilled' ? [undos[index].sessionId] : []);
-      window.dispatchEvent(new CustomEvent('finished-clear-undo-result', { detail: { restored, sessionIds, error } }));
-    });
-  };
 
   private _onChatNew = (): void => {
     this._newChatHarness = 'codex';
     this._newChatFolder = '';
     this._newChatProject = '';
     this._sdkChatId = 'new';
-    rememberSelectedChat(null);
-    this._onDashboardHide();
-    this._fleetOpen = false;
     this._closeDrawer();
   };
   private _onChatNewProject = (event: CustomEvent<{ projectId: string }>): void => {
@@ -2597,13 +2242,8 @@ export class MuxApp extends LitElement {
     const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
     if (!d) return;
     this._sdkChatId = null;
-    rememberSelectedChat(null);
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = '';
-    // "Go to that pane" cannot mean anything while an opaque overlay is still
-    // covering the dock the pane lives in. The door closes; the dock, which
-    // was never unmounted, is simply uncovered.
-    this._showDashboard = false;
-    this._fleetOpen = false;
+    // Reveal the dock before selecting its pane.
     if (d.workspaceId && d.workspaceId !== store.attached) {
       // Hand the pane to the dock as an INPUT to its restore. Applying it from
       // out here after the fact does not work: the restore re-asserts its own
@@ -2623,25 +2263,17 @@ export class MuxApp extends LitElement {
     const detail = (e as CustomEvent<{ sessionId: string }>).detail;
     if (!detail?.sessionId) return;
     this._sdkChatId = detail.sessionId;
-    rememberSelectedChat(detail.sessionId);
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
-    this._onDashboardHide();
-    this._fleetOpen = false;
     this._closeDrawer();
   };
 
   private _onChatCancel = (): void => {
     this._sdkChatId = null;
-    rememberSelectedChat(null);
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
-    // Picking a workspace is the "go work in there" gesture — the Dashboard
-    // steps aside and so does the drawer that was covering the terminal,
-    // or the click would land on a workspace nobody can see.
-    this._onDashboardHide();
+    // Picking a workspace closes the drawer covering the terminal.
     this._sdkChatId = null;
-    rememberSelectedChat(null);
     this._closeDrawer();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive
@@ -2724,7 +2356,7 @@ export class MuxApp extends LitElement {
    *
    * CAPTURE phase, and the event is consumed: the page underneath is mostly
    * TERMINALS, and an Escape typed at an open panel must never also reach a
-   * shell, end a voice call, or dismiss the Dashboard behind it. The guard is
+   * shell or dismiss the chat behind it. The guard is
    * the first line, so with no panel open this handler is one comparison and
    * the drawer's own popover Escape is untouched.
    */
@@ -2753,7 +2385,7 @@ export class MuxApp extends LitElement {
     disposeKeys?.();
     disposeKeys = installKeybindings(uiActions);
     disposeHomeToggle?.();
-    disposeHomeToggle = installHomeToggle(cfg.keys.toggleHome, this._toggleHome);
+    disposeHomeToggle = installHomeToggle(cfg.keys.toggleHome, this._onChatNew);
     // Persist the change: debounced PATCH /api/config → server merges,
     // writes to disk, and broadcasts to all connected clients.
     patchConfig(configToGoJSON(cfg));

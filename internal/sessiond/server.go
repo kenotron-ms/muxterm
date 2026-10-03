@@ -13,8 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/kenotron-ms/muxterm/internal/operator"
 )
 
 // Connection kinds carried by Message.ClientKind on attach and recorded in
@@ -37,7 +35,6 @@ type Server struct {
 	reg               *Registry
 	socket            string
 	machineIdentity   machineIdentity
-	daemonIncarnation string
 
 	mu    sync.Mutex
 	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
@@ -76,16 +73,7 @@ type Server struct {
 	triggers *triggerStore
 	engine   *triggerEngine
 
-	// lifecycle is the live transition watcher, or nil when Operator
-	// lifecycle notices are switched off. Nil is the whole feature gate on
-	// this side: emitSessionState checks it, and with it nil the daemon reads
-	// the spool exactly as often as it does today -- which is to say, not at
-	// all when nobody has opened the home view.
-	lifecycle *lifecycleWatcher
-	// attention is the durable live-marker log backing the watcher. Held even
-	// when the watcher is off so a request handler can read history that an
-	// earlier, enabled run wrote.
-	attention *attentionStore
+
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -102,7 +90,6 @@ func NewServer(socketPath string) (*Server, error) {
 		reg:                NewRegistry(),
 		socket:             socketPath,
 		machineIdentity:    identity,
-		daemonIncarnation:  uuid.New().String(),
 		subs:               make(map[string]map[*conn]bool),
 		conns:              make(map[*conn]bool),
 		preview:            make(map[string]*previewState),
@@ -113,23 +100,8 @@ func NewServer(socketPath string) (*Server, error) {
 	}
 	s.hookReports = newHookReportStore(identity.MachineID)
 	s.hookReports.projectAll()
-	s.attention = newAttentionStore(AttentionPath())
-	if LifecycleNoticesEnabled() {
-		s.lifecycle = newLifecycleWatcher(s.attention)
-	}
 	s.engine = newTriggerEngine(s, s.triggers)
 	return s, nil
-}
-
-// MissionControlIdentity returns sessiond's durable machine identity and this
-// daemon process incarnation. It is safe to expose only through the local
-// authenticated control protocol.
-func (s *Server) MissionControlIdentity() MissionControlIdentity {
-	return MissionControlIdentity{
-		ProtocolVersion:   MissionControlIdentityProtocolVersion,
-		MachineID:         s.machineIdentity.MachineID,
-		DaemonIncarnation: s.daemonIncarnation,
-	}
 }
 
 // CompletionsPath returns the durable completion log's location.
@@ -709,9 +681,6 @@ func (c *conn) handle(msg Message) {
 		c.srv.broadcastWorkspaceList()
 	case TypeListWorkspaces:
 		c.srv.replyWorkspaceList(c, msg.CID)
-	case TypeMissionControlIdentity:
-		identity := c.srv.MissionControlIdentity()
-		c.reply(&Message{Type: TypeMissionControlIdentityResult, CID: msg.CID, MissionControlProtocolVersion: identity.ProtocolVersion, MachineID: identity.MachineID, DaemonIncarnation: identity.DaemonIncarnation})
 	case TypeRenameWorkspace:
 		if c.srv.reg.RenameWorkspace(msg.WorkspaceID, msg.Name) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})
@@ -1695,7 +1664,7 @@ func (s *Server) emitSessionState() {
 	// does its work regardless of subscribers, using the same collected rows
 	// as the fleet. Explicitly disabling notices restores the subscriber-only
 	// behavior.
-	if !wanted && s.lifecycle == nil {
+	if !wanted {
 		return // nobody subscribed: no directory read, no /proc walk, no bytes
 	}
 	// The owners map is resolved lazily by collect: on a machine with no
@@ -1710,17 +1679,6 @@ func (s *Server) emitSessionState() {
 		// emptiness here would blank the home view over a transient stat error.
 		return
 	}
-	rows = excludeOperatorSession(rows)
-	// Edge detection runs on the LIVE rows, before any completion row is
-	// folded in: a completion row is a projection of a marker that already
-	// exists, and feeding it back here would manufacture a transition out of
-	// the daemon's own memory.
-	if s.lifecycle != nil {
-		s.lifecycle.observe(rows)
-	}
-	if !wanted {
-		return // markers recorded; nobody to publish rows to
-	}
 	// Fold in the lanes that have finished but not been dismissed. This is
 	// what makes the fleet a fleet: without it, a lane's row vanishes the
 	// instant its pane does, so `done` and `failed` are states nothing ever
@@ -1728,7 +1686,6 @@ func (s *Server) emitSessionState() {
 	// with it. The rows come from the durable log, so they survive a restart
 	// of this daemon.
 	rows = mergeCompletionRows(rows, s.completions.Pending())
-	rows = excludeOperatorSession(rows)
 	// The rows are already joined to their panes, which is the only thing
 	// naming a tab or a workspace after its session needs. Done before the
 	// publish, and outside every lock, so a tick that renames something emits
@@ -1740,21 +1697,6 @@ func (s *Server) emitSessionState() {
 	// notification saying "w7" and saying what actually completed.
 	s.applyDerivedNames(rows)
 	s.publishSessionState(rows)
-}
-
-// excludeOperatorSession removes muxterm's own persistent chat-driver session
-// at the daemon's single fleet source. Every consumer receives this same set:
-// browser cards, session-state subscribers, CLI/MCP fleet_status, and the
-// lifecycle edge watcher. Interactive lane sessions remain untouched.
-func excludeOperatorSession(rows []SessionState) []SessionState {
-	out := rows[:0]
-	for _, row := range rows {
-		if operator.IsFleetSession(row.SessionID, row.Harness, row.ExecutionID) {
-			continue
-		}
-		out = append(out, row)
-	}
-	return out
 }
 
 // publishSessionState advances the shared change gate and fans the set out to

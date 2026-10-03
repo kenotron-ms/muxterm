@@ -22,8 +22,6 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/authserver"
 	"github.com/kenotron-ms/muxterm/internal/chatattachments"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
-	"github.com/kenotron-ms/muxterm/internal/sessiond"
-	"github.com/kenotron-ms/muxterm/internal/voice"
 )
 
 func init() {
@@ -104,13 +102,6 @@ type Server struct {
 	// holding its link. See internal/server/publish.go.
 	publications *PublicationRegistry
 
-	// filesUploads owns the short-lived, HttpOnly destination bindings for the
-	// Files applet's narrowly scoped local upload surface. It is deliberately
-	// unrelated to publications and has no public route.
-	filesUploads   *filesUploadManager
-	filesBrowserMu sync.Mutex
-	filesBrowsers  map[filesBrowserKey]*Client
-
 	// publicDocFS is the one asset family reachable without authentication:
 	// the markdown renderer loaded by the /p/{id} page. See Config.
 	publicDocFS fs.FS
@@ -138,26 +129,11 @@ type Server struct {
 	cfgMu      sync.RWMutex
 	cfg        muxcfg.Config
 
-	// voice owns the opt-in realtime speech-to-speech capability. nil
-	// unless [voice] is enabled and valid; the routes are registered only
-	// alongside it, so a nil here means the paths do not exist.
-	voice    *voice.Manager
 	sdkVoice *sdkVoiceHost
 
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
 	ai *ai.Manager
-
-	// prs is the durable collector behind the Pull Requests applet: the
-	// pull requests muxterm's own sessions opened, kept after those
-	// sessions are gone. Server-owned rather than per-browser, because a
-	// collected pull request belongs to the machine's history and not to
-	// whoever happens to have a tab open. See prs_store.go.
-	prs *prCollector
-
-	// prsRefreshing is the single-flight guard for the background pull-request
-	// status refresh. See refreshPRStatusesAsync.
-	prsRefreshing atomic.Bool
 
 	// version is the running binary's version string, used by the
 	// /api/update/* routes. updating serializes apply requests so two
@@ -185,8 +161,6 @@ func New(cfg Config) *Server {
 		hub:            hub,
 		tunnels:        tunnels,
 		publications:   NewPublicationRegistry(),
-		filesUploads:   newFilesUploadManager(),
-		filesBrowsers:  make(map[filesBrowserKey]*Client),
 		publicDocFS:    cfg.PublicDocFS,
 		authSrv:        cfg.AuthServer,
 		webRedirectURI: cfg.WebRedirectURI,
@@ -215,27 +189,6 @@ func New(cfg Config) *Server {
 		aiKeyPath = ai.DefaultKeyPath()
 	}
 	s.ai = ai.NewManager(aiKeyPath)
-
-	// The composer attachment store is built from the SAME resolved config
-	// the rest of the process observes, once, before any route is served.
-	// Constructing it here (rather than lazily on first upload) is what
-	// makes a broken or unwritable store a startup log line instead of a
-	// surprise in the middle of someone's message.
-	hub.cosAttachments = newCosAttachmentStore(s.cfg.Cos.Attachments)
-	if hub.cosAttachments.available() {
-		log.Printf("muxterm: cos attachments enabled (max %d files, %d bytes each, %s retention)",
-			hub.cosAttachments.policy.MaxFiles,
-			hub.cosAttachments.policy.MaxFileBytes,
-			hub.cosAttachments.policy.Retention)
-		go hub.cosAttachments.runSweeper(context.Background())
-	}
-
-	// The collected pull requests, loaded from disk at construction so the
-	// first GET after a restart answers from the store rather than from an
-	// empty list it would then have to rebuild. Both paths are XDG-derived
-	// through sessiond's own resolver, so a dev server never reads the real
-	// machine's log or writes the real machine's store.
-	s.prs = newPRCollector(DefaultCollectedPRsPath(), sessiond.CompletionsPath())
 
 	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken)
 	protect := func(h http.Handler) http.Handler {
@@ -305,10 +258,8 @@ func New(cfg Config) *Server {
 	s.mux.Handle("DELETE /api/ai/key", protect(http.HandlerFunc(s.handleAIDeleteKey)))
 	s.mux.Handle("POST /api/ai/ping", protect(http.HandlerFunc(s.handleAIPing)))
 
-	// Opt-in realtime voice. Registered only when [voice] is enabled and
-	// valid -- see internal/server/voice.go.
-	s.registerVoiceRoutes(s.cfg.Voice, protect)
-	if s.voice != nil {
+	// Opt-in realtime voice for SDK chats.
+	if s.cfg.Voice.Enabled {
 		chatVoice, err := newSDKVoiceHost(s.cfg.Voice, s.sdkChats)
 		if err != nil {
 			log.Printf("sdk voice: unavailable: %v", err)
@@ -363,33 +314,6 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/remotes/{id}/disconnect", protect(http.HandlerFunc(s.handleRemotesDisconnect)))
 	s.mux.Handle("POST /api/remotes/{id}/provision", protect(http.HandlerFunc(s.handleRemotesProvision)))
 
-	// Mission Control's read-only applets: one git-annotated directory listing
-	// for Files, and every open pull request across the named worktrees for
-	// Pull Requests. Both add no authority over /ws -- the same auth boundary
-	// already hands out a shell. See internal/server/files_api.go and
-	// internal/server/prs_api.go.
-	s.mux.Handle("GET /api/files", protect(http.HandlerFunc(s.handleFilesList)))
-	s.mux.Handle("POST /api/files/upload", protect(http.HandlerFunc(s.handleFilesUpload)))
-	// Mission Control composer attachments. Behind the same authentication
-	// middleware as every other write route; the handler adds same-origin,
-	// a custom header, and a live attached browser on top, and answers 404
-	// outright when the capability is off.
-	s.mux.Handle("POST /api/cos/attachments", protect(http.HandlerFunc(s.handleCosAttachmentUpload)))
-	s.mux.Handle("DELETE /api/cos/attachments/{id}", protect(http.HandlerFunc(s.handleCosAttachmentDiscard)))
-	s.mux.Handle("GET /api/prs", protect(http.HandlerFunc(s.handlePRsList)))
-	s.mux.Handle("POST /api/prs/dismiss", protect(http.HandlerFunc(s.handlePRDismiss)))
-
-	// The artifact viewer: ONE file, shown the way a recipient of a published
-	// link would see it. Its kind, its content type and its size bound all
-	// come from the publishing code rather than from a second table, which is
-	// what makes the local preview and the public page agree by construction.
-	// /open is the one push: it lets the chief of staff put a document on the
-	// user's screen when they ask to be shown one. See artifact_api.go.
-	s.mux.Handle("GET /api/artifact", protect(http.HandlerFunc(s.handleArtifact)))
-	s.mux.Handle("GET /api/artifact/raw", protect(http.HandlerFunc(s.handleArtifactRaw)))
-	s.mux.Handle("GET /api/artifact/doc.css", protect(http.HandlerFunc(s.handleArtifactDocCSS)))
-	s.mux.Handle("POST /api/artifact/open", protect(http.HandlerFunc(s.handleArtifactOpen)))
-
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("GET /api/sdk-chat-names/events", protect(http.HandlerFunc(s.handleSDKChatNameEvents)))
 	s.mux.Handle("GET /api/sdk-chats/search-content", protect(http.HandlerFunc(s.handleSDKChatContentSearch)))
@@ -422,7 +346,6 @@ func New(cfg Config) *Server {
 	if cfg.StaticFS != nil {
 		static := http.FileServer(http.FS(cfg.StaticFS))
 		s.mux.Handle("/", protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			s.ensureFilesBrowser(w, r)
 			static.ServeHTTP(w, r)
 		})))
 	}
@@ -444,19 +367,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		Handler: s.mux,
 	}
 
-	// The chief-of-staff sidecar is a child process of THIS process, so it has
-	// to be stopped or it outlives the server that spawned it -- and an orphan
-	// still holds the amplifier session, so the next muxterm's sidecar becomes
-	// a SECOND writer on one transcript.
-	//
-	// Deferred, not placed in the ctx.Done() arm: this function also returns
-	// when ListenAndServe itself fails (a port already in use, a listener
-	// error), and that exit orphaned the sidecar. A defer covers every return
-	// path, including ones added later. No-op when nobody ever opened the chat.
-	//
-	// It does NOT cover a panic-free-fall past this frame or a SIGKILL; that is
-	// what the child's Pdeathsig is for (internal/cos/pdeathsig_linux.go).
-	defer s.hub.CloseCos()
+	// SDK chat adapters are child processes and are stopped with the server.
 	defer s.sdkChats.close()
 	if s.sdkVoice != nil {
 		defer s.sdkVoice.close()
@@ -482,19 +393,6 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		workers.Wait()
 	}()
-
-	// Operator lifecycle notices are enabled unless explicitly disabled.
-	// This connects the fleet's existing terminal signals to the conversation.
-	// Started here rather than at Hub construction so it exists only for a
-	// server that is actually serving, and stopped by CloseCos above.
-	s.hub.StartLifecycleNotices(ctx)
-
-	// A voice sideband is a live outbound WebSocket to the realtime
-	// vendor. Left open it keeps billing a session nobody is listening to,
-	// so it goes down on every return path, exactly as the sidecar does.
-	if s.voice != nil {
-		defer s.voice.Close()
-	}
 
 	// Expired publications linger briefly as tombstones so a reader who is
 	// seconds late is told "this expired" rather than "this is not valid".

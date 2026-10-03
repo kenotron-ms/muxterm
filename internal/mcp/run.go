@@ -145,7 +145,6 @@ func (lc *lazyClient) get() (*Client, error) {
 // variable is present for a lane and absent for everything else:
 //
 //	lane in a pane   muxterm mcp <- amplifier/claude <- pane process   SET
-//	chief of staff   muxterm mcp <- sidecar <- muxterm serve           unset
 //	a shell anywhere muxterm mcp <- whatever started it                unset
 //
 // Deliberately a presence test, not a parse: the value is a pane id, but
@@ -329,7 +328,6 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 	registerTunnelTools(srv)
 	registerPublishTools(srv)
 	registerChatControlTools(srv)
-	registerArtifactTools(srv)
 	registerConfigTools(srv)
 	registerTriggerTools(srv, localOnly)
 
@@ -540,8 +538,8 @@ func registerAllTools(
 	//   Chosen: destructive reach stops at the machine boundary. Enumerating
 	//   and driving a remote is fully supported; destroying things on one is
 	//   not. Three reasons compound. (a) It is unnecessary: nothing in "the
-	//   chief of staff can see and use another machine's sessions" requires
-	//   destroying a workspace there. (b) It is unobservable: the operator
+	//   an agent can see and use another machine's sessions" requires
+	//   destroying a workspace there. (b) It is unobservable: the user
 	//   watching a remote pane vanish is on the OTHER machine, so the usual
 	//   corrective feedback loop is absent. (c) The known hazard is still
 	//   open: agent lanes were recently found closing workspaces they should
@@ -667,36 +665,7 @@ func registerAllTools(
 	)
 
 	// --- Delegation tools ---
-	//
-	// spawn_lane is intentionally CREATE-ONLY, and there is deliberately no
-	// destroy_lane beside it. An agent that delegates must be able to open new
-	// work and must never be able to destroy existing work; closure stays with
-	// the human (docs/designs/2026-09-06-cos-delegation-model.md section 2).
-	// close_pane and close_workspace above are now withheld from any server
-	// running inside a pane, which is every lane this tool starts. The
-	// principle is unchanged and merely enforced one layer lower: a tool an
-	// agent does not have cannot be misused, whereas an approval gate on one
-	// can be overwritten out from under you. What changed is WHERE the surface
-	// is chosen -- an agent's bundle cannot decide this, because muxterm does
-	// not write the bundle a lane runs; the server does.
-	//
-	// SETTLED: the chief-of-staff bundle takes the muxterm tool set WHOLE
-	// (mcp_muxterm_*), so the CoS CAN close a pane or a workspace. That is
-	// deliberate, not an oversight. Managing muxterm is what a chief of staff
-	// for muxterm is for; a CoS that opens workspaces and can never tidy them
-	// leaves an accumulating mess. What it may not do is a LANE's work --
-	// hence no bash, no file writes, no delegate. Section 2 of the delegation
-	// model carries the full table and the reasoning.
-	//
-	// The CoS keeps both tools under the rule above BECAUSE OF WHERE IT RUNS:
-	// it is a sidecar of `muxterm serve`, not a pane process, so insidePane()
-	// is false for it. That is a real coupling, not a coincidence -- move the
-	// sidecar into a pane and it silently loses the two tools. If that day
-	// comes, give it an explicit exemption rather than weakening the rule.
-	//
-	// The broadcast above is still the thing to respect: closure is gated by
-	// ASKING (the approval card) and by the charter rule that the CoS never
-	// closes a workspace it did not create -- not by the tool's absence.
+	// Agents in panes cannot close their own workspace or pane.
 	srv.Register(
 		"spawn_lane",
 		"delegate work: launch a coding-agent session (amplifier|claude|codex) in a pane of the named workspace, "+
@@ -879,12 +848,6 @@ func registerAllTools(
 // question a lane has a real reason to ask -- "is something else about to fire
 // into this repository while I work in it". The guard withholds REACH THAT
 // STARTS OR STOPS THINGS, not reach.
-//
-// The chief of staff keeps all four, because it is a sidecar of `muxterm serve`
-// rather than a pane process (insidePane() is false for it) -- the same real
-// coupling spawn_lane's registration comment names. Managing the human's
-// automations on their behalf is its job; doing so has a charter rule attached
-// (propose, do not install) rather than a missing tool.
 //
 // LOCAL ONLY, deliberately. Every one of these is registered through
 // localOnly, so `machine: "boxb"` is refused rather than quietly managing

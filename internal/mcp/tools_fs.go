@@ -8,11 +8,6 @@ import (
 
 // Read-only file access across the machine boundary.
 //
-// The gap these two tools close: a chief-of-staff session can SEE a remote
-// pane's scrollback through get_screen, but could not read the file the work
-// actually lives in. Terminal output was reachable; the document beside it was
-// not.
-//
 // They are machine-scoped exactly the way PR #90's tools are -- a "machine"
 // parameter, absent meaning local, resolved through machines.resolve, and never
 // silently answered with this machine when a remote was named. Both run through

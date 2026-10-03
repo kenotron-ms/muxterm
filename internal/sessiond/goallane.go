@@ -70,7 +70,7 @@ const (
 //
 // THE GOAL TEXT IS AN ARGUMENT, NEVER SOURCE. It is passed as $1 to a FIXED
 // script, which is why this is safe: a lane's stop condition is routinely
-// written by a model (spawn_lane is an MCP tool the chief of staff calls) and
+// written by a model through the spawn_lane MCP tool and
 // routinely contains quotes, backticks, newlines and $. Interpolating that into
 // shell source would hand whoever wrote the goal a shell in the user's pane.
 // The `bash -c <script> <argv0> <arg>` form is the one shape that keeps a shell

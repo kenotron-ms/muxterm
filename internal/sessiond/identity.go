@@ -21,23 +21,12 @@ type machineIdentity struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// MissionControlIdentity is the read-only result of the sessiond capability
-// handshake. It intentionally advertises identity only, never threaded
-// execution or voice support.
-type MissionControlIdentity struct {
-	ProtocolVersion   int    `json:"missioncontrolProtocolVersion"`
-	MachineID         string `json:"machineId"`
-	DaemonIncarnation string `json:"daemonIncarnation"`
-}
-
-const MissionControlIdentityProtocolVersion = 1
-
-func missionControlIdentityPath() string {
-	return filepath.Join(snapshotDir(), "missioncontrol", "machine-identity.json")
+func machineIdentityPath() string {
+    return filepath.Join(snapshotDir(), "identity", "machine.json")
 }
 
 func loadOrCreateMachineIdentity() (machineIdentity, error) {
-	path := missionControlIdentityPath()
+	path := machineIdentityPath()
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return machineIdentity{}, fmt.Errorf("sessiond: create machine identity dir: %w", err)
@@ -55,6 +44,15 @@ func loadOrCreateMachineIdentity() (machineIdentity, error) {
 	}
 
 	data, err := os.ReadFile(path)
+    migrated := false
+    if errors.Is(err, os.ErrNotExist) {
+        legacy := filepath.Join(snapshotDir(), "missioncontrol", "machine-identity.json")
+        if old, oldErr := os.ReadFile(legacy); oldErr == nil {
+            data, err, migrated = old, nil, true
+        } else if !errors.Is(oldErr, os.ErrNotExist) {
+            return machineIdentity{}, fmt.Errorf("sessiond: read previous machine identity: %w", oldErr)
+        }
+    }
 	if err == nil {
 		var identity machineIdentity
 		if err := json.Unmarshal(data, &identity); err != nil {
@@ -63,6 +61,11 @@ func loadOrCreateMachineIdentity() (machineIdentity, error) {
 		if parsed, err := uuid.Parse(identity.MachineID); err != nil || parsed == uuid.Nil {
 			return machineIdentity{}, errors.New("sessiond: machine identity is invalid; refusing to replace it")
 		}
+        if migrated {
+            if err := atomicfile.Write(path, data, 0o600); err != nil {
+                return machineIdentity{}, fmt.Errorf("sessiond: migrate machine identity: %w", err)
+            }
+        }
 		return identity, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
