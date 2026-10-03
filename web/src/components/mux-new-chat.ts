@@ -61,7 +61,15 @@ export class MuxNewChat extends LitElement {
     label { display:flex; flex-direction:column; gap:5px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
     .controls label { display:block; }
     .controls .project { min-width:0; }
-    .controls .where,.controls .harness { min-width:0; }
+    .controls .harness { min-width:0; }
+    .worktree-toggle { display:inline-flex; align-items:center; gap:7px; height:31px; margin-left:auto; padding:0 3px 0 8px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; white-space:nowrap; }
+    .worktree-toggle:hover:not(:disabled),.worktree-toggle:focus-visible { background:var(--chrome-hover); color:var(--chrome-text-bright,#e2e6f1); outline:none; }
+    .worktree-toggle:disabled { opacity:.45; cursor:default; }
+    .worktree-toggle .track { display:flex; align-items:center; box-sizing:border-box; width:29px; height:17px; padding:2px; border:1px solid var(--chrome-border,#475067); border-radius:999px; background:var(--chrome-body); transition:background .15s; }
+    .worktree-toggle .thumb { width:11px; height:11px; border-radius:50%; background:var(--chrome-text-dim,#a9b0c0); transition:transform .15s; }
+    .worktree-toggle[aria-checked="true"] { color:var(--chrome-text-bright,#e2e6f1); }
+    .worktree-toggle[aria-checked="true"] .track { border-color:var(--chrome-accent,#9bb8f7); background:var(--chrome-accent,#9bb8f7); }
+    .worktree-toggle[aria-checked="true"] .thumb { background:var(--chrome-body); transform:translateX(12px); }
     .composer-actions { display:flex; align-items:center; gap:7px; padding-top:8px; border-top:1px solid var(--chrome-border,#475067); }
     .composer-actions .send { margin-left:auto; }
     select,input { box-sizing:border-box; width:100%; height:37px; border:1px solid var(--chrome-border,#475067); border-radius:8px; background:var(--chrome-bar,#252a39); color:var(--chrome-text-bright,#e2e6f1); padding:7px 9px; font:13px system-ui,sans-serif; }
@@ -305,8 +313,8 @@ export class MuxNewChat extends LitElement {
             <p class="location-note">${this.workMode === 'worktree' ? 'A separate Git worktree will be created from this project’s primary folder.' : this.projectId === 'ungrouped' ? 'This chat will use the chosen folder.' : 'This chat will use the project’s primary folder.'}${selectedProject?.sourceFolders?.length ? ` ${selectedProject.sourceFolders.length} additional source ${selectedProject.sourceFolders.length === 1 ? 'folder is' : 'folders are'} available at their existing paths.` : ''}</p>
           </div>
         </details>
-        <label class="where"><select aria-label="Where to work" .value=${this.workMode} @change=${(e:Event) => { this.workMode = (e.target as HTMLSelectElement).value as 'local' | 'worktree'; }}><option value="local">Local folder</option><option value="worktree" ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'}>New worktree</option></select></label>
         ${this.startOptions?.length ? html`<label class="harness"><select aria-label="Harness" .value=${this.harness} @change=${(e:Event) => this.onHarnessChange((e.target as HTMLSelectElement).value as HarnessName)}>${this.startOptions.map(option => html`<option value=${option.harness} ?selected=${this.harness === option.harness}>${harnessLabel(option.harness)}</option>`)}</select></label>` : nothing}
+        <button class="worktree-toggle" type="button" role="switch" aria-label="Use a separate Git worktree" aria-checked=${this.workMode === 'worktree'} title=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @click=${() => { this.workMode = this.workMode === 'worktree' ? 'local' : 'worktree'; }}><span>Worktree</span><span class="track" aria-hidden="true"><span class="thumb"></span></span></button>
         </div>
         ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button></div>`)}</div>` : nothing}
         <textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${(e:Event) => { this.prompt = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea>
