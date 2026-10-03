@@ -16,6 +16,7 @@ import (
 )
 
 const sdkHistoryPageSize = 150
+const sdkMessageHistoryPageTurns = 4
 
 // Event-log byte offsets are stable cursors because the log is append-only.
 // Reading backward avoids scanning an entire long conversation to open its tail.
@@ -44,6 +45,44 @@ func sdkPageStart(file *os.File, end int64, limit int) (int64, error) {
 			}
 		}
 		position = start
+	}
+	return 0, nil
+}
+
+// Message pages start at a user message, so long runs of thinking and tool
+// events cannot make the root transcript appear empty or require dozens of
+// scroll gestures to reach the next conversation turn.
+func sdkMessagePageStart(file *os.File, end int64) (int64, error) {
+	cursor, turns := end, 0
+	for cursor > 0 {
+		start, err := sdkPageStart(file, cursor, sdkHistoryPageSize)
+		if err != nil {
+			return 0, err
+		}
+		data := make([]byte, cursor-start)
+		if _, err := file.ReadAt(data, start); err != nil && !errors.Is(err, io.EOF) {
+			return 0, err
+		}
+		var messageStarts []int
+		offset := 0
+		for _, line := range bytes.SplitAfter(data, []byte{'\n'}) {
+			if bytes.Contains(line, []byte("input.accepted")) {
+				var header struct {
+					Type string `json:"type"`
+				}
+				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" {
+					messageStarts = append(messageStarts, offset)
+				}
+			}
+			offset += len(line)
+		}
+		for i := len(messageStarts) - 1; i >= 0; i-- {
+			turns++
+			if turns == sdkMessageHistoryPageTurns {
+				return start + int64(messageStarts[i]), nil
+			}
+		}
+		cursor = start
 	}
 	return 0, nil
 }
@@ -95,7 +134,12 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid history view", 400)
 		return
 	}
-	start, err := sdkPageStart(file, end, sdkHistoryPageSize)
+	var start int64
+	if view == "messages" {
+		start, err = sdkMessagePageStart(file, end)
+	} else {
+		start, err = sdkPageStart(file, end, sdkHistoryPageSize)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
