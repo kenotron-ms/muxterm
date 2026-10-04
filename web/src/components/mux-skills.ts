@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 
-type InstalledSkill = { name:string; scope:string; agents:string[]; source:string; sourceUrl:string };
+type InstalledSkill = { name:string; path:string; scope:string; agents:string[]; source:string; sourceUrl:string };
 type CatalogSkill = { id:string; name:string; source:string; installs:number };
 
 @customElement('mux-skills')
@@ -93,7 +93,7 @@ export class MuxSkills extends LitElement {
   }
 
   override render() {
-    const installedNames = new Set(this.installed.map(skill => skill.name));
+    const installedSlugs = new Set(this.installed.map(skill => skill.path?.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) || skill.name));
     return html`
       <div class="top"><div class="eyebrow">Extend your chats</div><h1>Skills</h1><div class="subtitle">Find and install shared skills for your chat harnesses.</div></div>
       <div class="content">
@@ -106,7 +106,8 @@ export class MuxSkills extends LitElement {
         <section class="section"><h2>Discover</h2><div class="search"><input aria-label="Search skills" placeholder="Search skills by name or task" .value=${this.query} @input=${(event:Event) => this.onQuery((event.target as HTMLInputElement).value)}></div>
           <div class="list">${this.searching ? html`<div class="empty">Searching…</div>` : this.query.trim().length < 2 ? html`<div class="empty">Enter at least two characters to search the skills catalog.</div>` : this.results.length ? this.results.map(skill => {
             const installable = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]+\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(skill.id);
-            return html`<div class="row"><div class="body"><div class="name">${skill.name}</div><div class="meta">${skill.source} · ${skill.installs.toLocaleString()} installs</div></div><div class="actions"><a href=${`https://skills.sh/${encodeURI(skill.id)}`} target="_blank" rel="noopener noreferrer">Details</a><button ?disabled=${!installable || !!this.installing || installedNames.has(skill.id.split('/')[2])} title=${installable ? 'Install for all chat harnesses' : 'This source cannot be installed from the app'} @click=${() => void this.install(skill)}>${installedNames.has(skill.id.split('/')[2]) ? 'Installed' : this.installing === skill.id ? 'Installing…' : 'Install'}</button></div></div>`;
+            const alreadyInstalled = installedSlugs.has(skill.id.split('/')[2]);
+            return html`<div class="row"><div class="body"><div class="name">${skill.name}</div><div class="meta">${skill.source} · ${skill.installs.toLocaleString()} installs</div></div><div class="actions"><a href=${`https://skills.sh/${encodeURI(skill.id)}`} target="_blank" rel="noopener noreferrer">Details</a><button ?disabled=${!installable || !!this.installing || alreadyInstalled} title=${installable ? 'Install for all chat harnesses' : 'This source cannot be installed from the app'} @click=${() => void this.install(skill)}>${alreadyInstalled ? 'Installed' : this.installing === skill.id ? 'Installing…' : 'Install'}</button></div></div>`;
           }) : html`<div class="empty">No skills found.</div>`}</div>
         </section>
         <p class="footnote">Skills installed here are shared with Codex, Claude, and Amplifier chats. ACP harness support is being developed separately.</p>
