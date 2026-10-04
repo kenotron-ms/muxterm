@@ -11,7 +11,6 @@ import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import './mux-sdk-utility.js';
-import type { MuxSDKUtility } from './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
 type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
@@ -40,14 +39,14 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { BookOpen, Bot, Brain, ChevronDown, ChevronRight, FilePenLine, Globe, Mic, Search, Terminal, Wrench, type IconNode } from 'lucide';
+import { BookOpen, Bot, Brain, ChevronDown, ChevronRight, Columns2, FilePenLine, Globe, Mic, PanelLeft, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
   @state() private chat?: SDKChat;
-  @state() private scheduledJob?: { name:string; scheduleLabel?:string; schedule:string; timezone:string; enabled:boolean };
+  @state() private scheduledJob?: { name:string };
   @state() private blocks: Block[] = [];
   @state() private trajectory: SDKEvent[] = [];
   @state() private agentEvents: SDKEvent[] | null = null;
@@ -173,10 +172,10 @@ export class MuxSDKChat extends LitElement {
     .recovery button:hover { background:color-mix(in srgb,var(--mux-warn) 25%,var(--chrome-bar)); }
     h1 { font-size:14px; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     button { font:inherit; cursor:pointer; }
-    .pane-controls { display:flex; align-items:center; gap:5px; margin-left:auto; }
-    .pane-controls button { border:1px solid transparent; border-radius:6px; background:transparent; color:var(--chrome-text-dim); padding:4px 8px; font-size:11px; }
-    .pane-controls button:hover, .pane-controls button.active { border-color:var(--chrome-border); color:var(--chrome-text-bright); background:var(--chrome-hover); }
-    .pane-controls button.active { color:var(--chrome-accent); }
+    .pane-controls { display:inline-flex; align-items:center; flex:none; margin-left:auto; border:1px solid var(--chrome-border); border-radius:8px; padding:2px; background:var(--chrome-bar); }
+    .pane-controls button { display:grid; place-items:center; width:29px; height:27px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-dim); padding:0; cursor:pointer; }
+    .pane-controls button:hover,.pane-controls button:focus-visible { color:var(--chrome-text-bright); background:var(--chrome-hover); outline:none; }
+    .pane-controls button.active { color:var(--chrome-accent); background:var(--chrome-hover); }
     .chat-title { min-width:0; overflow:hidden; }
     .chat-title small { display:block; color:var(--chrome-text-dim); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .layout { display:flex; flex:1; min-height:0; }
@@ -306,7 +305,7 @@ export class MuxSDKChat extends LitElement {
     .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--chrome-accent) 25%,transparent); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
-    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { position:absolute; right:0; top:42px; bottom:0; box-shadow:-10px 0 30px #0008; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar { padding-left:10px; gap:6px; } .pane-controls { gap:1px; } .pane-controls button { padding:4px 5px; } }
+    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { position:absolute; right:0; top:42px; bottom:0; box-shadow:-10px 0 30px #0008; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar { padding-left:10px; gap:6px; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -391,7 +390,7 @@ export class MuxSDKChat extends LitElement {
     try {
       const response = await fetch(apiPath('/api/sdk-jobs'));
       if (!response.ok) return;
-      const jobs = await response.json() as { chatId:string; name:string; scheduleLabel?:string; schedule:string; timezone:string; enabled:boolean }[];
+      const jobs = await response.json() as { chatId:string; name:string }[];
       if (this.sessionId === id) this.scheduledJob = jobs.find(job => job.chatId === id);
     } catch { /* Chat remains usable if job metadata is unavailable. */ }
   }
@@ -423,10 +422,6 @@ export class MuxSDKChat extends LitElement {
     if (mode === 'chat') { this.drawerOpen = false; this.previewFocused = false; return; }
     if (!this.drawerOpen) this.openDrawer();
     this.previewFocused = mode === 'preview';
-  }
-  private openFiles() {
-    this.setPaneMode('split');
-    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('files'));
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
     const { path, selected } = event.detail;
@@ -1526,7 +1521,7 @@ export class MuxSDKChat extends LitElement {
   override render() {
     const agents = this.agents();
     return html`
-    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div class="chat-title"><h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1>${this.scheduledJob ? html`<small>${this.scheduledJob.enabled ? `${this.scheduledJob.scheduleLabel || this.scheduledJob.schedule} · ${this.scheduledJob.timezone}` : 'Schedule paused'}</small>` : nothing}</div>`}<div class="pane-controls" role="group" aria-label="Chat pane layout"><button class=${!this.drawerOpen ? 'active' : ''} aria-pressed=${!this.drawerOpen} @click=${() => this.setPaneMode('chat')}>Chat</button><button class=${this.drawerOpen && !this.previewFocused ? 'active' : ''} aria-pressed=${this.drawerOpen && !this.previewFocused} @click=${() => this.setPaneMode('split')}>Split</button><button class=${this.previewFocused ? 'active' : ''} aria-pressed=${this.previewFocused} @click=${() => this.setPaneMode('preview')}>Preview</button><button aria-label="Open project files" title="Open project files" @click=${this.openFiles}>Files</button><button aria-label=${this.scheduledJob ? 'Edit scheduled job' : 'Schedule this chat'} title=${this.scheduledJob ? 'Edit scheduled job' : 'Schedule this chat'} @click=${() => this.dispatchEvent(new CustomEvent('job-create-request',{bubbles:true,composed:true,detail:{chatId:this.sessionId,suggestedBrief:[...this.blocks].reverse().find(block=>block.kind==='assistant'&&block.text.trim())?.text.slice(0,10000)||''}}))}>${this.scheduledJob ? 'Job settings' : 'Schedule'}</button></div></div>
+    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div class="chat-title"><h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}<div class="pane-controls" role="group" aria-label="Chat pane layout"><button class=${!this.drawerOpen ? 'active' : ''} aria-label="Chat only" title="Chat only" aria-pressed=${!this.drawerOpen} @click=${() => this.setPaneMode('chat')}>${icon(PanelLeft,{size:17})}</button><button class=${this.drawerOpen && !this.previewFocused ? 'active' : ''} aria-label="Split chat and preview" title="Split chat and preview" aria-pressed=${this.drawerOpen && !this.previewFocused} @click=${() => this.setPaneMode('split')}>${icon(Columns2,{size:17})}</button><button class=${this.previewFocused ? 'active' : ''} aria-label="Preview only" title="Preview only" aria-pressed=${this.previewFocused} @click=${() => this.setPaneMode('preview')}>${icon(PanelRight,{size:17})}</button></div></div>
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<div class="agent-history-error" role="alert">Saved agent work could not be loaded. <button @click=${this.retryAgentHistory}>Retry</button></div>` : nothing}
       ${this.recoveryRequired ? html`<div class="recovery" role="alert"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}
