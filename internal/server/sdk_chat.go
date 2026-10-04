@@ -1286,7 +1286,12 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	openingID := sdkID()
-	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": req.Prompt, "goal": req.Goal, "attachments": attachments}})
+	openingContent, err := sdkInputWithMemory(req.Prompt)
+	if err != nil {
+		http.Error(w, "local memory unavailable: "+err.Error(), 500)
+		return
+	}
+	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": openingContent, "displayContent": req.Prompt, "goal": req.Goal, "attachments": attachments}})
 	if err == nil {
 		var ack struct{ Status, InputID string }
 		err = json.Unmarshal(result, &ack)
@@ -1508,6 +1513,13 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		content := req.Content
 		if (req.Kind == "user" || req.Kind == "steer") && s.sdkVoice != nil {
 			content = sdkTaskInputWithVoiceContext(content, h.recentVoiceContext(id))
+		}
+		if req.Kind == "user" || req.Kind == "steer" {
+			content, err = sdkInputWithMemory(content)
+			if err != nil {
+				http.Error(w, "local memory unavailable: "+err.Error(), 500)
+				return
+			}
 		}
 		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": content, "displayContent": req.Content, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
 		if err != nil {

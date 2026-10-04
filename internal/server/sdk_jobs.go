@@ -435,6 +435,11 @@ func (m *sdkJobs) dispatch(parent context.Context, job sdkJob, runID string) {
 		return
 	}
 	content := fmt.Sprintf("Scheduled job run %s (%s). Standing instructions, revision %d:\n\n%s\n\nPerform the work now. Use code or tools where useful. Report what happened and any uncertainty.", runID, job.Name, job.Revision, job.Brief)
+	content, err := sdkInputWithMemory(content)
+	if err != nil {
+		m.failDispatch(job.ID, runID, "Local memory unavailable: "+err.Error(), false)
+		return
+	}
 	result, err := m.chats.call(ctx, "send", map[string]any{"sessionId": job.ChatID, "input": map[string]any{"kind": "user", "source": "scheduled-job", "id": runID, "content": content, "displayContent": "Run job: " + job.Name, "model": chat.Model, "effort": chat.Effort}})
 	if err != nil {
 		m.failDispatch(job.ID, runID, "Run delivery uncertain: "+err.Error(), true)

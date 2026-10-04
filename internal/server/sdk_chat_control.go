@@ -118,6 +118,15 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 502)
 		return
 	}
+	voiceContext := ""
+	if s.sdkVoice != nil {
+		voiceContext = h.recentVoiceContext(id)
+	}
+	content, memoryErr := sdkInputWithMemory(sdkTaskInputWithVoiceContext(req.Content, voiceContext))
+	if memoryErr != nil {
+		http.Error(w, "local memory unavailable: "+memoryErr.Error(), 500)
+		return
+	}
 	h.mu.Lock()
 	// A concurrent caller may have admitted the same key while resume ran.
 	if _, err := os.Stat(path); err == nil {
@@ -137,13 +146,9 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	if chat.State == "working" {
 		kind = "steer"
 	}
-	voiceContext := ""
-	if s.sdkVoice != nil {
-		voiceContext = h.recentVoiceContext(id)
-	}
 	result, err := h.call(ctx, "send", map[string]any{"sessionId": id,
 		"input": map[string]any{"kind": kind, "source": "user", "id": receipt.InputID,
-			"content": sdkTaskInputWithVoiceContext(req.Content, voiceContext), "displayContent": req.Content}})
+			"content": content, "displayContent": req.Content}})
 	var ack struct{ Status, InputID string }
 	if err == nil {
 		err = json.Unmarshal(result, &ack)
