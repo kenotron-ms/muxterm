@@ -4,9 +4,13 @@ import { apiPath } from '../lib/base-path.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
-type Settings = { model: string; effort: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[]; permission: string; mode: string; permissions: string[]; modes: string[] };
+type ModeOption = { name: string; description?: string; source?: string };
+type Settings = { model: string; effort: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[]; permission: string; mode: string; permissions: string[]; modes: string[]; modeOptions?: ModeOption[] };
 const permissionLabels: Record<string, string> = { 'read-only':'Read only', 'workspace-write':'Workspace write', 'full-permission':'Full permission' };
 const permissionHints: Record<string, string> = { 'read-only':'Inspect and plan without writing files', 'workspace-write':'Edit files in this workspace', 'full-permission':'Access the full environment' };
+// Amplifier mode names are file stems (plan, careful, explore), so they arrive
+// lowercase and are capitalised here to sit alongside the other picker entries.
+const modeLabel = (value: string) => value ? value.charAt(0).toUpperCase() + value.slice(1) : 'Default';
 const providerLabel = (value: string) => value === 'provider-anthropic' ? 'Anthropic' : value === 'provider-openai' ? 'OpenAI' : value.replace(/^provider-/, '');
 
 @customElement('mux-sdk-chat-settings')
@@ -90,6 +94,21 @@ export class MuxSDKChatSettings extends LitElement {
     } catch (error) { this.error = String(error); }
     finally { this.loading = false; this.pending(false); }
   }
+  /** Amplifier has no permission switch to offer -- its tool access comes from
+   *  the composed bundle. What it does have, and nothing else exposed, is its
+   *  own mode system, so that takes this slot. */
+  private modePicker(s: Settings) {
+    const active = s.mode || '';
+    const options = s.modeOptions || [];
+    return html`
+      <details class="picker permission-picker" aria-label="Amplifier mode"><summary><span class="summary-text">${modeLabel(active)}</span></summary><div class="panel">
+        <div class="heading">Mode</div>
+        ${this.choice('Default', 'No overlay — the bundle exactly as composed', active === '', true, () => void this.select({ mode:'' }))}
+        ${options.map(option => this.choice(modeLabel(option.name), option.description || '', active === option.name, true, () => void this.select({ mode:option.name })))}
+        ${options.length ? nothing : html`<div class="notice">This bundle composes no modes.</div>`}
+        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+      </div></details>`;
+  }
   private choice(name: string, hint: string, selected: boolean, available: boolean, action: () => void) {
     return html`<button class="choice ${selected ? 'selected' : ''}" ?disabled=${!available || this.loading || this.turnBusy} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span><span class="hint">${available ? hint : 'Unavailable for this harness'}</span></span>${selected ? html`<span class="check">✓</span>` : nothing}</button>`;
   }
@@ -103,15 +122,15 @@ export class MuxSDKChatSettings extends LitElement {
     const permission = s.permission || 'full-permission';
     const mode = s.mode || 'agent';
     return html`
+      ${this.harness === 'amplifier' ? this.modePicker(s) : html`
       <details class="picker permission-picker" aria-label="Permission and mode"><summary><span class="summary-text">${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}</span></summary><div class="panel">
         <div class="heading">Permission</div>
         ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
         <div class="divider"></div><div class="heading">Mode</div>
         ${this.choice('Agent', 'Work with the selected permission', mode === 'agent', s.modes.includes('agent') && (this.harness !== 'claude' || permission !== 'read-only'), () => void this.select({ mode:'agent' }))}
         ${this.choice('Plan', 'Explore and prepare a plan', mode === 'plan', s.modes.includes('plan') && (this.harness !== 'claude' || permission === 'read-only'), () => void this.select({ mode:'plan' }))}
-        ${this.harness === 'amplifier' ? html`<div class="notice">Amplifier currently exposes its bundle’s tool access only.</div>` : nothing}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-      </div></details>
+      </div></details>`}
       <details class="picker model-picker" aria-label="Provider, model and thinking"><summary><span class="summary-text">${model?.label || s.model || this.harness}</span></summary><div class="panel">
         ${this.harness === 'amplifier' ? html`<div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : 'Anthropic'} · managed by ${this.harness}</div>`}
         <div class="divider"></div><div class="heading">Model</div>
