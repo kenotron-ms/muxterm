@@ -44,6 +44,9 @@ export class CodexStream {
     const remoteConfigured = !!muxterm && existsSync(remoteConnectionFile);
     if (remoteConfigured) mcpConfig.push('-c', `mcp_servers.remote.command=${JSON.stringify(muxterm)}`,
       '-c', 'mcp_servers.remote.args=["connection-mcp","remote"]');
+    const workiqEnabledFile = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'workiq-local-enabled');
+    if (existsSync(workiqEnabledFile)) mcpConfig.push('-c', 'mcp_servers.workiq.command="workiq"',
+      '-c', 'mcp_servers.workiq.args=["mcp"]');
     for (const key of ['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']) {
       if (process.env[key]) {
         const value = JSON.stringify(process.env[key]);
