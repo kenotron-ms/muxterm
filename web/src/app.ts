@@ -2303,8 +2303,9 @@ export class MuxApp extends LitElement {
   };
 
   private _onChatCancel = (): void => {
+    const wasForJob = this._newChatForJob;
     this._newChatForJob = false;
-    this._sdkChatId = null;
+    this._sdkChatId = wasForJob ? 'jobs' : null;
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
