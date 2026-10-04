@@ -296,6 +296,29 @@ class SDKChatSession:
             else:
                 entry.setdefault("config", {}).setdefault("servers", {})["muxterm"] = {
                     "command": mcp_bin, "args": ["mcp"]}
+        # The skills CLI installs its canonical global copy here. Bundle authors
+        # can choose their own skill sources, but all muxterm chats must also be
+        # able to discover the owner's shared skills regardless of bundle.
+        shared_skills = str(Path.home() / ".agents" / "skills")
+        skills_tool = {"module": "tool-skills",
+                       "source": "git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills",
+                       "config": {"skills": [".amplifier/skills", str(Path.home() / ".amplifier" / "skills"), shared_skills]}}
+        for tool_plan in (cfg["tools"], prepared.mount_plan["tools"], prepared.bundle.tools):
+            entry = next((tool for tool in tool_plan if tool.get("module") == "tool-skills"), None)
+            if entry is None:
+                tool_plan.append(copy.deepcopy(skills_tool))
+            else:
+                tool_config = entry.setdefault("config", {})
+                # The newer `skills` key wins over `skills_dirs`, so carry
+                # existing sources forward before adding the shared directory.
+                sources = tool_config.get("skills", tool_config.get("skills_dirs", []))
+                if isinstance(sources, str):
+                    sources = [sources]
+                else:
+                    sources = list(sources)
+                if shared_skills not in sources:
+                    sources.append(shared_skills)
+                tool_config["skills"] = sources
         live = {"module": "loop-live", "source": LOOP_LIVE_SOURCE,
                 "config": {"background_tools": [], "background_delegate": False}}
         cfg.setdefault("session", {})["orchestrator"] = live

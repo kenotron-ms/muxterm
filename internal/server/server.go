@@ -323,6 +323,9 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/remotes/{id}/provision", protect(http.HandlerFunc(s.handleRemotesProvision)))
 
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
+	s.mux.Handle("GET /api/skills", protect(http.HandlerFunc(s.handleSkillsList)))
+	s.mux.Handle("GET /api/skills/search", protect(http.HandlerFunc(s.handleSkillsSearch)))
+	s.mux.Handle("POST /api/skills/install", protect(http.HandlerFunc(s.handleSkillsInstall)))
 	s.mux.Handle("GET /api/sdk-jobs", protect(http.HandlerFunc(s.handleSDKJobs)))
 	s.mux.Handle("POST /api/sdk-jobs", protect(http.HandlerFunc(s.handleSDKJobs)))
 	s.mux.Handle("GET /api/sdk-jobs/{id}", protect(http.HandlerFunc(s.handleSDKJob)))
