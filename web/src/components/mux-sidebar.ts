@@ -10,7 +10,7 @@ import { homeSessions } from '../lib/home-sessions.js';
 import type { SessionRunState } from '../lib/session-state.js';
 import { needsInputByWorkspace } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
-import { CalendarClock, ChevronDown, Download, Ellipsis, SquareTerminal } from 'lucide';
+import { CalendarClock, ChevronDown, Download, Ellipsis, Plug, Puzzle, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { previewStore, type PreviewEntry, type PreviewMode } from '../lib/preview-store.js';
@@ -1317,6 +1317,8 @@ export class MuxSidebar extends LitElement {
 
   @property({ type: Boolean }) newChatActive = false;
   @property({ type: Boolean }) jobsActive = false;
+  @property({ type: Boolean }) connectionsActive = false;
+  @property({ type: Boolean }) skillsActive = false;
   @property({ type: String }) selectedSDKChat = '';
 
   /**
@@ -2682,6 +2684,12 @@ export class MuxSidebar extends LitElement {
       </button>
       <button class="new-chat-action ${this.jobsActive ? 'active' : ''}" title="Scheduled jobs" aria-current="${this.jobsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('jobs-open', { bubbles: true, composed: true }))}">
         <span class="new-chat-action-mark">${icon(CalendarClock, { size: 14 })}</span><span>Scheduled jobs</span>
+      </button>
+      <button class="new-chat-action ${this.connectionsActive ? 'active' : ''}" title="Connections" aria-current="${this.connectionsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('connections-open', { bubbles: true, composed: true }))}">
+        <span class="new-chat-action-mark">${icon(Plug, { size: 14 })}</span><span>Connections</span>
+      </button>
+      <button class="new-chat-action ${this.skillsActive ? 'active' : ''}" title="Skills" aria-current="${this.skillsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('skills-open', { bubbles: true, composed: true }))}">
+        <span class="new-chat-action-mark">${icon(Puzzle, { size: 14 })}</span><span>Skills</span>
       </button>
       <div class="tab-content">
         <mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list>
