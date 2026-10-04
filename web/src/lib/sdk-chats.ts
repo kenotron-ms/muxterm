@@ -1,5 +1,9 @@
 import { apiPath } from './base-path.js';
-export interface SDKChat { id: string; workspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: 'codex' | 'claude' | 'amplifier'; provider?: string; nativeId?: string; state: string; createdAt: string; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string }
+export type SDKHarnessName = 'codex' | 'claude' | 'amplifier' | 'pi' | 'opencode' | 'deepseek';
+export function sdkHarnessLabel(harness: SDKHarnessName): string {
+  return { codex:'Codex', claude:'Claude Code', amplifier:'Amplifier', pi:'Pi', opencode:'OpenCode', deepseek:'DeepSeek Harness' }[harness];
+}
+export interface SDKChat { id: string; workspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: SDKHarnessName; provider?: string; nativeId?: string; state: string; createdAt: string; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string }
 export interface SDKProject { id: string; name: string; path: string; sourceFolders?: string[]; pinned?: boolean }
 export interface FolderListing { path: string; base: string; parent: string; folders: string[] }
 class SDKChatStore {
