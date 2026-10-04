@@ -655,9 +655,17 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 			settings["effort"] = c.Effort
 		}
 		settings["permission"] = sdkPermission(c)
-		settings["mode"] = sdkMode(c)
 		settings["permissions"] = sdkPermissions(c.Harness)
-		settings["modes"] = sdkModes(c.Harness)
+		// Amplifier's modes are defined by the composed bundle, not by this
+		// server, so the sidecar is the only authority on what exists and what
+		// is active. Every other harness gets the fixed agent/plan pair.
+		if c.Harness == "amplifier" {
+			settings["modeOptions"] = settings["modes"]
+			settings["modes"] = sdkModeNames(settings["modes"])
+		} else {
+			settings["mode"] = sdkMode(c)
+			settings["modes"] = sdkModes(c.Harness)
+		}
 		writeSDKJSON(w, 200, settings)
 		return
 	}
@@ -670,15 +678,31 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid chat settings", 400)
 		return
 	}
-	permission, mode := sdkPermission(c), sdkMode(c)
+	permission := sdkPermission(c)
+	// An Amplifier mode is a bundle-defined name with no server-side default --
+	// empty legitimately means "no mode". Other harnesses default to agent.
+	mode := c.Mode
+	if c.Harness != "amplifier" {
+		mode = sdkMode(c)
+	}
 	if value, ok := fields["permission"]; ok {
 		permission = value
 	}
 	if value, ok := fields["mode"]; ok {
 		mode = value
 	}
-	if !sdkContains(sdkPermissions(c.Harness), permission) || !sdkContains(sdkModes(c.Harness), mode) || (c.Harness == "claude" && ((permission == "read-only") != (mode == "plan"))) {
+	if !sdkContains(sdkPermissions(c.Harness), permission) {
+		http.Error(w, "unsupported permission for this harness", 422)
+		return
+	}
+	// Amplifier's modes are validated against the sidecar's live list below,
+	// once the bundle that defines them has been consulted.
+	if c.Harness != "amplifier" && (!sdkContains(sdkModes(c.Harness), mode) || (c.Harness == "claude" && ((permission == "read-only") != (mode == "plan")))) {
 		http.Error(w, "unsupported permission or mode for this harness", 422)
+		return
+	}
+	if len(mode) > 128 {
+		http.Error(w, "invalid chat settings", 400)
 		return
 	}
 	var req struct{ Bundle, Provider, Model, Effort string }
@@ -707,10 +731,26 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 		} `json:"models"`
 		Bundles   []string `json:"bundles"`
 		Providers []string `json:"providers"`
+		Modes     []struct {
+			Name string `json:"name"`
+		} `json:"modes"`
 	}
 	if json.Unmarshal(available, &current) != nil {
 		http.Error(w, "invalid harness settings", 502)
 		return
+	}
+	if c.Harness == "amplifier" && mode != "" {
+		known := false
+		for _, item := range current.Modes {
+			if item.Name == mode {
+				known = true
+				break
+			}
+		}
+		if !known {
+			http.Error(w, "unavailable Amplifier mode", 422)
+			return
+		}
 	}
 	if req.Bundle == "" {
 		req.Bundle = current.Bundle
@@ -762,7 +802,7 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 422)
 		return
 	}
-	var selected struct{ Bundle, Provider, Model, Effort string }
+	var selected struct{ Bundle, Provider, Model, Effort, Mode string }
 	if err := json.Unmarshal(result, &selected); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -770,6 +810,11 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	c.Bundle, c.Provider, c.Model, c.Effort = selected.Bundle, selected.Provider, selected.Model, selected.Effort
 	c.Permission, c.Mode = permission, mode
+	if c.Harness == "amplifier" {
+		// Record what the sidecar actually activated, which can differ from the
+		// request when a bundle switch left the requested mode behind.
+		c.Mode = selected.Mode
+	}
 	err = h.saveLocked(c)
 	h.mu.Unlock()
 	if err != nil {
@@ -780,8 +825,15 @@ func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
 	if json.Unmarshal(result, &response) != nil {
 		response = map[string]any{}
 	}
-	response["permission"], response["mode"] = permission, mode
-	response["permissions"], response["modes"] = sdkPermissions(c.Harness), sdkModes(c.Harness)
+	response["permission"] = permission
+	response["permissions"] = sdkPermissions(c.Harness)
+	if c.Harness == "amplifier" {
+		// `mode` is already the sidecar's own report of what it activated.
+		response["modeOptions"] = response["modes"]
+		response["modes"] = sdkModeNames(response["modes"])
+	} else {
+		response["mode"], response["modes"] = mode, sdkModes(c.Harness)
+	}
 	writeSDKJSON(w, 200, response)
 }
 func sdkPermission(c *sdkChat) string {
@@ -810,6 +862,27 @@ func sdkModes(harness string) []string {
 		return []string{"agent"}
 	}
 	return []string{"agent", "plan"}
+}
+
+// sdkModeNames reduces the sidecar's mode objects to the bare name list the
+// settings contract uses, so `modes` keeps one shape across every harness and
+// the descriptions travel separately in `modeOptions`.
+func sdkModeNames(value any) []string {
+	names := []string{}
+	items, ok := value.([]any)
+	if !ok {
+		return names
+	}
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := entry["name"].(string); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 func sdkContains(values []string, value string) bool {
 	for _, item := range values {

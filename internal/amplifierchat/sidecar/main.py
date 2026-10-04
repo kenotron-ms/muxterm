@@ -165,10 +165,13 @@ def sdk_provider_context(messages, provider):
 
 
 class SDKChatSession:
-    def __init__(self, session_id, cwd, bundle="anchors", provider="", model="", effort=""):
+    def __init__(self, session_id, cwd, bundle="anchors", provider="", model="", effort="", mode=""):
         self.id, self.cwd = session_id, cwd
         self.bundle, self.provider = bundle or "anchors", provider or ""
         self.selected_model, self.effort = model or "", effort or ""
+        # Amplifier's own mode overlay (bundle-modes), not the harness-generic
+        # agent/plan switch. Empty means no mode is active.
+        self.mode = mode or ""
         self.session = self.runtime = self.task = self.store = None
         self.active = set()
         self.partial = ""
@@ -367,11 +370,75 @@ class SDKChatSession:
                 raise RuntimeError("Amplifier context cannot restore transcript")
             await context.set_messages(transcript)
         self.hooks()
+        # Re-apply the chosen overlay before the dispatch loop runs, so a rebuilt
+        # session (bundle/provider/model switch) keeps the mode the human picked.
+        # A mode belongs to the bundle that defined it, so switching bundles can
+        # legitimately leave it behind: drop it rather than failing the build.
+        if self.mode:
+            try:
+                await self.apply_mode(self.mode)
+            except Exception as exc:
+                logger.info("SDK chat %s dropped mode '%s': %s", self.id, self.mode, exc)
+                self.mode = ""
         self.task = asyncio.create_task(self.session.execute(""), name=f"amplifier-chat-{self.id}")
         self.task.add_done_callback(self.owner_done)
         frame(self.id, "session.started", nativeId=self.id, capabilities=CAPS, model=self.model,
               bundle=self.bundle, provider=self.provider or self.model.split("/", 1)[0])
         timing("sdk.build_total", build_start)
+
+    def mode_discovery(self):
+        """bundle-modes' discovery, or None when this bundle composes no modes."""
+        state = getattr(self.session, "coordinator", None)
+        if state is None:
+            return None
+        return state.session_state.get("mode_discovery")
+
+    def available_modes(self):
+        """Modes this bundle offers. Empty list means the bundle has no mode system."""
+        discovery = self.mode_discovery()
+        if discovery is None:
+            return []
+        try:
+            listed = discovery.list_modes()
+        except Exception:
+            logger.warning("SDK chat %s could not list Amplifier modes", self.id, exc_info=True)
+            return []
+        # advertised=False marks modes meant for the model to discover, not a
+        # human picker, so the chat surface shows only advertised ones.
+        return [{"name": entry.name, "description": entry.description, "source": entry.source}
+                for entry in listed if getattr(entry, "advertised", True)]
+
+    def active_mode(self):
+        state = getattr(self.session, "coordinator", None)
+        if state is None:
+            return ""
+        return state.session_state.get("active_mode") or ""
+
+    async def apply_mode(self, name):
+        """Activate (or clear, when name is empty) an Amplifier mode.
+
+        Goes through the mounted `mode` tool rather than writing session_state
+        directly, so hooks-mode sees the same activation events a /mode switch
+        produces. tool-mode's default gate_policy is "warn": the first set is
+        refused with status "denied" and a retry proceeds. That gate exists to
+        stop the model switching modes unprompted -- here a human clicked the
+        picker, so the retry is the human's answer, not a bypass.
+        """
+        tool = self.session.coordinator.get("tools", "mode")
+        if tool is None:
+            raise ValueError("this Amplifier bundle does not provide a mode system")
+        request = {"operation": "clear"} if not name else {"operation": "set", "name": name}
+        result = await tool.execute(request)
+        output = getattr(result, "output", None) or {}
+        if not getattr(result, "success", False) and isinstance(output, dict) and output.get("status") == "denied":
+            result = await tool.execute(request)
+            output = getattr(result, "output", None) or {}
+        if not getattr(result, "success", False):
+            error = getattr(result, "error", None) or {}
+            message = error.get("message") if isinstance(error, dict) else None
+            raise ValueError(message or f"Amplifier refused mode '{name or 'default'}'")
+        self.mode = self.active_mode()
+        return self.mode
 
     def owner_done(self, task):
         if task.cancelled(): return
@@ -552,7 +619,7 @@ async def command(cmd):
             cwd = cmd.get("cwd")
             if not cwd or not Path(cwd).is_dir(): raise ValueError("Amplifier project folder unavailable")
             session = SDKChatSession(sid, cwd, cmd.get("bundle") or "anchors", cmd.get("provider") or "",
-                                     cmd.get("model") or "", cmd.get("effort") or "")
+                                     cmd.get("model") or "", cmd.get("effort") or "", cmd.get("mode") or "")
             await session.build()
             SDK_CHAT_SESSIONS[sid] = session
         return {"sessionId": sid, "capabilities": CAPS}
@@ -600,22 +667,29 @@ async def command(cmd):
             rows.insert(0, {"id": active_model, "label": active_model, "efforts": []})
         return {"bundle": session.bundle, "provider": active_provider,
                 "model": active_model, "effort": session.effort, "models": rows,
-                "bundles": session.available_bundles, "providers": session.available_providers}
+                "bundles": session.available_bundles, "providers": session.available_providers,
+                "mode": session.active_mode(), "modes": session.available_modes()}
     if op == "select":
         if session.active: raise RuntimeError("finish the current Amplifier turn before changing settings")
         bundle = cmd.get("bundle") or session.bundle
         provider = cmd.get("provider") or session.provider
         current = await command({"op": "settings", "sessionId": sid})
+        mode = (cmd.get("mode") if "mode" in cmd else current["mode"]) or ""
         switched = bundle != session.bundle or provider != current["provider"]
         model = "" if switched else (cmd.get("model") or current["model"])
         effort = "" if switched else (cmd.get("effort") or "")
         if not switched and model == current["model"] and effort == current["effort"]:
+            # A mode is session state, not construction input, so switching only
+            # the mode needs no rebuild -- the conversation survives intact.
+            if mode != current["mode"]:
+                await session.apply_mode(mode)
+                return await command({"op": "settings", "sessionId": sid})
             return current
         if not switched:
             selected = next((row for row in current["models"] if row["id"] == model), None)
             if selected is None or (effort and effort not in selected["efforts"]):
                 raise ValueError("unsupported model or effort for the active Amplifier provider")
-        replacement = SDKChatSession(sid, session.cwd, bundle, provider, model, effort)
+        replacement = SDKChatSession(sid, session.cwd, bundle, provider, model, effort, mode)
         try:
             await replacement.build()
         except BaseException:
@@ -632,7 +706,7 @@ async def command(cmd):
             await session.close()
             if session.finish_task: await session.finish_task
             replacement = SDKChatSession(sid, session.cwd, session.bundle, session.provider,
-                                         session.selected_model, session.effort)
+                                         session.selected_model, session.effort, session.mode)
             try:
                 await replacement.build()
             except BaseException as exc:
