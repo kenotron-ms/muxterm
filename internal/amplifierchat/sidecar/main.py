@@ -294,6 +294,10 @@ class SDKChatSession:
         if github_enabled:
             mcp_tool["config"]["servers"]["github"] = {"command": mcp_bin,
                                                       "args": ["connection-mcp", "github"]}
+        remote_connection_file = github_marker.with_name("remote.json")
+        if remote_connection_file.is_file():
+            mcp_tool["config"]["servers"]["remote"] = {"command": mcp_bin,
+                                                       "args": ["connection-mcp", "remote"]}
         for tool_plan in (cfg.setdefault("tools", []), prepared.mount_plan.setdefault("tools", []),
                           prepared.bundle.tools):
             entry = next((tool for tool in tool_plan if tool.get("module") == "tool-mcp"), None)
@@ -305,6 +309,9 @@ class SDKChatSession:
                 if github_enabled:
                     entry["config"]["servers"]["github"] = {"command": mcp_bin,
                                                           "args": ["connection-mcp", "github"]}
+                if remote_connection_file.is_file():
+                    entry["config"]["servers"]["remote"] = {"command": mcp_bin,
+                                                          "args": ["connection-mcp", "remote"]}
         # The skills CLI installs its canonical global copy here. Bundle authors
         # can choose their own skill sources, but all muxterm chats must also be
         # able to discover the owner's shared skills regardless of bundle.

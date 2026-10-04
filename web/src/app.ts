@@ -711,6 +711,7 @@ export class MuxApp extends LitElement {
   private _drawerOpen = false;
 
   @state() private _sdkChatId: string | null = null;
+  @state() private _connectionSelection: 'github' | 'remote' = 'github';
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
   @state() private _newChatProject = '';
@@ -882,6 +883,16 @@ export class MuxApp extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
 
+    // Return from service authorization to the Connections page. Consume only
+    // muxterm's own marker and preserve any unrelated URL parameters.
+    const url = new URL(window.location.href);
+    const connectionReturn = url.searchParams.get('connections');
+    if (connectionReturn === 'remote') {
+      this._connectionSelection = connectionReturn;
+      url.searchParams.delete('connections');
+      window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+      this._sdkChatId = 'connections';
+    }
     // Opt-in AI capability: resolve the flag once on load. Fetched over HTTP
     // rather than carried on the config frame, because the key that backs it
     // deliberately never enters the config pipeline.
@@ -1547,7 +1558,7 @@ export class MuxApp extends LitElement {
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
             <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @chat-cancel=${this._onChatCancel}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
-            <mux-connections></mux-connections>` : this._sdkChatId === 'skills' ? html`
+            <mux-connections .initialSelection=${this._connectionSelection}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
             <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
         </div>
@@ -2232,7 +2243,7 @@ export class MuxApp extends LitElement {
   private _applyBootSurface(): void {
     if (this._bootSurfaceApplied) return;
     this._bootSurfaceApplied = true;
-    this._sdkChatId = 'new';
+    if (this._sdkChatId === null) this._sdkChatId = 'new';
   }
 
   private _onChatNew = (): void => {

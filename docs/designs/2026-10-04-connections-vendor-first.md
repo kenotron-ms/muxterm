@@ -14,6 +14,14 @@ The page reports **Ready** only after live tool discovery. Finding a CLI login o
 
 Microsoft and Google rows remain setup/discovery entries in this PR. Their provider-owned connection paths must be validated before the page can call them connected. Microsoft Work IQ may require tenant administration and usage billing; Google's Workspace service endpoints are in Developer Preview.
 
+## User-supplied remote services
+
+The Remote services page accepts a public HTTPS Streamable HTTP endpoint and an OAuth client registered by the owner. Muxterm reads protected-resource and authorization-server metadata, checks the advertised resource and issuer, and uses one-use state, PKCE S256, an exact callback, and issuer validation when the provider supplies it. OAuth credentials and rotating tokens stay in an owner-readable local file; the browser API does not return them. Public-address checks run after DNS resolution and redirects are refused.
+
+The official Go MCP SDK handles remote MCP sessions and tool calls. Muxterm owns the browser callback because this pinned SDK version does not expose the newer authorization handler in the repository's Go toolchain. Tool discovery begins with an empty allowlist; the owner explicitly enables tool names shared by all three chat harnesses. Selected tools may write or delete service data, so the page describes that access before enabling them. Reauthorization invalidates older bridge sessions.
+
+Provider-owned local servers remain the preferred path where available. The remote flow exists for services that require a client registration and do not supply an adequate local sign-in server. Live provider consent and token refresh still need verification with eligible accounts.
+
 ## Source notes
 
 - [GitHub local server setup, token precedence, toolsets, and read-only mode](https://github.com/github/github-mcp-server)
@@ -21,3 +29,5 @@ Microsoft and Google rows remain setup/discovery entries in this PR. Their provi
 - [GitHub CLI token and active-host selection](https://cli.github.com/manual/gh_auth_token)
 - [Microsoft Work IQ prerequisites](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview)
 - [Google Workspace service setup](https://developers.google.com/workspace/guides/configure-mcp-servers)
+- [OAuth protected-resource metadata](https://www.rfc-editor.org/rfc/rfc9728)
+- [OAuth authorization-server issuer in the callback](https://www.rfc-editor.org/rfc/rfc9207)

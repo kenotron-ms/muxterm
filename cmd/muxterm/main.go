@@ -145,7 +145,13 @@ func main() {
 			os.Exit(1)
 		}
 	case "connection-mcp":
-		if err := server.RunGitHubConnectionMCP(context.Background()); err != nil {
+		var err error
+		if cfg.Args[0] == "remote" {
+			err = server.RunRemoteConnectionsMCP(context.Background())
+		} else {
+			err = server.RunGitHubConnectionMCP(context.Background())
+		}
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
