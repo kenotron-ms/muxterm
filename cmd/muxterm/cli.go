@@ -204,6 +204,11 @@ func parseCommand(args []string) (Config, error) {
 		return Config{Mode: "doctor"}, nil
 	case "mcp":
 		return parseMCP(args[1:])
+	case "connection-mcp":
+		if len(args) != 2 || args[1] != "github" {
+			return Config{}, fmt.Errorf("usage: muxterm connection-mcp github")
+		}
+		return Config{Mode: "connection-mcp"}, nil
 	case "amplifier":
 		return parseAmplifier(args[1:])
 	case "codex":

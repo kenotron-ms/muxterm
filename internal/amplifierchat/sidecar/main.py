@@ -288,6 +288,12 @@ class SDKChatSession:
         mcp_tool = {"module": "tool-mcp",
                     "source": "git+https://github.com/microsoft/amplifier-module-tool-mcp@main",
                     "config": {"servers": {"muxterm": {"command": mcp_bin, "args": ["mcp"]}}}}
+        github_marker = (Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
+                         / "muxterm" / "sdk-chat" / "connections" / "github-enabled")
+        github_enabled = github_marker.is_file()
+        if github_enabled:
+            mcp_tool["config"]["servers"]["github"] = {"command": mcp_bin,
+                                                      "args": ["connection-mcp", "github"]}
         for tool_plan in (cfg.setdefault("tools", []), prepared.mount_plan.setdefault("tools", []),
                           prepared.bundle.tools):
             entry = next((tool for tool in tool_plan if tool.get("module") == "tool-mcp"), None)
@@ -296,6 +302,9 @@ class SDKChatSession:
             else:
                 entry.setdefault("config", {}).setdefault("servers", {})["muxterm"] = {
                     "command": mcp_bin, "args": ["mcp"]}
+                if github_enabled:
+                    entry["config"]["servers"]["github"] = {"command": mcp_bin,
+                                                          "args": ["connection-mcp", "github"]}
         # The skills CLI installs its canonical global copy here. Bundle authors
         # can choose their own skill sources, but all muxterm chats must also be
         # able to discover the owner's shared skills regardless of bundle.

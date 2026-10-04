@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import readline from 'node:readline';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const codexCLI = createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js');
 function toolDetails(item) {
@@ -33,8 +36,19 @@ export class CodexStream {
     const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpConfig = muxterm ? ['-c', `mcp_servers.muxterm.command=${JSON.stringify(muxterm)}`,
       '-c', 'mcp_servers.muxterm.args=["mcp"]'] : [];
+    const githubMarker = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'github-enabled');
+    const githubEnabled = !!muxterm && existsSync(githubMarker);
+    if (githubEnabled) mcpConfig.push('-c', `mcp_servers.github.command=${JSON.stringify(muxterm)}`,
+      '-c', 'mcp_servers.github.args=["connection-mcp","github"]');
     for (const key of ['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']) {
-      if (process.env[key]) mcpConfig.push('-c', `mcp_servers.muxterm.env.${key}=${JSON.stringify(process.env[key])}`);
+      if (process.env[key]) {
+        const value = JSON.stringify(process.env[key]);
+        mcpConfig.push('-c', `mcp_servers.muxterm.env.${key}=${value}`);
+        if (githubEnabled) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${value}`);
+      }
+    }
+    if (githubEnabled) for (const key of ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
+      if (process.env[key]) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${JSON.stringify(process.env[key])}`);
     }
     this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="detailed"', ...mcpConfig], {
       cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
