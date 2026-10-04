@@ -424,6 +424,19 @@ export class MuxSDKChat extends LitElement {
     if (!this.drawerOpen) this.openDrawer();
     this.previewFocused = mode === 'preview';
   }
+  /** Apply a server-relayed request after this chat is on screen. */
+  async navigateUI(action: 'chat' | 'panel' | 'tab' | 'file', mode?: string, tab?: string, path?: string): Promise<void> {
+    if (action === 'chat') return;
+    if (action === 'panel') {
+      if (mode === 'chat' || mode === 'split' || mode === 'preview') this.setPaneMode(mode);
+      return;
+    }
+    this.setPaneMode(action === 'file' ? 'preview' : 'split');
+    await this.updateComplete;
+    const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
+    if (action === 'file' && path) await utility?.showFile(path);
+    else if (action === 'tab' && (tab === 'plan' || tab === 'files' || tab === 'pr' || tab === 'trajectory')) utility?.showPanel(tab);
+  }
   private openFiles() {
     this.setPaneMode('split');
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('files'));

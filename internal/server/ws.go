@@ -1373,6 +1373,27 @@ func (h *Hub) BroadcastAIStatus(status any) {
 	}
 }
 
+// BroadcastChatUINavigation relays an authenticated request to connected
+// browser views. It reports zero when no browser could have shown the result.
+func (h *Hub) BroadcastChatUINavigation(nav chatUINavigation) int {
+	data, err := json.Marshal(map[string]any{"chatUINavigation": nav})
+	if err != nil {
+		return 0
+	}
+	h.mu.RLock()
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+	for _, c := range clients {
+		if err := c.writeText(data); err != nil {
+			log.Printf("BroadcastChatUINavigation: write error: %v", err)
+		}
+	}
+	return len(clients)
+}
+
 // NewHub creates a new Hub that dials a fresh daemon connection per browser via
 // dial. dial may be nil and supplied later via SetDialer. tunnels is nil until
 // set by the caller (server.New sets it via hub.tunnels = tunnels).

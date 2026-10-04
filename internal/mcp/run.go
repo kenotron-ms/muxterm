@@ -328,6 +328,7 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 	registerTunnelTools(srv)
 	registerPublishTools(srv)
 	registerChatControlTools(srv)
+	registerChatUITools(srv)
 	registerConfigTools(srv)
 	registerTriggerTools(srv, localOnly)
 

@@ -15,6 +15,7 @@ export class MuxChatWorkspace extends LitElement {
   @state() private open = true;
   @state() private menuFor = '';
   @state() private contextMenu = false;
+  @state() private movingChatId = '';
   @state() private editing = false;
   @state() private editName = '';
   @state() private editPath = '';
@@ -72,7 +73,7 @@ export class MuxChatWorkspace extends LitElement {
     .chat-row:hover .action,.chat-row:has(.chat:focus-visible) .action { display:inline-flex; }
     .action:hover { background:var(--chrome-hover); color:inherit; }
     .more { opacity:1; }
-    .menu { position:absolute; z-index:30; top:28px; right:4px; min-width:180px; padding:5px; background:var(--chrome-bar,#252b38); border:1px solid var(--chrome-border,#3b4355); border-radius:9px; box-shadow:0 12px 28px #0008; }
+    .menu { position:absolute; z-index:30; top:28px; right:4px; min-width:180px; max-height:280px; overflow:auto; padding:5px; background:var(--chrome-bar,#252b38); border:1px solid var(--chrome-border,#3b4355); border-radius:9px; box-shadow:0 12px 28px #0008; }
     .menu.context { top:20px; right:12px; }
     .menu button { display:flex; align-items:center; gap:9px; width:100%; padding:8px; text-align:left; border-radius:5px; }
     .menu button:hover { background:var(--chrome-hover); }
@@ -103,11 +104,12 @@ export class MuxChatWorkspace extends LitElement {
     .error { color:var(--chrome-danger); padding:5px; }
   `;
 
-  private closeMenu() { this.menuFor = ''; this.contextMenu = false; }
+  private closeMenu() { this.menuFor = ''; this.contextMenu = false; this.movingChatId = ''; }
   private showContext(event: MouseEvent, target: string) {
     event.preventDefault();
     this.menuFor = target;
     this.contextMenu = true;
+    this.movingChatId = '';
   }
   private startRename(id: string, title: string) {
     this.closeMenu();
@@ -179,6 +181,11 @@ export class MuxChatWorkspace extends LitElement {
     try { await sdkChats.setArchived(chat.id, !chat.archived); this.error = ''; }
     catch (error) { this.error = String(error); }
   }
+  private async moveChat(chat: SDKChat, projectId: string) {
+    this.closeMenu();
+    try { await sdkChats.moveChat(chat.id, projectId); this.error = ''; }
+    catch (error) { this.error = `Could not move chat: ${String(error)}`; }
+  }
   private openChat(chat: SDKChat) {
     this.closeMenu();
     this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:chat.id}, bubbles:true, composed:true }));
@@ -198,10 +205,16 @@ export class MuxChatWorkspace extends LitElement {
     </div>`;
   }
   private chatMenu(chat: SDKChat) {
+    if (this.movingChatId === chat.id) return html`<div class="menu context" role="menu" aria-label="Move chat to project">
+      <button role="menuitem" @click=${() => { this.movingChatId = ''; }}>← Back</button>
+      ${chat.workspaceId ? html`<button role="menuitem" @click=${() => void this.moveChat(chat, '')}>Move to Ungrouped</button>` : nothing}
+      ${sdkChats.projects.filter(project => project.id !== chat.workspaceId).map(project => html`<button role="menuitem" @click=${() => void this.moveChat(chat, project.id)}>Move to ${project.name}</button>`)}
+    </div>`;
     return html`<div class="menu context" role="menu">
       <button role="menuitem" @click=${() => this.openChat(chat)}>${icon(MessageSquare,{size:14})} Open chat</button>
       <button role="menuitem" @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})} ${chat.pinned ? 'Unpin chat' : 'Pin chat'}</button>
       <button role="menuitem" @click=${() => this.startRename(chat.id, chat.title)}>${icon(Pencil,{size:14})} Rename chat</button>
+      <button role="menuitem" @click=${() => { this.movingChatId = chat.id; }}>Move to project…</button>
       <button role="menuitem" @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})} ${chat.archived ? 'Restore chat' : 'Archive chat'}</button>
     </div>`;
   }

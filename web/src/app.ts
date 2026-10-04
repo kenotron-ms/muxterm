@@ -38,6 +38,7 @@ import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
+import type { MuxSDKChat } from './components/mux-sdk-chat.js';
 import './components/mux-new-chat.js';
 import './components/mux-scheduled-jobs.js';
 import { homeSessions } from './lib/home-sessions.js';
@@ -1882,7 +1883,18 @@ export class MuxApp extends LitElement {
     if ('aiStatus' in msg) {
       store.setAIStatus(parseAIStatus(msg['aiStatus']));
     }
+    if ('chatUINavigation' in msg) {
+      const nav = msg['chatUINavigation'] as { action: 'chat' | 'panel' | 'tab' | 'file'; session_id: string; mode?: string; tab?: string; path?: string };
+      void this._navigateChatUI(nav);
+    }
   };
+
+  private async _navigateChatUI(nav: { action: 'chat' | 'panel' | 'tab' | 'file'; session_id: string; mode?: string; tab?: string; path?: string }): Promise<void> {
+    this._onChatOpen(new CustomEvent('chat-open', { detail: { sessionId: nav.session_id } }));
+    await this.updateComplete;
+    const chat = this.renderRoot.querySelector<MuxSDKChat>('mux-sdk-chat');
+    await chat?.navigateUI(nav.action, nav.mode, nav.tab, nav.path);
+  }
 
   // Phase 3: _onOpenWorkspacePicker will be re-introduced here for workspace management UI.
 
