@@ -10,7 +10,7 @@ import { homeSessions } from '../lib/home-sessions.js';
 import type { SessionRunState } from '../lib/session-state.js';
 import { needsInputByWorkspace } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
-import { ChevronDown, Download, Ellipsis, SquareTerminal } from 'lucide';
+import { CalendarClock, ChevronDown, Download, Ellipsis, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { previewStore, type PreviewEntry, type PreviewMode } from '../lib/preview-store.js';
@@ -1077,7 +1077,16 @@ export class MuxSidebar extends LitElement {
 
     .new-chat-action.active { color: var(--sidebar-text); background: var(--sidebar-hover); }
     .new-chat-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
-    .new-chat-action-mark { color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright)); font-size: 14px; }
+    .new-chat-action-mark {
+      width: 14px;
+      height: 14px;
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright));
+      font-size: 14px;
+    }
 
     .terminal-heading {
       margin-top: 13px;
@@ -2672,7 +2681,7 @@ export class MuxSidebar extends LitElement {
         <span class="new-chat-action-mark">＋</span><span>New Chat</span>
       </button>
       <button class="new-chat-action ${this.jobsActive ? 'active' : ''}" title="Scheduled jobs" aria-current="${this.jobsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('jobs-open', { bubbles: true, composed: true }))}">
-        <span class="new-chat-action-mark">◷</span><span>Scheduled jobs</span>
+        <span class="new-chat-action-mark">${icon(CalendarClock, { size: 14 })}</span><span>Scheduled jobs</span>
       </button>
       <div class="tab-content">
         <mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list>
