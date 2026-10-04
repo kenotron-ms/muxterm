@@ -709,7 +709,7 @@ export class MuxApp extends LitElement {
   @state() private _newChatProject = '';
   @state() private _newChatPrompt = '';
   @state() private _jobEditorChatId = '';
-  @state() private _jobSuggestedBrief = '';
+  private _newChatForJob = false;
   @state() private _newChatKey = 0;
 
   /** The initial screen is selected once per page load. */
@@ -1534,9 +1534,9 @@ export class MuxApp extends LitElement {
                 ></mux-dock>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatOpen} @chat-cancel=${this._onChatCancel}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
-            <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} .suggestedBrief=${this._jobSuggestedBrief} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} @job-create-request=${this._onJobCreateRequest}></mux-sdk-chat>` : ''}
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @chat-cancel=${this._onChatCancel}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
+            <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : html`
+            <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -2236,24 +2236,27 @@ export class MuxApp extends LitElement {
     this._newChatProject = '';
     this._newChatPrompt = '';
     this._jobEditorChatId = '';
-    this._jobSuggestedBrief = '';
+    this._newChatForJob = false;
     this._sdkChatId = 'new';
     this._closeDrawer();
   };
   private _onJobNew = (): void => {
     this._onChatNew();
+    this._newChatForJob = true;
     this._newChatPrompt = 'Help me define a scheduled job. What should it do, when should it run, and how will we know it succeeded?';
   };
   private _onJobsOpen = (): void => {
     this._jobEditorChatId = '';
-    this._jobSuggestedBrief = '';
+    this._newChatForJob = false;
     this._sdkChatId = 'jobs';
     this._closeDrawer();
   };
-  private _onJobCreateRequest = (event: CustomEvent<{chatId:string; suggestedBrief?:string}>): void => {
-    this._jobEditorChatId = event.detail.chatId;
-    this._jobSuggestedBrief = event.detail.suggestedBrief || '';
+  private _onChatCreated = (event: CustomEvent<{sessionId:string}>): void => {
+    if (!this._newChatForJob) { this._onChatOpen(event); return; }
+    this._newChatForJob = false;
+    this._jobEditorChatId = event.detail.sessionId;
     this._sdkChatId = 'jobs';
+    this._closeDrawer();
   };
   private _onChatNewProject = (event: CustomEvent<{ projectId: string }>): void => {
     this._onChatNew();
@@ -2306,12 +2309,15 @@ export class MuxApp extends LitElement {
     if (!detail?.sessionId) return;
     this._sdkChatId = detail.sessionId;
     this._jobEditorChatId = '';
+    this._newChatForJob = false;
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
     this._closeDrawer();
   };
 
   private _onChatCancel = (): void => {
-    this._sdkChatId = null;
+    const wasForJob = this._newChatForJob;
+    this._newChatForJob = false;
+    this._sdkChatId = wasForJob ? 'jobs' : null;
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
