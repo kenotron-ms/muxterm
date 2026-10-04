@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,12 +61,14 @@ type sdkJobRun struct {
 }
 
 type sdkJobs struct {
-	mu     sync.Mutex
-	dir    string
-	chats  *sdkChatHost
-	jobs   map[string]*sdkJob
-	runs   map[string]*sdkJobRun
-	byChat map[string]string
+	mu         sync.Mutex
+	ctx        context.Context
+	dir        string
+	chats      *sdkChatHost
+	jobs       map[string]*sdkJob
+	runs       map[string]*sdkJobRun
+	byChat     map[string]string
+	dispatchWG sync.WaitGroup
 }
 
 var errJobOccurrenceRecorded = errors.New("scheduled occurrence already recorded")
@@ -112,7 +115,7 @@ func writeJobFile(path string, value any) error {
 }
 
 func newSDKJobs(chats *sdkChatHost) *sdkJobs {
-	manager := &sdkJobs{dir: filepath.Join(chats.dir, "jobs"), chats: chats, jobs: map[string]*sdkJob{}, runs: map[string]*sdkJobRun{}, byChat: map[string]string{}}
+	manager := &sdkJobs{ctx: context.Background(), dir: filepath.Join(chats.dir, "jobs"), chats: chats, jobs: map[string]*sdkJob{}, runs: map[string]*sdkJobRun{}, byChat: map[string]string{}}
 	entries, _ := os.ReadDir(manager.dir)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
@@ -222,6 +225,11 @@ func (m *sdkJobs) finishLocked(job *sdkJob, run *sdkJobRun, status, summary stri
 	run.FinishedAt = &now
 	run.Summary = summary
 	m.appendLogLocked(run, "finish", summary)
+	if err := m.saveRunLocked(run); err != nil {
+		log.Printf("scheduled job %s: cannot persist run %s outcome: %v", job.ID, run.ID, err)
+		return
+	}
+	previousJob := *job
 	if job.ActiveRunID == run.ID {
 		job.ActiveRunID = ""
 	}
@@ -230,8 +238,10 @@ func (m *sdkJobs) finishLocked(job *sdkJob, run *sdkJobRun, status, summary stri
 		job.PendingAt = nil
 	}
 	job.UpdatedAt = now
-	_ = m.saveRunLocked(run)
-	_ = m.saveJobLocked(job)
+	if err := m.saveJobLocked(job); err != nil {
+		*job = previousJob
+		log.Printf("scheduled job %s: cannot persist completed run pointer: %v", job.ID, err)
+	}
 }
 func (m *sdkJobs) onChatEvent(event sdkEvent) {
 	m.mu.Lock()
@@ -370,12 +380,14 @@ func (m *sdkJobs) startRun(jobID, trigger string, occurrence *time.Time) (*sdkJo
 		return nil, err
 	}
 	copyJob := *job
+	dispatchContext := m.ctx
+	m.dispatchWG.Add(1)
 	m.mu.Unlock()
-	go m.dispatch(copyJob, run.ID)
+	go func() { defer m.dispatchWG.Done(); m.dispatch(dispatchContext, copyJob, run.ID) }()
 	return run, nil
 }
-func (m *sdkJobs) dispatch(job sdkJob, runID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+func (m *sdkJobs) dispatch(parent context.Context, job sdkJob, runID string) {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
 	m.chats.mu.Lock()
 	chat := m.chats.chats[job.ChatID]

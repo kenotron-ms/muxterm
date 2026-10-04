@@ -378,7 +378,6 @@ func (s *Server) Handler() http.Handler {
 // It performs a graceful shutdown with a 5-second timeout and returns nil
 // when the server closes normally.
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	go s.sdkJobs.loop(ctx)
 	srv := &http.Server{
 		Addr:    s.addr,
 		Handler: s.mux,
@@ -389,6 +388,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if s.sdkVoice != nil {
 		defer s.sdkVoice.close()
 	}
+	jobContext, stopJobs := context.WithCancel(ctx)
+	s.sdkJobs.mu.Lock()
+	s.sdkJobs.ctx = jobContext
+	s.sdkJobs.mu.Unlock()
+	jobsDone := make(chan struct{})
+	go func() { defer close(jobsDone); s.sdkJobs.loop(jobContext) }()
 	// Harness services have no browser owner. Bring them up with the server so
 	// opening a chat only reads its Go-owned history and never starts a provider.
 	prewarmDone := make(chan struct{})
@@ -417,6 +422,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	sweepDone := make(chan struct{})
 	defer close(sweepDone)
 	go s.sweepPublications(sweepDone)
+	// Stop scheduling before waiting for other server work or closing adapters.
+	defer func() { stopJobs(); <-jobsDone; s.sdkJobs.dispatchWG.Wait() }()
 
 	errCh := make(chan error, 1)
 	go func() {
