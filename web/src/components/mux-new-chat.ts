@@ -53,8 +53,6 @@ export class MuxNewChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
-    .top { padding:14px 24px; border-bottom:1px solid var(--chrome-border,#343a4c); font-size:14px; font-weight:600; display:flex; justify-content:space-between; align-items:center; }
-    .top button { border:0; background:transparent; color:inherit; cursor:pointer; }
     .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:24px; }
     .content { width:min(100%,780px); }
     h1 { font-size:28px; font-weight:600; margin:0 0 20px; }
@@ -295,7 +293,6 @@ export class MuxNewChat extends LitElement {
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
     return html`
-    <div class="top">New Chat <button type="button" @click=${() => this.dispatchEvent(new CustomEvent('chat-cancel', { bubbles:true, composed:true }))}>Use terminal instead</button></div>
     <div class="main"><div class="content">
       <h1>What would you like to do?</h1>
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
