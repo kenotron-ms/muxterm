@@ -17,6 +17,7 @@ export class MuxSkills extends LitElement {
   @state() private notice = '';
   private searchTimer?: number;
   private searchGeneration = 0;
+  private refreshGeneration = 0;
 
   static override styles = css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
@@ -46,20 +47,30 @@ export class MuxSkills extends LitElement {
     @media(max-width:600px) { .top { padding:16px; } .content { padding:17px 16px; } .row { align-items:flex-start; flex-direction:column; gap:8px; } }
   `;
 
-  override connectedCallback() { super.connectedCallback(); void this.refresh(); }
-  override disconnectedCallback() { if (this.searchTimer) window.clearTimeout(this.searchTimer); super.disconnectedCallback(); }
+  override connectedCallback() {
+    super.connectedCallback();
+    void this.refresh();
+    if (this.query.trim().length >= 2) void this.search(this.query.trim());
+  }
+  override disconnectedCallback() {
+    if (this.searchTimer) window.clearTimeout(this.searchTimer);
+    this.refreshGeneration++;
+    this.searchGeneration++;
+    this.searching = false;
+    super.disconnectedCallback();
+  }
 
   private async refresh() {
+    const generation = ++this.refreshGeneration;
     this.loading = true;
     try {
       const response = await fetch(apiPath('/api/skills'));
       if (!response.ok) throw new Error(await response.text());
       const installed: unknown = await response.json();
       if (!Array.isArray(installed)) throw new Error('invalid installed skills response');
-      this.installed = installed as InstalledSkill[];
-      this.error = '';
-    } catch (error) { this.error = `Could not load installed skills: ${String(error)}`; }
-    finally { this.loading = false; }
+      if (generation === this.refreshGeneration) { this.installed = installed as InstalledSkill[]; this.error = ''; }
+    } catch (error) { if (generation === this.refreshGeneration) this.error = `Could not load installed skills: ${String(error)}`; }
+    finally { if (generation === this.refreshGeneration) this.loading = false; }
   }
 
   private onQuery(value: string) {
@@ -110,7 +121,7 @@ export class MuxSkills extends LitElement {
         </div></section>
         <section class="section"><h2>Discover</h2><div class="search"><input aria-label="Search skills" placeholder="Search skills by name or task" .value=${this.query} @input=${(event:Event) => this.onQuery((event.target as HTMLInputElement).value)}></div>
           <div class="list">${this.searching ? html`<div class="empty">Searching…</div>` : this.query.trim().length < 2 ? html`<div class="empty">Enter at least two characters to search the skills catalog.</div>` : this.results.length ? this.results.map(skill => {
-            // Keep this UI hint aligned with the server's skillSlug validation.
+            // Keep this UI hint aligned with skillSlug in internal/server/skills.go.
             const installable = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]+\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(skill.id);
             const alreadyInstalled = installedIDs.has(skill.id);
             const nameInUse = !alreadyInstalled && installedSlugs.has(skill.id.split('/')[2]);

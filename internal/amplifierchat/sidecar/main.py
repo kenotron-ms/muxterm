@@ -303,7 +303,8 @@ class SDKChatSession:
         skills_tool = {"module": "tool-skills",
                        "source": "git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills",
                        "config": {"skills": [".amplifier/skills", str(Path.home() / ".amplifier" / "skills"), shared_skills]}}
-        for tool_plan in (cfg["tools"], prepared.mount_plan["tools"], prepared.bundle.tools):
+        for tool_plan in (cfg.setdefault("tools", []), prepared.mount_plan.setdefault("tools", []),
+                          prepared.bundle.tools):
             entry = next((tool for tool in tool_plan if tool.get("module") == "tool-skills"), None)
             if entry is None:
                 tool_plan.append(copy.deepcopy(skills_tool))

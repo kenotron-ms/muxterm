@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +24,7 @@ const skillsPackage = "skills@1.7.0"
 var skillSlug = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 var nodeVersion = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.`)
 var skillsInstallMu sync.Mutex
+var nodeVersionOK atomic.Bool
 
 type installedSkill struct {
 	Name      string   `json:"name"`
@@ -40,21 +42,8 @@ type searchSkill struct {
 }
 
 func skillsCommand(ctx context.Context, args ...string) ([]byte, error) {
-	version, err := exec.CommandContext(ctx, "node", "--version").Output()
-	if errors.Is(err, exec.ErrNotFound) {
-		return nil, fmt.Errorf("Skills requires Node.js 22.20 or newer on this server (node not found in PATH)")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("Skills could not check the Node.js version: %w", err)
-	}
-	match := nodeVersion.FindStringSubmatch(strings.TrimSpace(string(version)))
-	if match == nil {
-		return nil, fmt.Errorf("Skills requires Node.js 22.20 or newer on this server (could not parse node version)")
-	}
-	major, _ := strconv.Atoi(match[1])
-	minor, _ := strconv.Atoi(match[2])
-	if major < 22 || (major == 22 && minor < 20) {
-		return nil, fmt.Errorf("Skills requires Node.js 22.20 or newer on this server (found %s)", strings.TrimSpace(string(version)))
+	if err := checkSkillsNodeVersion(ctx); err != nil {
+		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, "npx", append([]string{"--yes", skillsPackage}, args...)...)
 	// Never invoke a shell or permit the browser to supply flags. The process
@@ -68,6 +57,30 @@ func skillsCommand(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("skills command failed: %w", err)
 	}
 	return out, nil
+}
+
+func checkSkillsNodeVersion(ctx context.Context) error {
+	if nodeVersionOK.Load() {
+		return nil
+	}
+	version, err := exec.CommandContext(ctx, "node", "--version").Output()
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Errorf("Skills requires Node.js 22.20 or newer on this server (node not found in PATH)")
+	}
+	if err != nil {
+		return fmt.Errorf("Skills could not check the Node.js version: %w", err)
+	}
+	match := nodeVersion.FindStringSubmatch(strings.TrimSpace(string(version)))
+	if match == nil {
+		return fmt.Errorf("Skills requires Node.js 22.20 or newer on this server (could not parse node version)")
+	}
+	major, _ := strconv.Atoi(match[1])
+	minor, _ := strconv.Atoi(match[2])
+	if major < 22 || (major == 22 && minor < 20) {
+		return fmt.Errorf("Skills requires Node.js 22.20 or newer on this server (found %s)", strings.TrimSpace(string(version)))
+	}
+	nodeVersionOK.Store(true)
+	return nil
 }
 
 func (s *Server) handleSkillsList(w http.ResponseWriter, r *http.Request) {
