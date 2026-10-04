@@ -1305,6 +1305,7 @@ export class MuxSidebar extends LitElement {
   // ---------------------------------------------------------------------------
 
   @property({ type: Boolean }) newChatActive = false;
+  @property({ type: Boolean }) jobsActive = false;
   @property({ type: String }) selectedSDKChat = '';
 
   /**
@@ -2667,6 +2668,9 @@ export class MuxSidebar extends LitElement {
       </div>
       <button class="new-chat-action ${this.newChatActive ? 'active' : ''}" title="New chat" aria-current="${this.newChatActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
         <span class="new-chat-action-mark">＋</span><span>New Chat</span>
+      </button>
+      <button class="new-chat-action ${this.jobsActive ? 'active' : ''}" title="Scheduled jobs" aria-current="${this.jobsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('jobs-open', { bubbles: true, composed: true }))}">
+        <span class="new-chat-action-mark">◷</span><span>Scheduled jobs</span>
       </button>
       <div class="tab-content">
         <mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list>

@@ -16,6 +16,7 @@ export class MuxNewChat extends LitElement {
   @property() initialHarness: HarnessName = 'codex';
   @property() initialFolder = '';
   @property() initialProject = '';
+  @property() initialPrompt = '';
   @state() private projectId = 'ungrouped';
   @state() private folder = '';
   @state() private workMode: 'local' | 'worktree' = 'local';
@@ -148,6 +149,7 @@ export class MuxNewChat extends LitElement {
     window.addEventListener('drop', this.resetDrop);
     window.addEventListener('dragend', this.resetDrop);
     this.harness = this.initialHarness;
+    if (this.initialPrompt) this.prompt = this.initialPrompt;
     void this.loadStartOptions();
     if (this.initialFolder) this.folder = this.initialFolder;
     if (this.initialProject) this.projectId = this.initialProject;

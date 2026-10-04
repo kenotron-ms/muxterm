@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -110,8 +111,10 @@ func (s *Server) handleSDKUtilityFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type row struct {
-		Name string `json:"name"`
-		Dir  bool   `json:"dir"`
+		Name     string `json:"name"`
+		Dir      bool   `json:"dir"`
+		Size     int64  `json:"size"`
+		Modified int64  `json:"modified"`
 	}
 	rows := make([]row, 0, len(entries))
 	for _, entry := range entries {
@@ -130,7 +133,7 @@ func (s *Server) handleSDKUtilityFiles(w http.ResponseWriter, r *http.Request) {
 		if e != nil || (!st.IsDir() && !st.Mode().IsRegular()) {
 			continue
 		}
-		rows = append(rows, row{name, st.IsDir()})
+		rows = append(rows, row{Name: name, Dir: st.IsDir(), Size: st.Size(), Modified: st.ModTime().Unix()})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Dir != rows[j].Dir {
@@ -138,7 +141,12 @@ func (s *Server) handleSDKUtilityFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		return strings.ToLower(rows[i].Name) < strings.ToLower(rows[j].Name)
 	})
-	writeSDKJSON(w, 200, map[string]any{"root": project, "path": rel, "entries": rows})
+	truncated := false
+	if len(entries) == 500 {
+		more, readErr := dir.ReadDir(1)
+		truncated = readErr == nil && len(more) > 0
+	}
+	writeSDKJSON(w, 200, map[string]any{"root": project, "path": rel, "entries": rows, "truncated": truncated})
 }
 
 func (s *Server) sdkUtilityFile(w http.ResponseWriter, r *http.Request, raw bool) {
@@ -168,6 +176,32 @@ func (s *Server) sdkUtilityFile(w http.ResponseWriter, r *http.Request, raw bool
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	if raw {
+		// A local preview may request a bounded copy. Downloads without this
+		// parameter keep their existing streaming and range behavior.
+		if r.URL.Query().Has("max_bytes") {
+			limit, parseErr := strconv.ParseInt(r.URL.Query().Get("max_bytes"), 10, 64)
+			if parseErr != nil || limit <= 0 || limit > 8<<20 {
+				http.Error(w, "Invalid preview size limit", http.StatusBadRequest)
+				return
+			}
+			if info.Size() > limit {
+				http.Error(w, "File is too large to preview", http.StatusRequestEntityTooLarge)
+				return
+			}
+			data, readErr := io.ReadAll(io.LimitReader(f, limit+1))
+			if readErr != nil {
+				http.Error(w, "File unavailable", http.StatusInternalServerError)
+				return
+			}
+			if int64(len(data)) > limit {
+				http.Error(w, "File grew beyond the preview limit", http.StatusRequestEntityTooLarge)
+				return
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Disposition", "attachment; filename=\""+safeAttachmentName(filepath.Base(rel))+"\"")
+			_, _ = w.Write(data)
+			return
+		}
 		if kind == kindImage {
 			w.Header().Set("Content-Type", contentType)
 		} else {

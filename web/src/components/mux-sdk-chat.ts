@@ -11,6 +11,7 @@ import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import './mux-sdk-utility.js';
+import type { MuxSDKUtility } from './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
 type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
@@ -39,13 +40,14 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { BookOpen, Bot, Brain, ChevronDown, ChevronRight, FilePenLine, Globe, Mic, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
+import { BookOpen, Bot, Brain, ChevronDown, ChevronRight, FilePenLine, Globe, Mic, Search, Terminal, Wrench, type IconNode } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
   @state() private chat?: SDKChat;
+  @state() private scheduledJob?: { name:string; scheduleLabel?:string; schedule:string; timezone:string; enabled:boolean };
   @state() private blocks: Block[] = [];
   @state() private trajectory: SDKEvent[] = [];
   @state() private agentEvents: SDKEvent[] | null = null;
@@ -60,6 +62,7 @@ export class MuxSDKChat extends LitElement {
   @state() private busy = false;
   @state() private stopping = false;
   @state() private drawerOpen = false;
+  @state() private previewFocused = false;
   @state() private drawerWidth = 0;
   private resizingDrawer = false;
   @state() private attachments: Attachment[] = [];
@@ -170,8 +173,16 @@ export class MuxSDKChat extends LitElement {
     .recovery button:hover { background:color-mix(in srgb,var(--mux-warn) 25%,var(--chrome-bar)); }
     h1 { font-size:14px; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     button { font:inherit; cursor:pointer; }
-    .drawer-toggle { margin-left:auto; border:0; background:transparent; color:var(--chrome-accent); padding:7px; }
+    .pane-controls { display:flex; align-items:center; gap:5px; margin-left:auto; }
+    .pane-controls button { border:1px solid transparent; border-radius:6px; background:transparent; color:var(--chrome-text-dim); padding:4px 8px; font-size:11px; }
+    .pane-controls button:hover, .pane-controls button.active { border-color:var(--chrome-border); color:var(--chrome-text-bright); background:var(--chrome-hover); }
+    .pane-controls button.active { color:var(--chrome-accent); }
+    .chat-title { min-width:0; overflow:hidden; }
+    .chat-title small { display:block; color:var(--chrome-text-dim); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .layout { display:flex; flex:1; min-height:0; }
+    .layout.preview-focused .chat { display:none; }
+    .layout.preview-focused .drawer { width:100%; flex:1; border-left:0; }
+    .layout.preview-focused .drawer-resizer { display:none; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
     .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable both-edges; overflow-anchor:none; }
     .scroll-bottom-row { position:relative; z-index:2; height:0; }
@@ -295,7 +306,7 @@ export class MuxSDKChat extends LitElement {
     .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--chrome-accent) 25%,transparent); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
-    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { position:absolute; right:0; top:42px; bottom:0; box-shadow:-10px 0 30px #0008; } }
+    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { position:absolute; right:0; top:42px; bottom:0; box-shadow:-10px 0 30px #0008; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar { padding-left:10px; gap:6px; } .pane-controls { gap:1px; } .pane-controls button { padding:4px 5px; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -372,7 +383,18 @@ export class MuxSDKChat extends LitElement {
     this.idleSuspended = false;
     this.retryConnection();
   };
-  override willUpdate(changed: Map<string, unknown>) { if (changed.has('sessionId')) this.connect(); }
+  override willUpdate(changed: Map<string, unknown>) { if (changed.has('sessionId')) { this.connect(); void this.loadScheduledJob(); } }
+  private async loadScheduledJob() {
+    const id = this.sessionId;
+    this.scheduledJob = undefined;
+    if (!id) return;
+    try {
+      const response = await fetch(apiPath('/api/sdk-jobs'));
+      if (!response.ok) return;
+      const jobs = await response.json() as { chatId:string; name:string; scheduleLabel?:string; schedule:string; timezone:string; enabled:boolean }[];
+      if (this.sessionId === id) this.scheduledJob = jobs.find(job => job.chatId === id);
+    } catch { /* Chat remains usable if job metadata is unavailable. */ }
+  }
   override updated(changed: Map<string, unknown>) {
     if (changed.has('draft')) this.sizeTextarea();
     this.rowObserver.disconnect();
@@ -390,12 +412,29 @@ export class MuxSDKChat extends LitElement {
     return { min: Math.min(280, available * .6), max: available <= 700 ? available * .9 : Math.max(280, available - 480), available };
   }
   private openDrawer() {
-    if (this.drawerOpen) { this.drawerOpen = false; return; }
+    if (this.drawerOpen) { this.drawerOpen = false; this.previewFocused = false; return; }
     const { min, max, available } = this.widthLimits();
     let stored = 0;
     try { stored = Number(localStorage.getItem(this.drawerKey())) || 0; } catch { /* private browsing */ }
     this.drawerWidth = Math.round(Math.max(min, Math.min(max, stored || available / 2)));
     this.drawerOpen = true;
+  }
+  private setPaneMode(mode: 'chat' | 'split' | 'preview') {
+    if (mode === 'chat') { this.drawerOpen = false; this.previewFocused = false; return; }
+    if (!this.drawerOpen) this.openDrawer();
+    this.previewFocused = mode === 'preview';
+  }
+  private openFiles() {
+    this.setPaneMode('split');
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('files'));
+  }
+  private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
+    const { path, selected } = event.detail;
+    this.selectedAgent = '';
+    this.setPaneMode('split');
+    const reference = `@${path}${selected ? `\n> ${selected.replaceAll('\n', '\n> ')}` : ''}`;
+    this.draft = this.draft.trimEnd() ? `${this.draft.trimEnd()}\n${reference}\n` : `${reference}\n`;
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
   }
   private startDrawerResize(event: PointerEvent) {
     event.preventDefault();
@@ -1487,8 +1526,8 @@ export class MuxSDKChat extends LitElement {
   override render() {
     const agents = this.agents();
     return html`
-    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<button class="drawer-toggle" aria-label=${this.drawerOpen ? 'Close right drawer' : 'Open right drawer'} aria-expanded=${this.drawerOpen} @click=${this.openDrawer}>${icon(PanelRight, { size: 16 })}</button></div>
-    <div class="layout" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
+    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div class="chat-title"><h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1>${this.scheduledJob ? html`<small>${this.scheduledJob.enabled ? `${this.scheduledJob.scheduleLabel || this.scheduledJob.schedule} · ${this.scheduledJob.timezone}` : 'Schedule paused'}</small>` : nothing}</div>`}<div class="pane-controls" role="group" aria-label="Chat pane layout"><button class=${!this.drawerOpen ? 'active' : ''} aria-pressed=${!this.drawerOpen} @click=${() => this.setPaneMode('chat')}>Chat</button><button class=${this.drawerOpen && !this.previewFocused ? 'active' : ''} aria-pressed=${this.drawerOpen && !this.previewFocused} @click=${() => this.setPaneMode('split')}>Split</button><button class=${this.previewFocused ? 'active' : ''} aria-pressed=${this.previewFocused} @click=${() => this.setPaneMode('preview')}>Preview</button><button aria-label="Open project files" title="Open project files" @click=${this.openFiles}>Files</button><button aria-label=${this.scheduledJob ? 'Edit scheduled job' : 'Schedule this chat'} title=${this.scheduledJob ? 'Edit scheduled job' : 'Schedule this chat'} @click=${() => this.dispatchEvent(new CustomEvent('job-create-request',{bubbles:true,composed:true,detail:{chatId:this.sessionId,suggestedBrief:[...this.blocks].reverse().find(block=>block.kind==='assistant'&&block.text.trim())?.text.slice(0,10000)||''}}))}>${this.scheduledJob ? 'Job settings' : 'Schedule'}</button></div></div>
+    <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<div class="agent-history-error" role="alert">Saved agent work could not be loaded. <button @click=${this.retryAgentHistory}>Retry</button></div>` : nothing}
       ${this.recoveryRequired ? html`<div class="recovery" role="alert"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
@@ -1506,7 +1545,7 @@ export class MuxSDKChat extends LitElement {
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.busy ? html`<button class="stop" aria-label="Stop current task" title="Stop current task" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
-      ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .harness=${this.chat?.harness || ''} .tasks=${this.planTasks()} .touched=${this.touchedFiles()} .events=${this.trajectory}></mux-sdk-utility></aside>` : nothing}
+      ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .harness=${this.chat?.harness || ''} .tasks=${this.planTasks()} .touched=${this.touchedFiles()} .events=${this.trajectory} @sdk-file-reference=${this.stageFileReference}></mux-sdk-utility></aside>` : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`;
   }
 }

@@ -1471,6 +1471,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unsupported input kind", 422)
 			return
 		}
+		if req.Kind == "user" && s.sdkJobs.activeChat(id) {
+			http.Error(w, "A scheduled job run is active in this chat. Steer it or wait for completion.", http.StatusConflict)
+			return
+		}
 		if req.Kind == "service" && c.Harness == "amplifier" && (req.Source == "" || req.Source == "browser" || req.Source == "user" || req.Source == "system" || req.Source == "developer") {
 			http.Error(w, "service input requires a distinct source", 422)
 			return
