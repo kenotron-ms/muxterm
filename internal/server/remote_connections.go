@@ -29,6 +29,7 @@ import (
 // registration and arbitrary local commands are outside this connection surface.
 type remoteConnection struct {
 	ID                    string              `json:"id"`
+	Provider              string              `json:"provider,omitempty"`
 	Name                  string              `json:"name"`
 	Endpoint              string              `json:"endpoint"`
 	Issuer                string              `json:"issuer"`
@@ -54,6 +55,7 @@ type remoteToolSummary struct {
 
 type remoteConnectionPublic struct {
 	ID              string              `json:"id"`
+	Provider        string              `json:"provider,omitempty"`
 	Name            string              `json:"name"`
 	Endpoint        string              `json:"endpoint"`
 	State           string              `json:"state"`
@@ -83,7 +85,7 @@ func (c remoteConnection) public() remoteConnectionPublic {
 	if allowed == nil {
 		allowed = []string{}
 	}
-	return remoteConnectionPublic{ID: c.ID, Name: c.Name, Endpoint: c.Endpoint, State: state, ToolCount: c.ToolCount, CheckedAt: c.CheckedAt, Error: c.CheckError, DiscoveredTools: tools, AllowedTools: allowed}
+	return remoteConnectionPublic{ID: c.ID, Provider: c.Provider, Name: c.Name, Endpoint: c.Endpoint, State: state, ToolCount: c.ToolCount, CheckedAt: c.CheckedAt, Error: c.CheckError, DiscoveredTools: tools, AllowedTools: allowed}
 }
 
 var remotePending = struct {
@@ -92,8 +94,8 @@ var remotePending = struct {
 }{items: make(map[string]remoteAuthAttempt)}
 
 type remoteAuthAttempt struct {
-	ID, Verifier, Issuer, Endpoint, ClientID string
-	Expires                                  time.Time
+	ID, Provider, Verifier, Issuer, Endpoint, ClientID string
+	Expires                                            time.Time
 }
 
 func remoteConnectionsPath() string { return filepath.Join(sdkDataDir(), "connections", "remote.json") }
@@ -456,16 +458,32 @@ func (s *Server) handleRemoteConnections(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleRemoteCreate(w http.ResponseWriter, r *http.Request) {
-	var input struct{ Name, Endpoint, IssuerURL, ClientID, ClientSecret, Scopes string }
+	var input struct{ Provider, Name, Endpoint, IssuerURL, ClientID, ClientSecret, Scopes string }
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384)).Decode(&input); err != nil {
 		http.Error(w, "invalid connection details", 400)
 		return
+	}
+	if input.Provider != "" {
+		preset, ok := googleConnectionPresets[input.Provider]
+		if !ok {
+			http.Error(w, "unknown service preset", 400)
+			return
+		}
+		// The endpoint and read scopes belong to this preset, not the caller.
+		input.Name = preset.Name
+		input.Endpoint = preset.Endpoint
+		input.IssuerURL = "https://accounts.google.com"
+		input.Scopes = strings.Join(preset.Scopes, " ")
 	}
 	input.Name = strings.TrimSpace(input.Name)
 	input.ClientID = strings.TrimSpace(input.ClientID)
 	input.ClientSecret = strings.TrimSpace(input.ClientSecret)
 	if input.Name == "" || len(input.Name) > 80 || input.ClientID == "" || len(input.ClientID) > 512 || len(input.ClientSecret) > 2048 {
 		http.Error(w, "name and OAuth client ID are required", 400)
+		return
+	}
+	if input.Provider != "" && strings.TrimSpace(input.ClientSecret) == "" {
+		http.Error(w, "Google Web OAuth client secret is required", 400)
 		return
 	}
 	endpoint, err := validatedPublicURL(strings.TrimSpace(input.Endpoint))
@@ -526,7 +544,7 @@ func (s *Server) handleRemoteCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not create connection", 500)
 		return
 	}
-	c := remoteConnection{ID: id, Name: input.Name, Endpoint: endpoint.String(), Issuer: selectedIssuer, RequireIssuerResponse: requireIss, AuthURL: authURL, TokenURL: tokenURL, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: scopes}
+	c := remoteConnection{ID: id, Provider: input.Provider, Name: input.Name, Endpoint: endpoint.String(), Issuer: selectedIssuer, RequireIssuerResponse: requireIss, AuthURL: authURL, TokenURL: tokenURL, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: scopes}
 	err = withRemoteConnections(func(records map[string]remoteConnection) error {
 		if len(records) >= 20 {
 			return errors.New("connection limit reached")
@@ -614,7 +632,7 @@ func (s *Server) handleRemoteStart(w http.ResponseWriter, r *http.Request, id st
 			delete(remotePending.items, key)
 		}
 	}
-	remotePending.items[state] = remoteAuthAttempt{ID: id, Verifier: verifier, Issuer: c.Issuer, Endpoint: c.Endpoint, ClientID: c.ClientID, Expires: time.Now().Add(5 * time.Minute)}
+	remotePending.items[state] = remoteAuthAttempt{ID: id, Provider: c.Provider, Verifier: verifier, Issuer: c.Issuer, Endpoint: c.Endpoint, ClientID: c.ClientID, Expires: time.Now().Add(5 * time.Minute)}
 	remotePending.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: "muxterm_remote_oauth", Value: state, Path: "/api/connections/remote/callback", HttpOnly: true, Secure: strings.HasPrefix(s.remoteCallbackURL(), "https://"), SameSite: http.SameSiteLaxMode, MaxAge: 300})
 	cfg := oauth2.Config{ClientID: c.ClientID, ClientSecret: c.ClientSecret, RedirectURL: s.remoteCallbackURL(), Scopes: c.Scopes, Endpoint: oauth2.Endpoint{AuthURL: c.AuthURL, TokenURL: c.TokenURL}}
@@ -623,10 +641,7 @@ func (s *Server) handleRemoteStart(w http.ResponseWriter, r *http.Request, id st
 		options = append(options, oauth2.SetAuthURLParam("resource", c.Endpoint))
 	}
 	if c.Issuer == "https://accounts.google.com" {
-		options = append(options, oauth2.SetAuthURLParam("access_type", "offline"))
-		if c.Token != nil {
-			options = append(options, oauth2.SetAuthURLParam("prompt", "consent"))
-		}
+		options = append(options, oauth2.SetAuthURLParam("access_type", "offline"), oauth2.SetAuthURLParam("prompt", "consent"))
 	}
 	authURL := cfg.AuthCodeURL(state, options...)
 	writeSDKJSON(w, 200, map[string]string{"url": authURL})
@@ -649,8 +664,12 @@ func (s *Server) handleRemoteCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authorization attempt expired", 400)
 		return
 	}
+	selection := attempt.Provider
+	if selection == "" {
+		selection = "remote"
+	}
 	returnToConnections := func(reason string) {
-		http.Redirect(w, r, "/?connections=remote&connection_error="+reason, http.StatusSeeOther)
+		http.Redirect(w, r, "/?connections="+selection+"&connection_error="+reason, http.StatusSeeOther)
 	}
 	iss := q.Get("iss")
 	if len(q["iss"]) > 1 || (iss != "" && canonicalRootIssuer(iss) != attempt.Issuer) {
@@ -687,7 +706,7 @@ func (s *Server) handleRemoteCallback(w http.ResponseWriter, r *http.Request) {
 		returnToConnections("failed")
 		return
 	}
-	if c.Issuer != attempt.Issuer || c.Endpoint != attempt.Endpoint || c.ClientID != attempt.ClientID {
+	if c.Provider != attempt.Provider || c.Issuer != attempt.Issuer || c.Endpoint != attempt.Endpoint || c.ClientID != attempt.ClientID {
 		returnToConnections("failed")
 		return
 	}
@@ -706,6 +725,10 @@ func (s *Server) handleRemoteCallback(w http.ResponseWriter, r *http.Request) {
 		returnToConnections("failed")
 		return
 	}
+	if c.Provider != "" && token.RefreshToken == "" {
+		returnToConnections("failed")
+		return
+	}
 	revision, err := randomURLSafeString(12)
 	if err != nil {
 		returnToConnections("failed")
@@ -713,7 +736,7 @@ func (s *Server) handleRemoteCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	err = withRemoteConnections(func(records map[string]remoteConnection) error {
 		current, ok := records[attempt.ID]
-		if !ok || current.ClientID != c.ClientID || current.TokenURL != c.TokenURL || current.Issuer != attempt.Issuer || current.Endpoint != attempt.Endpoint {
+		if !ok || current.Provider != attempt.Provider || current.ClientID != c.ClientID || current.TokenURL != c.TokenURL || current.Issuer != attempt.Issuer || current.Endpoint != attempt.Endpoint {
 			return errors.New("connection changed")
 		}
 		current.Token = token
@@ -730,7 +753,7 @@ func (s *Server) handleRemoteCallback(w http.ResponseWriter, r *http.Request) {
 		returnToConnections("failed")
 		return
 	}
-	http.Redirect(w, r, "/?connections=remote", http.StatusSeeOther)
+	http.Redirect(w, r, "/?connections="+selection, http.StatusSeeOther)
 }
 
 func remoteTokenSnapshot(id string) (remoteConnection, string, error) {
@@ -945,6 +968,7 @@ func (s *Server) handleRemoteCheck(w http.ResponseWriter, r *http.Request, id st
 	count := 0
 	var discovered []remoteToolSummary
 	errNoTools := errors.New("This service returned no tools for this account; check its access requirements")
+	statusMessage := ""
 	if err == nil {
 		defer session.Close()
 		var tools []*mcp.Tool
@@ -954,7 +978,8 @@ func (s *Server) handleRemoteCheck(w http.ResponseWriter, r *http.Request, id st
 			for _, tool := range tools {
 				if tool == nil || tool.Name == "" || seen[tool.Name] ||
 					!validRemoteToolSchema(tool.InputSchema) ||
-					(tool.OutputSchema != nil && !validRemoteToolSchema(tool.OutputSchema)) {
+					(tool.OutputSchema != nil && !validRemoteToolSchema(tool.OutputSchema)) ||
+					!presetAllowsRemoteTool(c, tool.Name) {
 					continue
 				}
 				seen[tool.Name] = true
@@ -965,9 +990,15 @@ func (s *Server) handleRemoteCheck(w http.ResponseWriter, r *http.Request, id st
 				discovered = append(discovered, remoteToolSummary{Name: tool.Name, Description: description})
 			}
 			count = len(discovered)
-		}
-		if err == nil && count == 0 {
-			err = errNoTools
+			if count == 0 {
+				if c.Provider != "" && len(tools) > 0 {
+					statusMessage = "This Google service returned tools, but none match muxterm's approved read tools. Check product access or supported tools."
+				} else if c.Provider != "" {
+					statusMessage = "Google returned no tools for this account. Check Developer Preview and product API access."
+				} else {
+					err = errNoTools
+				}
+			}
 		}
 	}
 	saveErr := withRemoteConnections(func(records map[string]remoteConnection) error {
@@ -999,7 +1030,7 @@ func (s *Server) handleRemoteCheck(w http.ResponseWriter, r *http.Request, id st
 				}
 			}
 			current.AllowedTools = kept
-			current.CheckError = ""
+			current.CheckError = statusMessage
 		}
 		records[id] = current
 		return saveRemoteConnections(records)
@@ -1018,6 +1049,10 @@ func (s *Server) handleRemoteCheck(w http.ResponseWriter, r *http.Request, id st
 			return
 		}
 		http.Error(w, "Remote tools could not be reached; check account and service access", 502)
+		return
+	}
+	if statusMessage != "" {
+		writeSDKJSON(w, 200, map[string]any{"state": "needs-attention", "toolCount": 0})
 		return
 	}
 	writeSDKJSON(w, 200, map[string]any{"state": "ready", "toolCount": count})
@@ -1047,7 +1082,7 @@ func (s *Server) handleRemoteTools(w http.ResponseWriter, r *http.Request, id st
 		}
 		seen := map[string]bool{}
 		for _, name := range input.AllowedTools {
-			if !known[name] || seen[name] {
+			if !known[name] || seen[name] || !presetAllowsRemoteTool(c, name) {
 				return errUnknown
 			}
 			seen[name] = true
@@ -1078,7 +1113,7 @@ func remoteToolAllowed(id, name, revision string) bool {
 		if !ok || c.Token == nil || c.CheckError != "" || c.AuthRevision != revision {
 			return nil
 		}
-		allowed = slices.Contains(c.AllowedTools, name)
+		allowed = slices.Contains(c.AllowedTools, name) && presetAllowsRemoteTool(c, name)
 		return nil
 	})
 	return allowed
@@ -1121,7 +1156,8 @@ func RunRemoteConnectionsMCP(ctx context.Context) error {
 		for _, tool := range tools {
 			if tool == nil || tool.Name == "" || !slices.Contains(c.AllowedTools, tool.Name) ||
 				!validRemoteToolSchema(tool.InputSchema) ||
-				(tool.OutputSchema != nil && !validRemoteToolSchema(tool.OutputSchema)) {
+				(tool.OutputSchema != nil && !validRemoteToolSchema(tool.OutputSchema)) ||
+				!presetAllowsRemoteTool(c, tool.Name) {
 				continue
 			}
 			t := *tool

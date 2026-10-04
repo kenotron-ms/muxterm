@@ -2,16 +2,16 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 
-type Service = { id:string; name:string; group:string; description:string; docsUrl:string; endpoint?:string; availability:string };
+type Service = { id:string; name:string; group:string; description:string; docsUrl:string; endpoint?:string; availability:string; scopes?:string[]; readTools?:string[] };
 type GitHubState = { state:string; enabled:boolean; ghInstalled:boolean; serverInstalled:boolean; signedIn:boolean; toolCount:number; checkedAt?:string; error:string };
 type ConnectionsResponse = { catalog:Service[]; github:GitHubState };
 type RemoteTool = { name:string; description?:string };
-type RemoteConnection = { id:string; name:string; endpoint:string; state:string; toolCount:number; checkedAt?:string; error?:string; discoveredTools:RemoteTool[]; allowedTools:string[] };
+type RemoteConnection = { id:string; provider?:string; name:string; endpoint:string; state:string; toolCount:number; checkedAt?:string; error?:string; discoveredTools:RemoteTool[]; allowedTools:string[] };
 type RemoteResponse = { items:RemoteConnection[]; callbackUrl:string };
 
 @customElement('mux-connections')
 export class MuxConnections extends LitElement {
-  @property() initialSelection: 'github' | 'remote' = 'github';
+  @property() initialSelection = 'github';
   @state() private data?:ConnectionsResponse;
   @state() private remotes?:RemoteResponse;
   @state() private selected='github';
@@ -24,6 +24,8 @@ export class MuxConnections extends LitElement {
   @state() private remoteClientID='';
   @state() private remoteClientSecret='';
   @state() private remoteScopes='';
+  @state() private googleClientID='';
+  @state() private googleClientSecret='';
 
   static override styles=css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
@@ -76,6 +78,21 @@ export class MuxConnections extends LitElement {
     return response.json() as Promise<T>;
   }
   private async refresh() { try { [this.data,this.remotes]=await Promise.all([this.request<ConnectionsResponse>('/api/connections'),this.request<RemoteResponse>('/api/connections/remote')]); } catch(error) { this.error=String(error); } }
+  private selectService(id:string) {
+    if (this.selected===id) return;
+    this.googleClientID='';
+    this.googleClientSecret='';
+    this.selected=id;
+  }
+  private serviceDotClass(service:Service) {
+    if (service.id==='github') {
+      return this.data?.github.state==='ready'?'ready':this.data?.github.state==='needs-attention'?'attention':'';
+    }
+    const items=this.remotes?.items.filter(item=>item.provider===service.id)??[];
+    if (items.some(item=>item.state==='needs-attention')) return 'attention';
+    if (items.some(item=>item.state==='ready'&&item.allowedTools.length>0)) return 'ready';
+    return '';
+  }
   private async run(name:string, action:()=>Promise<unknown>) {
     this.busy=name; this.error='';
     try { await action(); } catch(error) { this.error=error instanceof Error?error.message:String(error); }
@@ -89,6 +106,10 @@ export class MuxConnections extends LitElement {
   private createRemote() { void this.run('remote-create',async()=>{
     await this.request('/api/connections/remote',{method:'POST',body:JSON.stringify({name:this.remoteName,endpoint:this.remoteEndpoint,issuerURL:this.remoteIssuer,clientID:this.remoteClientID,clientSecret:this.remoteClientSecret,scopes:this.remoteScopes})});
     this.remoteName='';this.remoteEndpoint='';this.remoteIssuer='';this.remoteClientID='';this.remoteClientSecret='';this.remoteScopes='';
+  }); }
+  private createGoogle(service:Service) { void this.run('google-create',async()=>{
+    await this.request('/api/connections/remote',{method:'POST',body:JSON.stringify({provider:service.id,clientID:this.googleClientID.trim(),clientSecret:this.googleClientSecret})});
+    this.googleClientID='';this.googleClientSecret='';
   }); }
   private authorizeRemote(id:string) { void this.run('remote-start',async()=>{
     const result=await this.request<{url:string}>(`/api/connections/remote/${encodeURIComponent(id)}/start`,{method:'POST'});
@@ -112,7 +133,7 @@ export class MuxConnections extends LitElement {
     return html`<div class="head"><h2>Remote services</h2><span class="badge">Your connections</span></div>
       <p class="lead">Connect a public HTTPS service using an OAuth app you control. Credentials and tokens stay on this machine. After checking access, choose exactly which tools chats may use.</p>
       <p class="note">Selected tools may change or delete data and can run without a separate muxterm confirmation. Grant only the OAuth scopes and tools you want all chat harnesses to use.</p>
-      ${this.remotes?.items.map(item=>html`<div class="box"><div class="head"><strong>${item.name}</strong><span class="badge ${item.state==='ready'?'ready':item.state==='needs-attention'?'attention':''}">${item.state==='ready'?'Ready':item.state==='authorized'?'Authorized':item.state==='needs-attention'?'Needs attention':'Sign in required'}</span></div><p class="note"><code>${item.endpoint}</code></p><p class="note">${item.state==='ready'?`${item.toolCount} tools discovered; ${item.allowedTools.length} enabled for chats.`:item.error||'Authorize, then check access to discover tools.'}</p><div class="actions"><button class="action primary" ?disabled=${!!this.busy} @click=${()=>this.authorizeRemote(item.id)}>${item.state==='authorization-required'?'Authorize':'Reauthorize'}</button><button class="action" ?disabled=${!!this.busy||item.state==='authorization-required'} @click=${()=>this.checkRemote(item.id)}>Check tools</button><button class="action" ?disabled=${!!this.busy} @click=${()=>this.removeRemote(item.id)}>Remove</button></div>
+      ${this.remotes?.items.filter(item=>!item.provider).map(item=>html`<div class="box"><div class="head"><strong>${item.name}</strong><span class="badge ${item.state==='ready'?'ready':item.state==='needs-attention'?'attention':''}">${item.state==='ready'?'Ready':item.state==='authorized'?'Authorized':item.state==='needs-attention'?'Needs attention':'Sign in required'}</span></div><p class="note"><code>${item.endpoint}</code></p><p class="note">${item.state==='ready'?`${item.toolCount} tools discovered; ${item.allowedTools.length} enabled for chats.`:item.error||'Authorize, then check access to discover tools.'}</p><div class="actions"><button class="action primary" ?disabled=${!!this.busy} @click=${()=>this.authorizeRemote(item.id)}>${item.state==='authorization-required'?'Authorize':'Reauthorize'}</button><button class="action" ?disabled=${!!this.busy||item.state==='authorization-required'} @click=${()=>this.checkRemote(item.id)}>Check tools</button><button class="action" ?disabled=${!!this.busy} @click=${()=>this.removeRemote(item.id)}>Remove</button></div>
       ${item.discoveredTools?.length?html`<h3>Tools available to enable</h3><p class="note">New tools are off until you select them. Enabled tools appear in new chats across all harnesses.</p>${item.discoveredTools.map(tool=>html`<label><input type="checkbox" .checked=${(this.allowedDraft[item.id]??item.allowedTools).includes(tool.name)} @change=${(e:Event)=>this.toggleRemoteTool(item,tool.name,(e.target as HTMLInputElement).checked)}><strong>${tool.name}</strong>${tool.description?html`<small> — ${tool.description}</small>`:nothing}</label>`)}<button class="action" ?disabled=${!!this.busy||!this.allowedDraft[item.id]} @click=${()=>this.saveRemoteTools(item)}>Save enabled tools</button>`:nothing}</div>`)}
       <div class="box"><strong>Add a remote service</strong><p class="note">Register a Web OAuth client with the exact callback URL below. The service must publish protected-resource metadata identifying its OAuth issuer and support PKCE.</p>
         <label>Callback URL<input aria-label="Remote callback URL" readonly .value=${this.remotes?.callbackUrl||''}></label>
@@ -123,7 +144,29 @@ export class MuxConnections extends LitElement {
         <label>Client secret, if required<input aria-label="Remote client secret" type="password" autocomplete="off" .value=${this.remoteClientSecret} @input=${(e:Event)=>this.remoteClientSecret=(e.target as HTMLInputElement).value}></label>
         <label>Scopes, separated by spaces<input aria-label="Remote OAuth scopes" .value=${this.remoteScopes} @input=${(e:Event)=>this.remoteScopes=(e.target as HTMLInputElement).value}></label>
         <div class="actions"><button class="action primary" ?disabled=${!!this.busy||!this.remoteName.trim()||!this.remoteEndpoint.trim()||!this.remoteClientID.trim()||!this.remoteScopes.trim()} @click=${this.createRemote}>Save connection</button></div></div>
-      <p class="note">This is bring-your-own OAuth setup. Service operators may define additional access requirements and charges.</p>`;
+      <p class="note">This is bring-your-own OAuth setup. Service providers may define additional access requirements and charges.</p>`;
+  }
+  private googleDetail(service:Service) {
+    const items=this.remotes?.items.filter(item=>item.provider===service.id)??[];
+    const ready=items.some(item=>item.state==='ready'&&item.allowedTools.length>0);
+    return html`<div class="head"><h2>${service.name}</h2><span class="badge ${ready?'ready':''}">${ready?'Ready':'Developer preview · setup required'}</span></div>
+      <p class="lead">${service.description}. Connect through Google's official service using a Web OAuth client from your Google Cloud project.</p>
+      <div class="box"><strong>Before connecting</strong><p class="note">Join the Google Workspace Developer Preview, enable the product and connector APIs in your Cloud project, configure the OAuth consent screen, and register this exact callback URL on a Web OAuth client. External apps may need test users and scope verification.</p>
+        <label>Callback URL<input aria-label="Google callback URL" readonly .value=${this.remotes?.callbackUrl||''}></label>
+        <label>Service endpoint<input aria-label="Google service endpoint" readonly .value=${service.endpoint||''}></label>
+        <p class="note">Muxterm requests these read-only scopes. Google may classify access to mail or files as sensitive or restricted, requiring additional review:</p>
+        <ul>${service.scopes?.map(scope=>html`<li><code>${scope}</code></li>`)}</ul>
+        <p class="note">Only these read tools can be enabled after a successful check: ${service.readTools?.join(', ')}. Newly discovered tools stay off. Google still controls the account grant, and data returned by tools can contain untrusted instructions.</p>
+        <div class="actions"><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Google setup guide ↗</a></div></div>
+      ${items.map(item=>html`<div class="box"><div class="head"><strong>${item.name} connection</strong><span class="badge ${item.state==='ready'?'ready':item.state==='needs-attention'?'attention':''}">${item.state==='ready'?(item.allowedTools.length?'Ready':'Choose tools'):item.state==='authorized'?'Authorized · check tools':item.state==='needs-attention'?'Needs attention':'Sign in required'}</span></div>
+        <p class="note">${item.error||(item.state==='ready'?`${item.toolCount} approved read tools found; ${item.allowedTools.length} enabled for chats.`:item.state==='authorized'?'Check service access to discover read tools.':'Sign in, then check service access to discover read tools.')}</p>
+        <div class="actions"><button class="action primary" ?disabled=${!!this.busy} @click=${()=>this.authorizeRemote(item.id)}>${item.state==='authorization-required'?'Sign in with Google':'Reauthorize'}</button><button class="action" ?disabled=${!!this.busy||item.state==='authorization-required'} @click=${()=>this.checkRemote(item.id)}>Check tools</button><button class="action" ?disabled=${!!this.busy} @click=${()=>this.removeRemote(item.id)}>Remove</button></div>
+        ${item.discoveredTools?.length?html`<h3>Enable read tools for chats</h3><p class="note">These tools are off until you save your selection. Enabled tools appear in new chats across all harnesses.</p>${item.discoveredTools.map(tool=>html`<label><input type="checkbox" .checked=${(this.allowedDraft[item.id]??item.allowedTools).includes(tool.name)} @change=${(e:Event)=>this.toggleRemoteTool(item,tool.name,(e.target as HTMLInputElement).checked)}><strong>${tool.name}</strong>${tool.description?html`<small> — ${tool.description}</small>`:nothing}</label>`)}<button class="action" ?disabled=${!!this.busy||!this.allowedDraft[item.id]} @click=${()=>this.saveRemoteTools(item)}>Save enabled tools</button>`:nothing}</div>`)}
+      <div class="box"><strong>Add ${service.name}</strong><p class="note">Enter the client ID and secret from the Web OAuth client registered with the callback URL above. Authorization and a live tool check are required before this connection is ready.</p>
+        <label>Client ID<input aria-label="Google client ID" autocomplete="off" .value=${this.googleClientID} @input=${(e:Event)=>this.googleClientID=(e.target as HTMLInputElement).value}></label>
+        <label>Client secret<input aria-label="Google client secret" type="password" autocomplete="off" .value=${this.googleClientSecret} @input=${(e:Event)=>this.googleClientSecret=(e.target as HTMLInputElement).value}></label>
+        <div class="actions"><button class="action primary" ?disabled=${!!this.busy||!this.googleClientID.trim()||!this.googleClientSecret.trim()} @click=${()=>this.createGoogle(service)}>Save app details</button></div></div>
+      <p class="note">Google's service is in Developer Preview. A saved app registration or public endpoint alone does not establish access. Refresh tokens for external apps in Testing mode can expire after seven days.</p>`;
   }
   private githubDetail(g:GitHubState) {
     const status=g.state==='ready'?'Ready':g.state==='needs-attention'?'Needs attention':g.state==='setup-required'?'Setup required':g.enabled?'Enabled · check tools':'Ready to connect';
@@ -156,8 +199,8 @@ export class MuxConnections extends LitElement {
     const groups=['Developer','Microsoft 365','Google Workspace'];
     const service=this.data?.catalog.find(item=>item.id===this.selected);
     return html`<header><div class="eyebrow">Services</div><h1>Connections</h1><p>Bring your services into chats.</p></header>
-      <div class="layout"><nav class="catalog" aria-label="Connection catalog"><div class="group">Your services</div><button class="service ${this.selected==='remote'?'active':''}" aria-current=${this.selected==='remote'?'page':'false'} @click=${()=>this.selected='remote'}><span><strong>Remote services</strong><small>Add a public service</small></span><i class="dot ${this.remotes?.items.some(item=>item.state==='needs-attention')?'attention':this.remotes?.items.some(item=>item.state==='ready')?'ready':''}"></i></button>${groups.map(group=>html`<div class="group">${group}</div>${this.data?.catalog.filter(item=>item.group===group).map(item=>html`<button class="service ${item.id===this.selected?'active':''}" aria-current=${item.id===this.selected?'page':'false'} @click=${()=>this.selected=item.id}><span><strong>${item.name}</strong><small>${item.description}</small></span><i class="dot ${item.id==='github'&&this.data?.github.state==='ready'?'ready':item.id==='github'&&this.data?.github.state==='needs-attention'?'attention':''}"></i></button>`)}`)}</nav>
-        <main><div class="detail">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}${!this.data||!this.remotes?html`<p>Loading connections…</p>`:this.selected==='remote'?this.remoteDetail():service?.id==='github'?this.githubDetail(this.data.github):service?this.otherDetail(service):nothing}</div></main></div>`;
+      <div class="layout"><nav class="catalog" aria-label="Connection catalog"><div class="group">Your services</div><button class="service ${this.selected==='remote'?'active':''}" aria-current=${this.selected==='remote'?'page':'false'} @click=${()=>this.selectService('remote')}><span><strong>Remote services</strong><small>Add a public service</small></span><i class="dot ${this.remotes?.items.some(item=>!item.provider&&item.state==='needs-attention')?'attention':this.remotes?.items.some(item=>!item.provider&&item.state==='ready')?'ready':''}"></i></button>${groups.map(group=>html`<div class="group">${group}</div>${this.data?.catalog.filter(item=>item.group===group).map(item=>html`<button class="service ${item.id===this.selected?'active':''}" aria-current=${item.id===this.selected?'page':'false'} @click=${()=>this.selectService(item.id)}><span><strong>${item.name}</strong><small>${item.description}</small></span><i class="dot ${this.serviceDotClass(item)}"></i></button>`)}`)}</nav>
+        <main><div class="detail">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}${!this.data||!this.remotes?html`<p>Loading connections…</p>`:this.selected==='remote'?this.remoteDetail():service?.id==='github'?this.githubDetail(this.data.github):service?.group==='Google Workspace'?this.googleDetail(service):service?this.otherDetail(service):nothing}</div></main></div>`;
   }
 }
 

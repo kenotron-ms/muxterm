@@ -24,26 +24,28 @@ import (
 var githubServerArgs = []string{"stdio", "--read-only", "--toolsets=context,repos,issues,pull_requests"}
 
 type connectionCatalogEntry struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Group        string `json:"group"`
-	Description  string `json:"description"`
-	DocsURL      string `json:"docsUrl"`
-	Endpoint     string `json:"endpoint,omitempty"`
-	Availability string `json:"availability"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Group        string   `json:"group"`
+	Description  string   `json:"description"`
+	DocsURL      string   `json:"docsUrl"`
+	Endpoint     string   `json:"endpoint,omitempty"`
+	Availability string   `json:"availability"`
+	Scopes       []string `json:"scopes,omitempty"`
+	ReadTools    []string `json:"readTools,omitempty"`
 }
 
 var connectionCatalog = []connectionCatalogEntry{
-	{"github", "GitHub", "Developer", "Repositories, issues, and pull requests", "https://github.com/github/github-mcp-server/releases", "", "local-setup"},
-	{"onedrive", "OneDrive", "Microsoft 365", "Find and work with files", "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview", "", "account-setup"},
-	{"outlook-mail", "Outlook Mail", "Microsoft 365", "Read and send mail", "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview", "", "account-setup"},
-	{"outlook-calendar", "Outlook Calendar", "Microsoft 365", "Events and availability", "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview", "", "account-setup"},
-	{"gmail", "Gmail", "Google Workspace", "Messages and drafts", "https://developers.google.com/workspace/guides/configure-mcp-servers", "https://gmailmcp.googleapis.com/mcp/v1", "developer-preview"},
-	{"google-drive", "Google Drive", "Google Workspace", "Files and search", "https://developers.google.com/workspace/guides/configure-mcp-servers", "https://drivemcp.googleapis.com/mcp/v1", "developer-preview"},
-	{"google-calendar", "Google Calendar", "Google Workspace", "Events and availability", "https://developers.google.com/workspace/guides/configure-mcp-servers", "https://calendarmcp.googleapis.com/mcp/v1", "developer-preview"},
-	{"google-docs", "Google Docs", "Google Workspace", "Documents", "https://developers.google.com/workspace/guides/configure-mcp-servers", "https://docsmcp.googleapis.com/mcp/v1", "developer-preview"},
-	{"google-sheets", "Google Sheets", "Google Workspace", "Spreadsheets", "https://developers.google.com/workspace/guides/configure-mcp-servers", "https://sheetsmcp.googleapis.com/mcp/v1", "developer-preview"},
-	{"google-slides", "Google Slides", "Google Workspace", "Presentations", "https://developers.google.com/workspace/guides/configure-mcp-servers", "https://slidesmcp.googleapis.com/mcp/v1", "developer-preview"},
+	{"github", "GitHub", "Developer", "Repositories, issues, and pull requests", "https://github.com/github/github-mcp-server/releases", "", "local-setup", nil, nil},
+	{"onedrive", "OneDrive", "Microsoft 365", "Find and work with files", "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview", "", "account-setup", nil, nil},
+	{"outlook-mail", "Outlook Mail", "Microsoft 365", "Read and send mail", "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview", "", "account-setup", nil, nil},
+	{"outlook-calendar", "Outlook Calendar", "Microsoft 365", "Events and availability", "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview", "", "account-setup", nil, nil},
+	{"gmail", "Gmail", "Google Workspace", "Messages and drafts", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["gmail"].Endpoint, "developer-preview", googleConnectionPresets["gmail"].Scopes, googleConnectionPresets["gmail"].ReadTools},
+	{"google-drive", "Google Drive", "Google Workspace", "Files and search", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-drive"].Endpoint, "developer-preview", googleConnectionPresets["google-drive"].Scopes, googleConnectionPresets["google-drive"].ReadTools},
+	{"google-calendar", "Google Calendar", "Google Workspace", "Events and availability", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-calendar"].Endpoint, "developer-preview", googleConnectionPresets["google-calendar"].Scopes, googleConnectionPresets["google-calendar"].ReadTools},
+	{"google-docs", "Google Docs", "Google Workspace", "Documents", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-docs"].Endpoint, "developer-preview", googleConnectionPresets["google-docs"].Scopes, googleConnectionPresets["google-docs"].ReadTools},
+	{"google-sheets", "Google Sheets", "Google Workspace", "Spreadsheets", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-sheets"].Endpoint, "developer-preview", googleConnectionPresets["google-sheets"].Scopes, googleConnectionPresets["google-sheets"].ReadTools},
+	{"google-slides", "Google Slides", "Google Workspace", "Presentations", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-slides"].Endpoint, "developer-preview", googleConnectionPresets["google-slides"].Scopes, googleConnectionPresets["google-slides"].ReadTools},
 }
 
 type serviceConnections struct {

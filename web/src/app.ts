@@ -712,7 +712,7 @@ export class MuxApp extends LitElement {
   private _drawerOpen = false;
 
   @state() private _sdkChatId: string | null = null;
-  @state() private _connectionSelection: 'github' | 'remote' = 'github';
+  @state() private _connectionSelection = 'github';
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
   @state() private _newChatProject = '';
@@ -888,7 +888,7 @@ export class MuxApp extends LitElement {
     // muxterm's own marker and preserve any unrelated URL parameters.
     const url = new URL(window.location.href);
     const connectionReturn = url.searchParams.get('connections');
-    if (connectionReturn === 'remote') {
+    if (connectionReturn && ['github', 'remote', 'gmail', 'google-drive', 'google-calendar', 'google-docs', 'google-sheets', 'google-slides'].includes(connectionReturn)) {
       this._connectionSelection = connectionReturn;
       url.searchParams.delete('connections');
       window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
