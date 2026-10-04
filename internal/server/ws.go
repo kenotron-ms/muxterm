@@ -1386,12 +1386,15 @@ func (h *Hub) BroadcastChatUINavigation(nav chatUINavigation) int {
 		clients = append(clients, c)
 	}
 	h.mu.RUnlock()
+	count := 0
 	for _, c := range clients {
 		if err := c.writeText(data); err != nil {
 			log.Printf("BroadcastChatUINavigation: write error: %v", err)
+		} else {
+			count++
 		}
 	}
-	return len(clients)
+	return count
 }
 
 // NewHub creates a new Hub that dials a fresh daemon connection per browser via
