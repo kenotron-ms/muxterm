@@ -298,7 +298,7 @@ class SDKChatSession:
         if remote_connection_file.is_file():
             mcp_tool["config"]["servers"]["remote"] = {"command": mcp_bin,
                                                        "args": ["connection-mcp", "remote"]}
-        workiq_enabled_file = github_connection_file.with_name("workiq-local-enabled")
+        workiq_enabled_file = github_marker.with_name("workiq-local-enabled")
         if workiq_enabled_file.is_file():
             mcp_tool["config"]["servers"]["workiq"] = {"command": "workiq", "args": ["mcp"]}
         for tool_plan in (cfg.setdefault("tools", []), prepared.mount_plan.setdefault("tools", []),
