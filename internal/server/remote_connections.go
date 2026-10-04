@@ -230,7 +230,12 @@ func publicRemoteIP(ip netip.Addr) bool {
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return false
 	}
-	for _, raw := range []string{"100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32"} {
+	// IPv6 ranges outside 2000::/3 include well-known NAT64 prefixes that
+	// can route an apparently public IPv6 address to an embedded private IPv4.
+	if ip.Is6() && !netip.MustParsePrefix("2000::/3").Contains(ip) {
+		return false
+	}
+	for _, raw := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4", "2001::/23", "2001:db8::/32", "2002::/16"} {
 		if netip.MustParsePrefix(raw).Contains(ip) {
 			return false
 		}
@@ -241,6 +246,11 @@ func publicRemoteIP(ip netip.Addr) bool {
 func safeRemoteHTTPClient(timeout time.Duration) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = nil // Environment proxies must not bypass the public-address dial check.
+	if timeout == 0 {
+		// A bridge SSE response can live for the entire chat. Bound the wait
+		// for response headers without imposing a deadline on its open body.
+		tr.ResponseHeaderTimeout = 2 * time.Minute
+	}
 	tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
@@ -860,10 +870,29 @@ func (t remoteBearerTransport) RoundTrip(r *http.Request) (*http.Response, error
 
 func connectRemote(ctx context.Context, c remoteConnection) (*mcp.ClientSession, error) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "muxterm-remote-bridge", Version: "1"}, nil)
-	safe := safeRemoteHTTPClient(30 * time.Second)
+	safe := safeRemoteHTTPClient(0)
 	safe.Transport = remoteBearerTransport{ID: c.ID, Endpoint: c.Endpoint, AuthRevision: c.AuthRevision, Base: safe.Transport}
 	transport := &mcp.StreamableClientTransport{Endpoint: c.Endpoint, HTTPClient: safe}
 	return client.Connect(ctx, transport, nil)
+}
+
+// The pinned SDK panics when Server.AddTool receives nil or a non-object
+// input/output schema. Remote providers control these values, so skip only
+// the malformed tool and keep the other connections available.
+func validRemoteToolSchema(schema any) bool {
+	if schema == nil {
+		return false
+	}
+	b, err := json.Marshal(schema)
+	if err != nil {
+		return false
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(b, &object); err != nil {
+		return false
+	}
+	var kind string
+	return json.Unmarshal(object["type"], &kind) == nil && kind == "object"
 }
 
 func listRemoteTools(ctx context.Context, session *mcp.ClientSession) ([]*mcp.Tool, error) {
@@ -920,15 +949,22 @@ func (s *Server) handleRemoteCheck(w http.ResponseWriter, r *http.Request, id st
 		defer session.Close()
 		var tools []*mcp.Tool
 		tools, err = listRemoteTools(ctx, session)
-		count = len(tools)
 		if err == nil {
+			seen := map[string]bool{}
 			for _, tool := range tools {
+				if tool == nil || tool.Name == "" || seen[tool.Name] ||
+					!validRemoteToolSchema(tool.InputSchema) ||
+					(tool.OutputSchema != nil && !validRemoteToolSchema(tool.OutputSchema)) {
+					continue
+				}
+				seen[tool.Name] = true
 				description := tool.Description
 				if len(description) > 240 {
 					description = description[:240]
 				}
 				discovered = append(discovered, remoteToolSummary{Name: tool.Name, Description: description})
 			}
+			count = len(discovered)
 		}
 		if err == nil && count == 0 {
 			err = errNoTools
@@ -1066,9 +1102,11 @@ func RunRemoteConnectionsMCP(ctx context.Context) error {
 		if c.Token == nil || c.AuthRevision == "" || c.CheckedAt.IsZero() || c.CheckError != "" || len(c.AllowedTools) == 0 {
 			continue
 		}
-		// Connect with the bridge lifetime. Cancelling a setup-only context
-		// after discovery would tear down the session used by later tool calls.
-		session, err := connectRemote(ctx, c)
+		// The SDK detaches the stream lifetime from Connect's context. Bound
+		// each provider's setup so one stalled endpoint cannot block all chats.
+		setupCtx, setupCancel := context.WithTimeout(ctx, 20*time.Second)
+		session, err := connectRemote(setupCtx, c)
+		setupCancel()
 		if err != nil {
 			continue
 		}
@@ -1081,7 +1119,9 @@ func RunRemoteConnectionsMCP(ctx context.Context) error {
 		}
 		sessions = append(sessions, session)
 		for _, tool := range tools {
-			if !slices.Contains(c.AllowedTools, tool.Name) {
+			if tool == nil || tool.Name == "" || !slices.Contains(c.AllowedTools, tool.Name) ||
+				!validRemoteToolSchema(tool.InputSchema) ||
+				(tool.OutputSchema != nil && !validRemoteToolSchema(tool.OutputSchema)) {
 				continue
 			}
 			t := *tool
@@ -1092,7 +1132,9 @@ func RunRemoteConnectionsMCP(ctx context.Context) error {
 				if !remoteToolAllowed(c.ID, original, c.AuthRevision) {
 					return nil, errors.New("remote tool is no longer enabled")
 				}
-				return remote.CallTool(callCtx, &mcp.CallToolParams{Name: original, Arguments: json.RawMessage(request.Params.Arguments)})
+				bounded, cancel := context.WithTimeout(callCtx, 2*time.Minute)
+				defer cancel()
+				return remote.CallTool(bounded, &mcp.CallToolParams{Name: original, Arguments: json.RawMessage(request.Params.Arguments)})
 			})
 		}
 	}
