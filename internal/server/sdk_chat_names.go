@@ -17,6 +17,12 @@ import (
 // The opening input is named immediately; completed turns 2, 5, 8, ... are
 // checked again so the title can follow subject changes. One check runs per chat.
 func (h *sdkChatHost) scheduleNamingLocked(c *sdkChat) {
+	// Generic ACP chats keep their opening title until a person renames them.
+	// The title generator below invokes Codex and must not become a hidden
+	// dependency of Pi, OpenCode, or DeepSeek chat creation.
+	if isSDKACPHarness(c.Harness) {
+		return
+	}
 	if c.TitleSource == "manual" || c.TitleCheckedTurn >= c.UserTurns || h.naming[c.ID] {
 		return
 	}

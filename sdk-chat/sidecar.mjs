@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CodexStream } from './codex-stream.mjs';
+import { ACPStream, isACPHarness } from './acp-stream.mjs';
 import { query, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 
 const socketPath = process.argv[2];
@@ -24,7 +25,9 @@ function broadcast(message) {
   const line = JSON.stringify(message) + '\n';
   for (const client of clients) if (!client.destroyed) client.write(line);
 }
-const capabilities = harness => harness === 'claude'
+const capabilities = harness => isACPHarness(harness)
+  ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: false }
+  : harness === 'claude'
   ? { approvals: false, transcript_read: true, interrupt: true, live_input: true, attributed_service_input: true, native_steering: false }
   : { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: true };
 function attachmentPrompt(input) {
@@ -150,11 +153,21 @@ async function command(cmd) {
   if (op === 'capabilities') return { capabilities: capabilities(harness) };
   if (op === 'start' || op === 'resume') {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
-    if (harness !== 'codex' && harness !== 'claude') throw new Error(`Unsupported harness: ${harness}`);
+    if (harness !== 'codex' && harness !== 'claude' && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
     const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
+    if (isACPHarness(harness)) {
+      try {
+        s.acp = new ACPStream(s, emit);
+        await s.acp.start();
+      } catch (error) {
+        s.acp?.close(); sessions.delete(sessionId);
+        throw error;
+      }
+      return { sessionId, capabilities: capabilities(harness) };
+    }
     if (harness === 'claude') void runClaude(s);
     if (op === 'start') emit(sessionId, 'session.started', { capabilities: capabilities(harness), pendingNativeId: true });
     return { sessionId, capabilities: capabilities(harness) };
@@ -162,6 +175,7 @@ async function command(cmd) {
   const s = sessions.get(sessionId);
   if (!s) throw new Error('Session is not resident; resume it first');
   if (op === 'options') {
+    if (s.acp) return s.acp.options();
     if (s.harness === 'codex') {
       s.codex ||= new CodexStream(s, emit);
       return await s.codex.options();
@@ -173,6 +187,7 @@ async function command(cmd) {
     return { model: s.model || models[0]?.id || '', effort: s.effort, models };
   }
   if (op === 'select') {
+    if (s.acp) return await s.acp.select(cmd);
     if (s.busy) throw new Error('Finish the current turn before changing settings');
     const options = await command({ op: 'options', sessionId });
     const model = cmd.model || options.model;
@@ -190,6 +205,7 @@ async function command(cmd) {
     return { ...options, model, effort };
   }
   if (op === 'title') {
+    if (s.acp) return s.acp.title(cmd);
     if (s.harness === 'codex') {
       s.codex ||= new CodexStream(s, emit);
       return s.codex.title(cmd.mode, cmd.name, cmd.previousName);
@@ -215,6 +231,7 @@ async function command(cmd) {
       throw new Error('unsupported: attributed service input');
     if (input.kind === 'steer' && !s.busy) throw new Error('No active turn to steer');
     if (s.busy && input.kind !== 'steer' && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');
+    if (s.acp) return await s.acp.send(input);
     if (s.harness === 'claude') {
       if (input.model && input.model !== s.model) { await s.query.setModel(input.model); s.model = input.model; }
       if (input.effort !== s.effort) { await s.query.applyFlagSettings({ effortLevel: input.effort || null }); s.effort = input.effort || ''; }
@@ -259,6 +276,7 @@ async function command(cmd) {
   }
   if (op === 'interrupt') {
     if (!s.busy) throw new Error('No active turn to stop');
+    if (s.acp) return await s.acp.interrupt();
     if (s.harness === 'codex') await s.codex?.interrupt();
     else {
       s.cancelRequested = true;
@@ -271,7 +289,7 @@ async function command(cmd) {
     return { status: 'accepted' };
   }
   if (op === 'close') {
-    s.closed = true; s.wake?.(); s.codex?.close(); s.query?.close?.(); sessions.delete(sessionId);
+    s.closed = true; s.wake?.(); s.acp?.close(); s.codex?.close(); s.query?.close?.(); sessions.delete(sessionId);
     return { status: 'closed' };
   }
   throw new Error(`Unknown operation: ${op}`);
@@ -296,7 +314,7 @@ const server = net.createServer(client => {
 server.listen(socketPath);
 
 async function shutdown() {
-  for (const s of sessions.values()) { s.closed = true; s.wake?.(); s.codex?.close(); try { await s.query?.close?.(); } catch {} }
+  for (const s of sessions.values()) { s.closed = true; s.wake?.(); s.acp?.close(); s.codex?.close(); try { await s.query?.close?.(); } catch {} }
   server.close();
   try { await unlink(socketPath); } catch {}
   process.exit(0);

@@ -858,7 +858,7 @@ func sdkPermissions(harness string) []string {
 	return []string{"full-permission"}
 }
 func sdkModes(harness string) []string {
-	if harness == "amplifier" {
+	if harness == "amplifier" || isSDKACPHarness(harness) {
 		return []string{"agent"}
 	}
 	return []string{"agent", "plan"}
@@ -883,6 +883,35 @@ func sdkModeNames(value any) []string {
 		}
 	}
 	return names
+}
+
+func isSDKACPHarness(harness string) bool {
+	switch harness {
+	case "pi", "opencode", "deepseek":
+		return true
+	}
+	return false
+}
+
+func sdkACPExecutable(harness string) string {
+	switch harness {
+	case "pi":
+		if value := os.Getenv("MUXTERM_ACP_PI_COMMAND"); value != "" {
+			return value
+		}
+		return "pi-acp"
+	case "opencode":
+		if value := os.Getenv("MUXTERM_ACP_OPENCODE_COMMAND"); value != "" {
+			return value
+		}
+		return "opencode"
+	case "deepseek":
+		if value := os.Getenv("MUXTERM_ACP_DEEPSEEK_COMMAND"); value != "" {
+			return value
+		}
+		return "dsh"
+	}
+	return ""
 }
 func sdkContains(values []string, value string) bool {
 	for _, item := range values {
@@ -1156,15 +1185,15 @@ func amplifierProviderModule(harness, provider string) string {
 	}
 }
 
-// Only advertise opening choices whose local runtime and credential path are
-// present. A provider call can still fail later, but the composer must not
-// offer choices that this server already knows it cannot start.
+// Only advertise opening choices whose local runtime is present. A provider
+// call can still fail later, but the composer must not offer choices that this
+// server already knows it cannot start.
 func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Request) {
 	type option struct {
 		Harness  string `json:"harness"`
 		Provider string `json:"provider"`
 	}
-	options := make([]option, 0, 3)
+	options := make([]option, 0, 6)
 	sdkReady := s.sdkChats.ensure("codex") == nil // Codex and Claude share one Node sidecar.
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
@@ -1173,6 +1202,18 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		cmd := exec.CommandContext(ctx, "codex", "login", "status")
 		if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "" || cmd.Run() == nil {
 			options = append(options, option{Harness: "codex", Provider: "openai"})
+		}
+	}
+	if sdkReady {
+		for _, harness := range []string{"pi", "opencode", "deepseek"} {
+			if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
+				if harness == "pi" {
+					if _, err := exec.LookPath("pi"); err != nil {
+						continue
+					}
+				}
+				options = append(options, option{Harness: harness, Provider: "configured"})
+			}
 		}
 	}
 	if sdkReady {
@@ -1223,7 +1264,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", 400)
 		return
 	}
-	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "amplifier" {
+	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness) {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
@@ -1258,6 +1299,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "anthropic"
 		case "amplifier":
 			req.Provider = "configured"
+		case "pi", "opencode", "deepseek":
+			req.Provider = "configured"
 		}
 	}
 	if req.Provider != "openai" && req.Provider != "anthropic" && req.Provider != "configured" {
@@ -1266,7 +1309,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	if (req.Provider == "openai" && req.Harness == "claude") ||
 		(req.Provider == "anthropic" && req.Harness == "codex") ||
-		(req.Provider == "configured" && req.Harness != "amplifier") {
+		(req.Provider == "configured" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness)) ||
+		(isSDKACPHarness(req.Harness) && req.Provider != "configured") {
 		http.Error(w, "provider does not match harness", 400)
 		return
 	}
@@ -1307,6 +1351,18 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	req.ProjectPath = filepath.Clean(req.ProjectPath)
 	// A missing runtime is a setup failure, not a conversation. Check before
 	// writing a chat record or creating a worktree.
+	if isSDKACPHarness(req.Harness) {
+		if _, err := exec.LookPath(sdkACPExecutable(req.Harness)); err != nil {
+			http.Error(w, "ACP harness executable unavailable: "+sdkACPExecutable(req.Harness), 503)
+			return
+		}
+		if req.Harness == "pi" {
+			if _, err := exec.LookPath("pi"); err != nil {
+				http.Error(w, "Pi executable unavailable: pi", 503)
+				return
+			}
+		}
+	}
 	if err := h.ensure(req.Harness); err != nil {
 		http.Error(w, err.Error(), 503)
 		return

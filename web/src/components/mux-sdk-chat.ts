@@ -1468,7 +1468,7 @@ export class MuxSDKChat extends LitElement {
   }
   private async send() {
     const content = this.draft.trim();
-    if (this.voiceState !== 'idle' || (!content && !this.attachments.length) || this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || a.error) || (this.busy && this.attachments.length > 0)) return;
+    if (this.voiceState !== 'idle' || (!content && !this.attachments.length) || this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || a.error) || (this.busy && (this.attachments.length > 0 || this.isACPChat()))) return;
     const kind = this.busy ? 'steer' : 'user';
     const sent = this.attachments;
     const id = crypto.randomUUID();
@@ -1530,8 +1530,9 @@ export class MuxSDKChat extends LitElement {
     if (this.voiceState !== 'idle') return html`<button class="send voice-active" aria-label="Stop voice mode" title="Stop voice mode" @click=${() => void this.toggleVoice()}>${bars}Stop</button>`;
     if (!this.draft.trim() && !this.attachments.length && this.voiceAvailable) return html`<button class="send voice-idle" aria-label="Start voice mode" title="Start voice mode" ?disabled=${this.settingsPending} @click=${() => void this.toggleVoice()}>${bars}</button>`;
     if (this.busy && !this.draft.trim() && !this.attachments.length) return nothing;
-    return html`<button class="send" aria-label=${this.busy ? 'Steer running turn' : 'Send message'} ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.stopping || this.settingsPending || (this.busy && this.attachments.length > 0) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button>`;
+    return html`<button class="send" aria-label=${this.busy && this.isACPChat() ? 'Wait for ACP turn' : this.busy ? 'Steer running turn' : 'Send message'} ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.stopping || this.settingsPending || (this.busy && (this.attachments.length > 0 || this.isACPChat())) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button>`;
   }
+  private isACPChat() { return this.chat?.harness === 'pi' || this.chat?.harness === 'opencode' || this.chat?.harness === 'deepseek'; }
   override render() {
     const agents = this.agents();
     return html`
@@ -1550,7 +1551,7 @@ export class MuxSDKChat extends LitElement {
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
-      <div class="composer-row"><textarea aria-label=${this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
+      <div class="composer-row"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.busy ? html`<button class="stop" aria-label="Stop current task" title="Stop current task" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>

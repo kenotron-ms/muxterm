@@ -1,19 +1,18 @@
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { sdkChats, type FolderListing } from '../lib/sdk-chats.js';
+import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
-import { harnessLabel, type HarnessName } from '../lib/harness.js';
 import { ChevronDown, Folder, Plus } from 'lucide';
 import { icon } from '../lib/icons.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
-type StartOption = { harness: HarnessName; provider: ProviderName };
+type StartOption = { harness: SDKHarnessName; provider: ProviderName };
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; uploading: boolean; error?: string };
 
 @customElement('mux-new-chat')
 export class MuxNewChat extends LitElement {
-  @property() initialHarness: HarnessName = 'codex';
+  @property() initialHarness: SDKHarnessName = 'codex';
   @property() initialFolder = '';
   @property() initialProject = '';
   @property() initialPrompt = '';
@@ -22,7 +21,7 @@ export class MuxNewChat extends LitElement {
   @state() private workMode: 'local' | 'worktree' = 'local';
   @state() private projectName = '';
   @state() private newFolderName = '';
-  @state() private harness: HarnessName = 'codex';
+  @state() private harness: SDKHarnessName = 'codex';
   @state() private provider: ProviderName = 'openai';
   @state() private startOptions?: StartOption[];
   @state() private prompt = '';
@@ -210,7 +209,7 @@ export class MuxNewChat extends LitElement {
     else if (value === 'ungrouped' && this.listing) this.folder = this.listing.base;
     if (value === 'ungrouped' || value === 'new') this.workMode = 'local';
   }
-  private onHarnessChange(value: HarnessName) {
+  private onHarnessChange(value: SDKHarnessName) {
     const option = this.startOptions?.find(item => item.harness === value);
     if (!option) return;
     this.harness = option.harness;
@@ -315,7 +314,7 @@ export class MuxNewChat extends LitElement {
             <p class="location-note">${this.workMode === 'worktree' ? 'A separate Git worktree will be created from this project’s primary folder.' : this.projectId === 'ungrouped' ? 'This chat will use the chosen folder.' : 'This chat will use the project’s primary folder.'}${selectedProject?.sourceFolders?.length ? ` ${selectedProject.sourceFolders.length} additional source ${selectedProject.sourceFolders.length === 1 ? 'folder is' : 'folders are'} available at their existing paths.` : ''}</p>
           </div>
         </details>
-        ${this.startOptions?.length ? html`<label class="harness"><select aria-label="Harness" .value=${this.harness} @change=${(e:Event) => this.onHarnessChange((e.target as HTMLSelectElement).value as HarnessName)}>${this.startOptions.map(option => html`<option value=${option.harness} ?selected=${this.harness === option.harness}>${harnessLabel(option.harness)}</option>`)}</select></label>` : nothing}
+        ${this.startOptions?.length ? html`<label class="harness"><select aria-label="Harness" .value=${this.harness} @change=${(e:Event) => this.onHarnessChange((e.target as HTMLSelectElement).value as SDKHarnessName)}>${this.startOptions.map(option => html`<option value=${option.harness} ?selected=${this.harness === option.harness}>${sdkHarnessLabel(option.harness)}</option>`)}</select></label>` : nothing}
         <button class="worktree-toggle" type="button" role="switch" aria-label="Use a separate Git worktree" aria-checked=${this.workMode === 'worktree'} title=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @click=${() => { this.workMode = this.workMode === 'worktree' ? 'local' : 'worktree'; }}><span>Worktree</span><span class="track" aria-hidden="true"><span class="thumb"></span></span></button>
         </div>
         ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button></div>`)}</div>` : nothing}
