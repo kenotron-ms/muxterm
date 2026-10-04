@@ -24,6 +24,8 @@ const skillsPackage = "skills@1.7.0"
 var skillSlug = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 var nodeVersion = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.`)
 var skillsInstallMu sync.Mutex
+// Successful checks are cached for this server process. A Node upgrade is
+// observed after muxterm's next start, like other process PATH changes.
 var nodeVersionOK atomic.Bool
 
 type installedSkill struct {

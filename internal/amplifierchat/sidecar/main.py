@@ -300,9 +300,10 @@ class SDKChatSession:
         # can choose their own skill sources, but all muxterm chats must also be
         # able to discover the owner's shared skills regardless of bundle.
         shared_skills = str(Path.home() / ".agents" / "skills")
+        default_skill_sources = [".amplifier/skills", str(Path.home() / ".amplifier" / "skills")]
         skills_tool = {"module": "tool-skills",
                        "source": "git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills",
-                       "config": {"skills": [".amplifier/skills", str(Path.home() / ".amplifier" / "skills"), shared_skills]}}
+                       "config": {"skills": [*default_skill_sources, shared_skills]}}
         for tool_plan in (cfg.setdefault("tools", []), prepared.mount_plan.setdefault("tools", []),
                           prepared.bundle.tools):
             entry = next((tool for tool in tool_plan if tool.get("module") == "tool-skills"), None)
@@ -314,7 +315,9 @@ class SDKChatSession:
                 # existing sources forward before adding the shared directory.
                 sources = tool_config.get("skills")
                 if sources is None:
-                    sources = tool_config.get("skills_dirs") or []
+                    sources = tool_config.get("skills_dirs")
+                if sources is None:
+                    sources = default_skill_sources
                 if isinstance(sources, str):
                     sources = [sources]
                 else:

@@ -60,7 +60,7 @@ export class MuxSkills extends LitElement {
     super.disconnectedCallback();
   }
 
-  private async refresh() {
+  private async refresh(): Promise<boolean | undefined> {
     const generation = ++this.refreshGeneration;
     this.loading = true;
     try {
@@ -68,8 +68,14 @@ export class MuxSkills extends LitElement {
       if (!response.ok) throw new Error(await response.text());
       const installed: unknown = await response.json();
       if (!Array.isArray(installed)) throw new Error('invalid installed skills response');
-      if (generation === this.refreshGeneration) { this.installed = installed as InstalledSkill[]; this.error = ''; }
-    } catch (error) { if (generation === this.refreshGeneration) this.error = `Could not load installed skills: ${String(error)}`; }
+      if (generation !== this.refreshGeneration || !this.isConnected) return;
+      this.installed = installed as InstalledSkill[]; this.error = '';
+      return true;
+    } catch (error) {
+      if (generation !== this.refreshGeneration || !this.isConnected) return;
+      this.error = `Could not load installed skills: ${String(error)}`;
+      return false;
+    }
     finally { if (generation === this.refreshGeneration) this.loading = false; }
   }
 
@@ -100,9 +106,15 @@ export class MuxSkills extends LitElement {
     try {
       const response = await fetch(apiPath('/api/skills/install'), { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ id:skill.id }) });
       if (!response.ok) throw new Error(await response.text());
-      this.notice = `${skill.name} is installed for new chats in Codex, Claude, and Amplifier.`;
-      await this.refresh();
-    } catch (error) { this.error = `Install failed: ${String(error)}`; }
+      if (!this.isConnected) return;
+      const refreshed = await this.refresh();
+      if (!this.isConnected) return;
+      if (refreshed === true) this.notice = `${skill.name} is installed for new chats in Codex, Claude, and Amplifier.`;
+      else if (refreshed === false) {
+        this.notice = '';
+        this.error = `${skill.name} was installed, but the installed skills list could not be refreshed. Reopen Skills to reload it.`;
+      }
+    } catch (error) { if (this.isConnected) this.error = `Install failed: ${String(error)}`; }
     finally { this.installing = ''; }
   }
 
@@ -114,7 +126,7 @@ export class MuxSkills extends LitElement {
       <div class="top"><div class="eyebrow">Extend your chats</div><h1>Skills</h1><div class="subtitle">Find and install shared skills for your chat harnesses.</div></div>
       <div class="content">
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-        ${this.notice ? html`<div class="notice" role="status">${this.notice}</div>` : nothing}
+        ${!this.error && this.notice ? html`<div class="notice" role="status">${this.notice}</div>` : nothing}
         <section class="section"><h2>Installed</h2><div class="list">
           ${this.loading ? html`<div class="empty">Loading skills…</div>` : this.installed.length ? this.installed.map(skill => html`
             <div class="row"><div class="body"><div class="name">${skill.name}</div><div class="meta">${skill.source || 'Local skill'} · ${skill.agents?.length ? skill.agents.join(', ') : 'Shared skills directory'}</div></div></div>`) : html`<div class="empty">No shared skills installed yet.</div>`}
