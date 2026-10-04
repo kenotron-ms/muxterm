@@ -144,6 +144,7 @@ type Server struct {
 	sdkChats           *sdkChatHost
 	sdkChatAttachments *chatattachments.Store
 	sdkJobs            *sdkJobs
+	connections        *serviceConnections
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -169,6 +170,7 @@ func New(cfg Config) *Server {
 	}
 	s.sdkChats = newSDKChatHost()
 	s.sdkJobs = newSDKJobs(s.sdkChats)
+	s.connections = newServiceConnections()
 	attachmentRoot, err := chatattachments.DefaultRoot()
 	if err != nil {
 		log.Panicf("sdk chat attachment root: %v", err)
@@ -324,6 +326,9 @@ func New(cfg Config) *Server {
 
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("GET /api/skills", protect(http.HandlerFunc(s.handleSkillsList)))
+	s.mux.Handle("GET /api/connections", protect(http.HandlerFunc(s.handleConnections)))
+	s.mux.Handle("POST /api/connections/github/check", protect(http.HandlerFunc(s.handleGitHubCheck)))
+	s.mux.Handle("DELETE /api/connections/github", protect(http.HandlerFunc(s.handleGitHubDisconnect)))
 	s.mux.Handle("GET /api/skills/search", protect(http.HandlerFunc(s.handleSkillsSearch)))
 	s.mux.Handle("POST /api/skills/install", protect(http.HandlerFunc(s.handleSkillsInstall)))
 	s.mux.Handle("GET /api/sdk-jobs", protect(http.HandlerFunc(s.handleSDKJobs)))

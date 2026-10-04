@@ -144,6 +144,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "connection-mcp":
+		if err := server.RunGitHubConnectionMCP(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "amplifier-install":
 		if err := runAmplifierBundleInstall(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
