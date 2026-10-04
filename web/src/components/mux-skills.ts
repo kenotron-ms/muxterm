@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 
-type InstalledSkill = { name:string; path:string; scope:string; agents:string[]; source:string; sourceUrl:string };
+type InstalledSkill = { name:string; scope:string; agents:string[]; source:string; sourceUrl:string };
 type CatalogSkill = { id:string; name:string; source:string; installs:number };
 
 @customElement('mux-skills')
@@ -54,7 +54,9 @@ export class MuxSkills extends LitElement {
     try {
       const response = await fetch(apiPath('/api/skills'));
       if (!response.ok) throw new Error(await response.text());
-      this.installed = await response.json() as InstalledSkill[];
+      const installed: unknown = await response.json();
+      if (!Array.isArray(installed)) throw new Error('invalid installed skills response');
+      this.installed = installed as InstalledSkill[];
       this.error = '';
     } catch (error) { this.error = `Could not load installed skills: ${String(error)}`; }
     finally { this.loading = false; }
@@ -74,8 +76,9 @@ export class MuxSkills extends LitElement {
     try {
       const response = await fetch(apiPath(`/api/skills/search?q=${encodeURIComponent(query)}`));
       if (!response.ok) throw new Error(await response.text());
-      const results = await response.json() as CatalogSkill[];
-      if (generation === this.searchGeneration) { this.results = results; this.error = ''; }
+      const results: unknown = await response.json();
+      if (!Array.isArray(results)) throw new Error('invalid skills catalog response');
+      if (generation === this.searchGeneration) { this.results = results as CatalogSkill[]; this.error = ''; }
     } catch (error) { if (generation === this.searchGeneration) this.error = `Search failed: ${String(error)}`; }
     finally { if (generation === this.searchGeneration) this.searching = false; }
   }
@@ -93,7 +96,9 @@ export class MuxSkills extends LitElement {
   }
 
   override render() {
-    const installedSlugs = new Set(this.installed.map(skill => skill.path?.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) || skill.name));
+    // The pinned CLI reports `name` as the folder slug and `source` as owner/repo.
+    const installedSlugs = new Set(this.installed.map(skill => skill.name));
+    const installedIDs = new Set(this.installed.filter(skill => skill.source).map(skill => `${skill.source}/${skill.name}`));
     return html`
       <div class="top"><div class="eyebrow">Extend your chats</div><h1>Skills</h1><div class="subtitle">Find and install shared skills for your chat harnesses.</div></div>
       <div class="content">
@@ -105,12 +110,17 @@ export class MuxSkills extends LitElement {
         </div></section>
         <section class="section"><h2>Discover</h2><div class="search"><input aria-label="Search skills" placeholder="Search skills by name or task" .value=${this.query} @input=${(event:Event) => this.onQuery((event.target as HTMLInputElement).value)}></div>
           <div class="list">${this.searching ? html`<div class="empty">Searching…</div>` : this.query.trim().length < 2 ? html`<div class="empty">Enter at least two characters to search the skills catalog.</div>` : this.results.length ? this.results.map(skill => {
+            // Keep this UI hint aligned with the server's skillSlug validation.
             const installable = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]+\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(skill.id);
-            const alreadyInstalled = installedSlugs.has(skill.id.split('/')[2]);
-            return html`<div class="row"><div class="body"><div class="name">${skill.name}</div><div class="meta">${skill.source} · ${skill.installs.toLocaleString()} installs</div></div><div class="actions"><a href=${`https://skills.sh/${encodeURI(skill.id)}`} target="_blank" rel="noopener noreferrer">Details</a><button ?disabled=${!installable || !!this.installing || alreadyInstalled} title=${installable ? 'Install for all chat harnesses' : 'This source cannot be installed from the app'} @click=${() => void this.install(skill)}>${alreadyInstalled ? 'Installed' : this.installing === skill.id ? 'Installing…' : 'Install'}</button></div></div>`;
+            const alreadyInstalled = installedIDs.has(skill.id);
+            const nameInUse = !alreadyInstalled && installedSlugs.has(skill.id.split('/')[2]);
+            const installTitle = nameInUse ? 'A skill with this name is installed from another source' : alreadyInstalled ? 'Already installed' : installable ? 'Install for all chat harnesses' : 'This source cannot be installed from the app';
+            return html`<div class="row"><div class="body"><div class="name">${skill.name}</div><div class="meta">${skill.source} · ${skill.installs.toLocaleString()} installs</div></div><div class="actions"><a href=${`https://skills.sh/${encodeURI(skill.id)}`} target="_blank" rel="noopener noreferrer">Details</a><button ?disabled=${!installable || !!this.installing || alreadyInstalled || nameInUse} title=${installTitle} @click=${() => void this.install(skill)}>${alreadyInstalled ? 'Installed' : nameInUse ? 'Name in use' : this.installing === skill.id ? 'Installing…' : 'Install'}</button></div></div>`;
           }) : html`<div class="empty">No skills found.</div>`}</div>
         </section>
         <p class="footnote">Skills installed here are shared with Codex, Claude, and Amplifier chats. ACP harness support is being developed separately.</p>
       </div>`;
   }
 }
+
+declare global { interface HTMLElementTagNameMap { 'mux-skills': MuxSkills } }

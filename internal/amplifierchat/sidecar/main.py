@@ -311,7 +311,9 @@ class SDKChatSession:
                 tool_config = entry.setdefault("config", {})
                 # The newer `skills` key wins over `skills_dirs`, so carry
                 # existing sources forward before adding the shared directory.
-                sources = tool_config.get("skills", tool_config.get("skills_dirs", []))
+                sources = tool_config.get("skills")
+                if sources is None:
+                    sources = tool_config.get("skills_dirs") or []
                 if isinstance(sources, str):
                     sources = [sources]
                 else:

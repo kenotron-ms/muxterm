@@ -26,7 +26,6 @@ var skillsInstallMu sync.Mutex
 
 type installedSkill struct {
 	Name      string   `json:"name"`
-	Path      string   `json:"path"`
 	Scope     string   `json:"scope"`
 	Agents    []string `json:"agents"`
 	Source    string   `json:"source"`
@@ -42,9 +41,15 @@ type searchSkill struct {
 
 func skillsCommand(ctx context.Context, args ...string) ([]byte, error) {
 	version, err := exec.CommandContext(ctx, "node", "--version").Output()
+	if errors.Is(err, exec.ErrNotFound) {
+		return nil, fmt.Errorf("Skills requires Node.js 22.20 or newer on this server (node not found in PATH)")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("Skills could not check the Node.js version: %w", err)
+	}
 	match := nodeVersion.FindStringSubmatch(strings.TrimSpace(string(version)))
-	if err != nil || match == nil {
-		return nil, fmt.Errorf("Skills requires Node.js 22.20 or newer on this server")
+	if match == nil {
+		return nil, fmt.Errorf("Skills requires Node.js 22.20 or newer on this server (could not parse node version)")
 	}
 	major, _ := strconv.Atoi(match[1])
 	minor, _ := strconv.Atoi(match[2])
@@ -66,7 +71,8 @@ func skillsCommand(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (s *Server) handleSkillsList(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// A first request may need to download the pinned CLI into an empty npm cache.
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	out, err := skillsCommand(ctx, "list", "--global", "--json")
 	if err != nil {
@@ -77,6 +83,9 @@ func (s *Server) handleSkillsList(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(out, &rows); err != nil {
 		http.Error(w, "skills returned invalid installed skill data", http.StatusBadGateway)
 		return
+	}
+	if rows == nil {
+		rows = []installedSkill{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rows)
