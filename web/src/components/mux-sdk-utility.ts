@@ -165,6 +165,10 @@ export class MuxSDKUtility extends LitElement {
   showPanel(id: 'plan' | 'files' | 'pr' | 'trajectory'): void {
     this.dv?.panels.find(panel => panel.id === id)?.api.setActive();
   }
+  async showFile(path: string): Promise<void> {
+    this.showPanel('files');
+    await this.openFile(path);
+  }
   private previewURL(path: string, maxBytes: number): string {
     return `${this.endpoint('raw', path)}&max_bytes=${maxBytes}`;
   }

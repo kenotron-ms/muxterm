@@ -282,6 +282,30 @@ func registerChatControlTools(srv *Server) {
 			}
 			return string(result), nil
 		})
+	srv.Register("move_chat", "Move a Chat under a different project in the sidebar. Use list_projects for stable project IDs; an empty project_id moves to Ungrouped. Conversation history and working directory stay with the Chat. Local machine only.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"project_id": map[string]any{"type": "string", "description": "destination project ID, or empty for Ungrouped"},
+		}), "required": []string{"session_id", "project_id"}},
+		func(args map[string]any) (string, error) {
+			if err := refuseRemote(args, chatLocalOnly); err != nil {
+				return "", err
+			}
+			id, err := argString(args, "session_id")
+			if err != nil {
+				return "", err
+			}
+			projectID, err := argString(args, "project_id")
+			if err != nil {
+				return "", err
+			}
+			body, _ := json.Marshal(map[string]string{"projectId": projectID})
+			result, err := pt.doRequest(http.MethodPatch, "/api/sdk-chats/"+url.PathEscape(id)+"/project", body)
+			if err != nil {
+				return "", err
+			}
+			return string(result), nil
+		})
 	srv.Register("read_chat_session", "Read a Chat's recent persisted events and output by stable ID. Milestones retain input acceptance, delivery, and completion across long streamed replies. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"session_id": map[string]any{"type": "string"}}), "required": []string{"session_id"}},
 		func(args map[string]any) (string, error) {

@@ -1519,6 +1519,45 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 	}
 }
+
+// A move changes sidebar parentage only. The native session retains its cwd,
+// transcript, worktree, and source folders.
+func (s *Server) handleSDKChatProject(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ProjectID string `json:"projectId"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	h := s.sdkChats
+	h.mu.Lock()
+	c := h.chats[r.PathValue("id")]
+	if c == nil {
+		h.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	if req.ProjectID != "" && h.projects[req.ProjectID] == nil {
+		h.mu.Unlock()
+		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
+	oldID := c.WorkspaceID
+	if oldID != req.ProjectID {
+		c.WorkspaceID = req.ProjectID
+		if err := h.saveLocked(c); err != nil {
+			c.WorkspaceID = oldID
+			h.mu.Unlock()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		h.notifyCatalogLocked(c.ID)
+	}
+	copy := *c
+	h.mu.Unlock()
+	writeSDKJSON(w, http.StatusOK, copy)
+}
 func (s *Server) handleSDKChatInterrupt(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	id := r.PathValue("id")

@@ -11,6 +11,7 @@ import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import './mux-sdk-utility.js';
+import type { MuxSDKUtility } from './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
 type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
@@ -422,6 +423,19 @@ export class MuxSDKChat extends LitElement {
     if (mode === 'chat') { this.drawerOpen = false; this.previewFocused = false; return; }
     if (!this.drawerOpen) this.openDrawer();
     this.previewFocused = mode === 'preview';
+  }
+  /** Apply a server-relayed request after this chat is on screen. */
+  async navigateUI(action: 'chat' | 'panel' | 'tab' | 'file', mode?: string, tab?: string, path?: string): Promise<void> {
+    if (action === 'chat') return;
+    if (action === 'panel') {
+      if (mode === 'chat' || mode === 'split' || mode === 'preview') this.setPaneMode(mode);
+      return;
+    }
+    this.setPaneMode(action === 'file' ? 'preview' : 'split');
+    await this.updateComplete;
+    const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
+    if (action === 'file' && path) await utility?.showFile(path);
+    else if (action === 'tab' && (tab === 'plan' || tab === 'files' || tab === 'pr' || tab === 'trajectory')) utility?.showPanel(tab);
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
     const { path, selected } = event.detail;

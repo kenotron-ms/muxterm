@@ -343,6 +343,8 @@ func New(cfg Config) *Server {
 	s.mux.Handle("DELETE /api/sdk-projects/{id}", protect(http.HandlerFunc(s.handleSDKProject)))
 	s.mux.Handle("GET /api/sdk-folders", protect(http.HandlerFunc(s.handleSDKFolders)))
 	s.mux.Handle("GET /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
+	s.mux.Handle("PATCH /api/sdk-chats/{id}/project", protect(http.HandlerFunc(s.handleSDKChatProject)))
+	s.mux.Handle("POST /api/chat-ui/navigate", protect(http.HandlerFunc(s.handleChatUINavigation)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))

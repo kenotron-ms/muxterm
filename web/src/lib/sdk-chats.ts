@@ -69,6 +69,13 @@ class SDKChatStore {
     if (!response.ok) throw new Error(await response.text());
     await this.refresh();
   }
+  async moveChat(sessionId: string, projectId: string): Promise<void> {
+    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/project`), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    await this.refresh();
+  }
   async folders(path = ''): Promise<FolderListing> {
     const response = await fetch(apiPath(`/api/sdk-folders${path ? `?path=${encodeURIComponent(path)}` : ''}`));
     if (!response.ok) throw new Error(await response.text());
