@@ -298,6 +298,9 @@ class SDKChatSession:
         if remote_connection_file.is_file():
             mcp_tool["config"]["servers"]["remote"] = {"command": mcp_bin,
                                                        "args": ["connection-mcp", "remote"]}
+        workiq_enabled_file = github_connection_file.with_name("workiq-local-enabled")
+        if workiq_enabled_file.is_file():
+            mcp_tool["config"]["servers"]["workiq"] = {"command": "workiq", "args": ["mcp"]}
         for tool_plan in (cfg.setdefault("tools", []), prepared.mount_plan.setdefault("tools", []),
                           prepared.bundle.tools):
             entry = next((tool for tool in tool_plan if tool.get("module") == "tool-mcp"), None)
@@ -312,6 +315,8 @@ class SDKChatSession:
                 if remote_connection_file.is_file():
                     entry["config"]["servers"]["remote"] = {"command": mcp_bin,
                                                           "args": ["connection-mcp", "remote"]}
+                if workiq_enabled_file.is_file():
+                    entry["config"]["servers"]["workiq"] = {"command": "workiq", "args": ["mcp"]}
         # The skills CLI installs its canonical global copy here. Bundle authors
         # can choose their own skill sources, but all muxterm chats must also be
         # able to discover the owner's shared skills regardless of bundle.

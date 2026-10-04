@@ -8,12 +8,14 @@ type ConnectionsResponse = { catalog:Service[]; github:GitHubState };
 type RemoteTool = { name:string; description?:string };
 type RemoteConnection = { id:string; provider?:string; name:string; endpoint:string; state:string; toolCount:number; checkedAt?:string; error?:string; discoveredTools:RemoteTool[]; allowedTools:string[] };
 type RemoteResponse = { items:RemoteConnection[]; callbackUrl:string };
+type WorkIQState = { installed:boolean; enabled:boolean };
 
 @customElement('mux-connections')
 export class MuxConnections extends LitElement {
   @property() initialSelection = 'github';
   @state() private data?:ConnectionsResponse;
   @state() private remotes?:RemoteResponse;
+  @state() private workiq?:WorkIQState;
   @state() private selected='github';
   @state() private busy='';
   @state() private error='';
@@ -77,7 +79,7 @@ export class MuxConnections extends LitElement {
     if (!response.ok) throw new Error((await response.text()).trim() || `Request failed (${response.status})`);
     return response.json() as Promise<T>;
   }
-  private async refresh() { try { [this.data,this.remotes]=await Promise.all([this.request<ConnectionsResponse>('/api/connections'),this.request<RemoteResponse>('/api/connections/remote')]); } catch(error) { this.error=String(error); } }
+  private async refresh() { try { [this.data,this.remotes,this.workiq]=await Promise.all([this.request<ConnectionsResponse>('/api/connections'),this.request<RemoteResponse>('/api/connections/remote'),this.request<WorkIQState>('/api/connections/workiq')]); } catch(error) { this.error=String(error); } }
   private selectService(id:string) {
     if (this.selected===id) return;
     this.googleClientID='';
@@ -88,6 +90,7 @@ export class MuxConnections extends LitElement {
     if (service.id==='github') {
       return this.data?.github.state==='ready'?'ready':this.data?.github.state==='needs-attention'?'attention':'';
     }
+    if (service.group==='Microsoft 365') return this.workiq?.enabled?(this.workiq.installed?'ready':'attention'):'';
     const items=this.remotes?.items.filter(item=>item.provider===service.id)??[];
     if (items.some(item=>item.state==='needs-attention')) return 'attention';
     if (items.some(item=>item.state==='ready'&&item.allowedTools.length>0)) return 'ready';
@@ -185,22 +188,24 @@ export class MuxConnections extends LitElement {
       </div>
       <p class="note">Your GitHub CLI login may have broader permissions than the read-only tools shown here. Disabling this connection does not sign out GitHub CLI or revoke its authorization. <a target="_blank" rel="noopener noreferrer" href="https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md">Service configuration ↗</a></p>`;
   }
-  private otherDetail(service:Service) {
-    const microsoft=service.group==='Microsoft 365';
-    return html`<div class="head"><h2>${service.name}</h2><span class="badge">${microsoft?'Account setup':'Developer preview'}</span></div>
-      <p class="lead">${service.description}.</p>
-      <div class="box"><strong>${microsoft?'Microsoft 365 access':'Google Workspace setup'}</strong>
-      <p class="note">${microsoft?'Microsoft Work IQ provides these services through an eligible Microsoft 365 tenant. Tenant admin enablement and Copilot Credits usage charges may apply. Its sign-in and policy are managed by Microsoft; review the terms and billing before use.':'Google’s official service is in Developer Preview. Join the preview, enable its API, register an OAuth client, and authorize this product’s requested scopes before using its endpoint with a chat harness.'}</p>
-      ${service.endpoint?html`<label>Service endpoint<input aria-label="Service endpoint" readonly .value=${service.endpoint}></label>`:nothing}
-      <div class="actions"><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Setup instructions ↗</a>${microsoft?html`<a class="action" href="https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq-cli" target="_blank" rel="noopener noreferrer">Work IQ CLI ↗</a>`:nothing}</div></div>
-      <p class="note">This service is listed for discovery. It is not connected in muxterm yet.</p>`;
+  private workIQDetail(service:Service) {
+    const w=this.workiq!;
+    const enabled=w.enabled;
+    return html`<div class="head"><h2>${service.name}</h2><span class="badge ${enabled?(w.installed?'ready':'attention'):''}">${enabled?(w.installed?'Enabled for new chats':'CLI missing'):w.installed?'Available to enable':'Install required'}</span></div>
+      <p class="lead">${service.description}. One Microsoft Work IQ server covers OneDrive, Outlook Mail, Outlook Calendar, and other Microsoft 365 data. Enabling any of these cards enables that same server in new Codex, Claude, and Amplifier chats.</p>
+      <div class="box"><strong>Use Microsoft's Work IQ CLI</strong>
+        <p class="note">Install the official CLI so <code>workiq</code> is on muxterm's PATH: <code>npm install -g @microsoft/workiq</code>. Then review and accept its license with <code>workiq accept-eula</code> and sign in with <code>workiq auth login</code>. Run these commands in your own terminal; muxterm does not perform these steps.</p>
+        <p class="note">Your organization must grant Entra admin consent, assign you to a Copilot Credits billing plan, and allow Work IQ access. Work IQ handles its own sign-in; muxterm does not request an Entra app, client secret, or Microsoft token.</p>
+        <p class="note">This enables the vendor server's full available tool set across Microsoft 365. Work IQ may offer actions beyond reading files, mail, or meetings. Microsoft account permissions and tenant policies still apply, and usage may incur charges.</p>
+        <div class="actions"><button class="action ${enabled?'':'primary'}" ?disabled=${!!this.busy||(!w.installed&&!enabled)} @click=${()=>void this.run('workiq-toggle',()=>this.request('/api/connections/workiq',{method:enabled?'DELETE':'POST'}))}>${enabled?'Disable in new chats':'Enable in new chats'}</button><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Microsoft setup guide ↗</a></div>
+      </div><p class="note">Enabled means the CLI is available to new chats; it does not confirm Microsoft sign-in or tenant access. Disabling this entry does not revoke credentials stored by Work IQ. Running chats keep their current tools.</p>`;
   }
   override render() {
     const groups=['Developer','Microsoft 365','Google Workspace'];
     const service=this.data?.catalog.find(item=>item.id===this.selected);
     return html`<header><div class="eyebrow">Services</div><h1>Connections</h1><p>Bring your services into chats.</p></header>
       <div class="layout"><nav class="catalog" aria-label="Connection catalog"><div class="group">Your services</div><button class="service ${this.selected==='remote'?'active':''}" aria-current=${this.selected==='remote'?'page':'false'} @click=${()=>this.selectService('remote')}><span><strong>Remote services</strong><small>Add a public service</small></span><i class="dot ${this.remotes?.items.some(item=>!item.provider&&item.state==='needs-attention')?'attention':this.remotes?.items.some(item=>!item.provider&&item.state==='ready')?'ready':''}"></i></button>${groups.map(group=>html`<div class="group">${group}</div>${this.data?.catalog.filter(item=>item.group===group).map(item=>html`<button class="service ${item.id===this.selected?'active':''}" aria-current=${item.id===this.selected?'page':'false'} @click=${()=>this.selectService(item.id)}><span><strong>${item.name}</strong><small>${item.description}</small></span><i class="dot ${this.serviceDotClass(item)}"></i></button>`)}`)}</nav>
-        <main><div class="detail">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}${!this.data||!this.remotes?html`<p>Loading connections…</p>`:this.selected==='remote'?this.remoteDetail():service?.id==='github'?this.githubDetail(this.data.github):service?.group==='Google Workspace'?this.googleDetail(service):service?this.otherDetail(service):nothing}</div></main></div>`;
+        <main><div class="detail">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}${!this.data||!this.remotes||!this.workiq?html`<p>Loading connections…</p>`:this.selected==='remote'?this.remoteDetail():service?.id==='github'?this.githubDetail(this.data.github):service?.group==='Microsoft 365'?this.workIQDetail(service):service?.group==='Google Workspace'?this.googleDetail(service):nothing}</div></main></div>`;
   }
 }
 

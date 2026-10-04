@@ -10,9 +10,17 @@ The command always starts `github-mcp-server stdio --read-only --toolsets=contex
 
 The page reports **Ready** only after live tool discovery. Finding a CLI login or an installed binary alone is setup information. GitHub's server owns tool schemas, API calls, and GitHub authentication behavior. The first version targets `github.com`; enterprise hosts and per-chat grants need separate product decisions.
 
+## Microsoft 365 through Work IQ
+
+OneDrive, Outlook Mail, and Outlook Calendar share one local enable state for Microsoft's official `workiq mcp` stdio server. When the owner enables it, new Codex, Claude, and Amplifier chats each start their own vendor process. Muxterm stores only an enable marker; Work IQ owns sign-in, credentials, account selection, and tool behavior. Muxterm requests no Entra client secret or Microsoft token.
+
+The owner installs `@microsoft/workiq` in muxterm's PATH, accepts its EULA, and signs in through the CLI. An eligible tenant needs administrative consent, Copilot Credits billing, and an assigned user. The switch checks that the CLI executable is present, but it cannot verify tenant access. **Enabled** means new chats will be offered the command; it does not claim Microsoft authentication or tool readiness. Disabling affects new chats and does not revoke Work IQ's credentials.
+
+Work IQ's published tool set includes reads and mutations (`create`, `update`, `delete`, and `do-action`). Muxterm currently exposes the vendor tool set without per-service or read-only filtering. The three catalog rows are entry points to the same broad Microsoft 365 capability, not separate grants.
+
 ## Other services
 
-Microsoft and Google rows remain setup/discovery entries in this PR. Their provider-owned connection paths must be validated before the page can call them connected. Microsoft Work IQ may require tenant administration and usage billing; Google's Workspace service endpoints are in Developer Preview.
+Google Workspace endpoints are in Developer Preview. Their dedicated connection setup and access checks are documented in the follow-on Google presets change.
 
 ## User-supplied remote services
 
