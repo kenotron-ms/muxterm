@@ -39,6 +39,7 @@ import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
 import './components/mux-new-chat.js';
+import './components/mux-scheduled-jobs.js';
 import { homeSessions } from './lib/home-sessions.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -705,6 +706,9 @@ export class MuxApp extends LitElement {
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
   @state() private _newChatProject = '';
+  @state() private _newChatPrompt = '';
+  @state() private _jobEditorChatId = '';
+  @state() private _jobSuggestedBrief = '';
   @state() private _newChatKey = 0;
 
   /** The initial screen is selected once per page load. */
@@ -1461,12 +1465,12 @@ export class MuxApp extends LitElement {
     // They have no terminal and should not render as blank tiles.
     const panes = store.panes.filter((p) => p.paneId >= 0);
     const isWide = this._layoutMode === 'wide';
-    const selectedSDKChat = this._sdkChatId && this._sdkChatId !== 'new' ? this._sdkChatId : '';
+    const selectedSDKChat = this._sdkChatId && this._sdkChatId !== 'new' && this._sdkChatId !== 'jobs' ? this._sdkChatId : '';
 
     return html`
       ${!isWide ? html`<mux-title-bar
         .drawerOpen="${this._drawerOpen}"
-        .chatTitle="${this._sdkChatId === 'new' ? 'New Chat' : this._sdkChatId ? 'Chat' : ''}"
+        .chatTitle="${this._sdkChatId === 'new' ? 'New Chat' : this._sdkChatId === 'jobs' ? 'Scheduled jobs' : this._sdkChatId ? 'Chat' : ''}"
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
         @pane-create-request="${this._createPaneOptimistic}"
@@ -1477,12 +1481,14 @@ export class MuxApp extends LitElement {
         ${isWide ? html`
           <mux-sidebar
             .newChatActive="${this._sdkChatId === 'new'}"
+            .jobsActive="${this._sdkChatId === 'jobs'}"
             .selectedSDKChat="${selectedSDKChat}"
             .showLauncher="${!!this._sdkChatId}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @chat-open="${this._onChatOpen}"
             @home-open="${this._onHomeOpen}"
             @chat-new="${this._onChatNew}"
+            @jobs-open="${this._onJobsOpen}"
             @chat-new-project="${this._onChatNewProject}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
@@ -1527,8 +1533,9 @@ export class MuxApp extends LitElement {
                 ></mux-dock>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} @chat-created=${this._onChatOpen} @chat-cancel=${this._onChatCancel}></mux-new-chat>`) : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatOpen} @chat-cancel=${this._onChatCancel}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
+            <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} .suggestedBrief=${this._jobSuggestedBrief} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : html`
+            <mux-sdk-chat .sessionId=${this._sdkChatId} @job-create-request=${this._onJobCreateRequest}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -1544,12 +1551,14 @@ export class MuxApp extends LitElement {
             >
               <mux-sidebar
                 .newChatActive="${this._sdkChatId === 'new'}"
+                .jobsActive="${this._sdkChatId === 'jobs'}"
                 .selectedSDKChat="${selectedSDKChat}"
                 .previewsVisible="${this._drawerOpen}"
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @chat-open="${this._onChatOpen}"
                 @home-open="${this._onHomeOpen}"
                 @chat-new="${this._onChatNew}"
+                @jobs-open="${this._onJobsOpen}"
                 @chat-new-project="${this._onChatNewProject}"
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
@@ -2213,8 +2222,26 @@ export class MuxApp extends LitElement {
     this._newChatHarness = 'codex';
     this._newChatFolder = '';
     this._newChatProject = '';
+    this._newChatPrompt = '';
+    this._jobEditorChatId = '';
+    this._jobSuggestedBrief = '';
     this._sdkChatId = 'new';
     this._closeDrawer();
+  };
+  private _onJobNew = (): void => {
+    this._onChatNew();
+    this._newChatPrompt = 'Help me define a scheduled job. What should it do, when should it run, and how will we know it succeeded?';
+  };
+  private _onJobsOpen = (): void => {
+    this._jobEditorChatId = '';
+    this._jobSuggestedBrief = '';
+    this._sdkChatId = 'jobs';
+    this._closeDrawer();
+  };
+  private _onJobCreateRequest = (event: CustomEvent<{chatId:string; suggestedBrief?:string}>): void => {
+    this._jobEditorChatId = event.detail.chatId;
+    this._jobSuggestedBrief = event.detail.suggestedBrief || '';
+    this._sdkChatId = 'jobs';
   };
   private _onChatNewProject = (event: CustomEvent<{ projectId: string }>): void => {
     this._onChatNew();
@@ -2266,6 +2293,7 @@ export class MuxApp extends LitElement {
     const detail = (e as CustomEvent<{ sessionId: string }>).detail;
     if (!detail?.sessionId) return;
     this._sdkChatId = detail.sessionId;
+    this._jobEditorChatId = '';
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
     this._closeDrawer();
   };

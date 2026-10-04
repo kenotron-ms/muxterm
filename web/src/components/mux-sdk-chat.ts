@@ -47,6 +47,7 @@ type Attachment = { localId: string; file: File; id?: string; kind?: string; pre
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
   @state() private chat?: SDKChat;
+  @state() private scheduledJob?: { name:string; scheduleLabel?:string; schedule:string; timezone:string; enabled:boolean };
   @state() private blocks: Block[] = [];
   @state() private trajectory: SDKEvent[] = [];
   @state() private agentEvents: SDKEvent[] | null = null;
@@ -176,6 +177,8 @@ export class MuxSDKChat extends LitElement {
     .pane-controls button { border:1px solid transparent; border-radius:6px; background:transparent; color:var(--chrome-text-dim); padding:4px 8px; font-size:11px; }
     .pane-controls button:hover, .pane-controls button.active { border-color:var(--chrome-border); color:var(--chrome-text-bright); background:var(--chrome-hover); }
     .pane-controls button.active { color:var(--chrome-accent); }
+    .chat-title { min-width:0; overflow:hidden; }
+    .chat-title small { display:block; color:var(--chrome-text-dim); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .layout { display:flex; flex:1; min-height:0; }
     .layout.preview-focused .chat { display:none; }
     .layout.preview-focused .drawer { width:100%; flex:1; border-left:0; }
@@ -380,7 +383,18 @@ export class MuxSDKChat extends LitElement {
     this.idleSuspended = false;
     this.retryConnection();
   };
-  override willUpdate(changed: Map<string, unknown>) { if (changed.has('sessionId')) this.connect(); }
+  override willUpdate(changed: Map<string, unknown>) { if (changed.has('sessionId')) { this.connect(); void this.loadScheduledJob(); } }
+  private async loadScheduledJob() {
+    const id = this.sessionId;
+    this.scheduledJob = undefined;
+    if (!id) return;
+    try {
+      const response = await fetch(apiPath('/api/sdk-jobs'));
+      if (!response.ok) return;
+      const jobs = await response.json() as { chatId:string; name:string; scheduleLabel?:string; schedule:string; timezone:string; enabled:boolean }[];
+      if (this.sessionId === id) this.scheduledJob = jobs.find(job => job.chatId === id);
+    } catch { /* Chat remains usable if job metadata is unavailable. */ }
+  }
   override updated(changed: Map<string, unknown>) {
     if (changed.has('draft')) this.sizeTextarea();
     this.rowObserver.disconnect();
@@ -1512,7 +1526,7 @@ export class MuxSDKChat extends LitElement {
   override render() {
     const agents = this.agents();
     return html`
-    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<h1 title=${this.chat?.title || 'Chat'}>${this.chat?.title || 'Chat'}</h1>`}<div class="pane-controls" role="group" aria-label="Chat pane layout"><button class=${!this.drawerOpen ? 'active' : ''} aria-pressed=${!this.drawerOpen} @click=${() => this.setPaneMode('chat')}>Chat</button><button class=${this.drawerOpen && !this.previewFocused ? 'active' : ''} aria-pressed=${this.drawerOpen && !this.previewFocused} @click=${() => this.setPaneMode('split')}>Split</button><button class=${this.previewFocused ? 'active' : ''} aria-pressed=${this.previewFocused} @click=${() => this.setPaneMode('preview')}>Preview</button><button aria-label="Open project files" title="Open project files" @click=${this.openFiles}>Files</button></div></div>
+    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div class="chat-title"><h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1>${this.scheduledJob ? html`<small>${this.scheduledJob.enabled ? `${this.scheduledJob.scheduleLabel || this.scheduledJob.schedule} · ${this.scheduledJob.timezone}` : 'Schedule paused'}</small>` : nothing}</div>`}<div class="pane-controls" role="group" aria-label="Chat pane layout"><button class=${!this.drawerOpen ? 'active' : ''} aria-pressed=${!this.drawerOpen} @click=${() => this.setPaneMode('chat')}>Chat</button><button class=${this.drawerOpen && !this.previewFocused ? 'active' : ''} aria-pressed=${this.drawerOpen && !this.previewFocused} @click=${() => this.setPaneMode('split')}>Split</button><button class=${this.previewFocused ? 'active' : ''} aria-pressed=${this.previewFocused} @click=${() => this.setPaneMode('preview')}>Preview</button><button aria-label="Open project files" title="Open project files" @click=${this.openFiles}>Files</button><button aria-label=${this.scheduledJob ? 'Edit scheduled job' : 'Schedule this chat'} title=${this.scheduledJob ? 'Edit scheduled job' : 'Schedule this chat'} @click=${() => this.dispatchEvent(new CustomEvent('job-create-request',{bubbles:true,composed:true,detail:{chatId:this.sessionId,suggestedBrief:[...this.blocks].reverse().find(block=>block.kind==='assistant'&&block.text.trim())?.text.slice(0,10000)||''}}))}>${this.scheduledJob ? 'Job settings' : 'Schedule'}</button></div></div>
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<div class="agent-history-error" role="alert">Saved agent work could not be loaded. <button @click=${this.retryAgentHistory}>Retry</button></div>` : nothing}
       ${this.recoveryRequired ? html`<div class="recovery" role="alert"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}

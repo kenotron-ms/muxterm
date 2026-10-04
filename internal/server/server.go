@@ -143,6 +143,7 @@ type Server struct {
 
 	sdkChats           *sdkChatHost
 	sdkChatAttachments *chatattachments.Store
+	sdkJobs            *sdkJobs
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -167,6 +168,7 @@ func New(cfg Config) *Server {
 		version:        cfg.Version,
 	}
 	s.sdkChats = newSDKChatHost()
+	s.sdkJobs = newSDKJobs(s.sdkChats)
 	attachmentRoot, err := chatattachments.DefaultRoot()
 	if err != nil {
 		log.Panicf("sdk chat attachment root: %v", err)
@@ -265,10 +267,16 @@ func New(cfg Config) *Server {
 			log.Printf("sdk voice: unavailable: %v", err)
 		} else {
 			s.sdkVoice = chatVoice
-			s.sdkChats.onEvent = chatVoice.onChatEvent
+			s.sdkChats.onEvent = func(event sdkEvent) {
+				chatVoice.onChatEvent(event)
+				s.sdkJobs.onChatEvent(event)
+			}
 			s.mux.Handle("POST /api/sdk-chats/{id}/voice/sdp", protect(http.HandlerFunc(s.handleSDKVoiceSDP)))
 			s.mux.Handle("POST /api/sdk-chats/{id}/voice/end", protect(http.HandlerFunc(s.handleSDKVoiceEnd)))
 		}
+	}
+	if s.sdkChats.onEvent == nil {
+		s.sdkChats.onEvent = s.sdkJobs.onChatEvent
 	}
 
 	// Voice CREDENTIALS, registered unconditionally -- unlike the routes
@@ -315,6 +323,13 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/remotes/{id}/provision", protect(http.HandlerFunc(s.handleRemotesProvision)))
 
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
+	s.mux.Handle("GET /api/sdk-jobs", protect(http.HandlerFunc(s.handleSDKJobs)))
+	s.mux.Handle("POST /api/sdk-jobs", protect(http.HandlerFunc(s.handleSDKJobs)))
+	s.mux.Handle("GET /api/sdk-jobs/{id}", protect(http.HandlerFunc(s.handleSDKJob)))
+	s.mux.Handle("PATCH /api/sdk-jobs/{id}", protect(http.HandlerFunc(s.handleSDKJob)))
+	s.mux.Handle("POST /api/sdk-jobs/{id}/run", protect(http.HandlerFunc(s.handleSDKJobRun)))
+	s.mux.Handle("GET /api/sdk-jobs/{id}/runs", protect(http.HandlerFunc(s.handleSDKJobRuns)))
+	s.mux.Handle("GET /api/sdk-jobs/{id}/runs/{run}", protect(http.HandlerFunc(s.handleSDKJobRunDetail)))
 	s.mux.Handle("GET /api/sdk-chat-start-options", protect(http.HandlerFunc(s.handleSDKChatStartOptions)))
 	s.mux.Handle("GET /api/sdk-chat-names/events", protect(http.HandlerFunc(s.handleSDKChatNameEvents)))
 	s.mux.Handle("GET /api/sdk-chats/search-content", protect(http.HandlerFunc(s.handleSDKChatContentSearch)))
@@ -363,6 +378,7 @@ func (s *Server) Handler() http.Handler {
 // It performs a graceful shutdown with a 5-second timeout and returns nil
 // when the server closes normally.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	go s.sdkJobs.loop(ctx)
 	srv := &http.Server{
 		Addr:    s.addr,
 		Handler: s.mux,
