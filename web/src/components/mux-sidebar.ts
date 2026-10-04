@@ -616,10 +616,7 @@ export class MuxSidebar extends LitElement {
          resting bezel is mixed toward --chrome-text-dim for ~1.8:1 in both
          light and dark. */
       border-color: color-mix(in srgb, var(--chrome-border) 60%, var(--chrome-text-dim));
-      /* Lifts the card off the panel so it reads as a screen sitting ON the
-         sidebar rather than a region cut out of it. */
-      box-shadow: 0 1px 3px -1px rgba(0, 0, 0, 0.5);
-      transition: border-color 0.12s, box-shadow 0.12s;
+      transition: border-color 0.12s;
     }
 
     .ws-card.preview:hover,
@@ -633,7 +630,6 @@ export class MuxSidebar extends LitElement {
 
     .ws-card.preview.active {
       border-color: var(--chrome-accent);
-      box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--chrome-accent) 40%, transparent);
     }
 
     /* Home is the view on screen. The attached workspace is still attached --
@@ -944,7 +940,6 @@ export class MuxSidebar extends LitElement {
 
     .ws-card.preview.remote.active {
       border-color: var(--remote);
-      box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--remote) 40%, transparent);
     }
 
     .ws-card.remote .dot.active {
@@ -1206,35 +1201,42 @@ export class MuxSidebar extends LitElement {
       padding: 0 6px 0 3px;
       margin: 0;
       border: 0;
-      border-radius: 3px;
+      border-radius: 6px;
       background: transparent;
       box-shadow: none;
       overflow: visible;
-      cursor: grab;
-      transition: background 0.12s, box-shadow 0.12s, transform 0.12s;
+      cursor: pointer;
+      transition: none;
     }
-    .ws-card:hover { background: var(--sidebar-hover); }
+    .ws-card:hover,
+    .ws-card.preview:hover { background: var(--sidebar-hover); }
     .ws-card.active,
-    .ws-card.dragging { opacity: 0.95; background: color-mix(in srgb, var(--chrome-accent) 13%, var(--chrome-bar)); box-shadow: 0 12px 28px rgba(0,0,0,.6); z-index: 3; transform: translateY(8px); cursor: grabbing; }
-    .ws-card.drop-before::before { content: ''; position: absolute; left: 4px; right: 4px; top: -2px; height: 3px; border-radius: 4px; background: var(--chrome-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--chrome-accent) 13%, transparent); }
+    .ws-card.preview.active,
+    .ws-card.preview.remote.active {
+      background: color-mix(in srgb, var(--chrome-accent) 18%, var(--chrome-bar));
+      box-shadow: none;
+      transform: none;
+    }
+    .ws-card.dragging { opacity: 0.95; cursor: grabbing; }
+    .ws-card.drop-before::before { content: ''; position: absolute; left: 4px; right: 4px; top: -2px; height: 3px; border-radius: 4px; background: var(--chrome-accent); }
     .ws-header { display: contents; }
     .dot {
       grid-column: 1;
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       justify-self: center;
       border-radius: 50%;
       font-size: 0;
       background: var(--chrome-text-dim);
-      box-shadow: 0 0 0 4px color-mix(in srgb, var(--chrome-text-dim) 12%, transparent);
+      box-shadow: none;
     }
-    .dot.active { background: var(--chrome-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--chrome-accent) 12%, transparent); }
+    .dot.active { background: var(--chrome-accent); }
     .dot.bell,
-    .dot.needs { background: var(--mux-warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--mux-warn) 12%, transparent); }
-    .dot.working { background: var(--chrome-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--chrome-accent) 12%, transparent); }
-    .dot.blocked { background: var(--mux-warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--mux-warn) 12%, transparent); }
-    .dot.done { background: var(--mux-ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--mux-ok) 12%, transparent); }
-    .dot.failed { background: var(--mux-error); box-shadow: 0 0 0 4px color-mix(in srgb, var(--mux-error) 12%, transparent); }
+    .dot.needs { background: var(--mux-warn); }
+    .dot.working { background: var(--chrome-accent); }
+    .dot.blocked { background: var(--mux-warn); }
+    .dot.done { background: var(--mux-ok); }
+    .dot.failed { background: var(--mux-error); }
     .dot.stopped { background: var(--chrome-text-dim); }
     .ws-name {
       grid-column: 2;
