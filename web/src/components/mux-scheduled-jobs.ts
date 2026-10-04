@@ -3,7 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 
-type Job = { id:string; chatId:string; name:string; brief:string; revision:number; schedule:string; scheduleLabel?:string; timezone:string; enabled:boolean; nextRun?:string; activeRunId?:string; lastRunId?:string; createdAt:string };
+type Job = { id:string; chatId:string; name:string; brief:string; revision:number; schedule:string; scheduleLabel?:string; timezone:string; enabled:boolean; nextRun?:string; activeRunId?:string; lastRunId?:string; latestRun?:Run; createdAt:string };
 type Log = { at:string; kind:string; message:string };
 type Run = { id:string; jobId:string; chatId:string; trigger:string; scheduledAt?:string; revision:number; status:string; startedAt:string; finishedAt?:string; summary?:string; logs?:Log[] };
 function timeLabel(value?: string): string { return value ? new Date(value).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'}) : '—'; }
@@ -109,15 +109,16 @@ export class MuxScheduledJobs extends LitElement {
       const jobs = await this.request<Job[]>('/api/sdk-jobs');
       await sdkChats.refresh();
       this.jobs = jobs;
-      const results = await Promise.all(jobs.map(async job => [job.id, await this.request<Run[]>(`/api/sdk-jobs/${job.id}/runs`)] as const));
-      this.runs = Object.fromEntries(results);
+      if (this.selectedJob && jobs.some(job => job.id === this.selectedJob)) {
+        this.runs = {...this.runs, [this.selectedJob]: await this.request<Run[]>(`/api/sdk-jobs/${this.selectedJob}/runs`)};
+      }
       if (this.selectedJob && !jobs.some(job => job.id === this.selectedJob)) this.selectedJob = '';
     } catch (error) { this.error = error instanceof Error ? error.message : String(error); }
   }
   private chatFor(job:Job):SDKChat|undefined { return sdkChats.chats.find(chat => chat.id === job.chatId); }
-  private latest(job:Job):Run|undefined { return this.runs[job.id]?.[0]; }
+  private latest(job:Job):Run|undefined { return job.latestRun; }
   private status(job:Job):string { const latest=this.latest(job); return job.activeRunId ? 'Running' : latest && ['failed','outcome-unknown'].includes(latest.status) ? 'Needs attention' : !job.enabled ? 'Paused' : 'Active'; }
-  private async openHistory(job:Job) { this.selectedJob=job.id; this.detail=undefined; await this.loadRun(this.runs[job.id]?.[0]); }
+  private async openHistory(job:Job) { this.selectedJob=job.id; this.detail=undefined; await this.refresh(); await this.loadRun(this.runs[job.id]?.[0]); }
   private async loadRun(run?:Run) { if (!run) { this.detail=undefined; return; } try { this.detail=await this.request<Run>(`/api/sdk-jobs/${run.jobId}/runs/${run.id}`); } catch(error) { this.error=String(error); } }
   private async runNow(job:Job) { this.busy=job.id; this.error=''; try { await this.request<Run>(`/api/sdk-jobs/${job.id}/run`,{method:'POST'}); await this.refresh(); await this.openHistory(job); } catch(error) { this.error=String(error); } finally { this.busy=''; } }
   private async toggle(job:Job) { this.busy=job.id; this.error=''; try { await this.request<Job>(`/api/sdk-jobs/${job.id}`,{method:'PATCH',body:JSON.stringify({enabled:!job.enabled})}); await this.refresh(); } catch(error) { this.error=String(error); } finally { this.busy=''; } }

@@ -60,6 +60,11 @@ type sdkJobRun struct {
 	Logs        []sdkJobLog `json:"logs"`
 }
 
+type sdkJobSummary struct {
+	sdkJob
+	LatestRun *sdkJobRun `json:"latestRun,omitempty"`
+}
+
 type sdkJobs struct {
 	mu         sync.Mutex
 	ctx        context.Context
@@ -196,7 +201,25 @@ func newSDKJobs(chats *sdkChatHost) *sdkJobs {
 		}
 		_ = manager.saveJobLocked(job)
 	}
+	manager.pruneRunsLocked()
 	return manager
+}
+
+// Keep recent run summaries and active runs in memory. Completed run files stay
+// on disk, so the process footprint does not grow for the lifetime of a job.
+func (m *sdkJobs) pruneRunsLocked() {
+	byJob := make(map[string][]*sdkJobRun)
+	for _, run := range m.runs {
+		byJob[run.JobID] = append(byJob[run.JobID], run)
+	}
+	for jobID, runs := range byJob {
+		sort.Slice(runs, func(i, j int) bool { return runs[i].StartedAt.After(runs[j].StartedAt) })
+		for i, run := range runs {
+			if i >= 300 && run.ID != m.jobs[jobID].ActiveRunID && run.ID != m.jobs[jobID].LastRunID && run.FinishedAt != nil {
+				delete(m.runs, run.ID)
+			}
+		}
+	}
 }
 
 func (m *sdkJobs) saveJobLocked(job *sdkJob) error {
@@ -242,6 +265,7 @@ func (m *sdkJobs) finishLocked(job *sdkJob, run *sdkJobRun, status, summary stri
 		*job = previousJob
 		log.Printf("scheduled job %s: cannot persist completed run pointer: %v", job.ID, err)
 	}
+	m.pruneRunsLocked()
 }
 func (m *sdkJobs) onChatEvent(event sdkEvent) {
 	m.mu.Lock()
@@ -322,8 +346,25 @@ func (m *sdkJobs) onChatEvent(event sdkEvent) {
 }
 
 func (m *sdkJobs) startRun(jobID, trigger string, occurrence *time.Time) (*sdkJobRun, error) {
+	// Read the chat state before taking the jobs lock. No code path should need
+	// to acquire the chat lock while holding the jobs lock.
 	m.mu.Lock()
 	job := m.jobs[jobID]
+	if job == nil {
+		m.mu.Unlock()
+		return nil, errors.New("job not found")
+	}
+	chatID := job.ChatID
+	m.mu.Unlock()
+	m.chats.mu.Lock()
+	chat := m.chats.chats[chatID]
+	state := ""
+	if chat != nil {
+		state = chat.State
+	}
+	m.chats.mu.Unlock()
+	m.mu.Lock()
+	job = m.jobs[jobID]
 	if job == nil {
 		m.mu.Unlock()
 		return nil, errors.New("job not found")
@@ -340,14 +381,7 @@ func (m *sdkJobs) startRun(jobID, trigger string, occurrence *time.Time) (*sdkJo
 		m.mu.Unlock()
 		return nil, errors.New("a run is already active")
 	}
-	m.chats.mu.Lock()
-	chat := m.chats.chats[job.ChatID]
-	var state string
-	if chat != nil {
-		state = chat.State
-	}
-	m.chats.mu.Unlock()
-	if chat == nil {
+	if chat == nil || job.ChatID != chatID {
 		m.mu.Unlock()
 		return nil, errors.New("job chat is missing")
 	}
@@ -443,8 +477,18 @@ func (m *sdkJobs) tick(now time.Time) {
 	}
 	due := []dueJob{}
 	m.mu.Lock()
-	for _, job := range m.jobs {
+	ids := make([]string, 0, len(m.jobs))
+	for id := range m.jobs {
+		ids = append(ids, id)
+	}
+	m.mu.Unlock()
+	// Persist each due occurrence separately so one slow disk write does not
+	// hold event delivery behind every other job due at the same instant.
+	for _, id := range ids {
+		m.mu.Lock()
+		job := m.jobs[id]
 		if !job.Enabled || job.NextRun.IsZero() || job.NextRun.After(now) {
+			m.mu.Unlock()
 			continue
 		}
 		previous := *job
@@ -460,11 +504,12 @@ func (m *sdkJobs) tick(now time.Time) {
 		job.UpdatedAt = now
 		if err := m.saveJobLocked(job); err != nil {
 			*job = previous
+			m.mu.Unlock()
 			continue
 		}
 		due = append(due, dueJob{job.ID, occurrence})
+		m.mu.Unlock()
 	}
-	m.mu.Unlock()
 	for _, entry := range due {
 		if _, err := m.startRun(entry.id, "schedule", &entry.occurrence); err != nil {
 			if errors.Is(err, errJobOccurrenceRecorded) {
@@ -484,9 +529,20 @@ func (s *Server) handleSDKJobs(w http.ResponseWriter, r *http.Request) {
 	m := s.sdkJobs
 	if r.Method == http.MethodGet {
 		m.mu.Lock()
-		rows := make([]sdkJob, 0, len(m.jobs))
+		rows := make([]sdkJobSummary, 0, len(m.jobs))
 		for _, job := range m.jobs {
-			rows = append(rows, *job)
+			summary := sdkJobSummary{sdkJob: *job}
+			if run := m.runs[job.LastRunID]; run != nil {
+				copy := *run
+				copy.Logs = nil
+				summary.LatestRun = &copy
+			}
+			if run := m.runs[job.ActiveRunID]; run != nil {
+				copy := *run
+				copy.Logs = nil
+				summary.LatestRun = &copy
+			}
+			rows = append(rows, summary)
 		}
 		m.mu.Unlock()
 		sort.Slice(rows, func(i, j int) bool { return rows[i].CreatedAt.After(rows[j].CreatedAt) })
