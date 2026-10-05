@@ -19,6 +19,9 @@ const githubMcpEnv = Object.fromEntries(['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_
   .filter(key => process.env[key]).map(key => [key, process.env[key]]));
 const githubMarker = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'github-enabled');
 const remoteConnectionFile = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'remote.json');
+const microsoftRoot = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'microsoft-graph');
+const microsoftMcpEnv = Object.fromEntries(['PATH', 'HOME', 'XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
+  .filter(key => process.env[key]).map(key => [key, process.env[key]]));
 const emit = (sessionId, type, data = {}) => broadcast({ v: 1, event: { sessionId, type, ...data } });
 function broadcast(message) {
   const line = JSON.stringify(message) + '\n';
@@ -78,6 +81,8 @@ async function runClaude(s) {
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, additionalDirectories: s.sourceFolders, resume: s.nativeId || undefined,
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: muxtermMcpEnv },
       ...(existsSync(githubMarker) ? { github: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'github'], env: githubMcpEnv } } : {}),
+      ...(existsSync(join(microsoftRoot, 'personal', 'enabled')) ? { microsoft_personal: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'microsoft-personal'], env: microsoftMcpEnv } } : {}),
+      ...(existsSync(join(microsoftRoot, 'work', 'enabled')) ? { microsoft_work: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'microsoft-work'], env: microsoftMcpEnv } } : {}),
       ...(existsSync(remoteConnectionFile) ? { remote: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'remote'], env: muxtermMcpEnv } } : {}) },
     includePartialMessages: true, permissionMode: s.permission === 'read-only' ? 'plan' : 'bypassPermissions', allowDangerouslySkipPermissions: true,
     thinking: { type: 'adaptive', display: 'summarized' }, effort: 'high', maxTurns: 20 } });

@@ -1,0 +1,482 @@
+package server
+
+import (
+	"context"
+	"embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// The existing community MCP server owns Graph tools, MSAL, and token refresh.
+// Muxterm pins its package and limits the exposed surface to read-only mail,
+// calendar, and files. The vendor's public client is used; no Muxterm OAuth
+// registration or client secret is needed.
+const microsoftGraphVersion = "0.158.0"
+
+//go:embed ms365-package/package.json ms365-package/package-lock.json
+var microsoftGraphInstallFiles embed.FS
+
+var microsoftGraphArgs = []string{
+	"--preset", "mail,calendar,files", "--read-only",
+	"--allowed-scopes", "Calendars.Read Files.Read Mail.Read MailboxSettings.Read User.Read",
+	"--enabled-tools", "^(?!download-bytes-to-file$).*",
+}
+
+type microsoftGraphProfile struct {
+	name, tenant string
+	mu           sync.Mutex
+	cancel       context.CancelFunc
+	generation   uint64
+	loginState   string
+	code         string
+	errorMessage string
+	toolCount    int
+	checkedAt    time.Time
+}
+
+var microsoftGraphProfiles = map[string]*microsoftGraphProfile{
+	"personal": {name: "personal", tenant: "consumers"},
+	"work":     {name: "work", tenant: "organizations"},
+}
+
+var microsoftGraphInstallMu sync.Mutex
+var microsoftGraphCode = regexp.MustCompile(`(?i)enter the code\s+([A-Z0-9-]{6,14})\b`)
+
+func microsoftGraphRoot() string {
+	return filepath.Join(sdkDataDir(), "connections", "microsoft-graph")
+}
+
+func microsoftGraphPackageDir() string {
+	return filepath.Join(microsoftGraphRoot(), "dependencies", microsoftGraphVersion)
+}
+
+func microsoftGraphEntry() string {
+	return filepath.Join(microsoftGraphPackageDir(), "node_modules", "@softeria", "ms-365-mcp-server", "dist", "index.js")
+}
+
+func microsoftGraphProfileDir(name string) string {
+	return filepath.Join(microsoftGraphRoot(), name)
+}
+
+func microsoftGraphMarker(name string) string {
+	return filepath.Join(microsoftGraphProfileDir(name), "enabled")
+}
+
+func microsoftGraphEnabled(name string) bool {
+	_, err := os.Stat(microsoftGraphMarker(name))
+	return err == nil
+}
+
+func microsoftGraphEnvironment(p *microsoftGraphProfile) []string {
+	env := make([]string, 0, len(os.Environ())+5)
+	for _, item := range os.Environ() {
+		key, _, _ := strings.Cut(item, "=")
+		// Inherited vendor settings must never change the client, account
+		// authority, cache, or the fixed tool and scope surface.
+		if strings.HasPrefix(strings.ToUpper(key), "MS365_MCP_") || key == "XDG_CONFIG_HOME" {
+			continue
+		}
+		env = append(env, item)
+	}
+	authDir := filepath.Join(microsoftGraphProfileDir(p.name), "auth")
+	return append(env,
+		"XDG_CONFIG_HOME="+authDir,
+		"MS365_MCP_TENANT_ID="+p.tenant,
+		"MS365_MCP_TOKEN_CACHE_PATH="+filepath.Join(authDir, ".token-cache.json"),
+		"MS365_MCP_SELECTED_ACCOUNT_PATH="+filepath.Join(authDir, ".selected-account.json"),
+		"MS365_MCP_USE_KEYTAR=0",
+	)
+}
+
+func microsoftGraphCommand(ctx context.Context, p *microsoftGraphProfile, extra ...string) (*exec.Cmd, error) {
+	if _, err := os.Stat(microsoftGraphEntry()); err != nil {
+		return nil, errors.New("Microsoft service needs setup in Connections")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		return nil, errors.New("Node.js is required for the Microsoft service")
+	}
+	args := []string{microsoftGraphEntry()}
+	args = append(args, microsoftGraphArgs...)
+	args = append(args, extra...)
+	cmd := exec.CommandContext(ctx, node, args...)
+	cmd.Dir = microsoftGraphPackageDir() // Do not load a project-local .env.
+	cmd.Env = microsoftGraphEnvironment(p)
+	return cmd, nil
+}
+
+func ensureMicrosoftGraphPackage(ctx context.Context) error {
+	microsoftGraphInstallMu.Lock()
+	defer microsoftGraphInstallMu.Unlock()
+	if info, err := os.Stat(microsoftGraphEntry()); err == nil && info.Mode().IsRegular() {
+		return nil
+	}
+	npm, err := exec.LookPath("npm")
+	if err != nil {
+		return errors.New("Node.js and npm are required to set up the Microsoft service")
+	}
+	parent := filepath.Dir(microsoftGraphPackageDir())
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(parent, ".install-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	for _, name := range []string{"package.json", "package-lock.json"} {
+		data, err := microsoftGraphInstallFiles.ReadFile("ms365-package/" + name)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(tmp, name), data, 0600); err != nil {
+			return err
+		}
+	}
+	cmd := exec.CommandContext(ctx, npm, "ci", "--prefix", tmp, "--omit=optional", "--ignore-scripts", "--no-audit", "--no-fund")
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if err := cmd.Run(); err != nil {
+		return errors.New("Microsoft service download failed")
+	}
+	entry := filepath.Join(tmp, "node_modules", "@softeria", "ms-365-mcp-server", "dist", "index.js")
+	if _, err := os.Stat(entry); err != nil {
+		return errors.New("Microsoft service package was incomplete")
+	}
+	if err := os.RemoveAll(microsoftGraphPackageDir()); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, microsoftGraphPackageDir()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func microsoftGraphDataTool(name string) bool {
+	switch name {
+	case "login", "logout", "verify-login", "list-accounts", "select-account", "remove-account", "download-bytes-to-file":
+		return false
+	default:
+		return true
+	}
+}
+
+// RunMicrosoftGraphMCP forwards only data tools from the installed community
+// server. Sign-in and sign-out remain owned by Connections, not chat agents.
+func RunMicrosoftGraphMCP(ctx context.Context, name string) error {
+	p := microsoftGraphProfiles[name]
+	if p == nil || !microsoftGraphEnabled(name) {
+		return errors.New("Microsoft account is disabled in Connections")
+	}
+	cmd, err := microsoftGraphCommand(ctx, p)
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = io.Discard
+	client := mcp.NewClient(&mcp.Implementation{Name: "muxterm-microsoft-bridge", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		return errors.New("Microsoft's local service could not start")
+	}
+	defer session.Close()
+	tools, err := listRemoteTools(ctx, session)
+	if err != nil {
+		return errors.New("Microsoft tools could not be listed")
+	}
+	local := mcp.NewServer(&mcp.Implementation{Name: "muxterm-microsoft-connection", Version: "1"}, nil)
+	for _, tool := range tools {
+		if tool == nil || !microsoftGraphDataTool(tool.Name) || !validRemoteToolSchema(tool.InputSchema) ||
+			(tool.OutputSchema != nil && !validRemoteToolSchema(tool.OutputSchema)) {
+			continue
+		}
+		copy := *tool
+		original := tool.Name
+		local.AddTool(&copy, func(callCtx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if !microsoftGraphEnabled(name) {
+				return nil, errors.New("Microsoft account is disabled in Connections")
+			}
+			bounded, cancel := context.WithTimeout(callCtx, 2*time.Minute)
+			defer cancel()
+			return session.CallTool(bounded, &mcp.CallToolParams{Name: original, Arguments: json.RawMessage(request.Params.Arguments)})
+		})
+	}
+	return local.Run(ctx, &mcp.StdioTransport{})
+}
+
+func microsoftGraphPublicState(p *microsoftGraphProfile) map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state := "disconnected"
+	if microsoftGraphEnabled(p.name) {
+		state = "ready"
+	}
+	if p.errorMessage != "" {
+		state = "needs-attention"
+	}
+	if p.cancel != nil || p.loginState == "installing" {
+		state = "pending"
+	}
+	return map[string]any{
+		"state": state, "loginState": p.loginState, "userCode": p.code,
+		"verificationUrl": "https://www.microsoft.com/link", "error": p.errorMessage,
+		"toolCount": p.toolCount, "checkedAt": p.checkedAt,
+	}
+}
+
+func (s *Server) handleMicrosoftGraph(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeSDKJSON(w, http.StatusOK, map[string]any{
+		"personal": microsoftGraphPublicState(microsoftGraphProfiles["personal"]),
+		"work":     microsoftGraphPublicState(microsoftGraphProfiles["work"]),
+	})
+}
+
+type microsoftGraphLoginOutput struct {
+	p          *microsoftGraphProfile
+	generation uint64
+	mu         sync.Mutex
+	tail       string
+}
+
+func (o *microsoftGraphLoginOutput) Write(data []byte) (int, error) {
+	o.mu.Lock()
+	o.tail += string(data)
+	if len(o.tail) > 4096 {
+		o.tail = o.tail[len(o.tail)-4096:]
+	}
+	if matches := microsoftGraphCode.FindStringSubmatch(o.tail); len(matches) == 2 {
+		o.p.mu.Lock()
+		if o.p.generation == o.generation && o.p.cancel != nil {
+			o.p.code = strings.ToUpper(matches[1])
+			o.p.loginState = "pending"
+		}
+		o.p.mu.Unlock()
+	}
+	o.mu.Unlock()
+	return len(data), nil
+}
+
+func (o *microsoftGraphLoginOutput) result() (bool, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	blocked := strings.Contains(o.tail, "53003")
+	lines := strings.Split(o.tail, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var status struct {
+			Success *bool `json:"success"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(lines[i])), &status) == nil && status.Success != nil {
+			return *status.Success, blocked
+		}
+	}
+	return false, blocked
+}
+
+func (s *Server) handleMicrosoftGraphConnect(w http.ResponseWriter, r *http.Request) {
+	p := microsoftGraphProfiles[r.PathValue("account")]
+	if p == nil {
+		http.Error(w, "unknown Microsoft account type", http.StatusNotFound)
+		return
+	}
+	p.mu.Lock()
+	if p.cancel != nil {
+		p.mu.Unlock()
+		http.Error(w, "Microsoft sign-in is already running", http.StatusConflict)
+		return
+	}
+	p.loginState, p.code, p.errorMessage = "installing", "", ""
+	p.generation++
+	generation := p.generation
+	p.mu.Unlock()
+	installCtx, stop := context.WithTimeout(r.Context(), 4*time.Minute)
+	err := ensureMicrosoftGraphPackage(installCtx)
+	stop()
+	if err != nil {
+		p.mu.Lock()
+		if p.generation == generation {
+			p.loginState, p.errorMessage = "error", err.Error()
+		}
+		p.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := os.MkdirAll(microsoftGraphProfileDir(p.name), 0700); err != nil {
+		http.Error(w, "Microsoft connection settings could not be saved", http.StatusInternalServerError)
+		return
+	}
+	loginCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	p.mu.Lock()
+	if p.generation != generation {
+		p.mu.Unlock()
+		cancel()
+		http.Error(w, "Microsoft sign-in changed", http.StatusConflict)
+		return
+	}
+	p.cancel, p.loginState = cancel, "waiting"
+	p.mu.Unlock()
+	cmd, err := microsoftGraphCommand(loginCtx, p, "--login")
+	if err != nil {
+		cancel()
+		p.mu.Lock()
+		p.cancel, p.loginState, p.errorMessage = nil, "error", err.Error()
+		p.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	output := &microsoftGraphLoginOutput{p: p, generation: generation}
+	cmd.Stdout, cmd.Stderr = output, output
+	if err := cmd.Start(); err != nil {
+		cancel()
+		p.mu.Lock()
+		p.cancel, p.loginState, p.errorMessage = nil, "error", "Microsoft sign-in could not start"
+		p.mu.Unlock()
+		http.Error(w, "Microsoft sign-in could not start", http.StatusBadGateway)
+		return
+	}
+	go func() {
+		runErr := cmd.Wait()
+		success, blocked := output.result()
+		count := 0
+		if runErr == nil && success {
+			checkCtx, checkCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			count, runErr = checkMicrosoftGraphTools(checkCtx, p)
+			checkCancel()
+		} else if runErr == nil {
+			runErr = errors.New("Microsoft sign-in could not be verified")
+		}
+		p.mu.Lock()
+		if p.generation == generation {
+			if runErr == nil {
+				runErr = os.WriteFile(microsoftGraphMarker(p.name), []byte("enabled\n"), 0600)
+			}
+			p.cancel, p.code = nil, ""
+			p.loginState = "complete"
+			if runErr != nil {
+				p.loginState = "error"
+				p.errorMessage = "Microsoft sign-in failed; try again"
+				if blocked {
+					p.errorMessage = "Your organization blocked this app (53003). Ask your Microsoft 365 administrator to review the sign-in policy."
+				}
+			} else {
+				p.errorMessage, p.toolCount, p.checkedAt = "", count, time.Now()
+			}
+		}
+		p.mu.Unlock()
+		cancel()
+	}()
+	writeSDKJSON(w, http.StatusOK, microsoftGraphPublicState(p))
+}
+
+func checkMicrosoftGraphTools(ctx context.Context, p *microsoftGraphProfile) (int, error) {
+	cmd, err := microsoftGraphCommand(ctx, p)
+	if err != nil {
+		return 0, err
+	}
+	cmd.Stderr = io.Discard
+	client := mcp.NewClient(&mcp.Implementation{Name: "muxterm-microsoft-check", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer session.Close()
+	tools, err := listRemoteTools(ctx, session)
+	if err != nil {
+		return 0, errors.New("Microsoft service returned no tools")
+	}
+	count := 0
+	for _, tool := range tools {
+		if tool != nil && microsoftGraphDataTool(tool.Name) {
+			count++
+		}
+	}
+	if count == 0 {
+		return 0, errors.New("Microsoft service returned no data tools")
+	}
+	// Tool listing proves only that the selected package and preset start. The
+	// vendor CLI separately reports whether its own sign-in check succeeded.
+	return count, nil
+}
+
+func (s *Server) handleMicrosoftGraphCheck(w http.ResponseWriter, r *http.Request) {
+	p := microsoftGraphProfiles[r.PathValue("account")]
+	if p == nil || !microsoftGraphEnabled(p.name) {
+		http.Error(w, "Microsoft account is not connected", http.StatusNotFound)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	cmd, err := microsoftGraphCommand(ctx, p, "--verify-login")
+	if err != nil {
+		http.Error(w, "Microsoft service is unavailable", http.StatusBadGateway)
+		return
+	}
+	cmd.Stderr = io.Discard
+	output, err := cmd.Output()
+	var result struct {
+		Success bool `json:"success"`
+	}
+	if err != nil || json.Unmarshal(output, &result) != nil || !result.Success {
+		p.mu.Lock()
+		p.errorMessage = "Microsoft authorization needs another sign-in"
+		p.mu.Unlock()
+		http.Error(w, "Microsoft authorization needs another sign-in", http.StatusBadGateway)
+		return
+	}
+	count, err := checkMicrosoftGraphTools(ctx, p)
+	if err != nil {
+		http.Error(w, "Microsoft tools could not be reached", http.StatusBadGateway)
+		return
+	}
+	p.mu.Lock()
+	p.errorMessage, p.toolCount, p.checkedAt = "", count, time.Now()
+	p.mu.Unlock()
+	writeSDKJSON(w, http.StatusOK, microsoftGraphPublicState(p))
+}
+
+func (s *Server) handleMicrosoftGraphDisconnect(w http.ResponseWriter, r *http.Request) {
+	p := microsoftGraphProfiles[r.PathValue("account")]
+	if p == nil {
+		http.Error(w, "unknown Microsoft account type", http.StatusNotFound)
+		return
+	}
+	p.mu.Lock()
+	p.generation++
+	if p.cancel != nil {
+		p.cancel()
+	}
+	p.cancel, p.code, p.loginState, p.errorMessage = nil, "", "", ""
+	p.toolCount, p.checkedAt = 0, time.Time{}
+	p.mu.Unlock()
+	if err := os.RemoveAll(microsoftGraphProfileDir(p.name)); err != nil {
+		http.Error(w, fmt.Sprintf("Microsoft %s account could not be disconnected", p.name), http.StatusInternalServerError)
+		return
+	}
+	writeSDKJSON(w, http.StatusOK, microsoftGraphPublicState(p))
+}
+
+func (s *Server) handleMicrosoftGraphCancel(w http.ResponseWriter, r *http.Request) {
+	p := microsoftGraphProfiles[r.PathValue("account")]
+	if p == nil {
+		http.Error(w, "unknown Microsoft account type", http.StatusNotFound)
+		return
+	}
+	p.mu.Lock()
+	p.generation++
+	if p.cancel != nil {
+		p.cancel()
+	}
+	p.cancel, p.code, p.loginState, p.errorMessage = nil, "", "", ""
+	p.mu.Unlock()
+	writeSDKJSON(w, http.StatusOK, microsoftGraphPublicState(p))
+}

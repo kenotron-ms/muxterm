@@ -56,7 +56,7 @@ func workIQRemoteRecord() (remoteConnection, bool, error) {
 func workIQState() (map[string]any, error) {
 	result := map[string]any{
 		"mode": "remote", "endpoint": workIQRemoteEndpoint,
-		"state": "disconnected", "toolCount": 0,
+		"state": "disconnected", "toolCount": 0, "savedAuthorization": false,
 		"discoveredTools": []remoteToolSummary{}, "allowedTools": []string{},
 	}
 	record, found, err := workIQRemoteRecord()
@@ -64,6 +64,7 @@ func workIQState() (map[string]any, error) {
 		return nil, err
 	}
 	if found && record.Provider == workIQRemoteID && record.Endpoint == workIQRemoteEndpoint && record.Token != nil {
+		result["savedAuthorization"] = true
 		result["state"] = "authorized"
 		result["toolCount"] = record.ToolCount
 		result["discoveredTools"] = record.public().DiscoveredTools

@@ -1158,6 +1158,12 @@ func RunRemoteConnectionsMCP(ctx context.Context) error {
 		}
 	}()
 	for _, c := range records {
+		// Work IQ is no longer a catalog connection. Preserve its saved
+		// authorization for the owner, but never expose its legacy tools to
+		// newly started chats.
+		if c.Provider == workIQRemoteID {
+			continue
+		}
 		if c.Token == nil || c.AuthRevision == "" || c.CheckedAt.IsZero() || c.CheckError != "" || len(c.AllowedTools) == 0 {
 			continue
 		}
