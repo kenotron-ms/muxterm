@@ -68,7 +68,23 @@ func githubBinary(name string) (string, error) {
 	if info, err := os.Stat(managed); err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 {
 		return managed, nil
 	}
-	return exec.LookPath(name)
+	return "", fmt.Errorf("%s is not installed in Connections", name)
+}
+
+func ensureGitHubManaged(ctx context.Context) error {
+	assets, err := githubReleaseAssets()
+	if err != nil {
+		return err
+	}
+	for _, asset := range assets {
+		if _, lookupErr := githubBinary(asset.binary); lookupErr == nil {
+			continue
+		}
+		if err := downloadGitHubAsset(ctx, asset); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func downloadGitHubAsset(ctx context.Context, asset githubReleaseAsset) error {
@@ -187,19 +203,9 @@ func (s *Server) handleGitHubInstall(w http.ResponseWriter, r *http.Request) {
 	c.installing = true
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.installing = false; c.mu.Unlock() }()
-	assets, err := githubReleaseAssets()
-	if err == nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
-		defer cancel()
-		for _, asset := range assets {
-			if info, statErr := os.Stat(githubManagedBinary(asset.binary)); statErr == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 {
-				continue
-			}
-			if err = downloadGitHubAsset(ctx, asset); err != nil {
-				break
-			}
-		}
-	}
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
+	defer cancel()
+	err := ensureGitHubManaged(ctx)
 	if err != nil {
 		http.Error(w, "GitHub setup failed: "+err.Error(), http.StatusBadGateway)
 		return

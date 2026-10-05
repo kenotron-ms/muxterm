@@ -116,13 +116,13 @@ export class MuxConnections extends LitElement {
     try { await action(); } catch(error) { this.error=error instanceof Error?error.message:String(error); }
     finally { await this.refresh(); this.busy=''; }
   }
-  private check() { void this.run('check',()=>this.request('/api/connections/github/check',{method:'POST'})); }
+  private check() { void this.run('check',async()=>{
+    await this.request('/api/connections/github/install',{method:'POST'});
+    await this.request('/api/connections/github/check',{method:'POST'});
+  }); }
   private connectGitHub() { void this.run('github-connect',async()=>{
-    let github=this.data!.github;
-    if (!github.serverInstalled||!github.ghInstalled) {
-      await this.request('/api/connections/github/install',{method:'POST'});
-      github=(await this.request<ConnectionsResponse>('/api/connections')).github;
-    }
+    await this.request('/api/connections/github/install',{method:'POST'});
+    const github=(await this.request<ConnectionsResponse>('/api/connections')).github;
     if (!github.signedIn) {
       this.autoCheckAfterLogin=true;
       await this.request('/api/connections/github/login',{method:'POST'});
@@ -215,7 +215,7 @@ export class MuxConnections extends LitElement {
       </div>
       <div class="box"><strong>Use in chats</strong>
         <p class="note">Muxterm uses your GitHub CLI login when starting GitHub’s service. Muxterm stores only whether you enabled this connection; GitHub CLI stores its own authorization. The service exposes read-only repository, issue, and pull request tools.</p>
-        ${g.state==='ready'?html`<p class="note">${g.toolCount} tools verified. They are available in new chats across all harnesses.</p>`:g.error?html`<p class="note">${g.error}</p>`:nothing}
+        ${g.state==='ready'?html`<p class="note">${g.toolCount} tools verified. They are available in new Codex, Claude, and Amplifier chats.</p>`:g.error?html`<p class="note">${g.error}</p>`:nothing}
         <div class="actions">${g.enabled?html`<button class="action" ?disabled=${!!this.busy||!g.ghInstalled||!g.serverInstalled||!g.signedIn} @click=${this.check}>Check tools again</button>`:nothing}
           ${g.enabled?html`<button class="action" ?disabled=${!!this.busy} @click=${this.disconnect}>Disable for new chats</button>`:nothing}</div>
       </div>
