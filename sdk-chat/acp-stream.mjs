@@ -11,9 +11,10 @@ const profiles = {
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
 
 export class ACPStream {
-  constructor(session, emit) {
+  constructor(session, emit, onProcessExit) {
     this.session = session;
     this.emit = emit;
+    this.onProcessExit = onProcessExit;
     this.tools = new Map();
     this.busy = false;
     this.closed = false;
@@ -64,6 +65,7 @@ export class ACPStream {
     this.configOptions = session.configOptions || [];
     this.modes = session.modes || null;
     this.startupInfo = session._meta?.piAcp?.startupInfo || '';
+    this.startupBuffer = '';
     // A resumed ACP process starts with the agent's own defaults. Restore the
     // selections saved with this muxterm conversation before accepting input.
     await this.applySelection(this.session.model, this.session.effort);
@@ -84,6 +86,7 @@ export class ACPStream {
     this.exitError = error;
     this.resolveExit(error);
     if (this.busy) this.emit(this.session.id, 'session.uncertain', { message: String(error) });
+    this.onProcessExit?.();
   }
 
   onPermission(params) {
@@ -100,17 +103,29 @@ export class ACPStream {
     if (params.sessionId !== this.session.nativeId || this.closed || this.loading) return;
     const update = params.update;
     // Pi sends its startup banner after session/new returns. It is not the
-    // answer to the user's first prompt and must not confirm prompt delivery.
-    if (this.startupInfo && update.sessionUpdate === 'agent_message_chunk' && update.content?.text === this.startupInfo) {
+    // answer to the user's first prompt. ACP may split it across text chunks.
+    let messageText = update.content?.text;
+    if (this.startupInfo && update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text') {
+      const candidate = this.startupBuffer + (messageText || '');
+      if (this.startupInfo.startsWith(candidate)) {
+        this.startupBuffer = candidate;
+        if (candidate === this.startupInfo) {
+          this.startupInfo = '';
+          this.startupBuffer = '';
+        }
+        return;
+      }
+      messageText = candidate.startsWith(this.startupInfo) ? candidate.slice(this.startupInfo.length) : candidate;
       this.startupInfo = '';
-      return;
+      this.startupBuffer = '';
     }
+    if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && !messageText) return;
     if (this.busy && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan'].includes(update.sessionUpdate))
       this.turnActivity = true;
     if (this.busy && (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan', 'usage_update'].includes(update.sessionUpdate)
       || (update.sessionUpdate === 'session_info_update' && update._meta?.piAcp?.running === true))) this.confirmAccepted?.();
-    if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && update.content.text)
-      this.emit(this.session.id, 'assistant.delta', { text: update.content.text });
+    if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && messageText)
+      this.emit(this.session.id, 'assistant.delta', { text: messageText });
     else if (update.sessionUpdate === 'agent_thought_chunk' && update.content?.type === 'text' && update.content.text)
       this.emit(this.session.id, 'thinking.delta', { text: update.content.text });
     else if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
