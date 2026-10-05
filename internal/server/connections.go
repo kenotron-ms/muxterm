@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -102,7 +101,7 @@ func githubCLIStatus(ctx context.Context) bool {
 func githubCLIToken(ctx context.Context) (string, error) {
 	gh, err := githubBinary("gh")
 	if err != nil {
-		return "", errors.New("Set up GitHub tools in Connections")
+		return "", errors.New("GitHub tools need setup; open Connections and select Connect GitHub")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -138,12 +137,9 @@ func (o *boundedTokenOutput) Write(p []byte) (int, error) {
 }
 
 func githubMCPCommand(ctx context.Context) (*exec.Cmd, error) {
-	if err := ensureGitHubManaged(ctx); err != nil {
-		return nil, fmt.Errorf("Could not set up GitHub tools: %w", err)
-	}
 	server, err := githubBinary("github-mcp-server")
 	if err != nil {
-		return nil, errors.New("Set up GitHub tools in Connections")
+		return nil, errors.New("GitHub tools need setup; open Connections and select Connect GitHub")
 	}
 	token, err := githubCLIToken(ctx)
 	if err != nil {

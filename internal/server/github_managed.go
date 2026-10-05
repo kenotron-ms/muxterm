@@ -132,7 +132,7 @@ func downloadGitHubAsset(ctx context.Context, asset githubReleaseAsset) error {
 			if err != nil {
 				return err
 			}
-			contents, err = io.ReadAll(io.LimitReader(file, 80<<20))
+			contents, err = io.ReadAll(io.LimitReader(file, (80<<20)+1))
 			file.Close()
 			if err != nil {
 				return err
@@ -160,13 +160,13 @@ func downloadGitHubAsset(ctx context.Context, asset githubReleaseAsset) error {
 			if matches > 1 {
 				return errors.New("official archive contains duplicate binaries")
 			}
-			contents, err = io.ReadAll(io.LimitReader(reader, 80<<20))
+			contents, err = io.ReadAll(io.LimitReader(reader, (80<<20)+1))
 			if err != nil {
 				return err
 			}
 		}
 	}
-	if len(contents) == 0 || len(contents) >= 80<<20 {
+	if len(contents) == 0 || len(contents) > 80<<20 {
 		return errors.New("official archive did not contain a valid binary")
 	}
 	destination := githubManagedBinary(asset.binary)

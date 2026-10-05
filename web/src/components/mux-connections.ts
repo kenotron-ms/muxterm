@@ -205,7 +205,7 @@ export class MuxConnections extends LitElement {
     return html`<div class="head"><h2>GitHub</h2><span class="badge ${g.state==='ready'?'ready':g.state==='needs-attention'?'attention':''}">${status}</span></div>
       <p class="lead">Use repositories, issues, and pull requests in new chats through GitHub’s official local service.</p>
       <div class="box"><strong>Set up GitHub</strong>
-        <p class="note">Muxterm installs the official GitHub service and GitHub CLI for your account when needed. Downloads are pinned and verified before use. Nothing is installed system-wide.</p>
+        <p class="note">Muxterm installs the official GitHub service and GitHub CLI for your account when needed. Downloads are pinned and verified before use. Nothing is installed system-wide. First setup may take a few minutes.</p>
         <p class="note">GitHub service: ${g.serverInstalled?'available':'needed'} · Sign-in helper: ${g.ghInstalled?'available':'needed'} · GitHub account: ${g.signedIn?'signed in':'sign in required'}</p>
         ${g.state!=='ready'?html`<div class="actions"><button class="action primary" ?disabled=${!!this.busy||g.installing||g.loginState==='waiting'||g.loginState==='pending'} @click=${this.connectGitHub}>${this.busy==='github-connect'||g.installing?'Setting up GitHub…':g.loginState==='waiting'||g.loginState==='pending'?'Waiting for GitHub…':'Connect GitHub'}</button></div>`:nothing}
         ${g.loginState==='pending'&&g.loginCode?html`<p class="note">Open GitHub’s sign-in page and enter this one-time code: <strong><code>${g.loginCode}</code></strong></p><div class="actions"><a class="action" href="https://github.com/login/device" target="_blank" rel="noopener noreferrer">Open GitHub sign-in ↗</a></div>`:nothing}
