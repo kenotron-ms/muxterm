@@ -800,6 +800,10 @@ func remoteAccessToken(ctx context.Context, id string) (remoteConnection, string
 		}
 		snapshot := c
 		cfg := oauth2.Config{ClientID: c.ClientID, ClientSecret: c.ClientSecret, Endpoint: oauth2.Endpoint{TokenURL: c.TokenURL}}
+		if c.Provider == workIQRemoteID {
+			// Entra's device flow uses a public client ID in the form body.
+			cfg.Endpoint.AuthStyle = oauth2.AuthStyleInParams
+		}
 		refreshClient := safeRemoteHTTPClient(12 * time.Second)
 		if usesResourceIndicator(c) {
 			refreshClient.Transport = resourceRefreshTransport{base: refreshClient.Transport, resource: c.Endpoint}
