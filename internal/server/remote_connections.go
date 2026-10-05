@@ -225,7 +225,9 @@ func canonicalRootIssuer(raw string) string {
 	return raw
 }
 
-func usesResourceIndicator(c remoteConnection) bool { return c.Issuer != "https://accounts.google.com" }
+func usesResourceIndicator(c remoteConnection) bool {
+	return c.Issuer != "https://accounts.google.com" && c.Provider != workIQRemoteID
+}
 
 func publicRemoteIP(ip netip.Addr) bool {
 	ip = ip.Unmap()

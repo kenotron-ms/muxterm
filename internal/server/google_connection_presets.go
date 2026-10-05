@@ -53,6 +53,9 @@ func presetAllowsRemoteTool(c remoteConnection, name string) bool {
 	if c.Provider == "" {
 		return true
 	}
+	if c.Provider == workIQRemoteID {
+		return c.ID == workIQRemoteID && c.Endpoint == workIQRemoteEndpoint && c.ClientID == workIQClientID
+	}
 	preset, ok := googleConnectionPresets[c.Provider]
 	return ok && c.Endpoint == preset.Endpoint && slices.Contains(preset.ReadTools, name)
 }
