@@ -229,9 +229,10 @@ export class MuxSDKChat extends LitElement {
     .text .md-li .md-p { margin:0; }
     .text .md-quote { margin:0 0 16px; padding-left:15px; border-left:2px solid var(--chrome-border,#41485f); color:var(--chrome-text-dim,#9aa3b8); }
     .text .md-hr { margin:24px 0; border:0; border-top:1px solid var(--chrome-border,#41485f); }
-    .text .md-tablewrap { max-width:100%; overflow:auto; margin:0 0 18px; }
-    .text .md-table { border-collapse:collapse; }
-    .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--chrome-border,#41485f); text-align:left; }
+    .text .md-tablewrap { max-width:100%; min-width:0; overflow-x:auto; margin:0 0 18px; }
+    .text .md-table { border-collapse:collapse; min-width:max(100%, 40rem); }
+    .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--chrome-border,#41485f); text-align:left; vertical-align:top; overflow-wrap:break-word; word-break:normal; }
+    .text .md-table .md-link, .text .md-table .md-code { overflow-wrap:break-word; }
     .text .md-th { background:var(--chrome-bar,#202632); }
     .thinking-entry, .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; }
     .thinking-entry > summary, .tool-activity > summary, .tool-entry > summary { display:flex; align-items:center; gap:8px; min-height:27px; list-style:none; cursor:pointer; }
