@@ -3,7 +3,7 @@ export type SDKHarnessName = 'codex' | 'claude' | 'amplifier' | 'pi' | 'opencode
 export function sdkHarnessLabel(harness: SDKHarnessName): string {
   return { codex:'Codex', claude:'Claude Code', amplifier:'Amplifier', pi:'Pi', opencode:'OpenCode', deepseek:'DeepSeek Harness' }[harness];
 }
-export interface SDKChat { id: string; workspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: SDKHarnessName; provider?: string; nativeId?: string; state: string; createdAt: string; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string }
+export interface SDKChat { id: string; workspaceId?: string; terminalWorkspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: SDKHarnessName; provider?: string; nativeId?: string; state: string; createdAt: string; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string }
 export interface SDKProject { id: string; name: string; path: string; sourceFolders?: string[]; pinned?: boolean }
 export interface FolderListing { path: string; base: string; parent: string; folders: string[] }
 class SDKChatStore {
@@ -53,6 +53,11 @@ class SDKChatStore {
   }
   async setPinned(id: string, pinned: boolean) {
     const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned }) });
+    if (!response.ok) throw new Error(await response.text());
+    await this.refresh();
+  }
+  async setTerminalWorkspace(id: string, terminalWorkspaceId: string) {
+    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({terminalWorkspaceId}) });
     if (!response.ok) throw new Error(await response.text());
     await this.refresh();
   }
