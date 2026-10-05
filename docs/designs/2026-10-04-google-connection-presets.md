@@ -22,6 +22,16 @@ refresh token can be stored locally. Google may classify mail and file scopes
 as sensitive or restricted; external testing refresh tokens may expire after
 seven days.
 
+After these MCP services reach general availability, a Muxterm-owned Google
+Cloud project could carry one consent screen and clients for each supported
+platform. One Web client can be reused across product MCP endpoints on the same
+origin, but Google requires exact registered redirect URIs: a single Web client
+does not automatically cover arbitrary self-hosted Muxterm origins. Production
+Gmail access also requires Google's restricted-scope verification. Handling
+restricted Gmail data on a third-party server may require an independent
+security assessment. Do not ship a shared client ID or promise personal Gmail
+access until registration, verification, and deployment are resolved.
+
 These presets have been checked against public metadata, but no credentialed
 Google authorization or tool call has been completed here. The pinned Go MCP
 SDK defaults to protocol version 2025-06-18; Google documents support for
@@ -33,6 +43,7 @@ tool check.
 Sources: [Google Workspace Developer Preview terms](https://developers.google.com/workspace/preview),
 [Google Workspace setup](https://developers.google.com/workspace/guides/configure-mcp-servers),
 [Google OAuth offline access](https://developers.google.com/identity/protocols/oauth2/web-server),
+[Google OAuth client policies](https://developers.google.com/identity/protocols/oauth2/policies),
 [Google scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification),
 [Google MCP authentication](https://docs.cloud.google.com/mcp/authenticate-mcp),
 and [Go MCP SDK protocol support](https://github.com/modelcontextprotocol/go-sdk).
