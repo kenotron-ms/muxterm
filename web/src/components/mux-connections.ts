@@ -8,7 +8,7 @@ type ConnectionsResponse = { catalog:Service[]; github:GitHubState };
 type RemoteTool = { name:string; description?:string };
 type RemoteConnection = { id:string; provider?:string; name:string; endpoint:string; state:string; toolCount:number; checkedAt?:string; error?:string; discoveredTools:RemoteTool[]; allowedTools:string[] };
 type RemoteResponse = { items:RemoteConnection[]; callbackUrl:string };
-type WorkIQState = { installed:boolean; enabled:boolean };
+type WorkIQState = { installed:boolean; enabled:boolean; command:string };
 
 @customElement('mux-connections')
 export class MuxConnections extends LitElement {
@@ -191,14 +191,15 @@ export class MuxConnections extends LitElement {
   private workIQDetail(service:Service) {
     const w=this.workiq!;
     const enabled=w.enabled;
-    return html`<div class="head"><h2>${service.name}</h2><span class="badge ${enabled?(w.installed?'ready':'attention'):''}">${enabled?(w.installed?'Enabled for new chats':'CLI missing'):w.installed?'Available to enable':'Install required'}</span></div>
+    return html`<div class="head"><h2>${service.name}</h2><span class="badge ${enabled?(w.installed?'ready':'attention'):''}">${enabled?(w.installed?'Enabled for new chats':'Setup required'):w.installed?'Ready to enable':'Available'}</span></div>
       <p class="lead">${service.description}. One Microsoft Work IQ server covers OneDrive, Outlook Mail, Outlook Calendar, and other Microsoft 365 data. Enabling any of these cards enables that same server in new Codex, Claude, and Amplifier chats.</p>
-      <div class="box"><strong>Use Microsoft's Work IQ CLI</strong>
-        <p class="note">Install the official CLI so <code>workiq</code> is on muxterm's PATH: <code>npm install -g @microsoft/workiq</code>. Then review and accept its license with <code>workiq accept-eula</code> and sign in with <code>workiq auth login</code>. Run these commands in your own terminal; muxterm does not perform these steps.</p>
+      <div class="box"><strong>Use Microsoft's Work IQ service</strong>
+        <p class="note">Muxterm installs the official Work IQ service for you when you enable this connection. You do not need to install Node, npm, or any software manually. Microsoft requires you to review and accept its license, then sign in. Muxterm does not accept the license or sign in for you.</p>
+        ${w.command?html`<p class="note">After installation, use a terminal to run <code>${w.command} accept-eula</code> and <code>${w.command} auth login</code>. These commands launch Microsoft's own setup.</p>`:nothing}
         <p class="note">Your organization must grant Entra admin consent, assign you to a Copilot Credits billing plan, and allow Work IQ access. Work IQ handles its own sign-in; muxterm does not request an Entra app, client secret, or Microsoft token.</p>
         <p class="note">This enables the vendor server's full available tool set across Microsoft 365. Work IQ may offer actions beyond reading files, mail, or meetings. Microsoft account permissions and tenant policies still apply, and usage may incur charges.</p>
-        <div class="actions"><button class="action ${enabled?'':'primary'}" ?disabled=${!!this.busy||(!w.installed&&!enabled)} @click=${()=>void this.run('workiq-toggle',()=>this.request('/api/connections/workiq',{method:enabled?'DELETE':'POST'}))}>${enabled?'Disable in new chats':'Enable in new chats'}</button><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Microsoft setup guide ↗</a></div>
-      </div><p class="note">Enabled means the CLI is available to new chats; it does not confirm Microsoft sign-in or tenant access. Disabling this entry does not revoke credentials stored by Work IQ. Running chats keep their current tools.</p>`;
+        <div class="actions"><button class="action ${enabled?'':'primary'}" ?disabled=${!!this.busy} @click=${()=>void this.run('workiq-toggle',()=>this.request('/api/connections/workiq',{method:enabled?'DELETE':'POST'}))}>${this.busy==='workiq-toggle'?'Setting up…':enabled?'Disable in new chats':w.installed?'Enable in new chats':'Set up Microsoft 365'}</button><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Microsoft setup guide ↗</a></div>
+      </div><p class="note">Enabled means the vendor service is available to new chats; it does not confirm Microsoft sign-in or tenant access. Disabling this entry does not revoke credentials stored by Work IQ. Running chats keep their current tools.</p>`;
   }
   override render() {
     const groups=['Developer','Microsoft 365','Google Workspace'];
