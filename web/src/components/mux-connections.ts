@@ -8,17 +8,18 @@ type ConnectionsResponse = { catalog:Service[]; github:GitHubState };
 type RemoteTool = { name:string; description?:string };
 type RemoteConnection = { id:string; provider?:string; name:string; endpoint:string; state:string; toolCount:number; checkedAt?:string; error?:string; discoveredTools:RemoteTool[]; allowedTools:string[] };
 type RemoteResponse = { items:RemoteConnection[]; callbackUrl:string };
-type WorkIQState = { installed:boolean; enabled:boolean; command:string };
+type WorkIQState = { mode:'remote'; state:'disconnected'|'pending'|'authorized'|'ready'|'needs-attention'; endpoint:string; toolCount:number; checkedAt?:string; error?:string; verificationUrl?:string; userCode?:string; expiresAt?:string; discoveredTools?:RemoteTool[]; allowedTools?:string[] };
 
 @customElement('mux-connections')
 export class MuxConnections extends LitElement {
   private loginPoll?:number;
   private autoCheckAfterLogin=false;
+  private autoCheckWorkIQAfterLogin=false;
   @property() initialSelection = 'github';
   @state() private data?:ConnectionsResponse;
   @state() private remotes?:RemoteResponse;
   @state() private workiq?:WorkIQState;
-  @state() private copiedWorkIQ='';
+  @state() private workIQAllowedDraft?:string[];
   @state() private selected='github';
   @state() private busy='';
   @state() private error='';
@@ -57,14 +58,11 @@ export class MuxConnections extends LitElement {
     input[type=checkbox] { display:inline; width:auto; margin:0 7px 0 0; }
     .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
     button.action,a.action { display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--chrome-border); border-radius:7px; padding:7px 12px; color:var(--chrome-text-bright); background:var(--chrome-hover); text-decoration:none; }
-    button.action.primary { background:var(--chrome-accent); border-color:var(--chrome-accent); color:var(--chrome-body); font-weight:700; }
+    button.action.primary,a.action.primary { background:var(--chrome-accent); border-color:var(--chrome-accent); color:var(--chrome-body); font-weight:700; }
     button.action:disabled { opacity:.5; cursor:default; } a { color:var(--chrome-accent); }
     .error { margin:15px 0; padding:9px 11px; border:1px solid var(--chrome-danger); border-radius:7px; color:var(--chrome-danger); }
     .note { margin-top:11px; font-size:11px; } code { overflow-wrap:anywhere; }
-    details.setup-steps { margin-top:12px; font-size:11px; color:var(--chrome-text-dim); }
-    details.setup-steps summary { cursor:pointer; color:var(--chrome-accent); font-weight:650; }
-    .setup-command { display:flex; align-items:flex-start; gap:10px; margin-top:9px; }
-    .setup-command code { flex:1; min-width:0; padding:7px; border-radius:6px; background:var(--chrome-body); user-select:all; }
+    .device-code { display:inline-block; margin-top:10px; padding:7px 12px; border:1px solid var(--chrome-border); border-radius:7px; background:var(--chrome-body); color:var(--chrome-text-bright); font:700 22px ui-monospace,monospace; letter-spacing:.12em; user-select:all; }
     @media(max-width:700px) { header { padding:14px 16px; } .layout { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); } .catalog { display:flex; overflow:auto; border-right:0; border-bottom:1px solid var(--chrome-border); padding:9px; gap:4px; } .group { display:none; } .service { width:auto; min-width:150px; } main { padding:20px 16px 40px; } }
   `;
 
@@ -94,10 +92,14 @@ export class MuxConnections extends LitElement {
     try { [this.data,this.remotes,this.workiq]=await Promise.all([this.request<ConnectionsResponse>('/api/connections'),this.request<RemoteResponse>('/api/connections/remote'),this.request<WorkIQState>('/api/connections/workiq')]); }
     catch(error) { this.error=String(error); }
     if (this.loginPoll) window.clearTimeout(this.loginPoll);
-    if (this.isConnected && ['waiting','pending'].includes(this.data?.github.loginState||'')) this.loginPoll=window.setTimeout(()=>void this.refresh(),2000);
+    if (this.isConnected && (['waiting','pending'].includes(this.data?.github.loginState||'') || this.workiq?.state==='pending')) this.loginPoll=window.setTimeout(()=>void this.refresh(),2000);
     if (this.isConnected && this.autoCheckAfterLogin && this.data?.github.loginState==='complete' && this.data.github.signedIn) {
       this.autoCheckAfterLogin=false;
       void this.run('check',()=>this.request('/api/connections/github/check',{method:'POST'}));
+    }
+    if (this.isConnected && this.autoCheckWorkIQAfterLogin && this.workiq?.state==='authorized') {
+      this.autoCheckWorkIQAfterLogin=false;
+      void this.run('workiq-check',()=>this.request('/api/connections/workiq/check',{method:'POST'}));
     }
   }
   private selectService(id:string) {
@@ -110,7 +112,7 @@ export class MuxConnections extends LitElement {
     if (service.id==='github') {
       return this.data?.github.state==='ready'?'ready':this.data?.github.state==='needs-attention'?'attention':'';
     }
-    if (service.group==='Microsoft 365') return this.workiq?.enabled?(this.workiq.installed?'ready':'attention'):'';
+    if (service.group==='Microsoft 365') return this.workiq?.state==='ready'?'ready':this.workiq?.state==='needs-attention'?'attention':'';
     const items=this.remotes?.items.filter(item=>item.provider===service.id)??[];
     if (items.some(item=>item.state==='needs-attention')) return 'attention';
     if (items.some(item=>item.state==='ready'&&item.allowedTools.length>0)) return 'ready';
@@ -140,18 +142,32 @@ export class MuxConnections extends LitElement {
     if (!window.confirm('Disable GitHub tools for new chats? Your GitHub CLI login stays signed in.')) return;
     void this.run('disconnect',()=>this.request('/api/connections/github',{method:'DELETE'}));
   }
-  private workIQCommand(action:string) {
-    const path=this.workiq?.command??'';
-    return `'${path.replaceAll("'", "'\"'\"'")}' ${action}`;
+  private connectWorkIQ() {
+    this.autoCheckWorkIQAfterLogin=true;
+    void this.run('workiq-connect',()=>this.request('/api/connections/workiq/login',{method:'POST'}));
   }
-  private async copyWorkIQCommand(action:string) {
-    try {
-      await navigator.clipboard.writeText(this.workIQCommand(action));
-      this.copiedWorkIQ=action;
-    } catch {
-      this.error='Could not copy the command. Select the command text to copy it manually.';
-    }
+  private cancelWorkIQLogin() {
+    this.autoCheckWorkIQAfterLogin=false;
+    void this.run('workiq-cancel',()=>this.request('/api/connections/workiq/login',{method:'DELETE'}));
   }
+  private checkWorkIQ() {
+    this.workIQAllowedDraft=undefined;
+    void this.run('workiq-check',()=>this.request('/api/connections/workiq/check',{method:'POST'}));
+  }
+  private disconnectWorkIQ() {
+    if (!window.confirm('Disconnect Microsoft 365 and remove its saved authorization?')) return;
+    this.autoCheckWorkIQAfterLogin=false;
+    this.workIQAllowedDraft=undefined;
+    void this.run('workiq-disconnect',()=>this.request('/api/connections/workiq',{method:'DELETE'}));
+  }
+  private toggleWorkIQTool(name:string,enabled:boolean) {
+    const current=this.workIQAllowedDraft??this.workiq?.allowedTools??[];
+    this.workIQAllowedDraft=enabled?[...current,name]:current.filter(tool=>tool!==name);
+  }
+  private saveWorkIQTools() { void this.run('workiq-tools',async()=>{
+    await this.request('/api/connections/workiq/tools',{method:'PATCH',body:JSON.stringify({allowedTools:this.workIQAllowedDraft??this.workiq?.allowedTools??[]})});
+    this.workIQAllowedDraft=undefined;
+  }); }
   private createRemote() { void this.run('remote-create',async()=>{
     await this.request('/api/connections/remote',{method:'POST',body:JSON.stringify({name:this.remoteName,endpoint:this.remoteEndpoint,issuerURL:this.remoteIssuer,clientID:this.remoteClientID,clientSecret:this.remoteClientSecret,scopes:this.remoteScopes})});
     this.remoteName='';this.remoteEndpoint='';this.remoteIssuer='';this.remoteClientID='';this.remoteClientSecret='';this.remoteScopes='';
@@ -241,19 +257,38 @@ export class MuxConnections extends LitElement {
   }
   private workIQDetail(service:Service) {
     const w=this.workiq!;
-    const enabled=w.enabled;
-    return html`<div class="head"><h2>${service.name}</h2><span class="badge ${enabled?(w.installed?'ready':'attention'):''}">${enabled?(w.installed?'Enabled for new chats':'Setup required'):w.installed?'Ready to enable':'Available'}</span></div>
-      <p class="lead">${service.description}. One Microsoft Work IQ server covers OneDrive, Outlook Mail, Outlook Calendar, and other Microsoft 365 data. Enabling any of these cards enables that same server in new Codex, Claude, and Amplifier chats.</p>
-      <div class="box"><strong>Use Microsoft's Work IQ service</strong>
-        <p class="note">Muxterm installs the official Work IQ service for you when you enable this connection. You do not need to install Node, npm, or any software manually. Microsoft requires you to review and accept its license, then sign in. Muxterm does not accept the license or sign in for you.</p>
-        ${w.command?html`<details class="setup-steps"><summary>Show Microsoft setup commands</summary><p class="note">Run these commands in a terminal. They open Microsoft's own license and sign-in steps.</p>
-          <div class="setup-command"><code>${this.workIQCommand('accept-eula')}</code><button class="action" aria-label="Copy Work IQ license command" @click=${()=>void this.copyWorkIQCommand('accept-eula')}>${this.copiedWorkIQ==='accept-eula'?'Copied':'Copy'}</button></div>
-          <div class="setup-command"><code>${this.workIQCommand('auth login')}</code><button class="action" aria-label="Copy Work IQ sign-in command" @click=${()=>void this.copyWorkIQCommand('auth login')}>${this.copiedWorkIQ==='auth login'?'Copied':'Copy'}</button></div>
-        </details>`:nothing}
-        <p class="note">Your organization must grant Entra admin consent, assign you to a Copilot Credits billing plan, and allow Work IQ access. Work IQ handles its own sign-in; muxterm does not request an Entra app, client secret, or Microsoft token.</p>
-        <p class="note">This enables the vendor server's full available tool set across Microsoft 365. Work IQ may offer actions beyond reading files, mail, or meetings. Microsoft account permissions and tenant policies still apply, and usage may incur charges.</p>
-        <div class="actions"><button class="action ${enabled?'':'primary'}" ?disabled=${!!this.busy} @click=${()=>void this.run('workiq-toggle',()=>this.request('/api/connections/workiq',{method:enabled?'DELETE':'POST'}))}>${this.busy==='workiq-toggle'?'Setting up…':enabled?'Disable in new chats':w.installed?'Enable in new chats':'Set up Microsoft 365'}</button><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Microsoft setup guide ↗</a></div>
-      </div><p class="note">Enabled means the vendor service is available to new chats; it does not confirm Microsoft sign-in or tenant access. Disabling this entry does not revoke credentials stored by Work IQ. Running chats keep their current tools.</p>`;
+    const ready=w.state==='ready';
+    const pending=w.state==='pending';
+    const authorized=w.state==='authorized';
+    const attention=w.state==='needs-attention';
+    const tools=w.discoveredTools??[];
+    const allowed=w.allowedTools??[];
+    const selected=this.workIQAllowedDraft??allowed;
+    const status=ready?'Ready':pending?'Waiting for sign-in':authorized?(allowed.length?'Enabled · check access':w.toolCount?'Choose tools':'Signed in · check tools'):attention?'Needs attention':'Not connected';
+    return html`<div class="head"><h2>${service.name}</h2><span class="badge ${ready?'ready':attention?'attention':''}">${status}</span></div>
+      <p class="lead">${service.description}. One Microsoft-hosted Work IQ connection covers OneDrive, Outlook Mail, Outlook Calendar, and other Microsoft 365 data.</p>
+      <div class="box"><strong>Connect Microsoft 365</strong>
+        <p class="note">Sign in from any browser using a one-time code. The connection runs through Microsoft's hosted service, so this machine needs no Work IQ software or browser. Your organization may require administrator consent and may charge for Work IQ use.</p>
+        ${pending?html`<p class="note">Open Microsoft's sign-in page and enter this one-time code:</p>
+          ${w.userCode?html`<code class="device-code" aria-label="Microsoft sign-in code">${w.userCode}</code>`:html`<p class="note">Preparing a sign-in code…</p>`}
+          ${w.expiresAt?html`<p class="note">Code expires at ${new Date(w.expiresAt).toLocaleTimeString()}.</p>`:nothing}
+          <p class="note">This page will update after you finish signing in.</p>
+          <div class="actions">${w.verificationUrl?html`<a class="action primary" href=${w.verificationUrl} target="_blank" rel="noopener noreferrer">Open Microsoft sign-in ↗</a>`:nothing}<button class="action" ?disabled=${!!this.busy} @click=${this.cancelWorkIQLogin}>Cancel sign-in</button></div>`:nothing}
+        ${attention?html`<p class="note">${w.error||'The connection needs another sign-in or a successful tool check.'}</p>`:nothing}
+        ${!pending?html`<div class="actions">
+          ${w.state==='disconnected'||attention?html`<button class="action primary" ?disabled=${!!this.busy} @click=${this.connectWorkIQ}>${this.busy==='workiq-connect'?'Starting sign-in…':attention?'Reconnect Microsoft 365':'Connect Microsoft 365'}</button>`:nothing}
+          ${w.state!=='disconnected'?html`<button class="action" ?disabled=${!!this.busy} @click=${this.disconnectWorkIQ}>Disconnect</button>`:nothing}
+          <a class="action" href="https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview" target="_blank" rel="noopener noreferrer">About Work IQ ↗</a>
+        </div>`:nothing}
+      </div>
+      ${!pending&&w.state!=='disconnected'?html`<div class="box"><strong>Tools for chats</strong>
+        <p class="note">${ready?`${w.toolCount} tools verified; ${allowed.length} enabled for new Codex, Claude, and Amplifier chats.`:authorized&&allowed.length?`${allowed.length} selected tools remain enabled for new chats. Check access again to refresh their status.`:authorized&&w.toolCount?`${w.toolCount} tools found. Select the tools you want to make available in new chats.`:'Check access to discover which tools your Microsoft account can use.'}</p>
+        ${w.error&&w.state!=='needs-attention'?html`<p class="note">${w.error}</p>`:nothing}
+        <p class="note">Some Microsoft 365 tools can send, change, or delete data. Only enable tools you intend to use. Your account permissions and organization policies also apply.</p>
+        <div class="actions"><button class="action" ?disabled=${!!this.busy} @click=${this.checkWorkIQ}>${this.busy==='workiq-check'?'Checking tools…':ready?'Check tools again':'Check tools'}</button></div>
+        ${tools.length?html`<h3>Enable tools</h3>${tools.map(tool=>html`<label><input type="checkbox" .checked=${selected.includes(tool.name)} @change=${(e:Event)=>this.toggleWorkIQTool(tool.name,(e.target as HTMLInputElement).checked)}><strong>${tool.name}</strong>${tool.description?html`<small> — ${tool.description}</small>`:nothing}</label>`)}<button class="action" ?disabled=${!!this.busy||this.workIQAllowedDraft===undefined} @click=${this.saveWorkIQTools}>Save enabled tools</button>`:nothing}
+      </div>`:nothing}
+      <p class="note">Only tools you enable appear in new chats. Disconnecting removes muxterm's saved Microsoft authorization; running chats keep their current tools.</p>`;
   }
   override render() {
     const groups=['Developer','Microsoft 365','Google Workspace'];

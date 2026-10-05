@@ -1,7 +1,5 @@
 package server
 
-import "slices"
-
 // Google Workspace publishes one remote service per product. Keep each preset
 // fixed to its official endpoint, least-privilege read scopes, and reviewed
 // read-only tools. Newly discovered tools remain disabled until reviewed.
@@ -47,12 +45,4 @@ var googleConnectionPresets = map[string]googleConnectionPreset{
 		Scopes:    []string{"https://www.googleapis.com/auth/presentations.readonly", "https://www.googleapis.com/auth/drive.readonly"},
 		ReadTools: []string{"read_presentation"},
 	},
-}
-
-func presetAllowsRemoteTool(c remoteConnection, name string) bool {
-	if c.Provider == "" {
-		return true
-	}
-	preset, ok := googleConnectionPresets[c.Provider]
-	return ok && c.Endpoint == preset.Endpoint && slices.Contains(preset.ReadTools, name)
 }

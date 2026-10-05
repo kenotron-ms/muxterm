@@ -225,7 +225,10 @@ func canonicalRootIssuer(raw string) string {
 	return raw
 }
 
-func usesResourceIndicator(c remoteConnection) bool { return c.Issuer != "https://accounts.google.com" }
+func usesResourceIndicator(c remoteConnection) bool {
+	// Work IQ's explicit API scope already identifies its resource to Entra.
+	return c.Issuer != "https://accounts.google.com" && c.Provider != workIQRemoteID
+}
 
 func publicRemoteIP(ip netip.Addr) bool {
 	ip = ip.Unmap()
@@ -798,6 +801,10 @@ func remoteAccessToken(ctx context.Context, id string) (remoteConnection, string
 		}
 		snapshot := c
 		cfg := oauth2.Config{ClientID: c.ClientID, ClientSecret: c.ClientSecret, Endpoint: oauth2.Endpoint{TokenURL: c.TokenURL}}
+		if c.Provider == workIQRemoteID {
+			// Entra's device flow uses a public client ID in the form body.
+			cfg.Endpoint.AuthStyle = oauth2.AuthStyleInParams
+		}
 		refreshClient := safeRemoteHTTPClient(12 * time.Second)
 		if usesResourceIndicator(c) {
 			refreshClient.Transport = resourceRefreshTransport{base: refreshClient.Transport, resource: c.Endpoint}
@@ -899,6 +906,19 @@ func connectRemote(ctx context.Context, c remoteConnection) (*mcp.ClientSession,
 	return client.Connect(ctx, transport, nil)
 }
 
+func presetAllowsRemoteTool(c remoteConnection, name string) bool {
+	if c.Provider == "" {
+		return true
+	}
+	if c.Provider == workIQRemoteID {
+		// Work IQ's provider can add read and write tools. The owner explicitly
+		// selects each discovered tool before it is offered to chats.
+		return c.ID == workIQRemoteID && c.Endpoint == workIQRemoteEndpoint && c.ClientID == workIQClientID
+	}
+	preset, ok := googleConnectionPresets[c.Provider]
+	return ok && c.Endpoint == preset.Endpoint && slices.Contains(preset.ReadTools, name)
+}
+
 // The pinned SDK panics when Server.AddTool receives nil or a non-object
 // input/output schema. Remote providers control these values, so skip only
 // the malformed tool and keep the other connections available.
@@ -991,7 +1011,11 @@ func (s *Server) handleRemoteCheck(w http.ResponseWriter, r *http.Request, id st
 			}
 			count = len(discovered)
 			if count == 0 {
-				if c.Provider != "" && len(tools) > 0 {
+				if c.Provider == workIQRemoteID && len(tools) > 0 {
+					statusMessage = "Work IQ returned tools, but none could be validated. Check tenant consent and account access."
+				} else if c.Provider == workIQRemoteID {
+					statusMessage = "Work IQ returned no tools. Check tenant consent, Copilot Credits billing, and account access."
+				} else if c.Provider != "" && len(tools) > 0 {
 					statusMessage = "This Google service returned tools, but none match muxterm's approved read tools. Check product access or supported tools."
 				} else if c.Provider != "" {
 					statusMessage = "Google returned no tools for this account. Check Developer Preview and product API access."
