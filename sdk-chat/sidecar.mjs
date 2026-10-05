@@ -1,7 +1,7 @@
 // Versioned NDJSON over a Unix socket. Go owns IDs, receipts, and the event log.
 import net from 'node:net';
 import { unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CodexStream } from './codex-stream.mjs';
@@ -20,6 +20,13 @@ const githubMcpEnv = Object.fromEntries(['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_
 const githubMarker = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'github-enabled');
 const remoteConnectionFile = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'remote.json');
 const workiqEnabledFile = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'workiq-local-enabled');
+function workiqCommand() {
+  if (!existsSync(workiqEnabledFile)) return '';
+  try {
+    const command = readFileSync(workiqEnabledFile, 'utf8').trim();
+    return command && existsSync(command) ? command : '';
+  } catch { return ''; }
+}
 const emit = (sessionId, type, data = {}) => broadcast({ v: 1, event: { sessionId, type, ...data } });
 function broadcast(message) {
   const line = JSON.stringify(message) + '\n';
@@ -76,11 +83,12 @@ async function runClaude(s) {
   const toolNames = new Map();
   const agentTools = new Set();
   let thinkingStreamed = false;
+  const workiq = workiqCommand();
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, additionalDirectories: s.sourceFolders, resume: s.nativeId || undefined,
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: muxtermMcpEnv },
       ...(existsSync(githubMarker) ? { github: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'github'], env: githubMcpEnv } } : {}),
       ...(existsSync(remoteConnectionFile) ? { remote: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'remote'], env: muxtermMcpEnv } } : {}),
-      ...(existsSync(workiqEnabledFile) ? { workiq: { command: 'workiq', args: ['mcp'] } } : {}) },
+      ...(workiq ? { workiq: { command: workiq, args: ['mcp'] } } : {}) },
     includePartialMessages: true, permissionMode: s.permission === 'read-only' ? 'plan' : 'bypassPermissions', allowDangerouslySkipPermissions: true,
     thinking: { type: 'adaptive', display: 'summarized' }, effort: 'high', maxTurns: 20 } });
   s.query = q;
