@@ -62,7 +62,7 @@ export class MuxConnections extends LitElement {
     button.action:disabled { opacity:.5; cursor:default; } a { color:var(--chrome-accent); }
     .error { margin:15px 0; padding:9px 11px; border:1px solid var(--chrome-danger); border-radius:7px; color:var(--chrome-danger); }
     .note { margin-top:11px; font-size:11px; } code { overflow-wrap:anywhere; }
-    .device-code { display:inline-block; margin-top:10px; padding:7px 12px; border:1px solid var(--chrome-border); border-radius:7px; background:var(--chrome-body); color:var(--chrome-text-bright); font-size:22px; font-weight:700; letter-spacing:.12em; user-select:all; }
+    .device-code { display:inline-block; margin-top:10px; padding:7px 12px; border:1px solid var(--chrome-border); border-radius:7px; background:var(--chrome-body); color:var(--chrome-text-bright); font:700 22px ui-monospace,monospace; letter-spacing:.12em; user-select:all; }
     @media(max-width:700px) { header { padding:14px 16px; } .layout { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); } .catalog { display:flex; overflow:auto; border-right:0; border-bottom:1px solid var(--chrome-border); padding:9px; gap:4px; } .group { display:none; } .service { width:auto; min-width:150px; } main { padding:20px 16px 40px; } }
   `;
 

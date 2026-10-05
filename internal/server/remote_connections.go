@@ -905,6 +905,17 @@ func connectRemote(ctx context.Context, c remoteConnection) (*mcp.ClientSession,
 	return client.Connect(ctx, transport, nil)
 }
 
+func presetAllowsRemoteTool(c remoteConnection, name string) bool {
+	if c.Provider == "" {
+		return true
+	}
+	if c.Provider == workIQRemoteID {
+		return c.ID == workIQRemoteID && c.Endpoint == workIQRemoteEndpoint && c.ClientID == workIQClientID
+	}
+	preset, ok := googleConnectionPresets[c.Provider]
+	return ok && c.Endpoint == preset.Endpoint && slices.Contains(preset.ReadTools, name)
+}
+
 // The pinned SDK panics when Server.AddTool receives nil or a non-object
 // input/output schema. Remote providers control these values, so skip only
 // the malformed tool and keep the other connections available.
@@ -997,7 +1008,11 @@ func (s *Server) handleRemoteCheck(w http.ResponseWriter, r *http.Request, id st
 			}
 			count = len(discovered)
 			if count == 0 {
-				if c.Provider != "" && len(tools) > 0 {
+				if c.Provider == workIQRemoteID && len(tools) > 0 {
+					statusMessage = "Work IQ returned tools, but none could be validated. Check tenant consent and account access."
+				} else if c.Provider == workIQRemoteID {
+					statusMessage = "Work IQ returned no tools. Check tenant consent, Copilot Credits billing, and account access."
+				} else if c.Provider != "" && len(tools) > 0 {
 					statusMessage = "This Google service returned tools, but none match muxterm's approved read tools. Check product access or supported tools."
 				} else if c.Provider != "" {
 					statusMessage = "Google returned no tools for this account. Check Developer Preview and product API access."

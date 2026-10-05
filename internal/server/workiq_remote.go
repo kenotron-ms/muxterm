@@ -84,6 +84,9 @@ func workIQState() (map[string]any, error) {
 			result["verificationUrl"] = attempt.verificationURL
 			result["userCode"] = attempt.userCode
 			result["expiresAt"] = attempt.expires
+		} else {
+			result["state"] = "needs-attention"
+			result["error"] = "Microsoft sign-in code expired; try again"
 		}
 	}
 	workIQDevice.Unlock()
@@ -279,7 +282,8 @@ func pollWorkIQDevice(ctx context.Context, attempt *workIQDeviceAttempt, interva
 			return
 		}
 		// Serialize the final token commit with Cancel and Disconnect. A
-		// cancelled attempt must never recreate an enabled connection.
+		// cancelled attempt must never recreate an enabled connection. Readers
+		// release the connection file lock before taking workIQDevice's mutex.
 		workIQDevice.Lock()
 		if workIQDevice.attempt != attempt || workIQDevice.next != attempt.generation {
 			workIQDevice.Unlock()
