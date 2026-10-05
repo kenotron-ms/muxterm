@@ -910,6 +910,8 @@ func presetAllowsRemoteTool(c remoteConnection, name string) bool {
 		return true
 	}
 	if c.Provider == workIQRemoteID {
+		// Work IQ's provider can add read and write tools. The owner explicitly
+		// selects each discovered tool before it is offered to chats.
 		return c.ID == workIQRemoteID && c.Endpoint == workIQRemoteEndpoint && c.ClientID == workIQClientID
 	}
 	preset, ok := googleConnectionPresets[c.Provider]

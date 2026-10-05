@@ -81,16 +81,20 @@ func workIQState() (map[string]any, error) {
 	workIQDevice.Lock()
 	if attempt := workIQDevice.attempt; attempt != nil {
 		if attempt.errorText != "" {
-			result["state"] = "needs-attention"
-			result["error"] = attempt.errorText
+			if result["state"] == "disconnected" {
+				result["state"] = "needs-attention"
+				result["error"] = attempt.errorText
+			}
 		} else if time.Now().Before(attempt.expires) {
 			result["state"] = "pending"
 			result["verificationUrl"] = attempt.verificationURL
 			result["userCode"] = attempt.userCode
 			result["expiresAt"] = attempt.expires
 		} else {
-			result["state"] = "needs-attention"
-			result["error"] = "Microsoft sign-in code expired; try again"
+			if result["state"] == "disconnected" {
+				result["state"] = "needs-attention"
+				result["error"] = "Microsoft sign-in code expired; try again"
+			}
 		}
 	}
 	workIQDevice.Unlock()
