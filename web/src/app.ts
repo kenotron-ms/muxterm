@@ -531,14 +531,12 @@ export class MuxApp extends LitElement {
       position: relative;
     }
 
-    /* Split.js gutter — styled to visually match the removed
-       mux-sidebar.ts .resize-handle (4px, transparent, col-resize cursor,
-       hover highlight). Unlike the old absolutely-positioned overlay, this
-       is a real flex-row sibling occupying its own layout width. */
+    /* The gutter remains 4px wide for dragging. Paint it as part of the
+       main pane so the sidebar border meets the content without a gap. */
     .sidebar-gutter {
       width: 4px;
       cursor: col-resize;
-      background: transparent;
+      background: var(--chrome-body);
       transition: background 0.15s;
     }
 
@@ -1557,7 +1555,7 @@ export class MuxApp extends LitElement {
                 ></mux-dock>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @chat-cancel=${this._onChatCancel}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
@@ -2349,12 +2347,6 @@ export class MuxApp extends LitElement {
     this._newChatForJob = false;
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
     this._closeDrawer();
-  };
-
-  private _onChatCancel = (): void => {
-    const wasForJob = this._newChatForJob;
-    this._newChatForJob = false;
-    this._sdkChatId = wasForJob ? 'jobs' : null;
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
