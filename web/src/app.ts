@@ -535,14 +535,25 @@ export class MuxApp extends LitElement {
        main pane so the sidebar border meets the content without a gap. */
     .sidebar-gutter {
       width: 4px;
+      position: relative;
       cursor: col-resize;
       background: var(--chrome-body);
       transition: background 0.15s;
     }
 
+    /* Carry the shared 42px header rule across the resize target. */
+    .sidebar-gutter::after {
+      content: '';
+      position: absolute;
+      top: 41px;
+      left: 0;
+      right: 0;
+      border-bottom: 1px solid var(--chrome-border);
+      pointer-events: none;
+    }
+
     .sidebar-gutter:hover {
-      background: var(--chrome-accent);
-      opacity: 0.4;
+      background: color-mix(in srgb, var(--chrome-accent) 40%, var(--chrome-body));
     }
 
     /* ── Surface 1: the workspace drawer ─────────────────────────────────
