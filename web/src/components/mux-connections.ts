@@ -3,7 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 
 type Service = { id:string; name:string; group:string; description:string; docsUrl:string; endpoint?:string; availability:string; scopes?:string[]; readTools?:string[] };
-type GitHubState = { state:string; enabled:boolean; ghInstalled:boolean; serverInstalled:boolean; signedIn:boolean; toolCount:number; checkedAt?:string; error:string };
+type GitHubState = { state:string; enabled:boolean; ghInstalled:boolean; serverInstalled:boolean; signedIn:boolean; toolCount:number; checkedAt?:string; error:string; installing:boolean; loginState:string; loginCode:string; loginError:string };
 type ConnectionsResponse = { catalog:Service[]; github:GitHubState };
 type RemoteTool = { name:string; description?:string };
 type RemoteConnection = { id:string; provider?:string; name:string; endpoint:string; state:string; toolCount:number; checkedAt?:string; error?:string; discoveredTools:RemoteTool[]; allowedTools:string[] };
@@ -12,6 +12,8 @@ type WorkIQState = { installed:boolean; enabled:boolean };
 
 @customElement('mux-connections')
 export class MuxConnections extends LitElement {
+  private loginPoll?:number;
+  private autoCheckAfterLogin=false;
   @property() initialSelection = 'github';
   @state() private data?:ConnectionsResponse;
   @state() private remotes?:RemoteResponse;
@@ -74,12 +76,25 @@ export class MuxConnections extends LitElement {
     }
     void this.refresh();
   }
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this.loginPoll) window.clearTimeout(this.loginPoll);
+  }
   private async request<T>(path:string, init?:RequestInit):Promise<T> {
     const response=await fetch(apiPath(path), {...init, headers:{'Content-Type':'application/json',...init?.headers}});
     if (!response.ok) throw new Error((await response.text()).trim() || `Request failed (${response.status})`);
     return response.json() as Promise<T>;
   }
-  private async refresh() { try { [this.data,this.remotes,this.workiq]=await Promise.all([this.request<ConnectionsResponse>('/api/connections'),this.request<RemoteResponse>('/api/connections/remote'),this.request<WorkIQState>('/api/connections/workiq')]); } catch(error) { this.error=String(error); } }
+  private async refresh() {
+    try { [this.data,this.remotes,this.workiq]=await Promise.all([this.request<ConnectionsResponse>('/api/connections'),this.request<RemoteResponse>('/api/connections/remote'),this.request<WorkIQState>('/api/connections/workiq')]); }
+    catch(error) { this.error=String(error); }
+    if (this.loginPoll) window.clearTimeout(this.loginPoll);
+    if (this.isConnected && ['waiting','pending'].includes(this.data?.github.loginState||'')) this.loginPoll=window.setTimeout(()=>void this.refresh(),2000);
+    if (this.isConnected && this.autoCheckAfterLogin && this.data?.github.loginState==='complete' && this.data.github.signedIn) {
+      this.autoCheckAfterLogin=false;
+      void this.run('check',()=>this.request('/api/connections/github/check',{method:'POST'}));
+    }
+  }
   private selectService(id:string) {
     if (this.selected===id) return;
     this.googleClientID='';
@@ -102,6 +117,20 @@ export class MuxConnections extends LitElement {
     finally { await this.refresh(); this.busy=''; }
   }
   private check() { void this.run('check',()=>this.request('/api/connections/github/check',{method:'POST'})); }
+  private connectGitHub() { void this.run('github-connect',async()=>{
+    let github=this.data!.github;
+    if (!github.serverInstalled||!github.ghInstalled) {
+      await this.request('/api/connections/github/install',{method:'POST'});
+      github=(await this.request<ConnectionsResponse>('/api/connections')).github;
+    }
+    if (!github.signedIn) {
+      this.autoCheckAfterLogin=true;
+      await this.request('/api/connections/github/login',{method:'POST'});
+      return;
+    }
+    await this.request('/api/connections/github/check',{method:'POST'});
+  }); }
+  private cancelGitHubLogin() { this.autoCheckAfterLogin=false; void this.run('github-cancel',()=>this.request('/api/connections/github/login',{method:'DELETE'})); }
   private disconnect() {
     if (!window.confirm('Disable GitHub tools for new chats? Your GitHub CLI login stays signed in.')) return;
     void this.run('disconnect',()=>this.request('/api/connections/github',{method:'DELETE'}));
@@ -175,15 +204,19 @@ export class MuxConnections extends LitElement {
     const status=g.state==='ready'?'Ready':g.state==='needs-attention'?'Needs attention':g.state==='setup-required'?'Setup required':g.enabled?'Enabled · check tools':'Ready to connect';
     return html`<div class="head"><h2>GitHub</h2><span class="badge ${g.state==='ready'?'ready':g.state==='needs-attention'?'attention':''}">${status}</span></div>
       <p class="lead">Use repositories, issues, and pull requests in new chats through GitHub’s official local service.</p>
-      <div class="box"><strong>Set up on this machine</strong>
-        <p class="note">1. Install <code>gh</code> and <code>github-mcp-server</code> on the server running muxterm. 2. Sign in with <code>gh auth login --hostname github.com</code>. 3. Connect below to check the available tools.</p>
-        <p class="note">GitHub CLI: ${g.ghInstalled?'installed':'missing'} · GitHub service: ${g.serverInstalled?'installed':'missing'} · GitHub CLI login: ${g.signedIn?'found':'missing'}</p>
-        <div class="actions"><a class="action" target="_blank" rel="noopener noreferrer" href="https://cli.github.com/">Install GitHub CLI ↗</a><a class="action" target="_blank" rel="noopener noreferrer" href="https://github.com/github/github-mcp-server/releases">Install GitHub service ↗</a></div>
+      <div class="box"><strong>Set up GitHub</strong>
+        <p class="note">Muxterm installs the official GitHub service and GitHub CLI for your account when needed. Downloads are pinned and verified before use. Nothing is installed system-wide.</p>
+        <p class="note">GitHub service: ${g.serverInstalled?'available':'needed'} · Sign-in helper: ${g.ghInstalled?'available':'needed'} · GitHub account: ${g.signedIn?'signed in':'sign in required'}</p>
+        ${g.state!=='ready'?html`<div class="actions"><button class="action primary" ?disabled=${!!this.busy||g.installing||g.loginState==='waiting'||g.loginState==='pending'} @click=${this.connectGitHub}>${this.busy==='github-connect'||g.installing?'Setting up GitHub…':g.loginState==='waiting'||g.loginState==='pending'?'Waiting for GitHub…':'Connect GitHub'}</button></div>`:nothing}
+        ${g.loginState==='pending'&&g.loginCode?html`<p class="note">Open GitHub’s sign-in page and enter this one-time code: <strong><code>${g.loginCode}</code></strong></p><div class="actions"><a class="action" href="https://github.com/login/device" target="_blank" rel="noopener noreferrer">Open GitHub sign-in ↗</a></div>`:nothing}
+        ${g.loginState==='waiting'?html`<p class="note">Preparing a sign-in code…</p>`:nothing}
+        ${g.loginState==='waiting'||g.loginState==='pending'?html`<div class="actions"><button class="action" ?disabled=${!!this.busy} @click=${this.cancelGitHubLogin}>Cancel sign-in</button></div>`:nothing}
+        ${g.loginState==='error'?html`<p class="note">${g.loginError}</p>`:nothing}
       </div>
       <div class="box"><strong>Use in chats</strong>
-        <p class="note">Muxterm reads your existing GitHub CLI login when starting GitHub’s service. It stores only whether you enabled this connection, never a GitHub token. The service exposes read-only repository, issue, and pull request tools.</p>
+        <p class="note">Muxterm uses your GitHub CLI login when starting GitHub’s service. Muxterm stores only whether you enabled this connection; GitHub CLI stores its own authorization. The service exposes read-only repository, issue, and pull request tools.</p>
         ${g.state==='ready'?html`<p class="note">${g.toolCount} tools verified. They are available in new chats across all harnesses.</p>`:g.error?html`<p class="note">${g.error}</p>`:nothing}
-        <div class="actions"><button class="action primary" ?disabled=${!!this.busy||!g.ghInstalled||!g.serverInstalled||!g.signedIn} @click=${this.check}>${g.enabled?'Check tools again':'Connect GitHub'}</button>
+        <div class="actions">${g.enabled?html`<button class="action" ?disabled=${!!this.busy||!g.ghInstalled||!g.serverInstalled||!g.signedIn} @click=${this.check}>Check tools again</button>`:nothing}
           ${g.enabled?html`<button class="action" ?disabled=${!!this.busy} @click=${this.disconnect}>Disable for new chats</button>`:nothing}</div>
       </div>
       <p class="note">Your GitHub CLI login may have broader permissions than the read-only tools shown here. Disabling this connection does not sign out GitHub CLI or revoke its authorization. <a target="_blank" rel="noopener noreferrer" href="https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md">Service configuration ↗</a></p>`;
