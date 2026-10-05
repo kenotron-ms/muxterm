@@ -39,6 +39,10 @@ var workIQDevice = struct {
 	next    uint64
 }{}
 
+// Serialize token commits with cancel and disconnect without holding the
+// device-state mutex over connection file I/O.
+var workIQCommitMu sync.Mutex
+
 func workIQRemoteRecord() (remoteConnection, bool, error) {
 	var record remoteConnection
 	var found bool
@@ -107,11 +111,14 @@ func (s *Server) handleWorkIQRemote(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeWorkIQState(w)
 	case http.MethodDelete:
-		cancelWorkIQDevice()
-		if err := withRemoteConnections(func(records map[string]remoteConnection) error {
+		workIQCommitMu.Lock()
+		cancelWorkIQDeviceLocked()
+		err := withRemoteConnections(func(records map[string]remoteConnection) error {
 			delete(records, workIQRemoteID)
 			return saveRemoteConnections(records)
-		}); err != nil {
+		})
+		workIQCommitMu.Unlock()
+		if err != nil {
 			http.Error(w, "Microsoft connection could not be removed", http.StatusInternalServerError)
 			return
 		}
@@ -122,6 +129,12 @@ func (s *Server) handleWorkIQRemote(w http.ResponseWriter, r *http.Request) {
 }
 
 func cancelWorkIQDevice() {
+	workIQCommitMu.Lock()
+	defer workIQCommitMu.Unlock()
+	cancelWorkIQDeviceLocked()
+}
+
+func cancelWorkIQDeviceLocked() {
 	workIQDevice.Lock()
 	defer workIQDevice.Unlock()
 	if workIQDevice.attempt != nil {
@@ -137,15 +150,24 @@ func (s *Server) handleWorkIQLogin(w http.ResponseWriter, r *http.Request) {
 		writeWorkIQState(w)
 		return
 	}
+	workIQCommitMu.Lock()
 	workIQDevice.Lock()
-	pending := workIQDevice.attempt != nil && workIQDevice.attempt.errorText == "" && time.Now().Before(workIQDevice.attempt.expires)
-	workIQDevice.Unlock()
-	if pending {
+	if workIQDevice.attempt != nil && workIQDevice.attempt.errorText == "" && time.Now().Before(workIQDevice.attempt.expires) {
+		workIQDevice.Unlock()
+		workIQCommitMu.Unlock()
 		writeWorkIQState(w)
 		return
 	}
-	// A new attempt invalidates any earlier poller before contacting Entra.
-	cancelWorkIQDevice()
+	// Reserve a generation before contacting Entra. Concurrent starts and
+	// cancellation invalidate the earlier network response.
+	if workIQDevice.attempt != nil {
+		workIQDevice.attempt.cancel()
+		workIQDevice.attempt = nil
+	}
+	workIQDevice.next++
+	generation := workIQDevice.next
+	workIQDevice.Unlock()
+	workIQCommitMu.Unlock()
 	form := url.Values{"client_id": {workIQClientID}, "scope": {workIQScope + " offline_access"}}
 	request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, workIQDeviceURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -178,10 +200,15 @@ func (s *Server) handleWorkIQLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	pollCtx, cancel := context.WithCancel(context.Background())
 	workIQDevice.Lock()
-	workIQDevice.next++
+	if workIQDevice.next != generation {
+		workIQDevice.Unlock()
+		cancel()
+		writeWorkIQState(w)
+		return
+	}
 	attempt := &workIQDeviceAttempt{
 		code: body.DeviceCode, userCode: body.UserCode, verificationURL: verification.String(),
-		expires: time.Now().Add(time.Duration(body.ExpiresIn) * time.Second), cancel: cancel, generation: workIQDevice.next,
+		expires: time.Now().Add(time.Duration(body.ExpiresIn) * time.Second), cancel: cancel, generation: generation,
 	}
 	workIQDevice.attempt = attempt
 	workIQDevice.Unlock()
@@ -281,14 +308,16 @@ func pollWorkIQDevice(ctx context.Context, attempt *workIQDeviceAttempt, interva
 			finishWorkIQAttempt(attempt, "Microsoft connection could not be saved")
 			return
 		}
-		// Serialize the final token commit with Cancel and Disconnect. A
-		// cancelled attempt must never recreate an enabled connection. Readers
-		// release the connection file lock before taking workIQDevice's mutex.
+		// Serialize the final token commit with Cancel and Disconnect. The
+		// short state lock is released before the connection file's I/O.
+		workIQCommitMu.Lock()
 		workIQDevice.Lock()
 		if workIQDevice.attempt != attempt || workIQDevice.next != attempt.generation {
 			workIQDevice.Unlock()
+			workIQCommitMu.Unlock()
 			return
 		}
+		workIQDevice.Unlock()
 		err = withRemoteConnections(func(records map[string]remoteConnection) error {
 			records[workIQRemoteID] = remoteConnection{
 				ID: workIQRemoteID, Provider: workIQRemoteID, Name: "Microsoft 365",
@@ -299,14 +328,15 @@ func pollWorkIQDevice(ctx context.Context, attempt *workIQDeviceAttempt, interva
 			}
 			return saveRemoteConnections(records)
 		})
-		workIQDevice.Unlock()
 		if err != nil {
 			if ctx.Err() == nil {
 				finishWorkIQAttempt(attempt, "Microsoft connection could not be saved")
 			}
+			workIQCommitMu.Unlock()
 			return
 		}
 		finishWorkIQAttempt(attempt, "")
+		workIQCommitMu.Unlock()
 		return
 	}
 	finishWorkIQAttempt(attempt, "Microsoft sign-in code expired; try again")
