@@ -83,8 +83,10 @@ export class MuxConnections extends LitElement {
     super.disconnectedCallback();
     if (this.loginPoll) window.clearTimeout(this.loginPoll);
     this.loginPoll=undefined;
+    this.autoCheckAfterLogin=false;
     this.autoCheckWorkIQAfterLogin=false;
     this.workIQAllowedDraft=undefined;
+    this.allowedDraft={};
   }
   private async request<T>(path:string, init?:RequestInit):Promise<T> {
     const response=await fetch(apiPath(path), {...init, headers:{'Content-Type':'application/json',...init?.headers}});
