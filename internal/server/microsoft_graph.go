@@ -194,6 +194,9 @@ func RunMicrosoftGraphMCP(ctx context.Context, name string) error {
 	if err != nil {
 		return errors.New("Microsoft tools could not be listed")
 	}
+	if !microsoftGraphEnabled(name) {
+		return errors.New("Microsoft account is disabled in Connections")
+	}
 	local := mcp.NewServer(&mcp.Implementation{Name: "muxterm-microsoft-connection", Version: "1"}, nil)
 	for _, tool := range tools {
 		if tool == nil || !microsoftGraphDataTool(tool.Name) || !validRemoteToolSchema(tool.InputSchema) ||
@@ -290,92 +293,86 @@ func (s *Server) handleMicrosoftGraphConnect(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	p.mu.Lock()
-	if p.cancel != nil {
+	if p.cancel != nil || p.loginState == "installing" {
 		p.mu.Unlock()
 		http.Error(w, "Microsoft sign-in is already running", http.StatusConflict)
 		return
 	}
+	loginCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	p.cancel = cancel
 	p.loginState, p.code, p.errorMessage = "installing", "", ""
 	p.generation++
 	generation := p.generation
 	p.mu.Unlock()
-	installCtx, stop := context.WithTimeout(r.Context(), 4*time.Minute)
+	go runMicrosoftGraphLogin(loginCtx, cancel, p, generation)
+	writeSDKJSON(w, http.StatusAccepted, microsoftGraphPublicState(p))
+}
+
+func runMicrosoftGraphLogin(loginCtx context.Context, cancel context.CancelFunc, p *microsoftGraphProfile, generation uint64) {
+	defer cancel()
+	installCtx, stop := context.WithTimeout(loginCtx, 4*time.Minute)
 	err := ensureMicrosoftGraphPackage(installCtx)
 	stop()
 	if err != nil {
-		p.mu.Lock()
-		if p.generation == generation {
-			p.loginState, p.errorMessage = "error", err.Error()
-		}
+		finishMicrosoftGraphLogin(p, generation, 0, err, false)
+		return
+	}
+	p.mu.Lock()
+	if p.generation != generation || loginCtx.Err() != nil {
 		p.mu.Unlock()
-		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	if err := os.MkdirAll(microsoftGraphProfileDir(p.name), 0700); err != nil {
-		http.Error(w, "Microsoft connection settings could not be saved", http.StatusInternalServerError)
-		return
-	}
-	loginCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	p.mu.Lock()
-	if p.generation != generation {
 		p.mu.Unlock()
-		cancel()
-		http.Error(w, "Microsoft sign-in changed", http.StatusConflict)
+		finishMicrosoftGraphLogin(p, generation, 0, err, false)
 		return
 	}
-	p.cancel, p.loginState = cancel, "waiting"
+	p.loginState = "waiting"
 	p.mu.Unlock()
 	cmd, err := microsoftGraphCommand(loginCtx, p, "--login")
 	if err != nil {
-		cancel()
-		p.mu.Lock()
-		p.cancel, p.loginState, p.errorMessage = nil, "error", err.Error()
-		p.mu.Unlock()
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		finishMicrosoftGraphLogin(p, generation, 0, err, false)
 		return
 	}
 	output := &microsoftGraphLoginOutput{p: p, generation: generation}
 	cmd.Stdout, cmd.Stderr = output, output
 	if err := cmd.Start(); err != nil {
-		cancel()
-		p.mu.Lock()
-		p.cancel, p.loginState, p.errorMessage = nil, "error", "Microsoft sign-in could not start"
-		p.mu.Unlock()
-		http.Error(w, "Microsoft sign-in could not start", http.StatusBadGateway)
+		finishMicrosoftGraphLogin(p, generation, 0, err, false)
 		return
 	}
-	go func() {
-		runErr := cmd.Wait()
-		success, blocked := output.result()
-		count := 0
-		if runErr == nil && success {
-			checkCtx, checkCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			count, runErr = checkMicrosoftGraphTools(checkCtx, p)
-			checkCancel()
-		} else if runErr == nil {
-			runErr = errors.New("Microsoft sign-in could not be verified")
+	runErr := cmd.Wait()
+	success, blocked := output.result()
+	count := 0
+	if runErr == nil && success {
+		checkCtx, checkCancel := context.WithTimeout(loginCtx, 30*time.Second)
+		count, runErr = checkMicrosoftGraphTools(checkCtx, p)
+		checkCancel()
+	} else if runErr == nil {
+		runErr = errors.New("Microsoft sign-in could not be verified")
+	}
+	finishMicrosoftGraphLogin(p, generation, count, runErr, blocked)
+}
+
+func finishMicrosoftGraphLogin(p *microsoftGraphProfile, generation uint64, count int, runErr error, blocked bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.generation != generation {
+		return
+	}
+	if runErr == nil {
+		runErr = os.WriteFile(microsoftGraphMarker(p.name), []byte("enabled\n"), 0600)
+	}
+	p.cancel, p.code = nil, ""
+	p.loginState = "complete"
+	if runErr != nil {
+		p.loginState = "error"
+		p.errorMessage = "Microsoft sign-in failed; try again"
+		if blocked {
+			p.errorMessage = "Your organization blocked this app (53003). Ask your Microsoft 365 administrator to review the sign-in policy."
 		}
-		p.mu.Lock()
-		if p.generation == generation {
-			if runErr == nil {
-				runErr = os.WriteFile(microsoftGraphMarker(p.name), []byte("enabled\n"), 0600)
-			}
-			p.cancel, p.code = nil, ""
-			p.loginState = "complete"
-			if runErr != nil {
-				p.loginState = "error"
-				p.errorMessage = "Microsoft sign-in failed; try again"
-				if blocked {
-					p.errorMessage = "Your organization blocked this app (53003). Ask your Microsoft 365 administrator to review the sign-in policy."
-				}
-			} else {
-				p.errorMessage, p.toolCount, p.checkedAt = "", count, time.Now()
-			}
-		}
-		p.mu.Unlock()
-		cancel()
-	}()
-	writeSDKJSON(w, http.StatusOK, microsoftGraphPublicState(p))
+	} else {
+		p.errorMessage, p.toolCount, p.checkedAt = "", count, time.Now()
+	}
 }
 
 func checkMicrosoftGraphTools(ctx context.Context, p *microsoftGraphProfile) (int, error) {
@@ -414,6 +411,9 @@ func (s *Server) handleMicrosoftGraphCheck(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Microsoft account is not connected", http.StatusNotFound)
 		return
 	}
+	p.mu.Lock()
+	generation := p.generation
+	p.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	cmd, err := microsoftGraphCommand(ctx, p, "--verify-login")
@@ -428,6 +428,11 @@ func (s *Server) handleMicrosoftGraphCheck(w http.ResponseWriter, r *http.Reques
 	}
 	if err != nil || json.Unmarshal(output, &result) != nil || !result.Success {
 		p.mu.Lock()
+		if p.generation != generation || !microsoftGraphEnabled(p.name) {
+			p.mu.Unlock()
+			http.Error(w, "Microsoft connection changed during the check", http.StatusConflict)
+			return
+		}
 		p.errorMessage = "Microsoft authorization needs another sign-in"
 		p.mu.Unlock()
 		http.Error(w, "Microsoft authorization needs another sign-in", http.StatusBadGateway)
@@ -439,6 +444,11 @@ func (s *Server) handleMicrosoftGraphCheck(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	p.mu.Lock()
+	if p.generation != generation || !microsoftGraphEnabled(p.name) {
+		p.mu.Unlock()
+		http.Error(w, "Microsoft connection changed during the check", http.StatusConflict)
+		return
+	}
 	p.errorMessage, p.toolCount, p.checkedAt = "", count, time.Now()
 	p.mu.Unlock()
 	writeSDKJSON(w, http.StatusOK, microsoftGraphPublicState(p))
@@ -455,13 +465,23 @@ func (s *Server) handleMicrosoftGraphDisconnect(w http.ResponseWriter, r *http.R
 	if p.cancel != nil {
 		p.cancel()
 	}
-	p.cancel, p.code, p.loginState, p.errorMessage = nil, "", "", ""
-	p.toolCount, p.checkedAt = 0, time.Time{}
-	p.mu.Unlock()
+	if err := os.Remove(microsoftGraphMarker(p.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		p.cancel, p.code, p.loginState = nil, "", "error"
+		p.errorMessage = "Microsoft account could not be disabled"
+		p.mu.Unlock()
+		http.Error(w, "Microsoft account could not be disabled", http.StatusInternalServerError)
+		return
+	}
 	if err := os.RemoveAll(microsoftGraphProfileDir(p.name)); err != nil {
+		p.cancel, p.code, p.loginState = nil, "", "error"
+		p.errorMessage = "Microsoft account could not be disconnected"
+		p.mu.Unlock()
 		http.Error(w, fmt.Sprintf("Microsoft %s account could not be disconnected", p.name), http.StatusInternalServerError)
 		return
 	}
+	p.cancel, p.code, p.loginState, p.errorMessage = nil, "", "", ""
+	p.toolCount, p.checkedAt = 0, time.Time{}
+	p.mu.Unlock()
 	writeSDKJSON(w, http.StatusOK, microsoftGraphPublicState(p))
 }
 

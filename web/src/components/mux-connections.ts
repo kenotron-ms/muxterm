@@ -15,6 +15,7 @@ type LegacyWorkIQ = { savedAuthorization:boolean };
 @customElement('mux-connections')
 export class MuxConnections extends LitElement {
   private loginPoll?:number;
+  private refreshAbort?:AbortController;
   private autoCheckAfterLogin=false;
   @property() initialSelection = 'github';
   @state() private data?:ConnectionsResponse;
@@ -84,6 +85,8 @@ export class MuxConnections extends LitElement {
     super.disconnectedCallback();
     if (this.loginPoll) window.clearTimeout(this.loginPoll);
     this.loginPoll=undefined;
+    this.refreshAbort?.abort();
+    this.refreshAbort=undefined;
     this.autoCheckAfterLogin=false;
     this.allowedDraft={};
   }
@@ -93,8 +96,16 @@ export class MuxConnections extends LitElement {
     return response.json() as Promise<T>;
   }
   private async refresh() {
-    try { [this.data,this.remotes,this.microsoft,this.legacyWorkIQ]=await Promise.all([this.request<ConnectionsResponse>('/api/connections'),this.request<RemoteResponse>('/api/connections/remote'),this.request<MicrosoftState>('/api/connections/microsoft'),this.request<LegacyWorkIQ>('/api/connections/workiq')]); }
-    catch(error) { this.error=String(error); }
+    this.refreshAbort?.abort();
+    const abort=new AbortController();
+    this.refreshAbort=abort;
+    try {
+      const [data,remotes,microsoft,legacyWorkIQ]=await Promise.all([this.request<ConnectionsResponse>('/api/connections',{signal:abort.signal}),this.request<RemoteResponse>('/api/connections/remote',{signal:abort.signal}),this.request<MicrosoftState>('/api/connections/microsoft',{signal:abort.signal}),this.request<LegacyWorkIQ>('/api/connections/workiq',{signal:abort.signal})]);
+      if (abort.signal.aborted || !this.isConnected) return;
+      [this.data,this.remotes,this.microsoft,this.legacyWorkIQ]=[data,remotes,microsoft,legacyWorkIQ];
+    }
+    catch(error) { if (abort.signal.aborted || !this.isConnected) return; this.error=String(error); }
+    finally { if (this.refreshAbort===abort) this.refreshAbort=undefined; }
     if (this.loginPoll) window.clearTimeout(this.loginPoll);
     if (this.isConnected && (['waiting','pending'].includes(this.data?.github.loginState||'') || Object.values(this.microsoft??{}).some(profile=>profile.state==='pending'))) this.loginPoll=window.setTimeout(()=>void this.refresh(),2000);
     if (this.isConnected && this.autoCheckAfterLogin && this.data?.github.loginState==='complete' && this.data.github.signedIn) {
