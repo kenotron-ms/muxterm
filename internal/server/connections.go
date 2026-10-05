@@ -49,12 +49,17 @@ var connectionCatalog = []connectionCatalogEntry{
 }
 
 type serviceConnections struct {
-	mu         sync.Mutex
-	markerPath string
-	generation uint64
-	checkedAt  time.Time
-	toolCount  int
-	checkErr   string
+	mu          sync.Mutex
+	markerPath  string
+	generation  uint64
+	checkedAt   time.Time
+	toolCount   int
+	checkErr    string
+	installing  bool
+	loginState  string
+	loginCode   string
+	loginError  string
+	loginCancel context.CancelFunc
 }
 
 func newServiceConnections() *serviceConnections {
@@ -83,7 +88,7 @@ func githubEnvironment() []string {
 }
 
 func githubCLIStatus(ctx context.Context) bool {
-	gh, err := exec.LookPath("gh")
+	gh, err := githubBinary("gh")
 	if err != nil {
 		return false
 	}
@@ -94,9 +99,9 @@ func githubCLIStatus(ctx context.Context) bool {
 }
 
 func githubCLIToken(ctx context.Context) (string, error) {
-	gh, err := exec.LookPath("gh")
+	gh, err := githubBinary("gh")
 	if err != nil {
-		return "", errors.New("Install GitHub CLI, then sign in to github.com")
+		return "", errors.New("GitHub tools need setup; open Connections and select Connect GitHub")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -105,7 +110,7 @@ func githubCLIToken(ctx context.Context) (string, error) {
 	var out boundedTokenOutput
 	cmd.Stdout, cmd.Stderr = &out, io.Discard
 	if err := cmd.Run(); err != nil {
-		return "", errors.New("Sign in with GitHub CLI: gh auth login --hostname github.com")
+		return "", errors.New("Sign in to GitHub in Connections")
 	}
 	token := strings.TrimSpace(string(out.data))
 	if out.overflow || len(token) < 8 || strings.IndexFunc(token, unicode.IsSpace) >= 0 || strings.IndexFunc(token, unicode.IsControl) >= 0 {
@@ -132,9 +137,9 @@ func (o *boundedTokenOutput) Write(p []byte) (int, error) {
 }
 
 func githubMCPCommand(ctx context.Context) (*exec.Cmd, error) {
-	server, err := exec.LookPath("github-mcp-server")
+	server, err := githubBinary("github-mcp-server")
 	if err != nil {
-		return nil, errors.New("Install GitHub's official local server: github-mcp-server")
+		return nil, errors.New("GitHub tools need setup; open Connections and select Connect GitHub")
 	}
 	token, err := githubCLIToken(ctx)
 	if err != nil {
@@ -173,13 +178,14 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	_, markerErr := os.Stat(c.markerPath)
 	enabled := markerErr == nil
 	checkedAt, toolCount, checkErr := c.checkedAt, c.toolCount, c.checkErr
+	installing, loginState, loginCode, loginError := c.installing, c.loginState, c.loginCode, c.loginError
 	c.mu.Unlock()
 	ghInstalled := false
-	if _, err := exec.LookPath("gh"); err == nil {
+	if _, err := githubBinary("gh"); err == nil {
 		ghInstalled = true
 	}
 	serverInstalled := false
-	if _, err := exec.LookPath("github-mcp-server"); err == nil {
+	if _, err := githubBinary("github-mcp-server"); err == nil {
 		serverInstalled = true
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -197,9 +203,11 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeSDKJSON(w, 200, map[string]any{"catalog": connectionCatalog, "github": map[string]any{
 		"state": state, "enabled": enabled, "ghInstalled": ghInstalled, "serverInstalled": serverInstalled,
 		"signedIn": signedIn, "toolCount": toolCount, "checkedAt": checkedAt, "error": checkErr,
+		"installing": installing, "loginState": loginState, "loginCode": loginCode, "loginError": loginError,
 	}})
 }
 
