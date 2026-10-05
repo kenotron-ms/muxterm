@@ -260,7 +260,7 @@ export class MuxConnections extends LitElement {
     const tools=w.discoveredTools??[];
     const allowed=w.allowedTools??[];
     const selected=this.workIQAllowedDraft??allowed;
-    const status=ready?'Ready':pending?'Waiting for sign-in':authorized?(w.toolCount?'Choose tools':'Signed in · check tools'):attention?'Needs attention':'Not connected';
+    const status=ready?'Ready':pending?'Waiting for sign-in':authorized?(allowed.length?'Enabled · check access':w.toolCount?'Choose tools':'Signed in · check tools'):attention?'Needs attention':'Not connected';
     return html`<div class="head"><h2>${service.name}</h2><span class="badge ${ready?'ready':attention?'attention':''}">${status}</span></div>
       <p class="lead">${service.description}. One Microsoft-hosted Work IQ connection covers OneDrive, Outlook Mail, Outlook Calendar, and other Microsoft 365 data.</p>
       <div class="box"><strong>Connect Microsoft 365</strong>
@@ -278,7 +278,7 @@ export class MuxConnections extends LitElement {
         </div>`:nothing}
       </div>
       ${!pending&&w.state!=='disconnected'?html`<div class="box"><strong>Tools for chats</strong>
-        <p class="note">${ready?`${w.toolCount} tools verified; ${allowed.length} enabled for new Codex, Claude, and Amplifier chats.`:authorized&&w.toolCount?`${w.toolCount} tools found. Select the tools you want to make available in new chats.`:'Check access to discover which tools your Microsoft account can use.'}</p>
+        <p class="note">${ready?`${w.toolCount} tools verified; ${allowed.length} enabled for new Codex, Claude, and Amplifier chats.`:authorized&&allowed.length?`${allowed.length} selected tools remain enabled for new chats. Check access again to refresh their status.`:authorized&&w.toolCount?`${w.toolCount} tools found. Select the tools you want to make available in new chats.`:'Check access to discover which tools your Microsoft account can use.'}</p>
         ${w.error&&w.state!=='needs-attention'?html`<p class="note">${w.error}</p>`:nothing}
         <p class="note">Some Microsoft 365 tools can send, change, or delete data. Only enable tools you intend to use. Your account permissions and organization policies also apply.</p>
         <div class="actions"><button class="action" ?disabled=${!!this.busy} @click=${this.checkWorkIQ}>${this.busy==='workiq-check'?'Checking tools…':ready?'Check tools again':'Check tools'}</button></div>
