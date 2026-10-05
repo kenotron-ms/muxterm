@@ -150,7 +150,10 @@ export class MuxConnections extends LitElement {
     this.autoCheckWorkIQAfterLogin=false;
     void this.run('workiq-cancel',()=>this.request('/api/connections/workiq/login',{method:'DELETE'}));
   }
-  private checkWorkIQ() { void this.run('workiq-check',()=>this.request('/api/connections/workiq/check',{method:'POST'})); }
+  private checkWorkIQ() {
+    this.workIQAllowedDraft=undefined;
+    void this.run('workiq-check',()=>this.request('/api/connections/workiq/check',{method:'POST'}));
+  }
   private disconnectWorkIQ() {
     if (!window.confirm('Disconnect Microsoft 365 and remove its saved authorization?')) return;
     this.autoCheckWorkIQAfterLogin=false;

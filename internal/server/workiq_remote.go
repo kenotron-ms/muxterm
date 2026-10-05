@@ -30,13 +30,13 @@ type workIQDeviceAttempt struct {
 	expires                         time.Time
 	cancel                          context.CancelFunc
 	generation                      uint64
-	errorText                       string
 }
 
 var workIQDevice = struct {
 	sync.Mutex
-	attempt *workIQDeviceAttempt
-	next    uint64
+	attempt   *workIQDeviceAttempt
+	next      uint64
+	lastError string
 }{}
 
 // Serialize token commits with cancel and disconnect without holding the
@@ -80,12 +80,7 @@ func workIQState() (map[string]any, error) {
 	}
 	workIQDevice.Lock()
 	if attempt := workIQDevice.attempt; attempt != nil {
-		if attempt.errorText != "" {
-			if result["state"] == "disconnected" {
-				result["state"] = "needs-attention"
-				result["error"] = attempt.errorText
-			}
-		} else if time.Now().Before(attempt.expires) {
+		if time.Now().Before(attempt.expires) {
 			result["state"] = "pending"
 			result["verificationUrl"] = attempt.verificationURL
 			result["userCode"] = attempt.userCode
@@ -96,6 +91,9 @@ func workIQState() (map[string]any, error) {
 				result["error"] = "Microsoft sign-in code expired; try again"
 			}
 		}
+	} else if workIQDevice.lastError != "" && result["state"] == "disconnected" {
+		result["state"] = "needs-attention"
+		result["error"] = workIQDevice.lastError
 	}
 	workIQDevice.Unlock()
 	return result, nil
@@ -145,6 +143,7 @@ func cancelWorkIQDeviceLocked() {
 		workIQDevice.attempt.cancel()
 		workIQDevice.attempt = nil
 	}
+	workIQDevice.lastError = ""
 	workIQDevice.next++
 }
 
@@ -156,7 +155,7 @@ func (s *Server) handleWorkIQLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	workIQCommitMu.Lock()
 	workIQDevice.Lock()
-	if workIQDevice.attempt != nil && workIQDevice.attempt.errorText == "" && time.Now().Before(workIQDevice.attempt.expires) {
+	if workIQDevice.attempt != nil && time.Now().Before(workIQDevice.attempt.expires) {
 		workIQDevice.Unlock()
 		workIQCommitMu.Unlock()
 		writeWorkIQState(w)
@@ -168,6 +167,7 @@ func (s *Server) handleWorkIQLogin(w http.ResponseWriter, r *http.Request) {
 		workIQDevice.attempt.cancel()
 		workIQDevice.attempt = nil
 	}
+	workIQDevice.lastError = ""
 	workIQDevice.next++
 	generation := workIQDevice.next
 	workIQDevice.Unlock()
@@ -235,10 +235,8 @@ func finishWorkIQAttempt(attempt *workIQDeviceAttempt, message string) {
 	defer workIQDevice.Unlock()
 	if workIQDevice.attempt == attempt && workIQDevice.next == attempt.generation {
 		attempt.code = ""
-		attempt.errorText = message
-		if message == "" {
-			workIQDevice.attempt = nil
-		}
+		workIQDevice.lastError = message
+		workIQDevice.attempt = nil
 	}
 }
 

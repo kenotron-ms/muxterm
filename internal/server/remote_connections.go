@@ -226,6 +226,7 @@ func canonicalRootIssuer(raw string) string {
 }
 
 func usesResourceIndicator(c remoteConnection) bool {
+	// Work IQ's explicit API scope already identifies its resource to Entra.
 	return c.Issuer != "https://accounts.google.com" && c.Provider != workIQRemoteID
 }
 
