@@ -160,7 +160,11 @@ async function command(cmd) {
     sessions.set(sessionId, s);
     if (isACPHarness(harness)) {
       try {
-        s.acp = new ACPStream(s, emit);
+        s.acp = new ACPStream(s, emit, () => {
+          // A dead ACP child must be replaced on the next resume, even when
+          // it exited between turns and no uncertain delivery event was needed.
+          if (sessions.get(sessionId) === s) sessions.delete(sessionId);
+        });
         await s.acp.start();
       } catch (error) {
         s.acp?.close(); sessions.delete(sessionId);
