@@ -6,6 +6,7 @@ import { store } from '../state.js';
 import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
+import type { PartialBlock } from '@blocknote/core';
 import './mux-sdk-pdf-preview.js';
 import './mux-monaco-source.js';
 import './mux-monaco-diff.js';
@@ -25,25 +26,25 @@ type ChangedFile = { repo: string; path: string; status: string };
 type ChangeDetail = { repo: string; path: string; before: string; after: string; binary?: boolean; tooLarge?: boolean };
 type PageBlockType = 'text' | 'heading' | 'heading2' | 'heading3' | 'bullet' | 'numbered' | 'check' | 'code' | 'quote' | 'divider' | 'instructions' | 'image' | 'file' | 'page';
 type PageBlock = { id: string; type: PageBlockType; text: string; checked?: boolean; attachmentId?: string; childPageId?: string };
-type NotePage = { id: string; parentId?: string; title: string; blocks: PageBlock[] };
-type SlashAction = PageBlockType | 'page' | 'generate' | 'visualize';
-const PAGE_COMMANDS: { group: string; label: string; hint: string; action: SlashAction }[] = [
-  { group:'Generate', label:'Generate', hint:'Describe what you want to write', action:'generate' },
-  { group:'Generate', label:'Visualize', hint:'Create an interactive visualization', action:'visualize' },
-  { group:'Create', label:'Page', hint:'Create a page inside this one', action:'page' },
-  { group:'Media', label:'Image', hint:'Upload an image', action:'image' },
-  { group:'Media', label:'File', hint:'Upload a file for download', action:'file' },
-  { group:'Basic', label:'Assistant instructions', hint:'Guide the agent on this page', action:'instructions' },
-  { group:'Basic', label:'Heading 1', hint:'#', action:'heading' },
-  { group:'Basic', label:'Heading 2', hint:'##', action:'heading2' },
-  { group:'Basic', label:'Heading 3', hint:'###', action:'heading3' },
-  { group:'Basic', label:'Bulleted list', hint:'•', action:'bullet' },
-  { group:'Basic', label:'Numbered list', hint:'1.', action:'numbered' },
-  { group:'Basic', label:'To-do list', hint:'☐', action:'check' },
-  { group:'Basic', label:'Quote', hint:'❝', action:'quote' },
-  { group:'Basic', label:'Code', hint:'</>', action:'code' },
-  { group:'Basic', label:'Divider', hint:'—', action:'divider' },
-];
+type NotePage = { id: string; parentId?: string; title: string; blocks: PageBlock[]; content?: PartialBlock[] };
+
+function legacyPageContent(blocks: PageBlock[]): PartialBlock[] {
+  const converted = blocks.map((block): PartialBlock => {
+    const attachment = block.attachmentId ? apiPath(`/api/sdk-chat-attachments/${encodeURIComponent(block.attachmentId)}`) : '';
+    if (block.type === 'image' && attachment) return { type:'image', props:{url:attachment, caption:block.text} };
+    if (block.type === 'file' && attachment) return { type:'file', props:{url:attachment, caption:block.text, name:block.text} };
+    if (block.type === 'divider') return { type:'divider' };
+    if (block.type === 'page' && block.childPageId) return { type:'paragraph', content:[{type:'link', href:`#muxterm-page-${block.childPageId}`, content:`↗ ${block.text || 'Untitled'}`}] };
+    if (block.type.startsWith('heading')) return { type:'heading', props:{level:block.type === 'heading' ? 1 : block.type === 'heading2' ? 2 : 3}, content:block.text };
+    if (block.type === 'bullet') return { type:'bulletListItem', content:block.text };
+    if (block.type === 'numbered') return { type:'numberedListItem', content:block.text };
+    if (block.type === 'check') return { type:'checkListItem', props:{checked:!!block.checked}, content:block.text };
+    if (block.type === 'code') return { type:'codeBlock', content:block.text };
+    if (block.type === 'quote') return { type:'quote', content:block.text };
+    return { type:'paragraph', content:block.type === 'instructions' ? `Assistant instructions: ${block.text}` : block.text };
+  });
+  return converted.length ? converted : [{type:'paragraph'}];
+}
 type UtilityTabId = 'new' | 'files' | 'changes' | 'terminal' | 'pages';
 type UtilityTab = { id: string; kind: UtilityTabId; paneId?: number; pageId?: string };
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
@@ -144,10 +145,6 @@ export class MuxSDKUtility extends LitElement {
   private pageSaveQueue: Promise<void> = Promise.resolve();
   private pageSaving = false;
   private pagesRailOpen = true;
-  private slashBlockId = '';
-  private slashQuery = '';
-  private slashIndex = 0;
-  private pageUploadTarget: { pageId: string; blockId: string; kind: 'image' | 'file' } | null = null;
   private terminalRetryTimer?: number;
   private terminalRetryCount = 0;
   private terminalCreatePending = false;
@@ -643,6 +640,7 @@ export class MuxSDKUtility extends LitElement {
   private async loadPages() {
     this.pagesError = '';
     try {
+      await import('./mux-blocknote-page.js');
       const response = await fetch(this.endpoint('pages'));
       if (!response.ok) throw new Error(`Pages unavailable (${response.status})`);
       const doc = await response.json() as { pages: NotePage[] };
@@ -668,21 +666,13 @@ export class MuxSDKUtility extends LitElement {
     return this.pageSaveQueue;
   }
   private newPage(parentId = '') {
-    const page: NotePage = { id:crypto.randomUUID(), parentId:parentId || undefined, title:'Untitled', blocks:[{id:crypto.randomUUID(),type:'text',text:''}] };
+    const page: NotePage = { id:crypto.randomUUID(), parentId:parentId || undefined, title:'Untitled', blocks:[], content:[{type:'paragraph'}] };
     this.pages = [...(this.pages || []), page];
     this.selectPage(page.id);
-    this.slashBlockId = '';
     this.schedulePageSave();
     this.paintAll();
     void this.updateComplete.then(() => this.querySelector<HTMLTextAreaElement>('.page-title')?.focus());
     return page;
-  }
-  private addPageBlock(page: NotePage, index: number, type: PageBlockType = 'text') {
-    const block: PageBlock = { id:crypto.randomUUID(), type, text:'' };
-    page.blocks.splice(index, 0, block);
-    this.slashBlockId = '';
-    this.schedulePageSave(); this.paintAll();
-    void this.updateComplete.then(() => this.querySelector<HTMLTextAreaElement>(`[data-block-id="${block.id}"]`)?.focus());
   }
   private pageRows(parentId = '', depth = 0): TemplateResult[] {
     if (depth > 8) return [];
@@ -696,85 +686,17 @@ export class MuxSDKUtility extends LitElement {
   private selectPage(id: string) {
     this.pageId = id;
     if (this.currentTab.kind === 'pages') { this.currentTab.pageId = id; this.saveTabs(); }
-    this.slashBlockId = '';
     try { localStorage.setItem(this.pageKey(),id); } catch { /* private browsing */ }
     this.paintAll();
   }
-  private pageCommands() {
-    return PAGE_COMMANDS.filter(item => `${item.label} ${item.hint}`.toLowerCase().includes(this.slashQuery.toLowerCase()));
+  private openPageLink(event: MouseEvent) {
+    const link = event.composedPath().find(node => node instanceof HTMLAnchorElement && node.getAttribute('href')?.startsWith('#muxterm-page-')) as HTMLAnchorElement | undefined;
+    const id = link?.getAttribute('href')?.slice('#muxterm-page-'.length);
+    if (id && this.pages?.some(page => page.id === id)) { event.preventDefault(); this.selectPage(id); }
   }
-  private selectPageCommand(page: NotePage, block: PageBlock, action: SlashAction) {
-    this.slashBlockId = '';
-    this.slashQuery = '';
-    if (action === 'page') {
-      const child = this.newPage(page.id);
-      block.type = 'page'; block.text = child.title; block.childPageId = child.id;
-      this.schedulePageSave();
-      return;
-    }
-    if (action === 'generate' || action === 'visualize') {
-      block.text = '';
-      this.dispatchEvent(new CustomEvent('sdk-page-prompt',{detail:{pageId:page.id,title:page.title,kind:action},bubbles:true,composed:true}));
-      this.paintAll();
-      return;
-    }
-    block.type = action;
-    block.text = '';
-    this.schedulePageSave(); this.paintAll();
-    if (action === 'image' || action === 'file') this.choosePageMedia(page,block,action);
-    else void this.updateComplete.then(() => this.querySelector<HTMLTextAreaElement>(`[data-block-id="${block.id}"]`)?.focus());
-  }
-  private choosePageMedia(page: NotePage, block: PageBlock, kind: 'image' | 'file') {
-    this.pageUploadTarget = {pageId:page.id,blockId:block.id,kind};
-    void this.updateComplete.then(() => {
-      const input = this.querySelector<HTMLInputElement>('.page-media-input');
-      if (input) { input.accept = kind === 'image' ? 'image/*' : ''; input.click(); }
-    });
-  }
-  private async uploadPageMedia(event: Event) {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    const target = this.pageUploadTarget;
-    input.value = '';
-    this.pageUploadTarget = null;
-    if (!file || !target) return;
-    const block = this.pages?.find(page => page.id === target.pageId)?.blocks.find(item => item.id === target.blockId);
-    if (!block) return;
-    const form = new FormData(); form.append('file',file);
-    block.text = file.name;
-    this.pagesError = '';
-    this.paintAll();
-    try {
-      const response = await fetch(apiPath('/api/sdk-chat-attachments'), {method:'POST',headers:{'X-Muxterm-Chat-Attachment':'1'},body:form});
-      if (!response.ok) throw new Error(`Upload failed (${response.status})`);
-      const result = await response.json() as {id:string;kind:string};
-      block.attachmentId = result.id;
-      block.type = result.kind === 'image' ? 'image' : 'file';
-      this.schedulePageSave();
-    } catch (error) { this.pagesError = String(error); }
-    this.paintAll();
-  }
-  private pageBlockInput(page: NotePage, block: PageBlock, index: number) {
-    if (block.type === 'divider') return html`<hr class="page-divider">`;
-    if (block.type === 'page') {
-      const child = this.pages?.find(item => item.id === block.childPageId);
-      return html`<button class="page-child-link" @click=${() => { if (child) this.selectPage(child.id); }}>${icon(NotebookPen,{size:15})}<span>${child?.title || block.text || 'Untitled'}</span></button>`;
-    }
-    if (block.type === 'image' || block.type === 'file') return html`<div class="page-media">${block.attachmentId ? block.type === 'image' ? html`<img src=${apiPath(`/api/sdk-chat-attachments/${encodeURIComponent(block.attachmentId)}`)} alt=${block.text}>` : html`<a href=${apiPath(`/api/sdk-chat-attachments/${encodeURIComponent(block.attachmentId)}`)} target="_blank" rel="noopener">${icon(File,{size:16})}${block.text}</a>` : html`<button @click=${() => this.choosePageMedia(page,block,block.type as 'image' | 'file')}>${block.text || `Choose ${block.type}`}</button>`}</div>`;
-    return html`<textarea data-block-id=${block.id} aria-label=${`Block ${index+1}`} rows="1" placeholder=${block.type.startsWith('heading') ? 'Heading' : block.type === 'code' ? 'Write code…' : block.type === 'instructions' ? 'Instructions for the assistant…' : "Type '/' for commands"} .value=${block.text} @input=${(event: InputEvent) => { block.text = (event.target as HTMLTextAreaElement).value; this.growPageField(event); if (block.text.startsWith('/')) { this.slashBlockId = block.id; this.slashQuery = block.text.slice(1); this.slashIndex = 0; this.paintAll(); } else if (this.slashBlockId === block.id) { this.slashBlockId = ''; this.paintAll(); } this.schedulePageSave(); }} @keydown=${(event: KeyboardEvent) => {
-      if (this.slashBlockId === block.id) {
-        const commands = this.pageCommands();
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); this.slashIndex = Math.max(0,Math.min(commands.length-1,this.slashIndex + (event.key === 'ArrowDown' ? 1 : -1))); this.paintAll(); return; }
-        if (event.key === 'Enter' && commands[this.slashIndex]) { event.preventDefault(); this.selectPageCommand(page,block,commands[this.slashIndex].action); return; }
-        if (event.key === 'Escape') { event.preventDefault(); this.slashBlockId = ''; this.paintAll(); return; }
-      }
-      if (event.key === 'Enter' && !event.shiftKey && block.type !== 'code') { event.preventDefault(); this.addPageBlock(page,index+1,block.type === 'bullet' || block.type === 'numbered' || block.type === 'check' ? block.type : 'text'); }
-      else if (event.key === 'Backspace' && !block.text && page.blocks.length > 1) { event.preventDefault(); page.blocks.splice(index,1); this.schedulePageSave(); this.paintAll(); }
-    }}></textarea>`;
-  }
-  private pageBlock(page: NotePage, block: PageBlock, index: number): TemplateResult {
-    const commands = this.pageCommands();
-    return html`<div class="page-block-wrap"><div class="page-block ${block.type}"><button class="page-block-plus" aria-label="Add block below" title="Add block below" @click=${() => this.addPageBlock(page,index+1)}>＋</button>${block.type === 'check' ? html`<input type="checkbox" aria-label="Complete task" .checked=${!!block.checked} @change=${(event: Event) => { block.checked = (event.target as HTMLInputElement).checked; this.schedulePageSave(); }}>` : block.type === 'bullet' ? html`<span class="page-prefix">•</span>` : block.type === 'numbered' ? html`<span class="page-prefix">${index+1}.</span>` : nothing}${this.pageBlockInput(page,block,index)}<button class="page-block-more" aria-label="Block options" title="Block options" @click=${() => { this.slashBlockId = block.id; this.slashQuery = ''; this.slashIndex = 0; this.paintAll(); }}>⋮⋮</button></div>${this.slashBlockId === block.id ? html`<div class="page-slash-menu" role="listbox" aria-label="Page commands">${commands.map((command,i) => html`${i === 0 || commands[i-1].group !== command.group ? html`<div class="page-command-group">${command.group}</div>` : nothing}<button role="option" aria-selected=${String(this.slashIndex === i)} class=${this.slashIndex === i ? 'active' : ''} @mousedown=${(event: MouseEvent) => event.preventDefault()} @click=${() => this.selectPageCommand(page,block,command.action)}><span class="page-command-icon">${command.action === 'page' ? icon(NotebookPen,{size:14}) : command.action === 'image' ? icon(FileImage,{size:14}) : command.action === 'file' ? icon(File,{size:14}) : command.action === 'generate' ? '✧' : command.action === 'visualize' ? '◇' : 'Aa'}</span><strong>${command.label}</strong><small>${command.hint}</small></button>`)}</div>` : nothing}</div>`;
+  private pageCommand(page: NotePage, kind: 'page' | 'generate' | 'visualize') {
+    if (kind === 'page') { this.newPage(page.id); return; }
+    this.dispatchEvent(new CustomEvent('sdk-page-prompt', { detail:{pageId:page.id,title:page.title,kind}, bubbles:true, composed:true }));
   }
   override updated() {
     if (this.activeTab === 'terminal') {
@@ -784,9 +706,9 @@ export class MuxSDKUtility extends LitElement {
       this.requestChatTerminal();
     }
     if (this.activeTab !== 'pages') return;
-    for (const field of this.querySelectorAll<HTMLTextAreaElement>('.page-title, .page-block textarea')) {
+    for (const field of this.querySelectorAll<HTMLTextAreaElement>('.page-title')) {
       field.style.height = 'auto';
-      field.style.height = `${Math.max(field.scrollHeight, field.classList.contains('page-title') ? 42 : 28)}px`;
+      field.style.height = `${Math.max(field.scrollHeight, 42)}px`;
     }
   }
   private growPageField(event: InputEvent) {
@@ -801,7 +723,7 @@ export class MuxSDKUtility extends LitElement {
       ${this.pagesRailOpen ? html`<div class="pages-list"><header><strong>Pages</strong><button class="icon-button" aria-label="Hide pages list" title="Hide pages list" @click=${() => { this.pagesRailOpen = false; this.paintAll(); }}>${icon(X,{size:15})}</button></header><div class="page-list-rows">${this.pagesError ? html`<p class="pages-error">${this.pagesError}</p>` : nothing}${!this.pages ? html`<p class="empty">Loading pages…</p>` : this.pages.length ? this.pageRows() : html`<p class="empty">Create a page to start writing.</p>`}</div><button class="pages-list-new" @click=${() => this.newPage()}>＋ New page</button></div>` : nothing}
       ${this.pagesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize page list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'pages')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'pages')}></div>` : nothing}
       <div class="page-editor"><div class="page-toolbar"><div><button aria-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} title=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</button>${parent ? html`<button class="page-parent" @click=${() => this.selectPage(parent.id)}>${parent.title}</button><span>›</span>` : nothing}<span>${page?.title || 'Pages'}</span></div><span>${this.pageSaving ? 'Saving…' : 'Saved'}</span></div>
-      ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><div class="page-blocks">${page.blocks.map((block,index) => this.pageBlock(page,block,index))}</div><button class="page-add-block" @click=${() => this.addPageBlock(page,page.blocks.length)}>＋ Add a block</button></div></div>` : html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages</h2><p>Create a document for this chat.</p><button @click=${() => this.newPage()}>New page</button></div>`}</div><input class="page-media-input" type="file" hidden @change=${(event: Event) => void this.uploadPageMedia(event)}>
+      ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .content=${page.content?.length ? page.content : legacyPageContent(page.blocks)} .pageId=${page.id} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><button class="page-subpage" @click=${() => this.newPage(page.id)}>＋ New subpage</button></div></div>` : html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages</h2><p>Create a document for this chat.</p><button @click=${() => this.newPage()}>New page</button></div>`}</div>
     </section>`;
   }
   private surfaceCSS = `
@@ -965,18 +887,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-editor-top span:first-child { display:flex; align-items:center; gap:7px; }
     mux-sdk-utility .page-paper { width:min(720px,100%); box-sizing:border-box; margin:0 auto; padding:44px clamp(20px,8%,75px) 80px; }
     mux-sdk-utility .page-title { display:block; width:100%; min-height:75px; resize:none; overflow:hidden; border:0; outline:0; margin-bottom:22px; background:transparent; color:var(--chrome-text-bright); font:700 clamp(25px,3vw,36px)/1.3 system-ui,sans-serif; }
-    mux-sdk-utility .page-title::placeholder, mux-sdk-utility .page-block textarea::placeholder { color:var(--chrome-text-dim); opacity:.65; }
-    mux-sdk-utility .page-block { display:flex; align-items:flex-start; gap:7px; margin:2px 0; }
-    mux-sdk-utility .page-block select { flex:none; width:52px; max-width:52px; margin-top:3px; border:0; border-radius:4px; padding:2px; background:transparent; color:var(--chrome-text-dim); font:10px system-ui,sans-serif; opacity:.35; cursor:pointer; }
-    mux-sdk-utility .page-block:hover select, mux-sdk-utility .page-block:focus-within select { opacity:1; }
-    mux-sdk-utility .page-block textarea { flex:1; min-width:0; min-height:29px; resize:none; overflow:hidden; border:0; outline:0; padding:3px 0; background:transparent; color:var(--chrome-text-bright); font:14px/1.6 system-ui,sans-serif; }
-    mux-sdk-utility .page-block.heading textarea { font:650 21px/1.45 system-ui,sans-serif; }
-    mux-sdk-utility .page-block.code textarea { border-radius:5px; padding:9px 12px; background:var(--chrome-bar); font:12px/1.6 ui-monospace,monospace; }
-    mux-sdk-utility .page-block.bullet textarea { padding-left:17px; background:radial-gradient(circle at 5px 15px,var(--chrome-text-bright) 2px,transparent 2.5px) no-repeat; }
-    mux-sdk-utility .page-block.check textarea { padding-left:22px; background:linear-gradient(var(--chrome-border),var(--chrome-border)) 0 9px/13px 13px no-repeat; }
-    mux-sdk-utility .block-add { flex:none; width:20px; margin-top:3px; border:0; background:transparent; color:var(--chrome-text-dim); opacity:0; cursor:pointer; }
-    mux-sdk-utility .page-block:hover .block-add, mux-sdk-utility .page-block:focus-within .block-add { opacity:1; }
-    mux-sdk-utility .page-add-block { margin:10px 0 0 59px; border:0; background:transparent; color:var(--chrome-text-dim); font:11px system-ui,sans-serif; cursor:pointer; }
     mux-sdk-utility .page-new-button { margin-top:10px; border:1px solid var(--chrome-border); border-radius:5px; padding:7px 12px; background:var(--chrome-bar); color:var(--chrome-text-bright); cursor:pointer; }
     mux-sdk-utility .pages-panel { background:#fff; color:#232323; }
     mux-sdk-utility .pages-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
@@ -1001,37 +911,8 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-canvas { flex:1; overflow:auto; min-height:0; }
     mux-sdk-utility .page-paper { width:min(720px,100%); margin:0 auto; padding:42px clamp(22px,6%,70px) 100px; }
     mux-sdk-utility .page-title { min-height:42px; margin:0 0 49px; color:#202124; font:700 27px/1.28 system-ui,sans-serif; }
-    mux-sdk-utility .page-title::placeholder, mux-sdk-utility .page-block textarea::placeholder { color:#9ca0a3; opacity:1; }
-    mux-sdk-utility .page-block-wrap { position:relative; }
-    mux-sdk-utility .page-block { gap:6px; align-items:flex-start; margin:2px 0; }
-    mux-sdk-utility .page-block textarea { color:#202124; font:14px/1.55 system-ui,sans-serif; }
-    mux-sdk-utility .page-block.heading textarea { font:650 22px/1.4 system-ui,sans-serif; }
-    mux-sdk-utility .page-block.heading2 textarea { font:650 18px/1.4 system-ui,sans-serif; }
-    mux-sdk-utility .page-block.heading3 textarea { font:650 16px/1.4 system-ui,sans-serif; }
-    mux-sdk-utility .page-block.code textarea { background:#f4f4f5; color:#202124; }
-    mux-sdk-utility .page-block.instructions textarea { border-left:3px solid #e4d4fa; padding-left:10px; background:#faf7fe; }
-    mux-sdk-utility .page-block.quote textarea { border-left:3px solid #d2d5d6; padding-left:10px; font-style:italic; }
-    mux-sdk-utility .page-block.bullet textarea, mux-sdk-utility .page-block.check textarea { padding-left:0; background:none; }
-    mux-sdk-utility .page-block input[type=checkbox] { flex:none; width:16px; height:16px; margin:7px 0 0; accent-color:#4e7bd7; }
-    mux-sdk-utility .page-prefix { flex:none; width:16px; padding-top:3px; text-align:center; font-size:15px; }
-    mux-sdk-utility .page-block-plus, mux-sdk-utility .page-block-more { flex:none; width:20px; height:23px; padding:0; border:0; background:transparent; color:#94999c; opacity:0; cursor:pointer; }
-    mux-sdk-utility .page-block:hover .page-block-plus, mux-sdk-utility .page-block:hover .page-block-more, mux-sdk-utility .page-block:focus-within .page-block-plus, mux-sdk-utility .page-block:focus-within .page-block-more { opacity:1; }
-    mux-sdk-utility .page-divider { flex:1; margin:14px 0; border:0; border-top:1px solid #ddd; }
-    mux-sdk-utility .page-media { flex:1; min-width:0; margin:4px 0; }
-    mux-sdk-utility .page-media img { max-width:100%; max-height:540px; border-radius:8px; }
-    mux-sdk-utility .page-media a, mux-sdk-utility .page-media button { display:inline-flex; align-items:center; gap:8px; border:1px solid #e1e1e1; border-radius:8px; padding:8px 11px; background:#fafafa; color:#202124; font:12px system-ui,sans-serif; text-decoration:none; cursor:pointer; }
-    mux-sdk-utility .page-child-link { display:flex; align-items:center; gap:8px; flex:1; min-width:0; border:0; border-radius:7px; padding:5px 7px; background:#f5f5f5; color:#252729; text-align:left; font:13px system-ui,sans-serif; cursor:pointer; }
-    mux-sdk-utility .page-child-link:hover { background:#ebeeee; }
-    mux-sdk-utility .page-child-link span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    mux-sdk-utility .page-add-block { margin:9px 0 0 27px; color:#a0a3a6; }
-    mux-sdk-utility .page-add-block:hover { color:#34383b; }
-    mux-sdk-utility .page-slash-menu { position:absolute; z-index:25; top:calc(100% + 4px); left:26px; width:min(360px,calc(100% - 28px)); max-height:330px; overflow:auto; box-sizing:border-box; border:1px solid #e3e3e3; border-radius:14px; padding:7px 5px; background:#fff; box-shadow:0 5px 20px #00000020; }
-    mux-sdk-utility .page-command-group { padding:8px 9px 4px; color:#92969a; font:11px system-ui,sans-serif; }
-    mux-sdk-utility .page-slash-menu button { display:flex; align-items:center; gap:7px; width:100%; min-height:28px; border:0; border-radius:8px; padding:4px 7px; background:transparent; color:#252729; text-align:left; cursor:pointer; }
-    mux-sdk-utility .page-slash-menu button.active, mux-sdk-utility .page-slash-menu button:hover { background:#f0f1f2; }
-    mux-sdk-utility .page-command-icon { display:flex; justify-content:center; width:16px; flex:none; color:#4c5358; font:13px system-ui,sans-serif; }
-    mux-sdk-utility .page-slash-menu button strong { white-space:nowrap; font:500 12px system-ui,sans-serif; }
-    mux-sdk-utility .page-slash-menu button small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#9a9da0; font:11px system-ui,sans-serif; }
+    mux-sdk-utility .page-subpage { margin:20px 0 0; border:0; background:transparent; color:#868d92; font:12px system-ui,sans-serif; cursor:pointer; }
+    mux-sdk-utility .page-subpage:hover { color:#202124; }
     mux-sdk-utility .page-no-selection { display:flex; align-items:center; justify-content:center; flex:1; flex-direction:column; gap:8px; color:#777; }
     mux-sdk-utility .page-no-selection h2 { margin:0; color:#202124; }
     mux-sdk-utility .page-no-selection p { margin:0; }

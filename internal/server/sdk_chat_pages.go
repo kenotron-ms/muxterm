@@ -24,6 +24,8 @@ type utilityPage struct {
 	ParentID string             `json:"parentId,omitempty"`
 	Title    string             `json:"title"`
 	Blocks   []utilityPageBlock `json:"blocks"`
+	// Content stores BlockNote's lossless document JSON; Blocks remains for older pages.
+	Content json.RawMessage `json:"content,omitempty"`
 }
 
 type utilityPagesDocument struct {
@@ -70,6 +72,13 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[page.ID] = true
+		if len(page.Content) > 0 {
+			var content []json.RawMessage
+			if json.Unmarshal(page.Content, &content) != nil || len(content) > 500 {
+				http.Error(w, "Invalid page content", http.StatusBadRequest)
+				return
+			}
+		}
 		blocks := map[string]bool{}
 		for _, block := range page.Blocks {
 			if !safePageID(block.ID) || blocks[block.ID] || len(block.Text) > 20000 || !validPageBlockType(block.Type) || (block.AttachmentID != "" && !safePageID(block.AttachmentID)) || (block.ChildPageID != "" && !safePageID(block.ChildPageID)) {
