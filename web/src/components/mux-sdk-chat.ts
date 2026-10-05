@@ -435,7 +435,7 @@ export class MuxSDKChat extends LitElement {
     await this.updateComplete;
     const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
     if (action === 'file' && path) await utility?.showFile(path);
-    else if (action === 'tab' && (tab === 'plan' || tab === 'files' || tab === 'pr' || tab === 'trajectory')) utility?.showPanel(tab);
+    else if (action === 'tab' && (tab === 'files' || tab === 'changes' || tab === 'terminal' || tab === 'pages' || tab === 'pr')) utility?.showPanel(tab);
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
     const { path, selected } = event.detail;
@@ -443,6 +443,15 @@ export class MuxSDKChat extends LitElement {
     this.setPaneMode('split');
     const reference = `@${path}${selected ? `\n> ${selected.replaceAll('\n', '\n> ')}` : ''}`;
     this.draft = this.draft.trimEnd() ? `${this.draft.trimEnd()}\n${reference}\n` : `${reference}\n`;
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
+  }
+  private stagePagePrompt(event: CustomEvent<{ title: string; kind: 'generate' | 'visualize' }>) {
+    this.selectedAgent = '';
+    this.setPaneMode('split');
+    const request = event.detail.kind === 'visualize'
+      ? `Create an interactive visualization for the page "${event.detail.title}". Describe the HTML and data I should add to the page.`
+      : `Draft content for the page "${event.detail.title}". Write it in a form I can put on the page.`;
+    this.draft = this.draft.trim() ? `${this.draft.trim()}\n\n${request}` : request;
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
   }
   private startDrawerResize(event: PointerEvent) {
@@ -461,27 +470,6 @@ export class MuxSDKChat extends LitElement {
     if (!this.resizingDrawer) return;
     this.resizingDrawer = false;
     try { localStorage.setItem(this.drawerKey(), String(this.drawerWidth)); } catch { /* private browsing */ }
-  }
-  private planTasks(): { content: string; status: string }[] {
-    let latest: { content: string; status: string }[] = [];
-    for (const block of this.blocks) {
-      if (block.kind !== 'tool' || !/update_plan|todowrite|tool-todo|(^|[:_ ])todo($|[:_ ])/i.test(block.name || '')) continue;
-      let raw = block.input;
-      if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
-      const fields = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-      const result = block.output && typeof block.output === 'object' ? block.output as Record<string, unknown> : {};
-      const resultBody = result.output && typeof result.output === 'object' ? result.output as Record<string, unknown> : {};
-      const items = resultBody.todos || fields.plan || fields.todos || fields.tasks;
-      if (!Array.isArray(items)) continue;
-      const parsed = items.flatMap(item => {
-        if (!item || typeof item !== 'object') return [];
-        const row = item as Record<string, unknown>;
-        const content = row.step || row.content || row.task || row.title;
-        return typeof content === 'string' && content.trim() ? [{ content, status: typeof row.status === 'string' ? row.status : 'pending' }] : [];
-      });
-      if (parsed.length) latest = parsed;
-    }
-    return latest;
   }
   private touchedFiles(): string[] {
     const found = new Set<string>();
@@ -1551,7 +1539,7 @@ export class MuxSDKChat extends LitElement {
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.busy ? html`<button class="stop" aria-label="Stop current task" title="Stop current task" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
-      ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .harness=${this.chat?.harness || ''} .tasks=${this.planTasks()} .touched=${this.touchedFiles()} .events=${this.trajectory} @sdk-file-reference=${this.stageFileReference}></mux-sdk-utility></aside>` : nothing}
+      ${this.drawerOpen ? html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .chatTitle=${this.chat?.title || ''} .terminalWorkspaceId=${this.chat?.terminalWorkspaceId || ''} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>` : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`;
   }
 }

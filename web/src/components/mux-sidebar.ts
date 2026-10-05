@@ -2693,8 +2693,6 @@ export class MuxSidebar extends LitElement {
       </button>
       <div class="tab-content">
         <mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list>
-        <div class="terminal-heading">Terminals</div>
-        ${this._renderWorkspaces()}
       </div>
       ${this._renderFooter()}
       ${this._renderPreviewTooltip()}

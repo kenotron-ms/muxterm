@@ -27,36 +27,37 @@ import (
 
 // SDK chats are Go-owned records. Native harness IDs are resume pointers only.
 type sdkChat struct {
-	ID               string    `json:"id"`
-	WorkspaceID      string    `json:"workspaceId,omitempty"`
-	ProjectPath      string    `json:"projectPath"`
-	SourceFolders    []string  `json:"sourceFolders,omitempty"`
-	Title            string    `json:"title"`
-	TitleSource      string    `json:"titleSource,omitempty"`
-	TitleCheckedTurn int       `json:"titleCheckedTurn,omitempty"`
-	UserTurns        int       `json:"userTurns,omitempty"`
-	Harness          string    `json:"harness"`
-	Approval         string    `json:"approval,omitempty"`
-	Goal             string    `json:"goal,omitempty"`
-	GoalState        string    `json:"goalState,omitempty"`
-	GoalReason       string    `json:"goalReason,omitempty"`
-	GoalSummary      string    `json:"goalSummary,omitempty"`
-	Bundle           string    `json:"bundle,omitempty"`
-	Provider         string    `json:"provider,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	Effort           string    `json:"effort,omitempty"`
-	Permission       string    `json:"permission,omitempty"`
-	Mode             string    `json:"mode,omitempty"`
-	NativeID         string    `json:"nativeId,omitempty"`
-	State            string    `json:"state"`
-	Archived         bool      `json:"archived,omitempty"`
-	Pinned           bool      `json:"pinned,omitempty"`
-	WorkMode         string    `json:"workMode,omitempty"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt,omitempty"`
-	LastActivity     string    `json:"lastActivity,omitempty"`
-	LastOutput       string    `json:"lastOutput,omitempty"`
-	HasVoiceHistory  bool      `json:"hasVoiceHistory,omitempty"`
+	ID                  string    `json:"id"`
+	WorkspaceID         string    `json:"workspaceId,omitempty"`
+	TerminalWorkspaceID string    `json:"terminalWorkspaceId,omitempty"`
+	ProjectPath         string    `json:"projectPath"`
+	SourceFolders       []string  `json:"sourceFolders,omitempty"`
+	Title               string    `json:"title"`
+	TitleSource         string    `json:"titleSource,omitempty"`
+	TitleCheckedTurn    int       `json:"titleCheckedTurn,omitempty"`
+	UserTurns           int       `json:"userTurns,omitempty"`
+	Harness             string    `json:"harness"`
+	Approval            string    `json:"approval,omitempty"`
+	Goal                string    `json:"goal,omitempty"`
+	GoalState           string    `json:"goalState,omitempty"`
+	GoalReason          string    `json:"goalReason,omitempty"`
+	GoalSummary         string    `json:"goalSummary,omitempty"`
+	Bundle              string    `json:"bundle,omitempty"`
+	Provider            string    `json:"provider,omitempty"`
+	Model               string    `json:"model,omitempty"`
+	Effort              string    `json:"effort,omitempty"`
+	Permission          string    `json:"permission,omitempty"`
+	Mode                string    `json:"mode,omitempty"`
+	NativeID            string    `json:"nativeId,omitempty"`
+	State               string    `json:"state"`
+	Archived            bool      `json:"archived,omitempty"`
+	Pinned              bool      `json:"pinned,omitempty"`
+	WorkMode            string    `json:"workMode,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt,omitempty"`
+	LastActivity        string    `json:"lastActivity,omitempty"`
+	LastOutput          string    `json:"lastOutput,omitempty"`
+	HasVoiceHistory     bool      `json:"hasVoiceHistory,omitempty"`
 }
 type sdkProject struct {
 	ID            string   `json:"id"`
@@ -1515,12 +1516,37 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, c)
 	case "PATCH":
 		var req struct {
-			Title    string `json:"title"`
-			Archived *bool  `json:"archived"`
-			Pinned   *bool  `json:"pinned"`
+			Title               string  `json:"title"`
+			Archived            *bool   `json:"archived"`
+			Pinned              *bool   `json:"pinned"`
+			TerminalWorkspaceID *string `json:"terminalWorkspaceId"`
 		}
 		if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req) != nil {
 			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		if req.TerminalWorkspaceID != nil {
+			if len(*req.TerminalWorkspaceID) > 200 || *req.TerminalWorkspaceID == "" {
+				http.Error(w, "invalid terminal workspace", 400)
+				return
+			}
+			h.mu.Lock()
+			previous := c.TerminalWorkspaceID
+			c.TerminalWorkspaceID = *req.TerminalWorkspaceID
+			err := h.saveLocked(c)
+			if err != nil {
+				c.TerminalWorkspaceID = previous
+			}
+			updated := *c
+			if err == nil {
+				h.notifyCatalogLocked(id)
+			}
+			h.mu.Unlock()
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			writeSDKJSON(w, 200, updated)
 			return
 		}
 		if (req.Archived != nil || req.Pinned != nil) && req.Title == "" {
