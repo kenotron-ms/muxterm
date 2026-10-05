@@ -253,7 +253,7 @@ export class MuxConnections extends LitElement {
         <p class="note">This page updates when sign-in completes.</p>
         <div class="actions"><a class="action primary" href=${profile.verificationUrl} target="_blank" rel="noopener noreferrer">Open Microsoft sign-in ↗</a><button class="action" ?disabled=${!!this.busy} @click=${()=>this.cancelMicrosoft(account)}>Cancel sign-in</button></div>`:nothing}
       ${attention?html`<p class="note">${profile.error}</p>`:nothing}
-      ${ready?html`<p class="note">${profile.toolCount} read-only tools are available to new Codex, Claude, and Amplifier chats.</p>`:nothing}
+      ${ready?html`<p class="note">${profile.toolCount>0?`${profile.toolCount} read-only tools are available`:'Read-only tools are enabled'} for new Codex, Claude, and Amplifier chats.</p>`:nothing}
       ${!pending?html`<div class="actions"><button class="action primary" ?disabled=${!!this.busy} @click=${()=>this.connectMicrosoft(account)}>${ready?'Sign in again':this.busy===`microsoft-${account}`?'Installing…':attention?'Try sign-in again':'Connect account'}</button>
         ${ready?html`<button class="action" ?disabled=${!!this.busy} @click=${()=>this.checkMicrosoft(account)}>Check access</button>`:nothing}
         ${ready||attention?html`<button class="action" ?disabled=${!!this.busy} @click=${()=>this.disconnectMicrosoft(account)}>Disconnect</button>`:nothing}</div>`:nothing}
