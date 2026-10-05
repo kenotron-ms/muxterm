@@ -16,6 +16,7 @@ export class MuxConnections extends LitElement {
   @state() private data?:ConnectionsResponse;
   @state() private remotes?:RemoteResponse;
   @state() private workiq?:WorkIQState;
+  @state() private copiedWorkIQ='';
   @state() private selected='github';
   @state() private busy='';
   @state() private error='';
@@ -58,6 +59,10 @@ export class MuxConnections extends LitElement {
     button.action:disabled { opacity:.5; cursor:default; } a { color:var(--chrome-accent); }
     .error { margin:15px 0; padding:9px 11px; border:1px solid var(--chrome-danger); border-radius:7px; color:var(--chrome-danger); }
     .note { margin-top:11px; font-size:11px; } code { overflow-wrap:anywhere; }
+    details.setup-steps { margin-top:12px; font-size:11px; color:var(--chrome-text-dim); }
+    details.setup-steps summary { cursor:pointer; color:var(--chrome-accent); font-weight:650; }
+    .setup-command { display:flex; align-items:flex-start; gap:10px; margin-top:9px; }
+    .setup-command code { flex:1; min-width:0; padding:7px; border-radius:6px; background:var(--chrome-body); user-select:all; }
     @media(max-width:700px) { header { padding:14px 16px; } .layout { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); } .catalog { display:flex; overflow:auto; border-right:0; border-bottom:1px solid var(--chrome-border); padding:9px; gap:4px; } .group { display:none; } .service { width:auto; min-width:150px; } main { padding:20px 16px 40px; } }
   `;
 
@@ -105,6 +110,18 @@ export class MuxConnections extends LitElement {
   private disconnect() {
     if (!window.confirm('Disable GitHub tools for new chats? Your GitHub CLI login stays signed in.')) return;
     void this.run('disconnect',()=>this.request('/api/connections/github',{method:'DELETE'}));
+  }
+  private workIQCommand(action:string) {
+    const path=this.workiq?.command??'';
+    return `'${path.replaceAll("'", "'\"'\"'")}' ${action}`;
+  }
+  private async copyWorkIQCommand(action:string) {
+    try {
+      await navigator.clipboard.writeText(this.workIQCommand(action));
+      this.copiedWorkIQ=action;
+    } catch {
+      this.error='Could not copy the command. Select the command text to copy it manually.';
+    }
   }
   private createRemote() { void this.run('remote-create',async()=>{
     await this.request('/api/connections/remote',{method:'POST',body:JSON.stringify({name:this.remoteName,endpoint:this.remoteEndpoint,issuerURL:this.remoteIssuer,clientID:this.remoteClientID,clientSecret:this.remoteClientSecret,scopes:this.remoteScopes})});
@@ -195,7 +212,10 @@ export class MuxConnections extends LitElement {
       <p class="lead">${service.description}. One Microsoft Work IQ server covers OneDrive, Outlook Mail, Outlook Calendar, and other Microsoft 365 data. Enabling any of these cards enables that same server in new Codex, Claude, and Amplifier chats.</p>
       <div class="box"><strong>Use Microsoft's Work IQ service</strong>
         <p class="note">Muxterm installs the official Work IQ service for you when you enable this connection. You do not need to install Node, npm, or any software manually. Microsoft requires you to review and accept its license, then sign in. Muxterm does not accept the license or sign in for you.</p>
-        ${w.command?html`<p class="note">After installation, use a terminal to run <code>${w.command} accept-eula</code> and <code>${w.command} auth login</code>. These commands launch Microsoft's own setup.</p>`:nothing}
+        ${w.command?html`<details class="setup-steps"><summary>Show Microsoft setup commands</summary><p class="note">Run these commands in a terminal. They open Microsoft's own license and sign-in steps.</p>
+          <div class="setup-command"><code>${this.workIQCommand('accept-eula')}</code><button class="action" aria-label="Copy Work IQ license command" @click=${()=>void this.copyWorkIQCommand('accept-eula')}>${this.copiedWorkIQ==='accept-eula'?'Copied':'Copy'}</button></div>
+          <div class="setup-command"><code>${this.workIQCommand('auth login')}</code><button class="action" aria-label="Copy Work IQ sign-in command" @click=${()=>void this.copyWorkIQCommand('auth login')}>${this.copiedWorkIQ==='auth login'?'Copied':'Copy'}</button></div>
+        </details>`:nothing}
         <p class="note">Your organization must grant Entra admin consent, assign you to a Copilot Credits billing plan, and allow Work IQ access. Work IQ handles its own sign-in; muxterm does not request an Entra app, client secret, or Microsoft token.</p>
         <p class="note">This enables the vendor server's full available tool set across Microsoft 365. Work IQ may offer actions beyond reading files, mail, or meetings. Microsoft account permissions and tenant policies still apply, and usage may incur charges.</p>
         <div class="actions"><button class="action ${enabled?'':'primary'}" ?disabled=${!!this.busy} @click=${()=>void this.run('workiq-toggle',()=>this.request('/api/connections/workiq',{method:enabled?'DELETE':'POST'}))}>${this.busy==='workiq-toggle'?'Setting up…':enabled?'Disable in new chats':w.installed?'Enable in new chats':'Set up Microsoft 365'}</button><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Microsoft setup guide ↗</a></div>
