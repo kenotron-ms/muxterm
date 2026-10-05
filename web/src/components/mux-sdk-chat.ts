@@ -124,11 +124,9 @@ export class MuxSDKChat extends LitElement {
   };
   private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
   private workExpanded = new Set<number>();
-  private activityExpanded = new Set<number>();
   private stepExpanded = new Set<string>();
   private turnStarted = new Map<number, number>();
   private turnFinished = new Map<number, number>();
-  private turnActivities = new Map<number, { name: string; toolId: string; done: boolean; failed: boolean }[]>();
   private currentTurn = 0;
   @state() private now = Date.now();
   private clock?: ReturnType<typeof setInterval>;
@@ -241,10 +239,11 @@ export class MuxSDKChat extends LitElement {
     .thinking-entry > summary:hover, .tool-activity > summary:hover, .tool-entry > summary:hover { color:var(--chrome-text-bright,#d9def0); }
     .work-icon { display:inline-flex; align-items:center; justify-content:center; width:16px; flex:none; }
     .work-line { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .thinking-entry .work-line { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; white-space:normal; overflow-wrap:anywhere; line-height:1.45; }
     .work-chevron { display:inline-flex; flex:none; opacity:.65; transition:transform .15s ease; }
     .thinking-entry[open] > summary .work-chevron, .tool-activity[open] > summary .work-chevron, .tool-entry[open] > summary .work-chevron { transform:rotate(180deg); }
     .thinking-entry .detail { margin:4px 0 9px 24px; padding:0 0 0 10px; border-left:1px solid var(--chrome-border,#41485f); }
-    .tool-activity { margin-top:11px; }
+    .tool-activity { margin:5px 0 7px; }
     .tool-activity-items { margin:2px 0 0 2px; }
     .tool-entry > summary { padding-left:22px; }
     .tool-entry.failed > summary { color:var(--chrome-danger); }
@@ -596,8 +595,8 @@ export class MuxSDKChat extends LitElement {
     this.cacheTimer = window.setTimeout(() => { this.cacheTimer = undefined; this.persistTranscriptCache(); }, 150);
   }
   private resetTranscript() {
-    this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear(); this.activityExpanded.clear(); this.stepExpanded.clear();
-    this.turnStarted.clear(); this.turnFinished.clear(); this.turnActivities.clear(); this.currentTurn = 0; this.now = Date.now();
+    this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear(); this.stepExpanded.clear();
+    this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now();
     this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.pendingInputs.clear(); this.rowsCache = undefined;
   }
   private async loadRecent(id: string, epoch: number, signal: AbortSignal) {
@@ -787,14 +786,12 @@ export class MuxSDKChat extends LitElement {
     const oldStart = this.visibleStart, oldEnd = this.visibleEnd;
     const oldHeights = this.rowHeights;
     const expanded = new Set(this.workExpanded);
-    const expandedActivity = new Set(this.activityExpanded);
     const expandedSteps = new Set(this.stepExpanded);
     const oldTurn = this.currentTurn;
     this.loadedEvents = events;
     this.replayEvents();
     const turnShift = prepending ? this.currentTurn - oldTurn : 0;
     this.workExpanded = new Set([...expanded].map(turn => turn + turnShift));
-    this.activityExpanded = new Set([...expandedActivity].map(turn => turn + turnShift));
     this.stepExpanded = new Set([...expandedSteps].map(key => {
       const [turn, index] = key.split(':');
       return `${Number(turn) + turnShift}:${index}`;
@@ -921,15 +918,6 @@ export class MuxSDKChat extends LitElement {
     } else if (event.type === 'assistant.interim') {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
-    } else if (event.type === 'work.activity') {
-      const activities = this.turnActivities.get(this.currentTurn) || [];
-      // Anonymous completions belong to the latest unfinished anonymous call.
-      const existing = event.toolId
-        ? activities.find(item => item.toolId === event.toolId)
-        : event.kind === 'completed' ? [...activities].reverse().find(item => !item.toolId && !item.done) : undefined;
-      if (existing) { existing.name = event.name || existing.name; existing.done = event.kind === 'completed'; existing.failed = !!event.failed; }
-      else activities.push({ name:event.name || 'Tool', toolId:event.toolId || '', done:event.kind === 'completed', failed:!!event.failed });
-      this.turnActivities.set(this.currentTurn, activities);
     } else if (event.type === 'thinking.delta') {
       markStart(this.currentTurn);
       const last = blocks[blocks.length - 1];
@@ -1326,8 +1314,8 @@ export class MuxSDKChat extends LitElement {
   }
   private thinkingEntry(block: Block, key: string) {
     const open = this.stepExpanded.has(key);
-    const firstLine = block.text.trim().split(/\r?\n/).find(Boolean) || 'Thinking…';
-    return html`<details class="thinking-entry" aria-label="Thinking detail" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(Brain, { size: 14 })}</span><span class="work-line" title=${firstLine}>${firstLine}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><pre>${block.text}</pre></div>` : nothing}</details>`;
+    const preview = block.text.trim().replace(/\s+/g, ' ') || 'Thinking…';
+    return html`<details class="thinking-entry" aria-label="Thinking detail" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(Brain, { size: 14 })}</span><span class="work-line" title=${preview}>${preview}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><pre>${block.text}</pre></div>` : nothing}</details>`;
   }
   private toolEntry(block: Block, key: string) {
     const kind = this.toolKind(block);
@@ -1343,18 +1331,34 @@ export class MuxSDKChat extends LitElement {
     const inputText = kind === 'shell' && command ? `$ ${command}` : this.detail(input);
     return html`<details class="tool-entry ${this.toolFailed(block) ? 'failed' : ''}" aria-label=${`${block.name || 'Tool'} detail`} ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(kind), { size: 14 })}</span><span class="work-line" title=${label}>${label}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><div class="tool-detail-title">${heading}</div><div class="detail-label">${inputLabel}</div><pre>${inputText}</pre><div class="detail-label">${outputLabel}</div><pre>${output}</pre></div>` : nothing}</details>`;
   }
-  private workContent(turn: number, items: Block[]) {
-    const thinking = items.filter(item => item.kind === 'thinking');
-    if (!thinking.length && (items.some(item => item.kind === 'tool') || this.turnActivities.has(turn))) return nothing;
-    return thinking.length ? html`${thinking.map((item, index) => this.thinkingEntry(item, `${turn}:thinking-${index}`))}`
-      : html`<div class="work-item">${this.loadingDetails ? 'Loading work details…' : !this.detailsLoaded ? 'Work details load when opened.' : this.turnFinished.get(turn) === undefined ? 'Waiting for activity…' : 'No thinking details were reported.'}</div>`;
-  }
-  private activityContent(turn: number, items: Block[]) {
-    const tools = items.filter(item => item.kind === 'tool');
-    const summary = tools.length ? tools : this.turnActivities.get(turn) || [];
-    if (!summary.length) return nothing;
-    const open = this.activityExpanded.has(turn);
-    return html`<details class="tool-activity" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleActivityDisclosure(turn, event)}><span class="work-icon">${icon(this.toolIcon(this.toolKind(summary[0])), { size: 14 })}</span><span class="work-line">${this.activityLineForTools(summary)}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="tool-activity-items">${tools.length ? tools.map((item, index) => this.toolEntry(item, `${turn}:tool-${index}`)) : html`<div class="work-item">${this.loadingDetails ? 'Loading tool calls…' : 'Tool calls load when opened.'}</div>`}</div>` : nothing}</details>`;
+  private workTimeline(turn: number, items: Block[]) {
+    // Raw session events arrive in order. Keep each thinking passage at its
+    // original position and collapse only the adjacent tool calls after it.
+    const steps: ReturnType<typeof html>[] = [];
+    let run: Block[] = [];
+    let group = 0;
+    const flush = () => {
+      if (!run.length) return;
+      const tools = run;
+      const key = `${turn}:tools-${group++}`;
+      const open = this.stepExpanded.has(key);
+      steps.push(html`<details class="tool-activity" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(this.toolKind(tools[0])), { size: 14 })}</span><span class="work-line">${this.activityLineForTools(tools)}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="tool-activity-items">${tools.map(item => this.toolEntry(item, `${turn}:tool-${item.key}`))}</div>` : nothing}</details>`);
+      run = [];
+    };
+    for (const item of items) {
+      if (item.kind === 'tool') run.push(item);
+      else {
+        flush();
+        if (item.kind === 'thinking') steps.push(this.thinkingEntry(item, `${turn}:thinking-${item.key}`));
+      }
+    }
+    flush();
+    if (steps.length) return html`${steps}`;
+    // Lightweight message history intentionally omits raw thought and tool
+    // payloads. Do not display its flattened activity summary as a timeline.
+    if (this.loadingDetails || !this.detailsLoaded) return html`<div class="work-item">Loading work details…</div>`;
+    if (this.turnFinished.get(turn) === undefined) return html`<div class="work-item">Waiting for activity…</div>`;
+    return html`<div class="work-item">No work details were reported.</div>`;
   }
   private workedLabel(turn: number) {
     const started = this.turnStarted.get(turn);
@@ -1439,7 +1443,7 @@ export class MuxSDKChat extends LitElement {
     for (let i = end; i < rows.length; i++) after += this.rowHeight(rows[i]);
     return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map((row, offset) => {
       const block = row.block;
-      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${this.workExpanded.has(block.turn) ? html`<div class="work-items">${this.workContent(block.turn, row.work)}${this.activityContent(block.turn, row.work)}</div>` : nothing}</details></div>`
+      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${this.workExpanded.has(block.turn) ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details></div>`
         : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>` : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
@@ -1448,15 +1452,6 @@ export class MuxSDKChat extends LitElement {
     if (this.workExpanded.has(turn)) this.workExpanded.delete(turn);
     else {
       this.workExpanded.add(turn);
-      if (!this.detailsLoaded) void this.loadDetails();
-    }
-    this.requestUpdate();
-  }
-  private toggleActivityDisclosure(turn: number, event: MouseEvent) {
-    event.preventDefault();
-    if (this.activityExpanded.has(turn)) this.activityExpanded.delete(turn);
-    else {
-      this.activityExpanded.add(turn);
       if (!this.detailsLoaded) void this.loadDetails();
     }
     this.requestUpdate();
