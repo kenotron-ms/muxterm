@@ -467,26 +467,16 @@ func (s *Server) handleRemoteCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.Provider != "" {
-		preset, ok := googleConnectionPresets[input.Provider]
-		if !ok {
-			http.Error(w, "unknown service preset", 400)
-			return
-		}
-		// The endpoint and read scopes belong to this preset, not the caller.
-		input.Name = preset.Name
-		input.Endpoint = preset.Endpoint
-		input.IssuerURL = "https://accounts.google.com"
-		input.Scopes = strings.Join(preset.Scopes, " ")
+		// Existing Workspace Preview records remain manageable, but the
+		// catalog no longer offers new Preview connections.
+		http.Error(w, "Google Workspace Preview connections are no longer available to add", http.StatusBadRequest)
+		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
 	input.ClientID = strings.TrimSpace(input.ClientID)
 	input.ClientSecret = strings.TrimSpace(input.ClientSecret)
 	if input.Name == "" || len(input.Name) > 80 || input.ClientID == "" || len(input.ClientID) > 512 || len(input.ClientSecret) > 2048 {
 		http.Error(w, "name and OAuth client ID are required", 400)
-		return
-	}
-	if input.Provider != "" && strings.TrimSpace(input.ClientSecret) == "" {
-		http.Error(w, "Google Web OAuth client secret is required", 400)
 		return
 	}
 	endpoint, err := validatedPublicURL(strings.TrimSpace(input.Endpoint))

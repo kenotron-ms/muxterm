@@ -40,12 +40,7 @@ var connectionCatalog = []connectionCatalogEntry{
 	{"onedrive", "OneDrive", "Microsoft 365", "Files through Work IQ", "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview", workIQRemoteEndpoint, "remote", nil, nil},
 	{"outlook-mail", "Outlook Mail", "Microsoft 365", "Mail through Work IQ", "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview", workIQRemoteEndpoint, "remote", nil, nil},
 	{"outlook-calendar", "Outlook Calendar", "Microsoft 365", "Meetings through Work IQ", "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/overview", workIQRemoteEndpoint, "remote", nil, nil},
-	{"gmail", "Gmail", "Google Workspace", "Messages and drafts", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["gmail"].Endpoint, "developer-preview", googleConnectionPresets["gmail"].Scopes, googleConnectionPresets["gmail"].ReadTools},
-	{"google-drive", "Google Drive", "Google Workspace", "Files and search", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-drive"].Endpoint, "developer-preview", googleConnectionPresets["google-drive"].Scopes, googleConnectionPresets["google-drive"].ReadTools},
-	{"google-calendar", "Google Calendar", "Google Workspace", "Events and availability", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-calendar"].Endpoint, "developer-preview", googleConnectionPresets["google-calendar"].Scopes, googleConnectionPresets["google-calendar"].ReadTools},
-	{"google-docs", "Google Docs", "Google Workspace", "Documents", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-docs"].Endpoint, "developer-preview", googleConnectionPresets["google-docs"].Scopes, googleConnectionPresets["google-docs"].ReadTools},
-	{"google-sheets", "Google Sheets", "Google Workspace", "Spreadsheets", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-sheets"].Endpoint, "developer-preview", googleConnectionPresets["google-sheets"].Scopes, googleConnectionPresets["google-sheets"].ReadTools},
-	{"google-slides", "Google Slides", "Google Workspace", "Presentations", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-slides"].Endpoint, "developer-preview", googleConnectionPresets["google-slides"].Scopes, googleConnectionPresets["google-slides"].ReadTools},
+	{"google", "Google", "Google", "Gmail, Drive, and Calendar", "https://github.com/taylorwilsdon/google_workspace_mcp", "", "planned", nil, nil},
 }
 
 type serviceConnections struct {
