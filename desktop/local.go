@@ -84,7 +84,7 @@ func (c *Companion) startLocalMuxterm() (string, error) {
 			return "", c.localFailure(fmt.Errorf("open local server log: %w", err))
 		}
 		cmd := exec.Command(serverPath, "app-serve", "--addr", addr)
-		cmd.Env = localServerEnv(root)
+		cmd.Env = localServerEnv(root, filepath.Dir(executable))
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		if err := cmd.Start(); err != nil {
@@ -154,17 +154,24 @@ func (c *Companion) localFailure(err error) error {
 	return err
 }
 
-func localServerEnv(root string) []string {
+func localServerEnv(root, macOSDir string) []string {
 	env := make([]string, 0, len(os.Environ())+3)
+	home, _ := os.UserHomeDir()
+	path := os.Getenv("PATH")
+	// Finder provides a sparse PATH. Include the standard per-user and Homebrew
+	// locations so agents already installed on this Mac are discovered.
+	search := []string{macOSDir, filepath.Join(home, ".local", "bin"), filepath.Join(home, ".opencode", "bin"), filepath.Join(home, "Library", "pnpm"), "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", path}
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		switch key {
-		case "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "MUXTERM_DEV_INSTANCE", "MUXTERM_SESSION_STATE_DIR", "MUXTERM_HOOK_REPORT_ROOT", "INVOCATION_ID":
+		case "PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "MUXTERM_DEV_INSTANCE", "MUXTERM_SESSION_STATE_DIR", "MUXTERM_HOOK_REPORT_ROOT", "INVOCATION_ID":
 			continue
 		}
 		env = append(env, entry)
 	}
 	return append(env,
+		"PATH="+strings.Join(search, string(os.PathListSeparator)),
+		"MUXTERM_SDK_CHAT_SIDECAR="+filepath.Join(filepath.Dir(macOSDir), "Resources", "sdk-chat", "sidecar.mjs"),
 		"XDG_CONFIG_HOME="+filepath.Join(root, "config"),
 		"XDG_DATA_HOME="+filepath.Join(root, "data"),
 		"XDG_RUNTIME_DIR="+filepath.Join(root, "runtime"),

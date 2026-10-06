@@ -137,8 +137,7 @@ type sdkChatHost struct {
 	done        chan struct{}
 	running     bool
 	ampSup      *amplifierchat.Host
-	ampOnce     sync.Once
-	ampErr      error
+	ampMu       sync.Mutex
 	chats       map[string]*sdkChat
 	projects    map[string]*sdkProject
 	streams     map[string]map[chan sdkEvent]struct{}
@@ -405,37 +404,39 @@ func (h *sdkChatHost) ensure(harness string) error {
 	}
 }
 func (h *sdkChatHost) ensureAmplifier() error {
-	h.ampOnce.Do(func() {
-		checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer checkCancel()
-		if err := amplifierchat.CheckAmplifierCLI(checkCtx); err != nil {
-			h.ampErr = err
-			return
-		}
-		self, err := os.Executable()
-		if err != nil {
-			h.ampErr = err
-			return
-		}
-		sup := amplifierchat.New()
-		if err := sup.Start(self); err != nil {
-			h.ampErr = err
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), amplifierchat.DefaultReadyTimeout)
-		defer cancel()
-		if err := sup.WaitReady(ctx); err != nil {
-			h.ampErr = err
-			_ = sup.Close()
-			return
-		}
-		h.mu.Lock()
-		h.ampSup = sup
-		h.mu.Unlock()
-		// Subscribe before returning: start/send may emit the first frame at once.
-		go h.observeAmplifier(sup.Subscribe(1024))
-	})
-	return h.ampErr
+	h.ampMu.Lock()
+	defer h.ampMu.Unlock()
+	h.mu.Lock()
+	ready := h.ampSup != nil
+	h.mu.Unlock()
+	if ready {
+		return nil
+	}
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer checkCancel()
+	if err := amplifierchat.CheckAmplifierCLI(checkCtx); err != nil {
+		return err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	sup := amplifierchat.New()
+	if err := sup.Start(self); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), amplifierchat.DefaultReadyTimeout)
+	defer cancel()
+	if err := sup.WaitReady(ctx); err != nil {
+		_ = sup.Close()
+		return err
+	}
+	h.mu.Lock()
+	h.ampSup = sup
+	h.mu.Unlock()
+	// Subscribe before returning: start/send may emit the first frame at once.
+	go h.observeAmplifier(sup.Subscribe(1024))
+	return nil
 }
 func (h *sdkChatHost) observeAmplifier(sub *amplifierchat.Subscription) {
 	defer sub.Close()
