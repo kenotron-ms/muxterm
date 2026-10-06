@@ -177,8 +177,12 @@ export class MuxSDKUtility extends LitElement {
     } catch { /* storage unavailable */ }
     let folder = '.', legacyFile = '';
     try { folder = localStorage.getItem(this.pathKey()) || '.'; legacyFile = localStorage.getItem(this.fileKey()) || ''; } catch { /* private browsing */ }
-    const emptyFileTab = this.tabs.find(tab => tab.kind === 'files' && !tab.filePath);
-    if (legacyFile && emptyFileTab) { emptyFileTab.filePath = legacyFile; this.saveTabs(); }
+    if (legacyFile && !this.tabs.some(tab => tab.kind === 'files' && tab.filePath === legacyFile)) {
+      const emptyFileTab = this.tabs.find(tab => tab.kind === 'files' && !tab.filePath);
+      if (emptyFileTab) emptyFileTab.filePath = legacyFile;
+      else this.tabs = [...this.tabs, { id:crypto.randomUUID(), kind:'files', filePath:legacyFile }];
+      this.saveTabs();
+    }
     try { localStorage.removeItem(this.fileKey()); } catch { /* private browsing */ }
     try { this.pageId = localStorage.getItem(this.pageKey()) || ''; } catch { /* private browsing */ }
     void this.restoreExplorer(folder);
@@ -229,14 +233,15 @@ export class MuxSDKUtility extends LitElement {
     if (wasActive) this.activeTabId = this.tabs[Math.min(index,this.tabs.length-1)].id;
     this.saveTabs(); if (wasActive) this.activateTab(this.currentTab); this.paintAll();
   }
-  private activateTab(tab: UtilityTab) {
-    if (tab.kind === 'files' && tab.filePath) void this.loadFile(tab.filePath);
-    else this.resetFileView();
+  private activateTab(tab: UtilityTab, refreshFile = false) {
+    const fileLoad = tab.kind === 'files' && tab.filePath ? this.loadFile(tab.filePath, refreshFile) : undefined;
+    if (!fileLoad) this.resetFileView();
     if (tab.kind === 'pages' && tab.pageId) this.pageId = tab.pageId;
     if (tab.kind === 'changes' && !this.changes) void this.loadChanges();
     if (tab.kind === 'pages' && !this.pages) void this.loadPages();
     if (tab.kind === 'terminal') { this.terminalRetryCount = 0; this.assignTerminalPane(); this.requestChatTerminal(); }
     else if (this.terminalRetryTimer) { window.clearTimeout(this.terminalRetryTimer); this.terminalRetryTimer = undefined; }
+    return fileLoad;
   }
   private endpoint(kind: string, path?: string) {
     const base = `/api/sdk-chats/${encodeURIComponent(this.sessionId)}/utility/${kind}`;
@@ -386,7 +391,7 @@ export class MuxSDKUtility extends LitElement {
     else { tab = { id:crypto.randomUUID(), kind:'files', filePath:path }; this.tabs = [...this.tabs,tab]; }
     this.activeTabId = tab.id;
     this.saveTabs();
-    await this.loadFile(path, refresh);
+    await this.activateTab(tab, refresh);
   }
   private async loadFile(path: string, refresh = false) {
     this.fileAbort?.abort();
