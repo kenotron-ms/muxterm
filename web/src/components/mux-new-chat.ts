@@ -9,12 +9,12 @@ import { icon } from '../lib/icons.js';
 type ProviderName = 'openai' | 'anthropic' | 'configured';
 type StartOption = { harness: SDKHarnessName; provider: ProviderName };
 const SETUP_AGENTS = [
-  { name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
-  { name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
-  { name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
-  { name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
-  { name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
-  { name:'Amplifier', command:'uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
+  { harness:'codex', name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
+  { harness:'claude', name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
+  { harness:'opencode', name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
+  { harness:'pi', name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
+  { harness:'deepseek', name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
+  { harness:'amplifier', name:'Amplifier', command:'uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; uploading: boolean; error?: string };
 
@@ -40,6 +40,10 @@ export class MuxNewChat extends LitElement {
   @state() private busy = false;
   @state() private error = '';
   @state() private copiedSetup = '';
+  @state() private firstRun = false;
+  @state() private onboardingLoaded = false;
+  @state() private onboardingError = false;
+  @state() private optionsLoaded = false;
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   private dragDepth = 0;
@@ -138,9 +142,13 @@ export class MuxNewChat extends LitElement {
     .setup-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:10px; }
     .setup-card { padding:15px; border:1px solid var(--chrome-border); border-radius:13px; background:var(--chrome-bar); }
     .setup-card h2 { margin:0 0 8px; font-size:15px; }
+    .setup-card-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .setup-status { flex:none; color:var(--chrome-text-dim); font-size:11px; }
+    .setup-status.ready { color:var(--chrome-accent); }
     .setup-card code { display:block; min-height:42px; padding:8px; border-radius:7px; overflow-wrap:anywhere; background:var(--chrome-body); color:var(--chrome-text-bright); font:12px/1.45 ui-monospace,SFMono-Regular,monospace; }
     .setup-card p { margin:9px 0; color:var(--chrome-text-dim); font-size:12px; }
     .setup-actions { display:flex; align-items:center; gap:12px; margin-top:10px; }
+    .setup-footer { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:16px; }
     .setup-actions button,.setup-refresh { padding:7px 11px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-hover); color:var(--chrome-text-bright); }
     .setup-actions a { color:var(--chrome-accent); text-decoration:none; }
     .setup-refresh { margin-top:16px; }
@@ -166,13 +174,14 @@ export class MuxNewChat extends LitElement {
     window.addEventListener('drop', this.resetDrop);
     window.addEventListener('dragend', this.resetDrop);
     this.harness = this.initialHarness;
+    void this.loadOnboarding();
     if (this.initialPrompt) this.prompt = this.initialPrompt;
     void this.loadStartOptions();
     if (this.initialFolder) this.folder = this.initialFolder;
     if (this.initialProject) this.projectId = this.initialProject;
     document.addEventListener('pointerdown', this.closeDropdowns);
     this.unsub = sdkChats.subscribe(() => this.requestUpdate());
-    void sdkChats.refresh().then(() => { const project = sdkChats.projects.find(p => p.id === this.projectId); if (project) this.folder = project.path; });
+    void sdkChats.refresh().then(() => { const project = sdkChats.projects.find(p => p.id === this.projectId); if (project) this.folder = project.path; }).catch(error => { this.error = String(error); });
     void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) this.folder = listing.base; }).catch(error => { this.error = String(error); });
   }
   override disconnectedCallback() {
@@ -234,6 +243,7 @@ export class MuxNewChat extends LitElement {
     this.provider = option.provider;
   }
   private async loadStartOptions() {
+    this.optionsLoaded = false;
     try {
       const response = await fetch(apiPath('/api/sdk-chat-start-options'));
       if (!response.ok) throw new Error(await response.text());
@@ -245,11 +255,34 @@ export class MuxNewChat extends LitElement {
       else this.error = '';
     } catch (error) {
       if (this.isConnected) this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (this.isConnected) this.optionsLoaded = true;
     }
   }
   private async copySetup(command: string, name: string) {
     try { await navigator.clipboard.writeText(command); this.copiedSetup = name; this.error = ''; }
     catch { this.error = 'Could not copy the command. Select it above and copy it manually.'; }
+  }
+  private async loadOnboarding() {
+    try {
+      const response = await fetch(apiPath('/api/sdk-chat-onboarding'));
+      if (!response.ok) throw new Error(await response.text());
+      const state = await response.json() as { complete: boolean };
+      if (this.isConnected) { this.firstRun = !state.complete; this.onboardingError = false; }
+    } catch (error) {
+      if (this.isConnected) { this.error = error instanceof Error ? error.message : String(error); this.onboardingError = true; }
+    } finally {
+      if (this.isConnected) this.onboardingLoaded = true;
+    }
+  }
+  private async finishFirstRun() {
+    try {
+      const response = await fetch(apiPath('/api/sdk-chat-onboarding'), { method:'POST' });
+      if (!response.ok) throw new Error(await response.text());
+      if (this.isConnected) this.firstRun = false;
+    } catch (error) {
+      if (this.isConnected) this.error = error instanceof Error ? error.message : String(error);
+    }
   }
   private onDragEnter(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth++; this.dropActive = true; }
   private onDragOver(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; this.dropActive = true; }
@@ -315,18 +348,21 @@ export class MuxNewChat extends LitElement {
   }
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
-    if (this.startOptions?.length === 0) return html`
+    if (!this.onboardingLoaded || (this.firstRun && !this.optionsLoaded)) return html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="setup-intro" role="status">Checking your coding agents…</p></div></div>`;
+    if (this.onboardingError) return html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.error}</p><button class="setup-refresh" @click=${() => void this.loadOnboarding()}>Try again</button></div></div>`;
+    if (this.firstRun && !this.startOptions) return html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.error || 'Could not check coding agents.'}</p><button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Try again</button></div></div>`;
+    const showFirstRun = this.firstRun;
+    if (this.startOptions && (showFirstRun || this.startOptions.length === 0)) return html`
       <div class="main setup"><div class="content">
-        <h1>Choose your coding agent</h1>
-        <p class="setup-intro">Install an agent in a terminal, sign in to its provider, then refresh this list. Muxterm will use the agent already on your computer.</p>
+        <h1>${showFirstRun ? 'Welcome to Muxterm' : 'Set up a coding agent'}</h1>
+        <p class="setup-intro">${showFirstRun ? 'Check which coding agents Muxterm can use. Set up any others you want, then refresh the checks.' : 'Set up an agent in a terminal, then refresh the checks. Muxterm uses agents already on your computer.'}</p>
         <button class="setup-refresh" style="margin:0 0 16px" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open a terminal in muxterm</button>
         <div class="setup-list">${SETUP_AGENTS.map(agent => html`
-          <section class="setup-card"><h2>${agent.name}</h2>
-            <code>${agent.command}</code>
-            <p>After installing, run <strong>${agent.login}</strong> to connect your account.</p>
-            <div class="setup-actions"><button @click=${() => void this.copySetup(agent.command, agent.name)}>${this.copiedSetup === agent.name ? 'Copied' : 'Copy install command'}</button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
+          <section class="setup-card"><div class="setup-card-heading"><h2>${agent.name}</h2><span class="setup-status ${this.startOptions!.some(option => option.harness === agent.harness) ? 'ready' : ''}">${this.startOptions!.some(option => option.harness === agent.harness) ? agent.name.includes('ACP') ? 'Detected' : 'Ready to use' : 'Needs setup'}</span></div>
+            ${this.startOptions!.some(option => option.harness === agent.harness) ? html`<p>${agent.name.includes('ACP') ? 'Agent found. Confirm its provider is signed in before starting a chat.' : 'Muxterm can start chats with this agent.'}</p>` : html`<code>${agent.command}</code><p>Install if needed, then run <strong>${agent.login}</strong> to connect your account.</p>`}
+            <div class="setup-actions">${this.startOptions!.some(option => option.harness === agent.harness) ? nothing : html`<button @click=${() => void this.copySetup(agent.command, agent.name)}>${this.copiedSetup === agent.name ? 'Copied' : 'Copy install command'}</button>`}<a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
           </section>`)}</div>
-        <button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Refresh installed agents</button>
+        <div class="setup-footer"><button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Refresh checks</button>${showFirstRun && this.startOptions.length ? html`<button class="setup-refresh" @click=${this.finishFirstRun}>Start using Muxterm</button>` : nothing}</div>
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></div>`;
     return html`

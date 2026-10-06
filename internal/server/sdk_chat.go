@@ -1246,6 +1246,39 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	writeSDKJSON(w, 200, options)
 }
 
+// The completion marker lives beside SDK chat records, not in browser storage:
+// the desktop app gets a new localhost port (and origin) on every launch.
+func (s *Server) handleSDKChatOnboarding(w http.ResponseWriter, r *http.Request) {
+	marker := filepath.Join(sdkDataDir(), "onboarding-complete")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodGet {
+		_, err := os.Stat(marker)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "could not read onboarding state", http.StatusInternalServerError)
+			return
+		}
+		complete := err == nil
+		if !complete {
+			s.sdkChats.mu.Lock()
+			complete = len(s.sdkChats.chats) > 0
+			s.sdkChats.mu.Unlock()
+		}
+		writeSDKJSON(w, http.StatusOK, struct {
+			Complete bool `json:"complete"`
+		}{complete})
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(marker), 0700); err != nil {
+		http.Error(w, "could not save onboarding state", http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(marker, []byte("done\n"), 0600); err != nil {
+		http.Error(w, "could not save onboarding state", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == "GET" {
