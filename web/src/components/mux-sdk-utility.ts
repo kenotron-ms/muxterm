@@ -46,7 +46,7 @@ function legacyPageContent(blocks: PageBlock[]): PartialBlock[] {
   return converted.length ? converted : [{type:'paragraph'}];
 }
 type UtilityTabId = 'new' | 'files' | 'changes' | 'terminal' | 'pages';
-type UtilityTab = { id: string; kind: UtilityTabId; paneId?: number; pageId?: string };
+type UtilityTab = { id: string; kind: UtilityTabId; paneId?: number; pageId?: string; filePath?: string };
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
 const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, terminal:Terminal, pages:NotebookPen };
 
@@ -175,10 +175,22 @@ export class MuxSDKUtility extends LitElement {
         if (Number.isFinite(width) && width >= 160 && width <= 900) this.railWidths[key] = width;
       }
     } catch { /* storage unavailable */ }
-    let folder = '.', file = '';
-    try { folder = localStorage.getItem(this.pathKey()) || '.'; file = localStorage.getItem(this.fileKey()) || ''; } catch { /* private browsing */ }
+    let folder = '.', legacyFile = '';
+    try { folder = localStorage.getItem(this.pathKey()) || '.'; legacyFile = localStorage.getItem(this.fileKey()) || ''; } catch { /* private browsing */ }
+    if (legacyFile.startsWith('/')) {
+      const root = this.projectPath.replace(/\/+$/, '');
+      legacyFile = root && legacyFile.startsWith(`${root}/`) ? legacyFile.slice(root.length + 1) : '';
+    }
+    if (legacyFile && !this.tabs.some(tab => tab.kind === 'files' && tab.filePath === legacyFile)) {
+      const emptyFileTab = this.tabs.find(tab => tab.kind === 'files' && !tab.filePath);
+      if (emptyFileTab) emptyFileTab.filePath = legacyFile;
+      else this.tabs = [...this.tabs, { id:crypto.randomUUID(), kind:'files', filePath:legacyFile }];
+      this.saveTabs();
+    }
+    try { localStorage.removeItem(this.fileKey()); } catch { /* private browsing */ }
     try { this.pageId = localStorage.getItem(this.pageKey()) || ''; } catch { /* private browsing */ }
-    void this.restoreExplorer(folder, file);
+    void this.restoreExplorer(folder);
+    if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
     if (this.activeTab === 'changes') void this.loadChanges();
     if (this.activeTab === 'pages') void this.loadPages();
     this.pagesPollTimer = window.setInterval(() => { if (this.activeTab === 'pages' && this.pages && !this.pageSaving && !this.pagesConflict) void this.refreshPages(); }, 2500);
@@ -199,11 +211,11 @@ export class MuxSDKUtility extends LitElement {
   }
   override render() {
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && this.selected ? fileGlyph(this.selected) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'changes' ? this.changesView() : tab.kind === 'terminal' ? this.terminalView(tab) : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${item.filePath || this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'changes' ? this.changesView() : tab.kind === 'terminal' ? this.terminalView(tab) : this.pagesView()}</div>`;
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
-    if (tab.kind === 'files') return this.selected.split('/').pop() || 'Files';
+    if (tab.kind === 'files') return tab.filePath?.split('/').pop() || 'Files';
     if (tab.kind === 'pages') return this.pages?.find(page => page.id === tab.pageId)?.title || 'Page';
     return ({ changes:'Changes', terminal:'Terminal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
@@ -219,17 +231,21 @@ export class MuxSDKUtility extends LitElement {
   }
   private closeTab(id: string) {
     const index = this.tabs.findIndex(tab => tab.id === id); if (index < 0) return;
+    const wasActive = this.activeTabId === id;
     this.tabs = this.tabs.filter(tab => tab.id !== id);
     if (!this.tabs.length) this.tabs = [{ id:crypto.randomUUID(), kind:'new' }];
-    if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(index,this.tabs.length-1)].id;
-    this.saveTabs(); this.activateTab(this.currentTab); this.paintAll();
+    if (wasActive) this.activeTabId = this.tabs[Math.min(index,this.tabs.length-1)].id;
+    this.saveTabs(); if (wasActive) this.activateTab(this.currentTab); this.paintAll();
   }
-  private activateTab(tab: UtilityTab) {
+  private activateTab(tab: UtilityTab, refreshFile = false) {
+    const fileLoad = tab.kind === 'files' && tab.filePath ? this.loadFile(tab.filePath, refreshFile) : undefined;
+    if (!fileLoad) this.resetFileView();
     if (tab.kind === 'pages' && tab.pageId) this.pageId = tab.pageId;
     if (tab.kind === 'changes' && !this.changes) void this.loadChanges();
     if (tab.kind === 'pages' && !this.pages) void this.loadPages();
     if (tab.kind === 'terminal') { this.terminalRetryCount = 0; this.assignTerminalPane(); this.requestChatTerminal(); }
     else if (this.terminalRetryTimer) { window.clearTimeout(this.terminalRetryTimer); this.terminalRetryTimer = undefined; }
+    return fileLoad;
   }
   private endpoint(kind: string, path?: string) {
     const base = `/api/sdk-chats/${encodeURIComponent(this.sessionId)}/utility/${kind}`;
@@ -304,20 +320,18 @@ export class MuxSDKUtility extends LitElement {
     this.paintAll();
   }
   async showFile(path: string): Promise<void> {
-    this.showPanel('files');
     await this.revealFile(path);
   }
   private previewURL(path: string, maxBytes: number): string {
     return `${this.endpoint('raw', path)}&max_bytes=${maxBytes}`;
   }
-  private async restoreExplorer(folder: string, file: string) {
+  private async restoreExplorer(folder: string) {
     await this.loadDirectory('.');
     let path = '';
     for (const part of folder.split('/').filter(part => part !== '.')) {
       path = path ? `${path}/${part}` : part;
       await this.loadDirectory(path);
     }
-    if (file) await this.openFile(file);
   }
   private async revealFile(path: string) {
     let folder = '';
@@ -374,6 +388,16 @@ export class MuxSDKUtility extends LitElement {
     await this.loadDirectory(path);
   }
   private async openFile(path: string, refresh = false) {
+    const current = this.currentTab;
+    let tab = this.tabs.find(item => item.kind === 'files' && item.filePath === path);
+    if (!tab) tab = current.kind === 'files' && !current.filePath ? current : this.tabs.find(item => item.kind === 'files' && !item.filePath);
+    if (tab) tab.filePath = path;
+    else { tab = { id:crypto.randomUUID(), kind:'files', filePath:path }; this.tabs = [...this.tabs,tab]; }
+    this.activeTabId = tab.id;
+    this.saveTabs();
+    await this.activateTab(tab, refresh);
+  }
+  private async loadFile(path: string, refresh = false) {
     this.fileAbort?.abort();
     const controller = new AbortController();
     this.fileAbort = controller;
@@ -384,7 +408,6 @@ export class MuxSDKUtility extends LitElement {
     this.localSource = snapshot?.localSource || '';
     this.pdfBytes = snapshot?.pdfBytes || null;
     this.expandAncestors(path.split('/').slice(0, -1).join('/') || '.');
-    try { localStorage.setItem(this.fileKey(), path); } catch { /* private browsing */ }
     const current = ++this.pendingFile;
     this.paintAll();
     try {
@@ -419,16 +442,14 @@ export class MuxSDKUtility extends LitElement {
     } catch (error) { if (current === this.pendingFile && !controller.signal.aborted) this.fileError = String(error); }
     this.paintAll();
   }
-  private clearFile() {
+  private resetFileView() {
     this.fileAbort?.abort(); this.pendingFile++;
-    this.selected = ''; this.artifact = undefined; this.localSource = ''; this.pdfBytes = null;
-    try { localStorage.removeItem(this.fileKey()); } catch { /* private browsing */ }
-    this.paintAll();
+    this.selected = ''; this.artifact = undefined; this.localSource = ''; this.pdfBytes = null; this.fileError = '';
   }
   private showQuickOpen() {
     this.quickAbort?.abort();
     if (this.quickTimer) window.clearTimeout(this.quickTimer);
-    this.showPanel('files');
+    if (this.currentTab.kind !== 'files') this.showPanel('files');
     this.quickOpen = true;
     this.quickQuery = '';
     this.quickResults = [];
@@ -600,7 +621,7 @@ export class MuxSDKUtility extends LitElement {
       </div>` : nothing}
       ${this.filesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize file explorer" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'files')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'files')}></div>` : nothing}
       <div class="viewer">
-        <div class="single-file-bar"><button class="rail-toggle" aria-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} title=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.paintAll(); }}>${icon(this.filesRailOpen ? ChevronRight : Folder,{size:15})}</button>${this.selected ? html`${icon(fileGlyph(this.selected),{size:15})}<strong title=${this.selected}>${this.selected.split('/').pop()}</strong><button class="icon-button" aria-label="Close file" title="Close file" @click=${() => this.clearFile()}>${icon(X,{size:14})}</button>` : html`<span class="single-file-empty">No file open</span>`}</div>
+        <div class="single-file-bar"><button class="rail-toggle" aria-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} title=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.paintAll(); }}>${icon(this.filesRailOpen ? ChevronRight : Folder,{size:15})}</button>${this.selected ? html`${icon(fileGlyph(this.selected),{size:15})}<strong title=${this.selected}>${this.selected.split('/').pop()}</strong><button class="icon-button" aria-label="Close file" title="Close file" @click=${() => this.closeTab(this.currentTab.id)}>${icon(X,{size:14})}</button>` : html`<span class="single-file-empty">No file open</span>`}</div>
         <div class="viewer-header"><nav class="viewer-path" aria-label="Open file path">${segments.length ? html`<button @click=${() => void this.loadDirectory('.')}>${projectName}</button>${segments.map((part,index) => html`<span>›</span>${index < segments.length-1 ? html`<button @click=${() => void this.loadDirectory(segments.slice(0,index+1).join('/'))}>${part}</button>` : html`<strong>${part}</strong>`}`)}` : html`<span>Open a file to preview it</span>`}</nav><button class="icon-button" aria-label="Refresh open file" title="Refresh open file" ?disabled=${!this.selected} @click=${() => void this.openFile(this.selected, true)}>${icon(RefreshCw,{size:15})}</button><button class="icon-button" aria-label=${this.focused ? 'Show chat beside files' : 'Focus file viewer'} title=${this.focused ? 'Show chat beside files' : 'Focus file viewer'} @click=${() => this.dispatchEvent(new CustomEvent('sdk-file-focus',{bubbles:true,composed:true}))}>${icon(this.focused ? Minimize2 : Maximize2,{size:15})}</button></div>
         ${file ? html`<div class="viewer-actions">${hasAlternateView ? html`<div class="view-switch"><button class=${this.fileMode === 'preview' ? 'active' : ''} @click=${() => this.setFileMode('preview')}>Preview</button><button class=${this.fileMode === 'source' ? 'active' : ''} @click=${() => this.setFileMode('source')}>Source</button></div>` : html`<span class="mode-label">${file.kind === 'image' || file.name.endsWith('.pdf') ? 'Preview' : 'Source'}</span>`}<span class="action-spacer"></span><button @click=${() => this.askAboutFile()}>Ask about file</button><a href=${this.endpoint('raw', this.selected)} download=${file.name}>Download</a></div>` : nothing}
         <div class="viewer-body">${this.selected ? this.fileBody() : html`<div class="welcome-file">${icon(FolderOpen,{size:35})}<h2>Explore this project</h2><p>Choose a file from the explorer or search by name across the project.</p><button @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></button></div>`}</div>

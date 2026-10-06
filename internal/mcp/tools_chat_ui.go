@@ -32,12 +32,12 @@ func registerChatUITools(srv *Server) {
 		}
 		return string(result), nil
 	}
-	srv.Register("navigate_app", "Open a Chat in connected muxterm browsers, change its Chat/Split/Preview panel layout, or select its Plan/Files/PR/Trajectory tab. Use list_chats for session_id. Returns a browser count; zero means nobody saw the navigation. Local machine only.",
+	srv.Register("navigate_app", "Open a Chat in connected muxterm browsers, show or hide its side panel beside the chat, or select a Chat tab. Agent navigation keeps the chat visible; Preview-only is a user control. Use list_chats for session_id. Returns a browser count; zero means nobody saw the navigation. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"session_id": map[string]any{"type": "string", "description": "Chat ID"},
 			"action":     map[string]any{"type": "string", "enum": []string{"chat", "panel", "tab"}},
-			"mode":       map[string]any{"type": "string", "enum": []string{"chat", "split", "preview"}, "description": "required for action=panel"},
-			"tab":        map[string]any{"type": "string", "enum": []string{"plan", "files", "pr", "trajectory"}, "description": "required for action=tab"},
+			"mode":       map[string]any{"type": "string", "enum": []string{"chat", "split"}, "description": "required for action=panel"},
+			"tab":        map[string]any{"type": "string", "enum": []string{"files", "changes", "terminal", "pages"}, "description": "required for action=tab"},
 		}), "required": []string{"session_id", "action"}},
 		func(args map[string]any) (string, error) {
 			action, err := argString(args, "action")
@@ -46,7 +46,7 @@ func registerChatUITools(srv *Server) {
 			}
 			return call(args, action)
 		})
-	srv.Register("view_file", "Show a local file in a Chat's Files viewer in every connected muxterm browser. Requires the Chat ID and an absolute file path inside that Chat's folder. This opens the actual viewer for the human; read_file only reads for the agent. Returns a browser count; zero means nobody saw it. Local machine only.",
+	srv.Register("view_file", "Show a local file in a Chat's Files viewer beside the chat in every connected muxterm browser. Each distinct file opens in its own tab; opening the same file selects its existing tab. Requires the Chat ID and an absolute file path inside that Chat's folder. This opens the actual viewer for the human; read_file only reads for the agent. Returns a browser count; zero means nobody saw it. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"session_id": map[string]any{"type": "string", "description": "Chat ID"},
 			"path":       map[string]any{"type": "string", "description": "absolute path inside the Chat's folder"},
