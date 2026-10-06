@@ -193,13 +193,16 @@ func (c *Companion) openMuxtermWindow() error {
 			"const bar = document.createElement('div'); bar.id = 'muxterm-native-titlebar'; bar.textContent = 'muxterm'; document.body.appendChild(bar); }" +
 			"customElements.whenDefined('mux-app').then(() => {" +
 			"const root = document.querySelector('mux-app')?.shadowRoot; if (!root) return;" +
-			"const softenSidebar = () => { const shadow = root.querySelector('mux-sidebar')?.shadowRoot;" +
+			"if (!root.getElementById('muxterm-native-gutter-style')) {" +
+			"const style = document.createElement('style'); style.id = 'muxterm-native-gutter-style';" +
+			"style.textContent = '.sidebar-gutter::after { content: none !important; }'; root.appendChild(style); }" +
+			"const styleSidebar = () => { const shadow = root.querySelector('mux-sidebar')?.shadowRoot;" +
 			"if (!shadow || shadow.getElementById('muxterm-native-sidebar-style')) return;" +
 			"const style = document.createElement('style'); style.id = 'muxterm-native-sidebar-style';" +
-			"style.textContent = ':host { border-right-color: transparent !important; } .header { border-bottom-color: transparent !important; }';" +
+			"style.textContent = '.terminal-heading { border-top: 0 !important; } .hg-head { border-bottom: 0 !important; }';" +
 			"shadow.appendChild(style); };" +
-			"softenSidebar(); customElements.whenDefined('mux-sidebar').then(softenSidebar);" +
-			"new MutationObserver(softenSidebar).observe(root, {childList:true, subtree:true});" +
+			"styleSidebar(); customElements.whenDefined('mux-sidebar').then(styleSidebar);" +
+			"new MutationObserver(styleSidebar).observe(root, {childList:true, subtree:true});" +
 			"});" +
 			"})()",
 		BackgroundColour: application.NewRGB(232, 232, 237),
