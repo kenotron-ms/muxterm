@@ -701,7 +701,7 @@ export class MuxSDKUtility extends LitElement {
     if (depth > 8) return [];
     const rows: TemplateResult[] = [];
     for (const page of (this.pages || []).filter(item => (item.parentId || '') === parentId)) {
-      rows.push(html`<button class="page-list-item ${page.id === this.pageId ? 'selected' : ''}" style=${`--page-depth:${depth}`} @click=${() => this.selectPage(page.id)}>${icon(NotebookPen,{size:15})}<span>${page.title || 'Untitled'}</span></button>`);
+      rows.push(html`<button class="page-list-item ${page.id === this.pageId ? 'selected' : ''}" style=${`--page-depth:${depth}`} title=${page.title || 'Untitled'} @click=${() => this.selectPage(page.id)}><span class="page-list-glyph">${icon(NotebookPen,{size:15})}</span><span class="page-list-name">${page.title || 'Untitled'}</span></button>`);
       rows.push(...this.pageRows(page.id, depth + 1));
     }
     return rows;
@@ -743,7 +743,7 @@ export class MuxSDKUtility extends LitElement {
     const page = this.pages?.find(item => item.id === this.pageId);
     const parent = page?.parentId ? this.pages?.find(item => item.id === page.parentId) : undefined;
     return html`<section class="pages-panel split-panel ${this.pagesRailOpen ? '' : 'rail-closed'}" style=${`--rail-width:${this.railWidths.pages}px`}>
-      ${this.pagesRailOpen ? html`<div class="pages-list"><header><strong>Pages</strong><button class="icon-button" aria-label="Hide pages list" title="Hide pages list" @click=${() => { this.pagesRailOpen = false; this.paintAll(); }}>${icon(X,{size:15})}</button></header><div class="page-list-rows">${this.pagesError ? html`<p class="pages-error">${this.pagesError}</p>` : nothing}${!this.pages ? html`<p class="empty">Loading pages…</p>` : this.pages.length ? this.pageRows() : html`<p class="empty">Create a page to start writing.</p>`}</div><button class="pages-list-new" @click=${() => this.newPage()}>＋ New page</button></div>` : nothing}
+      ${this.pagesRailOpen ? html`<div class="pages-list"><div class="browser-heading"><div class="explorer-label">PAGES</div><div class="explorer-actions"><button class="icon-button" aria-label="New page" title="New page" @click=${() => this.newPage()}>${icon(Plus,{size:15})}</button></div></div><div class="page-list-rows">${this.pagesError ? html`<p class="pages-error">${this.pagesError}</p>` : nothing}${!this.pages ? html`<p class="empty">Loading pages…</p>` : this.pages.length ? this.pageRows() : html`<p class="empty">Create a page to start writing.</p>`}</div></div>` : nothing}
       ${this.pagesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize page list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'pages')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'pages')}></div>` : nothing}
       <div class="page-editor"><div class="page-toolbar"><div><button aria-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} title=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</button>${parent ? html`<button class="page-parent" @click=${() => this.selectPage(parent.id)}>${parent.title}</button><span>›</span>` : nothing}<span>${page?.title || 'Pages'}</span></div><span>${this.pageSaving ? 'Saving…' : 'Saved'}</span></div>
       ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .content=${page.content?.length ? page.content : legacyPageContent(page.blocks)} .pageId=${page.id} .documentEpoch=${this.pagesRenderEpoch} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><button class="page-subpage" @click=${() => this.newPage(page.id)}>＋ New subpage</button></div></div>` : html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages</h2><p>Create a document for this chat.</p><button @click=${() => this.newPage()}>New page</button></div>`}</div>
@@ -896,15 +896,16 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .terminal-content mux-chat-terminal { display:block; width:100%; height:100%; }
     mux-sdk-utility .terminal-empty { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px; height:100%; color:var(--chrome-text-dim); text-align:center; }
     mux-sdk-utility .terminal-empty button { border:1px solid var(--chrome-border); border-radius:6px; padding:6px 10px; background:var(--chrome-bar); color:var(--chrome-text-bright); cursor:pointer; }
-    mux-sdk-utility .pages-list { min-width:0; min-height:0; overflow:auto; background:color-mix(in srgb,var(--chrome-body) 78%,var(--chrome-bar)); }
-    mux-sdk-utility .pages-list > header { display:flex; align-items:center; justify-content:space-between; height:38px; padding:0 10px 0 15px; border-bottom:1px solid var(--chrome-border); color:var(--chrome-text-dim); font:600 10px system-ui,sans-serif; letter-spacing:.1em; }
+    mux-sdk-utility .pages-list { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:color-mix(in srgb,var(--chrome-body) 78%,var(--chrome-bar)); }
+    mux-sdk-utility .pages-list .browser-heading { flex:none; }
     mux-sdk-utility .pages-list .empty, mux-sdk-utility .pages-error { margin:14px; font:11px/1.5 system-ui,sans-serif; color:var(--chrome-text-dim); }
     mux-sdk-utility .pages-error { color:#e59393; }
-    mux-sdk-utility .page-list-item { display:flex; align-items:center; gap:8px; width:100%; padding:8px 14px; border:0; background:transparent; color:var(--chrome-text-bright); text-align:left; font:11px system-ui,sans-serif; cursor:pointer; }
-    mux-sdk-utility .page-list-item:hover, mux-sdk-utility .page-list-item.selected { background:var(--chrome-hover); }
-    mux-sdk-utility .page-list-item.selected { box-shadow:inset 2px 0 var(--chrome-accent); }
-    mux-sdk-utility .page-list-item svg { flex:none; color:var(--chrome-accent); }
-    mux-sdk-utility .page-list-item span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    mux-sdk-utility .page-list-rows { flex:1; min-height:0; overflow:auto; padding:2px 0 10px; }
+    mux-sdk-utility .page-list-item { display:flex; align-items:center; gap:5px; box-sizing:border-box; width:100%; min-width:0; min-height:24px; padding:0 11px 0 calc(8px + var(--page-depth)*14px); border:0; background:transparent; color:var(--chrome-text-bright); text-align:left; font:11px system-ui,sans-serif; cursor:pointer; }
+    mux-sdk-utility .page-list-item:hover { background:var(--chrome-hover); }
+    mux-sdk-utility .page-list-item.selected { background:color-mix(in srgb,var(--chrome-accent) 17%,var(--chrome-hover)); box-shadow:inset 2px 0 var(--chrome-accent); }
+    mux-sdk-utility .page-list-glyph { display:flex; align-items:center; justify-content:center; flex:none; width:17px; color:var(--chrome-accent); }
+    mux-sdk-utility .page-list-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .page-editor { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:auto; }
     mux-sdk-utility .page-editor-top { display:flex; align-items:center; justify-content:space-between; min-height:38px; padding:0 18px; border-bottom:1px solid var(--chrome-border); color:var(--chrome-text-dim); font:11px system-ui,sans-serif; }
     mux-sdk-utility .page-editor-top span:first-child { display:flex; align-items:center; gap:7px; }
@@ -913,17 +914,8 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-new-button { margin-top:10px; border:1px solid var(--chrome-border); border-radius:5px; padding:7px 12px; background:var(--chrome-bar); color:var(--chrome-text-bright); cursor:pointer; }
     mux-sdk-utility .pages-panel { background:#fff; color:#232323; }
     mux-sdk-utility .pages-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
-    mux-sdk-utility .pages-list { display:flex; flex-direction:column; margin:6px 0 6px 6px; border:1px solid #e3e3e3; border-radius:14px; background:#fff; box-shadow:0 2px 13px #0000000c; overflow:hidden; }
-    mux-sdk-utility .pages-list > header { flex:none; height:43px; border:0; padding:0 9px 0 15px; color:#202124; font:650 13px system-ui,sans-serif; letter-spacing:0; }
-    mux-sdk-utility .pages-list .icon-button { border-radius:50%; background:#f4f4f4; color:#444; }
-    mux-sdk-utility .page-list-rows { flex:1; overflow:auto; padding:0 8px; }
-    mux-sdk-utility .page-list-item { min-height:31px; border-radius:8px; padding:5px 8px 5px calc(8px + var(--page-depth)*16px); color:#303234; font:12px system-ui,sans-serif; }
-    mux-sdk-utility .page-list-item.selected, mux-sdk-utility .page-list-item:hover { background:#edf0f0; box-shadow:none; }
-    mux-sdk-utility .page-list-item svg { color:#4c5153; }
-    mux-sdk-utility .pages-list-new { flex:none; margin:5px 8px 9px; border:0; border-radius:7px; padding:7px 8px; background:transparent; color:#676b6d; text-align:left; font:12px system-ui,sans-serif; cursor:pointer; }
-    mux-sdk-utility .pages-list-new:hover { background:#f2f3f3; }
-    mux-sdk-utility .pages-panel .vertical-resizer { background:#fff; }
-    mux-sdk-utility .pages-panel .vertical-resizer:hover, mux-sdk-utility .pages-panel .vertical-resizer:focus-visible { background:#dae2e8; }
+    mux-sdk-utility .pages-panel .vertical-resizer { background:var(--chrome-border); }
+    mux-sdk-utility .pages-panel .vertical-resizer:hover, mux-sdk-utility .pages-panel .vertical-resizer:focus-visible { background:var(--chrome-accent); }
     mux-sdk-utility .page-editor { background:#fff; color:#202124; }
     mux-sdk-utility .page-toolbar { display:flex; justify-content:space-between; align-items:center; flex:none; min-height:42px; padding:0 14px; border-bottom:1px solid #eeeeee; color:#777; font:11px system-ui,sans-serif; }
     mux-sdk-utility .page-toolbar > div { display:flex; align-items:center; gap:7px; min-width:0; }
@@ -932,7 +924,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-toolbar button:hover { background:#f3f3f3; }
     mux-sdk-utility .page-toolbar .page-parent { width:auto; max-width:130px; border:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .page-canvas { flex:1; overflow:auto; min-height:0; }
-    mux-sdk-utility .page-paper { width:min(720px,100%); margin:0 auto; padding:42px clamp(22px,6%,70px) 100px; }
+    mux-sdk-utility .page-paper { width:min(720px,100%); margin:0 auto; padding:42px clamp(16px,6%,70px) 100px clamp(64px,8%,75px); }
     mux-sdk-utility .page-title { min-height:42px; margin:0 0 49px; color:#202124; font:700 27px/1.28 system-ui,sans-serif; }
     mux-sdk-utility .page-subpage { margin:20px 0 0; border:0; background:transparent; color:#868d92; font:12px system-ui,sans-serif; cursor:pointer; }
     mux-sdk-utility .page-subpage:hover { color:#202124; }
@@ -940,6 +932,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-no-selection h2 { margin:0; color:#202124; }
     mux-sdk-utility .page-no-selection p { margin:0; }
     mux-sdk-utility .page-no-selection button { margin-top:9px; border:1px solid #ddd; border-radius:7px; padding:7px 12px; background:#fff; color:#333; cursor:pointer; }
-    @container(max-width:520px) { mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(170px,38%) minmax(0,1fr); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .vertical-resizer { display:none; } mux-sdk-utility .browser, mux-sdk-utility .changes-list, mux-sdk-utility .pages-list { border-bottom:1px solid var(--chrome-border); } }
+    @container(max-width:520px) { mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(170px,38%) minmax(0,1fr); } mux-sdk-utility .files-panel.rail-closed, mux-sdk-utility .pages-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .vertical-resizer { display:none; } mux-sdk-utility .browser, mux-sdk-utility .changes-list, mux-sdk-utility .pages-list { border-bottom:1px solid var(--chrome-border); } }
   `;
 }
