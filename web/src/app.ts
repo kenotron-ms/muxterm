@@ -87,6 +87,16 @@ const UTILITY_TITLES = new Map([
   ['connections', 'Connections'],
   ['skills', 'Skills'],
 ]);
+function chatFromHash(): string | null {
+  return /^#chat=([0-9a-f]{32})$/i.exec(window.location.hash)?.[1] ?? null;
+}
+
+function setChatHash(id: string | null): void {
+  if (!id && !chatFromHash()) return;
+  const next = id ? `#chat=${encodeURIComponent(id)}` : '';
+  if (window.location.hash === next) return;
+  window.history.pushState(window.history.state, '', window.location.pathname + window.location.search + next);
+}
 interface CloseRequestState {
   target: CloseTarget;
   token: symbol;
@@ -905,6 +915,9 @@ export class MuxApp extends LitElement {
       window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
       this._sdkChatId = 'connections';
     }
+    if (this._sdkChatId === null) this._sdkChatId = chatFromHash();
+    window.addEventListener('hashchange', this._onChatHistory);
+    window.addEventListener('popstate', this._onChatHistory);
     // Opt-in AI capability: resolve the flag once on load. Fetched over HTTP
     // rather than carried on the config frame, because the key that backs it
     // deliberately never enters the config pipeline.
@@ -1293,6 +1306,8 @@ export class MuxApp extends LitElement {
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
+    window.removeEventListener('hashchange', this._onChatHistory);
+    window.removeEventListener('popstate', this._onChatHistory);
     this.removeEventListener('pane-close', this._onPaneCloseIntent);
     this.removeEventListener('workspace-close', this._onWorkspaceCloseIntent);
     this.removeEventListener('connect-machine', this._onConnectMachine);
@@ -1581,7 +1596,7 @@ export class MuxApp extends LitElement {
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @chat-terminal-open=${this._onChatTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @chat-terminal-open=${this._onChatTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -2287,6 +2302,7 @@ export class MuxApp extends LitElement {
     this._jobEditorChatId = '';
     this._newChatForJob = false;
     this._sdkChatId = 'new';
+    setChatHash(null);
     this._closeDrawer();
   };
   private _onJobNew = (): void => {
@@ -2298,12 +2314,14 @@ export class MuxApp extends LitElement {
     this._jobEditorChatId = '';
     this._newChatForJob = false;
     this._sdkChatId = 'jobs';
+    setChatHash(null);
     this._closeDrawer();
   };
   private _openUtility(view: 'connections' | 'skills'): void {
     this._jobEditorChatId = '';
     this._newChatForJob = false;
     this._sdkChatId = view;
+    setChatHash(null);
     this._closeDrawer();
   }
   private _onConnectionsOpen = (): void => this._openUtility('connections');
@@ -2313,6 +2331,7 @@ export class MuxApp extends LitElement {
     this._newChatForJob = false;
     this._jobEditorChatId = event.detail.sessionId;
     this._sdkChatId = 'jobs';
+    setChatHash(null);
     this._closeDrawer();
   };
   private _onChatNewProject = (event: CustomEvent<{ projectId: string }>): void => {
@@ -2344,6 +2363,7 @@ export class MuxApp extends LitElement {
     const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
     if (!d) return;
     this._sdkChatId = null;
+    setChatHash(null);
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = '';
     // Reveal the dock before selecting its pane.
     if (d.workspaceId && d.workspaceId !== store.attached) {
@@ -2361,10 +2381,18 @@ export class MuxApp extends LitElement {
     );
   };
 
+  private _onChatHistory = (): void => {
+    const id = chatFromHash();
+    this._sdkChatId = id ?? 'new';
+    (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = id ?? '';
+    this._closeDrawer();
+  };
+
   private _onChatOpen = (e: Event): void => {
     const detail = (e as CustomEvent<{ sessionId: string }>).detail;
     if (!detail?.sessionId) return;
     this._sdkChatId = detail.sessionId;
+    setChatHash(detail.sessionId);
     this._jobEditorChatId = '';
     this._newChatForJob = false;
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
@@ -2374,6 +2402,7 @@ export class MuxApp extends LitElement {
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     // Picking a workspace closes the drawer covering the terminal.
     this._sdkChatId = null;
+    setChatHash(null);
     this._closeDrawer();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive
