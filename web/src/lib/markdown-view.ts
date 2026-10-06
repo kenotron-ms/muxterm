@@ -72,6 +72,7 @@ export interface MdLinkPolicy {
   image?(raw: string): string | null;
   remoteImages?: boolean;
   reference?(href: string, label: string): TemplateResult | null;
+  referenceText?(text: string): unknown;
   /** Chat policies opt in; published documents keep Mermaid as code. */
   diagrams?: boolean;
 }
@@ -114,7 +115,7 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
     case 'text':
       // Nested tokens appear on list-item text; without this, `- **a**` in a
       // tight list would render its own source.
-      return t.tokens && t.tokens.length > 0 ? renderInline(t.tokens, policy) : (t.text ?? '');
+      return t.tokens && t.tokens.length > 0 ? renderInline(t.tokens, policy) : (policy?.referenceText?.(t.text ?? '') ?? t.text ?? '');
     case 'escape':
       return t.text ?? '';
     case 'strong':
@@ -124,7 +125,7 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
     case 'del':
       return html`<s>${renderInline(t.tokens, policy)}</s>`;
     case 'codespan':
-      return html`<code class="md-code">${t.text ?? ''}</code>`;
+      return html`<code class="md-code">${policy?.referenceText?.(t.text ?? '') ?? t.text ?? ''}</code>`;
     case 'br':
       return html`<br />`;
     case 'link': {

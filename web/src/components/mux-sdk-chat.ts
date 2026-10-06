@@ -221,6 +221,8 @@ export class MuxSDKChat extends LitElement {
     .text .md-pre code { color:inherit; font:12.5px/1.6 ui-monospace,monospace; white-space:pre; }
     .text .md-pre[data-streaming] { border-bottom-color:var(--chrome-accent,#9bb8f7); }
     .text .md-link { color:var(--chrome-accent,#9bb8f7); text-decoration:underline; text-underline-offset:3px; }
+    .text .md-chat-link { display:inline-flex; align-items:baseline; gap:4px; max-width:100%; padding:1px 6px; border:1px solid color-mix(in srgb,var(--chrome-accent,#9bb8f7) 48%,transparent); border-radius:6px; background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 12%,transparent); font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
+    .text .md-chat-link:hover { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 22%,transparent); text-decoration:underline; }
     .text .md-image-link { display:inline-block; max-width:100%; }
     .text .md-img { display:block; max-width:100%; max-height:min(420px,55vh); width:auto; height:auto; object-fit:contain; border:1px solid var(--chrome-border,#41485f); border-radius:8px; }
     .text .md-ul, .text .md-ol { margin:0 0 16px; padding-left:25px; }

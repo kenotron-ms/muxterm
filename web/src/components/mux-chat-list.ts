@@ -52,6 +52,14 @@ export class MuxChatWorkspace extends LitElement {
     document.removeEventListener('keydown', this.onEscape);
     super.disconnectedCallback();
   }
+  override willUpdate(changed: Map<string, unknown>) {
+    if ((changed.has('selectedSession') || changed.has('model')) && this.model?.chats.some(chat => chat.id === this.selectedSession)) this.open = true;
+  }
+  override updated(changed: Map<string, unknown>) {
+    if ((changed.has('selectedSession') || changed.has('model')) && this.selectedSession) {
+      this.renderRoot.querySelector<HTMLElement>('.chat-row[selected]')?.scrollIntoView({ block:'nearest' });
+    }
+  }
   reveal() { this.open = true; this.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
 
   static styles = css`
