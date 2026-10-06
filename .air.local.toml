@@ -16,7 +16,7 @@ tmp_dir = "tmp"
 [build]
   bin = "./bin/muxterm-dev"
   args_bin = ["serve", "--addr", "127.0.0.1:8313", "--no-auth"]
-  cmd = "go build -o ./bin/muxterm-dev ./cmd/muxterm"
+  cmd = "go build -o ./bin/muxterm-dev.next ./cmd/muxterm && mv ./bin/muxterm-dev.next ./bin/muxterm-dev"
   delay = 200
   stop_on_error = false
 

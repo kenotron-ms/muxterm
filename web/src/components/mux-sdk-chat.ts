@@ -276,7 +276,6 @@ export class MuxSDKChat extends LitElement {
     .composer-row { display:flex; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
-    .composer-controls .stop + .send { margin-left:0; }
     textarea { display:block; flex:1; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:14px/1.55 system-ui,sans-serif; min-height:34px; height:34px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
     textarea::placeholder { color:var(--chrome-text-dim,#9aa3b8); opacity:.8; }
     .send, .stop { flex:none; width:34px; height:34px; display:grid; place-items:center; border-radius:10px; }
@@ -284,20 +283,22 @@ export class MuxSDKChat extends LitElement {
     .send:hover:not(:disabled) { filter:brightness(1.1); }
     .send:disabled { opacity:.38; cursor:default; }
     .voice-text { white-space:pre-wrap; overflow-wrap:anywhere; }
-    .send.voice-idle { transition:width .3s ease,border-radius .3s ease,background .3s ease; }
-    .send.voice-active { width:86px; border-radius:11px; display:flex; align-items:center; justify-content:center; gap:7px; font-size:13px; font-weight:650; transition:width .3s ease,border-radius .3s ease,background .3s ease; }
-    .voice-bars { display:inline-flex; align-items:center; justify-content:center; gap:2px; height:20px; }
-    .voice-bars i { display:block; width:3px; border-radius:99px; background:currentColor; transition:height .075s ease-out; }
-    .voice-bars i:nth-child(1) { height:8px; }
-    .voice-bars i:nth-child(2) { height:17px; }
-    .voice-bars i:nth-child(3) { height:11px; }
-    .voice-bars i:nth-child(4) { height:20px; }
-    .voice-bars i:nth-child(5) { height:13px; }
+    .send-icon { display:grid; place-items:center; animation:send-icon-in .18s ease-out both; }
+    @keyframes send-icon-in { from { opacity:0; } to { opacity:1; } }
+    .send.voice-active { width:78px; font-size:13px; font-weight:650; }
+    .send.voice-active .send-icon { display:flex; align-items:center; gap:6px; }
+    .voice-bars { display:inline-flex; align-items:center; justify-content:center; gap:2px; height:16px; }
+    .voice-bars i { display:block; width:2px; border-radius:99px; background:currentColor; transition:height .075s ease-out; }
+    .voice-bars i:nth-child(1) { height:6px; }
+    .voice-bars i:nth-child(2) { height:13px; }
+    .voice-bars i:nth-child(3) { height:8px; }
+    .voice-bars i:nth-child(4) { height:16px; }
+    .voice-bars i:nth-child(5) { height:10px; }
     .voice-compose-row { min-height:34px; display:flex; align-items:center; gap:9px; color:var(--chrome-text-dim,#9aa3b8); }
     .voice-compose-row .voice-label { flex:1; font-size:14px; }
     .voice-compose-row .voice-mic { font-size:18px; line-height:1; }
     .voice-compose-row .voice-attach { flex:none; width:30px; height:30px; border:0; background:transparent; color:inherit; font-size:22px; line-height:1; }
-    @media (prefers-reduced-motion:reduce) { .voice-bars i { transition:none; } }
+    @media (prefers-reduced-motion:reduce) { .voice-bars i { transition:none; } .send-icon { animation:none; } }
     .stop { border:1px solid var(--chrome-danger); background:var(--chrome-danger); color:var(--chrome-body); font-size:15px; }
     .stop:hover:not(:disabled) { background:color-mix(in srgb,var(--chrome-danger) 85%,var(--chrome-text-bright)); }
     .stop:disabled { opacity:.6; }
@@ -1509,15 +1510,20 @@ export class MuxSDKChat extends LitElement {
   }
   private updateVoiceLevels(levels: readonly number[]) {
     const bars = this.renderRoot.querySelectorAll<HTMLElement>('.send.voice-active .voice-bars i');
-    const resting = [5, 8, 4, 7, 6];
-    bars.forEach((bar, index) => { bar.style.height = `${Math.round(resting[index] + Math.min(1, levels[index] || 0) * 13)}px`; });
+    const resting = [4, 6, 4, 6, 5];
+    bars.forEach((bar, index) => { bar.style.height = `${Math.round(resting[index] + Math.min(1, levels[index] || 0) * 10)}px`; });
   }
   private sendVoiceButton() {
+    const mode = this.voiceState !== 'idle' ? 'voice-stop' : this.busy ? 'task-stop' : this.draft.trim() || this.attachments.length ? 'send' : 'voice-start';
+    const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'send' ? 'Send message' : this.voiceAvailable ? 'Start voice mode' : 'Voice mode unavailable; check Voice settings';
+    const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending
+      : mode === 'task-stop' ? this.stopping
+      : mode === 'send' ? this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)
+      : false;
     const bars = html`<span class="voice-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>`;
-    if (this.voiceState !== 'idle') return html`<button class="send voice-active" aria-label="Stop voice mode" title="Stop voice mode" @click=${() => void this.toggleVoice()}>${bars}Stop</button>`;
-    if (!this.draft.trim() && !this.attachments.length && this.voiceAvailable) return html`<button class="send voice-idle" aria-label="Start voice mode" title="Start voice mode" ?disabled=${this.settingsPending} @click=${() => void this.toggleVoice()}>${bars}</button>`;
-    if (this.busy && !this.draft.trim() && !this.attachments.length) return nothing;
-    return html`<button class="send" aria-label=${this.busy && this.isACPChat() ? 'Wait for ACP turn' : this.busy ? 'Steer running turn' : 'Send message'} ?disabled=${(!this.draft.trim() && !this.attachments.length) || this.stopping || this.settingsPending || (this.busy && (this.attachments.length > 0 || this.isACPChat())) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button>`;
+    const glyph = mode === 'voice-start' ? bars : mode === 'voice-stop' ? html`${bars}<span aria-hidden="true">Stop</span>`
+      : mode === 'send' ? html`<span aria-hidden="true">↑</span>` : html`<span aria-hidden="true">■</span>`;
+    return html`<button class="send ${mode === 'voice-stop' ? 'voice-active' : ''}" aria-label=${label} title=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</button>`;
   }
   private isACPChat() { return this.chat?.harness === 'pi' || this.chat?.harness === 'opencode' || this.chat?.harness === 'deepseek'; }
   override render() {
@@ -1539,7 +1545,7 @@ export class MuxSDKChat extends LitElement {
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
       <div class="composer-row"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${(e: InputEvent) => { this.draft = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
-      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.busy ? html`<button class="stop" aria-label="Stop current task" title="Stop current task" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}${this.sendVoiceButton()}</div>`}
+      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .chatTitle=${this.chat?.title || ''} .terminalWorkspaceId=${this.chat?.terminalWorkspaceId || ''} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}
