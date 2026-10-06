@@ -175,19 +175,8 @@ export class MuxSDKUtility extends LitElement {
         if (Number.isFinite(width) && width >= 160 && width <= 900) this.railWidths[key] = width;
       }
     } catch { /* storage unavailable */ }
-    let folder = '.', legacyFile = '';
-    try { folder = localStorage.getItem(this.pathKey()) || '.'; legacyFile = localStorage.getItem(this.fileKey()) || ''; } catch { /* private browsing */ }
-    if (legacyFile.startsWith('/')) {
-      const root = this.projectPath.replace(/\/+$/, '');
-      legacyFile = root && legacyFile.startsWith(`${root}/`) ? legacyFile.slice(root.length + 1) : '';
-    }
-    if (legacyFile && !this.tabs.some(tab => tab.kind === 'files' && tab.filePath === legacyFile)) {
-      const emptyFileTab = this.tabs.find(tab => tab.kind === 'files' && !tab.filePath);
-      if (emptyFileTab) emptyFileTab.filePath = legacyFile;
-      else this.tabs = [...this.tabs, { id:crypto.randomUUID(), kind:'files', filePath:legacyFile }];
-      this.saveTabs();
-    }
-    try { localStorage.removeItem(this.fileKey()); } catch { /* private browsing */ }
+    let folder = '.';
+    try { folder = localStorage.getItem(this.pathKey()) || '.'; } catch { /* private browsing */ }
     try { this.pageId = localStorage.getItem(this.pageKey()) || ''; } catch { /* private browsing */ }
     void this.restoreExplorer(folder);
     if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
@@ -220,14 +209,34 @@ export class MuxSDKUtility extends LitElement {
     return ({ changes:'Changes', terminal:'Terminal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
+  private migrateLegacyFile(): boolean {
+    if (!this.sessionId) return false;
+    let path = '';
+    try { path = localStorage.getItem(this.fileKey()) || ''; } catch { return false; }
+    if (!path) return false;
+    if (path.startsWith('/')) {
+      const root = this.projectPath.replace(/\/+$/, '');
+      if (!root || !path.startsWith(`${root}/`)) return false;
+      path = path.slice(root.length + 1);
+    }
+    const inserted = !this.tabs.some(tab => tab.kind === 'files' && tab.filePath === path);
+    if (inserted) {
+      const emptyFileTab = this.tabs.find(tab => tab.kind === 'files' && !tab.filePath);
+      if (emptyFileTab) emptyFileTab.filePath = path;
+      else this.tabs = [...this.tabs, { id:crypto.randomUUID(), kind:'files', filePath:path }];
+      this.saveTabs();
+    }
+    try { localStorage.removeItem(this.fileKey()); } catch { /* private browsing */ }
+    return inserted;
+  }
   private addTab(kind: UtilityTabId = 'new'): UtilityTab {
     const tab: UtilityTab = { id:crypto.randomUUID(), kind };
     this.tabs = [...this.tabs,tab]; this.activeTabId = tab.id; this.saveTabs();
-    this.activateTab(tab); this.paintAll(); return tab;
+    void this.activateTab(tab); this.paintAll(); return tab;
   }
   private selectTab(id: string) {
     const tab = this.tabs.find(item => item.id === id); if (!tab) return;
-    this.activeTabId = id; this.saveTabs(); this.activateTab(tab); this.paintAll();
+    this.activeTabId = id; this.saveTabs(); void this.activateTab(tab); this.paintAll();
   }
   private closeTab(id: string) {
     const index = this.tabs.findIndex(tab => tab.id === id); if (index < 0) return;
@@ -235,7 +244,7 @@ export class MuxSDKUtility extends LitElement {
     this.tabs = this.tabs.filter(tab => tab.id !== id);
     if (!this.tabs.length) this.tabs = [{ id:crypto.randomUUID(), kind:'new' }];
     if (wasActive) this.activeTabId = this.tabs[Math.min(index,this.tabs.length-1)].id;
-    this.saveTabs(); if (wasActive) this.activateTab(this.currentTab); this.paintAll();
+    this.saveTabs(); if (wasActive) void this.activateTab(this.currentTab); this.paintAll();
   }
   private activateTab(tab: UtilityTab, refreshFile = false) {
     const fileLoad = tab.kind === 'files' && tab.filePath ? this.loadFile(tab.filePath, refreshFile) : undefined;
@@ -251,11 +260,10 @@ export class MuxSDKUtility extends LitElement {
     const base = `/api/sdk-chats/${encodeURIComponent(this.sessionId)}/utility/${kind}`;
     return apiPath(base) + (path ? `?${new URLSearchParams({path})}` : '');
   }
-  showPanel(id: UtilityTabId | 'plan' | 'pr' | 'trajectory'): void {
-    const kind = id === 'pr' ? 'changes' : id === 'plan' || id === 'trajectory' ? 'files' : id;
-    const existing = this.tabs.find(tab => tab.kind === kind);
+  showPanel(id: UtilityTabId): void {
+    const existing = this.tabs.find(tab => tab.kind === id);
     if (existing) this.selectTab(existing.id);
-    else this.addTab(kind);
+    else this.addTab(id);
   }
   private chooseTool(kind: 'terminal' | 'files' | 'changes' | 'pages') {
     const current = this.currentTab;
@@ -743,6 +751,10 @@ export class MuxSDKUtility extends LitElement {
     this.dispatchEvent(new CustomEvent('sdk-page-prompt', { detail:{pageId:page.id,title:page.title,kind}, bubbles:true, composed:true }));
   }
   override updated() {
+    if (this.migrateLegacyFile()) {
+      if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
+      this.paintAll();
+    }
     if (this.activeTab === 'terminal') {
       const previousPane = this.currentTab.paneId;
       this.assignTerminalPane();
