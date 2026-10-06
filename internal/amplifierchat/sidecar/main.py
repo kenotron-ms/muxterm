@@ -303,10 +303,9 @@ class SDKChatSession:
                                                        "args": ["connection-mcp", "remote"]}
         microsoft_root = github_marker.parent / "microsoft-graph"
         microsoft_servers = {}
-        for account in ("personal", "work"):
-            if (microsoft_root / account / "enabled").is_file():
-                microsoft_servers[f"microsoft_{account}"] = {
-                    "command": mcp_bin, "args": ["connection-mcp", f"microsoft-{account}"]}
+        if (microsoft_root / "personal" / "enabled").is_file():
+            microsoft_servers["microsoft_personal"] = {
+                "command": mcp_bin, "args": ["connection-mcp", "microsoft-personal"]}
         mcp_tool["config"]["servers"].update(microsoft_servers)
         for tool_plan in (cfg.setdefault("tools", []), prepared.mount_plan.setdefault("tools", []),
                           prepared.bundle.tools):

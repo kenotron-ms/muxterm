@@ -9,7 +9,7 @@ type RemoteTool = { name:string; description?:string };
 type RemoteConnection = { id:string; provider?:string; name:string; endpoint:string; state:string; toolCount:number; checkedAt?:string; error?:string; discoveredTools:RemoteTool[]; allowedTools:string[] };
 type RemoteResponse = { items:RemoteConnection[]; callbackUrl:string };
 type MicrosoftProfile = { state:'disconnected'|'pending'|'ready'|'needs-attention'; loginState:string; userCode:string; verificationUrl:string; error:string; toolCount:number; checkedAt?:string };
-type MicrosoftState = { personal:MicrosoftProfile; work:MicrosoftProfile };
+type MicrosoftState = { personal:MicrosoftProfile };
 type LegacyWorkIQ = { savedAuthorization:boolean };
 
 @customElement('mux-connections')
@@ -123,7 +123,7 @@ export class MuxConnections extends LitElement {
     if (service.id==='github') {
       return this.data?.github.state==='ready'?'ready':this.data?.github.state==='needs-attention'?'attention':'';
     }
-    if (service.group==='Microsoft 365') return Object.values(this.microsoft??{}).some(profile=>profile.state==='ready')?'ready':Object.values(this.microsoft??{}).some(profile=>profile.state==='needs-attention')?'attention':'';
+    if (service.group==='Microsoft personal') return this.microsoft?.personal.state==='ready'?'ready':this.microsoft?.personal.state==='needs-attention'?'attention':'';
     const items=this.remotes?.items.filter(item=>item.provider===service.id)??[];
     if (items.some(item=>item.state==='needs-attention')) return 'attention';
     if (items.some(item=>item.state==='ready'&&item.allowedTools.length>0)) return 'ready';
@@ -153,12 +153,12 @@ export class MuxConnections extends LitElement {
     if (!window.confirm('Disable GitHub tools for new chats? Your GitHub CLI login stays signed in.')) return;
     void this.run('disconnect',()=>this.request('/api/connections/github',{method:'DELETE'}));
   }
-  private connectMicrosoft(account:'personal'|'work') { void this.run(`microsoft-${account}`,()=>this.request(`/api/connections/microsoft/${account}/connect`,{method:'POST'})); }
-  private cancelMicrosoft(account:'personal'|'work') { void this.run(`microsoft-${account}-cancel`,()=>this.request(`/api/connections/microsoft/${account}/connect`,{method:'DELETE'})); }
-  private checkMicrosoft(account:'personal'|'work') { void this.run(`microsoft-${account}-check`,()=>this.request(`/api/connections/microsoft/${account}/check`,{method:'POST'})); }
-  private disconnectMicrosoft(account:'personal'|'work') {
-    if (!window.confirm(`Disconnect your ${account} Microsoft account and remove its saved authorization?`)) return;
-    void this.run(`microsoft-${account}-disconnect`,()=>this.request(`/api/connections/microsoft/${account}`,{method:'DELETE'}));
+  private connectMicrosoft() { void this.run('microsoft-personal',()=>this.request('/api/connections/microsoft/personal/connect',{method:'POST'})); }
+  private cancelMicrosoft() { void this.run('microsoft-personal-cancel',()=>this.request('/api/connections/microsoft/personal/connect',{method:'DELETE'})); }
+  private checkMicrosoft() { void this.run('microsoft-personal-check',()=>this.request('/api/connections/microsoft/personal/check',{method:'POST'})); }
+  private disconnectMicrosoft() {
+    if (!window.confirm('Disconnect your personal Microsoft account and remove its saved authorization?')) return;
+    void this.run('microsoft-personal-disconnect',()=>this.request('/api/connections/microsoft/personal',{method:'DELETE'}));
   }
   private removeLegacyWorkIQ() {
     if (!window.confirm('Remove the old Work IQ authorization saved on this machine?')) return;
@@ -251,38 +251,38 @@ export class MuxConnections extends LitElement {
       </div>
       <p class="note">Your GitHub CLI login may have broader permissions than the read-only tools shown here. Disabling this connection does not sign out GitHub CLI or revoke its authorization. <a target="_blank" rel="noopener noreferrer" href="https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md">Service configuration ↗</a></p>`;
   }
-  private microsoftProfile(account:'personal'|'work') {
-    const profile=this.microsoft?.[account];
+  private microsoftProfile() {
+    const profile=this.microsoft?.personal;
     if (!profile) return nothing;
     const ready=profile.state==='ready';
     const pending=profile.state==='pending';
     const attention=profile.state==='needs-attention';
-    return html`<div class="box"><div class="head"><strong>${account==='personal'?'Personal Microsoft account':'Work or school account'}</strong><span class="badge ${ready?'ready':attention?'attention':''}">${ready?'Ready':pending?'Waiting for sign-in':attention?'Needs attention':'Not connected'}</span></div>
-      <p class="note">${account==='personal'?'Use Outlook.com, Hotmail, or personal OneDrive.':'Use your organization’s Outlook and OneDrive account. Your administrator may need to allow this app.'}</p>
+    return html`<div class="box"><div class="head"><strong>Personal Microsoft account</strong><span class="badge ${ready?'ready':attention?'attention':''}">${ready?'Ready':pending?'Waiting for sign-in':attention?'Needs attention':'Not connected'}</span></div>
+      <p class="note">Use Outlook.com, Hotmail, or personal OneDrive.</p>
       ${pending?html`<p class="note">Enter this one-time code at Microsoft’s sign-in page:</p>
         ${profile.userCode?html`<code class="device-code" aria-label="Microsoft sign-in code">${profile.userCode}</code>`:html`<p class="note">${profile.loginState==='installing'?'Installing the connection…':'Preparing a sign-in code…'}</p>`}
         <p class="note">This page updates when sign-in completes.</p>
-        <div class="actions"><a class="action primary" href=${profile.verificationUrl} target="_blank" rel="noopener noreferrer">Open Microsoft sign-in ↗</a><button class="action" ?disabled=${!!this.busy} @click=${()=>this.cancelMicrosoft(account)}>Cancel sign-in</button></div>`:nothing}
+        <div class="actions">${profile.userCode&&profile.verificationUrl?html`<a class="action primary" href=${profile.verificationUrl} target="_blank" rel="noopener noreferrer">Open Microsoft sign-in ↗</a>`:nothing}<button class="action" ?disabled=${!!this.busy} @click=${this.cancelMicrosoft}>Cancel sign-in</button></div>`:nothing}
       ${attention?html`<p class="note">${profile.error}</p>`:nothing}
       ${ready?html`<p class="note">${profile.toolCount>0?`${profile.toolCount} read-only tools are available`:'Read-only tools are enabled'} for new Codex, Claude, and Amplifier chats.</p>`:nothing}
-      ${!pending?html`<div class="actions"><button class="action primary" ?disabled=${!!this.busy} @click=${()=>this.connectMicrosoft(account)}>${ready?'Sign in again':this.busy===`microsoft-${account}`?'Installing…':attention?'Try sign-in again':'Connect account'}</button>
-        ${ready?html`<button class="action" ?disabled=${!!this.busy} @click=${()=>this.checkMicrosoft(account)}>Check access</button>`:nothing}
-        ${ready||attention?html`<button class="action" ?disabled=${!!this.busy} @click=${()=>this.disconnectMicrosoft(account)}>Disconnect</button>`:nothing}</div>`:nothing}
+      ${!pending?html`<div class="actions"><button class="action primary" ?disabled=${!!this.busy} @click=${this.connectMicrosoft}>${ready?'Sign in again':this.busy==='microsoft-personal'?'Installing…':attention?'Try sign-in again':'Connect account'}</button>
+        ${ready?html`<button class="action" ?disabled=${!!this.busy} @click=${this.checkMicrosoft}>Check access</button>`:nothing}
+        ${ready||attention?html`<button class="action" ?disabled=${!!this.busy} @click=${this.disconnectMicrosoft}>Disconnect</button>`:nothing}</div>`:nothing}
     </div>`;
   }
   private microsoftDetail(service:Service) {
-    return html`<div class="head"><h2>${service.name}</h2><span class="badge">Personal and work</span></div>
-      <p class="lead">${service.description}. Connect either account type through the community Microsoft Graph service. Muxterm installs it for you and offers a one-time code that works on a headless machine.</p>
-      ${this.microsoftProfile('personal')}${this.microsoftProfile('work')}
+    return html`<div class="head"><h2>${service.name}</h2><span class="badge">Personal account</span></div>
+      <p class="lead">${service.description}. Connect through a community Microsoft Graph service. Muxterm installs it for you and offers a one-time code that works on a headless machine.</p>
+      ${this.microsoftProfile()}
       ${this.legacyWorkIQ?.savedAuthorization?html`<div class="box"><strong>Previous Work IQ authorization</strong><p class="note">The old Work IQ connection no longer supplies tools to new chats. Its saved authorization remains on this machine until you remove it.</p><div class="actions"><button class="action" ?disabled=${!!this.busy} @click=${this.removeLegacyWorkIQ}>Remove old authorization</button></div></div>`:nothing}
-      <p class="note">The connection uses Softeria’s public Microsoft app registration and stores authorization on this machine. Mail, calendar, and file tools are read-only. A work organization can still block this app through its sign-in policy, including error 53003. <a href="https://github.com/Softeria/ms-365-mcp-server" target="_blank" rel="noopener noreferrer">About the service ↗</a></p>`;
+      <p class="note">The community service uses its own public Microsoft app registration and stores authorization on this machine. Mail, calendar, and file tools are read-only. <a href="https://github.com/Softeria/ms-365-mcp-server" target="_blank" rel="noopener noreferrer">About the service ↗</a></p>`;
   }
   override render() {
-    const groups=['Developer','Microsoft 365','Google Workspace'];
+    const groups=['Developer','Microsoft personal','Google Workspace'];
     const service=this.data?.catalog.find(item=>item.id===this.selected);
     return html`<header><div class="eyebrow">Services</div><h1>Connections</h1><p>Bring your services into chats.</p></header>
       <div class="layout"><nav class="catalog" aria-label="Connection catalog"><div class="group">Your services</div><button class="service ${this.selected==='remote'?'active':''}" aria-current=${this.selected==='remote'?'page':'false'} @click=${()=>this.selectService('remote')}><span><strong>Remote services</strong><small>Add a public service</small></span><i class="dot ${this.remotes?.items.some(item=>!item.provider&&item.state==='needs-attention')?'attention':this.remotes?.items.some(item=>!item.provider&&item.state==='ready')?'ready':''}"></i></button>${groups.map(group=>html`<div class="group">${group}</div>${this.data?.catalog.filter(item=>item.group===group).map(item=>html`<button class="service ${item.id===this.selected?'active':''}" aria-current=${item.id===this.selected?'page':'false'} @click=${()=>this.selectService(item.id)}><span><strong>${item.name}</strong><small>${item.description}</small></span><i class="dot ${this.serviceDotClass(item)}"></i></button>`)}`)}</nav>
-        <main><div class="detail">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}${!this.data||!this.remotes||!this.microsoft?html`<p>Loading connections…</p>`:this.selected==='remote'?this.remoteDetail():service?.id==='github'?this.githubDetail(this.data.github):service?.group==='Microsoft 365'?this.microsoftDetail(service):service?.group==='Google Workspace'?this.googleDetail(service):nothing}</div></main></div>`;
+        <main><div class="detail">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}${!this.data||!this.remotes||!this.microsoft?html`<p>Loading connections…</p>`:this.selected==='remote'?this.remoteDetail():service?.id==='github'?this.githubDetail(this.data.github):service?.group==='Microsoft personal'?this.microsoftDetail(service):service?.group==='Google Workspace'?this.googleDetail(service):nothing}</div></main></div>`;
   }
 }
 

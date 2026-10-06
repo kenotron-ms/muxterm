@@ -37,9 +37,9 @@ type connectionCatalogEntry struct {
 
 var connectionCatalog = []connectionCatalogEntry{
 	{"github", "GitHub", "Developer", "Repositories, issues, and pull requests", "https://github.com/github/github-mcp-server/releases", "", "local-setup", nil, nil},
-	{"onedrive", "OneDrive", "Microsoft 365", "Files from your Microsoft account", "https://github.com/Softeria/ms-365-mcp-server", "", "local-setup", nil, nil},
-	{"outlook-mail", "Outlook Mail", "Microsoft 365", "Messages from your Microsoft account", "https://github.com/Softeria/ms-365-mcp-server", "", "local-setup", nil, nil},
-	{"outlook-calendar", "Outlook Calendar", "Microsoft 365", "Events from your Microsoft account", "https://github.com/Softeria/ms-365-mcp-server", "", "local-setup", nil, nil},
+	{"onedrive", "OneDrive", "Microsoft personal", "Files from your personal Microsoft account", "https://github.com/Softeria/ms-365-mcp-server", "", "local-setup", nil, nil},
+	{"outlook-mail", "Outlook Mail", "Microsoft personal", "Messages from your personal Microsoft account", "https://github.com/Softeria/ms-365-mcp-server", "", "local-setup", nil, nil},
+	{"outlook-calendar", "Outlook Calendar", "Microsoft personal", "Events from your personal Microsoft account", "https://github.com/Softeria/ms-365-mcp-server", "", "local-setup", nil, nil},
 	{"gmail", "Gmail", "Google Workspace", "Messages and drafts", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["gmail"].Endpoint, "developer-preview", googleConnectionPresets["gmail"].Scopes, googleConnectionPresets["gmail"].ReadTools},
 	{"google-drive", "Google Drive", "Google Workspace", "Files and search", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-drive"].Endpoint, "developer-preview", googleConnectionPresets["google-drive"].Scopes, googleConnectionPresets["google-drive"].ReadTools},
 	{"google-calendar", "Google Calendar", "Google Workspace", "Events and availability", "https://developers.google.com/workspace/guides/configure-mcp-servers", googleConnectionPresets["google-calendar"].Endpoint, "developer-preview", googleConnectionPresets["google-calendar"].Scopes, googleConnectionPresets["google-calendar"].ReadTools},

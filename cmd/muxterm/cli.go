@@ -205,8 +205,8 @@ func parseCommand(args []string) (Config, error) {
 	case "mcp":
 		return parseMCP(args[1:])
 	case "connection-mcp":
-		if len(args) != 2 || (args[1] != "github" && args[1] != "remote" && args[1] != "microsoft-personal" && args[1] != "microsoft-work") {
-			return Config{}, fmt.Errorf("usage: muxterm connection-mcp github|remote|microsoft-personal|microsoft-work")
+		if len(args) != 2 || (args[1] != "github" && args[1] != "remote" && args[1] != "microsoft-personal") {
+			return Config{}, fmt.Errorf("usage: muxterm connection-mcp github|remote|microsoft-personal")
 		}
 		return Config{Mode: "connection-mcp", Args: args[1:]}, nil
 	case "amplifier":

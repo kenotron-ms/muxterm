@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -35,24 +37,25 @@ var microsoftGraphArgs = []string{
 }
 
 type microsoftGraphProfile struct {
-	name, tenant string
-	mu           sync.Mutex
-	cancel       context.CancelFunc
-	generation   uint64
-	loginState   string
-	code         string
-	errorMessage string
-	toolCount    int
-	checkedAt    time.Time
+	name, tenant    string
+	mu              sync.Mutex
+	cancel          context.CancelFunc
+	generation      uint64
+	loginState      string
+	code            string
+	verificationURL string
+	errorMessage    string
+	toolCount       int
+	checkedAt       time.Time
 }
 
 var microsoftGraphProfiles = map[string]*microsoftGraphProfile{
 	"personal": {name: "personal", tenant: "consumers"},
-	"work":     {name: "work", tenant: "organizations"},
 }
 
 var microsoftGraphInstallMu sync.Mutex
 var microsoftGraphCode = regexp.MustCompile(`(?i)enter the code\s+([A-Z0-9-]{6,14})\b`)
+var microsoftGraphURL = regexp.MustCompile(`(?i)https://(?:[a-z0-9-]+\.)*microsoft\.com/[a-z0-9/_?=&%-]+`)
 
 func microsoftGraphRoot() string {
 	return filepath.Join(sdkDataDir(), "connections", "microsoft-graph")
@@ -179,6 +182,8 @@ func RunMicrosoftGraphMCP(ctx context.Context, name string) error {
 	if p == nil || !microsoftGraphEnabled(name) {
 		return errors.New("Microsoft account is disabled in Connections")
 	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	cmd, err := microsoftGraphCommand(ctx, p)
 	if err != nil {
 		return err
@@ -227,12 +232,12 @@ func microsoftGraphPublicState(p *microsoftGraphProfile) map[string]any {
 	if p.errorMessage != "" {
 		state = "needs-attention"
 	}
-	if p.cancel != nil || p.loginState == "installing" {
+	if p.cancel != nil || p.loginState == "installing" || p.loginState == "disconnecting" {
 		state = "pending"
 	}
 	return map[string]any{
 		"state": state, "loginState": p.loginState, "userCode": p.code,
-		"verificationUrl": "https://www.microsoft.com/link", "error": p.errorMessage,
+		"verificationUrl": p.verificationURL, "error": p.errorMessage,
 		"toolCount": p.toolCount, "checkedAt": p.checkedAt,
 	}
 }
@@ -241,7 +246,6 @@ func (s *Server) handleMicrosoftGraph(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	writeSDKJSON(w, http.StatusOK, map[string]any{
 		"personal": microsoftGraphPublicState(microsoftGraphProfiles["personal"]),
-		"work":     microsoftGraphPublicState(microsoftGraphProfiles["work"]),
 	})
 }
 
@@ -259,9 +263,11 @@ func (o *microsoftGraphLoginOutput) Write(data []byte) (int, error) {
 		o.tail = o.tail[len(o.tail)-4096:]
 	}
 	if matches := microsoftGraphCode.FindStringSubmatch(o.tail); len(matches) == 2 {
+		url := microsoftGraphURL.FindString(o.tail)
 		o.p.mu.Lock()
-		if o.p.generation == o.generation && o.p.cancel != nil {
+		if o.p.generation == o.generation && o.p.cancel != nil && url != "" {
 			o.p.code = strings.ToUpper(matches[1])
+			o.p.verificationURL = url
 			o.p.loginState = "pending"
 		}
 		o.p.mu.Unlock()
@@ -270,20 +276,19 @@ func (o *microsoftGraphLoginOutput) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func (o *microsoftGraphLoginOutput) result() (bool, bool) {
+func (o *microsoftGraphLoginOutput) result() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	blocked := strings.Contains(o.tail, "53003")
 	lines := strings.Split(o.tail, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		var status struct {
 			Success *bool `json:"success"`
 		}
 		if json.Unmarshal([]byte(strings.TrimSpace(lines[i])), &status) == nil && status.Success != nil {
-			return *status.Success, blocked
+			return *status.Success
 		}
 	}
-	return false, blocked
+	return false
 }
 
 func (s *Server) handleMicrosoftGraphConnect(w http.ResponseWriter, r *http.Request) {
@@ -293,14 +298,14 @@ func (s *Server) handleMicrosoftGraphConnect(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	p.mu.Lock()
-	if p.cancel != nil || p.loginState == "installing" {
+	if p.cancel != nil || p.loginState == "installing" || p.loginState == "disconnecting" {
 		p.mu.Unlock()
 		http.Error(w, "Microsoft sign-in is already running", http.StatusConflict)
 		return
 	}
 	loginCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	p.cancel = cancel
-	p.loginState, p.code, p.errorMessage = "installing", "", ""
+	p.loginState, p.code, p.verificationURL, p.errorMessage = "installing", "", "", ""
 	p.generation++
 	generation := p.generation
 	p.mu.Unlock()
@@ -314,7 +319,11 @@ func runMicrosoftGraphLogin(loginCtx context.Context, cancel context.CancelFunc,
 	err := ensureMicrosoftGraphPackage(installCtx)
 	stop()
 	if err != nil {
-		finishMicrosoftGraphLogin(p, generation, 0, err, false)
+		finishMicrosoftGraphLogin(p, generation, 0, err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Join(microsoftGraphProfileDir(p.name), "auth"), 0700); err != nil {
+		finishMicrosoftGraphLogin(p, generation, 0, err)
 		return
 	}
 	p.mu.Lock()
@@ -322,26 +331,21 @@ func runMicrosoftGraphLogin(loginCtx context.Context, cancel context.CancelFunc,
 		p.mu.Unlock()
 		return
 	}
-	if err := os.MkdirAll(microsoftGraphProfileDir(p.name), 0700); err != nil {
-		p.mu.Unlock()
-		finishMicrosoftGraphLogin(p, generation, 0, err, false)
-		return
-	}
 	p.loginState = "waiting"
 	p.mu.Unlock()
 	cmd, err := microsoftGraphCommand(loginCtx, p, "--login")
 	if err != nil {
-		finishMicrosoftGraphLogin(p, generation, 0, err, false)
+		finishMicrosoftGraphLogin(p, generation, 0, err)
 		return
 	}
 	output := &microsoftGraphLoginOutput{p: p, generation: generation}
 	cmd.Stdout, cmd.Stderr = output, output
 	if err := cmd.Start(); err != nil {
-		finishMicrosoftGraphLogin(p, generation, 0, err, false)
+		finishMicrosoftGraphLogin(p, generation, 0, err)
 		return
 	}
 	runErr := cmd.Wait()
-	success, blocked := output.result()
+	success := output.result()
 	count := 0
 	if runErr == nil && success {
 		checkCtx, checkCancel := context.WithTimeout(loginCtx, 30*time.Second)
@@ -350,10 +354,10 @@ func runMicrosoftGraphLogin(loginCtx context.Context, cancel context.CancelFunc,
 	} else if runErr == nil {
 		runErr = errors.New("Microsoft sign-in could not be verified")
 	}
-	finishMicrosoftGraphLogin(p, generation, count, runErr, blocked)
+	finishMicrosoftGraphLogin(p, generation, count, runErr)
 }
 
-func finishMicrosoftGraphLogin(p *microsoftGraphProfile, generation uint64, count int, runErr error, blocked bool) {
+func finishMicrosoftGraphLogin(p *microsoftGraphProfile, generation uint64, count int, runErr error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.generation != generation {
@@ -362,14 +366,11 @@ func finishMicrosoftGraphLogin(p *microsoftGraphProfile, generation uint64, coun
 	if runErr == nil {
 		runErr = os.WriteFile(microsoftGraphMarker(p.name), []byte("enabled\n"), 0600)
 	}
-	p.cancel, p.code = nil, ""
+	p.cancel, p.code, p.verificationURL = nil, "", ""
 	p.loginState = "complete"
 	if runErr != nil {
 		p.loginState = "error"
 		p.errorMessage = "Microsoft sign-in failed; try again"
-		if blocked {
-			p.errorMessage = "Your organization blocked this app (53003). Ask your Microsoft 365 administrator to review the sign-in policy."
-		}
 	} else {
 		p.errorMessage, p.toolCount, p.checkedAt = "", count, time.Now()
 	}
@@ -461,25 +462,34 @@ func (s *Server) handleMicrosoftGraphDisconnect(w http.ResponseWriter, r *http.R
 		return
 	}
 	p.mu.Lock()
+	if p.loginState == "disconnecting" {
+		p.mu.Unlock()
+		http.Error(w, "Microsoft disconnect is already running", http.StatusConflict)
+		return
+	}
 	p.generation++
 	if p.cancel != nil {
 		p.cancel()
 	}
+	p.loginState = "disconnecting"
 	if err := os.Remove(microsoftGraphMarker(p.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		p.cancel, p.code, p.loginState = nil, "", "error"
+		p.cancel, p.code, p.verificationURL, p.loginState = nil, "", "", "error"
 		p.errorMessage = "Microsoft account could not be disabled"
 		p.mu.Unlock()
 		http.Error(w, "Microsoft account could not be disabled", http.StatusInternalServerError)
 		return
 	}
+	p.mu.Unlock()
 	if err := os.RemoveAll(microsoftGraphProfileDir(p.name)); err != nil {
-		p.cancel, p.code, p.loginState = nil, "", "error"
+		p.mu.Lock()
+		p.cancel, p.code, p.verificationURL, p.loginState = nil, "", "", "error"
 		p.errorMessage = "Microsoft account could not be disconnected"
 		p.mu.Unlock()
 		http.Error(w, fmt.Sprintf("Microsoft %s account could not be disconnected", p.name), http.StatusInternalServerError)
 		return
 	}
-	p.cancel, p.code, p.loginState, p.errorMessage = nil, "", "", ""
+	p.mu.Lock()
+	p.cancel, p.code, p.verificationURL, p.loginState, p.errorMessage = nil, "", "", "", ""
 	p.toolCount, p.checkedAt = 0, time.Time{}
 	p.mu.Unlock()
 	writeSDKJSON(w, http.StatusOK, microsoftGraphPublicState(p))
@@ -492,11 +502,16 @@ func (s *Server) handleMicrosoftGraphCancel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	p.mu.Lock()
+	if p.loginState == "disconnecting" {
+		p.mu.Unlock()
+		http.Error(w, "Microsoft disconnect is already running", http.StatusConflict)
+		return
+	}
 	p.generation++
 	if p.cancel != nil {
 		p.cancel()
 	}
-	p.cancel, p.code, p.loginState, p.errorMessage = nil, "", "", ""
+	p.cancel, p.code, p.verificationURL, p.loginState, p.errorMessage = nil, "", "", "", ""
 	p.mu.Unlock()
 	writeSDKJSON(w, http.StatusOK, microsoftGraphPublicState(p))
 }
