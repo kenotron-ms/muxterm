@@ -1512,13 +1512,11 @@ export class MuxSDKChat extends LitElement {
     bars.forEach((bar, index) => { bar.style.height = `${Math.round(resting[index] + Math.min(1, levels[index] || 0) * 10)}px`; });
   }
   private sendVoiceButton() {
-    const hasMessage = !!this.draft.trim() || this.attachments.length > 0;
-    const canSend = hasMessage && (!this.busy || (!this.isACPChat() && !this.attachments.length));
-    const mode = this.voiceState !== 'idle' ? 'voice-stop' : canSend ? 'send' : this.busy ? 'task-stop' : 'voice-start';
-    const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'send' ? this.busy ? 'Steer running turn' : 'Send message' : 'Start voice mode';
+    const mode = this.voiceState !== 'idle' ? 'voice-stop' : this.busy ? 'task-stop' : this.draft.trim() || this.attachments.length ? 'send' : 'voice-start';
+    const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'send' ? 'Send message' : 'Start voice mode';
     const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending
       : mode === 'task-stop' ? this.stopping
-      : mode === 'send' ? this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)
+      : mode === 'send' ? this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)
       : false;
     const bars = html`<span class="voice-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>`;
     const glyph = mode === 'voice-start' ? bars : mode === 'voice-stop' ? html`${bars}<span aria-hidden="true">Stop</span>`
