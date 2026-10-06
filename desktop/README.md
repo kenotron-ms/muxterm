@@ -13,6 +13,20 @@ Silicon `.app` on a Mac runner. Download the `muxterm-macos-arm64`
 artifact from a successful run, unzip it, and open the app. The artifact is
 ad hoc signed for development, not notarized for public distribution.
 
+## Downloadable release
+
+A `v*` tag builds a Developer ID signed, notarized, stapled Apple Silicon DMG
+and attaches it to the existing GitHub Release. This uses the same Apple ID
+app-specific password method as SideHuddle; it does not publish to the Mac App
+Store. Configure these repository Actions secrets before tagging:
+
+- `MACOS_DEVELOPER_ID_P12_BASE64`: base64 encoded Developer ID Application `.p12`
+- `MACOS_DEVELOPER_ID_P12_PASSWORD`: password used when exporting the `.p12`
+- `APPLE_APP_PASSWORD`: Apple ID app-specific password for notarization
+
+Set repository variable `APPLE_NOTARY_APPLE_ID` to the Apple ID that owns the
+Developer team. The existing `APPLE_TEAM_ID` variable identifies that team.
+
 ## Build on a Mac
 
 Install Go 1.25 or later and Xcode Command Line Tools. Then:
