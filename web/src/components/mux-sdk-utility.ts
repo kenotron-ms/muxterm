@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, Minimize2, NotebookPen, Plus, RefreshCw, Search, Terminal, X, type IconNode } from 'lucide';
+import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, Minimize2, NotebookPen, Plus, RefreshCw, Search, Terminal, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { store } from '../state.js';
 import { icon } from '../lib/icons.js';
@@ -46,7 +46,7 @@ function legacyPageContent(blocks: PageBlock[]): PartialBlock[] {
   return converted.length ? converted : [{type:'paragraph'}];
 }
 type UtilityTabId = 'new' | 'files' | 'changes' | 'terminal' | 'pages';
-type UtilityTab = { id: string; kind: UtilityTabId; paneId?: number; pageId?: string };
+type UtilityTab = { id: string; kind: UtilityTabId; paneId?: number; pageId?: string; filePath?: string };
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
 const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, terminal:Terminal, pages:NotebookPen };
 
@@ -175,10 +175,11 @@ export class MuxSDKUtility extends LitElement {
         if (Number.isFinite(width) && width >= 160 && width <= 900) this.railWidths[key] = width;
       }
     } catch { /* storage unavailable */ }
-    let folder = '.', file = '';
-    try { folder = localStorage.getItem(this.pathKey()) || '.'; file = localStorage.getItem(this.fileKey()) || ''; } catch { /* private browsing */ }
+    let folder = '.';
+    try { folder = localStorage.getItem(this.pathKey()) || '.'; } catch { /* private browsing */ }
     try { this.pageId = localStorage.getItem(this.pageKey()) || ''; } catch { /* private browsing */ }
-    void this.restoreExplorer(folder, file);
+    void this.restoreExplorer(folder);
+    if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
     if (this.activeTab === 'changes') void this.loadChanges();
     if (this.activeTab === 'pages') void this.loadPages();
     this.pagesPollTimer = window.setInterval(() => { if (this.activeTab === 'pages' && this.pages && !this.pageSaving && !this.pagesConflict) void this.refreshPages(); }, 2500);
@@ -199,47 +200,70 @@ export class MuxSDKUtility extends LitElement {
   }
   override render() {
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && this.selected ? fileGlyph(this.selected) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'changes' ? this.changesView() : tab.kind === 'terminal' ? this.terminalView(tab) : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${item.filePath || this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'changes' ? this.changesView() : tab.kind === 'terminal' ? this.terminalView(tab) : this.pagesView()}</div>`;
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
-    if (tab.kind === 'files') return this.selected.split('/').pop() || 'Files';
+    if (tab.kind === 'files') return tab.filePath?.split('/').pop() || 'Files';
     if (tab.kind === 'pages') return this.pages?.find(page => page.id === tab.pageId)?.title || 'Page';
     return ({ changes:'Changes', terminal:'Terminal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
+  private migrateLegacyFile(): boolean {
+    if (!this.sessionId) return false;
+    let path = '';
+    try { path = localStorage.getItem(this.fileKey()) || ''; } catch { return false; }
+    if (!path) return false;
+    if (path.startsWith('/')) {
+      const root = this.projectPath.replace(/\/+$/, '');
+      if (!root || !path.startsWith(`${root}/`)) return false;
+      path = path.slice(root.length + 1);
+    }
+    const inserted = !this.tabs.some(tab => tab.kind === 'files' && tab.filePath === path);
+    if (inserted) {
+      const emptyFileTab = this.tabs.find(tab => tab.kind === 'files' && !tab.filePath);
+      if (emptyFileTab) emptyFileTab.filePath = path;
+      else this.tabs = [...this.tabs, { id:crypto.randomUUID(), kind:'files', filePath:path }];
+      this.saveTabs();
+    }
+    try { localStorage.removeItem(this.fileKey()); } catch { /* private browsing */ }
+    return inserted;
+  }
   private addTab(kind: UtilityTabId = 'new'): UtilityTab {
     const tab: UtilityTab = { id:crypto.randomUUID(), kind };
     this.tabs = [...this.tabs,tab]; this.activeTabId = tab.id; this.saveTabs();
-    this.activateTab(tab); this.paintAll(); return tab;
+    void this.activateTab(tab); this.paintAll(); return tab;
   }
   private selectTab(id: string) {
     const tab = this.tabs.find(item => item.id === id); if (!tab) return;
-    this.activeTabId = id; this.saveTabs(); this.activateTab(tab); this.paintAll();
+    this.activeTabId = id; this.saveTabs(); void this.activateTab(tab); this.paintAll();
   }
   private closeTab(id: string) {
     const index = this.tabs.findIndex(tab => tab.id === id); if (index < 0) return;
+    const wasActive = this.activeTabId === id;
     this.tabs = this.tabs.filter(tab => tab.id !== id);
     if (!this.tabs.length) this.tabs = [{ id:crypto.randomUUID(), kind:'new' }];
-    if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(index,this.tabs.length-1)].id;
-    this.saveTabs(); this.activateTab(this.currentTab); this.paintAll();
+    if (wasActive) this.activeTabId = this.tabs[Math.min(index,this.tabs.length-1)].id;
+    this.saveTabs(); if (wasActive) void this.activateTab(this.currentTab); this.paintAll();
   }
-  private activateTab(tab: UtilityTab) {
+  private activateTab(tab: UtilityTab, refreshFile = false) {
+    const fileLoad = tab.kind === 'files' && tab.filePath ? this.loadFile(tab.filePath, refreshFile) : undefined;
+    if (!fileLoad) this.resetFileView();
     if (tab.kind === 'pages' && tab.pageId) this.pageId = tab.pageId;
     if (tab.kind === 'changes' && !this.changes) void this.loadChanges();
     if (tab.kind === 'pages' && !this.pages) void this.loadPages();
     if (tab.kind === 'terminal') { this.terminalRetryCount = 0; this.assignTerminalPane(); this.requestChatTerminal(); }
     else if (this.terminalRetryTimer) { window.clearTimeout(this.terminalRetryTimer); this.terminalRetryTimer = undefined; }
+    return fileLoad;
   }
   private endpoint(kind: string, path?: string) {
     const base = `/api/sdk-chats/${encodeURIComponent(this.sessionId)}/utility/${kind}`;
     return apiPath(base) + (path ? `?${new URLSearchParams({path})}` : '');
   }
-  showPanel(id: UtilityTabId | 'plan' | 'pr' | 'trajectory'): void {
-    const kind = id === 'pr' ? 'changes' : id === 'plan' || id === 'trajectory' ? 'files' : id;
-    const existing = this.tabs.find(tab => tab.kind === kind);
+  showPanel(id: UtilityTabId): void {
+    const existing = this.tabs.find(tab => tab.kind === id);
     if (existing) this.selectTab(existing.id);
-    else this.addTab(kind);
+    else this.addTab(id);
   }
   private chooseTool(kind: 'terminal' | 'files' | 'changes' | 'pages') {
     const current = this.currentTab;
@@ -304,20 +328,18 @@ export class MuxSDKUtility extends LitElement {
     this.paintAll();
   }
   async showFile(path: string): Promise<void> {
-    this.showPanel('files');
     await this.revealFile(path);
   }
   private previewURL(path: string, maxBytes: number): string {
     return `${this.endpoint('raw', path)}&max_bytes=${maxBytes}`;
   }
-  private async restoreExplorer(folder: string, file: string) {
+  private async restoreExplorer(folder: string) {
     await this.loadDirectory('.');
     let path = '';
     for (const part of folder.split('/').filter(part => part !== '.')) {
       path = path ? `${path}/${part}` : part;
       await this.loadDirectory(path);
     }
-    if (file) await this.openFile(file);
   }
   private async revealFile(path: string) {
     let folder = '';
@@ -374,6 +396,16 @@ export class MuxSDKUtility extends LitElement {
     await this.loadDirectory(path);
   }
   private async openFile(path: string, refresh = false) {
+    const current = this.currentTab;
+    let tab = this.tabs.find(item => item.kind === 'files' && item.filePath === path);
+    if (!tab) tab = current.kind === 'files' && !current.filePath ? current : this.tabs.find(item => item.kind === 'files' && !item.filePath);
+    if (tab) tab.filePath = path;
+    else { tab = { id:crypto.randomUUID(), kind:'files', filePath:path }; this.tabs = [...this.tabs,tab]; }
+    this.activeTabId = tab.id;
+    this.saveTabs();
+    await this.activateTab(tab, refresh);
+  }
+  private async loadFile(path: string, refresh = false) {
     this.fileAbort?.abort();
     const controller = new AbortController();
     this.fileAbort = controller;
@@ -384,7 +416,6 @@ export class MuxSDKUtility extends LitElement {
     this.localSource = snapshot?.localSource || '';
     this.pdfBytes = snapshot?.pdfBytes || null;
     this.expandAncestors(path.split('/').slice(0, -1).join('/') || '.');
-    try { localStorage.setItem(this.fileKey(), path); } catch { /* private browsing */ }
     const current = ++this.pendingFile;
     this.paintAll();
     try {
@@ -419,16 +450,14 @@ export class MuxSDKUtility extends LitElement {
     } catch (error) { if (current === this.pendingFile && !controller.signal.aborted) this.fileError = String(error); }
     this.paintAll();
   }
-  private clearFile() {
+  private resetFileView() {
     this.fileAbort?.abort(); this.pendingFile++;
-    this.selected = ''; this.artifact = undefined; this.localSource = ''; this.pdfBytes = null;
-    try { localStorage.removeItem(this.fileKey()); } catch { /* private browsing */ }
-    this.paintAll();
+    this.selected = ''; this.artifact = undefined; this.localSource = ''; this.pdfBytes = null; this.fileError = '';
   }
   private showQuickOpen() {
     this.quickAbort?.abort();
     if (this.quickTimer) window.clearTimeout(this.quickTimer);
-    this.showPanel('files');
+    if (this.currentTab.kind !== 'files') this.showPanel('files');
     this.quickOpen = true;
     this.quickQuery = '';
     this.quickResults = [];
@@ -600,7 +629,7 @@ export class MuxSDKUtility extends LitElement {
       </div>` : nothing}
       ${this.filesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize file explorer" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'files')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'files')}></div>` : nothing}
       <div class="viewer">
-        <div class="single-file-bar"><button class="rail-toggle" aria-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} title=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.paintAll(); }}>${icon(this.filesRailOpen ? ChevronRight : Folder,{size:15})}</button>${this.selected ? html`${icon(fileGlyph(this.selected),{size:15})}<strong title=${this.selected}>${this.selected.split('/').pop()}</strong><button class="icon-button" aria-label="Close file" title="Close file" @click=${() => this.clearFile()}>${icon(X,{size:14})}</button>` : html`<span class="single-file-empty">No file open</span>`}</div>
+        <div class="single-file-bar"><button class="rail-toggle" aria-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} title=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.paintAll(); }}>${icon(this.filesRailOpen ? ChevronRight : Folder,{size:15})}</button>${this.selected ? html`${icon(fileGlyph(this.selected),{size:15})}<strong title=${this.selected}>${this.selected.split('/').pop()}</strong><button class="icon-button" aria-label="Close file" title="Close file" @click=${() => this.closeTab(this.currentTab.id)}>${icon(X,{size:14})}</button>` : html`<span class="single-file-empty">No file open</span>`}</div>
         <div class="viewer-header"><nav class="viewer-path" aria-label="Open file path">${segments.length ? html`<button @click=${() => void this.loadDirectory('.')}>${projectName}</button>${segments.map((part,index) => html`<span>›</span>${index < segments.length-1 ? html`<button @click=${() => void this.loadDirectory(segments.slice(0,index+1).join('/'))}>${part}</button>` : html`<strong>${part}</strong>`}`)}` : html`<span>Open a file to preview it</span>`}</nav><button class="icon-button" aria-label="Refresh open file" title="Refresh open file" ?disabled=${!this.selected} @click=${() => void this.openFile(this.selected, true)}>${icon(RefreshCw,{size:15})}</button><button class="icon-button" aria-label=${this.focused ? 'Show chat beside files' : 'Focus file viewer'} title=${this.focused ? 'Show chat beside files' : 'Focus file viewer'} @click=${() => this.dispatchEvent(new CustomEvent('sdk-file-focus',{bubbles:true,composed:true}))}>${icon(this.focused ? Minimize2 : Maximize2,{size:15})}</button></div>
         ${file ? html`<div class="viewer-actions">${hasAlternateView ? html`<div class="view-switch"><button class=${this.fileMode === 'preview' ? 'active' : ''} @click=${() => this.setFileMode('preview')}>Preview</button><button class=${this.fileMode === 'source' ? 'active' : ''} @click=${() => this.setFileMode('source')}>Source</button></div>` : html`<span class="mode-label">${file.kind === 'image' || file.name.endsWith('.pdf') ? 'Preview' : 'Source'}</span>`}<span class="action-spacer"></span><button @click=${() => this.askAboutFile()}>Ask about file</button><a href=${this.endpoint('raw', this.selected)} download=${file.name}>Download</a></div>` : nothing}
         <div class="viewer-body">${this.selected ? this.fileBody() : html`<div class="welcome-file">${icon(FolderOpen,{size:35})}<h2>Explore this project</h2><p>Choose a file from the explorer or search by name across the project.</p><button @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></button></div>`}</div>
@@ -697,11 +726,35 @@ export class MuxSDKUtility extends LitElement {
     void this.updateComplete.then(() => this.querySelector<HTMLTextAreaElement>('.page-title')?.focus());
     return page;
   }
+  private deletePage(page: NotePage) {
+    if (!this.pages || this.pagesConflict) return;
+    const deleted = new Set([page.id]);
+    for (let size = -1; size !== deleted.size;) {
+      size = deleted.size;
+      for (const child of this.pages) if (child.parentId && deleted.has(child.parentId)) deleted.add(child.id);
+    }
+    const descendants = deleted.size - 1;
+    const title = page.title || 'Untitled';
+    const message = descendants
+      ? `Delete “${title}” and its ${descendants} subpage${descendants === 1 ? '' : 's'}? This cannot be undone.`
+      : `Delete “${title}”? This cannot be undone.`;
+    if (!window.confirm(message)) return;
+    this.pages = this.pages.filter(item => !deleted.has(item.id));
+    const next = page.parentId && this.pages.some(item => item.id === page.parentId)
+      ? page.parentId : this.pages[0]?.id || '';
+    if (deleted.has(this.pageId)) this.pageId = next;
+    for (const tab of this.tabs) if (tab.kind === 'pages' && tab.pageId && deleted.has(tab.pageId)) tab.pageId = next;
+    this.saveTabs();
+    try { localStorage.setItem(this.pageKey(), this.pageId); } catch { /* private browsing */ }
+    this.pagesRenderEpoch++;
+    this.schedulePageSave();
+    this.paintAll();
+  }
   private pageRows(parentId = '', depth = 0): TemplateResult[] {
     if (depth > 8) return [];
     const rows: TemplateResult[] = [];
     for (const page of (this.pages || []).filter(item => (item.parentId || '') === parentId)) {
-      rows.push(html`<button class="page-list-item ${page.id === this.pageId ? 'selected' : ''}" style=${`--page-depth:${depth}`} @click=${() => this.selectPage(page.id)}>${icon(NotebookPen,{size:15})}<span>${page.title || 'Untitled'}</span></button>`);
+      rows.push(html`<button class="page-list-item ${page.id === this.pageId ? 'selected' : ''}" style=${`--page-depth:${depth}`} title=${page.title || 'Untitled'} @click=${() => this.selectPage(page.id)}><span class="page-list-glyph">${icon(NotebookPen,{size:15})}</span><span class="page-list-name">${page.title || 'Untitled'}</span></button>`);
       rows.push(...this.pageRows(page.id, depth + 1));
     }
     return rows;
@@ -722,6 +775,10 @@ export class MuxSDKUtility extends LitElement {
     this.dispatchEvent(new CustomEvent('sdk-page-prompt', { detail:{pageId:page.id,title:page.title,kind}, bubbles:true, composed:true }));
   }
   override updated() {
+    if (this.migrateLegacyFile()) {
+      if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
+      this.paintAll();
+    }
     if (this.activeTab === 'terminal') {
       const previousPane = this.currentTab.paneId;
       this.assignTerminalPane();
@@ -743,9 +800,9 @@ export class MuxSDKUtility extends LitElement {
     const page = this.pages?.find(item => item.id === this.pageId);
     const parent = page?.parentId ? this.pages?.find(item => item.id === page.parentId) : undefined;
     return html`<section class="pages-panel split-panel ${this.pagesRailOpen ? '' : 'rail-closed'}" style=${`--rail-width:${this.railWidths.pages}px`}>
-      ${this.pagesRailOpen ? html`<div class="pages-list"><header><strong>Pages</strong><button class="icon-button" aria-label="Hide pages list" title="Hide pages list" @click=${() => { this.pagesRailOpen = false; this.paintAll(); }}>${icon(X,{size:15})}</button></header><div class="page-list-rows">${this.pagesError ? html`<p class="pages-error">${this.pagesError}</p>` : nothing}${!this.pages ? html`<p class="empty">Loading pages…</p>` : this.pages.length ? this.pageRows() : html`<p class="empty">Create a page to start writing.</p>`}</div><button class="pages-list-new" @click=${() => this.newPage()}>＋ New page</button></div>` : nothing}
+      ${this.pagesRailOpen ? html`<div class="pages-list"><div class="browser-heading"><div class="explorer-label">PAGES</div><div class="explorer-actions"><button class="icon-button" aria-label="New page" title="New page" @click=${() => this.newPage()}>${icon(Plus,{size:15})}</button></div></div><div class="page-list-rows">${this.pagesError ? html`<p class="pages-error">${this.pagesError}</p>` : nothing}${!this.pages ? html`<p class="empty">Loading pages…</p>` : this.pages.length ? this.pageRows() : html`<p class="empty">Create a page to start writing.</p>`}</div></div>` : nothing}
       ${this.pagesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize page list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'pages')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'pages')}></div>` : nothing}
-      <div class="page-editor"><div class="page-toolbar"><div><button aria-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} title=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</button>${parent ? html`<button class="page-parent" @click=${() => this.selectPage(parent.id)}>${parent.title}</button><span>›</span>` : nothing}<span>${page?.title || 'Pages'}</span></div><span>${this.pageSaving ? 'Saving…' : 'Saved'}</span></div>
+      <div class="page-editor"><div class="page-toolbar"><div><button aria-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} title=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</button>${parent ? html`<button class="page-parent" @click=${() => this.selectPage(parent.id)}>${parent.title}</button><span>›</span>` : nothing}<span>${page?.title || 'Pages'}</span></div><div class="page-toolbar-actions"><span>${this.pageSaving ? 'Saving…' : 'Saved'}</span>${page ? html`<button class="page-delete" aria-label=${`Delete page ${page.title || 'Untitled'}`} title=${this.pagesConflict ? 'Reload pages before deleting' : 'Delete page'} ?disabled=${this.pagesConflict} @click=${() => this.deletePage(page)}>${icon(Trash2,{size:15})}</button>` : nothing}</div></div>
       ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .content=${page.content?.length ? page.content : legacyPageContent(page.blocks)} .pageId=${page.id} .documentEpoch=${this.pagesRenderEpoch} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><button class="page-subpage" @click=${() => this.newPage(page.id)}>＋ New subpage</button></div></div>` : html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages</h2><p>Create a document for this chat.</p><button @click=${() => this.newPage()}>New page</button></div>`}</div>
     </section>`;
   }
@@ -896,15 +953,16 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .terminal-content mux-chat-terminal { display:block; width:100%; height:100%; }
     mux-sdk-utility .terminal-empty { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px; height:100%; color:var(--chrome-text-dim); text-align:center; }
     mux-sdk-utility .terminal-empty button { border:1px solid var(--chrome-border); border-radius:6px; padding:6px 10px; background:var(--chrome-bar); color:var(--chrome-text-bright); cursor:pointer; }
-    mux-sdk-utility .pages-list { min-width:0; min-height:0; overflow:auto; background:color-mix(in srgb,var(--chrome-body) 78%,var(--chrome-bar)); }
-    mux-sdk-utility .pages-list > header { display:flex; align-items:center; justify-content:space-between; height:38px; padding:0 10px 0 15px; border-bottom:1px solid var(--chrome-border); color:var(--chrome-text-dim); font:600 10px system-ui,sans-serif; letter-spacing:.1em; }
+    mux-sdk-utility .pages-list { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:color-mix(in srgb,var(--chrome-body) 78%,var(--chrome-bar)); }
+    mux-sdk-utility .pages-list .browser-heading { flex:none; }
     mux-sdk-utility .pages-list .empty, mux-sdk-utility .pages-error { margin:14px; font:11px/1.5 system-ui,sans-serif; color:var(--chrome-text-dim); }
     mux-sdk-utility .pages-error { color:#e59393; }
-    mux-sdk-utility .page-list-item { display:flex; align-items:center; gap:8px; width:100%; padding:8px 14px; border:0; background:transparent; color:var(--chrome-text-bright); text-align:left; font:11px system-ui,sans-serif; cursor:pointer; }
-    mux-sdk-utility .page-list-item:hover, mux-sdk-utility .page-list-item.selected { background:var(--chrome-hover); }
-    mux-sdk-utility .page-list-item.selected { box-shadow:inset 2px 0 var(--chrome-accent); }
-    mux-sdk-utility .page-list-item svg { flex:none; color:var(--chrome-accent); }
-    mux-sdk-utility .page-list-item span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    mux-sdk-utility .page-list-rows { flex:1; min-height:0; overflow:auto; padding:2px 0 10px; }
+    mux-sdk-utility .page-list-item { display:flex; align-items:center; gap:5px; box-sizing:border-box; width:100%; min-width:0; min-height:24px; padding:0 11px 0 calc(8px + var(--page-depth)*14px); border:0; background:transparent; color:var(--chrome-text-bright); text-align:left; font:11px system-ui,sans-serif; cursor:pointer; }
+    mux-sdk-utility .page-list-item:hover { background:var(--chrome-hover); }
+    mux-sdk-utility .page-list-item.selected { background:color-mix(in srgb,var(--chrome-accent) 17%,var(--chrome-hover)); box-shadow:inset 2px 0 var(--chrome-accent); }
+    mux-sdk-utility .page-list-glyph { display:flex; align-items:center; justify-content:center; flex:none; width:17px; color:var(--chrome-accent); }
+    mux-sdk-utility .page-list-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .page-editor { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:auto; }
     mux-sdk-utility .page-editor-top { display:flex; align-items:center; justify-content:space-between; min-height:38px; padding:0 18px; border-bottom:1px solid var(--chrome-border); color:var(--chrome-text-dim); font:11px system-ui,sans-serif; }
     mux-sdk-utility .page-editor-top span:first-child { display:flex; align-items:center; gap:7px; }
@@ -913,26 +971,20 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-new-button { margin-top:10px; border:1px solid var(--chrome-border); border-radius:5px; padding:7px 12px; background:var(--chrome-bar); color:var(--chrome-text-bright); cursor:pointer; }
     mux-sdk-utility .pages-panel { background:#fff; color:#232323; }
     mux-sdk-utility .pages-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
-    mux-sdk-utility .pages-list { display:flex; flex-direction:column; margin:6px 0 6px 6px; border:1px solid #e3e3e3; border-radius:14px; background:#fff; box-shadow:0 2px 13px #0000000c; overflow:hidden; }
-    mux-sdk-utility .pages-list > header { flex:none; height:43px; border:0; padding:0 9px 0 15px; color:#202124; font:650 13px system-ui,sans-serif; letter-spacing:0; }
-    mux-sdk-utility .pages-list .icon-button { border-radius:50%; background:#f4f4f4; color:#444; }
-    mux-sdk-utility .page-list-rows { flex:1; overflow:auto; padding:0 8px; }
-    mux-sdk-utility .page-list-item { min-height:31px; border-radius:8px; padding:5px 8px 5px calc(8px + var(--page-depth)*16px); color:#303234; font:12px system-ui,sans-serif; }
-    mux-sdk-utility .page-list-item.selected, mux-sdk-utility .page-list-item:hover { background:#edf0f0; box-shadow:none; }
-    mux-sdk-utility .page-list-item svg { color:#4c5153; }
-    mux-sdk-utility .pages-list-new { flex:none; margin:5px 8px 9px; border:0; border-radius:7px; padding:7px 8px; background:transparent; color:#676b6d; text-align:left; font:12px system-ui,sans-serif; cursor:pointer; }
-    mux-sdk-utility .pages-list-new:hover { background:#f2f3f3; }
-    mux-sdk-utility .pages-panel .vertical-resizer { background:#fff; }
-    mux-sdk-utility .pages-panel .vertical-resizer:hover, mux-sdk-utility .pages-panel .vertical-resizer:focus-visible { background:#dae2e8; }
+    mux-sdk-utility .pages-panel .vertical-resizer { background:var(--chrome-border); }
+    mux-sdk-utility .pages-panel .vertical-resizer:hover, mux-sdk-utility .pages-panel .vertical-resizer:focus-visible { background:var(--chrome-accent); }
     mux-sdk-utility .page-editor { background:#fff; color:#202124; }
     mux-sdk-utility .page-toolbar { display:flex; justify-content:space-between; align-items:center; flex:none; min-height:42px; padding:0 14px; border-bottom:1px solid #eeeeee; color:#777; font:11px system-ui,sans-serif; }
     mux-sdk-utility .page-toolbar > div { display:flex; align-items:center; gap:7px; min-width:0; }
     mux-sdk-utility .page-toolbar > div > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    mux-sdk-utility .page-toolbar-actions { flex:none; }
+    mux-sdk-utility .page-toolbar .page-delete:hover { color:#b42318; background:#fff0ed; border-color:#ffd5cc; }
+    mux-sdk-utility .page-toolbar .page-delete:disabled { opacity:.4; cursor:not-allowed; }
     mux-sdk-utility .page-toolbar button { display:inline-flex; align-items:center; justify-content:center; flex:none; width:28px; height:28px; border:1px solid #ebebeb; border-radius:9px; background:#fff; color:#555; cursor:pointer; }
     mux-sdk-utility .page-toolbar button:hover { background:#f3f3f3; }
     mux-sdk-utility .page-toolbar .page-parent { width:auto; max-width:130px; border:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .page-canvas { flex:1; overflow:auto; min-height:0; }
-    mux-sdk-utility .page-paper { width:min(720px,100%); margin:0 auto; padding:42px clamp(22px,6%,70px) 100px; }
+    mux-sdk-utility .page-paper { width:min(720px,100%); margin:0 auto; padding:42px clamp(16px,6%,70px) 100px clamp(64px,8%,75px); }
     mux-sdk-utility .page-title { min-height:42px; margin:0 0 49px; color:#202124; font:700 27px/1.28 system-ui,sans-serif; }
     mux-sdk-utility .page-subpage { margin:20px 0 0; border:0; background:transparent; color:#868d92; font:12px system-ui,sans-serif; cursor:pointer; }
     mux-sdk-utility .page-subpage:hover { color:#202124; }
@@ -940,6 +992,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-no-selection h2 { margin:0; color:#202124; }
     mux-sdk-utility .page-no-selection p { margin:0; }
     mux-sdk-utility .page-no-selection button { margin-top:9px; border:1px solid #ddd; border-radius:7px; padding:7px 12px; background:#fff; color:#333; cursor:pointer; }
-    @container(max-width:520px) { mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(170px,38%) minmax(0,1fr); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .vertical-resizer { display:none; } mux-sdk-utility .browser, mux-sdk-utility .changes-list, mux-sdk-utility .pages-list { border-bottom:1px solid var(--chrome-border); } }
+    @container(max-width:520px) { mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(170px,38%) minmax(0,1fr); } mux-sdk-utility .files-panel.rail-closed, mux-sdk-utility .pages-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .vertical-resizer { display:none; } mux-sdk-utility .browser, mux-sdk-utility .changes-list, mux-sdk-utility .pages-list { border-bottom:1px solid var(--chrome-border); } }
   `;
 }

@@ -39,12 +39,12 @@ func (s *Server) handleChatUINavigation(w http.ResponseWriter, r *http.Request) 
 	switch nav.Action {
 	case "chat":
 	case "panel":
-		if nav.Mode != "chat" && nav.Mode != "split" && nav.Mode != "preview" {
-			writeSDKJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be chat, split, or preview"})
+		if nav.Mode != "chat" && nav.Mode != "split" {
+			writeSDKJSON(w, http.StatusBadRequest, map[string]string{"error": "agent navigation mode must be chat or split"})
 			return
 		}
 	case "tab":
-		if nav.Tab != "plan" && nav.Tab != "files" && nav.Tab != "pr" && nav.Tab != "trajectory" {
+		if nav.Tab != "files" && nav.Tab != "changes" && nav.Tab != "terminal" && nav.Tab != "pages" {
 			writeSDKJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown chat tab"})
 			return
 		}
