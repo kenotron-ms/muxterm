@@ -1,10 +1,10 @@
 # Muxterm for macOS
 
-This Wails app runs the full muxterm web interface in a Mac window. Its Browser
-button opens a right-side browser panel with tabs, navigation, and an address
-bar. Preview pages run in native WKWebViews on the Mac. Selected ports from an
-SSH host forward to the **same** ports on the Mac, so previews retain their
-`localhost` origin and root path. The app does not install or restart muxterm.
+This Wails app displays the full muxterm web interface in a Mac window. The
+native title bar shares muxterm's colors, including when the muxterm theme
+changes. If the muxterm URL is a localhost port on an SSH host, the app
+forwards that port to the same port on the Mac. The app does not install or
+restart muxterm. Browser previews and other companion features are deferred.
 
 ## CI build
 
@@ -43,9 +43,6 @@ open bin/Muxterm.app
 The Mac must have SSH key access to the machine running muxterm and your dev
 servers. Set the SSH host to an alias from `~/.ssh/config` or to `user@host`.
 Set the muxterm URL to its HTTPS address, or to `http://localhost:<port>/` to
-forward its port over SSH. In the muxterm window, open **Browser** and enter a
-preview URL such as `http://localhost:3000/`. Its port forwards automatically.
+forward its port over SSH.
 
-The port forwards stop when the app quits. Browser-based CLI login handoff
-and automatic callback-port discovery are not yet wired; use
-`az login --use-device-code` for Azure CLI login in the meantime.
+The port forward stops when the app quits.

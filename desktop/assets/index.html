@@ -5,28 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Muxterm Settings</title>
   <style>
-    :root { color-scheme: dark; font: 15px -apple-system, BlinkMacSystemFont, sans-serif; background: #11151b; color: #e9edf4; }
+    :root { color-scheme: dark; font: 15px -apple-system, BlinkMacSystemFont, sans-serif; background: #16161e; color: #c0caf5; }
     * { box-sizing: border-box; }
     body { margin: 0; }
-    main { max-width: 680px; margin: auto; padding: 30px; }
+    main { max-width: 680px; margin: auto; padding: 56px 30px 30px; }
     h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -.025em; }
     h2 { font-size: 18px; margin: 0 0 12px; }
-    p { color: #a9b4c4; line-height: 1.5; margin: 0 0 18px; }
-    section { background: #1c232d; border: 1px solid #303b49; border-radius: 14px; padding: 20px; margin-top: 18px; }
-    label { display: block; margin: 14px 0 6px; font-size: 13px; color: #cbd4df; }
-    input { width: 100%; border: 1px solid #405063; border-radius: 8px; padding: 10px 12px; background: #10161d; color: #fff; font: inherit; }
-    input:focus { outline: 2px solid #61a9ff; outline-offset: 1px; }
-    button { border: 1px solid #55729a; border-radius: 8px; padding: 9px 13px; background: #2b5a91; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
-    button:hover { background: #3774b9; }
-    button.secondary { background: #263445; border-color: #41546a; }
-    button.secondary:hover { background: #33465b; }
+    p { color: #a9b1d6; line-height: 1.5; margin: 0 0 18px; }
+    section { background: #1a1b26; border: 1px solid #292e42; border-radius: 14px; padding: 20px; margin-top: 18px; }
+    label { display: block; margin: 14px 0 6px; font-size: 13px; color: #a9b1d6; }
+    input { width: 100%; border: 1px solid #414868; border-radius: 8px; padding: 10px 12px; background: #16161e; color: #c0caf5; font: inherit; }
+    input:focus { outline: 2px solid #7aa2f7; outline-offset: 1px; }
+    button { border: 1px solid #7aa2f7; border-radius: 8px; padding: 9px 13px; background: #2b4d80; color: #c0caf5; font: inherit; font-weight: 600; cursor: pointer; }
+    button:hover { background: #365c96; }
+    button.secondary { background: #1f2335; border-color: #414868; }
+    button.secondary:hover { background: #292e42; }
     button.danger { background: #3c292e; border-color: #6b454b; }
     button.danger:hover { background: #583439; }
     .row { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
     .row input { flex: 1; min-width: 0; }
     .row button { flex: none; }
-    .forward { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid #303b49; }
-    .forward .url { flex: 1; color: #aad0ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .forward { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid #292e42; }
+    .forward .url { flex: 1; color: #7aa2f7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #status { min-height: 22px; margin-top: 18px; color: #a9d9ac; }
     #status.error { color: #ff9da1; }
     .hint { font-size: 13px; margin: 12px 0 0; }
@@ -35,7 +35,7 @@
 <body>
   <main>
     <h1>Muxterm for Mac</h1>
-    <p>Run the full muxterm app in a Mac window. Its Browser panel opens previews at their real <code>localhost</code> URLs.</p>
+    <p>Open your muxterm server in a Mac window.</p>
 
     <section>
       <h2>Connection</h2>
@@ -46,29 +46,9 @@
       <div class="row">
         <button id="save">Save connection</button>
         <button id="open-window" class="secondary">Open muxterm</button>
-        <button id="open-browser" class="secondary">Open in browser</button>
       </div>
     </section>
-
-    <section>
-      <h2>Local port forwards</h2>
-      <p>Forward a dev server's port from your SSH host to the same port on this Mac. Pages keep their root path and <code>localhost</code> origin.</p>
-      <div class="row">
-        <input id="port" type="number" min="1" max="65535" inputmode="numeric" placeholder="3000" aria-label="Port to forward">
-        <button id="forward">Forward port</button>
-      </div>
-      <div id="forwards"></div>
-      <p class="hint">SSH key access must already work from this Mac. Try <code>ssh my-devbox</code> once in Terminal if the forward cannot connect.</p>
-    </section>
-
-    <section>
-      <h2>Browser tab</h2>
-      <p>Open a page in muxterm's right-side browser panel. A <code>localhost</code> port automatically forwards from the SSH host.</p>
-      <div class="row">
-        <input id="browser-url" type="url" spellcheck="false" placeholder="http://localhost:3000/" aria-label="Browser URL">
-        <button id="browser-tab">Open tab</button>
-      </div>
-    </section>
+    <p class="hint">For a localhost URL on another machine, enter an SSH host that already works from this Mac.</p>
     <div id="status" role="status" aria-live="polite"></div>
   </main>
   <script type="module">
@@ -91,57 +71,16 @@
       try { await action(); status(success); }
       catch (error) { status(error?.message || String(error), true); }
     };
-    async function refresh() {
-      const items = await call('ListForwards');
-      const root = $('forwards');
-      root.replaceChildren();
-      for (const item of items) {
-        const row = document.createElement('div');
-        row.className = 'forward';
-        const url = document.createElement('span');
-        url.className = 'url';
-        url.textContent = item.url;
-        const open = document.createElement('button');
-        open.textContent = 'Open';
-        open.className = 'secondary';
-        open.addEventListener('click', () => act(() => call('OpenPreview', item.port), `Opened ${item.url}`));
-        const stop = document.createElement('button');
-        stop.textContent = 'Stop';
-        stop.className = 'danger';
-        stop.addEventListener('click', () => act(async () => { await call('StopForward', item.port); await refresh(); }, `Stopped port ${item.port}`));
-        row.append(url, open, stop);
-        root.append(row);
-      }
-      if (!items.length) root.textContent = 'No ports forwarded yet.';
-    }
     $('save').addEventListener('click', () => act(
       () => call('SaveSettings', {serverURL: $('server-url').value, sshHost: $('ssh-host').value}),
       'Connection saved.'
     ));
     $('open-window').addEventListener('click', () => act(() => call('OpenMuxtermWindow'), 'Opened muxterm window.'));
-    $('open-browser').addEventListener('click', () => act(() => call('OpenMuxtermBrowser'), 'Opened muxterm in your browser.'));
-    $('browser-tab').addEventListener('click', () => act(
-      () => call('OpenBrowserTab', $('browser-url').value),
-      'Opened browser tab.'
-    ));
-    async function forward() {
-      const port = Number($('port').value);
-      await act(async () => {
-        const result = await call('StartForward', port);
-        $('port').value = '';
-        await refresh();
-        return result;
-      }, `Forwarded port ${port}.`);
-    }
-    $('forward').addEventListener('click', forward);
-    $('port').addEventListener('keydown', (event) => { if (event.key === 'Enter') forward(); });
     try {
       const settings = await call('GetSettings');
       $('server-url').value = settings.serverURL || '';
       $('ssh-host').value = settings.sshHost || '';
-      await refresh();
     } catch (error) { status(error?.message || String(error), true); }
-    setInterval(() => refresh().catch(() => {}), 5000);
   </script>
 </body>
 </html>

@@ -21,11 +21,10 @@ func main() {
 	}
 	companion.token = hex.EncodeToString(tokenBytes[:])
 	app := application.New(application.Options{
-		Name:              "Muxterm",
-		Description:       "Muxterm for Mac with browser previews and local port forwarding",
-		Services:          []application.Service{application.NewService(companion)},
-		Assets:            application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
-		RawMessageHandler: companion.browserMessage,
+		Name:        "Muxterm",
+		Description: "Muxterm for Mac",
+		Services:    []application.Service{application.NewService(companion)},
+		Assets:      application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
@@ -48,9 +47,14 @@ func main() {
 	settings := companion.settings
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: "companion", Title: "Muxterm Settings", URL: "/",
-		Width: 640, Height: 690, MinWidth: 520, MinHeight: 570,
-		JS:     "globalThis.muxtermCompanionToken = '" + companion.token + "'",
-		Hidden: settings.ServerURL != "",
+		Width: 640, Height: 420, MinWidth: 520, MinHeight: 380,
+		JS:               "globalThis.muxtermCompanionToken = '" + companion.token + "'",
+		Hidden:           settings.ServerURL != "",
+		BackgroundColour: application.NewRGB(22, 22, 30),
+		Mac: application.MacWindow{
+			Appearance: application.NSAppearanceNameDarkAqua,
+			TitleBar:   application.MacTitleBarHidden,
+		},
 	})
 	if settings.ServerURL != "" {
 		if err := companion.openMuxtermWindow(); err != nil {

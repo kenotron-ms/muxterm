@@ -176,14 +176,19 @@ func (c *Companion) openMuxtermWindow() error {
 		window.Focus()
 		return nil
 	}
-	browserScript, err := assets.ReadFile("assets/browser.js")
+	shellStyle, err := assets.ReadFile("assets/shell.css")
 	if err != nil {
 		return err
 	}
 	c.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: "muxterm", Title: "muxterm", URL: s.ServerURL,
 		Width: 1400, Height: 900, MinWidth: 700, MinHeight: 500,
-		JS: string(browserScript),
+		CSS:              string(shellStyle),
+		BackgroundColour: application.NewRGB(22, 22, 30),
+		Mac: application.MacWindow{
+			Appearance: application.NSAppearanceNameDarkAqua,
+			TitleBar:   application.MacTitleBarHidden,
+		},
 	})
 	return nil
 }

@@ -1,0 +1,9 @@
+html, body {
+  background: var(--chrome-bar, #16161e) !important;
+}
+
+mux-app {
+  box-sizing: border-box !important;
+  padding-top: 32px !important;
+  background: var(--chrome-bar, #16161e) !important;
+}
