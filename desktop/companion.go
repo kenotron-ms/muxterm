@@ -192,9 +192,8 @@ func (c *Companion) openMuxtermWindow() error {
 			"if (!document.getElementById('muxterm-native-titlebar')) {" +
 			"const bar = document.createElement('div'); bar.id = 'muxterm-native-titlebar'; bar.textContent = 'muxterm'; document.body.appendChild(bar); }" +
 			"})()",
-		BackgroundColour: application.NewRGB(22, 22, 30),
+		BackgroundColour: application.NewRGB(232, 232, 237),
 		Mac: application.MacWindow{
-			Appearance:              application.NSAppearanceNameDarkAqua,
 			TitleBar:                application.MacTitleBarHidden,
 			InvisibleTitleBarHeight: 42,
 		},
