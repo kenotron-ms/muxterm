@@ -8,6 +8,7 @@
     :root { color-scheme: dark; font: 15px -apple-system, BlinkMacSystemFont, sans-serif; background: #16161e; color: #c0caf5; }
     * { box-sizing: border-box; }
     body { margin: 0; }
+    #native-titlebar { position: fixed; inset: 0 0 auto; height: 42px; --wails-draggable: drag; -webkit-app-region: drag; user-select: none; }
     main { max-width: 680px; margin: auto; padding: 56px 30px 30px; }
     h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -.025em; }
     h2 { font-size: 18px; margin: 0 0 12px; }
@@ -33,6 +34,7 @@
   </style>
 </head>
 <body>
+  <div id="native-titlebar" aria-hidden="true"></div>
   <main>
     <h1>Muxterm for Mac</h1>
     <p>Open your muxterm server in a Mac window.</p>

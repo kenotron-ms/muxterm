@@ -1,9 +1,30 @@
 html, body {
+  margin: 0 !important;
+  overflow: hidden !important;
   background: var(--chrome-bar, #16161e) !important;
+}
+
+/* This element lives outside mux-app's shadow root so Wails receives the drag. */
+#muxterm-native-titlebar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 2147483647;
+  box-sizing: border-box;
+  height: 42px;
+  border-bottom: 1px solid var(--chrome-border, #292e42);
+  background: var(--chrome-bar, #16161e);
+  color: var(--chrome-text-dim, #a9b1d6);
+  font: 500 12px/42px -apple-system, BlinkMacSystemFont, sans-serif;
+  text-align: center;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-app-region: drag;
+  --wails-draggable: drag;
 }
 
 mux-app {
   box-sizing: border-box !important;
-  padding-top: 32px !important;
-  background: var(--chrome-bar, #16161e) !important;
+  margin-top: 42px !important;
+  height: calc(100vh - 42px) !important;
+  height: calc(100dvh - 42px) !important;
 }

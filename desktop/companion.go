@@ -183,7 +183,15 @@ func (c *Companion) openMuxtermWindow() error {
 	c.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: "muxterm", Title: "muxterm", URL: s.ServerURL,
 		Width: 1400, Height: 900, MinWidth: 700, MinHeight: 500,
-		CSS:              string(shellStyle),
+		// Wails beta.28's Mac CSS injector interpolates raw CSS into a JS
+		// single-quoted string, so newlines make it fail. Quote it as JS instead.
+		JS: "(() => {" +
+			"let style = document.getElementById('muxterm-native-shell-style');" +
+			"if (!style) { style = document.createElement('style'); style.id = 'muxterm-native-shell-style'; document.head.appendChild(style); }" +
+			"style.textContent = " + strconv.Quote(string(shellStyle)) + ";" +
+			"if (!document.getElementById('muxterm-native-titlebar')) {" +
+			"const bar = document.createElement('div'); bar.id = 'muxterm-native-titlebar'; bar.textContent = 'muxterm'; document.body.appendChild(bar); }" +
+			"})()",
 		BackgroundColour: application.NewRGB(22, 22, 30),
 		Mac: application.MacWindow{
 			Appearance: application.NSAppearanceNameDarkAqua,
