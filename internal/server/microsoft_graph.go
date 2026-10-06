@@ -211,9 +211,9 @@ func RunMicrosoftGraphMCP(ctx context.Context, name string) error {
 			(tool.OutputSchema != nil && !validRemoteToolSchema(tool.OutputSchema)) {
 			continue
 		}
-		copy := *tool
+		toolSnap := *tool
 		original := tool.Name
-		local.AddTool(&copy, func(callCtx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		local.AddTool(&toolSnap, func(callCtx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if !microsoftGraphEnabled(name) {
 				return nil, errors.New("Microsoft account is disabled in Connections")
 			}
@@ -422,7 +422,9 @@ func (s *Server) handleMicrosoftGraphCheck(w http.ResponseWriter, r *http.Reques
 	p.mu.Lock()
 	generation := p.generation
 	p.mu.Unlock()
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// Finish the check even if the browser navigates away. A cancelled request
+	// must not turn a valid token into a persistent needs-attention state.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 	defer cancel()
 	cmd, err := microsoftGraphCommand(ctx, p, "--verify-login")
 	if err != nil {
