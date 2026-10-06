@@ -316,13 +316,18 @@ export class MuxSidebar extends LitElement {
       justify-content: space-between;
     }
 
-    .header > span {
+    .brand {
       flex: 1 1 auto;
       min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+
+    .brand-logo { width: 20px; height: 20px; flex: none; border-radius: 5px; }
 
     .launcher-btn {
       width: 26px;
@@ -2666,7 +2671,7 @@ export class MuxSidebar extends LitElement {
 
     return html`
       <div class="header">
-        <span title="${window.location.hostname}">${instanceLabel()}</span>
+        <span class="brand"><img class="brand-logo" src="${apiPath('/icons/icon.svg')}" alt=""><span>Muxterm</span></span>
         ${this.showLauncher
           ? html`<button
               class="launcher-btn"

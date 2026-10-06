@@ -160,7 +160,7 @@ func localServerEnv(root, macOSDir string) []string {
 	path := os.Getenv("PATH")
 	// Finder provides a sparse PATH. Include the standard per-user and Homebrew
 	// locations so agents already installed on this Mac are discovered.
-	search := []string{macOSDir, filepath.Join(home, ".local", "bin"), filepath.Join(home, ".opencode", "bin"), filepath.Join(home, "Library", "pnpm"), "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", path}
+	search := []string{macOSDir, filepath.Join(filepath.Dir(macOSDir), "Resources", "bin"), filepath.Join(home, ".local", "bin"), filepath.Join(home, ".opencode", "bin"), filepath.Join(home, "Library", "pnpm"), "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", path}
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		switch key {
@@ -171,6 +171,7 @@ func localServerEnv(root, macOSDir string) []string {
 	}
 	return append(env,
 		"PATH="+strings.Join(search, string(os.PathListSeparator)),
+		"NPM_CONFIG_PREFIX="+filepath.Join(home, ".local"),
 		"MUXTERM_SDK_CHAT_SIDECAR="+filepath.Join(filepath.Dir(macOSDir), "Resources", "sdk-chat", "sidecar.mjs"),
 		"XDG_CONFIG_HOME="+filepath.Join(root, "config"),
 		"XDG_DATA_HOME="+filepath.Join(root, "data"),

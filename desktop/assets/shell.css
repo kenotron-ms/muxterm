@@ -14,11 +14,23 @@ html, body {
   background: var(--chrome-bar, #16161e);
   background: color-mix(in srgb, var(--chrome-bar, #16161e) 88%, var(--chrome-text-dim, #565f89));
   color: var(--chrome-text-dim, #a9b1d6);
-  font: 500 12px/42px -apple-system, BlinkMacSystemFont, sans-serif;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 88px;
+  font: 600 12px/1 -apple-system, BlinkMacSystemFont, sans-serif;
   user-select: none;
   -webkit-user-select: none;
 }
+
+#muxterm-native-titlebar img {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+#muxterm-native-titlebar span { pointer-events: none; }
 
 mux-app {
   box-sizing: border-box !important;

@@ -18,10 +18,20 @@ NODE_OPTIONS="--max-old-space-size=6144 ${NODE_OPTIONS:-}" npm run build --prefi
 npm ci --prefix sdk-chat --ignore-scripts --no-audit --no-fund
 
 app="desktop/bin/Muxterm.app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/sdk-chat"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/sdk-chat" "$app/Contents/Resources/bin"
 cp desktop/build/Info.plist "$app/Contents/Info.plist"
 cp desktop/build/Muxterm.icns "$app/Contents/Resources/Muxterm.icns"
 cp -L "$(command -v node)" "$app/Contents/MacOS/node"
+npm_cli="$(node -p 'require("fs").realpathSync(process.argv[1])' "$(command -v npm)")"
+rm -rf "$app/Contents/Resources/npm"
+cp -R "$(dirname "$npm_cli")/.." "$app/Contents/Resources/npm"
+cat > "$app/Contents/Resources/bin/npm" <<'EOF'
+#!/bin/sh
+resources_dir="$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
+exec "$resources_dir/../MacOS/node" "$resources_dir/npm/bin/npm-cli.js" "$@"
+EOF
+chmod 755 "$app/Contents/Resources/bin/npm"
+rm -f "$app/Contents/MacOS/npm"
 cp sdk-chat/sidecar.mjs sdk-chat/codex-stream.mjs sdk-chat/acp-stream.mjs sdk-chat/package.json "$app/Contents/Resources/sdk-chat/"
 cp -R sdk-chat/node_modules "$app/Contents/Resources/sdk-chat/node_modules"
 go build -o "$app/Contents/MacOS/muxterm-server" ./cmd/muxterm
