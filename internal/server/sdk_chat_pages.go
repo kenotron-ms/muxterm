@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type utilityPageBlock struct {
@@ -45,11 +46,15 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.sdkChats.mu.Lock()
-	defer s.sdkChats.mu.Unlock()
-	if !safePageID(id) || s.sdkChats.chats[id] == nil {
+	exists := s.sdkChats.chats[id] != nil
+	s.sdkChats.mu.Unlock()
+	if !safePageID(id) || !exists {
 		http.Error(w, "Chat not found", http.StatusNotFound)
 		return
 	}
+	pagesLock := s.pageDocumentLock(id)
+	pagesLock.Lock()
+	defer pagesLock.Unlock()
 	path := filepath.Join(sdkDataDir(), "pages", id+".json")
 	if r.Method == http.MethodGet {
 		data, err := os.ReadFile(path)
@@ -134,6 +139,11 @@ func readUtilityPages(path string) (utilityPagesDocument, error) {
 		return utilityPagesDocument{}, err
 	}
 	return doc, nil
+}
+
+func (s *Server) pageDocumentLock(chatID string) *sync.Mutex {
+	lock, _ := s.pagesMu.LoadOrStore(chatID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 func writeUtilityPages(path string, data []byte) error {

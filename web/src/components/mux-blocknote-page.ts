@@ -50,6 +50,7 @@ function PageEditor({ content, changed, command }: { content: PageContent; chang
 /** A React island keeps BlockNote's editor lifecycle independent from Lit saves. */
 export class MuxBlockNotePage extends HTMLElement {
   private root: Root | null = null;
+  private mount?: HTMLDivElement;
   private currentPageId = '';
   private currentContent: PageContent = [];
   private currentEpoch = 0;
@@ -63,19 +64,26 @@ export class MuxBlockNotePage extends HTMLElement {
   set documentEpoch(value: number) { if (value === this.currentEpoch) return; this.currentEpoch = value; this.renderEditor(); }
 
   connectedCallback(): void {
-    const shadow = this.attachShadow({ mode: 'open' });
-    const style = document.createElement('style');
-    style.textContent = `${blockNoteCSS}\n${mantineCSS}\n${visualizationCSS}\n:host{display:block;min-height:100px}.bn-container{background:transparent!important;color:#202124!important}.bn-editor{padding-inline:0!important}`;
+    if (this.root) return;
+    const shadow = this.shadowRoot || this.attachShadow({ mode: 'open' });
+    if (!this.shadowRoot?.querySelector('style')) {
+      const style = document.createElement('style');
+      style.textContent = `${blockNoteCSS}\n${mantineCSS}\n${visualizationCSS}\n:host{display:block;min-height:100px}.bn-container{background:transparent!important;color:#202124!important}.bn-editor{padding-inline:0!important}`;
+      shadow.append(style);
+    }
     const mount = document.createElement('div');
-    shadow.append(style, mount);
+    shadow.append(mount);
+    this.mount = mount;
     this.root = createRoot(mount);
     this.renderEditor();
   }
 
   disconnectedCallback(): void {
     const root = this.root;
+    const mount = this.mount;
     this.root = null;
-    queueMicrotask(() => root?.unmount());
+    this.mount = undefined;
+    queueMicrotask(() => { root?.unmount(); mount?.remove(); });
   }
 
   private renderEditor(): void {

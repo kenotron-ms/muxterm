@@ -63,7 +63,7 @@ func (s *Server) handleSDKPageBlocks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, p := range v.Points {
-			if len(p.Label) == 0 || len(p.Label) > 100 || len(p.Detail) > 1000 || math.IsNaN(p.Value) || math.IsInf(p.Value, 0) {
+			if len(p.Label) == 0 || len(p.Label) > 100 || len(p.Detail) > 1000 || math.IsNaN(p.Value) || math.IsInf(p.Value, 0) || v.ChartType == "bar" && p.Value < 0 {
 				http.Error(w, "Invalid visualization point", http.StatusBadRequest)
 				return
 			}
@@ -72,11 +72,15 @@ func (s *Server) handleSDKPageBlocks(w http.ResponseWriter, r *http.Request) {
 		additions = []map[string]any{{"type": "visualization", "props": map[string]any{"title": v.Title, "caption": v.Caption, "chartType": v.ChartType, "points": string(points)}}}
 	}
 	s.sdkChats.mu.Lock()
-	defer s.sdkChats.mu.Unlock()
-	if s.sdkChats.chats[chatID] == nil {
+	exists := s.sdkChats.chats[chatID] != nil
+	s.sdkChats.mu.Unlock()
+	if !exists {
 		http.Error(w, "Page not found", http.StatusNotFound)
 		return
 	}
+	pagesLock := s.pageDocumentLock(chatID)
+	pagesLock.Lock()
+	defer pagesLock.Unlock()
 	path := filepath.Join(sdkDataDir(), "pages", chatID+".json")
 	doc, err := readUtilityPages(path)
 	if err != nil {

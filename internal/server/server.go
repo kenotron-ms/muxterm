@@ -142,6 +142,7 @@ type Server struct {
 	updating atomic.Bool
 
 	sdkChats           *sdkChatHost
+	pagesMu            sync.Map // chat ID -> *sync.Mutex; page writes never hold the global chat lock
 	sdkChatAttachments *chatattachments.Store
 	sdkJobs            *sdkJobs
 	connections        *serviceConnections
