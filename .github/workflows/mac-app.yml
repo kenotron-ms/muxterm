@@ -1,0 +1,42 @@
+name: Mac App
+
+on:
+  push:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/mac-app.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/mac-app.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+
+      - name: Build and sign Mac app
+        run: desktop/build-mac.sh
+
+      - name: Verify and archive app
+        run: |
+          codesign --verify --strict --verbose=2 'desktop/bin/Muxterm.app'
+          ditto -c -k --sequesterRsrc --keepParent \
+            'desktop/bin/Muxterm.app' \
+            'desktop/bin/Muxterm-macos-arm64.zip'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxterm-macos-arm64
+          path: desktop/bin/Muxterm-macos-arm64.zip
+          if-no-files-found: error
