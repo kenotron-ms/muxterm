@@ -62,7 +62,7 @@ xcrun notarytool submit "$work/Muxterm.zip" \
   --apple-id "$APPLE_NOTARY_APPLE_ID" \
   --password "$APPLE_APP_PASSWORD" \
   --team-id "$APPLE_TEAM_ID" \
-  --wait --timeout 20m
+  --wait --timeout 2h
 xcrun stapler staple "$app"
 xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=2 "$app"
