@@ -11,7 +11,7 @@ cd "$root"
 if [ ! -d web/node_modules ]; then
   npm ci --prefix web
 fi
-npm run build --prefix web
+NODE_OPTIONS="--max-old-space-size=6144 ${NODE_OPTIONS:-}" npm run build --prefix web
 
 app="desktop/bin/Muxterm.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
