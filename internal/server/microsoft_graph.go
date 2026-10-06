@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,11 +22,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// The existing community MCP server owns Graph tools, MSAL, and token refresh.
-// Muxterm pins its package and limits the exposed surface to read-only mail,
-// calendar, and files. The vendor's public client is used; no Muxterm OAuth
-// registration or client secret is needed.
+// The community MCP server owns Graph tools, MSAL, and token refresh. Muxterm
+// owns the public app registration used by every personal-account connection.
+// The client ID is public; device-code sign-in needs no client secret.
 const microsoftGraphVersion = "0.158.0"
+const microsoftGraphClientID = "aefd0a14-e065-463e-a806-06e1e1465a18"
 
 //go:embed ms365-package/package.json ms365-package/package-lock.json
 var microsoftGraphInstallFiles embed.FS
@@ -96,6 +97,7 @@ func microsoftGraphEnvironment(p *microsoftGraphProfile) []string {
 	authDir := filepath.Join(microsoftGraphProfileDir(p.name), "auth")
 	return append(env,
 		"XDG_CONFIG_HOME="+authDir,
+		"MS365_MCP_CLIENT_ID="+microsoftGraphClientID,
 		"MS365_MCP_TENANT_ID="+p.tenant,
 		"MS365_MCP_TOKEN_CACHE_PATH="+filepath.Join(authDir, ".token-cache.json"),
 		"MS365_MCP_SELECTED_ACCOUNT_PATH="+filepath.Join(authDir, ".selected-account.json"),
@@ -151,6 +153,7 @@ func ensureMicrosoftGraphPackage(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, npm, "ci", "--prefix", tmp, "--omit=optional", "--ignore-scripts", "--no-audit", "--no-fund")
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	if err := cmd.Run(); err != nil {
+		log.Printf("microsoft service package download failed: %v", err)
 		return errors.New("Microsoft service download failed")
 	}
 	entry := filepath.Join(tmp, "node_modules", "@softeria", "ms-365-mcp-server", "dist", "index.js")
@@ -423,11 +426,25 @@ func (s *Server) handleMicrosoftGraphCheck(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	cmd.Stderr = io.Discard
-	output, err := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		http.Error(w, "Microsoft service could not be checked", http.StatusBadGateway)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		http.Error(w, "Microsoft service could not be checked", http.StatusBadGateway)
+		return
+	}
+	const maxVerificationOutput = 64 << 10
+	output, readErr := io.ReadAll(io.LimitReader(stdout, maxVerificationOutput+1))
+	if readErr != nil || len(output) > maxVerificationOutput {
+		_ = cmd.Process.Kill()
+	}
+	waitErr := cmd.Wait()
 	var result struct {
 		Success bool `json:"success"`
 	}
-	if err != nil || json.Unmarshal(output, &result) != nil || !result.Success {
+	if readErr != nil || len(output) > maxVerificationOutput || waitErr != nil || json.Unmarshal(output, &result) != nil || !result.Success {
 		p.mu.Lock()
 		if p.generation != generation || !microsoftGraphEnabled(p.name) {
 			p.mu.Unlock()
@@ -435,6 +452,7 @@ func (s *Server) handleMicrosoftGraphCheck(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		p.errorMessage = "Microsoft authorization needs another sign-in"
+		p.toolCount, p.checkedAt = 0, time.Time{}
 		p.mu.Unlock()
 		http.Error(w, "Microsoft authorization needs another sign-in", http.StatusBadGateway)
 		return

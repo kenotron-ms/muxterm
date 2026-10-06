@@ -100,7 +100,8 @@ export class MuxConnections extends LitElement {
     const abort=new AbortController();
     this.refreshAbort=abort;
     try {
-      const [data,remotes,microsoft,legacyWorkIQ]=await Promise.all([this.request<ConnectionsResponse>('/api/connections',{signal:abort.signal}),this.request<RemoteResponse>('/api/connections/remote',{signal:abort.signal}),this.request<MicrosoftState>('/api/connections/microsoft',{signal:abort.signal}),this.request<LegacyWorkIQ>('/api/connections/workiq',{signal:abort.signal})]);
+      const legacy=this.request<LegacyWorkIQ>('/api/connections/workiq',{signal:abort.signal}).catch(()=>({savedAuthorization:false}));
+      const [data,remotes,microsoft,legacyWorkIQ]=await Promise.all([this.request<ConnectionsResponse>('/api/connections',{signal:abort.signal}),this.request<RemoteResponse>('/api/connections/remote',{signal:abort.signal}),this.request<MicrosoftState>('/api/connections/microsoft',{signal:abort.signal}),legacy]);
       if (abort.signal.aborted || !this.isConnected) return;
       [this.data,this.remotes,this.microsoft,this.legacyWorkIQ]=[data,remotes,microsoft,legacyWorkIQ];
     }
@@ -275,7 +276,7 @@ export class MuxConnections extends LitElement {
       <p class="lead">${service.description}. Connect through a community Microsoft Graph service. Muxterm installs it for you and offers a one-time code that works on a headless machine.</p>
       ${this.microsoftProfile()}
       ${this.legacyWorkIQ?.savedAuthorization?html`<div class="box"><strong>Previous Work IQ authorization</strong><p class="note">The old Work IQ connection no longer supplies tools to new chats. Its saved authorization remains on this machine until you remove it.</p><div class="actions"><button class="action" ?disabled=${!!this.busy} @click=${this.removeLegacyWorkIQ}>Remove old authorization</button></div></div>`:nothing}
-      <p class="note">The community service uses its own public Microsoft app registration and stores authorization on this machine. Mail, calendar, and file tools are read-only. <a href="https://github.com/Softeria/ms-365-mcp-server" target="_blank" rel="noopener noreferrer">About the service ↗</a></p>`;
+      <p class="note">Muxterm uses one public Microsoft app registration for personal accounts. The community service manages sign-in and stores authorization on this machine. Mail, calendar, and file tools are read-only. <a href="https://github.com/Softeria/ms-365-mcp-server" target="_blank" rel="noopener noreferrer">About the service ↗</a></p>`;
   }
   override render() {
     const groups=['Developer','Microsoft personal','Google Workspace'];
