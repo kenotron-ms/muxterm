@@ -180,7 +180,7 @@ func (c *Companion) stopLocalMuxterm() {
 		return
 	}
 	if err := running.cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return
+		_ = running.cmd.Process.Kill()
 	}
 	select {
 	case <-running.done:

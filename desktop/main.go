@@ -15,7 +15,9 @@ var assets embed.FS
 
 func main() {
 	companion := newCompanion()
-	localURL, localErr := companion.startLocalMuxterm()
+	// Wait for the local server before opening WebKit so the first window always
+	// contains muxterm instead of a transient connection or error page.
+	_, localErr := companion.startLocalMuxterm()
 	if localErr != nil {
 		log.Printf("could not start local muxterm: %v", localErr)
 	}
@@ -60,7 +62,7 @@ func main() {
 			InvisibleTitleBarHeight: 42,
 		},
 	})
-	if localErr == nil && localURL != "" {
+	if localErr == nil {
 		if err := companion.openMuxtermWindow(); err != nil {
 			log.Printf("could not open local muxterm: %v", err)
 			companion.showSettings()
