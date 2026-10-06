@@ -209,7 +209,7 @@ func (c *Companion) openMuxtermURL(rawURL string) error {
 		return err
 	}
 	c.app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name: "muxterm", Title: "muxterm", URL: rawURL,
+		Name: "muxterm", Title: "Muxterm", URL: rawURL,
 		Width: 1400, Height: 900, MinWidth: 700, MinHeight: 500,
 		// Wails beta.28's Mac CSS injector interpolates raw CSS into a JS
 		// single-quoted string, so newlines make it fail. Quote it as JS instead.
@@ -218,7 +218,9 @@ func (c *Companion) openMuxtermURL(rawURL string) error {
 			"if (!style) { style = document.createElement('style'); style.id = 'muxterm-native-shell-style'; document.head.appendChild(style); }" +
 			"style.textContent = " + strconv.Quote(string(shellStyle)) + ";" +
 			"if (!document.getElementById('muxterm-native-titlebar')) {" +
-			"const bar = document.createElement('div'); bar.id = 'muxterm-native-titlebar'; bar.textContent = 'muxterm'; document.body.appendChild(bar); }" +
+			"const bar = document.createElement('div'); bar.id = 'muxterm-native-titlebar';" +
+			"const logo = document.createElement('img'); logo.src = new URL('icons/icon.svg', document.baseURI).href; logo.alt = ''; bar.appendChild(logo);" +
+			"const label = document.createElement('span'); label.textContent = 'Muxterm'; bar.appendChild(label); document.body.appendChild(bar); }" +
 			"customElements.whenDefined('mux-app').then(() => {" +
 			"const root = document.querySelector('mux-app')?.shadowRoot; if (!root) return;" +
 			"if (!root.getElementById('muxterm-native-gutter-style')) {" +

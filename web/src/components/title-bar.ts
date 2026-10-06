@@ -7,7 +7,7 @@ import './mux-pane-picker.js';
 import './mic-button.js';
 import { icon } from '../lib/icons.js';
 import { Ellipsis, Menu } from 'lucide';
-import { instanceLabel } from '../lib/instance-identity.js';
+import { apiPath } from '../lib/base-path.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
 
@@ -62,11 +62,10 @@ export class MuxTitleBar extends LitElement {
       text-overflow: ellipsis;
     }
 
-    .brand-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--chrome-accent);
+    .brand-logo {
+      width: 20px;
+      height: 20px;
+      border-radius: 5px;
       flex-shrink: 0;
     }
 
@@ -288,8 +287,8 @@ export class MuxTitleBar extends LitElement {
       ${this.chatTitle
         ? html`<span class="chat-title">${this.chatTitle}</span>`
         : html`<div class="brand">
-            <span class="brand-dot"></span>
-            <span title="${window.location.hostname}">${instanceLabel()}</span>
+            <img class="brand-logo" src="${apiPath('/icons/icon.svg')}" alt="">
+            <span>Muxterm</span>
             <span class="brand-sha">${__GIT_SHA__}</span>
           </div><mux-pane-picker></mux-pane-picker>`}
       <div class="right">

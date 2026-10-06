@@ -171,6 +171,7 @@ func localServerEnv(root, macOSDir string) []string {
 	}
 	return append(env,
 		"PATH="+strings.Join(search, string(os.PathListSeparator)),
+		"NPM_CONFIG_PREFIX="+filepath.Join(home, ".local"),
 		"MUXTERM_SDK_CHAT_SIDECAR="+filepath.Join(filepath.Dir(macOSDir), "Resources", "sdk-chat", "sidecar.mjs"),
 		"XDG_CONFIG_HOME="+filepath.Join(root, "config"),
 		"XDG_DATA_HOME="+filepath.Join(root, "data"),
