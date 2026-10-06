@@ -12,6 +12,7 @@ html, body {
   box-sizing: border-box;
   height: 42px;
   background: var(--chrome-bar, #16161e);
+  background: color-mix(in srgb, var(--chrome-bar, #16161e) 88%, var(--chrome-text-dim, #565f89));
   color: var(--chrome-text-dim, #a9b1d6);
   font: 500 12px/42px -apple-system, BlinkMacSystemFont, sans-serif;
   text-align: center;
