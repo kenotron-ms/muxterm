@@ -1,10 +1,11 @@
 # Muxterm for macOS
 
-This Wails app displays the full muxterm web interface in a Mac window. The
-native title bar shares muxterm's colors, including when the muxterm theme
-changes. If the muxterm URL is a localhost port on an SSH host, the app
-forwards that port to the same port on the Mac. The app does not install or
-restart muxterm. Browser previews and other companion features are deferred.
+This Wails app bundles the full muxterm server and opens it locally in a Mac
+window. It starts its own loopback listener when the app launches, with config,
+terminal sessions, and durable data in `~/Library/Application Support/muxterm-desktop/local`.
+The native title bar shares muxterm's colors, including when the theme changes.
+Remote muxterm URLs and SSH port forwarding remain available in **Connection
+and ports…**; they are optional. The app does not install a system service.
 
 ## CI build
 
@@ -32,7 +33,7 @@ artifact without creating a GitHub Release.
 
 ## Build on a Mac
 
-Install Go 1.25 or later and Xcode Command Line Tools. Then:
+Install Go 1.25 or later, Node 22, npm, and Xcode Command Line Tools. Then:
 
 ```sh
 cd desktop
@@ -40,9 +41,8 @@ cd desktop
 open bin/Muxterm.app
 ```
 
-The Mac must have SSH key access to the machine running muxterm and your dev
-servers. Set the SSH host to an alias from `~/.ssh/config` or to `user@host`.
-Set the muxterm URL to its HTTPS address, or to `http://localhost:<port>/` to
-forward its port over SSH.
+For optional remote muxterm or dev server forwarding, set the SSH host to an
+alias from `~/.ssh/config` or to `user@host`. Set the remote muxterm URL to its
+HTTPS address, or to `http://localhost:<port>/` to forward its port over SSH.
 
 The port forward stops when the app quits.

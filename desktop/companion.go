@@ -53,17 +53,21 @@ func (b *syncBuffer) String() string {
 }
 
 type Companion struct {
-	mu             sync.Mutex
-	bridgeMu       sync.Mutex
-	app            *application.App
-	token          string
-	settings       Settings
-	forwards       map[int]*runningForward
-	browserSeq     int
-	browserTabs    map[int]*browserTab
-	activeBrowser  int
-	browserRect    browserRect
-	browserVisible bool
+	mu               sync.Mutex
+	localStartMu     sync.Mutex
+	bridgeMu         sync.Mutex
+	app              *application.App
+	token            string
+	settings         Settings
+	local            *runningLocal
+	localError       string
+	activeMuxtermURL string
+	forwards         map[int]*runningForward
+	browserSeq       int
+	browserTabs      map[int]*browserTab
+	activeBrowser    int
+	browserRect      browserRect
+	browserVisible   bool
 }
 
 func (c *Companion) authorize(token string) error {
@@ -154,11 +158,22 @@ func (c *Companion) OpenMuxtermWindow(token string) error {
 }
 
 func (c *Companion) openMuxtermWindow() error {
+	localURL, err := c.startLocalMuxterm()
+	if err != nil {
+		return err
+	}
+	return c.openMuxtermURL(localURL)
+}
+
+func (c *Companion) OpenRemoteMuxtermWindow(token string) error {
+	if err := c.authorize(token); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	s := c.settings
 	c.mu.Unlock()
 	if s.ServerURL == "" {
-		return errors.New("save the muxterm URL first")
+		return errors.New("save the remote muxterm URL first")
 	}
 	server, _ := url.Parse(s.ServerURL)
 	if s.SSHHost != "" && (server.Hostname() == "localhost" || server.Hostname() == "127.0.0.1") && server.Port() != "" {
@@ -170,8 +185,21 @@ func (c *Companion) openMuxtermWindow() error {
 			return err
 		}
 	}
+	if err := c.openMuxtermURL(s.ServerURL); err != nil {
+		return err
+	}
+	if window, ok := c.app.Window.GetByName("companion"); ok {
+		window.Hide()
+	}
+	return nil
+}
+
+func (c *Companion) openMuxtermURL(rawURL string) error {
+	c.mu.Lock()
+	c.activeMuxtermURL = rawURL
+	c.mu.Unlock()
 	if window, ok := c.app.Window.GetByName("muxterm"); ok {
-		window.SetURL(s.ServerURL)
+		window.SetURL(rawURL)
 		window.Show()
 		window.Focus()
 		return nil
@@ -181,7 +209,7 @@ func (c *Companion) openMuxtermWindow() error {
 		return err
 	}
 	c.app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name: "muxterm", Title: "muxterm", URL: s.ServerURL,
+		Name: "muxterm", Title: "muxterm", URL: rawURL,
 		Width: 1400, Height: 900, MinWidth: 700, MinHeight: 500,
 		// Wails beta.28's Mac CSS injector interpolates raw CSS into a JS
 		// single-quoted string, so newlines make it fail. Quote it as JS instead.
@@ -222,14 +250,14 @@ func (c *Companion) showSettings() {
 }
 
 func (c *Companion) OpenMuxtermBrowser(token string) error {
-	s, err := c.GetSettings(token)
+	if err := c.authorize(token); err != nil {
+		return err
+	}
+	localURL, err := c.startLocalMuxterm()
 	if err != nil {
 		return err
 	}
-	if s.ServerURL == "" {
-		return errors.New("save the muxterm URL first")
-	}
-	return c.app.Browser.OpenURL(s.ServerURL)
+	return c.app.Browser.OpenURL(localURL)
 }
 
 func (c *Companion) OpenBrowserTab(token, rawURL string) (int, error) {
@@ -386,9 +414,11 @@ func (c *Companion) OpenPreview(token string, port int) error {
 
 func (c *Companion) close() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, running := range c.forwards {
+	forwards := c.forwards
+	c.forwards = make(map[int]*runningForward)
+	c.mu.Unlock()
+	for _, running := range forwards {
 		_ = running.cmd.Process.Kill()
 	}
-	c.forwards = make(map[int]*runningForward)
+	c.stopLocalMuxterm()
 }

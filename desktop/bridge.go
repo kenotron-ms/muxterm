@@ -22,7 +22,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 		return
 	}
 	c.mu.Lock()
-	serverURL := c.settings.ServerURL
+	serverURL := c.activeMuxtermURL
 	c.mu.Unlock()
 	server, serverErr := url.Parse(serverURL)
 	messageURL, messageErr := url.Parse(origin.Origin)

@@ -54,6 +54,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "app-serve":
+		if err := runLocal(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "serve":
 		if err := runServe(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -528,12 +533,32 @@ func runLocal(cfg Config) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if cfg.Mode == "app-serve" {
+		parentPID := os.Getppid()
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if os.Getppid() != parentPID {
+						stop()
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	browserHost := cfg.Addr
 	if _, port, err := net.SplitHostPort(cfg.Addr); err == nil {
 		browserHost = "localhost:" + port
 	}
-	go openBrowser("http://" + browserHost)
+	if cfg.Mode == "local" {
+		go openBrowser("http://" + browserHost)
+	}
 
 	// Local mode deliberately ignores [server], so there is no source to
 	// name here -- cfg.Addr is the only one.
