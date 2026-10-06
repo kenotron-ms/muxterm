@@ -42,7 +42,7 @@ export class MuxNewChat extends LitElement {
   @state() private copiedSetup = '';
   @state() private firstRun = false;
   @state() private onboardingLoaded = false;
-  @state() private onboardingError = false;
+  @state() private onboardingError = '';
   @state() private optionsLoaded = false;
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
@@ -152,6 +152,7 @@ export class MuxNewChat extends LitElement {
     .setup-actions button,.setup-refresh { padding:7px 11px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-hover); color:var(--chrome-text-bright); }
     .setup-actions a { color:var(--chrome-accent); text-decoration:none; }
     .setup-refresh { margin-top:16px; }
+    .setup-footer .setup-refresh { margin-top:0; }
     .receipt { display:flex; align-items:center; gap:8px; margin:12px 2px 0; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; }
     .receipt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--chrome-accent,#9bb8f7); animation:receipt-pulse 1.35s ease-in-out infinite; }
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
@@ -268,9 +269,9 @@ export class MuxNewChat extends LitElement {
       const response = await fetch(apiPath('/api/sdk-chat-onboarding'));
       if (!response.ok) throw new Error(await response.text());
       const state = await response.json() as { complete: boolean };
-      if (this.isConnected) { this.firstRun = !state.complete; this.onboardingError = false; }
+      if (this.isConnected) { this.firstRun = !state.complete; this.onboardingError = ''; }
     } catch (error) {
-      if (this.isConnected) { this.error = error instanceof Error ? error.message : String(error); this.onboardingError = true; }
+      if (this.isConnected) this.onboardingError = (error instanceof Error ? error.message : String(error)) || 'Could not check onboarding state.';
     } finally {
       if (this.isConnected) this.onboardingLoaded = true;
     }
@@ -349,7 +350,7 @@ export class MuxNewChat extends LitElement {
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
     if (!this.onboardingLoaded || (this.firstRun && !this.optionsLoaded)) return html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="setup-intro" role="status">Checking your coding agents…</p></div></div>`;
-    if (this.onboardingError) return html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.error}</p><button class="setup-refresh" @click=${() => void this.loadOnboarding()}>Try again</button></div></div>`;
+    if (this.onboardingError) return html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.onboardingError}</p><button class="setup-refresh" @click=${() => void this.loadOnboarding()}>Try again</button></div></div>`;
     if (this.firstRun && !this.startOptions) return html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.error || 'Could not check coding agents.'}</p><button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Try again</button></div></div>`;
     const showFirstRun = this.firstRun;
     if (this.startOptions && (showFirstRun || this.startOptions.length === 0)) return html`
