@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@softeria/ms-365-mcp-server": "0.158.0"
+  }
+}

@@ -44,13 +44,22 @@ export class CodexStream {
     const remoteConfigured = !!muxterm && existsSync(remoteConnectionFile);
     if (remoteConfigured) mcpConfig.push('-c', `mcp_servers.remote.command=${JSON.stringify(muxterm)}`,
       '-c', 'mcp_servers.remote.args=["connection-mcp","remote"]');
+    const microsoftRoot = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'microsoft-graph');
+    const microsoftPersonal = !!muxterm && existsSync(join(microsoftRoot, 'personal', 'enabled'));
+    if (microsoftPersonal) mcpConfig.push('-c', `mcp_servers.microsoft_personal.command=${JSON.stringify(muxterm)}`,
+      '-c', 'mcp_servers.microsoft_personal.args=["connection-mcp","microsoft-personal"]');
     for (const key of ['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']) {
       if (process.env[key]) {
         const value = JSON.stringify(process.env[key]);
         mcpConfig.push('-c', `mcp_servers.muxterm.env.${key}=${value}`);
         if (githubEnabled) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${value}`);
         if (remoteConfigured) mcpConfig.push('-c', `mcp_servers.remote.env.${key}=${value}`);
+        if (microsoftPersonal) mcpConfig.push('-c', `mcp_servers.microsoft_personal.env.${key}=${value}`);
       }
+    }
+    for (const key of ['PATH', 'HOME']) if (process.env[key]) {
+      const value = JSON.stringify(process.env[key]);
+      if (microsoftPersonal) mcpConfig.push('-c', `mcp_servers.microsoft_personal.env.${key}=${value}`);
     }
     if (githubEnabled) for (const key of ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
       if (process.env[key]) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${JSON.stringify(process.env[key])}`);

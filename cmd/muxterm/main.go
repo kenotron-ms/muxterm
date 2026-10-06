@@ -148,6 +148,8 @@ func main() {
 		var err error
 		if cfg.Args[0] == "remote" {
 			err = server.RunRemoteConnectionsMCP(context.Background())
+		} else if cfg.Args[0] == "microsoft-personal" {
+			err = server.RunMicrosoftGraphMCP(context.Background(), "personal")
 		} else {
 			err = server.RunGitHubConnectionMCP(context.Background())
 		}
