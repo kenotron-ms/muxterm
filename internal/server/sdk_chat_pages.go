@@ -35,6 +35,15 @@ type utilityPagesDocument struct {
 
 func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	var data []byte
+	var err error
+	if r.Method != http.MethodGet {
+		data, err = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "Pages too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+	}
 	s.sdkChats.mu.Lock()
 	defer s.sdkChats.mu.Unlock()
 	if !safePageID(id) || s.sdkChats.chats[id] == nil {
@@ -54,11 +63,6 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(data)
-		return
-	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
-	if err != nil {
-		http.Error(w, "Pages too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	var doc utilityPagesDocument

@@ -31,9 +31,7 @@ type pageBlocksRequest struct {
 // other pages (or losing the browser's current document version).
 func (s *Server) handleSDKPageBlocks(w http.ResponseWriter, r *http.Request) {
 	chatID, pageID := r.PathValue("id"), r.PathValue("pageID")
-	s.sdkChats.mu.Lock()
-	defer s.sdkChats.mu.Unlock()
-	if !safePageID(chatID) || s.sdkChats.chats[chatID] == nil || !safePageID(pageID) {
+	if !safePageID(chatID) || !safePageID(pageID) {
 		http.Error(w, "Page not found", http.StatusNotFound)
 		return
 	}
@@ -72,6 +70,12 @@ func (s *Server) handleSDKPageBlocks(w http.ResponseWriter, r *http.Request) {
 		}
 		points, _ := json.Marshal(v.Points)
 		additions = []map[string]any{{"type": "visualization", "props": map[string]any{"title": v.Title, "caption": v.Caption, "chartType": v.ChartType, "points": string(points)}}}
+	}
+	s.sdkChats.mu.Lock()
+	defer s.sdkChats.mu.Unlock()
+	if s.sdkChats.chats[chatID] == nil {
+		http.Error(w, "Page not found", http.StatusNotFound)
+		return
 	}
 	path := filepath.Join(sdkDataDir(), "pages", chatID+".json")
 	doc, err := readUtilityPages(path)
