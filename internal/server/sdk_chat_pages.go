@@ -29,7 +29,8 @@ type utilityPage struct {
 }
 
 type utilityPagesDocument struct {
-	Pages []utilityPage `json:"pages"`
+	Version int64         `json:"version"`
+	Pages   []utilityPage `json:"pages"`
 }
 
 func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +66,15 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid pages", http.StatusBadRequest)
 		return
 	}
+	current, err := readUtilityPages(path)
+	if err != nil {
+		http.Error(w, "Cannot read pages", http.StatusInternalServerError)
+		return
+	}
+	if doc.Version != current.Version {
+		http.Error(w, "Pages changed elsewhere; reload before saving", http.StatusConflict)
+		return
+	}
 	seen := map[string]bool{}
 	for _, page := range doc.Pages {
 		if !safePageID(page.ID) || seen[page.ID] || len(page.Title) > 300 || len(page.Blocks) > 500 || (page.ParentID != "" && (!safePageID(page.ParentID) || page.ParentID == page.ID)) {
@@ -94,14 +104,41 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	doc.Version++
+	data, err = json.Marshal(doc)
+	if err != nil || len(data) > 1<<20 {
+		http.Error(w, "Pages too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if err := writeUtilityPages(path, data); err != nil {
 		http.Error(w, "Cannot save pages", http.StatusInternalServerError)
 		return
 	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+func readUtilityPages(path string) (utilityPagesDocument, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return utilityPagesDocument{Pages: []utilityPage{}}, nil
+	}
+	if err != nil {
+		return utilityPagesDocument{}, err
+	}
+	var doc utilityPagesDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return utilityPagesDocument{}, err
+	}
+	return doc, nil
+}
+
+func writeUtilityPages(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".pages-*")
 	if err != nil {
-		http.Error(w, "Cannot save pages", http.StatusInternalServerError)
-		return
+		return err
 	}
 	defer os.Remove(tmp.Name())
 	if _, err = tmp.Write(data); err == nil {
@@ -115,11 +152,7 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = os.Rename(tmp.Name(), path)
 	}
-	if err != nil {
-		http.Error(w, "Cannot save pages", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, doc)
+	return err
 }
 
 func safePageID(id string) bool {

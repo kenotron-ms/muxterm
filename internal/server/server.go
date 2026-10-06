@@ -383,6 +383,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/change", protect(http.HandlerFunc(s.handleSDKUtilityChange)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/pages", protect(http.HandlerFunc(s.handleSDKUtilityPages)))
 	s.mux.Handle("PUT /api/sdk-chats/{id}/utility/pages", protect(http.HandlerFunc(s.handleSDKUtilityPages)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/utility/pages/{pageID}/blocks", protect(http.HandlerFunc(s.handleSDKPageBlocks)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/file", protect(http.HandlerFunc(s.handleSDKUtilityFile)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/raw", protect(http.HandlerFunc(s.handleSDKUtilityRaw)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/pr", protect(http.HandlerFunc(s.handleSDKUtilityPR)))
