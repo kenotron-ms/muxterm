@@ -52,8 +52,9 @@ func main() {
 		Hidden:           settings.ServerURL != "",
 		BackgroundColour: application.NewRGB(22, 22, 30),
 		Mac: application.MacWindow{
-			Appearance: application.NSAppearanceNameDarkAqua,
-			TitleBar:   application.MacTitleBarHidden,
+			Appearance:              application.NSAppearanceNameDarkAqua,
+			TitleBar:                application.MacTitleBarHidden,
+			InvisibleTitleBarHeight: 42,
 		},
 	})
 	if settings.ServerURL != "" {

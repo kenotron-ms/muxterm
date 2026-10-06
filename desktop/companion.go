@@ -194,8 +194,9 @@ func (c *Companion) openMuxtermWindow() error {
 			"})()",
 		BackgroundColour: application.NewRGB(22, 22, 30),
 		Mac: application.MacWindow{
-			Appearance: application.NSAppearanceNameDarkAqua,
-			TitleBar:   application.MacTitleBarHidden,
+			Appearance:              application.NSAppearanceNameDarkAqua,
+			TitleBar:                application.MacTitleBarHidden,
+			InvisibleTitleBarHeight: 42,
 		},
 	})
 	return nil
