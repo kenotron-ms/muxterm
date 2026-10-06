@@ -1513,7 +1513,7 @@ export class MuxSDKChat extends LitElement {
   }
   private sendVoiceButton() {
     const mode = this.voiceState !== 'idle' ? 'voice-stop' : this.busy ? 'task-stop' : this.draft.trim() || this.attachments.length ? 'send' : 'voice-start';
-    const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'send' ? 'Send message' : 'Start voice mode';
+    const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'send' ? 'Send message' : this.voiceAvailable ? 'Start voice mode' : 'Voice mode unavailable; check Voice settings';
     const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending
       : mode === 'task-stop' ? this.stopping
       : mode === 'send' ? this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)
