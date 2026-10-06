@@ -1063,6 +1063,7 @@ export class MuxSidebar extends LitElement {
       margin: 0 7px;
       padding: 0 6px;
       border: 0;
+      border-radius: 6px;
       background: transparent;
       color: color-mix(in srgb, var(--chrome-text-bright) 72%, var(--chrome-text-dim));
       display: flex;
@@ -1075,7 +1076,9 @@ export class MuxSidebar extends LitElement {
       cursor: pointer;
     }
 
-    .new-chat-action.active { color: var(--sidebar-text); background: var(--sidebar-hover); }
+    .header + .new-chat-action { margin-top: 6px; }
+
+    .new-chat-action.active { color: var(--sidebar-text); background: color-mix(in srgb, var(--chrome-accent) 18%, var(--chrome-bar)); }
     .new-chat-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
     .new-chat-action-mark {
       width: 14px;
