@@ -4,7 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
@@ -12,7 +14,7 @@ import (
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, spawn-lane, fleet, amplifier-install, help
+	Mode string // local, app-serve, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, spawn-lane, fleet, amplifier-install, help
 	Addr string // listen address
 	// Secret is accepted and ignored. It exists only so an installed unit
 	// that still passes --secret keeps parsing: the documented upgrade
@@ -185,6 +187,8 @@ func parseCommand(args []string) (Config, error) {
 		return Config{Mode: "help"}, nil
 	case "serve":
 		return parseServe(args[1:])
+	case "app-serve":
+		return parseAppServe(args[1:])
 	case "sessiond":
 		return Config{Mode: "sessiond"}, nil
 	case "sessiond-connect":
@@ -234,6 +238,29 @@ func parseCommand(args []string) (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("unknown command %q\n\nRun 'muxterm --help' for usage.", args[0])
 	}
+}
+
+// app-serve is private plumbing for the bundled Mac app. It uses local mode's
+// loopback policy without opening a second window in the system browser.
+func parseAppServe(args []string) (Config, error) {
+	fs := flag.NewFlagSet("app-serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	addr := fs.String("addr", "", "loopback listen address")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if fs.NArg() != 0 {
+		return Config{}, fmt.Errorf("app-serve accepts only --addr")
+	}
+	host, port, err := net.SplitHostPort(*addr)
+	if err != nil || host != "127.0.0.1" || port == "" {
+		return Config{}, fmt.Errorf("app-serve requires a 127.0.0.1 address and port")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return Config{}, fmt.Errorf("app-serve requires a valid port")
+	}
+	return Config{Mode: "app-serve", Addr: *addr}, nil
 }
 
 func parseAmplifier(args []string) (Config, error) {

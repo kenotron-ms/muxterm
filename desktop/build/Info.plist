@@ -6,6 +6,7 @@
   <key>CFBundleName</key><string>Muxterm</string>
   <key>CFBundleDisplayName</key><string>Muxterm</string>
   <key>CFBundleExecutable</key><string>muxterm</string>
+  <key>CFBundleIconFile</key><string>Muxterm.icns</string>
   <key>CFBundleIdentifier</key><string>io.ampbox.muxterm.desktop</string>
   <key>CFBundleVersion</key><string>0.1.0</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>

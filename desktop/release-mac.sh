@@ -49,6 +49,8 @@ fi
 bash "$root/desktop/build-mac.sh"
 plutil -replace CFBundleVersion -string "$version" "$app/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
+codesign --force --options runtime --timestamp \
+  --sign "$identity" "$app/Contents/MacOS/muxterm-server"
 codesign --force --deep --options runtime --timestamp \
   --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"

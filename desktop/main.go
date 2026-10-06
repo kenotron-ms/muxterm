@@ -15,6 +15,12 @@ var assets embed.FS
 
 func main() {
 	companion := newCompanion()
+	// Wait for the local server before opening WebKit so the first window always
+	// contains muxterm instead of a transient connection or error page.
+	_, localErr := companion.startLocalMuxterm()
+	if localErr != nil {
+		log.Printf("could not start local muxterm: %v", localErr)
+	}
 	var tokenBytes [32]byte
 	if _, err := rand.Read(tokenBytes[:]); err != nil {
 		log.Fatal(err)
@@ -44,12 +50,11 @@ func main() {
 	})
 	menu.AddRole(application.WindowMenu)
 	app.Menu.Set(menu)
-	settings := companion.settings
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: "companion", Title: "Muxterm Settings", URL: "/",
-		Width: 640, Height: 420, MinWidth: 520, MinHeight: 380,
+		Width: 640, Height: 540, MinWidth: 520, MinHeight: 460,
 		JS:               "globalThis.muxtermCompanionToken = '" + companion.token + "'",
-		Hidden:           settings.ServerURL != "",
+		Hidden:           localErr == nil,
 		BackgroundColour: application.NewRGB(22, 22, 30),
 		Mac: application.MacWindow{
 			Appearance:              application.NSAppearanceNameDarkAqua,
@@ -57,9 +62,9 @@ func main() {
 			InvisibleTitleBarHeight: 42,
 		},
 	})
-	if settings.ServerURL != "" {
+	if localErr == nil {
 		if err := companion.openMuxtermWindow(); err != nil {
-			log.Printf("could not open saved muxterm URL: %v", err)
+			log.Printf("could not open local muxterm: %v", err)
 			companion.showSettings()
 		}
 	}

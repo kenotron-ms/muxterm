@@ -37,17 +37,23 @@
   <div id="native-titlebar" aria-hidden="true"></div>
   <main>
     <h1>Muxterm for Mac</h1>
-    <p>Open your muxterm server in a Mac window.</p>
+    <p>Muxterm runs on this Mac and opens in its own window.</p>
 
     <section>
-      <h2>Connection</h2>
-      <label for="server-url">Muxterm URL</label>
+      <h2>Local muxterm</h2>
+      <p id="local-status">Checking the local server…</p>
+      <button id="open-window">Open local muxterm</button>
+    </section>
+
+    <section>
+      <h2>Remote connection (optional)</h2>
+      <label for="server-url">Remote muxterm URL</label>
       <input id="server-url" type="url" spellcheck="false" placeholder="https://muxterm.example.com/">
       <label for="ssh-host">SSH host for the machine running your dev servers</label>
       <input id="ssh-host" type="text" spellcheck="false" placeholder="my-devbox (an alias in ~/.ssh/config)">
       <div class="row">
-        <button id="save">Save connection</button>
-        <button id="open-window" class="secondary">Open muxterm</button>
+        <button id="save">Save remote connection</button>
+        <button id="open-remote" class="secondary">Open remote muxterm</button>
       </div>
     </section>
     <p class="hint">For a localhost URL on another machine, enter an SSH host that already works from this Mac.</p>
@@ -77,11 +83,14 @@
       () => call('SaveSettings', {serverURL: $('server-url').value, sshHost: $('ssh-host').value}),
       'Connection saved.'
     ));
-    $('open-window').addEventListener('click', () => act(() => call('OpenMuxtermWindow'), 'Opened muxterm window.'));
+    $('open-window').addEventListener('click', () => act(() => call('OpenMuxtermWindow'), 'Opened local muxterm.'));
+    $('open-remote').addEventListener('click', () => act(() => call('OpenRemoteMuxtermWindow'), 'Opened remote muxterm.'));
     try {
       const settings = await call('GetSettings');
       $('server-url').value = settings.serverURL || '';
       $('ssh-host').value = settings.sshHost || '';
+      const local = await call('GetLocalStatus');
+      $('local-status').textContent = local.url ? `Running at ${local.url}` : (local.error || 'Not running. Click Open local muxterm to retry.');
     } catch (error) { status(error?.message || String(error), true); }
   </script>
 </body>
