@@ -429,10 +429,10 @@ export class MuxSDKChat extends LitElement {
   async navigateUI(action: 'chat' | 'panel' | 'tab' | 'file', mode?: string, tab?: string, path?: string): Promise<void> {
     if (action === 'chat') return;
     if (action === 'panel') {
-      if (mode === 'chat' || mode === 'split' || mode === 'preview') this.setPaneMode(mode);
+      if (mode === 'chat' || mode === 'split') this.setPaneMode(mode);
       return;
     }
-    this.setPaneMode(action === 'file' ? 'preview' : 'split');
+    this.setPaneMode('split');
     await this.updateComplete;
     const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
     if (action === 'file' && path) await utility?.showFile(path);
