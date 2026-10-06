@@ -205,8 +205,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns42Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 42 tools
+// TestMCPToolsListReturns45Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 45 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
@@ -227,8 +227,9 @@ func assertToolNames(t *testing.T, got, want []string) {
 // (create_trigger, list_triggers, set_trigger_enabled, delete_trigger), which
 // starts lanes on a schedule or a file change with no human present, took it
 // to 33. The four Chat control tools took it to 37. The three Chat discovery
-// tools took it to 40. move_chat and navigate_app take it to 42.
-func TestMCPToolsListReturns42Tools(t *testing.T) {
+// tools took it to 40. move_chat and navigate_app take it to 42. The three
+// Chat Page tools take it to 45.
+func TestMCPToolsListReturns45Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "")
 
@@ -276,6 +277,10 @@ func TestMCPToolsListReturns42Tools(t *testing.T) {
 		// 2 Chat UI tools (HTTP REST, registered via registerChatUITools)
 		"navigate_app",
 		"view_file",
+		// 3 Chat Page tools (HTTP REST, registered via registerChatPageTools)
+		"get_chat_pages",
+		"append_page_markdown",
+		"add_page_visualization",
 		// 2 config tools (HTTP REST, registered via registerConfigTools)
 		"get_config",
 		"update_config",
@@ -361,6 +366,9 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		// Navigation only selects a Chat surface; it has no destructive reach.
 		"navigate_app",
 		"view_file",
+		"get_chat_pages",
+		"append_page_markdown",
+		"add_page_visualization",
 		// 2 config tools, unchanged.
 		"get_config",
 		"update_config",

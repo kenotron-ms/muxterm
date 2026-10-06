@@ -51,6 +51,7 @@ import type { SessionState } from './lib/session-state.js';
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
+import { sdkChats } from './lib/sdk-chats.js';
 import {
   SessiondType,
   SessiondErrorCode,
@@ -700,6 +701,7 @@ export class MuxApp extends LitElement {
    * surface ever sets it and every create is byte-identical to today's.
    */
   private _createModalHost = '';
+  private _chatTerminalPending: { chatId: string; clientRef: string; workspaceId?: string } | null = null;
 
   @state()
   private _overlayPanel: 'settings' | 'shortcuts' | 'about' | 'connect' | null = null;
@@ -1026,6 +1028,15 @@ export class MuxApp extends LitElement {
     // just below.
     this._disposePaneFocusListeners = this._paneFocusCoordinator.installWindowListeners();
     this._socket.onSessiondMessage = (msg) => {
+      const pendingChatTerminal = this._chatTerminalPending;
+      if (msg.type === SessiondType.WorkspaceCreated && pendingChatTerminal && pendingChatTerminal.clientRef === msg.clientRef && msg.workspaceId) {
+        const chatId = pendingChatTerminal.chatId;
+        pendingChatTerminal.workspaceId = msg.workspaceId;
+        void sdkChats.setTerminalWorkspace(chatId, msg.workspaceId).catch(error => {
+          if (this._chatTerminalPending === pendingChatTerminal) this._chatTerminalPending = null;
+          console.error('Could not link chat terminal:', error);
+        });
+      }
       // For pane-added events carrying an explicit placement token (e.g. from
       // an MCP create_pane call), pre-wire the dock's placement intent BEFORE
       // applySessiond() triggers the Lit reactive update that runs the
@@ -1538,7 +1549,7 @@ export class MuxApp extends LitElement {
                 @pane-create-request="${this._createPaneOptimistic}"
               ></mux-title-bar>`
             : ''}
-          ${panes.length === 0
+          ${selectedSDKChat ? '' : panes.length === 0
             ? html`
                 <div class="empty-workspace">
                   <div class="glyph">${icon(MonitorX, { size: 48 })}</div>
@@ -1570,7 +1581,7 @@ export class MuxApp extends LitElement {
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .sessionId=${this._sdkChatId} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @chat-terminal-open=${this._onChatTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -2376,9 +2387,29 @@ export class MuxApp extends LitElement {
     this._socket?.attachWithBreakpoint(e.detail.workspaceId, currentLayoutMode());
   };
 
+  private _onChatTerminalOpen = (e: CustomEvent<{ chatId: string; title: string; projectPath: string; workspaceId?: string; force?: boolean }>): void => {
+    const { chatId, title, projectPath, workspaceId, force } = e.detail;
+    if (!chatId || this._sdkChatId !== chatId) return;
+    if (workspaceId) {
+      if (this._chatTerminalPending?.chatId === chatId && this._chatTerminalPending.workspaceId === workspaceId) this._chatTerminalPending = null;
+      if (force || (store.attached !== workspaceId && this._socket?.lastAttachTarget !== workspaceId)) {
+        voiceInputController.invalidateIfActive();
+        this._socket?.attachWithBreakpoint(workspaceId, currentLayoutMode());
+      }
+      return;
+    }
+    if (this._chatTerminalPending?.chatId === chatId) return;
+    const clientRef = mintClientRef();
+    if (this._socket?.createWorkspace(`Chat: ${title.slice(0, 52)}`, clientRef, '', projectPath)) {
+      this._chatTerminalPending = { chatId, clientRef };
+    }
+  };
+
   /** The live <mux-dock> element in our shadow root, or null when absent. */
   private get _dock(): MuxDock | null {
-    return (this.renderRoot as ShadowRoot).querySelector('mux-dock');
+    return (this.renderRoot as ShadowRoot).querySelector('mux-dock')
+      || (this.renderRoot as ShadowRoot).querySelector<MuxSDKChat>('mux-sdk-chat')?.shadowRoot?.querySelector('mux-dock')
+      || null;
   }
 
   private get _closeModal(): CloseConfirmationModal | null {

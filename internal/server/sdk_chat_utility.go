@@ -149,6 +149,108 @@ func (s *Server) handleSDKUtilityFiles(w http.ResponseWriter, r *http.Request) {
 	writeSDKJSON(w, 200, map[string]any{"root": project, "path": rel, "entries": rows, "truncated": truncated})
 }
 
+// Search file names inside the project for the Files panel's Quick Open.
+// os.Root guards every path, while the traversal bounds keep large projects responsive.
+func (s *Server) handleSDKUtilitySearch(w http.ResponseWriter, r *http.Request) {
+	root, _, ok := s.sdkUtilityRoot(r)
+	if !ok {
+		http.Error(w, "Project folder unavailable", http.StatusNotFound)
+		return
+	}
+	defer root.Close()
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	if len(query) < 2 || len(query) > 128 {
+		http.Error(w, "Search query must be 2–128 characters", http.StatusBadRequest)
+		return
+	}
+	type result struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+		Size int64  `json:"size"`
+	}
+	type folder struct {
+		path  string
+		depth int
+	}
+	queue := []folder{{path: "."}}
+	results := make([]result, 0, 60)
+	visited := 0
+	truncated := false
+	for len(queue) > 0 && visited < 6000 {
+		if r.Context().Err() != nil {
+			return
+		}
+		current := queue[0]
+		queue = queue[1:]
+		dir, err := root.Open(current.path)
+		if err != nil {
+			continue
+		}
+		entries, readErr := dir.ReadDir(500)
+		dir.Close()
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			continue
+		}
+		if len(entries) == 500 {
+			truncated = true
+		}
+		for _, entry := range entries {
+			visited++
+			if visited >= 6000 {
+				truncated = true
+				break
+			}
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			path := name
+			if current.path != "." {
+				path = current.path + "/" + name
+			}
+			file, openErr := root.Open(path)
+			if openErr != nil {
+				continue
+			}
+			info, statErr := file.Stat()
+			file.Close()
+			if statErr != nil {
+				continue
+			}
+			if info.IsDir() {
+				if current.depth < 9 && len(queue) < 500 && name != "node_modules" && name != "dist" && name != "vendor" && name != "target" {
+					queue = append(queue, folder{path: path, depth: current.depth + 1})
+				} else {
+					truncated = true
+				}
+				continue
+			}
+			if info.Mode().IsRegular() && strings.Contains(strings.ToLower(path), query) {
+				results = append(results, result{Path: path, Name: name, Size: info.Size()})
+			}
+		}
+	}
+	if len(queue) > 0 {
+		truncated = true
+	}
+	sort.Slice(results, func(i, j int) bool {
+		left, right := strings.ToLower(results[i].Name), strings.ToLower(results[j].Name)
+		leftPrefix, rightPrefix := strings.HasPrefix(left, query), strings.HasPrefix(right, query)
+		if leftPrefix != rightPrefix {
+			return leftPrefix
+		}
+		if len(left) != len(right) {
+			return len(left) < len(right)
+		}
+		return results[i].Path < results[j].Path
+	})
+	if len(results) > 60 {
+		results = results[:60]
+		truncated = true
+	}
+	writeSDKJSON(w, http.StatusOK, map[string]any{"results": results, "truncated": truncated})
+}
+
 func (s *Server) sdkUtilityFile(w http.ResponseWriter, r *http.Request, raw bool) {
 	root, _, ok := s.sdkUtilityRoot(r)
 	if !ok {

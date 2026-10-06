@@ -4,7 +4,7 @@ import "embed"
 
 // Dist embeds the built web frontend assets from web/dist/.
 //
-//go:embed dist/*
+//go:embed all:dist/*
 var Dist embed.FS
 
 // PublicDist embeds the ONE asset served without authentication: the renderer

@@ -142,6 +142,7 @@ type Server struct {
 	updating atomic.Bool
 
 	sdkChats           *sdkChatHost
+	pagesMu            sync.Map // chat ID -> *sync.Mutex; page writes never hold the global chat lock
 	sdkChatAttachments *chatattachments.Store
 	sdkJobs            *sdkJobs
 	connections        *serviceConnections
@@ -379,6 +380,12 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats/{id}/history", protect(http.HandlerFunc(s.handleSDKChatHistory)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/agents", protect(http.HandlerFunc(s.handleSDKChatAgents)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/files", protect(http.HandlerFunc(s.handleSDKUtilityFiles)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/utility/search", protect(http.HandlerFunc(s.handleSDKUtilitySearch)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/utility/changes", protect(http.HandlerFunc(s.handleSDKUtilityChanges)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/utility/change", protect(http.HandlerFunc(s.handleSDKUtilityChange)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/utility/pages", protect(http.HandlerFunc(s.handleSDKUtilityPages)))
+	s.mux.Handle("PUT /api/sdk-chats/{id}/utility/pages", protect(http.HandlerFunc(s.handleSDKUtilityPages)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/utility/pages/{pageID}/blocks", protect(http.HandlerFunc(s.handleSDKPageBlocks)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/file", protect(http.HandlerFunc(s.handleSDKUtilityFile)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/raw", protect(http.HandlerFunc(s.handleSDKUtilityRaw)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/pr", protect(http.HandlerFunc(s.handleSDKUtilityPR)))
