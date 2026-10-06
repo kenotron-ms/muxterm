@@ -29,10 +29,6 @@ export class MuxLauncherMenu extends LitElement {
       min-width: 180px;
     }
 
-    :host(:not(:popover-open)) {
-      display: none;
-    }
-
     .divider {
       height: 1px;
       background: var(--chrome-border);

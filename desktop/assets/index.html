@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muxterm Settings</title>
+  <style>
+    :root { color-scheme: dark; font: 15px -apple-system, BlinkMacSystemFont, sans-serif; background: #16161e; color: #c0caf5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    #native-titlebar { position: fixed; inset: 0 0 auto; height: 42px; user-select: none; }
+    main { max-width: 680px; margin: auto; padding: 56px 30px 30px; }
+    h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -.025em; }
+    h2 { font-size: 18px; margin: 0 0 12px; }
+    p { color: #a9b1d6; line-height: 1.5; margin: 0 0 18px; }
+    section { background: #1a1b26; border: 1px solid #292e42; border-radius: 14px; padding: 20px; margin-top: 18px; }
+    label { display: block; margin: 14px 0 6px; font-size: 13px; color: #a9b1d6; }
+    input { width: 100%; border: 1px solid #414868; border-radius: 8px; padding: 10px 12px; background: #16161e; color: #c0caf5; font: inherit; }
+    input:focus { outline: 2px solid #7aa2f7; outline-offset: 1px; }
+    button { border: 1px solid #7aa2f7; border-radius: 8px; padding: 9px 13px; background: #2b4d80; color: #c0caf5; font: inherit; font-weight: 600; cursor: pointer; }
+    button:hover { background: #365c96; }
+    button.secondary { background: #1f2335; border-color: #414868; }
+    button.secondary:hover { background: #292e42; }
+    button.danger { background: #3c292e; border-color: #6b454b; }
+    button.danger:hover { background: #583439; }
+    .row { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+    .row input { flex: 1; min-width: 0; }
+    .row button { flex: none; }
+    .forward { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid #292e42; }
+    .forward .url { flex: 1; color: #7aa2f7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #status { min-height: 22px; margin-top: 18px; color: #a9d9ac; }
+    #status.error { color: #ff9da1; }
+    .hint { font-size: 13px; margin: 12px 0 0; }
+  </style>
+</head>
+<body>
+  <div id="native-titlebar" aria-hidden="true"></div>
+  <main>
+    <h1>Muxterm for Mac</h1>
+    <p>Open your muxterm server in a Mac window.</p>
+
+    <section>
+      <h2>Connection</h2>
+      <label for="server-url">Muxterm URL</label>
+      <input id="server-url" type="url" spellcheck="false" placeholder="https://muxterm.example.com/">
+      <label for="ssh-host">SSH host for the machine running your dev servers</label>
+      <input id="ssh-host" type="text" spellcheck="false" placeholder="my-devbox (an alias in ~/.ssh/config)">
+      <div class="row">
+        <button id="save">Save connection</button>
+        <button id="open-window" class="secondary">Open muxterm</button>
+      </div>
+    </section>
+    <p class="hint">For a localhost URL on another machine, enter an SSH host that already works from this Mac.</p>
+    <div id="status" role="status" aria-live="polite"></div>
+  </main>
+  <script type="module">
+    import { Call } from '/wails/runtime.js';
+    const $ = (id) => document.getElementById(id);
+    async function companionToken() {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (globalThis.muxtermCompanionToken) return globalThis.muxtermCompanionToken;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error('The desktop bridge did not start. Reopen this window.');
+    }
+    const token = await companionToken();
+    const call = (method, ...args) => Call.ByName(`main.Companion.${method}`, token, ...args);
+    const status = (message, error = false) => {
+      $('status').textContent = message;
+      $('status').classList.toggle('error', error);
+    };
+    const act = async (action, success) => {
+      try { await action(); status(success); }
+      catch (error) { status(error?.message || String(error), true); }
+    };
+    $('save').addEventListener('click', () => act(
+      () => call('SaveSettings', {serverURL: $('server-url').value, sshHost: $('ssh-host').value}),
+      'Connection saved.'
+    ));
+    $('open-window').addEventListener('click', () => act(() => call('OpenMuxtermWindow'), 'Opened muxterm window.'));
+    try {
+      const settings = await call('GetSettings');
+      $('server-url').value = settings.serverURL || '';
+      $('ssh-host').value = settings.sshHost || '';
+    } catch (error) { status(error?.message || String(error), true); }
+  </script>
+</body>
+</html>
