@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type utilityPageBlock struct {
@@ -29,17 +30,31 @@ type utilityPage struct {
 }
 
 type utilityPagesDocument struct {
-	Pages []utilityPage `json:"pages"`
+	Version int64         `json:"version"`
+	Pages   []utilityPage `json:"pages"`
 }
 
 func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	var data []byte
+	var err error
+	if r.Method != http.MethodGet {
+		data, err = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "Pages too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+	}
 	s.sdkChats.mu.Lock()
-	defer s.sdkChats.mu.Unlock()
-	if !safePageID(id) || s.sdkChats.chats[id] == nil {
+	exists := s.sdkChats.chats[id] != nil
+	s.sdkChats.mu.Unlock()
+	if !safePageID(id) || !exists {
 		http.Error(w, "Chat not found", http.StatusNotFound)
 		return
 	}
+	pagesLock := s.pageDocumentLock(id)
+	pagesLock.Lock()
+	defer pagesLock.Unlock()
 	path := filepath.Join(sdkDataDir(), "pages", id+".json")
 	if r.Method == http.MethodGet {
 		data, err := os.ReadFile(path)
@@ -55,14 +70,18 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(data)
 		return
 	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
-	if err != nil {
-		http.Error(w, "Pages too large", http.StatusRequestEntityTooLarge)
-		return
-	}
 	var doc utilityPagesDocument
 	if json.Unmarshal(data, &doc) != nil || len(doc.Pages) > 100 {
 		http.Error(w, "Invalid pages", http.StatusBadRequest)
+		return
+	}
+	current, err := readUtilityPages(path)
+	if err != nil {
+		http.Error(w, "Cannot read pages", http.StatusInternalServerError)
+		return
+	}
+	if doc.Version != current.Version {
+		http.Error(w, "Pages changed elsewhere; reload before saving", http.StatusConflict)
 		return
 	}
 	seen := map[string]bool{}
@@ -94,14 +113,46 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	doc.Version++
+	data, err = json.Marshal(doc)
+	if err != nil || len(data) > 1<<20 {
+		http.Error(w, "Pages too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if err := writeUtilityPages(path, data); err != nil {
 		http.Error(w, "Cannot save pages", http.StatusInternalServerError)
 		return
 	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+func readUtilityPages(path string) (utilityPagesDocument, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return utilityPagesDocument{Pages: []utilityPage{}}, nil
+	}
+	if err != nil {
+		return utilityPagesDocument{}, err
+	}
+	var doc utilityPagesDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return utilityPagesDocument{}, err
+	}
+	return doc, nil
+}
+
+func (s *Server) pageDocumentLock(chatID string) *sync.Mutex {
+	lock, _ := s.pagesMu.LoadOrStore(chatID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+func writeUtilityPages(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".pages-*")
 	if err != nil {
-		http.Error(w, "Cannot save pages", http.StatusInternalServerError)
-		return
+		return err
 	}
 	defer os.Remove(tmp.Name())
 	if _, err = tmp.Write(data); err == nil {
@@ -115,11 +166,7 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = os.Rename(tmp.Name(), path)
 	}
-	if err != nil {
-		http.Error(w, "Cannot save pages", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, doc)
+	return err
 }
 
 func safePageID(id string) bool {

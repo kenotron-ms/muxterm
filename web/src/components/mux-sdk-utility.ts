@@ -139,11 +139,15 @@ export class MuxSDKUtility extends LitElement {
   private changeDetail?: ChangeDetail;
   private changeAbort?: AbortController;
   private pages?: NotePage[];
+  private pagesVersion = 0;
+  private pagesRenderEpoch = 0;
+  private pagesPollTimer?: number;
   private pagesError = '';
   private pageId = '';
   private pageSaveTimer?: number;
   private pageSaveQueue: Promise<void> = Promise.resolve();
   private pageSaving = false;
+  private pagesConflict = false;
   private pagesRailOpen = true;
   private terminalRetryTimer?: number;
   private terminalRetryCount = 0;
@@ -177,6 +181,7 @@ export class MuxSDKUtility extends LitElement {
     void this.restoreExplorer(folder, file);
     if (this.activeTab === 'changes') void this.loadChanges();
     if (this.activeTab === 'pages') void this.loadPages();
+    this.pagesPollTimer = window.setInterval(() => { if (this.activeTab === 'pages' && this.pages && !this.pageSaving && !this.pagesConflict) void this.refreshPages(); }, 2500);
     if (this.activeTab === 'terminal') queueMicrotask(() => this.requestChatTerminal());
     this.unsubscribeStore = store.subscribe(() => { if (this.activeTab === 'terminal') { this.assignTerminalPane(); this.paintAll(); } });
   }
@@ -188,6 +193,7 @@ export class MuxSDKUtility extends LitElement {
     this.quickAbort?.abort();
     if (this.quickTimer) window.clearTimeout(this.quickTimer);
     if (this.pageSaveTimer) { window.clearTimeout(this.pageSaveTimer); void this.savePages(); }
+    if (this.pagesPollTimer) window.clearInterval(this.pagesPollTimer);
     if (this.terminalRetryTimer) window.clearTimeout(this.terminalRetryTimer);
     super.disconnectedCallback();
   }
@@ -643,11 +649,26 @@ export class MuxSDKUtility extends LitElement {
       await import('./mux-blocknote-page.js');
       const response = await fetch(this.endpoint('pages'));
       if (!response.ok) throw new Error(`Pages unavailable (${response.status})`);
-      const doc = await response.json() as { pages: NotePage[] };
+      const doc = await response.json() as { pages: NotePage[]; version?: number };
       this.pages = doc.pages || [];
+      this.pagesVersion = doc.version || 0;
+      this.pagesConflict = false;
       if (!this.pages.some(page => page.id === this.pageId)) this.pageId = this.pages[0]?.id || '';
     } catch (error) { this.pagesError = String(error); }
     this.paintAll();
+  }
+  private async refreshPages() {
+    try {
+      const response = await fetch(this.endpoint('pages'));
+      if (!response.ok) return;
+      const doc = await response.json() as { pages: NotePage[]; version?: number };
+      if ((doc.version || 0) <= this.pagesVersion || this.pageSaving) return;
+      this.pages = doc.pages || [];
+      this.pagesVersion = doc.version || 0;
+      this.pagesRenderEpoch++;
+      if (!this.pages.some(page => page.id === this.pageId)) this.pageId = this.pages[0]?.id || '';
+      this.paintAll();
+    } catch { /* refresh on next poll */ }
   }
   private schedulePageSave() {
     if (this.pageSaveTimer) window.clearTimeout(this.pageSaveTimer);
@@ -655,10 +676,12 @@ export class MuxSDKUtility extends LitElement {
     this.pageSaveTimer = window.setTimeout(() => { this.pageSaveTimer = undefined; void this.savePages(); }, 500);
   }
   private savePages() {
-    const snapshot = JSON.stringify({ pages: this.pages || [] });
     this.pageSaveQueue = this.pageSaveQueue.catch(() => {}).then(async () => {
+      const snapshot = JSON.stringify({ version:this.pagesVersion, pages:this.pages || [] });
       const response = await fetch(this.endpoint('pages'), { method:'PUT', headers:{'Content-Type':'application/json'}, body:snapshot });
-      if (!response.ok) throw new Error(`Could not save pages (${response.status})`);
+      if (!response.ok) { if (response.status === 409) this.pagesConflict = true; throw new Error(response.status === 409 ? 'Page changed elsewhere. Your edits are still here; reload after copying them.' : `Could not save pages (${response.status})`); }
+      const result = await response.json() as { version?: number };
+      this.pagesVersion = result.version || 0;
       this.pagesError = '';
       this.pageSaving = false;
       this.paintAll();
@@ -723,7 +746,7 @@ export class MuxSDKUtility extends LitElement {
       ${this.pagesRailOpen ? html`<div class="pages-list"><header><strong>Pages</strong><button class="icon-button" aria-label="Hide pages list" title="Hide pages list" @click=${() => { this.pagesRailOpen = false; this.paintAll(); }}>${icon(X,{size:15})}</button></header><div class="page-list-rows">${this.pagesError ? html`<p class="pages-error">${this.pagesError}</p>` : nothing}${!this.pages ? html`<p class="empty">Loading pages…</p>` : this.pages.length ? this.pageRows() : html`<p class="empty">Create a page to start writing.</p>`}</div><button class="pages-list-new" @click=${() => this.newPage()}>＋ New page</button></div>` : nothing}
       ${this.pagesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize page list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'pages')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'pages')}></div>` : nothing}
       <div class="page-editor"><div class="page-toolbar"><div><button aria-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} title=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</button>${parent ? html`<button class="page-parent" @click=${() => this.selectPage(parent.id)}>${parent.title}</button><span>›</span>` : nothing}<span>${page?.title || 'Pages'}</span></div><span>${this.pageSaving ? 'Saving…' : 'Saved'}</span></div>
-      ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .content=${page.content?.length ? page.content : legacyPageContent(page.blocks)} .pageId=${page.id} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><button class="page-subpage" @click=${() => this.newPage(page.id)}>＋ New subpage</button></div></div>` : html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages</h2><p>Create a document for this chat.</p><button @click=${() => this.newPage()}>New page</button></div>`}</div>
+      ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .content=${page.content?.length ? page.content : legacyPageContent(page.blocks)} .pageId=${page.id} .documentEpoch=${this.pagesRenderEpoch} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><button class="page-subpage" @click=${() => this.newPage(page.id)}>＋ New subpage</button></div></div>` : html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages</h2><p>Create a document for this chat.</p><button @click=${() => this.newPage()}>New page</button></div>`}</div>
     </section>`;
   }
   private surfaceCSS = `
