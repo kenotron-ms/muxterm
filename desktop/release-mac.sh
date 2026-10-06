@@ -18,8 +18,12 @@ app="$root/desktop/bin/Muxterm.app"
 dmg="$root/desktop/bin/Muxterm-${version}-macos-arm64.dmg"
 work="$(mktemp -d)"
 keychain="$work/release.keychain-db"
+previous_default="$(security default-keychain -d user | sed -e 's/^ *"//' -e 's/"$//')"
 
 cleanup() {
+  if [[ -n "$previous_default" ]]; then
+    security default-keychain -d user -s "$previous_default" >/dev/null 2>&1 || true
+  fi
   security delete-keychain "$keychain" >/dev/null 2>&1 || true
   rm -rf "$work"
 }
@@ -27,12 +31,13 @@ trap cleanup EXIT
 
 printf '%s' "$MACOS_DEVELOPER_ID_P12_BASE64" | base64 -D > "$work/developer-id.p12"
 security create-keychain -p '' "$keychain"
+security default-keychain -d user -s "$keychain"
 security unlock-keychain -p '' "$keychain"
 security set-keychain-settings -lut 21600 "$keychain"
 security import "$work/developer-id.p12" \
   -k "$keychain" -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" \
   -T /usr/bin/codesign -T /usr/bin/security
-security set-key-partition-list -S apple-tool:,apple: -s -k '' "$keychain"
+security set-key-partition-list -S apple-tool:,apple: -s -k '' "$keychain" >/dev/null
 rm "$work/developer-id.p12"
 
 identity="$(security find-identity -v -p codesigning "$keychain" | awk -v team="$APPLE_TEAM_ID" '$0 ~ "Developer ID Application:" && index($0, team) { print $2; exit }')"
@@ -45,7 +50,7 @@ bash "$root/desktop/build-mac.sh"
 plutil -replace CFBundleVersion -string "$version" "$app/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
 codesign --force --deep --options runtime --timestamp \
-  --keychain "$keychain" --sign "$identity" "$app"
+  --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 
 ditto -c -k --keepParent "$app" "$work/Muxterm.zip"
@@ -63,6 +68,6 @@ ditto "$app" "$work/dmg/Muxterm.app"
 ln -s /Applications "$work/dmg/Applications"
 hdiutil create -volname Muxterm -srcfolder "$work/dmg" \
   -ov -format UDZO "$dmg"
-codesign --timestamp --keychain "$keychain" --sign "$identity" "$dmg"
+codesign --timestamp --sign "$identity" "$dmg"
 codesign --verify --verbose=2 "$dmg"
 echo "Created $dmg"
