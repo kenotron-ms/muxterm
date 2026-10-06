@@ -26,6 +26,9 @@ Store. Configure these repository Actions secrets before tagging:
 
 Set repository variable `APPLE_NOTARY_APPLE_ID` to the Apple ID that owns the
 Developer team. The existing `APPLE_TEAM_ID` variable identifies that team.
+To verify credentials before publishing a release, manually run **Mac App**
+with `signed_preview` enabled. It uploads the notarized DMG as a workflow
+artifact without creating a GitHub Release.
 
 ## Build on a Mac
 

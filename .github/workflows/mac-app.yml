@@ -10,6 +10,11 @@ on:
       - 'desktop/**'
       - '.github/workflows/mac-app.yml'
   workflow_dispatch:
+    inputs:
+      signed_preview:
+        description: Build a Developer ID signed and notarized DMG
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,4 +44,30 @@ jobs:
         with:
           name: muxterm-macos-arm64
           path: desktop/bin/Muxterm-macos-arm64.zip
+          if-no-files-found: error
+
+  signed-preview:
+    if: github.event_name == 'workflow_dispatch' && inputs.signed_preview
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+
+      - name: Sign, notarize, and package preview
+        env:
+          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_NOTARY_APPLE_ID: ${{ vars.APPLE_NOTARY_APPLE_ID }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: bash desktop/release-mac.sh 0.1.0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxterm-signed-macos-arm64
+          path: desktop/bin/Muxterm-0.1.0-macos-arm64.dmg
           if-no-files-found: error
