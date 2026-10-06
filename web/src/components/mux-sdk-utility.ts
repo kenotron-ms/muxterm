@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, Minimize2, NotebookPen, Plus, RefreshCw, Search, Terminal, X, type IconNode } from 'lucide';
+import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, Minimize2, NotebookPen, Plus, RefreshCw, Search, Terminal, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { store } from '../state.js';
 import { icon } from '../lib/icons.js';
@@ -726,6 +726,30 @@ export class MuxSDKUtility extends LitElement {
     void this.updateComplete.then(() => this.querySelector<HTMLTextAreaElement>('.page-title')?.focus());
     return page;
   }
+  private deletePage(page: NotePage) {
+    if (!this.pages || this.pagesConflict) return;
+    const deleted = new Set([page.id]);
+    for (let size = -1; size !== deleted.size;) {
+      size = deleted.size;
+      for (const child of this.pages) if (child.parentId && deleted.has(child.parentId)) deleted.add(child.id);
+    }
+    const descendants = deleted.size - 1;
+    const title = page.title || 'Untitled';
+    const message = descendants
+      ? `Delete “${title}” and its ${descendants} subpage${descendants === 1 ? '' : 's'}? This cannot be undone.`
+      : `Delete “${title}”? This cannot be undone.`;
+    if (!window.confirm(message)) return;
+    this.pages = this.pages.filter(item => !deleted.has(item.id));
+    const next = page.parentId && this.pages.some(item => item.id === page.parentId)
+      ? page.parentId : this.pages[0]?.id || '';
+    if (deleted.has(this.pageId)) this.pageId = next;
+    for (const tab of this.tabs) if (tab.kind === 'pages' && tab.pageId && deleted.has(tab.pageId)) tab.pageId = next;
+    this.saveTabs();
+    try { localStorage.setItem(this.pageKey(), this.pageId); } catch { /* private browsing */ }
+    this.pagesRenderEpoch++;
+    this.schedulePageSave();
+    this.paintAll();
+  }
   private pageRows(parentId = '', depth = 0): TemplateResult[] {
     if (depth > 8) return [];
     const rows: TemplateResult[] = [];
@@ -778,7 +802,7 @@ export class MuxSDKUtility extends LitElement {
     return html`<section class="pages-panel split-panel ${this.pagesRailOpen ? '' : 'rail-closed'}" style=${`--rail-width:${this.railWidths.pages}px`}>
       ${this.pagesRailOpen ? html`<div class="pages-list"><div class="browser-heading"><div class="explorer-label">PAGES</div><div class="explorer-actions"><button class="icon-button" aria-label="New page" title="New page" @click=${() => this.newPage()}>${icon(Plus,{size:15})}</button></div></div><div class="page-list-rows">${this.pagesError ? html`<p class="pages-error">${this.pagesError}</p>` : nothing}${!this.pages ? html`<p class="empty">Loading pages…</p>` : this.pages.length ? this.pageRows() : html`<p class="empty">Create a page to start writing.</p>`}</div></div>` : nothing}
       ${this.pagesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize page list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'pages')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'pages')}></div>` : nothing}
-      <div class="page-editor"><div class="page-toolbar"><div><button aria-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} title=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</button>${parent ? html`<button class="page-parent" @click=${() => this.selectPage(parent.id)}>${parent.title}</button><span>›</span>` : nothing}<span>${page?.title || 'Pages'}</span></div><span>${this.pageSaving ? 'Saving…' : 'Saved'}</span></div>
+      <div class="page-editor"><div class="page-toolbar"><div><button aria-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} title=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</button>${parent ? html`<button class="page-parent" @click=${() => this.selectPage(parent.id)}>${parent.title}</button><span>›</span>` : nothing}<span>${page?.title || 'Pages'}</span></div><div class="page-toolbar-actions"><span>${this.pageSaving ? 'Saving…' : 'Saved'}</span>${page ? html`<button class="page-delete" aria-label=${`Delete page ${page.title || 'Untitled'}`} title=${this.pagesConflict ? 'Reload pages before deleting' : 'Delete page'} ?disabled=${this.pagesConflict} @click=${() => this.deletePage(page)}>${icon(Trash2,{size:15})}</button>` : nothing}</div></div>
       ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .content=${page.content?.length ? page.content : legacyPageContent(page.blocks)} .pageId=${page.id} .documentEpoch=${this.pagesRenderEpoch} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><button class="page-subpage" @click=${() => this.newPage(page.id)}>＋ New subpage</button></div></div>` : html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages</h2><p>Create a document for this chat.</p><button @click=${() => this.newPage()}>New page</button></div>`}</div>
     </section>`;
   }
@@ -953,6 +977,9 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-toolbar { display:flex; justify-content:space-between; align-items:center; flex:none; min-height:42px; padding:0 14px; border-bottom:1px solid #eeeeee; color:#777; font:11px system-ui,sans-serif; }
     mux-sdk-utility .page-toolbar > div { display:flex; align-items:center; gap:7px; min-width:0; }
     mux-sdk-utility .page-toolbar > div > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    mux-sdk-utility .page-toolbar-actions { flex:none; }
+    mux-sdk-utility .page-toolbar .page-delete:hover { color:#b42318; background:#fff0ed; border-color:#ffd5cc; }
+    mux-sdk-utility .page-toolbar .page-delete:disabled { opacity:.4; cursor:not-allowed; }
     mux-sdk-utility .page-toolbar button { display:inline-flex; align-items:center; justify-content:center; flex:none; width:28px; height:28px; border:1px solid #ebebeb; border-radius:9px; background:#fff; color:#555; cursor:pointer; }
     mux-sdk-utility .page-toolbar button:hover { background:#f3f3f3; }
     mux-sdk-utility .page-toolbar .page-parent { width:auto; max-width:130px; border:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
