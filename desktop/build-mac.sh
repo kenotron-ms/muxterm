@@ -23,6 +23,7 @@ cp desktop/build/Info.plist "$app/Contents/Info.plist"
 cp desktop/build/Muxterm.icns "$app/Contents/Resources/Muxterm.icns"
 cp -L "$(command -v node)" "$app/Contents/MacOS/node"
 npm_cli="$(node -p 'require("fs").realpathSync(process.argv[1])' "$(command -v npm)")"
+rm -rf "$app/Contents/Resources/npm"
 cp -R "$(dirname "$npm_cli")/.." "$app/Contents/Resources/npm"
 cat > "$app/Contents/Resources/bin/npm" <<'EOF'
 #!/bin/sh
