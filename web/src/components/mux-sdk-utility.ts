@@ -97,6 +97,8 @@ export class MuxSDKUtility extends LitElement {
   @property({ attribute: false }) touched: string[] = [];
   @property({ attribute: false }) events: TrajectoryEvent[] = [];
   private dv?: DockviewComponent;
+  private dockStyle?: HTMLStyleElement;
+  private dockHost?: HTMLDivElement;
   private panels = new Map<string, UtilityPanel>();
   private observer?: ResizeObserver;
   private listing?: Listing;
@@ -127,7 +129,9 @@ export class MuxSDKUtility extends LitElement {
     const style = document.createElement('style');
     style.textContent = `${dockviewCss}\n${this.surfaceCSS}`;
     this.appendChild(style);
+    this.dockStyle = style;
     const host = document.createElement('div'); host.className = 'utility-dock'; this.appendChild(host);
+    this.dockHost = host;
     this.dv = new DockviewComponent(host, { defaultTabComponent:'utility-tab', createTabComponent: () => new UtilityTab(), createComponent: opts => {
       const panel = new UtilityPanel(opts.id, this); this.panels.set(opts.id, panel); return panel;
     }});
@@ -155,6 +159,8 @@ export class MuxSDKUtility extends LitElement {
     this.observer?.disconnect();
     this.dv?.dispose(); this.dv = undefined;
     this.panels.clear();
+    this.dockStyle?.remove(); this.dockStyle = undefined;
+    this.dockHost?.remove(); this.dockHost = undefined;
     super.disconnectedCallback();
   }
   override updated() { this.paintAll(); }

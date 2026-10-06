@@ -282,7 +282,11 @@ func (o *microsoftGraphLoginOutput) Write(data []byte) (int, error) {
 func (o *microsoftGraphLoginOutput) result() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	lines := strings.Split(o.tail, "\n")
+	return microsoftGraphSuccess([]byte(o.tail))
+}
+
+func microsoftGraphSuccess(output []byte) bool {
+	lines := strings.Split(string(output), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		var status struct {
 			Success *bool `json:"success"`
@@ -441,10 +445,7 @@ func (s *Server) handleMicrosoftGraphCheck(w http.ResponseWriter, r *http.Reques
 		_ = cmd.Process.Kill()
 	}
 	waitErr := cmd.Wait()
-	var result struct {
-		Success bool `json:"success"`
-	}
-	if readErr != nil || len(output) > maxVerificationOutput || waitErr != nil || json.Unmarshal(output, &result) != nil || !result.Success {
+	if readErr != nil || len(output) > maxVerificationOutput || waitErr != nil || !microsoftGraphSuccess(output) {
 		p.mu.Lock()
 		if p.generation != generation || !microsoftGraphEnabled(p.name) {
 			p.mu.Unlock()
@@ -459,6 +460,15 @@ func (s *Server) handleMicrosoftGraphCheck(w http.ResponseWriter, r *http.Reques
 	}
 	count, err := checkMicrosoftGraphTools(ctx, p)
 	if err != nil {
+		p.mu.Lock()
+		if p.generation != generation || !microsoftGraphEnabled(p.name) {
+			p.mu.Unlock()
+			http.Error(w, "Microsoft connection changed during the check", http.StatusConflict)
+			return
+		}
+		p.errorMessage = "Microsoft tools could not be reached"
+		p.toolCount, p.checkedAt = 0, time.Time{}
+		p.mu.Unlock()
 		http.Error(w, "Microsoft tools could not be reached", http.StatusBadGateway)
 		return
 	}
