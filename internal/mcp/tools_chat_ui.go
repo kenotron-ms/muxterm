@@ -37,7 +37,7 @@ func registerChatUITools(srv *Server) {
 			"session_id": map[string]any{"type": "string", "description": "Chat ID"},
 			"action":     map[string]any{"type": "string", "enum": []string{"chat", "panel", "tab"}},
 			"mode":       map[string]any{"type": "string", "enum": []string{"chat", "split"}, "description": "required for action=panel"},
-			"tab":        map[string]any{"type": "string", "enum": []string{"plan", "files", "pr", "trajectory"}, "description": "required for action=tab"},
+			"tab":        map[string]any{"type": "string", "enum": []string{"files", "changes", "terminal", "pages"}, "description": "required for action=tab"},
 		}), "required": []string{"session_id", "action"}},
 		func(args map[string]any) (string, error) {
 			action, err := argString(args, "action")

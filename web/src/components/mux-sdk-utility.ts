@@ -177,6 +177,10 @@ export class MuxSDKUtility extends LitElement {
     } catch { /* storage unavailable */ }
     let folder = '.', legacyFile = '';
     try { folder = localStorage.getItem(this.pathKey()) || '.'; legacyFile = localStorage.getItem(this.fileKey()) || ''; } catch { /* private browsing */ }
+    if (legacyFile.startsWith('/')) {
+      const root = this.projectPath.replace(/\/+$/, '');
+      legacyFile = root && legacyFile.startsWith(`${root}/`) ? legacyFile.slice(root.length + 1) : '';
+    }
     if (legacyFile && !this.tabs.some(tab => tab.kind === 'files' && tab.filePath === legacyFile)) {
       const emptyFileTab = this.tabs.find(tab => tab.kind === 'files' && !tab.filePath);
       if (emptyFileTab) emptyFileTab.filePath = legacyFile;

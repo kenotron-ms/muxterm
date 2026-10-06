@@ -436,7 +436,7 @@ export class MuxSDKChat extends LitElement {
     await this.updateComplete;
     const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
     if (action === 'file' && path) await utility?.showFile(path);
-    else if (action === 'tab' && (tab === 'files' || tab === 'changes' || tab === 'terminal' || tab === 'pages' || tab === 'pr')) utility?.showPanel(tab);
+    else if (action === 'tab' && (tab === 'files' || tab === 'changes' || tab === 'terminal' || tab === 'pages')) utility?.showPanel(tab);
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
     const { path, selected } = event.detail;
