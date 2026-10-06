@@ -1516,7 +1516,7 @@ export class MuxSDKChat extends LitElement {
     const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'send' ? 'Send message' : 'Start voice mode';
     const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending
       : mode === 'task-stop' ? this.stopping
-      : mode === 'send' ? this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)
+      : mode === 'send' ? this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)
       : false;
     const bars = html`<span class="voice-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>`;
     const glyph = mode === 'voice-start' ? bars : mode === 'voice-stop' ? html`${bars}<span aria-hidden="true">Stop</span>`
