@@ -561,7 +561,7 @@ export class MuxSDKUtility extends LitElement {
       const data = tableRows(file.text, extension === 'tsv' ? '\t' : ',');
       return html`<div class="table-view"><table><tbody>${data.rows.map((row, index) => html`<tr>${row.map(value => index === 0 ? html`<th>${value}</th>` : html`<td>${value}</td>`)}</tr>`)}</tbody></table>${data.truncated ? html`<p class="empty">Showing the first 200 rows.</p>` : nothing}</div>`;
     }
-    if (file.kind === 'markdown') return html`<div class="markdown document-view">${renderSegments(parseMarkdown(file.text))}</div>`;
+    if (file.kind === 'markdown') return html`<article class="document-view" aria-label=${`Preview of ${file.name}`}>${renderSegments(parseMarkdown(file.text))}</article>`;
     return this.sourceView(file.text);
   }
   private treeRows(folder: string, depth = 0): TemplateResult[] {
@@ -911,8 +911,37 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .quick-results button strong, mux-sdk-utility .quick-results button small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .quick-results button strong { font:12px system-ui,sans-serif; }
     mux-sdk-utility .quick-results button small, mux-sdk-utility .quick-results button em { color:var(--chrome-text-dim); font:10px ui-monospace,monospace; }
-    mux-sdk-utility .document-view { padding:18px 25px; overflow-wrap:anywhere; }
-    mux-sdk-utility .document-view pre { padding:10px; background:var(--chrome-body); overflow:auto; }
+    mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:840px; margin:0 auto; padding:clamp(22px,4vw,48px) clamp(20px,5vw,56px) 64px; color:var(--chrome-text-bright); font:14px/1.72 system-ui,sans-serif; overflow-wrap:break-word; }
+    mux-sdk-utility .document-view > :first-child { margin-top:0; }
+    mux-sdk-utility .document-view > :last-child { margin-bottom:0; }
+    mux-sdk-utility .document-view .md-p { margin:0 0 1.15em; }
+    mux-sdk-utility .document-view .md-h { margin:1.75em 0 .55em; color:var(--chrome-text-bright); font-weight:700; line-height:1.3; overflow-wrap:break-word; }
+    mux-sdk-utility .document-view h1.md-h { margin-top:0; padding-bottom:.35em; border-bottom:1px solid var(--chrome-border); font-size:2em; letter-spacing:-.025em; }
+    mux-sdk-utility .document-view h2.md-h { padding-bottom:.28em; border-bottom:1px solid var(--chrome-border); font-size:1.5em; letter-spacing:-.015em; }
+    mux-sdk-utility .document-view h3.md-h { font-size:1.25em; }
+    mux-sdk-utility .document-view h4.md-h { font-size:1.08em; }
+    mux-sdk-utility .document-view h5.md-h, mux-sdk-utility .document-view h6.md-h { font-size:1em; }
+    mux-sdk-utility .document-view strong { font-weight:700; }
+    mux-sdk-utility .document-view .md-link { color:var(--chrome-accent); text-decoration:underline; text-underline-offset:3px; }
+    mux-sdk-utility .document-view .md-link:hover { color:var(--chrome-text-bright); }
+    mux-sdk-utility .document-view .md-code { padding:.13em .35em; border:1px solid var(--chrome-border); border-radius:4px; background:var(--chrome-bar); font:.9em/1.45 ui-monospace,monospace; }
+    mux-sdk-utility .document-view .md-pre { box-sizing:border-box; max-width:100%; margin:0 0 1.4em; padding:15px 18px; overflow:auto; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
+    mux-sdk-utility .document-view .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:0 0 9px; color:var(--chrome-text-dim); font:10px/1.4 system-ui,sans-serif; text-transform:uppercase; letter-spacing:.07em; }
+    mux-sdk-utility .document-view .md-pre code { font:12.5px/1.6 ui-monospace,monospace; white-space:pre; }
+    mux-sdk-utility .document-view .md-ul, mux-sdk-utility .document-view .md-ol { margin:0 0 1.2em; padding-left:1.8em; }
+    mux-sdk-utility .document-view .md-li { padding-left:.2em; margin:.3em 0; }
+    mux-sdk-utility .document-view .md-li .md-p { margin:0; }
+    mux-sdk-utility .document-view .md-li > .md-ul, mux-sdk-utility .document-view .md-li > .md-ol { margin:.35em 0 .5em; }
+    mux-sdk-utility .document-view .md-quote { margin:0 0 1.3em; padding:.15em 0 .15em 1.15em; border-left:3px solid var(--chrome-accent); color:var(--chrome-text-dim); }
+    mux-sdk-utility .document-view .md-quote > :last-child { margin-bottom:0; }
+    mux-sdk-utility .document-view .md-hr { margin:2em 0; border:0; border-top:1px solid var(--chrome-border); }
+    mux-sdk-utility .document-view .md-tablewrap { max-width:100%; overflow-x:auto; margin:0 0 1.5em; border:1px solid var(--chrome-border); border-radius:8px; }
+    mux-sdk-utility .document-view .md-table { width:100%; border-collapse:collapse; font-size:13px; line-height:1.5; }
+    mux-sdk-utility .document-view .md-th, mux-sdk-utility .document-view .md-td { padding:9px 12px; border-bottom:1px solid var(--chrome-border); text-align:left; vertical-align:top; overflow-wrap:normal; }
+    mux-sdk-utility .document-view .md-th + .md-th, mux-sdk-utility .document-view .md-td + .md-td { border-left:1px solid var(--chrome-border); }
+    mux-sdk-utility .document-view .md-table tr:last-child .md-td { border-bottom:0; }
+    mux-sdk-utility .document-view .md-th { background:var(--chrome-bar); font-weight:650; white-space:nowrap; }
+    mux-sdk-utility .document-view .md-img { display:block; max-width:100%; height:auto; margin:0 0 1.3em; border-radius:7px; }
     mux-sdk-utility .image-view { display:flex; justify-content:center; align-items:flex-start; padding:18px; }
     mux-sdk-utility .image-view img { max-width:100%; max-height:calc(100vh - 200px); object-fit:contain; }
     mux-sdk-utility .table-view { flex:1; overflow:auto; padding:12px; } mux-sdk-utility .table-view table { border-collapse:collapse; font:11px/1.5 system-ui,sans-serif; }
