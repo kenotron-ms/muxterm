@@ -12,8 +12,8 @@ operator; cycles are rejected.
    sidebar uses a network icon in place of the chat's status dot while
    operator mode is on. The same switch turns it off.
 2. Ask the operator in the ordinary composer to start a lane with a chosen
-   harness, attach an existing chat, or remove a lane. The Status tab displays
-   progress and links to full chats; it has no lane-management form.
+   harness or attach an existing chat. The Status tab displays progress, links
+   to full chats, and offers quick actions to unlink or archive a lane.
 3. Every operator turn
    receives standing instructions and the current linked lane IDs and states.
    The operator uses `spawn_operator_lane`, `link_operator_lane`,
@@ -43,13 +43,13 @@ operator; cycles are rejected.
 │  You: Ship the search changes.   ├──────────────────────────────────────────┤
 │                                  │ Operator status                       │
 │  Operator: I started Codex and   │ 3 lanes · 2 working · 1 needs attention│
-│  Claude lanes. I will report     │ ┌──────────────────────────────────────┐ │
-│  back on their outcomes.         │ │ ● Search API       Codex · working   │ │
-│                                  │ │ Running tool: go build               │ │
-│  ┌ Search API · Complete ────┐   │ │ Todo progress              67%        │ │
-│  │ API ready; one blocker…   │   │ │ ✓ route  ✓ build  ○ review            │ │
-│  └───────────────────────────┘   │ │ Open chat                            │ │
-│  Operator: Search API is ready…  │ │ Open chat                            │ │
+│  Claude lanes. I will report     │ [All] [Needs attention] [Running]     │
+│  back on their outcomes.         │ [Done]                               │
+│                                  │ ┌──────────────────────────────────────┐ │
+│  ┌ Search API · Complete ────┐   │ │ Lane       State    Progress   Open  │ │
+│  │ API ready; one blocker…   │   │ │ Search API  Working  ▂▅▃▇ 67%    ↗  │ │
+│  └───────────────────────────┘   │ │   Latest reply in Markdown           │ │
+│  Operator: Search API is ready…  │ │   [Unlink lane] [Archive chat]        │ │
 │  UI review · failed · Error...   │ └──────────────────────────────────────┘ │
 │  [Ask: start a Claude lane…]     │                                          │
 │  [Permission · Agent · Operator] │                                          │
@@ -81,6 +81,15 @@ It stops polling when the tab closes. Lifecycle milestones arrive in the
 operator chat over its existing event stream. Operator instructions are added
 server-side for both browser sends and MCP control sends; the user's displayed
 message remains unchanged.
+
+The Status table defaults to **All**. **Needs attention** contains failed and
+uncertain lanes, **Running** contains starting and working lanes, and **Done**
+contains ready lanes. Archiving a chat changes its sidebar placement only: an
+archived lane keeps its operator link, reporting contract, state, and filter
+category. It is marked **Archived** in Status and can be restored there.
+Archiving a linked lane asks for confirmation. **Unlink lane** removes only
+this operator's link; the chat and its archive state remain intact. Status
+snapshots contain only chats currently named by that operator's link list.
 
 This first version coordinates SDK chats. Terminal panes managed by sessiond
 remain in the existing fleet and are not linkable as operator lanes here.

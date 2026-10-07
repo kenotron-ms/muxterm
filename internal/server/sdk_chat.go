@@ -305,6 +305,10 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		}
 	case "tool.started":
 		c.LastActivity = "Running tool: " + event.Name
+		// Text before a tool call is interim narration. Keep the status
+		// message aligned with the latest assistant reply after that tool.
+		c.LastOutput = ""
+		c.LaneReport = ""
 		if c.LaneProgressSource != "todos" && c.LaneProgress < 25 {
 			c.LaneProgress = 25
 		}
@@ -323,6 +327,11 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		if c.LaneProgressSource != "todos" && c.LaneProgress < 50 {
 			c.LaneProgress = 50
 		}
+	case "assistant.interim":
+		// The next assistant message is the lane's latest reply. Do not show
+		// pre-tool narration as part of the expanded status row.
+		c.LastOutput = ""
+		c.LaneReport = ""
 	case "turn.completed":
 		c.State = "ready"
 		c.LastActivity = "Turn completed"

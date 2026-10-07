@@ -194,7 +194,12 @@ export class MuxSDKChat extends LitElement {
     .pane-controls button { display:grid; place-items:center; width:29px; height:27px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-dim); padding:0; cursor:pointer; }
     .pane-controls button:hover,.pane-controls button:focus-visible { color:var(--chrome-text-bright); background:var(--chrome-hover); outline:none; }
     .pane-controls button.active { color:var(--chrome-accent); background:var(--chrome-hover); }
-    .chat-title { min-width:0; overflow:hidden; }
+    .chat-title { display:flex; align-items:center; gap:5px; min-width:0; overflow:hidden; }
+    .chat-title h1 { min-width:0; }
+    .operator-parent { display:grid; place-items:center; flex:none; width:24px; height:24px; border:0; border-radius:5px; padding:0; background:none; color:var(--chrome-accent); }
+    .operator-parent:hover,.operator-parent:focus-visible { background:var(--chrome-hover); outline:none; }
+    .operator-parent:focus-visible { box-shadow:0 0 0 2px var(--chrome-accent); }
+    .operator-crumb { display:inline-flex; flex:none; color:var(--chrome-text-dim); }
     .chat-title small { display:block; color:var(--chrome-text-dim); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .layout { display:flex; flex:1; min-height:0; }
     .layout.preview-focused .chat { display:none; }
@@ -1645,8 +1650,9 @@ export class MuxSDKChat extends LitElement {
   }
   override render() {
     const agents = this.agents();
+    const parentOperator = sdkChats.chats.find(chat => chat.operator && chat.operatorLanes?.includes(this.sessionId));
     return html`
-    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div class="chat-title"><h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}<div class="pane-controls" role="group" aria-label="Chat pane layout"><button class=${!this.drawerOpen ? 'active' : ''} aria-label="Chat only" title="Chat only" aria-pressed=${!this.drawerOpen} @click=${() => this.setPaneMode('chat')}>${icon(PanelLeft,{size:17})}</button><button class=${this.drawerOpen && !this.previewFocused ? 'active' : ''} aria-label="Split chat and preview" title="Split chat and preview" aria-pressed=${this.drawerOpen && !this.previewFocused} @click=${() => this.setPaneMode('split')}>${icon(Columns2,{size:17})}</button><button class=${this.previewFocused ? 'active' : ''} aria-label="Preview only" title="Preview only" aria-pressed=${this.previewFocused} @click=${() => this.setPaneMode('preview')}>${icon(PanelRight,{size:17})}</button></div></div>
+    <div class="topbar">${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div class="chat-title">${parentOperator ? html`<button class="operator-parent" aria-label=${`Open operator chat: ${parentOperator.title}`} title=${`Open operator chat: ${parentOperator.title}`} @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:parentOperator.id},bubbles:true,composed:true}))}>${icon(Network,{size:15})}</button><span class="operator-crumb" aria-hidden="true">${icon(ChevronRight,{size:13})}</span>` : nothing}<h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}<div class="pane-controls" role="group" aria-label="Chat pane layout"><button class=${!this.drawerOpen ? 'active' : ''} aria-label="Chat only" title="Chat only" aria-pressed=${!this.drawerOpen} @click=${() => this.setPaneMode('chat')}>${icon(PanelLeft,{size:17})}</button><button class=${this.drawerOpen && !this.previewFocused ? 'active' : ''} aria-label="Split chat and preview" title="Split chat and preview" aria-pressed=${this.drawerOpen && !this.previewFocused} @click=${() => this.setPaneMode('split')}>${icon(Columns2,{size:17})}</button><button class=${this.previewFocused ? 'active' : ''} aria-label="Preview only" title="Preview only" aria-pressed=${this.previewFocused} @click=${() => this.setPaneMode('preview')}>${icon(PanelRight,{size:17})}</button></div></div>
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<div class="agent-history-error" role="alert">Saved agent work could not be loaded. <button @click=${this.retryAgentHistory}>Retry</button></div>` : nothing}
       ${this.recoveryRequired ? html`<div class="recovery" role="alert"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}
