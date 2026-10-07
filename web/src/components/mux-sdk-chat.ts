@@ -102,6 +102,7 @@ export class MuxSDKChat extends LitElement {
   private historyAbort?: AbortController;
   private historyEpoch = 0;
   private activeSession = '';
+  private draftRevisions = new Map<string, number>();
   private historyFrom = 0;
   private historyTo = 0;
   @state() private hasOlder = false;
@@ -559,11 +560,19 @@ export class MuxSDKChat extends LitElement {
   }
   private setDraft(value: string) {
     this.draft = value;
-    if (this.activeSession) writeDraft(this.activeSession, 'message', value);
+    if (this.activeSession) {
+      const key = draftKey(this.activeSession, 'message');
+      this.draftRevisions.set(key, (this.draftRevisions.get(key) || 0) + 1);
+      writeDraft(this.activeSession, 'message', value);
+    }
   }
   private setAgentDraft(value: string) {
     this.agentDraft = value;
-    if (this.activeSession) writeDraft(this.activeSession, 'agent', value);
+    if (this.activeSession) {
+      const key = draftKey(this.activeSession, 'agent');
+      this.draftRevisions.set(key, (this.draftRevisions.get(key) || 0) + 1);
+      writeDraft(this.activeSession, 'agent', value);
+    }
   }
   private async loadAgentHistory(id: string, epoch: number, signal: AbortSignal) {
     this.agentHistoryError = '';
@@ -1258,16 +1267,20 @@ export class MuxSDKChat extends LitElement {
   private async steerAgent() {
     if (this.voiceState !== 'idle') return;
     const agent = this.agents().find(item => item.id === this.selectedAgent);
-    const message = this.agentDraft.trim();
+    const originalDraft = this.agentDraft;
+    const message = originalDraft.trim();
     if (!agent || !message) return;
     const sessionId = this.activeSession;
+    const draftRevision = this.draftRevisions.get(draftKey(sessionId, 'agent')) || 0;
     const content = `Please steer delegated agent ${agent.name} (${agent.id}) with this instruction: ${message}`;
     try {
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ kind:this.busy ? 'steer' : 'user', source:'browser', id:crypto.randomUUID(), content }) });
       if (!response.ok) throw new Error(await response.text());
-      if (this.activeSession === sessionId && this.agentDraft.trim() === message) this.setAgentDraft('');
-      else if (this.activeSession !== sessionId && readDraft(sessionId, 'agent').trim() === message) writeDraft(sessionId, 'agent', '');
+      if ((this.draftRevisions.get(draftKey(sessionId, 'agent')) || 0) === draftRevision && readDraft(sessionId, 'agent') === originalDraft) {
+        if (this.activeSession === sessionId) this.setAgentDraft('');
+        else writeDraft(sessionId, 'agent', '');
+      }
       if (this.activeSession === sessionId) this.agentNotice = 'Steering request sent to the root session.';
     } catch (error) { if (this.activeSession === sessionId) this.agentNotice = String(error); }
   }
@@ -1488,6 +1501,7 @@ export class MuxSDKChat extends LitElement {
     if (this.voiceState !== 'idle' || (!content && !this.attachments.length) || this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || a.error) || (this.busy && (this.attachments.length > 0 || this.isACPChat()))) return;
     const kind = this.busy ? 'steer' : 'user';
     const sessionId = this.activeSession;
+    const draftRevision = this.draftRevisions.get(draftKey(sessionId, 'message')) || 0;
     const sent = this.attachments;
     const id = crypto.randomUUID();
     const wasBusy = this.busy;
@@ -1503,9 +1517,10 @@ export class MuxSDKChat extends LitElement {
       await this.scrollToBottom();
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind, source:'browser', id, content, attachments: sent.map(a => a.id) }) });
       if (!response.ok) throw new Error(await response.text());
-      if (this.activeSession === sessionId) {
-        if (!this.draft || this.draft === content) this.setDraft('');
-      } else if (readDraft(sessionId, 'message') === originalDraft) writeDraft(sessionId, 'message', '');
+      if ((this.draftRevisions.get(draftKey(sessionId, 'message')) || 0) === draftRevision && readDraft(sessionId, 'message') === originalDraft) {
+        if (this.activeSession === sessionId) this.setDraft('');
+        else writeDraft(sessionId, 'message', '');
+      }
       for (const item of sent) if (item.preview) URL.revokeObjectURL(item.preview);
       if (this.activeSession === sessionId) {
         this.attachments = this.attachments.filter(a => !sent.includes(a));
