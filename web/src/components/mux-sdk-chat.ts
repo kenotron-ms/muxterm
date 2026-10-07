@@ -103,6 +103,7 @@ export class MuxSDKChat extends LitElement {
   private historyEpoch = 0;
   private activeSession = '';
   private draftRevisions = new Map<string, number>();
+  private submittingSessions = new Set<string>();
   private historyFrom = 0;
   private historyTo = 0;
   @state() private hasOlder = false;
@@ -1498,9 +1499,10 @@ export class MuxSDKChat extends LitElement {
   private async send() {
     const originalDraft = this.draft;
     const content = originalDraft.trim();
-    if (this.voiceState !== 'idle' || (!content && !this.attachments.length) || this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || a.error) || (this.busy && (this.attachments.length > 0 || this.isACPChat()))) return;
+    if (this.voiceState !== 'idle' || (!content && !this.attachments.length) || this.stopping || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || a.error) || (this.busy && (this.attachments.length > 0 || this.isACPChat()))) return;
     const kind = this.busy ? 'steer' : 'user';
     const sessionId = this.activeSession;
+    this.submittingSessions.add(sessionId);
     const draftRevision = this.draftRevisions.get(draftKey(sessionId, 'message')) || 0;
     const sent = this.attachments;
     const id = crypto.randomUUID();
@@ -1535,6 +1537,8 @@ export class MuxSDKChat extends LitElement {
       this.pendingInputs.delete(id);
       this.blocks = this.blocks.filter(block => block.key !== key && !(block.kind === 'progress' && block.turn === this.currentTurn && !wasBusy));
       if (!wasBusy) { this.busy = false; this.turnStarted.delete(this.currentTurn); }
+    } finally {
+      this.submittingSessions.delete(sessionId);
     }
   }
   private prepareRecovery() {
