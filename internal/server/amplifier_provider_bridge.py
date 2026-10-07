@@ -5,15 +5,21 @@ provider exception text: SDK exceptions can contain request headers.
 """
 
 import json
+import importlib.util
 import os
 import re
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
+# Amplifier imports may load keys.env into os.environ. Capture what the app
+# actually inherited first so the UI can name the credential source correctly
+# and a stored key can be replaced without treating it as an external override.
+EXPLICIT_CREDENTIALS = {name: bool(os.environ.get(name)) for name in
+                        ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY")}
+
 from amplifier_app_cli.key_manager import KeyManager
 from amplifier_foundation.paths.resolution import get_amplifier_home
-from amplifier_foundation.settings import read_settings, update_settings
 
 class SetupError(ValueError):
     """Validation message safe to return to the browser."""
@@ -27,6 +33,7 @@ PROVIDERS = {
 
 
 def rows():
+    from amplifier_foundation.settings import read_settings
     path = get_amplifier_home() / "settings.yaml"
     settings = read_settings((path,))
     configured = settings.get("config", {}).get("providers", [])
@@ -36,31 +43,34 @@ def rows():
 
 
 def state():
-    configured = rows()
-    inherited = {name: bool(os.environ.get(name)) for name, _ in PROVIDERS.values()}
+    supported = importlib.util.find_spec("amplifier_foundation.settings") is not None
+    configured = rows() if supported else []
     stored = KeyManager().stored_keys()
     output = []
     for identity, (env_name, module) in PROVIDERS.items():
         row = next((entry for entry in configured if isinstance(entry, dict) and
                     (entry.get("id") == identity or (not entry.get("id") and entry.get("module") == module))), None)
-        source = "environment" if inherited[env_name] else "amplifier-keys" if env_name in stored else ""
+        source = "environment" if EXPLICIT_CREDENTIALS[env_name] else "amplifier-keys" if env_name in stored else ""
         output.append({"id": identity, "source": source, "envName": env_name,
                        "configured": bool(row), "model": str((row or {}).get("config", {}).get("default_model", ""))})
     ordered = sorted((entry for entry in configured if isinstance(entry, dict)),
                      key=lambda entry: entry.get("config", {}).get("priority", 100))
     primary = (ordered[0].get("id") or ordered[0].get("module", "").removeprefix("provider-")) if ordered else ""
-    return {"cliInstalled": True, "configured": bool(ordered), "primary": primary,
+    return {"cliInstalled": True, "setupSupported": supported, "configured": bool(ordered), "primary": primary,
             "providers": output}
 
 
 def save(request):
+    if importlib.util.find_spec("amplifier_foundation.settings") is None:
+        raise SetupError("Update Amplifier to configure providers in Muxterm")
+    from amplifier_foundation.settings import update_settings
     identity = request.get("provider")
     if identity not in PROVIDERS:
         raise SetupError("Unsupported provider")
     env_name, module = PROVIDERS[identity]
     method = request.get("credentialSource")
     key = request.get("apiKey", "")
-    explicit_env = bool(os.environ.get(env_name))
+    explicit_env = EXPLICIT_CREDENTIALS[env_name]
     KeyManager()  # Load Amplifier-managed keys before checking availability.
     if method not in ("environment", "private-key"):
         raise SetupError("Choose a credential source")
@@ -108,6 +118,8 @@ def save(request):
 
 
 def check(request):
+    if importlib.util.find_spec("amplifier_foundation.settings") is None:
+        raise SetupError("Update Amplifier before checking provider connections")
     identity = request.get("provider")
     if identity not in PROVIDERS:
         raise SetupError("Unsupported provider")

@@ -113,11 +113,14 @@ func (s *Server) handleAmplifierInstall(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, uv, "tool", "install", "--from", "git+https://github.com/microsoft/amplifier", "amplifier")
+	// The graphical provider API requires the current Foundation settings
+	// module. An older uv-managed Amplifier can still supply keys.env, but must
+	// be upgraded when the user explicitly chooses Update Amplifier.
+	cmd := exec.CommandContext(ctx, uv, "tool", "install", "--force", "--from", "git+https://github.com/microsoft/amplifier", "amplifier")
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {
-		http.Error(w, "Amplifier installation failed. Check network access and the uv installation, then retry.", http.StatusBadGateway)
+		http.Error(w, "Amplifier installation or update failed. Check network access and the uv installation, then retry.", http.StatusBadGateway)
 		return
 	}
 	result, err := runProviderBridge(ctx, providerBridgeRequest{Action: "status"})

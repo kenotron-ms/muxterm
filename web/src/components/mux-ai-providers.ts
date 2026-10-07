@@ -3,7 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 
 type Provider = { id: string; source: string; envName: string; configured: boolean; model: string };
-type Setup = { cliInstalled: boolean; primary: string; providers: Provider[]; isolatedProfile?: boolean; error?: string };
+type Setup = { cliInstalled: boolean; setupSupported?: boolean; primary: string; providers: Provider[]; isolatedProfile?: boolean; error?: string };
 
 const choices = [
   { id: 'anthropic', name: 'Anthropic', detail: 'Claude models · Anthropic API key' },
@@ -155,7 +155,7 @@ export class MuxAIProviders extends LitElement {
       })}</div>
       <section class="editor" aria-label=${`${choice.name} configuration`}>
         <h2>${choice.name}</h2><p class="muted">Connect Amplifier to your ${choice.name} account.</p>
-        ${!this.setup ? html`<p role="status">Checking Amplifier…</p>` : !this.setup.cliInstalled ? html`<p role="alert">${this.setup.error || 'Install Amplifier to manage providers.'}</p><button class="action primary" ?disabled=${!!this.busy} @click=${() => void this.install()}>${this.busy === 'install' ? 'Installing Amplifier…' : 'Install Amplifier'}</button>${this.message ? html`<p class="message" role="alert">${this.message}</p>` : nothing}` : html`
+        ${!this.setup ? html`<p role="status">Checking Amplifier…</p>` : !this.setup.cliInstalled || this.setup.setupSupported === false ? html`<p role="alert">${this.setup.cliInstalled ? 'This Amplifier installation predates graphical provider management. ' + (current?.source === 'amplifier-keys' ? `${current.envName} was found in Amplifier keys.env, and will remain there during the update.` : 'Your existing Amplifier credentials will remain in your profile during the update.') : this.setup.error || 'Install Amplifier to manage providers.'}</p><button class="action primary" ?disabled=${!!this.busy} @click=${() => void this.install()}>${this.busy === 'install' ? 'Preparing Amplifier…' : this.setup.cliInstalled ? 'Update Amplifier' : 'Install Amplifier'}</button>${this.message ? html`<p class="message" role="alert">${this.message}</p>` : nothing}` : html`
           <p class="muted">${this.setup.primary === this.selected ? 'This is Amplifier’s default provider.' : 'Saving will make this Amplifier’s default provider.'}</p>
           <div class="field"><span>Credential</span>
             <label class="radio"><input type="radio" name="credential" .checked=${this.credentialSource === 'environment'} @change=${() => { this.credentialSource = 'environment'; this.apiKey = ''; }}>Use ${current?.envName} from the environment or Amplifier keys</label>
