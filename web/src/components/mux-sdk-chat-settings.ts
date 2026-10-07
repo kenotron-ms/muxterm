@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
 type ModeOption = { name: string; description?: string; source?: string };
@@ -17,6 +18,7 @@ const providerLabel = (value: string) => value === 'provider-anthropic' ? 'Anthr
 export class MuxSDKChatSettings extends LitElement {
   @property() sessionId = '';
   @property() harness = '';
+  @property({ type:Boolean }) operator = false;
   @property({ type:Boolean }) turnBusy = false;
   @state() private settings?: Settings;
   @state() private loading = false;
@@ -67,6 +69,13 @@ export class MuxSDKChatSettings extends LitElement {
     .notice { padding:9px 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
     .error { color:var(--chrome-danger); padding:7px 10px; overflow-wrap:anywhere; }
     .busy { opacity:.55; }
+    .operator-choice { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; border:0; border-radius:9px; padding:10px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:inherit; text-align:left; cursor:pointer; }
+    .operator-choice:hover,.operator-choice:focus-visible { background:var(--chrome-hover); outline:none; }
+    .operator-choice:disabled { opacity:.5; cursor:default; }
+    .switch { flex:none; width:30px; height:18px; box-sizing:border-box; border-radius:99px; padding:3px; background:var(--chrome-border,#41485f); }
+    .switch::after { content:''; display:block; width:12px; height:12px; border-radius:50%; background:var(--chrome-text-bright,#d9def0); transition:transform .15s; }
+    .operator-choice[aria-checked="true"] .switch { background:var(--chrome-accent,#9bb8f7); }
+    .operator-choice[aria-checked="true"] .switch::after { transform:translateX(12px); background:var(--chrome-bar,#202632); }
   `;
   override updated(changed: Map<string, unknown>) {
     if (changed.has('sessionId') && this.sessionId) { this.settings = undefined; this.error = ''; void this.load(this.sessionId); }
@@ -94,6 +103,18 @@ export class MuxSDKChatSettings extends LitElement {
     } catch (error) { this.error = String(error); }
     finally { this.loading = false; this.pending(false); }
   }
+  private async toggleOperator() {
+    if (this.loading || !this.sessionId) return;
+    this.loading = true; this.error = '';
+    try {
+      const chat = await sdkChats.operator(this.sessionId, { enabled: !this.operator });
+      this.dispatchEvent(new CustomEvent<SDKChat>('operator-changed', { detail:chat, bubbles:true, composed:true }));
+    } catch (error) { this.error = String(error); }
+    finally { this.loading = false; }
+  }
+  private operatorControl() {
+    return html`<div class="divider"></div><div class="heading">Operator</div><button class="operator-choice" role="switch" aria-label="Operator mode" aria-checked=${this.operator ? 'true' : 'false'} ?disabled=${this.loading} @click=${() => void this.toggleOperator()}><span class="choice-main"><span class="choice-name">Operator mode</span><span class="hint">Coordinate other chats as lanes</span></span><span class="switch" aria-hidden="true"></span></button>`;
+  }
   /** Amplifier has no permission switch to offer -- its tool access comes from
    *  the composed bundle. What it does have, and nothing else exposed, is its
    *  own mode system, so that takes this slot. */
@@ -101,11 +122,12 @@ export class MuxSDKChatSettings extends LitElement {
     const active = s.mode || '';
     const options = s.modeOptions || [];
     return html`
-      <details class="picker permission-picker" aria-label="Amplifier mode"><summary><span class="summary-text">${modeLabel(active)}</span></summary><div class="panel">
+      <details class="picker permission-picker" aria-label="Amplifier mode and operator"><summary><span class="summary-text">${modeLabel(active)}${this.operator ? ' · Operator' : ''}</span></summary><div class="panel">
         <div class="heading">Mode</div>
         ${this.choice('Default', 'No overlay — the bundle exactly as composed', active === '', true, () => void this.select({ mode:'' }))}
         ${options.map(option => this.choice(modeLabel(option.name), option.description || '', active === option.name, true, () => void this.select({ mode:option.name })))}
         ${options.length ? nothing : html`<div class="notice">This bundle composes no modes.</div>`}
+        ${this.operatorControl()}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></details>`;
   }
@@ -123,12 +145,13 @@ export class MuxSDKChatSettings extends LitElement {
     const mode = s.mode || 'agent';
     return html`
       ${this.harness === 'amplifier' ? this.modePicker(s) : html`
-      <details class="picker permission-picker" aria-label="Permission and mode"><summary><span class="summary-text">${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}</span></summary><div class="panel">
+      <details class="picker permission-picker" aria-label="Permission, mode and operator"><summary><span class="summary-text">${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}${this.operator ? ' · Operator' : ''}</span></summary><div class="panel">
         <div class="heading">Permission</div>
         ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
         <div class="divider"></div><div class="heading">Mode</div>
         ${this.choice('Agent', 'Work with the selected permission', mode === 'agent', s.modes.includes('agent') && (this.harness !== 'claude' || permission !== 'read-only'), () => void this.select({ mode:'agent' }))}
         ${this.choice('Plan', 'Explore and prepare a plan', mode === 'plan', s.modes.includes('plan') && (this.harness !== 'claude' || permission === 'read-only'), () => void this.select({ mode:'plan' }))}
+        ${this.operatorControl()}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></details>`}
       <details class="picker model-picker" aria-label="Provider, model and thinking"><summary><span class="summary-text">${model?.label || s.model || this.harness}</span></summary><div class="panel">

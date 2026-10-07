@@ -7,9 +7,10 @@ operator; cycles are rejected.
 
 ## Flow
 
-1. Open any chat and choose **Make operator** in the chat header. The right
-   drawer opens to **Status**, next to Files. The sidebar uses a network icon
-   in place of the chat's status dot while operator mode is on.
+1. Open the permission and mode menu in any chat's composer and turn on
+   **Operator mode**. The right drawer opens to **Status**, next to Files. The
+   sidebar uses a network icon in place of the chat's status dot while
+   operator mode is on. The same switch turns it off.
 2. Ask the operator in the ordinary composer to start a lane with a chosen
    harness, attach an existing chat, or remove a lane. The Status tab displays
    progress and links to full chats; it has no lane-management form.
@@ -23,33 +24,35 @@ operator; cycles are rejected.
    cancellation, failure, uncertainty, and goal milestones. Plan and todo tool
    payloads become a shared checklist and percentage. When there is no plan,
    the Status tab labels the percentage as a hook estimate.
-5. A completed lane turn, or a terminal full goal run, writes a durable
-   source-attributed lane report into the operator transcript. The server then
-   submits that report to the operator harness as an `operator-lane` input so
-   it can summarize the outcome and blockers for the user. The report appears
-   on the left in its own card; it is never rendered as a human user bubble.
-6. Open a lane only when you want its full conversation. The compact **Operator
-   mode** switch in Status returns the chat to regular mode and removes its
+5. Lifecycle updates appear in one lane status card in the operator transcript.
+   A completed turn, or a terminal full goal run, finishes that card and writes
+   a durable source-attributed report. The server submits the report to the
+   operator harness as an `operator-lane` input so it can summarize the outcome
+   and blockers for the user. The report is never a human user bubble.
+6. Open a lane only when you want its full conversation. The **Operator mode**
+   switch in the composer returns the chat to regular mode and removes its
    links while preserving the chats and their histories.
 
 ## Screen shape
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ Chat title                 [Operator]                  [chat | split | tab] │
+│ Chat title                                             [chat | split | tab] │
 ├──────────────────────────────────┬──────────────────────────────────────────┤
 │                                  │ [Status] [Files] [Changes] [Terminal]  │
 │  You: Ship the search changes.   ├──────────────────────────────────────────┤
-│                                  │ Operator status    Operator mode [on] │
+│                                  │ Operator status                       │
 │  Operator: I started Codex and   │ 3 lanes · 2 working · 1 needs attention│
 │  Claude lanes. I will report     │ ┌──────────────────────────────────────┐ │
 │  back on their outcomes.         │ │ ● Search API       Codex · working   │ │
 │                                  │ │ Running tool: go build               │ │
-│  Report from Search API          │ │ Todo progress              67%        │ │
-│  API ready; one blocker...       │ │ ✓ route  ✓ build  ○ review            │ │
+│  ┌ Search API · Complete ────┐   │ │ Todo progress              67%        │ │
+│  │ API ready; one blocker…   │   │ │ ✓ route  ✓ build  ○ review            │ │
+│  └───────────────────────────┘   │ │ Open chat                            │ │
 │  Operator: Search API is ready…  │ │ Open chat                            │ │
 │  UI review · failed · Error...   │ └──────────────────────────────────────┘ │
 │  [Ask: start a Claude lane…]     │                                          │
+│  [Permission · Agent · Operator] │                                          │
 └──────────────────────────────────┴──────────────────────────────────────────┘
 ```
 

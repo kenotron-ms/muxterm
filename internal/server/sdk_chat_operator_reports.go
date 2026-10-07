@@ -85,11 +85,12 @@ func (h *sdkChatHost) queueOperatorReport(operatorID, laneID string, terminal sd
 	}
 	text := fmt.Sprintf("%s (%s) · %s\n%s", label, harness, state, strings.TrimSpace(answer))
 	if terminal.Type == "turn.cancelled" {
+		state = "stopped"
 		text = fmt.Sprintf("%s (%s) · stopped\n%s", label, harness, strings.TrimSpace(answer))
 	}
 	// The event is durable before dispatch. The browser displays this as a
 	// sourced lane card even while the operator is busy with another turn.
-	h.appendEvent(sdkEvent{SessionID: operatorID, Type: "operator.lane.report", ChildSessionID: laneID, InputID: sdkID(), Name: label, Text: text})
+	h.appendEvent(sdkEvent{SessionID: operatorID, Type: "operator.lane.report", ChildSessionID: laneID, InputID: sdkID(), Name: label, Agent: harness, Kind: state, Text: text})
 	go h.drainOperatorReports(operatorID)
 }
 

@@ -403,25 +403,22 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 				}
 			}
 		}
-		var label, state, activity, output string
+		var label, harness, state, activity, output string
 		var terminalGoal bool
 		if lane != nil {
-			label, state, activity, output = lane.Title, lane.State, lane.LastActivity, lane.LastOutput
+			label, harness, state, activity, output = lane.Title, lane.Harness, lane.State, lane.LastActivity, lane.LastOutput
 			terminalGoal = lane.Goal != ""
 		}
 		h.mu.Unlock()
 		for _, parent := range parents {
-			message := label + " · " + state
-			if activity != "" && event.Type != "turn.completed" {
-				message += " · " + sdkPreview(activity, 120)
-			}
+			message := activity
 			if event.Type == "turn.completed" && output != "" {
-				message += " · " + sdkPreview(output, 180)
+				message = output
 			}
 			if event.Type == "error" && event.Message != "" {
-				message += " · " + sdkPreview(event.Message, 180)
+				message = event.Message
 			}
-			h.appendEvent(sdkEvent{SessionID: parent, Type: "operator.lane.status", ChildSessionID: event.SessionID, Text: message})
+			h.appendEvent(sdkEvent{SessionID: parent, Type: "operator.lane.status", ChildSessionID: event.SessionID, Name: label, Agent: harness, Kind: state, Text: sdkPreview(message, 180)})
 			finishedTurn := !terminalGoal && event.Type == "turn.completed"
 			stopped := event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain"
 			finishedGoal := terminalGoal && event.Type == "goal.progress" && event.GoalState != "" && event.GoalState != "continuing"
