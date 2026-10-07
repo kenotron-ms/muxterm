@@ -366,6 +366,7 @@ func New(cfg Config) *Server {
 	if err := chatattachments.RegisterRoutes(s.mux, s.sdkChatAttachments, protect); err != nil {
 		log.Panicf("sdk chat attachment routes: %v", err)
 	}
+	s.mux.Handle("GET /api/artifact/raw", protect(http.HandlerFunc(s.handleArtifactRaw)))
 	s.mux.Handle("POST /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("GET /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))
 	s.mux.Handle("POST /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))
@@ -376,6 +377,10 @@ func New(cfg Config) *Server {
 	s.mux.Handle("PATCH /api/sdk-chats/{id}/project", protect(http.HandlerFunc(s.handleSDKChatProject)))
 	s.mux.Handle("POST /api/chat-ui/navigate", protect(http.HandlerFunc(s.handleChatUINavigation)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/operator", protect(http.HandlerFunc(s.handleSDKOperator)))
+	s.mux.Handle("PATCH /api/sdk-chats/{id}/operator", protect(http.HandlerFunc(s.handleSDKOperator)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/operator", protect(http.HandlerFunc(s.handleSDKOperator)))
+	s.mux.Handle("DELETE /api/sdk-chats/{id}/operator", protect(http.HandlerFunc(s.handleSDKOperator)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("POST /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))

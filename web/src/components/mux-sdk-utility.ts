@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, Minimize2, NotebookPen, Plus, RefreshCw, Search, Terminal, Trash2, X, type IconNode } from 'lucide';
+import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, Minimize2, Network, NotebookPen, Plus, RefreshCw, Search, Terminal, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { store } from '../state.js';
 import { icon } from '../lib/icons.js';
@@ -11,6 +11,7 @@ import './mux-sdk-pdf-preview.js';
 import './mux-monaco-source.js';
 import './mux-monaco-diff.js';
 import './mux-chat-terminal.js';
+import './mux-operator-status.js';
 type Artifact = {
   path: string; name: string; size: number; modified: number;
   kind: 'markdown' | 'text' | 'image' | 'download'; contentType: string;
@@ -45,10 +46,10 @@ function legacyPageContent(blocks: PageBlock[]): PartialBlock[] {
   });
   return converted.length ? converted : [{type:'paragraph'}];
 }
-type UtilityTabId = 'new' | 'files' | 'changes' | 'terminal' | 'pages';
+type UtilityTabId = 'new' | 'files' | 'status' | 'changes' | 'terminal' | 'pages';
 type UtilityTab = { id: string; kind: UtilityTabId; paneId?: number; pageId?: string; filePath?: string; label?: string; setupCommand?: string; setupIssued?: boolean };
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
-const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, terminal:Terminal, pages:NotebookPen };
+const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, terminal:Terminal, pages:NotebookPen };
 
 export function carryUtilityTabs(fromSessionId: string, toSessionId: string): void {
   try {
@@ -173,7 +174,7 @@ export class MuxSDKUtility extends LitElement {
     super.connectedCallback();
     try {
       const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: (UtilityTab | { id: string; kind: 'web' })[]; activeTabId?: string } | null;
-      const valid = new Set<string>(['new','files','changes','terminal','pages','web']);
+      const valid = new Set<string>(['new','files','status','changes','terminal','pages','web']);
       if (saved?.tabs?.length && saved.tabs.length <= 30 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
         this.tabs = saved.tabs.map(tab => tab.kind === 'web' ? { id:tab.id, kind:'new' } : tab);
         this.activeTabId = this.tabs.some(tab => tab.id === saved.activeTabId) ? saved.activeTabId! : this.tabs[0].id;
@@ -211,14 +212,14 @@ export class MuxSDKUtility extends LitElement {
   }
   override render() {
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${item.filePath || this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'changes' ? this.changesView() : tab.kind === 'terminal' ? this.terminalView(tab) : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${item.filePath || this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'terminal' ? this.terminalView(tab) : this.pagesView()}</div>`;
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.label) return tab.label;
     if (tab.kind === 'new') return 'New tab';
     if (tab.kind === 'files') return tab.filePath?.split('/').pop() || 'Files';
     if (tab.kind === 'pages') return this.pages?.find(page => page.id === tab.pageId)?.title || 'Page';
-    return ({ changes:'Changes', terminal:'Terminal' } as Record<string,string>)[tab.kind] || 'Tab';
+    return ({ status:'Status', changes:'Changes', terminal:'Terminal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
   openSetupTerminal(label: string, command: string): void {
@@ -288,7 +289,7 @@ export class MuxSDKUtility extends LitElement {
     if (existing) this.selectTab(existing.id);
     else this.addTab(id);
   }
-  private chooseTool(kind: 'terminal' | 'files' | 'changes' | 'pages') {
+  private chooseTool(kind: 'terminal' | 'files' | 'status' | 'changes' | 'pages') {
     const current = this.currentTab;
     if (kind === 'terminal') {
       const existing = this.tabs.some(tab => tab.kind === 'terminal');
@@ -304,7 +305,7 @@ export class MuxSDKUtility extends LitElement {
     this.saveTabs(); this.paintAll();
   }
   private newTabView(): TemplateResult {
-    return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Tools</h2><div class="new-tab-tools"><button @click=${() => this.chooseTool('terminal')}>${icon(Terminal,{size:16})}<span>Terminal</span></button>${this.sessionId.startsWith('draft-') ? nothing : html`<button @click=${() => this.chooseTool('files')}>${icon(Folder,{size:16})}<span>Files</span></button><button @click=${() => this.chooseTool('changes')}>${icon(GitCompare,{size:16})}<span>Changes</span></button><button @click=${() => this.chooseTool('pages')}>${icon(NotebookPen,{size:16})}<span>New page</span></button>`}</div></div></section>`;
+    return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Tools</h2><div class="new-tab-tools"><button @click=${() => this.chooseTool('terminal')}>${icon(Terminal,{size:16})}<span>Terminal</span></button>${this.sessionId.startsWith('draft-') ? nothing : html`<button @click=${() => this.chooseTool('files')}>${icon(Folder,{size:16})}<span>Files</span></button><button @click=${() => this.chooseTool('status')}>${icon(Network,{size:16})}<span>Status</span></button><button @click=${() => this.chooseTool('changes')}>${icon(GitCompare,{size:16})}<span>Changes</span></button><button @click=${() => this.chooseTool('pages')}>${icon(NotebookPen,{size:16})}<span>New page</span></button>`}</div></div></section>`;
   }
   private assignTerminalPane() {
     if (!this.terminalWorkspaceId || store.attached !== this.terminalWorkspaceId) return;
@@ -590,7 +591,7 @@ export class MuxSDKUtility extends LitElement {
       const data = tableRows(file.text, extension === 'tsv' ? '\t' : ',');
       return html`<div class="table-view"><table><tbody>${data.rows.map((row, index) => html`<tr>${row.map(value => index === 0 ? html`<th>${value}</th>` : html`<td>${value}</td>`)}</tr>`)}</tbody></table>${data.truncated ? html`<p class="empty">Showing the first 200 rows.</p>` : nothing}</div>`;
     }
-    if (file.kind === 'markdown') return html`<div class="markdown document-view">${renderSegments(parseMarkdown(file.text))}</div>`;
+    if (file.kind === 'markdown') return html`<article class="document-view" aria-label=${`Preview of ${file.name}`}>${renderSegments(parseMarkdown(file.text))}</article>`;
     return this.sourceView(file.text);
   }
   private treeRows(folder: string, depth = 0): TemplateResult[] {
@@ -940,8 +941,37 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .quick-results button strong, mux-sdk-utility .quick-results button small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .quick-results button strong { font:12px system-ui,sans-serif; }
     mux-sdk-utility .quick-results button small, mux-sdk-utility .quick-results button em { color:var(--chrome-text-dim); font:10px ui-monospace,monospace; }
-    mux-sdk-utility .document-view { padding:18px 25px; overflow-wrap:anywhere; }
-    mux-sdk-utility .document-view pre { padding:10px; background:var(--chrome-body); overflow:auto; }
+    mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:840px; margin:0 auto; padding:clamp(22px,4vw,48px) clamp(20px,5vw,56px) 64px; color:var(--chrome-text-bright); font:14px/1.72 system-ui,sans-serif; overflow-wrap:break-word; }
+    mux-sdk-utility .document-view > :first-child { margin-top:0; }
+    mux-sdk-utility .document-view > :last-child { margin-bottom:0; }
+    mux-sdk-utility .document-view .md-p { margin:0 0 1.15em; }
+    mux-sdk-utility .document-view .md-h { margin:1.75em 0 .55em; color:var(--chrome-text-bright); font-weight:700; line-height:1.3; overflow-wrap:break-word; }
+    mux-sdk-utility .document-view h1.md-h { margin-top:0; padding-bottom:.35em; border-bottom:1px solid var(--chrome-border); font-size:2em; letter-spacing:-.025em; }
+    mux-sdk-utility .document-view h2.md-h { padding-bottom:.28em; border-bottom:1px solid var(--chrome-border); font-size:1.5em; letter-spacing:-.015em; }
+    mux-sdk-utility .document-view h3.md-h { font-size:1.25em; }
+    mux-sdk-utility .document-view h4.md-h { font-size:1.08em; }
+    mux-sdk-utility .document-view h5.md-h, mux-sdk-utility .document-view h6.md-h { font-size:1em; }
+    mux-sdk-utility .document-view strong { font-weight:700; }
+    mux-sdk-utility .document-view .md-link { color:var(--chrome-accent); text-decoration:underline; text-underline-offset:3px; }
+    mux-sdk-utility .document-view .md-link:hover { color:var(--chrome-text-bright); }
+    mux-sdk-utility .document-view .md-code { padding:.13em .35em; border:1px solid var(--chrome-border); border-radius:4px; background:var(--chrome-bar); font:.9em/1.45 ui-monospace,monospace; }
+    mux-sdk-utility .document-view .md-pre { box-sizing:border-box; max-width:100%; margin:0 0 1.4em; padding:15px 18px; overflow:auto; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
+    mux-sdk-utility .document-view .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:0 0 9px; color:var(--chrome-text-dim); font:10px/1.4 system-ui,sans-serif; text-transform:uppercase; letter-spacing:.07em; }
+    mux-sdk-utility .document-view .md-pre code { font:12.5px/1.6 ui-monospace,monospace; white-space:pre; }
+    mux-sdk-utility .document-view .md-ul, mux-sdk-utility .document-view .md-ol { margin:0 0 1.2em; padding-left:1.8em; }
+    mux-sdk-utility .document-view .md-li { padding-left:.2em; margin:.3em 0; }
+    mux-sdk-utility .document-view .md-li .md-p { margin:0; }
+    mux-sdk-utility .document-view .md-li > .md-ul, mux-sdk-utility .document-view .md-li > .md-ol { margin:.35em 0 .5em; }
+    mux-sdk-utility .document-view .md-quote { margin:0 0 1.3em; padding:.15em 0 .15em 1.15em; border-left:3px solid var(--chrome-accent); color:var(--chrome-text-dim); }
+    mux-sdk-utility .document-view .md-quote > :last-child { margin-bottom:0; }
+    mux-sdk-utility .document-view .md-hr { margin:2em 0; border:0; border-top:1px solid var(--chrome-border); }
+    mux-sdk-utility .document-view .md-tablewrap { max-width:100%; overflow-x:auto; margin:0 0 1.5em; border:1px solid var(--chrome-border); border-radius:8px; }
+    mux-sdk-utility .document-view .md-table { width:100%; border-collapse:collapse; font-size:13px; line-height:1.5; }
+    mux-sdk-utility .document-view .md-th, mux-sdk-utility .document-view .md-td { padding:9px 12px; border-bottom:1px solid var(--chrome-border); text-align:left; vertical-align:top; overflow-wrap:normal; }
+    mux-sdk-utility .document-view .md-th + .md-th, mux-sdk-utility .document-view .md-td + .md-td { border-left:1px solid var(--chrome-border); }
+    mux-sdk-utility .document-view .md-table tr:last-child .md-td { border-bottom:0; }
+    mux-sdk-utility .document-view .md-th { background:var(--chrome-bar); font-weight:650; white-space:nowrap; }
+    mux-sdk-utility .document-view .md-img { display:block; max-width:100%; height:auto; margin:0 0 1.3em; border-radius:7px; }
     mux-sdk-utility .image-view { display:flex; justify-content:center; align-items:flex-start; padding:18px; }
     mux-sdk-utility .image-view img { max-width:100%; max-height:calc(100vh - 200px); object-fit:contain; }
     mux-sdk-utility .table-view { flex:1; overflow:auto; padding:12px; } mux-sdk-utility .table-view table { border-collapse:collapse; font:11px/1.5 system-ui,sans-serif; }
