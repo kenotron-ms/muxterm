@@ -46,9 +46,18 @@ function legacyPageContent(blocks: PageBlock[]): PartialBlock[] {
   return converted.length ? converted : [{type:'paragraph'}];
 }
 type UtilityTabId = 'new' | 'files' | 'changes' | 'terminal' | 'pages';
-type UtilityTab = { id: string; kind: UtilityTabId; paneId?: number; pageId?: string; filePath?: string };
+type UtilityTab = { id: string; kind: UtilityTabId; paneId?: number; pageId?: string; filePath?: string; label?: string; setupCommand?: string; setupIssued?: boolean };
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
 const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, terminal:Terminal, pages:NotebookPen };
+
+export function carryUtilityTabs(fromSessionId: string, toSessionId: string): void {
+  try {
+    const tabs = localStorage.getItem(TABS_KEY + fromSessionId);
+    if (!tabs) return;
+    localStorage.setItem(TABS_KEY + toSessionId, tabs);
+    localStorage.removeItem(TABS_KEY + fromSessionId);
+  } catch { /* private browsing */ }
+}
 
 function readableSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -178,11 +187,13 @@ export class MuxSDKUtility extends LitElement {
     let folder = '.';
     try { folder = localStorage.getItem(this.pathKey()) || '.'; } catch { /* private browsing */ }
     try { this.pageId = localStorage.getItem(this.pageKey()) || ''; } catch { /* private browsing */ }
-    void this.restoreExplorer(folder);
+    if (!this.sessionId.startsWith('draft-')) void this.restoreExplorer(folder);
     if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
-    if (this.activeTab === 'changes') void this.loadChanges();
-    if (this.activeTab === 'pages') void this.loadPages();
-    this.pagesPollTimer = window.setInterval(() => { if (this.activeTab === 'pages' && this.pages && !this.pageSaving && !this.pagesConflict) void this.refreshPages(); }, 2500);
+    if (!this.sessionId.startsWith('draft-')) {
+      if (this.activeTab === 'changes') void this.loadChanges();
+      if (this.activeTab === 'pages') void this.loadPages();
+      this.pagesPollTimer = window.setInterval(() => { if (this.activeTab === 'pages' && this.pages && !this.pageSaving && !this.pagesConflict) void this.refreshPages(); }, 2500);
+    }
     if (this.activeTab === 'terminal') queueMicrotask(() => this.requestChatTerminal());
     this.unsubscribeStore = store.subscribe(() => { if (this.activeTab === 'terminal') { this.assignTerminalPane(); this.paintAll(); } });
   }
@@ -203,12 +214,24 @@ export class MuxSDKUtility extends LitElement {
     return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${item.filePath || this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'changes' ? this.changesView() : tab.kind === 'terminal' ? this.terminalView(tab) : this.pagesView()}</div>`;
   }
   private tabTitle(tab: UtilityTab): string {
+    if (tab.label) return tab.label;
     if (tab.kind === 'new') return 'New tab';
     if (tab.kind === 'files') return tab.filePath?.split('/').pop() || 'Files';
     if (tab.kind === 'pages') return this.pages?.find(page => page.id === tab.pageId)?.title || 'Page';
     return ({ changes:'Changes', terminal:'Terminal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
+  openSetupTerminal(label: string, command: string): void {
+    const existing = this.tabs.find(tab => tab.kind === 'terminal' && tab.label === label);
+    if (existing) { this.selectTab(existing.id); return; }
+    const tab: UtilityTab = { id:crypto.randomUUID(), kind:'terminal', label, setupCommand:command };
+    this.tabs = [...this.tabs, tab];
+    this.activeTabId = tab.id;
+    this.terminalCreatePending = true;
+    this.saveTabs();
+    void this.activateTab(tab);
+    this.paintAll();
+  }
   private migrateLegacyFile(): boolean {
     if (!this.sessionId) return false;
     let path = '';
@@ -281,7 +304,7 @@ export class MuxSDKUtility extends LitElement {
     this.saveTabs(); this.paintAll();
   }
   private newTabView(): TemplateResult {
-    return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Tools</h2><div class="new-tab-tools"><button @click=${() => this.chooseTool('terminal')}>${icon(Terminal,{size:16})}<span>Terminal</span></button><button @click=${() => this.chooseTool('files')}>${icon(Folder,{size:16})}<span>Files</span></button><button @click=${() => this.chooseTool('changes')}>${icon(GitCompare,{size:16})}<span>Changes</span></button><button @click=${() => this.chooseTool('pages')}>${icon(NotebookPen,{size:16})}<span>New page</span></button></div></div></section>`;
+    return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Tools</h2><div class="new-tab-tools"><button @click=${() => this.chooseTool('terminal')}>${icon(Terminal,{size:16})}<span>Terminal</span></button>${this.sessionId.startsWith('draft-') ? nothing : html`<button @click=${() => this.chooseTool('files')}>${icon(Folder,{size:16})}<span>Files</span></button><button @click=${() => this.chooseTool('changes')}>${icon(GitCompare,{size:16})}<span>Changes</span></button><button @click=${() => this.chooseTool('pages')}>${icon(NotebookPen,{size:16})}<span>New page</span></button>`}</div></div></section>`;
   }
   private assignTerminalPane() {
     if (!this.terminalWorkspaceId || store.attached !== this.terminalWorkspaceId) return;
@@ -294,7 +317,13 @@ export class MuxSDKUtility extends LitElement {
       tab.paneId = pane.paneId; claimed.add(pane.paneId); changed = true;
     }
     if (changed) this.saveTabs();
-    if (this.terminalCreatePending) {
+    for (const tab of this.tabs) {
+      if (tab.kind !== 'terminal' || tab.paneId === undefined || !tab.setupCommand || tab.setupIssued) continue;
+      tab.setupIssued = true;
+      this.saveTabs();
+      this.dispatchEvent(new CustomEvent('setup-command', { detail:{ paneId:tab.paneId, workspaceId:this.terminalWorkspaceId, command:tab.setupCommand }, bubbles:true, composed:true }));
+    }
+    if (this.terminalCreatePending && panes.length > 0) {
       this.terminalCreatePending = false;
       if (this.currentTab.kind === 'terminal' && this.currentTab.paneId === undefined)
         this.dispatchEvent(new CustomEvent('pane-create',{bubbles:true,composed:true}));

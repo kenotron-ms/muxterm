@@ -34,7 +34,7 @@ class SDKChatStore {
     this.projects = projectRows;
     for (const fn of this.listeners) fn();
   }
-  async create(request: { workspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; prompt: string; attachments?: string[] }) {
+  async create(request: { workspaceId?: string; terminalWorkspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; prompt: string; attachments?: string[] }) {
     const response = await fetch(apiPath('/api/sdk-chats'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
     if (!response.ok) throw new Error(await response.text());
     const chat = await response.json() as SDKChat;

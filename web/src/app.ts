@@ -712,6 +712,10 @@ export class MuxApp extends LitElement {
    */
   private _createModalHost = '';
   private _chatTerminalPending: { chatId: string; clientRef: string; workspaceId?: string } | null = null;
+  @state() private _onboardingState: 'loading' | 'first-run' | 'done' = 'loading';
+  @state() private _newChatTerminalWorkspaceId = '';
+  private _newChatDraftId = `draft-${crypto.randomUUID()}`;
+  private _carriedUtilityChatId = '';
 
   @state()
   private _overlayPanel: 'settings' | 'shortcuts' | 'about' | 'connect' | null = null;
@@ -1045,10 +1049,15 @@ export class MuxApp extends LitElement {
       if (msg.type === SessiondType.WorkspaceCreated && pendingChatTerminal && pendingChatTerminal.clientRef === msg.clientRef && msg.workspaceId) {
         const chatId = pendingChatTerminal.chatId;
         pendingChatTerminal.workspaceId = msg.workspaceId;
-        void sdkChats.setTerminalWorkspace(chatId, msg.workspaceId).catch(error => {
-          if (this._chatTerminalPending === pendingChatTerminal) this._chatTerminalPending = null;
-          console.error('Could not link chat terminal:', error);
-        });
+        if (chatId.startsWith('draft-')) {
+          if (chatId === this._newChatDraftId) this._newChatTerminalWorkspaceId = msg.workspaceId;
+          this._chatTerminalPending = null;
+        } else {
+          void sdkChats.setTerminalWorkspace(chatId, msg.workspaceId).catch(error => {
+            if (this._chatTerminalPending === pendingChatTerminal) this._chatTerminalPending = null;
+            console.error('Could not link chat terminal:', error);
+          });
+        }
       }
       // For pane-added events carrying an explicit placement token (e.g. from
       // an MCP create_pane call), pre-wire the dock's placement intent BEFORE
@@ -1363,7 +1372,8 @@ export class MuxApp extends LitElement {
     // given and writes inline widths onto it; releasing it here is what stops
     // those widths, and Split's global drag listeners, from following the
     // sidebar into a drawer that has no gutter and no second pane.
-    if (changedProperties.has('_layoutMode') && this._layoutMode === 'narrow' && this._split) {
+    if (((changedProperties.has('_layoutMode') && this._layoutMode === 'narrow') ||
+      (changedProperties.has('_onboardingState') && this._sdkChatId === 'new' && this._onboardingState !== 'done')) && this._split) {
       this._destroySplit();
     }
   }
@@ -1379,7 +1389,7 @@ export class MuxApp extends LitElement {
     // Narrow→wide: init Split.js AFTER Lit has placed the sidebar/main-pane
     // elements back in the DOM (updated fires post-render) — see
     // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
-    if (changed.has('_layoutMode') && this._layoutMode === 'wide' && !this._split) {
+    if ((changed.has('_layoutMode') || changed.has('_onboardingState')) && this._layoutMode === 'wide' && !this._split) {
       this._initSplit();
     }
     // An overlay panel opening dismisses the drawer.
@@ -1520,10 +1530,11 @@ export class MuxApp extends LitElement {
     // They have no terminal and should not render as blank tiles.
     const panes = store.panes.filter((p) => p.paneId >= 0);
     const isWide = this._layoutMode === 'wide';
+    const onboarding = this._sdkChatId === 'new' && this._onboardingState !== 'done';
     const selectedSDKChat = this._sdkChatId && !UTILITY_TITLES.has(this._sdkChatId) ? this._sdkChatId : '';
 
     return html`
-      ${!isWide ? html`<mux-title-bar
+      ${!isWide && !onboarding ? html`<mux-title-bar
         .drawerOpen="${this._drawerOpen}"
         .chatTitle="${this._sdkChatId ? UTILITY_TITLES.get(this._sdkChatId) || 'Chat' : ''}"
         @launcher-action="${this._onLauncherAction}"
@@ -1533,7 +1544,7 @@ export class MuxApp extends LitElement {
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
-        ${isWide ? html`
+        ${isWide && !onboarding ? html`
           <mux-sidebar
             .newChatActive="${this._sdkChatId === 'new'}"
             .jobsActive="${this._sdkChatId === 'jobs'}"
@@ -1592,16 +1603,16 @@ export class MuxApp extends LitElement {
                 ></mux-dock>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} .draftId=${this._newChatDraftId} .terminalWorkspaceId=${this._newChatTerminalWorkspaceId} @onboarding-state=${this._onOnboardingState} @chat-created=${this._onChatCreated} @chat-terminal-open=${this._onChatTerminalOpen} @pane-create=${this._createPaneOptimistic} @setup-command=${this._onSetupCommand}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @chat-terminal-open=${this._onChatTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .sessionId=${this._sdkChatId} .initialUtilityOpen=${this._carriedUtilityChatId === this._sdkChatId} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @chat-terminal-open=${this._onChatTerminalOpen} @setup-command=${this._onSetupCommand} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
 
-      ${!isWide
+      ${!isWide && !onboarding
         ? html`
             <!-- The mobile workspace and chat sidebar lives in a popover drawer. -->
             <div
@@ -2295,6 +2306,10 @@ export class MuxApp extends LitElement {
 
   private _onChatNew = (): void => {
     this._newChatKey++;
+    this._newChatDraftId = `draft-${crypto.randomUUID()}`;
+    this._newChatTerminalWorkspaceId = '';
+    this._carriedUtilityChatId = '';
+    this._onboardingState = 'loading';
     this._newChatHarness = 'codex';
     this._newChatFolder = '';
     this._newChatProject = '';
@@ -2327,6 +2342,7 @@ export class MuxApp extends LitElement {
   private _onConnectionsOpen = (): void => this._openUtility('connections');
   private _onSkillsOpen = (): void => this._openUtility('skills');
   private _onChatCreated = (event: CustomEvent<{sessionId:string}>): void => {
+    this._carriedUtilityChatId = this._newChatTerminalWorkspaceId ? event.detail.sessionId : '';
     if (!this._newChatForJob) { this._onChatOpen(event); return; }
     this._newChatForJob = false;
     this._jobEditorChatId = event.detail.sessionId;
@@ -2418,7 +2434,7 @@ export class MuxApp extends LitElement {
 
   private _onChatTerminalOpen = (e: CustomEvent<{ chatId: string; title: string; projectPath: string; workspaceId?: string; force?: boolean }>): void => {
     const { chatId, title, projectPath, workspaceId, force } = e.detail;
-    if (!chatId || this._sdkChatId !== chatId) return;
+    if (!chatId || (this._sdkChatId !== chatId && !(this._sdkChatId === 'new' && chatId === this._newChatDraftId))) return;
     if (workspaceId) {
       if (this._chatTerminalPending?.chatId === chatId && this._chatTerminalPending.workspaceId === workspaceId) this._chatTerminalPending = null;
       if (force || (store.attached !== workspaceId && this._socket?.lastAttachTarget !== workspaceId)) {
@@ -2432,6 +2448,16 @@ export class MuxApp extends LitElement {
     if (this._socket?.createWorkspace(`Chat: ${title.slice(0, 52)}`, clientRef, '', projectPath)) {
       this._chatTerminalPending = { chatId, clientRef };
     }
+  };
+
+  private _onOnboardingState = (e: CustomEvent<{firstRun:boolean}>): void => {
+    this._onboardingState = e.detail.firstRun ? 'first-run' : 'done';
+  };
+
+  private _onSetupCommand = (e: CustomEvent<{paneId:number;workspaceId:string;command:string}>): void => {
+    const { paneId, workspaceId, command } = e.detail;
+    if (!workspaceId || store.attached !== workspaceId || !store.panes.some(pane => pane.paneId === paneId)) return;
+    this._socket?.sendPaneInput(paneId, new TextEncoder().encode(`${command}\n`));
   };
 
   /** The live <mux-dock> element in our shadow root, or null when absent. */

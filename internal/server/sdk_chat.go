@@ -1292,8 +1292,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode string
-		Attachments                                                                   []string `json:"attachments"`
+		WorkspaceID, TerminalWorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode string
+		Attachments                                                                                        []string `json:"attachments"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -1301,6 +1301,10 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness) {
 		http.Error(w, "unsupported harness", 400)
+		return
+	}
+	if len(req.TerminalWorkspaceID) > 200 {
+		http.Error(w, "terminal workspace ID too long", 400)
 		return
 	}
 	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" && len(req.Attachments) == 0 {
@@ -1430,7 +1434,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
-	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
+	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, TerminalWorkspaceID: req.TerminalWorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	h.chats[c.ID] = c
 	err = h.saveLocked(c)
