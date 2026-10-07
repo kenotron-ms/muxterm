@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"time"
 
@@ -36,15 +37,31 @@ func validAmplifierProvider(id string) bool {
 	return false
 }
 
+func isolatedAmplifierProfile() bool {
+	account, err := user.Current()
+	if err != nil {
+		return false
+	}
+	actualHome := filepath.Clean(account.HomeDir)
+	selectedHome, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	if filepath.Clean(selectedHome) != actualHome {
+		return true
+	}
+	if configuredHome := os.Getenv("AMPLIFIER_HOME"); configuredHome != "" {
+		return filepath.Clean(configuredHome) != filepath.Join(actualHome, ".amplifier")
+	}
+	return false
+}
+
 func runProviderBridge(ctx context.Context, input providerBridgeRequest) (map[string]any, error) {
-	binary, err := amplifierchat.CLIExecutable()
+	_, err := amplifierchat.CLIExecutable()
 	if err != nil {
 		return nil, errors.New("Amplifier is not installed")
 	}
-	probe := exec.CommandContext(ctx, binary, "--version")
-	probe.Stdout = io.Discard
-	probe.Stderr = io.Discard
-	if probe.Run() != nil {
+	if amplifierchat.CheckAmplifierCLI(ctx) != nil {
 		return nil, errors.New("Amplifier's tool environment does not match this Amplifier home")
 	}
 	python, err := amplifierchat.ResolveInterpreter()
@@ -75,6 +92,7 @@ func runProviderBridge(ctx context.Context, input providerBridgeRequest) (map[st
 	if message, ok := result["error"].(string); ok {
 		return nil, errors.New(message)
 	}
+	result["isolatedProfile"] = isolatedAmplifierProfile()
 	return result, nil
 }
 
@@ -116,7 +134,7 @@ func (s *Server) handleAmplifierProviderSetup(w http.ResponseWriter, r *http.Req
 	defer cancel()
 	result, err := runProviderBridge(ctx, providerBridgeRequest{Action: "status"})
 	if err != nil {
-		writeSDKJSON(w, http.StatusOK, map[string]any{"cliInstalled": false, "configured": false, "primary": "", "providers": []any{}, "error": err.Error()})
+		writeSDKJSON(w, http.StatusOK, map[string]any{"cliInstalled": false, "configured": false, "primary": "", "providers": []any{}, "isolatedProfile": isolatedAmplifierProfile(), "error": err.Error()})
 		return
 	}
 	writeSDKJSON(w, http.StatusOK, result)

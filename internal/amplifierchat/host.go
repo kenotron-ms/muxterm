@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -104,13 +105,25 @@ func ResolveInterpreter() (string, error) {
 	return exec.LookPath("python3")
 }
 func CheckAmplifierCLI(ctx context.Context) error {
+	binary, err := CLIExecutable()
+	if err != nil {
+		return err
+	}
+	// --version bypasses Amplifier's shared-venv guard. The read-only provider
+	// listing exercises the same environment check used by actual chat runs.
+	probe := exec.CommandContext(ctx, binary, "provider", "list")
+	probe.Stdout = io.Discard
+	probe.Stderr = io.Discard
+	if probe.Run() != nil {
+		return errors.New("Amplifier executable is unavailable for the selected Amplifier home and tool environment")
+	}
 	python, err := ResolveInterpreter()
 	if err != nil {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, python, "-c", "import amplifier_app_cli")
 	if err := cmd.Run(); err != nil {
-		return errors.New("Amplifier CLI is unavailable in the selected Python interpreter; install Amplifier, run amplifier init, then restart muxterm")
+		return errors.New("Amplifier's selected Python environment is missing amplifier-app-cli")
 	}
 	return nil
 }

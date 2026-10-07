@@ -3,7 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 
 type Provider = { id: string; source: string; envName: string; configured: boolean; model: string };
-type Setup = { cliInstalled: boolean; primary: string; providers: Provider[]; error?: string };
+type Setup = { cliInstalled: boolean; primary: string; providers: Provider[]; isolatedProfile?: boolean; error?: string };
 
 const choices = [
   { id: 'anthropic', name: 'Anthropic', detail: 'Claude models · Anthropic API key' },
@@ -48,6 +48,7 @@ export class MuxAIProviders extends LitElement {
     .message { margin:15px 0 0; color:var(--mux-error); }
     .success { margin:15px 0 0; color:var(--chrome-accent); }
     .footnote { margin:18px 0 0; font-size:11px; color:var(--chrome-text-dim); }
+    .profile-notice { margin:0 0 17px; padding:10px 13px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); color:var(--chrome-text-dim); }
     @container (max-width:600px) { .layout { grid-template-columns:minmax(0,1fr); gap:16px; } .choices { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); } .choice { padding:9px 7px; } .choice b { font-size:12px; } .choice small { display:none; } .editor { padding:18px; } }
     @media(max-width:650px) { .layout { grid-template-columns:1fr; gap:16px; } }
   `;
@@ -147,7 +148,7 @@ export class MuxAIProviders extends LitElement {
   override render() {
     const current = this.setup?.providers.find(provider => provider.id === this.selected);
     const choice = choices.find(item => item.id === this.selected)!;
-    return html`<div class="layout">
+    return html`${this.setup?.isolatedProfile ? html`<p class="profile-notice" role="note">This preview uses a separate Amplifier profile. Credentials in your normal ~/.amplifier/keys.env are not visible here. Your usual Muxterm installation can read that file without importing or displaying its keys.</p>` : nothing}<div class="layout">
       <div class="choices" role="group" aria-label="AI providers">${choices.map(item => {
         const found = this.setup?.providers.find(provider => provider.id === item.id);
         return html`<button class="choice" aria-pressed=${this.selected === item.id} @click=${() => this.select(item.id)}><b>${item.name}</b><small>${item.detail}</small><em>${this.setup?.primary === item.id ? 'Default' : found?.configured ? 'Configured' : found?.source ? 'Key found' : 'Set up'}</em></button>`;
@@ -160,7 +161,7 @@ export class MuxAIProviders extends LitElement {
             <label class="radio"><input type="radio" name="credential" .checked=${this.credentialSource === 'environment'} @change=${() => { this.credentialSource = 'environment'; this.apiKey = ''; }}>Use ${current?.envName} from the environment or Amplifier keys</label>
             <label class="radio"><input type="radio" name="credential" .checked=${this.credentialSource === 'private-key'} @change=${() => this.credentialSource = 'private-key'}>Enter a new API key</label>
           </div>
-          ${this.credentialSource === 'private-key' ? html`<label class="field"><span>API key</span><input type="password" autocomplete="new-password" .value=${this.apiKey} @input=${(event: Event) => this.apiKey = (event.target as HTMLInputElement).value}></label>` : html`<p class="muted">${current?.source ? `${current.envName} is available. The key stays on this computer.` : `${current?.envName} is not available yet. Enter a key to save it privately.`}</p>`}
+          ${this.credentialSource === 'private-key' ? html`<label class="field"><span>API key</span><input type="password" autocomplete="new-password" .value=${this.apiKey} @input=${(event: Event) => this.apiKey = (event.target as HTMLInputElement).value}></label>` : html`<p class="muted">${current?.source === 'amplifier-keys' ? `${current.envName} was found in Amplifier keys.env. The key stays on this computer.` : current?.source === 'environment' ? `${current.envName} was found in Muxterm's environment. The key stays on this computer.` : `${current?.envName} is not available in this profile. Enter a key to save it privately.`}</p>`}
           <label class="field"><span>Default model (optional)</span><input .value=${this.model} placeholder="Use Amplifier's model default" @input=${(event: Event) => this.model = (event.target as HTMLInputElement).value}></label>
           <div class="actions"><button class="action primary" ?disabled=${!!this.busy || (this.credentialSource === 'private-key' && !this.apiKey)} @click=${() => void this.save()}>${this.busy === 'save' ? 'Saving…' : current?.configured ? 'Save changes' : 'Configure'}</button><button class="action" ?disabled=${!!this.busy || !current?.configured} @click=${() => void this.check()}>${this.busy === 'check' ? 'Checking…' : 'Check connection'}</button><button class="action" ?disabled=${!!this.busy} @click=${() => void this.refresh()}>Refresh</button></div>
           ${this.message ? html`<p class=${this.connected === this.selected ? 'success' : 'message'} role=${this.connected === this.selected ? 'status' : 'alert'}>${this.message}</p>` : nothing}
