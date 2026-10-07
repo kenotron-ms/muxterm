@@ -1527,8 +1527,11 @@ export class MuxSDKChat extends LitElement {
         this.error = '';
       }
     } catch (error) {
-      if (this.activeSession !== sessionId) return;
-      this.error = String(error); this.setDraft(this.draft ? `${originalDraft}\n\n${this.draft}` : originalDraft);
+      const saved = readDraft(sessionId, 'message');
+      const edited = (this.draftRevisions.get(draftKey(sessionId, 'message')) || 0) !== draftRevision || saved !== originalDraft;
+      const restored = edited && saved ? `${originalDraft}\n\n${saved}` : originalDraft;
+      if (this.activeSession !== sessionId) { writeDraft(sessionId, 'message', restored); return; }
+      this.error = String(error); this.setDraft(restored);
       this.pendingInputs.delete(id);
       this.blocks = this.blocks.filter(block => block.key !== key && !(block.kind === 'progress' && block.turn === this.currentTurn && !wasBusy));
       if (!wasBusy) { this.busy = false; this.turnStarted.delete(this.currentTurn); }
