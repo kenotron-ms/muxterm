@@ -70,20 +70,18 @@ func apiURL() string {
 // LatestRelease shares a persisted release and ETag across processes. A fresh
 // cache returns without network I/O; an expired one is revalidated.
 func LatestRelease(ctx context.Context) (*Release, error) {
-	url := apiURL()
-	var token string
-	if url == defaultAPIURL {
-		token = os.Getenv("GITHUB_TOKEN")
-		if token == "" {
-			token = os.Getenv("GH_TOKEN")
-		}
-	}
-	return latestRelease(ctx, token, false)
+	return LatestReleaseWithToken(ctx, "", false)
 }
 
 // LatestReleaseWithToken uses a connected GitHub account when available. A
 // manual check skips the freshness window but still honors rate-limit resets.
 func LatestReleaseWithToken(ctx context.Context, token string, force bool) (*Release, error) {
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+		if token == "" {
+			token = os.Getenv("GH_TOKEN")
+		}
+	}
 	return latestRelease(ctx, token, force)
 }
 
@@ -261,13 +259,7 @@ func CheckForServerWithToken(ctx context.Context, current string, noAuth bool, t
 		return st, nil
 	}
 
-	var rel *Release
-	var err error
-	if token != "" || force {
-		rel, err = LatestReleaseWithToken(ctx, token, force)
-	} else {
-		rel, err = LatestRelease(ctx)
-	}
+	rel, err := LatestReleaseWithToken(ctx, token, force)
 	if err != nil {
 		st.Error = err.Error()
 		return st, nil
