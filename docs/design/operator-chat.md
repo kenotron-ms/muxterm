@@ -47,10 +47,11 @@ operator; cycles are rejected.
 │  Claude lanes. I will report     │ [All] [Needs attention] [Running]     │
 │  back on their outcomes.         │ [Done]                               │
 │                                  │ ┌──────────────────────────────────────┐ │
-│  ┌ Search API · Complete ────┐   │ │ Lane       State    Time/tasks Open │ │
-│  │ API ready; one blocker…   │   │ │ Search API  Working  ▂▅▃▇ ~2–12m ↗  │ │
-│  └───────────────────────────┘   │ │   Latest reply in Markdown           │ │
-│  Operator: Search API is ready…  │ │   [Unlink lane] [Archive chat]        │ │
+│  ┌ Search API · Complete ────┐   │ │ Lane          Time / tasks      Open │ │
+│  │ API ready; one blocker…   │   │ │ Search API    ~2–12m             ↗  │ │
+│  └───────────────────────────┘   │ │ Codex · Working    ▂▅▃▇ remaining   │ │
+│  Operator: Search API is ready…  │ │ Latest reply in Markdown             │ │
+│                                  │ │ Unlink lane            Archive chat  │ │
 │  UI review · failed · Error...   │ └──────────────────────────────────────┘ │
 │  [Ask: start a Claude lane…]     │                                          │
 │  [Permission · Agent · Operator] │                                          │
@@ -90,8 +91,9 @@ turn is labeled **Stopped** until another turn starts. Archiving a chat
 changes its sidebar placement only: an archived lane keeps its operator link,
 reporting contract, state, and filter
 category. It is marked **Archived** in Status and can be restored there.
-Archiving a linked lane asks for confirmation. **Unlink lane** removes only
-this operator's link; the chat and its archive state remain intact. Status
+Archiving a linked lane happens immediately and can be reversed with
+**Restore chat**. **Unlink lane** removes only this operator's link; the chat
+and its archive state remain intact. Status
 snapshots contain only chats currently named by that operator's link list.
 
 Timing uses completed human turns from the last 180 days of local SDK chat
@@ -106,8 +108,9 @@ displayed effort range spans the observed 10th to 90th percentiles. For a
 running lane, a remaining range uses only examples that ran longer than the
 current elapsed time; fewer than five such examples yields "Time uncertain."
 The sparkline bars show completed tasks, or elapsed time against the upper
-historical range, and are not a percent-complete claim. The expanded row
-states the sample count, category source, observed range, and uncertainty.
+historical range, and are not a percent-complete claim. The collapsed row
+shows a compact time range; a tooltip gives the sample count and uncertainty.
+The expanded row shows only the latest Markdown reply and lane actions.
 Completed-turn history is an imperfect proxy for whole goal runs; there is
 currently too little whole-goal history for a separate range. No model
 confidence score appears in Status.
