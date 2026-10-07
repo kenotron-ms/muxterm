@@ -9,13 +9,22 @@ import { carryUtilityTabs, type MuxSDKUtility } from './mux-sdk-utility.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
 type StartOption = { harness: SDKHarnessName; provider: ProviderName };
+type AmplifierProviderState = { id: string; source?: 'environment' | 'amplifier-keys' | 'oauth-cache'; envName?: string };
+type AmplifierProviderSetup = { cliInstalled: boolean; configured: boolean; primary: string; providers: AmplifierProviderState[] };
+const AI_PROVIDERS = [
+  { id:'github-copilot', name:'GitHub Copilot', detail:'Use an existing Copilot subscription. Sign-in may already be available through GitHub or VS Code.' },
+  { id:'openai-chatgpt', name:'ChatGPT', detail:'Use a ChatGPT subscription with device-code sign-in.' },
+  { id:'openai', name:'OpenAI API', detail:'Use an API key with separate usage billing.' },
+  { id:'anthropic', name:'Anthropic API', detail:'Use an Anthropic API key.' },
+  { id:'gemini', name:'Google Gemini API', detail:'Use a Google API key.' },
+] as const;
 const SETUP_AGENTS = [
   { harness:'codex', name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
   { harness:'claude', name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
   { harness:'opencode', name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode auth login', docs:'https://opencode.ai/docs/' },
   { harness:'pi', name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
   { harness:'deepseek', name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
-  { harness:'amplifier', name:'Amplifier', command:'export PATH="$HOME/.local/bin:$PATH"; command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh; uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
+  { harness:'amplifier', name:'Amplifier CLI', command:'export PATH="$HOME/.local/bin:$PATH"; command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh; uv tool install git+https://github.com/microsoft/amplifier', login:'export PATH="$HOME/.local/bin:$PATH"; amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; uploading: boolean; error?: string };
 
@@ -48,6 +57,14 @@ export class MuxNewChat extends LitElement {
   @state() private onboardingLoaded = false;
   @state() private onboardingError = '';
   @state() private optionsLoaded = false;
+  @state() private amplifierProviderSetup?: AmplifierProviderSetup;
+  @state() private chosenAIProvider = '';
+  @state() private providerError = '';
+  @state() private providerCheckBusy = false;
+  @state() private providerChecked = '';
+  @state() private providerCheckError = '';
+  @state() private setupStep: 'provider' | 'harness' = 'provider';
+  @state() private providerSettingsOpen = false;
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   private dragDepth = 0;
@@ -158,6 +175,18 @@ export class MuxNewChat extends LitElement {
     .send:disabled { opacity:.4; cursor:default; }
     .error { margin:10px 0; color:var(--chrome-danger); }
     .setup-intro { margin:0 0 18px; color:var(--chrome-text-dim); font-size:14px; }
+    .setup-steps { display:flex; gap:8px; margin:0 0 18px; color:var(--chrome-text-dim); font-size:12px; }
+    .setup-steps span { padding:6px 10px; border-radius:999px; background:var(--chrome-bar); }
+    .setup-steps .current { background:var(--chrome-hover); color:var(--chrome-text-bright); }
+    .provider-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:9px; }
+    .provider-choice { width:100%; padding:13px; border:1px solid var(--chrome-border); border-radius:11px; background:var(--chrome-bar); color:var(--chrome-text-bright); text-align:left; }
+    .provider-choice[aria-pressed="true"] { border-color:var(--chrome-accent); background:var(--chrome-hover); }
+    .provider-choice strong,.provider-choice small { display:block; }
+    .provider-choice small { margin-top:5px; color:var(--chrome-text-dim); line-height:1.35; }
+    .provider-setup { margin-top:15px; padding:15px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
+    .provider-setup p { margin:5px 0 11px; color:var(--chrome-text-dim); font-size:12px; }
+    .provider-setup input { max-width:450px; margin:6px 0; }
+    .provider-setup .setup-actions { flex-wrap:wrap; }
     .setup-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:10px; }
     .setup-card { padding:15px; border:1px solid var(--chrome-border); border-radius:13px; background:var(--chrome-bar); }
     .setup-card h2 { margin:0 0 8px; font-size:15px; }
@@ -169,6 +198,7 @@ export class MuxNewChat extends LitElement {
     .setup-actions { display:flex; align-items:center; gap:12px; margin-top:10px; }
     .setup-footer { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:16px; }
     .setup-actions button,.setup-refresh { padding:7px 11px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-hover); color:var(--chrome-text-bright); }
+    .setup-actions button:disabled,.setup-refresh:disabled { opacity:.45; cursor:default; }
     .setup-actions a { color:var(--chrome-accent); text-decoration:none; }
     .setup-refresh { margin-top:16px; }
     .setup-footer .setup-refresh { margin-top:0; }
@@ -197,8 +227,10 @@ export class MuxNewChat extends LitElement {
     void this.loadOnboarding();
     if (this.initialPrompt) this.prompt = this.initialPrompt;
     void this.loadStartOptions();
+    void this.loadAmplifierProviderSetup();
     this.optionsRefreshTimer = window.setInterval(() => {
       if (this.firstRun || (this.utilityOpen && this.startOptions?.length === 0)) void this.loadStartOptions(true);
+      if (this.firstRun || this.providerSettingsOpen) void this.loadAmplifierProviderSetup();
     }, 4000);
     if (this.initialFolder) this.folder = this.initialFolder;
     if (this.initialProject) this.projectId = this.initialProject;
@@ -286,6 +318,62 @@ export class MuxNewChat extends LitElement {
       this.optionsRefreshing = false;
       if (this.isConnected && !silent) this.optionsLoaded = true;
     }
+  }
+  private async loadAmplifierProviderSetup() {
+    try {
+      const response = await fetch(apiPath('/api/amplifier-provider-setup'));
+      if (!response.ok) throw new Error(await response.text());
+      const setup = await response.json() as AmplifierProviderSetup;
+      if (!this.isConnected) return;
+      this.amplifierProviderSetup = setup;
+      if (!this.chosenAIProvider) this.chosenAIProvider = setup.providers.find(provider => provider.source)?.id || 'anthropic';
+      this.providerError = '';
+    } catch (error) {
+      if (this.isConnected) this.providerError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  private async checkAIProvider() {
+    if (this.providerCheckBusy || !this.amplifierProviderSetup?.cliInstalled) return;
+    const provider = this.chosenAIProvider;
+    this.providerCheckBusy = true;
+    this.providerCheckError = '';
+    this.providerChecked = '';
+    try {
+      const response = await fetch(apiPath('/api/amplifier-provider-setup/check'), {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({provider}),
+      });
+      if (!response.ok) throw new Error((await response.text()).trim() || 'Could not check provider.');
+      if (this.isConnected && this.chosenAIProvider === provider) this.providerChecked = provider;
+    } catch (error) {
+      if (this.isConnected && this.chosenAIProvider === provider) this.providerCheckError = error instanceof Error ? error.message : String(error);
+    } finally { this.providerCheckBusy = false; }
+  }
+  private renderProviderSetup(): TemplateResult {
+    const setup = this.amplifierProviderSetup;
+    const selected = setup?.providers.find(provider => provider.id === this.chosenAIProvider);
+    return this.renderScreen(html`<div class="main setup"><div class="content">
+      <div class="setup-heading"><h1>${this.firstRun ? 'Set up Muxterm intelligence' : 'Amplifier provider'}</h1><button class="setup-refresh" @click=${() => void this.openTerminal()}>Open a terminal</button></div>
+      ${this.firstRun ? html`<div class="setup-steps"><span class="current">1 · Provider</span><span>2 · Coding agents</span></div>` : nothing}
+      <p class="setup-intro">Muxterm uses Amplifier CLI for Amplifier chats. Choose a provider, then configure it in the terminal.</p>
+      <div class="provider-list">${AI_PROVIDERS.map(provider => {
+        const state = setup?.providers.find(item => item.id === provider.id);
+        return html`<button class="provider-choice" aria-pressed=${this.chosenAIProvider === provider.id} @click=${() => { this.chosenAIProvider = provider.id; this.providerError = ''; this.providerChecked = ''; this.providerCheckError = ''; }}><strong>${provider.name}</strong><small>${provider.detail}</small><small>${setup?.primary === provider.id ? 'Amplifier default provider' : state?.source === 'environment' ? `Found ${state.envName} in Muxterm's environment` : state?.source === 'amplifier-keys' ? `Found ${state.envName} in ~/.amplifier/keys.env` : state?.source === 'oauth-cache' ? 'ChatGPT sign-in cache found' : 'Connection needed'}</small></button>`;
+      })}</div>
+      <div class="provider-setup">
+        <strong>${AI_PROVIDERS.find(provider => provider.id === this.chosenAIProvider)?.name || 'Provider'} setup</strong>
+        ${!setup ? html`<p role="status">Checking local Amplifier setup…</p>` : html`
+          <p>${selected?.source ? 'A credential was found. Amplifier still needs a configured provider and a successful connection check.' : 'Configure this provider and complete its sign-in in the terminal.'}</p>
+          ${selected?.source === 'amplifier-keys' ? html`<p>Amplifier CLI uses ~/.amplifier/keys.env, so this key can be reused during setup.</p>` : nothing}
+          ${setup.primary && setup.primary !== this.chosenAIProvider ? html`<p>Amplifier currently starts with ${setup.primary}. Use provider management to make ${this.chosenAIProvider} the default.</p>` : nothing}
+          <div class="setup-actions"><span class="setup-status ${setup.cliInstalled ? 'ready' : ''}">Amplifier CLI ${setup.cliInstalled ? 'installed' : 'needed'}</span>${!setup.cliInstalled ? html`<button @click=${() => void this.openTerminal('Install Amplifier CLI', SETUP_AGENTS.find(agent => agent.harness === 'amplifier')!.command)}>Install Amplifier CLI</button>` : nothing}<a href="https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md" target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
+          <div class="setup-actions"><button ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier provider setup', `export PATH="$HOME/.local/bin:$PATH"; amplifier provider add ${this.chosenAIProvider} --scope global`)}>Configure ${this.chosenAIProvider}</button><button ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier providers', 'export PATH="$HOME/.local/bin:$PATH"; amplifier provider manage')}>Manage providers</button><button ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier setup', 'export PATH="$HOME/.local/bin:$PATH"; amplifier init')}>Open full setup</button></div>
+          <div class="setup-actions"><button ?disabled=${!setup.cliInstalled || this.providerCheckBusy} @click=${() => void this.checkAIProvider()}>${this.providerCheckBusy ? 'Checking provider…' : 'Check connection'}</button>${this.providerChecked === this.chosenAIProvider ? html`<span class="setup-status ready" role="status">Ready · Amplifier provider check passed</span>` : nothing}</div>
+          ${this.providerCheckError ? html`<p class="error" role="alert">${this.providerCheckError}</p>` : nothing}
+        `}
+        ${this.providerError ? html`<p class="error" role="alert">${this.providerError}</p>` : nothing}
+      </div>
+      <div class="setup-footer"><button class="setup-refresh" @click=${() => void this.loadAmplifierProviderSetup()}>Refresh checks</button>${this.firstRun ? html`<button class="setup-refresh" ?disabled=${this.providerChecked !== this.chosenAIProvider || (!!setup?.primary && setup.primary !== this.chosenAIProvider)} @click=${() => { this.setupStep = 'harness'; }}>Continue to coding agents</button>` : html`<button class="setup-refresh" @click=${() => { this.providerSettingsOpen = false; }}>Back to new chat</button>`}<span>Found means a credential exists; ready means Amplifier's provider check passed.</span></div>
+    </div></div>`);
   }
   private async openTerminal(label?: string, command?: string) {
     if (!this.folder) { this.error = 'Choose a folder before opening a terminal.'; return; }
@@ -396,18 +484,20 @@ export class MuxNewChat extends LitElement {
   }
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
-    if (!this.onboardingLoaded || (this.firstRun && !this.optionsLoaded)) return this.renderScreen(html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="setup-intro" role="status">Checking your coding agents…</p></div></div>`);
+    if (!this.onboardingLoaded || (this.firstRun && this.setupStep === 'harness' && !this.optionsLoaded)) return this.renderScreen(html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="setup-intro" role="status">Checking your coding agents…</p></div></div>`);
     if (this.onboardingError) return this.renderScreen(html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.onboardingError}</p><button class="setup-refresh" @click=${() => void this.loadOnboarding()}>Try again</button></div></div>`);
+    if ((this.firstRun && this.setupStep === 'provider') || this.providerSettingsOpen) return this.renderProviderSetup();
     if (this.firstRun && !this.startOptions) return this.renderScreen(html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.error || 'Could not check coding agents.'}</p><button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Try again</button></div></div>`);
     const showFirstRun = this.firstRun;
     if (this.startOptions && (showFirstRun || this.startOptions.length === 0)) return this.renderScreen(html`
       <div class="main setup"><div class="content">
         <div class="setup-heading"><h1>${showFirstRun ? 'Welcome to Muxterm' : 'Set up a coding agent'}</h1><button class="setup-refresh" @click=${() => void this.openTerminal()}>Open a terminal</button></div>
+        ${showFirstRun ? html`<div class="setup-steps"><span>1 · Provider</span><span class="current">2 · Coding agents</span></div><button class="setup-refresh" @click=${() => { this.setupStep = 'provider'; }}>Change provider</button>` : nothing}
         <p class="setup-intro">Choose an agent to set up. Its install or sign-in command runs in the terminal beside these checks.</p>
-        <p class="setup-explain"><strong>Ready to use</strong> means Muxterm found the runtime and account setup it can check. <strong>Detected</strong> means an ACP command is present; its provider sign-in still needs your confirmation. You only need one agent to start.</p>
+        <p class="setup-explain"><strong>Ready to use</strong> means Muxterm found the runtime and account setup it can check. <strong>Detected</strong> means an ACP command is present; its provider sign-in still needs your confirmation. Set up at least one coding agent after your general provider.</p>
         <div class="setup-list">${SETUP_AGENTS.map(agent => html`
           <section class="setup-card"><div class="setup-card-heading"><h2>${agent.name}</h2><span class="setup-status ${this.startOptions!.some(option => option.harness === agent.harness) ? 'ready' : ''}">${this.startOptions!.some(option => option.harness === agent.harness) ? agent.name.includes('ACP') ? 'Detected' : 'Ready to use' : agent.harness === 'codex' || agent.harness === 'claude' ? 'Sign-in needed' : 'Needs setup'}</span></div>
-            ${this.startOptions!.some(option => option.harness === agent.harness) ? html`<p>${agent.name.includes('ACP') ? 'Command found. Muxterm cannot verify its provider account; sign in if needed.' : 'Muxterm can start chats with this agent.'}</p>` : html`<code>${agent.command}</code><p>${agent.harness === 'codex' || agent.harness === 'claude' ? 'The SDK runtime is included. Install the CLI here only for interactive account sign-in; no separate SDK install is needed.' : agent.harness === 'amplifier' ? 'The current Amplifier integration needs its CLI and an initialized account.' : 'Install this ACP command, then connect its provider account.'}</p>`}
+            ${this.startOptions!.some(option => option.harness === agent.harness) ? html`<p>${agent.name.includes('ACP') ? 'Command found. Muxterm cannot verify its provider account; sign in if needed.' : agent.harness === 'amplifier' ? 'Amplifier CLI is configured and Muxterm can start its chats.' : 'Muxterm can start chats with this agent.'}</p>` : html`<code>${agent.command}</code><p>${agent.harness === 'codex' || agent.harness === 'claude' ? 'The SDK runtime is included. Install the CLI here only for interactive account sign-in; no separate SDK install is needed.' : agent.harness === 'amplifier' ? 'Install Amplifier CLI, then run its provider setup in the terminal.' : 'Install this ACP command, then connect its provider account.'}</p>`}
             <div class="setup-actions">${this.startOptions!.some(option => option.harness === agent.harness) && !agent.name.includes('ACP') ? nothing : html`<button @click=${() => void this.openTerminal(`${agent.name} setup`, this.startOptions!.some(option => option.harness === agent.harness) ? agent.login : `${agent.command} && ${agent.login}`)}>${this.startOptions!.some(option => option.harness === agent.harness) ? 'Open sign-in terminal' : 'Install and sign in'}</button>`}<a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
           </section>`)}</div>
         <div class="setup-footer"><button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Refresh checks</button>${showFirstRun && this.startOptions.length ? html`<button class="setup-refresh" @click=${this.finishFirstRun}>Start using Muxterm</button>` : nothing}<span>Checks update automatically while you set up agents.</span></div>
@@ -415,7 +505,7 @@ export class MuxNewChat extends LitElement {
       </div></div>`);
     return this.renderScreen(html`
     <div class="main"><div class="content">
-      <div class="composer-tools"><button @click=${() => void this.openTerminal()}>Tools · open terminal</button></div>
+      <div class="composer-tools"><button @click=${() => { this.providerSettingsOpen = true; void this.loadAmplifierProviderSetup(); }}>AI provider</button><button @click=${() => void this.openTerminal()}>Tools · open terminal</button></div>
       <h1>What would you like to do?</h1>
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
         <div class="controls">

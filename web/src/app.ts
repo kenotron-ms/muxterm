@@ -1372,8 +1372,7 @@ export class MuxApp extends LitElement {
     // given and writes inline widths onto it; releasing it here is what stops
     // those widths, and Split's global drag listeners, from following the
     // sidebar into a drawer that has no gutter and no second pane.
-    if (((changedProperties.has('_layoutMode') && this._layoutMode === 'narrow') ||
-      (changedProperties.has('_onboardingState') && this._sdkChatId === 'new' && this._onboardingState !== 'done')) && this._split) {
+    if (changedProperties.has('_layoutMode') && this._layoutMode === 'narrow' && this._split) {
       this._destroySplit();
     }
   }
@@ -1389,7 +1388,7 @@ export class MuxApp extends LitElement {
     // Narrow→wide: init Split.js AFTER Lit has placed the sidebar/main-pane
     // elements back in the DOM (updated fires post-render) — see
     // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
-    if ((changed.has('_layoutMode') || changed.has('_onboardingState')) && this._layoutMode === 'wide' && !this._split) {
+    if (changed.has('_layoutMode') && this._layoutMode === 'wide' && !this._split) {
       this._initSplit();
     }
     // An overlay panel opening dismisses the drawer.
@@ -1530,11 +1529,10 @@ export class MuxApp extends LitElement {
     // They have no terminal and should not render as blank tiles.
     const panes = store.panes.filter((p) => p.paneId >= 0);
     const isWide = this._layoutMode === 'wide';
-    const onboarding = this._sdkChatId === 'new' && this._onboardingState !== 'done';
     const selectedSDKChat = this._sdkChatId && !UTILITY_TITLES.has(this._sdkChatId) ? this._sdkChatId : '';
 
     return html`
-      ${!isWide && !onboarding ? html`<mux-title-bar
+      ${!isWide ? html`<mux-title-bar
         .drawerOpen="${this._drawerOpen}"
         .chatTitle="${this._sdkChatId ? UTILITY_TITLES.get(this._sdkChatId) || 'Chat' : ''}"
         @launcher-action="${this._onLauncherAction}"
@@ -1544,7 +1542,7 @@ export class MuxApp extends LitElement {
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
-        ${isWide && !onboarding ? html`
+        ${isWide ? html`
           <mux-sidebar
             .newChatActive="${this._sdkChatId === 'new'}"
             .jobsActive="${this._sdkChatId === 'jobs'}"
@@ -1612,7 +1610,7 @@ export class MuxApp extends LitElement {
 
       </div>
 
-      ${!isWide && !onboarding
+      ${!isWide
         ? html`
             <!-- The mobile workspace and chat sidebar lives in a popover drawer. -->
             <div

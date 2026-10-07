@@ -64,11 +64,25 @@ func (s *Subscription) Close() {
 	s.host.mu.Unlock()
 }
 
+func CLIExecutable() (string, error) {
+	if name, err := exec.LookPath("amplifier"); err == nil {
+		return name, nil
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		name := filepath.Join(home, ".local", "bin", "amplifier")
+		if info, err := os.Stat(name); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+			return name, nil
+		}
+	}
+	return "", errors.New("Amplifier CLI is not installed")
+}
+
 func ResolveInterpreter() (string, error) {
 	if name := os.Getenv("MUXTERM_AMPLIFIER_PYTHON"); name != "" {
 		return exec.LookPath(name)
 	}
-	if amp, err := exec.LookPath("amplifier"); err == nil {
+	if amp, err := CLIExecutable(); err == nil {
 		if real, e := filepath.EvalSymlinks(amp); e == nil {
 			amp = real
 		}
