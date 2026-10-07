@@ -33,12 +33,14 @@ import {
 // ---------------------------------------------------------------------------
 
 /** UI phase of the footer's update control. */
-type UpdatePhase = 'idle' | 'checking' | 'updating' | 'failed';
+type UpdatePhase = 'idle' | 'updating' | 'failed';
 
 /** Poll cadence while waiting for the restarted server to report a new version. */
 const UPDATE_POLL_INTERVAL_MS = 1000;
 /** Give up after this many polls (~60s) and surface a failure. */
 const UPDATE_POLL_MAX_ATTEMPTS = 60;
+/** Server cache decides whether the 15-minute tick needs a GitHub request. */
+const UPDATE_STATUS_INTERVAL_MS = 15 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Live workspace previews
@@ -1378,6 +1380,7 @@ export class MuxSidebar extends LitElement {
   @state() private _updateStatus: UpdateStatus | null = null;
   @state() private _updatePhase: UpdatePhase = 'idle';
   @state() private _updateError = '';
+  private _updateStatusTimer: number | null = null;
 
   /** Host groups the user explicitly collapsed during this page session. */
   @state() private _collapsed = new Set<string>();
@@ -1467,6 +1470,7 @@ export class MuxSidebar extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    window.addEventListener('muxterm-update-checked', this._onUpdateChecked);
     document.addEventListener('pointerdown', this._onOutsideClick);
 
     // Subscribe to store changes and trigger re-render by bumping _version.
@@ -1507,6 +1511,7 @@ export class MuxSidebar extends LitElement {
   }
 
   override disconnectedCallback(): void {
+    window.removeEventListener('muxterm-update-checked', this._onUpdateChecked);
     document.removeEventListener('pointerdown', this._onOutsideClick);
     super.disconnectedCallback();
     this._unsub?.();
@@ -1537,23 +1542,28 @@ export class MuxSidebar extends LitElement {
     this._canvases.clear();
     this._cards = [];
     this._clearUpdatePoll();
+    if (this._updateStatusTimer !== null) {
+      window.clearInterval(this._updateStatusTimer);
+      this._updateStatusTimer = null;
+    }
   }
 
   /** One status check, after first paint — the footer never blocks rendering. */
   override firstUpdated(): void {
     this._observeCardWidth();
+    void this._refreshUpdateStatus();
+    this._updateStatusTimer = window.setInterval(() => {
+      if (this._updatePhase !== 'updating') void this._refreshUpdateStatus();
+    }, UPDATE_STATUS_INTERVAL_MS);
+  }
 
-    this._updatePhase = 'checking';
-    void fetchUpdateStatus()
-      .then((status) => {
-        this._updateStatus = status;
-      })
-      .catch(() => {
-        // Status unknown (offline, old server): the footer stays empty.
-      })
-      .finally(() => {
-        if (this._updatePhase === 'checking') this._updatePhase = 'idle';
-      });
+  private async _refreshUpdateStatus(): Promise<void> {
+    try {
+      const status = await fetchUpdateStatus();
+      if (this.isConnected && this._updatePhase !== 'updating') this._updateStatus = status;
+    } catch {
+      // Keep the last known status if the network or server is unavailable.
+    }
   }
 
   /**
@@ -1626,6 +1636,10 @@ export class MuxSidebar extends LitElement {
   // ---------------------------------------------------------------------------
   // Self-update
   // ---------------------------------------------------------------------------
+
+  private _onUpdateChecked = (event: Event): void => {
+    this._updateStatus = (event as CustomEvent<UpdateStatus>).detail;
+  };
 
   /** Starts (or retries) the update. Safe to call from both button states. */
   private _onUpdateClick(): void {

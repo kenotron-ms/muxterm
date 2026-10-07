@@ -2,9 +2,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -32,8 +34,23 @@ func writeUpdateError(w http.ResponseWriter, code int, reason string) {
 //
 // AuthMiddleware protects this route at mux registration.
 func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
-	st, _ := update.CheckForServer(r.Context(), s.version, s.noAuth)
+	st, _ := s.checkUpdate(r.Context(), false)
 	writeUpdateJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	st, _ := s.checkUpdate(r.Context(), true)
+	writeUpdateJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) checkUpdate(ctx context.Context, force bool) (update.Status, *update.Release) {
+	var token string
+	if _, err := os.Stat(s.connections.markerPath); err == nil {
+		// A stale sign-in falls back to the anonymous budget. The token stays
+		// in memory and is never returned to the browser or written to cache.
+		token, _ = githubCLIToken(ctx)
+	}
+	return update.CheckForServerWithToken(ctx, s.version, s.noAuth, token, force)
 }
 
 // handleUpdateApply downloads, verifies, and installs the latest release, then
@@ -63,7 +80,7 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 
 	// Check hands back the release it resolved, so the install below reuses
 	// that exact release instead of fetching it again.
-	st, rel := update.CheckForServer(r.Context(), s.version, s.noAuth)
+	st, rel := s.checkUpdate(r.Context(), false)
 	if !st.CanUpdate {
 		reason := st.Reason
 		if reason == "" {
