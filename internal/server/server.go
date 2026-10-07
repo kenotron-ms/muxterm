@@ -362,6 +362,7 @@ func New(cfg Config) *Server {
 	if err := chatattachments.RegisterRoutes(s.mux, s.sdkChatAttachments, protect); err != nil {
 		log.Panicf("sdk chat attachment routes: %v", err)
 	}
+	s.mux.Handle("GET /api/artifact/raw", protect(http.HandlerFunc(s.handleArtifactRaw)))
 	s.mux.Handle("POST /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("GET /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))
 	s.mux.Handle("POST /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))
