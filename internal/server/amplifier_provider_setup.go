@@ -21,17 +21,18 @@ import (
 var amplifierProviderBridge string
 
 type providerBridgeRequest struct {
-	Action           string `json:"action"`
-	Provider         string `json:"provider,omitempty"`
-	CredentialSource string `json:"credentialSource,omitempty"`
-	APIKey           string `json:"apiKey,omitempty"`
-	Model            string `json:"model,omitempty"`
-	MakeDefault      bool   `json:"makeDefault,omitempty"`
+	Action           string   `json:"action"`
+	Provider         string   `json:"provider,omitempty"`
+	CredentialSource string   `json:"credentialSource,omitempty"`
+	APIKey           string   `json:"apiKey,omitempty"`
+	Model            string   `json:"model,omitempty"`
+	IDs              []string `json:"ids,omitempty"`
+	ExpectedIDs      []string `json:"expectedIds,omitempty"`
 }
 
 func validAmplifierProvider(id string) bool {
 	switch id {
-	case "anthropic", "openai", "gemini":
+	case "anthropic", "openai", "gemini", "github-copilot":
 		return true
 	}
 	return false
@@ -184,6 +185,24 @@ func (s *Server) handleAmplifierProviderCheck(w http.ResponseWriter, r *http.Req
 	result, err := runProviderBridge(ctx, input)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeSDKJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleAmplifierProviderReorder(w http.ResponseWriter, r *http.Request) {
+	var input providerBridgeRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 20000)).Decode(&input); err != nil || len(input.IDs) == 0 || len(input.IDs) != len(input.ExpectedIDs) {
+		http.Error(w, "Invalid provider order", http.StatusBadRequest)
+		return
+	}
+	input.Action = "reorder"
+	w.Header().Set("Cache-Control", "no-store")
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	result, err := runProviderBridge(ctx, input)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	writeSDKJSON(w, http.StatusOK, result)

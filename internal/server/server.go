@@ -361,6 +361,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/amplifier-provider-setup/install", protect(http.HandlerFunc(s.handleAmplifierInstall)))
 	s.mux.Handle("POST /api/amplifier-provider-setup/save", protect(http.HandlerFunc(s.handleAmplifierProviderSave)))
 	s.mux.Handle("POST /api/amplifier-provider-setup/check", protect(http.HandlerFunc(s.handleAmplifierProviderCheck)))
+	s.mux.Handle("POST /api/amplifier-provider-setup/reorder", protect(http.HandlerFunc(s.handleAmplifierProviderReorder)))
 	s.mux.Handle("GET /api/sdk-chat-onboarding", protect(http.HandlerFunc(s.handleSDKChatOnboarding)))
 	s.mux.Handle("POST /api/sdk-chat-onboarding", protect(http.HandlerFunc(s.handleSDKChatOnboarding)))
 	s.mux.Handle("GET /api/sdk-chat-names/events", protect(http.HandlerFunc(s.handleSDKChatNameEvents)))
