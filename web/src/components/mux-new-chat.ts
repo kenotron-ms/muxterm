@@ -21,9 +21,9 @@ const AI_PROVIDERS = [
 const SETUP_AGENTS = [
   { harness:'codex', name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
   { harness:'claude', name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
-  { harness:'opencode', name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode auth login', docs:'https://opencode.ai/docs/' },
-  { harness:'pi', name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
-  { harness:'deepseek', name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
+  { harness:'opencode', name:'OpenCode', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode auth login', docs:'https://opencode.ai/docs/' },
+  { harness:'pi', name:'Pi', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
+  { harness:'deepseek', name:'DeepSeek Harness', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
   { harness:'amplifier', name:'Amplifier CLI', command:'export PATH="$HOME/.local/bin:$PATH"; command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh; uv tool install git+https://github.com/microsoft/amplifier', login:'export PATH="$HOME/.local/bin:$PATH"; amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; uploading: boolean; error?: string };
@@ -94,10 +94,6 @@ export class MuxNewChat extends LitElement {
     .utility-drawer > header button { border:0; border-radius:6px; padding:3px 8px; background:transparent; color:var(--chrome-text-bright); }
     .utility-drawer > header button:hover { background:var(--chrome-hover); }
     .utility-drawer mux-sdk-utility { flex:1; min-height:0; }
-    .setup-heading { display:flex; align-items:start; justify-content:space-between; gap:14px; }
-    .setup-heading .setup-refresh { flex:none; margin:0; }
-    .setup-explain { max-width:760px; margin:0 0 17px; padding:10px 12px; border-radius:9px; background:var(--chrome-bar); color:var(--chrome-text-dim); font-size:12px; }
-    .setup-explain strong { color:var(--chrome-text-bright); }
     .composer-tools { display:flex; justify-content:flex-end; width:min(100%,780px); margin:0 0 12px; }
     .composer-tools button { padding:7px 11px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); color:var(--chrome-text-bright); }
     .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:24px; overflow:auto; }
@@ -174,34 +170,69 @@ export class MuxNewChat extends LitElement {
     .send:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
     .send:disabled { opacity:.4; cursor:default; }
     .error { margin:10px 0; color:var(--chrome-danger); }
-    .setup-intro { margin:0 0 18px; color:var(--chrome-text-dim); font-size:14px; }
-    .setup-steps { display:flex; gap:8px; margin:0 0 18px; color:var(--chrome-text-dim); font-size:12px; }
-    .setup-steps span { padding:6px 10px; border-radius:999px; background:var(--chrome-bar); }
-    .setup-steps .current { background:var(--chrome-hover); color:var(--chrome-text-bright); }
-    .provider-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:9px; }
-    .provider-choice { width:100%; padding:13px; border:1px solid var(--chrome-border); border-radius:11px; background:var(--chrome-bar); color:var(--chrome-text-bright); text-align:left; }
-    .provider-choice[aria-pressed="true"] { border-color:var(--chrome-accent); background:var(--chrome-hover); }
-    .provider-choice strong,.provider-choice small { display:block; }
-    .provider-choice small { margin-top:5px; color:var(--chrome-text-dim); line-height:1.35; }
-    .provider-setup { margin-top:15px; padding:15px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
-    .provider-setup p { margin:5px 0 11px; color:var(--chrome-text-dim); font-size:12px; }
-    .provider-setup input { max-width:450px; margin:6px 0; }
-    .provider-setup .setup-actions { flex-wrap:wrap; }
-    .setup-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:10px; }
-    .setup-card { padding:15px; border:1px solid var(--chrome-border); border-radius:13px; background:var(--chrome-bar); }
-    .setup-card h2 { margin:0 0 8px; font-size:15px; }
-    .setup-card-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-    .setup-status { flex:none; color:var(--chrome-text-dim); font-size:11px; }
-    .setup-status.ready { color:var(--chrome-accent); }
-    .setup-card code { display:block; min-height:42px; padding:8px; border-radius:7px; overflow-wrap:anywhere; background:var(--chrome-body); color:var(--chrome-text-bright); font:12px/1.45 ui-monospace,SFMono-Regular,monospace; }
-    .setup-card p { margin:9px 0; color:var(--chrome-text-dim); font-size:12px; }
-    .setup-actions { display:flex; align-items:center; gap:12px; margin-top:10px; }
-    .setup-footer { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:16px; }
-    .setup-actions button,.setup-refresh { padding:7px 11px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-hover); color:var(--chrome-text-bright); }
-    .setup-actions button:disabled,.setup-refresh:disabled { opacity:.45; cursor:default; }
-    .setup-actions a { color:var(--chrome-accent); text-decoration:none; }
-    .setup-refresh { margin-top:16px; }
-    .setup-footer .setup-refresh { margin-top:0; }
+    .setup-shell { max-width:1080px; margin:28px auto 34px; }
+    .setup-header { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:26px; }
+    .setup-header h1 { margin:0 0 8px; font-size:32px; font-weight:650; letter-spacing:-.035em; line-height:1.13; }
+    .setup-lead { max-width:620px; margin:0; color:var(--chrome-text-dim); font-size:14px; line-height:1.6; }
+    .setup-progress { display:flex; align-items:center; gap:15px; padding:0 0 20px; margin-bottom:24px; border-bottom:1px solid var(--chrome-border); color:var(--chrome-text-dim); font-size:12px; }
+    .setup-progress span { display:inline-flex; align-items:center; gap:7px; }
+    .setup-progress b { display:grid; place-items:center; width:23px; height:23px; border:1px solid var(--chrome-border); border-radius:50%; font-size:11px; font-weight:600; }
+    .setup-progress .current { color:var(--chrome-text-bright); font-weight:600; }
+    .setup-progress .current b,.setup-progress .done b { border-color:var(--chrome-accent); background:var(--chrome-accent); color:var(--chrome-body); }
+    .setup-progress i { width:30px; height:1px; background:var(--chrome-border); }
+    .setup-action { display:inline-flex; align-items:center; justify-content:center; min-height:34px; padding:7px 12px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-hover); color:var(--chrome-text-bright); font-size:12px; font-weight:550; white-space:nowrap; }
+    .setup-action:hover:not(:disabled) { border-color:var(--chrome-accent); }
+    .setup-action:focus-visible,.provider-choice:focus-visible,.setup-link:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:2px; }
+    .setup-action:disabled { opacity:.5; cursor:default; }
+    .setup-action.primary { border-color:var(--chrome-accent); background:var(--chrome-accent); color:var(--chrome-body); font-weight:650; }
+    .setup-link { padding:4px 0; border:0; background:transparent; color:var(--chrome-accent); font-size:12px; text-decoration:none; }
+    .setup-link:hover { text-decoration:underline; }
+    .provider-workspace { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr)); gap:28px; align-items:start; }
+    .provider-workspace.compact { grid-template-columns:minmax(0,1fr); gap:14px; }
+    .provider-picker { display:flex; align-items:center; gap:12px; color:var(--chrome-text-dim); font-size:12px; }
+    .provider-picker select { width:min(100%,280px); height:34px; }
+    .provider-browser { border-top:1px solid var(--chrome-border); }
+    .provider-choice { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:center; width:100%; padding:15px 12px 15px 14px; border:0; border-bottom:1px solid var(--chrome-border); border-left:3px solid transparent; border-radius:0; background:transparent; color:var(--chrome-text-bright); text-align:left; }
+    .provider-choice:hover { background:color-mix(in srgb,var(--chrome-accent) 5%,var(--chrome-body)); }
+    .provider-choice[aria-pressed="true"] { border-left-color:var(--chrome-accent); background:color-mix(in srgb,var(--chrome-accent) 8%,var(--chrome-body)); }
+    .provider-choice strong { font-size:14px; font-weight:620; }
+    .provider-choice .detail { grid-column:1; color:var(--chrome-text-dim); font-size:12px; line-height:1.4; }
+    .provider-choice .provider-status { grid-column:2; grid-row:1 / 3; max-width:115px; color:var(--chrome-text-dim); font-size:11px; line-height:1.3; text-align:right; }
+    .provider-choice .provider-status.active { color:var(--chrome-accent); font-weight:650; }
+    .provider-setup { box-sizing:border-box; min-height:365px; padding:22px 24px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
+    .provider-setup h2 { margin:0 0 5px; font-size:20px; font-weight:650; letter-spacing:-.02em; }
+    .provider-setup p { max-width:58ch; margin:5px 0 12px; color:var(--chrome-text-dim); font-size:12px; line-height:1.55; }
+    .provider-setup .provider-note { margin:0 0 13px; }
+    .setup-sequence { margin-top:20px; border-top:1px solid var(--chrome-border); }
+    .sequence-row { display:grid; grid-template-columns:22px minmax(0,1fr) auto; gap:12px; align-items:center; min-height:58px; padding:11px 0; border-bottom:1px solid var(--chrome-border); }
+    .sequence-row .number { color:var(--chrome-text-dim); font:12px ui-monospace,SFMono-Regular,monospace; }
+    .sequence-row strong { display:block; font-size:13px; font-weight:600; }
+    .sequence-row small { display:block; margin-top:2px; color:var(--chrome-text-dim); font-size:11px; line-height:1.4; }
+    .sequence-row .setup-status { text-align:right; }
+    .provider-tools { display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-top:15px; }
+    .provider-tools a { color:var(--chrome-accent); font-size:12px; text-decoration:none; }
+    .provider-tools a:hover { text-decoration:underline; }
+    .setup-status { color:var(--chrome-text-dim); font-size:11px; }
+    .setup-status.ready { color:var(--chrome-accent); font-weight:650; }
+    .setup-footer { display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin-top:24px; padding-top:17px; border-top:1px solid var(--chrome-border); }
+    .setup-footer .next { margin-left:auto; }
+    .setup-footer .hint { color:var(--chrome-text-dim); font-size:11px; }
+    .setup-list { display:flex; flex-direction:column; border-top:1px solid var(--chrome-border); }
+    .setup-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px 20px; align-items:center; padding:17px 4px; border-bottom:1px solid var(--chrome-border); }
+    .setup-card-heading { display:flex; align-items:baseline; gap:12px; }
+    .setup-card h2 { margin:0; font-size:15px; font-weight:620; }
+    .setup-card p { max-width:70ch; margin:4px 0 0; color:var(--chrome-text-dim); font-size:12px; line-height:1.45; }
+    .setup-card .setup-actions { display:flex; align-items:center; gap:12px; margin:0; }
+    .setup-card .setup-actions a { color:var(--chrome-accent); font-size:12px; text-decoration:none; white-space:nowrap; }
+    .setup-card .setup-actions a:hover { text-decoration:underline; }
+    .setup-card details { margin-top:5px; color:var(--chrome-text-dim); font-size:11px; }
+    .setup-card details summary { width:fit-content; cursor:pointer; }
+    .setup-card code { display:block; max-width:70ch; margin-top:5px; overflow-wrap:anywhere; color:var(--chrome-text-bright); font:11px/1.5 ui-monospace,SFMono-Regular,monospace; }
+    .layout.with-utility .setup-header h1 { font-size:28px; }
+    .layout.with-utility .setup-card { grid-template-columns:1fr; }
+    .layout.with-utility .setup-card .setup-actions { justify-content:flex-start; }
+    @media(max-width:860px) { .setup-shell { margin-top:10px; } .setup-header h1 { font-size:27px; } .setup-card { grid-template-columns:1fr; } .setup-card .setup-actions { justify-content:flex-start; } }
+    @media(max-width:560px) { .provider-setup { padding:17px; } .sequence-row { grid-template-columns:18px minmax(0,1fr); } .sequence-row > :last-child { grid-column:2; justify-self:start; } .setup-header { gap:10px; } .setup-header .setup-action { padding:5px 7px; white-space:normal; } }
     .receipt { display:flex; align-items:center; gap:8px; margin:12px 2px 0; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; }
     .receipt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--chrome-accent,#9bb8f7); animation:receipt-pulse 1.35s ease-in-out infinite; }
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
@@ -348,31 +379,44 @@ export class MuxNewChat extends LitElement {
       if (this.isConnected && this.chosenAIProvider === provider) this.providerCheckError = error instanceof Error ? error.message : String(error);
     } finally { this.providerCheckBusy = false; }
   }
+  private chooseAIProvider(provider: string) {
+    this.chosenAIProvider = provider;
+    this.providerError = '';
+    this.providerChecked = '';
+    this.providerCheckError = '';
+  }
   private renderProviderSetup(): TemplateResult {
     const setup = this.amplifierProviderSetup;
     const selected = setup?.providers.find(provider => provider.id === this.chosenAIProvider);
-    return this.renderScreen(html`<div class="main setup"><div class="content">
-      <div class="setup-heading"><h1>${this.firstRun ? 'Set up Muxterm intelligence' : 'Amplifier provider'}</h1><button class="setup-refresh" @click=${() => void this.openTerminal()}>Open a terminal</button></div>
-      ${this.firstRun ? html`<div class="setup-steps"><span class="current">1 · Provider</span><span>2 · Coding agents</span></div>` : nothing}
-      <p class="setup-intro">Muxterm uses Amplifier CLI for Amplifier chats. Choose a provider, then configure it in the terminal.</p>
-      <div class="provider-list">${AI_PROVIDERS.map(provider => {
-        const state = setup?.providers.find(item => item.id === provider.id);
-        return html`<button class="provider-choice" aria-pressed=${this.chosenAIProvider === provider.id} @click=${() => { this.chosenAIProvider = provider.id; this.providerError = ''; this.providerChecked = ''; this.providerCheckError = ''; }}><strong>${provider.name}</strong><small>${provider.detail}</small><small>${setup?.primary === provider.id ? 'Amplifier default provider' : state?.source === 'environment' ? `Found ${state.envName} in Muxterm's environment` : state?.source === 'amplifier-keys' ? `Found ${state.envName} in ~/.amplifier/keys.env` : state?.source === 'oauth-cache' ? 'ChatGPT sign-in cache found' : 'Connection needed'}</small></button>`;
-      })}</div>
-      <div class="provider-setup">
-        <strong>${AI_PROVIDERS.find(provider => provider.id === this.chosenAIProvider)?.name || 'Provider'} setup</strong>
-        ${!setup ? html`<p role="status">Checking local Amplifier setup…</p>` : html`
-          <p>${selected?.source ? 'A credential was found. Amplifier still needs a configured provider and a successful connection check.' : 'Configure this provider and complete its sign-in in the terminal.'}</p>
-          ${selected?.source === 'amplifier-keys' ? html`<p>Amplifier CLI uses ~/.amplifier/keys.env, so this key can be reused during setup.</p>` : nothing}
-          ${setup.primary && setup.primary !== this.chosenAIProvider ? html`<p>Amplifier currently starts with ${setup.primary}. Use provider management to make ${this.chosenAIProvider} the default.</p>` : nothing}
-          <div class="setup-actions"><span class="setup-status ${setup.cliInstalled ? 'ready' : ''}">Amplifier CLI ${setup.cliInstalled ? 'installed' : 'needed'}</span>${!setup.cliInstalled ? html`<button @click=${() => void this.openTerminal('Install Amplifier CLI', SETUP_AGENTS.find(agent => agent.harness === 'amplifier')!.command)}>Install Amplifier CLI</button>` : nothing}<a href="https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md" target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
-          <div class="setup-actions"><button ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier provider setup', `export PATH="$HOME/.local/bin:$PATH"; amplifier provider add ${this.chosenAIProvider} --scope global`)}>Configure ${this.chosenAIProvider}</button><button ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier providers', 'export PATH="$HOME/.local/bin:$PATH"; amplifier provider manage')}>Manage providers</button><button ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier setup', 'export PATH="$HOME/.local/bin:$PATH"; amplifier init')}>Open full setup</button></div>
-          <div class="setup-actions"><button ?disabled=${!setup.cliInstalled || this.providerCheckBusy} @click=${() => void this.checkAIProvider()}>${this.providerCheckBusy ? 'Checking provider…' : 'Check connection'}</button>${this.providerChecked === this.chosenAIProvider ? html`<span class="setup-status ready" role="status">Ready · Amplifier provider check passed</span>` : nothing}</div>
-          ${this.providerCheckError ? html`<p class="error" role="alert">${this.providerCheckError}</p>` : nothing}
-        `}
-        ${this.providerError ? html`<p class="error" role="alert">${this.providerError}</p>` : nothing}
+    const name = AI_PROVIDERS.find(provider => provider.id === this.chosenAIProvider)?.name || 'Provider';
+    const connected = this.providerChecked === this.chosenAIProvider;
+    return this.renderScreen(html`<div class="main setup"><div class="content setup-shell">
+      <header class="setup-header"><div><h1>${this.firstRun ? 'Connect an AI provider' : 'Amplifier provider'}</h1><p class="setup-lead">Amplifier uses this connection for its chats. Choose a service, then confirm it can reach a model.</p></div>${!this.utilityOpen ? html`<button class="setup-action" @click=${() => void this.openTerminal()}>Open terminal</button>` : nothing}</header>
+      ${this.firstRun ? html`<nav class="setup-progress" aria-label="Setup progress"><span class="current" aria-current="step"><b>1</b>AI provider</span><i aria-hidden="true"></i><span><b>2</b>Coding agents</span></nav>` : nothing}
+      <div class="provider-workspace ${this.utilityOpen ? 'compact' : ''}">
+        ${this.utilityOpen ? html`<label class="provider-picker">Provider<select aria-label="AI provider" .value=${this.chosenAIProvider} @change=${(event:Event) => this.chooseAIProvider((event.target as HTMLSelectElement).value)}>${AI_PROVIDERS.map(provider => html`<option value=${provider.id}>${provider.name}</option>`)}</select></label>` : html`<section class="provider-browser" aria-label="AI providers">${AI_PROVIDERS.map(provider => {
+          const state = setup?.providers.find(item => item.id === provider.id);
+          const isDefault = setup?.primary === provider.id;
+          const status = isDefault ? 'Default' : state?.source === 'environment' || state?.source === 'amplifier-keys' ? 'Key found' : state?.source === 'oauth-cache' ? 'Sign-in found' : 'Set up';
+          return html`<button class="provider-choice" aria-pressed=${this.chosenAIProvider === provider.id} @click=${() => this.chooseAIProvider(provider.id)}><strong>${provider.name}</strong><span class="detail">${provider.detail}</span><span class="provider-status ${isDefault ? 'active' : ''}">${status}</span></button>`;
+        })}</section>`}
+        <section class="provider-setup" aria-label=${`${name} setup`}>
+          <h2>${name}</h2>
+          ${!setup ? html`<p role="status">Checking Amplifier on this computer…</p>` : html`
+            <p class="provider-note">${connected ? 'Amplifier reached this provider.' : selected?.source === 'environment' ? `${selected.envName} is available in Muxterm’s environment.` : selected?.source === 'amplifier-keys' ? `${selected.envName} is in ~/.amplifier/keys.env. Amplifier can reuse it.` : selected?.source === 'oauth-cache' ? 'A previous ChatGPT sign-in was found.' : 'Complete setup in the terminal to connect this service.'}</p>
+            ${setup.primary && setup.primary !== this.chosenAIProvider ? html`<p>Amplifier currently starts with ${setup.primary}. Make ${this.chosenAIProvider} the default in provider management.</p>` : nothing}
+            <div class="setup-sequence">
+              <div class="sequence-row"><span class="number">1</span><div><strong>Amplifier CLI</strong><small>${setup.cliInstalled ? 'Installed on this computer' : 'Required for Amplifier chats'}</small></div>${setup.cliInstalled ? html`<span class="setup-status ready">Installed</span>` : html`<button class="setup-action" @click=${() => void this.openTerminal('Install Amplifier CLI', SETUP_AGENTS.find(agent => agent.harness === 'amplifier')!.command)}>Install</button>`}</div>
+              <div class="sequence-row"><span class="number">2</span><div><strong>Configure ${name}</strong><small>${setup.primary === this.chosenAIProvider ? 'Selected as Amplifier’s default' : 'Choose a model and sign in, if needed'}</small></div><button class="setup-action" ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier provider setup', `export PATH="$HOME/.local/bin:$PATH"; amplifier provider add ${this.chosenAIProvider} --scope global`)}>Configure</button></div>
+              <div class="sequence-row"><span class="number">3</span><div><strong>Check connection</strong><small>${connected ? 'A model is available' : 'Ask Amplifier to list available models'}</small></div>${connected ? html`<span class="setup-status ready" role="status">Connected</span>` : html`<button class="setup-action" ?disabled=${!setup.cliInstalled || this.providerCheckBusy} @click=${() => void this.checkAIProvider()}>${this.providerCheckBusy ? 'Checking…' : 'Check'}</button>`}</div>
+            </div>
+            <div class="provider-tools"><button class="setup-link" ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier providers', 'export PATH="$HOME/.local/bin:$PATH"; amplifier provider manage')}>Manage providers</button><button class="setup-link" ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier setup', 'export PATH="$HOME/.local/bin:$PATH"; amplifier init')}>Open full setup</button><a href="https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md" target="_blank" rel="noopener noreferrer">Setup guide</a></div>
+            ${this.providerCheckError ? html`<p class="error" role="alert">${this.providerCheckError}</p>` : nothing}
+          `}
+          ${this.providerError ? html`<p class="error" role="alert">${this.providerError}</p>` : nothing}
+        </section>
       </div>
-      <div class="setup-footer"><button class="setup-refresh" @click=${() => void this.loadAmplifierProviderSetup()}>Refresh checks</button>${this.firstRun ? html`<button class="setup-refresh" ?disabled=${this.providerChecked !== this.chosenAIProvider || (!!setup?.primary && setup.primary !== this.chosenAIProvider)} @click=${() => { this.setupStep = 'harness'; }}>Continue to coding agents</button>` : html`<button class="setup-refresh" @click=${() => { this.providerSettingsOpen = false; }}>Back to new chat</button>`}<span>Found means a credential exists; ready means Amplifier's provider check passed.</span></div>
+      <footer class="setup-footer"><button class="setup-link" @click=${() => void this.loadAmplifierProviderSetup()}>Refresh status</button><span class="hint">A saved key needs a successful connection check.</span>${this.firstRun ? html`<button class="setup-action primary next" ?disabled=${!connected || (!!setup?.primary && setup.primary !== this.chosenAIProvider)} @click=${() => { this.setupStep = 'harness'; }}>Continue to coding agents</button>` : html`<button class="setup-action primary next" @click=${() => { this.providerSettingsOpen = false; }}>Back to new chat</button>`}</footer>
     </div></div>`);
   }
   private async openTerminal(label?: string, command?: string) {
@@ -386,7 +430,7 @@ export class MuxNewChat extends LitElement {
     else utility.showPanel('terminal');
   }
   private renderScreen(content: TemplateResult): TemplateResult {
-    return html`<div class="layout">${content}${this.utilityOpen ? html`<aside class="utility-drawer" aria-label="Setup tools"><header><span>Tools · terminals stay with your chat</span><button aria-label="Close tools" @click=${() => { this.utilityOpen = false; }}>Close</button></header><mux-sdk-utility .sessionId=${this.draftId} .projectPath=${this.folder} .chatTitle=${'Setup'} .terminalWorkspaceId=${this.terminalWorkspaceId}></mux-sdk-utility></aside>` : nothing}</div>`;
+    return html`<div class="layout ${this.utilityOpen ? 'with-utility' : ''}">${content}${this.utilityOpen ? html`<aside class="utility-drawer" aria-label="Setup tools"><header><span>Tools · terminals stay with your chat</span><button aria-label="Close tools" @click=${() => { this.utilityOpen = false; }}>Close</button></header><mux-sdk-utility .sessionId=${this.draftId} .projectPath=${this.folder} .chatTitle=${'Setup'} .terminalWorkspaceId=${this.terminalWorkspaceId}></mux-sdk-utility></aside>` : nothing}</div>`;
   }
   private async loadOnboarding() {
     try {
@@ -484,23 +528,24 @@ export class MuxNewChat extends LitElement {
   }
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
-    if (!this.onboardingLoaded || (this.firstRun && this.setupStep === 'harness' && !this.optionsLoaded)) return this.renderScreen(html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="setup-intro" role="status">Checking your coding agents…</p></div></div>`);
-    if (this.onboardingError) return this.renderScreen(html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.onboardingError}</p><button class="setup-refresh" @click=${() => void this.loadOnboarding()}>Try again</button></div></div>`);
+    if (!this.onboardingLoaded || (this.firstRun && this.setupStep === 'harness' && !this.optionsLoaded)) return this.renderScreen(html`<div class="main setup"><div class="content setup-shell"><h1>Welcome to Muxterm</h1><p class="setup-lead" role="status">Checking your coding agents…</p></div></div>`);
+    if (this.onboardingError) return this.renderScreen(html`<div class="main setup"><div class="content setup-shell"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.onboardingError}</p><button class="setup-action" @click=${() => void this.loadOnboarding()}>Try again</button></div></div>`);
     if ((this.firstRun && this.setupStep === 'provider') || this.providerSettingsOpen) return this.renderProviderSetup();
-    if (this.firstRun && !this.startOptions) return this.renderScreen(html`<div class="main setup"><div class="content"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.error || 'Could not check coding agents.'}</p><button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Try again</button></div></div>`);
+    if (this.firstRun && !this.startOptions) return this.renderScreen(html`<div class="main setup"><div class="content setup-shell"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.error || 'Could not check coding agents.'}</p><button class="setup-action" @click=${() => void this.loadStartOptions()}>Try again</button></div></div>`);
     const showFirstRun = this.firstRun;
     if (this.startOptions && (showFirstRun || this.startOptions.length === 0)) return this.renderScreen(html`
-      <div class="main setup"><div class="content">
-        <div class="setup-heading"><h1>${showFirstRun ? 'Welcome to Muxterm' : 'Set up a coding agent'}</h1><button class="setup-refresh" @click=${() => void this.openTerminal()}>Open a terminal</button></div>
-        ${showFirstRun ? html`<div class="setup-steps"><span>1 · Provider</span><span class="current">2 · Coding agents</span></div><button class="setup-refresh" @click=${() => { this.setupStep = 'provider'; }}>Change provider</button>` : nothing}
-        <p class="setup-intro">Choose an agent to set up. Its install or sign-in command runs in the terminal beside these checks.</p>
-        <p class="setup-explain"><strong>Ready to use</strong> means Muxterm found the runtime and account setup it can check. <strong>Detected</strong> means an ACP command is present; its provider sign-in still needs your confirmation. Set up at least one coding agent after your general provider.</p>
-        <div class="setup-list">${SETUP_AGENTS.map(agent => html`
-          <section class="setup-card"><div class="setup-card-heading"><h2>${agent.name}</h2><span class="setup-status ${this.startOptions!.some(option => option.harness === agent.harness) ? 'ready' : ''}">${this.startOptions!.some(option => option.harness === agent.harness) ? agent.name.includes('ACP') ? 'Detected' : 'Ready to use' : agent.harness === 'codex' || agent.harness === 'claude' ? 'Sign-in needed' : 'Needs setup'}</span></div>
-            ${this.startOptions!.some(option => option.harness === agent.harness) ? html`<p>${agent.name.includes('ACP') ? 'Command found. Muxterm cannot verify its provider account; sign in if needed.' : agent.harness === 'amplifier' ? 'Amplifier CLI is configured and Muxterm can start its chats.' : 'Muxterm can start chats with this agent.'}</p>` : html`<code>${agent.command}</code><p>${agent.harness === 'codex' || agent.harness === 'claude' ? 'The SDK runtime is included. Install the CLI here only for interactive account sign-in; no separate SDK install is needed.' : agent.harness === 'amplifier' ? 'Install Amplifier CLI, then run its provider setup in the terminal.' : 'Install this ACP command, then connect its provider account.'}</p>`}
-            <div class="setup-actions">${this.startOptions!.some(option => option.harness === agent.harness) && !agent.name.includes('ACP') ? nothing : html`<button @click=${() => void this.openTerminal(`${agent.name} setup`, this.startOptions!.some(option => option.harness === agent.harness) ? agent.login : `${agent.command} && ${agent.login}`)}>${this.startOptions!.some(option => option.harness === agent.harness) ? 'Open sign-in terminal' : 'Install and sign in'}</button>`}<a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
-          </section>`)}</div>
-        <div class="setup-footer"><button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Refresh checks</button>${showFirstRun && this.startOptions.length ? html`<button class="setup-refresh" @click=${this.finishFirstRun}>Start using Muxterm</button>` : nothing}<span>Checks update automatically while you set up agents.</span></div>
+      <div class="main setup"><div class="content setup-shell">
+        <header class="setup-header"><div><h1>${showFirstRun ? 'Choose your coding agents' : 'Connect a coding agent'}</h1><p class="setup-lead">Install or sign in to the agents you want to use. Setup opens in a terminal beside this screen.</p></div>${!this.utilityOpen ? html`<button class="setup-action" @click=${() => void this.openTerminal()}>Open terminal</button>` : nothing}</header>
+        ${showFirstRun ? html`<nav class="setup-progress" aria-label="Setup progress"><span class="done"><b>✓</b>AI provider</span><i aria-hidden="true"></i><span class="current" aria-current="step"><b>2</b>Coding agents</span></nav>` : nothing}
+        <p class="setup-lead">${this.startOptions.length} of ${SETUP_AGENTS.length} agents found. <strong>Ready</strong> means Muxterm can start a chat. <strong>Detected</strong> means an ACP command exists; sign-in still needs confirmation.</p>
+        <div class="setup-list">${SETUP_AGENTS.map(agent => {
+          const found = this.startOptions!.some(option => option.harness === agent.harness);
+          const acp = agent.harness === 'opencode' || agent.harness === 'pi' || agent.harness === 'deepseek';
+          const status = found ? acp ? 'Detected' : 'Ready' : agent.harness === 'codex' || agent.harness === 'claude' ? 'Sign-in needed' : 'Needs setup';
+          const detail = found ? acp ? 'Command found. Sign in before the first chat.' : agent.harness === 'amplifier' ? 'Ready for Amplifier chats.' : 'Ready for new chats.' : agent.harness === 'codex' || agent.harness === 'claude' ? 'The SDK is included. Sign in with the CLI to use your account.' : agent.harness === 'amplifier' ? 'Install the CLI, then configure a provider.' : 'Install the command and connect its account.';
+          return html`<section class="setup-card"><div><div class="setup-card-heading"><h2>${agent.name}</h2><span class="setup-status ${found && !acp ? 'ready' : ''}">${status}</span></div><p>${detail}</p>${!found ? html`<details><summary>Show install command</summary><code>${agent.command}</code></details>` : nothing}</div><div class="setup-actions">${found && !acp ? nothing : html`<button class="setup-action" @click=${() => void this.openTerminal(`${agent.name} setup`, found ? agent.login : `${agent.command} && ${agent.login}`)}>${found ? 'Open sign-in terminal' : 'Install and sign in'}</button>`}<a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide</a></div></section>`;
+        })}</div>
+        <footer class="setup-footer">${showFirstRun ? html`<button class="setup-link" @click=${() => { this.setupStep = 'provider'; }}>Back to provider</button>` : nothing}<button class="setup-link" @click=${() => void this.loadStartOptions()}>Refresh status</button><span class="hint">Checks refresh automatically while setup is open.</span>${showFirstRun && this.startOptions.length ? html`<button class="setup-action primary next" @click=${this.finishFirstRun}>Start using Muxterm</button>` : nothing}</footer>
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></div>`);
     return this.renderScreen(html`
