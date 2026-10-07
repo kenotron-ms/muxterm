@@ -70,13 +70,25 @@ func apiURL() string {
 // LatestRelease shares a persisted release and ETag across processes. A fresh
 // cache returns without network I/O; an expired one is revalidated.
 func LatestRelease(ctx context.Context) (*Release, error) {
-	url := apiURL()
-	var token string
-	if url == defaultAPIURL {
+	return LatestReleaseWithToken(ctx, "", false)
+}
+
+// LatestReleaseWithToken uses a connected GitHub account when available. A
+// manual check skips the freshness window but still honors rate-limit resets.
+func LatestReleaseWithToken(ctx context.Context, token string, force bool) (*Release, error) {
+	if token == "" {
 		token = os.Getenv("GITHUB_TOKEN")
 		if token == "" {
 			token = os.Getenv("GH_TOKEN")
 		}
+	}
+	return latestRelease(ctx, token, force)
+}
+
+func latestRelease(ctx context.Context, token string, force bool) (*Release, error) {
+	url := apiURL()
+	if url != defaultAPIURL {
+		token = ""
 	}
 	return lockedReleaseCache(func(cache *releaseCache) (*Release, error) {
 		if cache.URL != url || cache.Auth != (token != "") {
@@ -86,10 +98,14 @@ func LatestRelease(ctx context.Context) (*Release, error) {
 		if cache.Error != "" && now.Before(cache.RetryAt) {
 			return nil, fmt.Errorf("GitHub API rate limit reached; retry after %s", cache.RetryAt.UTC().Format(time.RFC3339))
 		}
-		if cache.Error != "" && now.Sub(cache.AttemptedAt) < failedCheckAge {
+		if !force && cache.Error != "" && now.Sub(cache.AttemptedAt) < failedCheckAge {
 			return nil, fmt.Errorf("%s", cache.Error)
 		}
-		if cache.Release != nil && now.Sub(cache.CheckedAt) < releaseCacheAge {
+		cacheAge := anonymousReleaseCacheAge
+		if token != "" {
+			cacheAge = authenticatedReleaseCacheAge
+		}
+		if !force && cache.Release != nil && now.Sub(cache.CheckedAt) < cacheAge {
 			return cache.Release, nil
 		}
 		if now.Before(cache.RetryAt) {
@@ -224,6 +240,12 @@ func Check(ctx context.Context, current string) (Status, *Release) {
 // CheckForServer skips release lookups for unauthenticated development servers.
 // The --no-auth switch is restricted to local, ephemeral instances.
 func CheckForServer(ctx context.Context, current string, noAuth bool) (Status, *Release) {
+	return CheckForServerWithToken(ctx, current, noAuth, "", false)
+}
+
+// CheckForServerWithToken allows the owner server to supply its connected
+// GitHub account without storing a credential in the release cache.
+func CheckForServerWithToken(ctx context.Context, current string, noAuth bool, token string, force bool) (Status, *Release) {
 	method, reason := Platform()
 	st := Status{CurrentVersion: current, Method: method}
 
@@ -237,7 +259,7 @@ func CheckForServer(ctx context.Context, current string, noAuth bool) (Status, *
 		return st, nil
 	}
 
-	rel, err := LatestRelease(ctx)
+	rel, err := LatestReleaseWithToken(ctx, token, force)
 	if err != nil {
 		st.Error = err.Error()
 		return st, nil

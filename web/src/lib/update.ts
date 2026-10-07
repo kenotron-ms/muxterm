@@ -86,6 +86,13 @@ export async function fetchUpdateStatus(): Promise<UpdateStatus> {
   return parseUpdateStatus(await res.json());
 }
 
+/** Explicit owner request to revalidate the release, regardless of cache age. */
+export async function checkUpdateNow(): Promise<UpdateStatus> {
+  const res = await fetch(apiPath('/api/update/check'), { method: 'POST' });
+  if (!res.ok) throw new Error(`checkUpdateNow: HTTP ${res.status}`);
+  return parseUpdateStatus(await res.json());
+}
+
 /**
  * POST /api/update/apply — replaces the binary; the server restarts ~500ms later.
  *

@@ -49,17 +49,18 @@ curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh
 muxterm install  # restarts the service with the new binary
 ```
 
-The in-app release check shares a 15-minute cache across muxterm processes
-under the same user (`~/.cache/muxterm/github-release.json` on Linux). It
-revalidates expired entries with GitHub's ETag and pauses requests until the
-reported reset when the API rate limit is exhausted. Set `GITHUB_TOKEN` (or
-`GH_TOKEN`) in the server environment to use an authenticated GitHub budget;
-the token is never written to the cache. GitHub only guarantees that an
-unchanged `304` response is free of primary-rate-limit cost when the request
-is authenticated; an unauthenticated `304` can still spend the shared IP
-budget. Development builds, `--no-auth` servers, `make dev` and
-`make dev-local` instances, and CI jobs skip release checks. Set
-`MUXTERM_DISABLE_UPDATE_CHECK=1` for other short-lived instances.
+The in-app release check shares a cache across muxterm processes under the
+same user (`~/.cache/muxterm/github-release.json` on Linux). Automatic checks
+use a 24-hour cache when anonymous and a 15-minute cache when the enabled
+GitHub connection supplies a token. An explicit check is available in About.
+Expired entries are revalidated with GitHub's ETag, and requests pause until
+the reported reset when the API rate limit is exhausted. `GITHUB_TOKEN` (or
+`GH_TOKEN`) in the server environment also uses an authenticated GitHub budget;
+tokens are never written to the cache. GitHub only guarantees that an unchanged
+`304` response is free of primary-rate-limit cost when authenticated; an
+unauthenticated `304` can still spend the shared IP budget. Development builds,
+`--no-auth` servers, `make dev` and `make dev-local` instances, and CI jobs skip
+release checks. Set `MUXTERM_DISABLE_UPDATE_CHECK=1` for other short-lived instances.
 
 ### Windows — Scoop (coming soon)
 

@@ -4,7 +4,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { MonitorX } from 'lucide';
+import { MonitorX, RefreshCw } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { previewStore } from './lib/preview-store.js';
@@ -16,6 +16,7 @@ import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
+import { checkUpdateNow, fetchUpdateStatus, type UpdateStatus } from './lib/update.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
@@ -460,6 +461,33 @@ export class MuxApp extends LitElement {
 
     .about-body strong { color: var(--chrome-text-bright); }
 
+    .about-version {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 16px;
+      color: var(--chrome-text-bright);
+    }
+
+    .about-check {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--chrome-border);
+      border-radius: 5px;
+      background: transparent;
+      color: var(--chrome-text-dim);
+      cursor: pointer;
+    }
+
+    .about-check:not(:disabled):hover { color: var(--chrome-text-bright); background: var(--chrome-hover); }
+    .about-check:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: 2px; }
+    .about-check:disabled { opacity: 0.55; cursor: default; }
+
+    .about-version-note { color: var(--chrome-text-dim); font-size: 12px; line-height: 1.4; }
+
     .about-sha {
       margin-top: 16px;
       font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
@@ -715,6 +743,9 @@ export class MuxApp extends LitElement {
 
   @state()
   private _overlayPanel: 'settings' | 'shortcuts' | 'about' | 'connect' | null = null;
+  @state() private _aboutUpdate: UpdateStatus | null = null;
+  @state() private _aboutChecking = false;
+  @state() private _aboutCheckError = '';
   private _settingsOpenSection: SettingsSection | null = null;
 
   @state()
@@ -1757,6 +1788,19 @@ export class MuxApp extends LitElement {
                     connects to a <code>sessiond</code> daemon over WebSocket and renders
                     panes using xterm.js inside a dockview layout.</p>
                     <p>Config file: <strong>~/.config/muxterm/config.toml</strong></p>
+                    <div class="about-version">
+                      <span>Version ${this._aboutUpdate?.currentVersion || 'unknown'}</span>
+                      <button class="about-check" type="button" title="Check for updates" aria-label="Check for updates" ?disabled=${this._aboutChecking} @click=${this._checkAboutUpdate}>
+                        ${icon(RefreshCw, { size: 15 })}
+                      </button>
+                    </div>
+                    <div class="about-version-note" role="status">
+                      ${this._aboutChecking ? 'Checking for updates…' : this._aboutCheckError ||
+                        (this._aboutUpdate?.devBuild ? 'Development build — updates are managed by your build.' :
+                        this._aboutUpdate?.error ? `Could not check: ${this._aboutUpdate.error}` :
+                        this._aboutUpdate?.updateAvailable ? `Version ${this._aboutUpdate.latestVersion} is available.` :
+                        this._aboutUpdate?.latestVersion ? 'Up to date.' : '')}
+                    </div>
                   </div>
                   <div class="about-sha">build ${__GIT_SHA__}</div>
                 </div>
@@ -2468,6 +2512,7 @@ export class MuxApp extends LitElement {
       case 'shortcuts':
       case 'about':
         this._overlayPanel = action;
+        if (action === 'about') void this._loadAboutUpdate();
         break;
       case 'reconnect':
         window.location.reload();
@@ -2475,6 +2520,30 @@ export class MuxApp extends LitElement {
       case 'new-workspace':
         this._onOpenCreateModal();
         break;
+    }
+  };
+
+  private async _loadAboutUpdate(): Promise<void> {
+    if (this._aboutChecking) return;
+    this._aboutCheckError = '';
+    try {
+      this._aboutUpdate = await fetchUpdateStatus();
+    } catch {
+      this._aboutCheckError = 'Could not load update status.';
+    }
+  }
+
+  private _checkAboutUpdate = async (): Promise<void> => {
+    if (this._aboutChecking) return;
+    this._aboutChecking = true;
+    this._aboutCheckError = '';
+    try {
+      this._aboutUpdate = await checkUpdateNow();
+      window.dispatchEvent(new CustomEvent('muxterm-update-checked', { detail: this._aboutUpdate }));
+    } catch {
+      this._aboutCheckError = 'Could not check for updates.';
+    } finally {
+      this._aboutChecking = false;
     }
   };
 

@@ -11,7 +11,8 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/atomicfile"
 )
 
-const releaseCacheAge = 15 * time.Minute
+const anonymousReleaseCacheAge = 24 * time.Hour
+const authenticatedReleaseCacheAge = 15 * time.Minute
 const failedCheckAge = 2 * time.Minute
 
 // releaseCache is shared by every muxterm process under the same user. No

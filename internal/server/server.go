@@ -295,6 +295,7 @@ func New(cfg Config) *Server {
 	// Self-update. Protected like every other owner surface: applying an
 	// update rewrites the binary this process is running from.
 	s.mux.Handle("GET /api/update/status", protect(http.HandlerFunc(s.handleUpdateStatus)))
+	s.mux.Handle("POST /api/update/check", protect(http.HandlerFunc(s.handleUpdateCheck)))
 	s.mux.Handle("POST /api/update/apply", protect(http.HandlerFunc(s.handleUpdateApply)))
 
 	s.mux.Handle("GET /api/tunnels", protect(http.HandlerFunc(s.handleTunnelList)))
