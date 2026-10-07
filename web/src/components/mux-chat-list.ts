@@ -2,11 +2,11 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
+import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { sdkChats, type FolderListing, type SDKChat, type SDKProject } from '../lib/sdk-chats.js';
 
-interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; archived?: boolean }
+interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean }
 
 @customElement('mux-chat-workspace')
 export class MuxChatWorkspace extends LitElement {
@@ -94,6 +94,10 @@ export class MuxChatWorkspace extends LitElement {
     .status.operator { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--chrome-accent); }
     .status.operator.working { background:none; color:var(--mux-ok); }
     .status.operator.failed,.status.operator.uncertain { color:var(--chrome-danger); }
+    .status.lane { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--chrome-text-dim); }
+    .status.lane.starting,.status.lane.working { background:none; color:var(--chrome-accent); }
+    .status.lane.ready { color:var(--mux-ok,#55b981); }
+    .status.lane.failed,.status.lane.uncertain { color:var(--chrome-danger); }
     .title { font-weight:550; }
     .harness { color:var(--chrome-text-dim,#aab2c1); font-size:10px; flex:none; text-transform:lowercase; }
     .chat-row:hover .harness,.chat-row:has(.chat:focus-visible) .harness { display:none; }
@@ -258,8 +262,8 @@ export class MuxChatWorkspace extends LitElement {
       ${this.open ? html`<div class="chats">${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="action more" aria-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</button>` : html`
-            <button class="chat" title=${`${chat.operator ? 'Operator · ' : ''}${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
-              <span class="status ${chat.operator ? 'operator' : ''} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : chat.state}>${chat.operator ? icon(Network,{size:13}) : nothing}</span><span class="title">${chat.title}</span><span class="harness">${chat.harness}</span>
+            <button class="chat" title=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
+              <span class="status ${chat.operator ? 'operator' : group.laneIds.has(chat.id) ? 'lane' : ''} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : group.laneIds.has(chat.id) ? `Lane · ${chat.state}` : chat.state}>${chat.operator ? icon(Network,{size:13}) : group.laneIds.has(chat.id) ? icon(GitBranch,{size:13}) : nothing}</span><span class="title">${chat.title}</span><span class="harness">${chat.harness}</span>
             </button>
             <button class="action" aria-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} title=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</button>
             <button class="action" aria-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} title=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</button>`}
@@ -288,6 +292,9 @@ export class MuxChatList extends LitElement {
     .pin-row:hover { background:var(--chrome-hover); }
     .pin-row span:not(.pin-icon) { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pin-icon { display:flex; flex:none; color:var(--chrome-text-dim); }
+    .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--chrome-accent); }
+    .pin-icon.lane.ready { color:var(--mux-ok,#55b981); }
+    .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--chrome-danger); }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -304,15 +311,16 @@ export class MuxChatList extends LitElement {
     const projects = [...sdkChats.projects].sort((a,b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     const chats = [...sdkChats.chats].sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt) || a.id.localeCompare(b.id));
     const active = chats.filter(chat => !chat.archived);
-    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:active.filter(chat => chat.workspaceId === project.id) }));
-    groups.push({ id:'ungrouped', name:'Ungrouped', chats:active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)) });
-    groups.push({ id:'archived', name:`Archived (${chats.length-active.length})`, archived:true, chats:chats.filter(chat => chat.archived) });
+    const laneIds = new Set(chats.filter(chat => chat.operator).flatMap(chat => chat.operatorLanes || []));
+    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:active.filter(chat => chat.workspaceId === project.id), laneIds }));
+    groups.push({ id:'ungrouped', name:'Ungrouped', chats:active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)), laneIds });
+    groups.push({ id:'archived', name:`Archived (${chats.length-active.length})`, archived:true, chats:chats.filter(chat => chat.archived), laneIds });
     const pinned = [
-      ...projects.filter(project => project.pinned).map(project => ({ kind:'project' as const, id:project.id, name:project.name, operator:false })),
-      ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, operator:!!chat.operator })),
+      ...projects.filter(project => project.pinned).map(project => ({ kind:'project' as const, id:project.id, name:project.name, operator:false, lane:false, state:'' })),
+      ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, operator:!!chat.operator, lane:laneIds.has(chat.id), state:chat.state })),
     ];
     return html`
-      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<button class="pin-row" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}><span class="pin-icon">${icon(item.kind === 'project' ? Folder : item.operator ? Network : MessageSquare,{size:15})}</span><span>${item.name}</span></button>`)}</div>` : nothing}
+      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<button class="pin-row" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}><span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${icon(item.kind === 'project' ? Folder : item.operator ? Network : item.lane ? GitBranch : MessageSquare,{size:15})}</span><span>${item.name}</span></button>`)}</div>` : nothing}
       <div class="heading">Chats</div>
       ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
     `;
