@@ -5,7 +5,7 @@ import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { chatMarkdownPolicy } from '../lib/chat-markdown-policy.js';
 import '../lib/mermaid-diagram.js';
-import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
+import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
@@ -19,7 +19,7 @@ type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; pare
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status'; text: string; channel?: 'voice' | 'task'; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[] };
+type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report'; text: string; channel?: 'voice' | 'task'; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
@@ -57,7 +57,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { BookOpen, Bot, Brain, ChevronDown, ChevronRight, Columns2, FilePenLine, Globe, Mic, PanelLeft, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
+import { BookOpen, Bot, Brain, ChevronDown, ChevronRight, Columns2, FilePenLine, Globe, Mic, Network, PanelLeft, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
@@ -222,6 +222,16 @@ export class MuxSDKChat extends LitElement {
     .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
     .bubble a { display:block; margin-top:7px; color:var(--chrome-accent); }
+    .lane-report-card { max-width:720px; border:1px solid var(--chrome-border); border-radius:11px; padding:12px 15px; background:var(--chrome-bar); }
+    .lane-report-head { display:flex; align-items:center; gap:9px; min-width:0; }
+    .lane-report-icon { display:grid; place-items:center; flex:none; width:25px; height:25px; border-radius:7px; background:var(--chrome-hover); color:var(--chrome-text-dim); }
+    .lane-report-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:650; }
+    .lane-report-state { margin-left:auto; flex:none; border-radius:99px; padding:2px 8px; background:var(--chrome-hover); color:var(--chrome-text-dim); font-size:11px; }
+    .lane-report-state.failed,.lane-report-state.uncertain { color:var(--chrome-danger); }
+    .lane-report-card p { margin:10px 0 0 34px; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.5; color:var(--chrome-text-bright); }
+    .lane-report-foot { display:flex; align-items:center; gap:10px; margin:9px 0 0 34px; color:var(--chrome-text-dim); font-size:11px; }
+    .lane-report-foot button { margin-left:auto; border:0; padding:0; background:none; color:var(--chrome-accent); font-size:11px; }
+    .lane-report-foot button:hover { text-decoration:underline; }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; font-weight:600; margin-bottom:10px; text-transform:capitalize; }
     .text { color:var(--chrome-text-bright,#d9def0); font-size:14px; line-height:1.68; overflow-wrap:anywhere; }
     .text > :first-child { margin-top:0; }
@@ -457,7 +467,14 @@ export class MuxSDKChat extends LitElement {
     await this.updateComplete;
     const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
     if (action === 'file' && path) await utility?.showFile(path);
-    else if (action === 'tab' && (tab === 'files' || tab === 'changes' || tab === 'terminal' || tab === 'pages')) utility?.showPanel(tab);
+    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'terminal' || tab === 'pages')) utility?.showPanel(tab);
+  }
+  private async operatorChanged(chat: SDKChat) {
+    this.chat = chat;
+    if (!chat.operator) return;
+    this.setPaneMode('split');
+    await this.updateComplete;
+    this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('status');
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
     const { path, selected } = event.detail;
@@ -879,6 +896,27 @@ export class MuxSDKChat extends LitElement {
       if (epoch === this.historyEpoch) this.loadingDetails = false;
     }
   }
+  private upsertLaneCard(blocks: Block[], event: SDKEvent, done: boolean) {
+    let name = event.name || 'Linked lane';
+    let state = event.kind || (done ? 'ready' : 'working');
+    let body = event.text || (done ? 'No final status was reported.' : 'Working');
+    if (done && body.includes('\n')) {
+      const [heading, ...lines] = body.split('\n');
+      if (heading.startsWith(`${name} (`)) body = lines.join('\n').trim() || body;
+    } else if (!event.name && body.includes(' · ')) {
+      const [legacyName, legacyState, ...detail] = body.split(' · ');
+      name = legacyName || name;
+      state = legacyState || state;
+      body = detail.join(' · ') || state;
+    }
+    let index = -1;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i].kind === 'lane-report' && blocks[i].id === event.childSessionId && !blocks[i].done) { index = i; break; }
+    }
+    const card: Block = { key:index >= 0 ? blocks[index].key : ++this.nextBlockKey, turn:index >= 0 ? blocks[index].turn : this.currentTurn, kind:'lane-report', id:event.childSessionId, name, text:body, done, laneState:state, harness:event.agent || (index >= 0 ? blocks[index].harness : '') };
+    if (index >= 0) blocks[index] = card;
+    else blocks.push(card);
+  }
   private onEvent(event: SDKEvent) {
     if (!this.replaying) { this.loadedEvents.push(event); this.liveEvents.push(event); }
     if (!this.replaying && this.agentEvents && (event.type.startsWith('delegate.') || event.type === 'tool.started' || event.type === 'tool.completed'))
@@ -900,6 +938,16 @@ export class MuxSDKChat extends LitElement {
       const last = blocks[blocks.length - 1];
       if (last?.kind === kind && last.channel === 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind, channel:'voice', text:event.text || '' });
+    }
+    else if (event.type === 'operator.lane.report') {
+      this.upsertLaneCard(blocks, event, true);
+      if (!this.replaying) void sdkChats.refresh();
+    }
+    else if (event.type === 'input.accepted' && event.source === 'operator-lane') {
+      // The durable sourced report card is already in the transcript. This
+      // accepted input starts the operator's reply but is not a human bubble.
+      this.busy = true;
+      markStart(this.currentTurn);
     }
     else if (event.type === 'input.accepted' && event.source === 'voice') {
       this.busy = true;
@@ -1003,6 +1051,10 @@ export class MuxSDKChat extends LitElement {
     else if (event.type === 'goal.progress') {
       if (this.chat) this.chat = { ...this.chat, goalState: event.goalState, goalReason: event.goalReason, goalSummary: event.goalSummary };
       if (event.goalState !== 'continuing') blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:`Goal ${event.goalState || 'updated'}: ${event.goalSummary || event.goalReason || ''}` });
+    }
+    else if (event.type === 'operator.lane.status') {
+      this.upsertLaneCard(blocks, event, false);
+      if (!this.replaying) void sdkChats.refresh();
     }
     else if (event.type === 'task.cancel.requested') {
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:'Task cancellation requested.' });
@@ -1478,7 +1530,7 @@ export class MuxSDKChat extends LitElement {
     return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map((row, offset) => {
       const block = row.block;
       return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${this.workExpanded.has(block.turn) ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details></div>`
-        : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>` : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
+        : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>` : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
   private toggleWorkDisclosure(turn: number, event: MouseEvent) {
@@ -1586,6 +1638,11 @@ export class MuxSDKChat extends LitElement {
     return html`<button class="send ${mode === 'voice-stop' ? 'voice-active' : ''}" aria-label=${label} title=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</button>`;
   }
   private isACPChat() { return this.chat?.harness === 'pi' || this.chat?.harness === 'opencode' || this.chat?.harness === 'deepseek'; }
+  private laneCard(block: Block) {
+    const state = block.laneState === 'failed' ? 'Failed' : block.laneState === 'uncertain' ? 'Needs attention' : block.laneState === 'stopped' ? 'Stopped' : block.done ? 'Completed' : block.laneState === 'ready' ? 'Ready' : 'Working';
+    const harness = block.harness ? sdkHarnessLabel(block.harness as SDKHarnessName) || block.harness : 'Linked chat';
+    return html`<div class="lane-report-card" aria-label=${`${block.name || 'Linked lane'} status update`}><div class="lane-report-head"><span class="lane-report-icon" aria-hidden="true">${icon(Network,{size:14})}</span><span class="lane-report-name" title=${block.name || 'Linked lane'}>${block.name || 'Linked lane'}</span><span class="lane-report-state ${block.laneState || ''}">${state}</span></div><p>${block.text}</p><div class="lane-report-foot"><span>${harness} · Lane update</span>${block.id ? html`<button @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>Open chat</button>` : nothing}</div></div>`;
+  }
   override render() {
     const agents = this.agents();
     return html`
@@ -1605,7 +1662,7 @@ export class MuxSDKChat extends LitElement {
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
       <div class="composer-row"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${(e: InputEvent) => { this.setDraft((e.target as HTMLTextAreaElement).value); }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
-      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
+      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .chatTitle=${this.chat?.title || ''} .terminalWorkspaceId=${this.chat?.terminalWorkspaceId || ''} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}
