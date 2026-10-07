@@ -14,6 +14,7 @@ func (s *Server) handleSDKOperator(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	id := r.PathValue("id")
 	if r.Method == http.MethodGet {
+		w.Header().Set("Cache-Control", "no-store")
 		h.mu.Lock()
 		operator := h.chats[id]
 		if operator == nil {
@@ -22,11 +23,18 @@ func (s *Server) handleSDKOperator(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		result := *operator
+		result.OperatorLanes = append([]string(nil), operator.OperatorLanes...)
 		lanes := make([]sdkChat, 0, len(operator.OperatorLanes))
-		for _, laneID := range operator.OperatorLanes {
-			if lane := h.chats[laneID]; lane != nil {
-				lanes = append(lanes, *lane)
+		if operator.Operator {
+			for _, laneID := range operator.OperatorLanes {
+				// Membership belongs to this operator, including archived lanes.
+				// Archiving a chat never creates or removes a lane link.
+				if lane := h.chats[laneID]; lane != nil {
+					lanes = append(lanes, *lane)
+				}
 			}
+		} else {
+			result.OperatorLanes = nil
 		}
 		h.mu.Unlock()
 		writeSDKJSON(w, 200, map[string]any{"operator": result, "lanes": lanes})

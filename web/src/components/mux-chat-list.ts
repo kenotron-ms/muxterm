@@ -193,6 +193,10 @@ export class MuxChatWorkspace extends LitElement {
   }
   private async toggleArchive(chat: SDKChat) {
     this.closeMenu();
+    if (!chat.archived) {
+      const linked = sdkChats.chats.some(parent => parent.operator && parent.operatorLanes?.includes(chat.id));
+      if (linked && !confirm(`Archive "${chat.title}"? It will stay linked to its operator and remain visible in Operator Status.`)) return;
+    }
     try { await sdkChats.setArchived(chat.id, !chat.archived); this.error = ''; }
     catch (error) { this.error = String(error); }
   }
