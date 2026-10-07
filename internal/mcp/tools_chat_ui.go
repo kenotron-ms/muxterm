@@ -32,12 +32,12 @@ func registerChatUITools(srv *Server) {
 		}
 		return string(result), nil
 	}
-	srv.Register("navigate_app", "Open a Chat in connected muxterm browsers, show or hide its side panel beside the chat, or select a Chat tab. Agent navigation keeps the chat visible; Preview-only is a user control. Use list_chats for session_id. Returns a browser count; zero means nobody saw the navigation. Local machine only.",
+	srv.Register("navigate_app", "Open a Chat in connected muxterm browsers, show or hide its side panel beside the chat, or select a Chat tab including Status. Agent navigation keeps the chat visible; Preview-only is a user control. Use list_chats for session_id. Returns a browser count; zero means nobody saw the navigation. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"session_id": map[string]any{"type": "string", "description": "Chat ID"},
 			"action":     map[string]any{"type": "string", "enum": []string{"chat", "panel", "tab"}},
 			"mode":       map[string]any{"type": "string", "enum": []string{"chat", "split"}, "description": "required for action=panel"},
-			"tab":        map[string]any{"type": "string", "enum": []string{"files", "changes", "terminal", "pages"}, "description": "required for action=tab"},
+			"tab":        map[string]any{"type": "string", "enum": []string{"status", "files", "changes", "terminal", "pages"}, "description": "required for action=tab"},
 		}), "required": []string{"session_id", "action"}},
 		func(args map[string]any) (string, error) {
 			action, err := argString(args, "action")

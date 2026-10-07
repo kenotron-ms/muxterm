@@ -91,6 +91,38 @@ func (pt *publishTools) chatDiscovery() ([]discoverChat, []discoverProject, []di
 // They address Go-owned SDK chat IDs, never terminal pane IDs.
 func registerChatControlTools(srv *Server) {
 	pt := newPublishTools()
+	srv.Register("get_operator_lanes", "Read an operator Chat's linked lanes and their hook-backed state, activity and recent output. Local machine only.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"operator_id": map[string]any{"type": "string"}}), "required": []string{"operator_id"}},
+		func(args map[string]any) (string, error) {
+			if err := refuseRemote(args, chatLocalOnly); err != nil {
+				return "", err
+			}
+			id, err := argString(args, "operator_id")
+			if err != nil {
+				return "", err
+			}
+			result, err := pt.doRequest(http.MethodGet, "/api/sdk-chats/"+url.PathEscape(id)+"/operator", nil)
+			return string(result), err
+		})
+	srv.Register("link_operator_lane", "Link an existing Chat as a lane of an operator Chat. Its harness events will report lifecycle status to the operator's journal and status tab. Local machine only.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"operator_id": map[string]any{"type": "string"}, "lane_id": map[string]any{"type": "string"}}), "required": []string{"operator_id", "lane_id"}},
+		func(args map[string]any) (string, error) {
+			if err := refuseRemote(args, chatLocalOnly); err != nil {
+				return "", err
+			}
+			id, err := argString(args, "operator_id")
+			if err != nil {
+				return "", err
+			}
+			laneID, err := argString(args, "lane_id")
+			if err != nil {
+				return "", err
+			}
+			path := "/api/sdk-chats/" + url.PathEscape(id) + "/operator"
+			body, _ := json.Marshal(map[string]any{"laneId": laneID})
+			result, err := pt.doRequest(http.MethodPost, path, body)
+			return string(result), err
+		})
 	srv.Register("list_chats", "List every addressable Chat on this muxterm serve process. IDs can be passed unchanged to send_chat_message. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{})},
 		func(args map[string]any) (string, error) {
@@ -180,11 +212,12 @@ func registerChatControlTools(srv *Server) {
 		})
 	srv.Register("spawn_chat", "Delegate work to a project Chat by default. Optional goal starts an Amplifier stop-condition loop. Chats run with unattended approvals. Returns its stable session ID. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
-			"project":  map[string]any{"type": "string", "description": "exact name of an existing project; omit for Ungrouped"},
-			"harness":  map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex"}},
-			"prompt":   map[string]any{"type": "string", "description": "opening user turn"},
-			"goal":     map[string]any{"type": "string", "description": "Amplifier stop condition; starts a real goal loop and supersedes prompt"},
-			"approval": map[string]any{"type": "string", "enum": []string{"never"}, "description": "optional explicit unattended policy; chats always use never"},
+			"project":     map[string]any{"type": "string", "description": "exact name of an existing project; omit for Ungrouped"},
+			"harness":     map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex", "pi", "opencode", "deepseek"}},
+			"prompt":      map[string]any{"type": "string", "description": "opening user turn"},
+			"goal":        map[string]any{"type": "string", "description": "Amplifier stop condition; starts a real goal loop and supersedes prompt"},
+			"operator_id": map[string]any{"type": "string", "description": "operator chat ID; links this lane before its opening turn and activates reporting"},
+			"approval":    map[string]any{"type": "string", "enum": []string{"never"}, "description": "optional explicit unattended policy; chats always use never"},
 		}), "required": []string{"harness"}},
 		func(args map[string]any) (string, error) {
 			if err := refuseRemote(args, chatLocalOnly); err != nil {
@@ -194,7 +227,7 @@ func registerChatControlTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
-			if harness != "amplifier" && harness != "claude" && harness != "codex" {
+			if harness != "amplifier" && harness != "claude" && harness != "codex" && harness != "pi" && harness != "opencode" && harness != "deepseek" {
 				return "", fmt.Errorf("unsupported harness %q", harness)
 			}
 			prompt, err := argString(args, "prompt")
@@ -226,6 +259,13 @@ func registerChatControlTools(srv *Server) {
 				return "", err
 			}
 			payload := map[string]any{"harness": harness, "prompt": prompt, "goal": goal, "approval": approval}
+			operatorID, _, err := argStringOptional(args, "operator_id")
+			if err != nil {
+				return "", err
+			}
+			if operatorID != "" {
+				payload["operatorId"] = operatorID
+			}
 			if project != "" {
 				body, err := pt.doRequest(http.MethodGet, "/api/sdk-projects", nil)
 				if err != nil {

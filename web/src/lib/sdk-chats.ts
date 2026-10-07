@@ -3,7 +3,7 @@ export type SDKHarnessName = 'codex' | 'claude' | 'amplifier' | 'pi' | 'opencode
 export function sdkHarnessLabel(harness: SDKHarnessName): string {
   return { codex:'Codex', claude:'Claude Code', amplifier:'Amplifier', pi:'Pi', opencode:'OpenCode', deepseek:'DeepSeek Harness' }[harness];
 }
-export interface SDKChat { id: string; workspaceId?: string; terminalWorkspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: SDKHarnessName; provider?: string; nativeId?: string; state: string; createdAt: string; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string }
+export interface SDKChat { id: string; workspaceId?: string; terminalWorkspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: SDKHarnessName; provider?: string; nativeId?: string; state: string; createdAt: string; updatedAt?: string; lastActivity?: string; lastOutput?: string; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string; operator?: boolean; operatorLanes?: string[]; laneTodos?: {text:string;status:string}[]; laneProgress?: number; laneProgressSource?: 'todos' | 'estimate'; laneReport?: string }
 export interface SDKProject { id: string; name: string; path: string; sourceFolders?: string[]; pinned?: boolean }
 export interface FolderListing { path: string; base: string; parent: string; folders: string[] }
 class SDKChatStore {
@@ -34,7 +34,7 @@ class SDKChatStore {
     this.projects = projectRows;
     for (const fn of this.listeners) fn();
   }
-  async create(request: { workspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; prompt: string; attachments?: string[] }) {
+  async create(request: { workspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; prompt: string; attachments?: string[]; operatorId?: string }) {
     const response = await fetch(apiPath('/api/sdk-chats'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
     if (!response.ok) throw new Error(await response.text());
     const chat = await response.json() as SDKChat;
@@ -60,6 +60,20 @@ class SDKChatStore {
     const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({terminalWorkspaceId}) });
     if (!response.ok) throw new Error(await response.text());
     await this.refresh();
+  }
+  async operator(id: string, change: { enabled?: boolean; laneIds?: string[] }): Promise<SDKChat> {
+    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/operator`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(change) });
+    if (!response.ok) throw new Error(await response.text());
+    const chat = await response.json() as SDKChat;
+    await this.refresh();
+    return chat;
+  }
+  async linkOperatorLane(id: string, laneId: string): Promise<SDKChat> {
+    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/operator`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({laneId}) });
+    if (!response.ok) throw new Error(await response.text());
+    const chat = await response.json() as SDKChat;
+    await this.refresh();
+    return chat;
   }
   async createProject(path: string, name = '', sourceFolders: string[] = []) {
     const response = await fetch(apiPath('/api/sdk-projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name, sourceFolders }) });
