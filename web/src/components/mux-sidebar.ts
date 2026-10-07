@@ -1638,6 +1638,7 @@ export class MuxSidebar extends LitElement {
   // ---------------------------------------------------------------------------
 
   private _onUpdateChecked = (event: Event): void => {
+    if (this._updatePhase === 'updating') return;
     this._updateStatus = (event as CustomEvent<UpdateStatus>).detail;
   };
 

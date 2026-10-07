@@ -2524,6 +2524,7 @@ export class MuxApp extends LitElement {
   };
 
   private async _loadAboutUpdate(): Promise<void> {
+    if (this._aboutChecking) return;
     this._aboutCheckError = '';
     try {
       this._aboutUpdate = await fetchUpdateStatus();
