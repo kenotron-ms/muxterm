@@ -133,7 +133,9 @@ func (s *Server) handleAmplifierInstall(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleAmplifierProviderSetup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	// A freshly installed uv tool can take longer on its first provider-list
+	// invocation while Amplifier initializes its module cache.
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 	result, err := runProviderBridge(ctx, providerBridgeRequest{Action: "status"})
 	if err != nil {
@@ -159,7 +161,7 @@ func (s *Server) handleAmplifierProviderSave(w http.ResponseWriter, r *http.Requ
 	}
 	input.Action = "save"
 	w.Header().Set("Cache-Control", "no-store")
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	result, err := runProviderBridge(ctx, input)
 	if err != nil {
