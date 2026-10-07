@@ -1414,6 +1414,16 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "provider does not match harness", 400)
 		return
 	}
+	// A lane started by an operator defaults to that chat's project. Explicit
+	// project choices still take precedence for cross-project delegation.
+	if req.OperatorID != "" && req.WorkspaceID == "" && req.ProjectPath == "" {
+		h.mu.Lock()
+		operator := h.chats[req.OperatorID]
+		if operator != nil {
+			req.WorkspaceID, req.ProjectPath = operator.WorkspaceID, operator.ProjectPath
+		}
+		h.mu.Unlock()
+	}
 	sourceFolders := []string{}
 	if req.WorkspaceID != "" {
 		h.mu.Lock()

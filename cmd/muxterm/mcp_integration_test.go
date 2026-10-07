@@ -205,8 +205,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns45Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 45 tools
+// TestMCPToolsListReturns49Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 49 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
@@ -228,8 +228,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 // starts lanes on a schedule or a file change with no human present, took it
 // to 33. The four Chat control tools took it to 37. The three Chat discovery
 // tools took it to 40. move_chat and navigate_app take it to 42. The three
-// Chat Page tools take it to 45. Operator lane tools take it to 47.
-func TestMCPToolsListReturns47Tools(t *testing.T) {
+// Chat Page tools take it to 45. Operator lane tools take it to 49.
+func TestMCPToolsListReturns49Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "")
 
@@ -265,7 +265,7 @@ func TestMCPToolsListReturns47Tools(t *testing.T) {
 		"publish_folder",
 		"list_publications",
 		"revoke_publication",
-		// 10 serve-owned Chat control, discovery, and operator tools.
+		// 12 serve-owned Chat control, discovery, and operator tools.
 		"list_chats",
 		"search_chats",
 		"list_projects",
@@ -276,6 +276,8 @@ func TestMCPToolsListReturns47Tools(t *testing.T) {
 		"read_chat_session",
 		"get_operator_lanes",
 		"link_operator_lane",
+		"unlink_operator_lane",
+		"spawn_operator_lane",
 		// 2 Chat UI tools (HTTP REST, registered via registerChatUITools)
 		"navigate_app",
 		"view_file",
@@ -352,7 +354,7 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		"publish_folder",
 		"list_publications",
 		"revoke_publication",
-		// 10 Chat tools, available inside a session for cross-chat handoffs.
+		// 12 Chat tools, available inside a session for cross-chat handoffs.
 		"list_chats",
 		"search_chats",
 		"list_projects",
@@ -363,6 +365,8 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		"read_chat_session",
 		"get_operator_lanes",
 		"link_operator_lane",
+		"unlink_operator_lane",
+		"spawn_operator_lane",
 		// Chat UI tools are present in a pane. view_file SHOWS a file to the
 		// human who is already logged in. It publishes nothing, creates no
 		// link and destroys nothing, so it falls on the same side of this

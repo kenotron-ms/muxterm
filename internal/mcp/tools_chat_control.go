@@ -123,6 +123,90 @@ func registerChatControlTools(srv *Server) {
 			result, err := pt.doRequest(http.MethodPost, path, body)
 			return string(result), err
 		})
+	srv.Register("unlink_operator_lane", "Remove a Chat from an operator's linked lanes without closing the Chat. Local machine only.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"operator_id": map[string]any{"type": "string"}, "lane_id": map[string]any{"type": "string"}}), "required": []string{"operator_id", "lane_id"}},
+		func(args map[string]any) (string, error) {
+			if err := refuseRemote(args, chatLocalOnly); err != nil {
+				return "", err
+			}
+			id, err := argString(args, "operator_id")
+			if err != nil {
+				return "", err
+			}
+			laneID, err := argString(args, "lane_id")
+			if err != nil {
+				return "", err
+			}
+			body, _ := json.Marshal(map[string]any{"laneId": laneID})
+			result, err := pt.doRequest(http.MethodDelete, "/api/sdk-chats/"+url.PathEscape(id)+"/operator", body)
+			return string(result), err
+		})
+	srv.Register("spawn_operator_lane", "Start a new Chat as a lane of an operator. It inherits the operator's project unless a project is specified, and reporting is active before its opening turn. Local machine only.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{
+			"operator_id": map[string]any{"type": "string"},
+			"harness":     map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex", "pi", "opencode", "deepseek"}},
+			"prompt":      map[string]any{"type": "string", "description": "opening task"},
+			"goal":        map[string]any{"type": "string", "description": "Amplifier full-goal stop condition; supersedes prompt"},
+			"project":     map[string]any{"type": "string", "description": "optional exact name of a different project"},
+		}), "required": []string{"operator_id", "harness"}},
+		func(args map[string]any) (string, error) {
+			if err := refuseRemote(args, chatLocalOnly); err != nil {
+				return "", err
+			}
+			operatorID, err := argString(args, "operator_id")
+			if err != nil {
+				return "", err
+			}
+			harness, err := argString(args, "harness")
+			if err != nil {
+				return "", err
+			}
+			prompt, _, err := argStringOptional(args, "prompt")
+			if err != nil {
+				return "", err
+			}
+			goal, _, err := argStringOptional(args, "goal")
+			if err != nil {
+				return "", err
+			}
+			project, _, err := argStringOptional(args, "project")
+			if err != nil {
+				return "", err
+			}
+			if strings.TrimSpace(prompt) == "" && strings.TrimSpace(goal) == "" {
+				return "", fmt.Errorf("prompt or goal required")
+			}
+			if goal != "" && harness != "amplifier" {
+				return "", fmt.Errorf("goal requires amplifier")
+			}
+			payload := map[string]any{"operatorId": operatorID, "harness": harness, "prompt": prompt, "goal": goal}
+			if project != "" {
+				body, err := pt.doRequest(http.MethodGet, "/api/sdk-projects", nil)
+				if err != nil {
+					return "", err
+				}
+				var projects []struct{ ID, Name string }
+				if err := json.Unmarshal(body, &projects); err != nil {
+					return "", err
+				}
+				matches := 0
+				for _, p := range projects {
+					if p.Name == project {
+						payload["workspaceId"] = p.ID
+						matches++
+					}
+				}
+				if matches != 1 {
+					return "", fmt.Errorf("project %q matched %d projects; name must identify exactly one", project, matches)
+				}
+			}
+			body, _ := json.Marshal(payload)
+			result, err := pt.doRequest(http.MethodPost, "/api/sdk-chats", body)
+			if err != nil {
+				return "", fmt.Errorf("spawn_operator_lane outcome uncertain; list_chat_sessions before creating another lane: %w", err)
+			}
+			return string(result), nil
+		})
 	srv.Register("list_chats", "List every addressable Chat on this muxterm serve process. IDs can be passed unchanged to send_chat_message. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{})},
 		func(args map[string]any) (string, error) {

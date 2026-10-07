@@ -68,13 +68,6 @@ class SDKChatStore {
     await this.refresh();
     return chat;
   }
-  async linkOperatorLane(id: string, laneId: string): Promise<SDKChat> {
-    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/operator`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({laneId}) });
-    if (!response.ok) throw new Error(await response.text());
-    const chat = await response.json() as SDKChat;
-    await this.refresh();
-    return chat;
-  }
   async createProject(path: string, name = '', sourceFolders: string[] = []) {
     const response = await fetch(apiPath('/api/sdk-projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name, sourceFolders }) });
     if (!response.ok) throw new Error(await response.text());

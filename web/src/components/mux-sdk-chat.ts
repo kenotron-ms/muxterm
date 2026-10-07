@@ -194,6 +194,7 @@ export class MuxSDKChat extends LitElement {
     .pane-controls button.active { color:var(--chrome-accent); background:var(--chrome-hover); }
     .chat-title { min-width:0; overflow:hidden; }
     .operator-button { display:inline-flex; align-items:center; gap:6px; flex:none; border:1px solid var(--chrome-border); border-radius:7px; padding:5px 8px; background:var(--chrome-bar); color:var(--chrome-text-dim); font-size:11px; }
+    .operator-button:not(.active) { color:var(--chrome-accent); border-color:color-mix(in srgb,var(--chrome-accent) 45%,var(--chrome-border)); background:color-mix(in srgb,var(--chrome-accent) 9%,var(--chrome-bar)); }
     .operator-button:hover,.operator-button.active { color:var(--chrome-accent); border-color:color-mix(in srgb,var(--chrome-accent) 50%,var(--chrome-border)); }
     .chat-title small { display:block; color:var(--chrome-text-dim); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .layout { display:flex; flex:1; min-height:0; }

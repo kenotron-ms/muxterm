@@ -7,17 +7,18 @@ operator; cycles are rejected.
 
 ## Flow
 
-1. Open any chat and choose **Make operator** in the top bar. The right drawer
-   opens to **Status**, next to Files.
-2. Attach existing chats, or enter a task and choose a harness to start a new
-   lane in the operator's project. Newly created lanes are linked before their
-   first turn, so the opening request receives the lane reporting contract.
-3. Ask the operator to coordinate work in the ordinary composer. Every turn
+1. Open any chat and choose **Make operator** in the chat header. The right
+   drawer opens to **Status**, next to Files. The sidebar uses a network icon
+   in place of the chat's status dot while operator mode is on.
+2. Ask the operator in the ordinary composer to start a lane with a chosen
+   harness, attach an existing chat, or remove a lane. The Status tab displays
+   progress and links to full chats; it has no lane-management form.
+3. Every operator turn
    receives standing instructions and the current linked lane IDs and states.
-   The operator can use `spawn_chat`, `send_chat_message`,
-   `link_operator_lane`, `get_operator_lanes`, and `read_chat_session` through
-   the existing muxterm MCP bridge. It passes `operator_id` when spawning a
-   lane so the link exists before the opening turn.
+   The operator uses `spawn_operator_lane`, `link_operator_lane`,
+   `unlink_operator_lane`, `get_operator_lanes`, `send_chat_message`, and
+   `read_chat_session` through the muxterm MCP bridge. A new lane is linked
+   before its opening turn, so its reporting contract is active from the start.
 4. Each linked harness's event bridge reports start, tools, completion,
    cancellation, failure, uncertainty, and goal milestones. Plan and todo tool
    payloads become a shared checklist and percentage. When there is no plan,
@@ -27,9 +28,9 @@ operator; cycles are rejected.
    submits that report to the operator harness as an `operator-lane` input so
    it can summarize the outcome and blockers for the user. The report appears
    on the left in its own card; it is never rendered as a human user bubble.
-6. Open a lane only when you want its full conversation. Remove it from the
-   operator when it no longer belongs to the group. **End operator mode** keeps
-   the chat and its history, and removes the links.
+6. Open a lane only when you want its full conversation. The compact **Operator
+   mode** switch in Status returns the chat to regular mode and removes its
+   links while preserving the chats and their histories.
 
 ## Screen shape
 
@@ -39,17 +40,16 @@ operator; cycles are rejected.
 ├──────────────────────────────────┬──────────────────────────────────────────┤
 │                                  │ [Status] [Files] [Changes] [Terminal]  │
 │  You: Ship the search changes.   ├──────────────────────────────────────────┤
-│                                  │ Operator status          End operator  │
+│                                  │ Operator status    Operator mode [on] │
 │  Operator: I started Codex and   │ 3 lanes · 2 working · 1 needs attention│
 │  Claude lanes. I will report     │ ┌──────────────────────────────────────┐ │
 │  back on their outcomes.         │ │ ● Search API       Codex · working   │ │
 │                                  │ │ Running tool: go build               │ │
 │  Report from Search API          │ │ Todo progress              67%        │ │
 │  API ready; one blocker...       │ │ ✓ route  ✓ build  ○ review            │ │
-│  Operator: Search API is ready…  │ │ Open chat   Remove lane              │ │
+│  Operator: Search API is ready…  │ │ Open chat                            │ │
 │  UI review · failed · Error...   │ └──────────────────────────────────────┘ │
-│                                  │ Attach existing chat  [Choose] [Attach]│
-│  [Message the operator…]         │ Start a new lane      [Task + harness]│
+│  [Ask: start a Claude lane…]     │                                          │
 └──────────────────────────────────┴──────────────────────────────────────────┘
 ```
 
