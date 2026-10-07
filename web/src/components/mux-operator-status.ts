@@ -49,7 +49,7 @@ export class MuxOperatorStatus extends LitElement {
     table { width:100%; min-width:390px; border-collapse:collapse; table-layout:fixed; }
     col.lane-col { width:auto; }
     col.state-col { width:76px; }
-    col.progress-col { width:101px; }
+    col.progress-col { width:145px; }
     col.action-col { width:36px; }
     th { padding:9px 10px 7px; color:var(--chrome-text-dim); font-size:11px; font-weight:500; text-align:left; border-bottom:1px solid var(--chrome-border); }
     th:nth-child(3) { text-align:right; }
@@ -68,15 +68,16 @@ export class MuxOperatorStatus extends LitElement {
     .state::before { content:''; width:6px; height:6px; flex:none; border-radius:50%; background:currentColor; }
     .state.working,.state.starting { color:var(--chrome-accent); }
     .state.ready { color:var(--mux-ok,#55b981); }
-    .state.failed,.state.uncertain { color:var(--chrome-danger); }
+    .state.failed,.state.uncertain,.state.stopped { color:var(--chrome-danger); }
     .progress-cell { text-align:right; }
     .meter { display:inline-flex; align-items:center; justify-content:flex-end; gap:7px; width:100%; color:var(--chrome-accent); }
     .meter.ready { color:var(--mux-ok,#55b981); }
-    .meter.failed,.meter.uncertain { color:var(--chrome-danger); }
+    .meter.failed,.meter.uncertain,.meter.stopped { color:var(--chrome-danger); }
     .bars { display:inline-flex; align-items:end; gap:2px; height:17px; }
     .bars span { display:block; width:3px; flex:none; border-radius:2px 2px 0 0; background:color-mix(in srgb,var(--chrome-border) 82%,transparent); }
     .bars span.filled { background:currentColor; }
-    .percent { min-width:29px; color:var(--chrome-text-dim); font-size:10px; font-variant-numeric:tabular-nums; }
+    .time-label { min-width:75px; color:var(--chrome-text-dim); font-size:10px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .timing-note { margin:0 0 8px; color:var(--chrome-text-dim); font-size:11px; line-height:1.45; }
     .open { display:grid; place-items:center; width:24px; height:24px; border:0; border-radius:5px; padding:0; background:none; color:var(--chrome-text-dim); }
     .open:hover { background:var(--chrome-hover); color:var(--chrome-accent); }
     .detail td { padding:0 11px 13px 28px; background:var(--chrome-hover); border-top:0; }
@@ -187,25 +188,62 @@ export class MuxOperatorStatus extends LitElement {
       ? renderSegments(new MarkdownStream().update(latest, false), chatMarkdownPolicy)
       : html`<p class="message-placeholder">No message from this lane yet.</p>`;
   }
+  private duration(seconds: number) {
+    if (seconds < 60) return `${Math.max(1, Math.round(seconds))}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    return `${Math.round(seconds / 3600 * 10) / 10}h`;
+  }
+  private timingLabel(lane: SDKChat) {
+    const timing = lane.timing;
+    if (this.isStopped(lane)) return 'Stopped';
+    if (lane.state === 'ready') return timing?.actualSeconds ? `Done in ${this.duration(timing.actualSeconds)}` : 'Done';
+    if (lane.state !== 'working' && lane.state !== 'starting') return 'Time unknown';
+    if (timing?.remainingLowSeconds !== undefined && timing.remainingHighSeconds !== undefined) return `~${this.duration(timing.remainingLowSeconds)}–${this.duration(timing.remainingHighSeconds)} left`;
+    if (timing?.sampleSize && timing.effortLowSeconds !== undefined && timing.effortHighSeconds !== undefined && !timing.elapsedSeconds) return `~${this.duration(timing.effortLowSeconds)}–${this.duration(timing.effortHighSeconds)}`;
+    return timing?.sampleSize ? 'Time uncertain' : 'No history yet';
+  }
+  private timingNote(lane: SDKChat) {
+    const timing = lane.timing;
+    if (!timing || timing.sampleSize < 8) return 'Timing unavailable: fewer than eight completed human turns in recent history. Whole goal runs have too little history for a separate estimate.';
+    const category = { review:'review', focused:'focused change', cross_stack:'cross-stack change', operational:'operational change' }[timing.category];
+    const source = { openai_decisions:'OpenAI Decisions', anthropic:'Anthropic', historical_only:'request wording' }[timing.classification];
+    const basis = timing.broadHistory ? 'all request types (too few comparable examples)' : `comparable ${category} requests`;
+    const range = `${this.duration(timing.effortLowSeconds || 0)}–${this.duration(timing.effortHighSeconds || 0)}`;
+    const elapsed = timing.elapsedSeconds ? ` Elapsed: ${this.duration(timing.elapsedSeconds)}.` : '';
+    const remaining = timing.elapsedSeconds && (timing.survivorCount || 0) < 5 ? ' Too few longer examples remain for a useful remaining-time range.' : timing.survivorCount ? ` Remaining range uses ${timing.survivorCount} examples that ran longer than elapsed time.` : '';
+    return `Timing basis: ${timing.sampleSize} completed human turns in the last 180 days, ${basis}; observed middle 80%: ${range}. Classified by ${source}.${elapsed}${remaining} Turn timing is an uncertain guide to this work; whole goal runs have too little history for a separate estimate.`;
+  }
   private meter(lane: SDKChat) {
-    const percent = Math.max(0, Math.min(100, lane.laneProgress ?? 0));
-    const source = lane.laneProgressSource === 'todos' ? 'Todo progress' : 'Turn estimate';
-    return html`<div class="meter ${lane.state}" role="progressbar" aria-label=${`${lane.title}: ${source}`} aria-valuenow=${percent} aria-valuemin="0" aria-valuemax="100" title=${`${source}: ${percent}%`}>
-      <span class="bars" aria-hidden="true">${barHeights.map((height, index) => html`<span class=${index < Math.ceil(percent * barHeights.length / 100) ? 'filled' : ''} style=${`height:${height}px`}></span>`)}</span>
-      <span class="percent" aria-hidden="true">${percent}%</span>
+    const done = lane.laneTodos?.filter(todo => todo.status === 'completed' || todo.status === 'done').length || 0;
+    const total = lane.laneTodos?.length || 0;
+    const todoCount = total > 0;
+    const elapsed = lane.timing?.elapsedSeconds || 0;
+    const high = lane.timing?.effortHighSeconds || 0;
+    const filled = todoCount ? Math.round(done / total * barHeights.length) : lane.state === 'ready' && !this.isStopped(lane) ? barHeights.length : lane.state === 'working' && high > 0 ? Math.min(barHeights.length, Math.max(1, Math.round(elapsed / high * barHeights.length))) : lane.state === 'working' ? 1 : 0;
+    const label = todoCount ? `${done}/${total} tasks` : this.timingLabel(lane);
+    const meaning = todoCount ? 'completed tasks' : lane.state === 'working' && high > 0 ? 'elapsed time against the upper historical range; not percent complete' : 'lane state';
+    return html`<div class="meter ${this.isStopped(lane) ? 'stopped' : lane.state}" aria-label=${`${lane.title}: ${label}; bars show ${meaning}`} title=${meaning}>
+      <span class="bars" aria-hidden="true">${barHeights.map((height, index) => html`<span class=${index < filled ? 'filled' : ''} style=${`height:${height}px`}></span>`)}</span>
+      <span class="time-label">${label}</span>
     </div>`;
   }
   private filterButton(value: LaneFilter, label: string, count: number) {
     return html`<button class="filter ${this.filter === value ? 'active' : ''}" aria-pressed=${this.filter === value} @click=${() => this.chooseFilter(value)}>${label}<span class="filter-count">${count}</span></button>`;
   }
+  private isStopped(lane: SDKChat) {
+    return lane.state === 'ready' && lane.lastTurnOutcome === 'cancelled';
+  }
+  private needsAttention(lane: SDKChat) {
+    return lane.state === 'failed' || lane.state === 'uncertain' || this.isStopped(lane);
+  }
   override render() {
     const operator = this.snapshot?.operator;
     const lanes = this.snapshot?.lanes || [];
-    const attention = lanes.filter(chat => chat.state === 'failed' || chat.state === 'uncertain').length;
+    const attention = lanes.filter(chat => this.needsAttention(chat)).length;
     const working = lanes.filter(chat => chat.state === 'working' || chat.state === 'starting').length;
-    const done = lanes.filter(chat => chat.state === 'ready').length;
-    const visible = lanes.filter(chat => this.filter === 'all' || (this.filter === 'attention' ? chat.state === 'failed' || chat.state === 'uncertain' : this.filter === 'running' ? chat.state === 'working' || chat.state === 'starting' : chat.state === 'ready'));
-    return html`<div class="head"><h2>Operator status</h2><p>Lane progress and latest replies.</p></div>
+    const done = lanes.filter(chat => chat.state === 'ready' && !this.isStopped(chat)).length;
+    const visible = lanes.filter(chat => this.filter === 'all' || (this.filter === 'attention' ? this.needsAttention(chat) : this.filter === 'running' ? chat.state === 'working' || chat.state === 'starting' : chat.state === 'ready' && !this.isStopped(chat)));
+    return html`<div class="head"><h2>Operator status</h2><p>Lane work, timing ranges, and latest replies.</p></div>
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       ${!operator ? html`<div class="empty">Loading operator status…</div>` : !operator.operator ? html`<div class="empty"><p>Operator mode is off.</p><p class="hint">Turn it on from the permission and mode menu in the chat composer.</p></div>` : html`
         <p class="summary"><strong>${lanes.length}</strong> lanes<span class="sep">/</span><strong>${working}</strong> working<span class="sep">/</span><strong>${attention}</strong> need attention</p>
@@ -216,16 +254,16 @@ export class MuxOperatorStatus extends LitElement {
           ${this.filterButton('done', 'Done', done)}
         </div>${visible.length ? html`<div class="table-scroll"><table aria-label="Operator lanes">
           <colgroup><col class="lane-col"><col class="state-col"><col class="progress-col"><col class="action-col"></colgroup>
-          <thead><tr><th scope="col">Lane</th><th scope="col">State</th><th scope="col">Progress</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
+          <thead><tr><th scope="col">Lane</th><th scope="col">State</th><th scope="col">Time / tasks</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
           <tbody>${visible.map(lane => {
             const expanded = this.expandedLane === lane.id;
             const detailId = `operator-lane-${lane.id}`;
             return html`<tr class="lane-row ${expanded ? 'expanded' : ''}">
               <td><button class="lane-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} ${lane.title}`} aria-expanded=${expanded} aria-controls=${detailId} @click=${() => { this.expandedLane = expanded ? '' : lane.id; this.archiveConfirmLane = ''; }}><span class="chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-name" title=${lane.title}>${lane.title}<span class="harness">${sdkHarnessLabel(lane.harness)}${lane.archived ? html` <span class="archived-label">· Archived</span>` : nothing}</span></span></button></td>
-              <td><span class="state ${lane.state}">${lane.state === 'ready' ? 'Ready' : lane.state === 'uncertain' ? 'Uncertain' : lane.state === 'starting' ? 'Starting' : lane.state === 'failed' ? 'Failed' : 'Working'}</span></td>
+              <td><span class="state ${this.isStopped(lane) ? 'stopped' : lane.state}">${this.isStopped(lane) ? 'Stopped' : lane.state === 'ready' ? 'Ready' : lane.state === 'uncertain' ? 'Uncertain' : lane.state === 'starting' ? 'Starting' : lane.state === 'failed' ? 'Failed' : 'Working'}</span></td>
               <td class="progress-cell">${this.meter(lane)}</td>
               <td><button class="open" aria-label=${`Open chat: ${lane.title}`} title="Open chat" @click=${() => this.open(lane.id)}>${icon(ArrowUpRight,{size:15})}</button></td>
-            </tr>${expanded ? html`<tr class="detail"><td colspan="4"><div class="message" id=${detailId}>${this.message(lane)}</div>
+            </tr>${expanded ? html`<tr class="detail"><td colspan="4"><p class="timing-note">${this.timingNote(lane)}</p><div class="message" id=${detailId}>${this.message(lane)}</div>
               <div class="detail-actions"><button aria-label=${`Unlink ${lane.title} from operator`} ?disabled=${!!this.pendingLane} @click=${() => void this.unlink(lane)}>${icon(Unlink2,{size:13})} Unlink lane</button>
                 <button class="archive-action" aria-label=${`${lane.archived ? 'Restore' : 'Archive'} chat ${lane.title}`} ?disabled=${!!this.pendingLane} @click=${() => lane.archived ? void this.setArchived(lane, false) : this.archiveConfirmLane = lane.id}>${icon(lane.archived ? ArchiveRestore : Archive,{size:13})} ${lane.archived ? 'Restore chat' : 'Archive chat'}</button></div>
               ${this.archiveConfirmLane === lane.id && !lane.archived ? html`<div class="archive-confirm"><p>Archive “${lane.title}”? It stays linked here and can keep reporting.</p><div class="buttons"><button @click=${() => { this.archiveConfirmLane = ''; }}>Cancel</button><button class="confirm-archive" ?disabled=${!!this.pendingLane} @click=${() => void this.setArchived(lane, true)}>Archive chat</button></div></div>` : nothing}

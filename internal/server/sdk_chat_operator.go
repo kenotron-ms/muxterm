@@ -37,7 +37,15 @@ func (s *Server) handleSDKOperator(w http.ResponseWriter, r *http.Request) {
 			result.OperatorLanes = nil
 		}
 		h.mu.Unlock()
-		writeSDKJSON(w, 200, map[string]any{"operator": result, "lanes": lanes})
+		type laneSnapshot struct {
+			sdkChat
+			Timing sdkLaneTiming `json:"timing"`
+		}
+		statusLanes := make([]laneSnapshot, 0, len(lanes))
+		for _, lane := range lanes {
+			statusLanes = append(statusLanes, laneSnapshot{sdkChat: lane, Timing: h.estimates.timing(lane)})
+		}
+		writeSDKJSON(w, 200, map[string]any{"operator": result, "lanes": statusLanes})
 		return
 	}
 	var req struct {

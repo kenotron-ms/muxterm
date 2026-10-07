@@ -47,19 +47,6 @@ func sdkTodosFromTool(event sdkEvent) []sdkLaneTodo {
 	return todos
 }
 
-func sdkTodoPercent(todos []sdkLaneTodo) int {
-	if len(todos) == 0 {
-		return 0
-	}
-	done := 0
-	for _, item := range todos {
-		if item.Status == "completed" || item.Status == "done" {
-			done++
-		}
-	}
-	return 100 * done / len(todos)
-}
-
 func (h *sdkChatHost) queueOperatorReport(operatorID, laneID string, terminal sdkEvent) {
 	h.mu.Lock()
 	lane := h.chats[laneID]

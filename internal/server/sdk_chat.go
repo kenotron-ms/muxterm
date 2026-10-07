@@ -56,14 +56,15 @@ type sdkChat struct {
 	WorkMode            string        `json:"workMode,omitempty"`
 	CreatedAt           time.Time     `json:"createdAt"`
 	UpdatedAt           time.Time     `json:"updatedAt,omitempty"`
+	TurnStartedAt       time.Time     `json:"turnStartedAt,omitempty"`
+	LastTurnSeconds     int           `json:"lastTurnSeconds,omitempty"`
+	LastTurnOutcome     string        `json:"lastTurnOutcome,omitempty"`
 	LastActivity        string        `json:"lastActivity,omitempty"`
 	LastOutput          string        `json:"lastOutput,omitempty"`
 	HasVoiceHistory     bool          `json:"hasVoiceHistory,omitempty"`
 	Operator            bool          `json:"operator,omitempty"`
 	OperatorLanes       []string      `json:"operatorLanes,omitempty"`
 	LaneTodos           []sdkLaneTodo `json:"laneTodos,omitempty"`
-	LaneProgress        int           `json:"laneProgress,omitempty"`
-	LaneProgressSource  string        `json:"laneProgressSource,omitempty"`
 	LaneReport          string        `json:"laneReport,omitempty"`
 }
 type sdkLaneTodo struct {
@@ -157,6 +158,7 @@ type sdkChatHost struct {
 	reportRunning map[string]bool
 	reportPending map[string]bool
 	onEvent       func(sdkEvent)
+	estimates     *sdkEffortEstimator
 }
 
 func sdkDataDir() string {
@@ -169,6 +171,7 @@ func sdkDataDir() string {
 }
 func newSDKChatHost() *sdkChatHost {
 	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}}
+	h.estimates = newSDKEffortEstimator(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	entries, _ := os.ReadDir(h.dir)
 	// A catalog is authoritative once written. A removed project must stay
@@ -294,12 +297,13 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	switch event.Type {
 	case "input.accepted":
 		c.State = "working"
+		c.TurnStartedAt = event.At
+		c.LastTurnSeconds = 0
+		c.LastTurnOutcome = ""
 		c.LastActivity = "Working on: " + sdkPreview(event.Text, 160)
 		c.LastOutput = ""
 		c.LaneReport = ""
 		c.LaneTodos = nil
-		c.LaneProgress = 0
-		c.LaneProgressSource = "estimate"
 		if event.Kind == "user" && event.Source != "operator-lane" {
 			c.UserTurns++
 		}
@@ -309,24 +313,16 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		// message aligned with the latest assistant reply after that tool.
 		c.LastOutput = ""
 		c.LaneReport = ""
-		if c.LaneProgressSource != "todos" && c.LaneProgress < 25 {
-			c.LaneProgress = 25
-		}
 		if todos := sdkTodosFromTool(event); len(todos) > 0 {
 			c.LaneTodos = todos
-			c.LaneProgress, c.LaneProgressSource = sdkTodoPercent(todos), "todos"
 		}
 	case "tool.completed":
 		if todos := sdkTodosFromTool(event); len(todos) > 0 {
 			c.LaneTodos = todos
-			c.LaneProgress, c.LaneProgressSource = sdkTodoPercent(todos), "todos"
 		}
 	case "assistant.delta":
 		c.LastOutput = sdkTail(c.LastOutput+event.Text, 300)
 		c.LaneReport = sdkTail(c.LaneReport+event.Text, 4000)
-		if c.LaneProgressSource != "todos" && c.LaneProgress < 50 {
-			c.LaneProgress = 50
-		}
 	case "assistant.interim":
 		// The next assistant message is the lane's latest reply. Do not show
 		// pre-tool narration as part of the expanded status row.
@@ -334,22 +330,17 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.LaneReport = ""
 	case "turn.completed":
 		c.State = "ready"
-		c.LastActivity = "Turn completed"
-		if c.Goal == "" && c.LaneProgressSource != "todos" {
-			c.LaneProgress, c.LaneProgressSource = 100, "estimate"
+		c.LastTurnOutcome = "completed"
+		if !c.TurnStartedAt.IsZero() && event.At.After(c.TurnStartedAt) {
+			c.LastTurnSeconds = int(event.At.Sub(c.TurnStartedAt).Seconds() + .5)
 		}
+		c.LastActivity = "Turn completed"
 	case "goal.progress":
 		c.GoalState, c.GoalReason, c.GoalSummary = event.GoalState, event.GoalReason, event.GoalSummary
 		c.LastActivity = "Goal: " + event.GoalState
-		if c.LaneProgressSource != "todos" {
-			if event.GoalState == "continuing" && c.LaneProgress < 75 {
-				c.LaneProgress = 75
-			} else if event.GoalState != "" && event.GoalState != "continuing" {
-				c.LaneProgress = 100
-			}
-		}
 	case "turn.cancelled":
 		c.State = "ready"
+		c.LastTurnOutcome = "cancelled"
 		c.LastActivity = "Turn stopped by user"
 	case "error":
 		c.State = "failed"
