@@ -30,6 +30,8 @@ import copy  # noqa: E402
 import dataclasses  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
+import re  # noqa: E402
+import shlex  # noqa: E402
 import signal  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
@@ -88,6 +90,38 @@ class Proto:
 
 SDK_CHAT_SESSIONS = {}
 SDK_CHAT_PROTO = None
+_KEY_FILE_VALUES = {}
+
+
+def refresh_amplifier_keys(home: Path) -> None:
+    """Refresh Amplifier-managed keys for a new chat without replacing launch env."""
+    path = home / "keys.env"
+    values = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() and path.stat().st_size <= 1_000_000 else ()
+    except OSError:
+        lines = ()
+    for line in lines:
+        line = line.strip().removeprefix("export ")
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, raw = line.split("=", 1)
+        name = name.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            continue
+        try:
+            values[name] = " ".join(shlex.split(raw, comments=True))
+        except ValueError:
+            continue
+    for name, previous in tuple(_KEY_FILE_VALUES.items()):
+        if name not in values and os.environ.get(name) == previous:
+            os.environ.pop(name, None)
+            _KEY_FILE_VALUES.pop(name, None)
+    for name, value in values.items():
+        previous = _KEY_FILE_VALUES.get(name)
+        if name not in os.environ or (previous is not None and os.environ.get(name) == previous):
+            os.environ[name] = value
+            _KEY_FILE_VALUES[name] = value
 SDK_PREPARED_CACHE = {}
 CAPS = dict(approvals=False, transcript_read=True, interrupt=True,
             live_input=True, attributed_service_input=True, native_steering=True)
@@ -224,6 +258,7 @@ class SDKChatSession:
         if not slug.startswith("-"):
             slug = "-" + slug
         home = get_amplifier_home()
+        refresh_amplifier_keys(home)
         settings = AppSettings(SettingsPaths(
             global_settings=home / "settings.yaml",
             project_settings=project / ".amplifier" / "settings.yaml",

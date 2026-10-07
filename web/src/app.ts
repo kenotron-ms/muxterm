@@ -396,6 +396,11 @@ export class MuxApp extends LitElement {
       max-height: min(80vh, 600px);
     }
 
+    .overlay-dialog.sdialog {
+      width: min(920px, calc(100vw - 32px));
+      height: min(88vh, 760px);
+    }
+
     .overlay-body {
       flex: 1;
       overflow: hidden;
@@ -1601,7 +1606,7 @@ export class MuxApp extends LitElement {
                 ></mux-dock>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} .draftId=${this._newChatDraftId} .terminalWorkspaceId=${this._newChatTerminalWorkspaceId} @onboarding-state=${this._onOnboardingState} @chat-created=${this._onChatCreated} @chat-terminal-open=${this._onChatTerminalOpen} @pane-create=${this._createPaneOptimistic} @setup-command=${this._onSetupCommand}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} .draftId=${this._newChatDraftId} .terminalWorkspaceId=${this._newChatTerminalWorkspaceId} @onboarding-state=${this._onOnboardingState} @chat-created=${this._onChatCreated} @chat-terminal-open=${this._onChatTerminalOpen} @pane-create=${this._createPaneOptimistic} @setup-command=${this._onSetupCommand} @launcher-action=${this._onLauncherAction}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
@@ -1714,7 +1719,7 @@ export class MuxApp extends LitElement {
       ${this._overlayPanel ? html`
         <div class="overlay-backdrop" @click="${this._closeOverlayPanel}">
           <div
-            class="overlay-dialog${this._overlayPanel === 'connect' ? ' cdialog' : ''}"
+            class="overlay-dialog${this._overlayPanel === 'connect' ? ' cdialog' : this._overlayPanel === 'settings' ? ' sdialog' : ''}"
             @click="${(e: Event) => e.stopPropagation()}"
           >
             <div class="overlay-body">

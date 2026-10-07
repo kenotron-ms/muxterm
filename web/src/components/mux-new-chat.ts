@@ -6,18 +6,10 @@ import { apiPath } from '../lib/base-path.js';
 import { ChevronDown, Folder, Plus } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { carryUtilityTabs, type MuxSDKUtility } from './mux-sdk-utility.js';
+import './mux-ai-providers.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
 type StartOption = { harness: SDKHarnessName; provider: ProviderName };
-type AmplifierProviderState = { id: string; source?: 'environment' | 'amplifier-keys' | 'oauth-cache'; envName?: string };
-type AmplifierProviderSetup = { cliInstalled: boolean; configured: boolean; primary: string; providers: AmplifierProviderState[] };
-const AI_PROVIDERS = [
-  { id:'github-copilot', name:'GitHub Copilot', detail:'Use an existing Copilot subscription. Sign-in may already be available through GitHub or VS Code.' },
-  { id:'openai-chatgpt', name:'ChatGPT', detail:'Use a ChatGPT subscription with device-code sign-in.' },
-  { id:'openai', name:'OpenAI API', detail:'Use an API key with separate usage billing.' },
-  { id:'anthropic', name:'Anthropic API', detail:'Use an Anthropic API key.' },
-  { id:'gemini', name:'Google Gemini API', detail:'Use a Google API key.' },
-] as const;
 const SETUP_AGENTS = [
   { harness:'codex', name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
   { harness:'claude', name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
@@ -57,14 +49,8 @@ export class MuxNewChat extends LitElement {
   @state() private onboardingLoaded = false;
   @state() private onboardingError = '';
   @state() private optionsLoaded = false;
-  @state() private amplifierProviderSetup?: AmplifierProviderSetup;
-  @state() private chosenAIProvider = '';
-  @state() private providerError = '';
-  @state() private providerCheckBusy = false;
-  @state() private providerChecked = '';
-  @state() private providerCheckError = '';
+  @state() private aiProviderReady = false;
   @state() private setupStep: 'provider' | 'harness' = 'provider';
-  @state() private providerSettingsOpen = false;
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   private dragDepth = 0;
@@ -259,10 +245,8 @@ export class MuxNewChat extends LitElement {
     void this.loadOnboarding();
     if (this.initialPrompt) this.prompt = this.initialPrompt;
     void this.loadStartOptions();
-    void this.loadAmplifierProviderSetup();
     this.optionsRefreshTimer = window.setInterval(() => {
       if (this.firstRun || (this.utilityOpen && this.startOptions?.length === 0)) void this.loadStartOptions(true);
-      if (this.firstRun || this.providerSettingsOpen) void this.loadAmplifierProviderSetup();
     }, 4000);
     if (this.initialFolder) this.folder = this.initialFolder;
     if (this.initialProject) this.projectId = this.initialProject;
@@ -351,76 +335,12 @@ export class MuxNewChat extends LitElement {
       if (this.isConnected && !silent) this.optionsLoaded = true;
     }
   }
-  private async loadAmplifierProviderSetup() {
-    try {
-      const response = await fetch(apiPath('/api/amplifier-provider-setup'));
-      if (!response.ok) throw new Error(await response.text());
-      const setup = await response.json() as AmplifierProviderSetup;
-      if (!this.isConnected) return;
-      this.amplifierProviderSetup = setup;
-      if (!this.chosenAIProvider) this.chosenAIProvider = setup.providers.find(provider => provider.source)?.id || 'anthropic';
-      this.providerError = '';
-    } catch (error) {
-      if (this.isConnected) this.providerError = error instanceof Error ? error.message : String(error);
-    }
-  }
-  private async checkAIProvider() {
-    if (this.providerCheckBusy || !this.amplifierProviderSetup?.cliInstalled) return;
-    const provider = this.chosenAIProvider;
-    this.providerCheckBusy = true;
-    this.providerCheckError = '';
-    this.providerChecked = '';
-    try {
-      const response = await fetch(apiPath('/api/amplifier-provider-setup/check'), {
-        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({provider}),
-      });
-      if (!response.ok) throw new Error((await response.text()).trim() || 'Could not check provider.');
-      if (this.isConnected && this.chosenAIProvider === provider) {
-        this.providerChecked = provider;
-        await this.loadAmplifierProviderSetup();
-      }
-    } catch (error) {
-      if (this.isConnected && this.chosenAIProvider === provider) this.providerCheckError = error instanceof Error ? error.message : String(error);
-    } finally { this.providerCheckBusy = false; }
-  }
-  private chooseAIProvider(provider: string) {
-    this.chosenAIProvider = provider;
-    this.providerError = '';
-    this.providerChecked = '';
-    this.providerCheckError = '';
-  }
   private renderProviderSetup(): TemplateResult {
-    const setup = this.amplifierProviderSetup;
-    const selected = setup?.providers.find(provider => provider.id === this.chosenAIProvider);
-    const name = AI_PROVIDERS.find(provider => provider.id === this.chosenAIProvider)?.name || 'Provider';
-    const connected = this.providerChecked === this.chosenAIProvider;
     return this.renderScreen(html`<div class="main setup"><div class="content setup-shell">
-      <header class="setup-header"><div><h1>${this.firstRun ? 'Connect an AI provider' : 'Amplifier provider'}</h1><p class="setup-lead">Amplifier uses this connection for its chats. Choose a service, then confirm it can reach a model.</p></div></header>
+      <header class="setup-header"><div><h1>${this.firstRun ? 'Connect an AI provider' : 'AI providers'}</h1><p class="setup-lead">Amplifier uses this connection for its chats. Configure a provider and check that it can reach a model.</p></div></header>
       ${this.firstRun ? html`<nav class="setup-progress" aria-label="Setup progress"><span class="current" aria-current="step"><b>1</b>AI provider</span><i aria-hidden="true"></i><span><b>2</b>Coding agents</span></nav>` : nothing}
-      <div class="provider-workspace ${this.utilityOpen ? 'compact' : ''}">
-        ${this.utilityOpen ? html`<label class="provider-picker">Provider<select aria-label="AI provider" .value=${this.chosenAIProvider} @change=${(event:Event) => this.chooseAIProvider((event.target as HTMLSelectElement).value)}>${AI_PROVIDERS.map(provider => html`<option value=${provider.id}>${provider.name}</option>`)}</select></label>` : html`<section class="provider-browser" aria-label="AI providers">${AI_PROVIDERS.map(provider => {
-          const state = setup?.providers.find(item => item.id === provider.id);
-          const isDefault = setup?.primary === provider.id;
-          const status = isDefault ? 'Default' : state?.source === 'environment' || state?.source === 'amplifier-keys' ? 'Key found' : state?.source === 'oauth-cache' ? 'Sign-in found' : 'Set up';
-          return html`<button class="provider-choice" aria-pressed=${this.chosenAIProvider === provider.id} @click=${() => this.chooseAIProvider(provider.id)}><strong>${provider.name}</strong><span class="detail">${provider.detail}</span><span class="provider-status ${isDefault ? 'active' : ''}">${status}</span></button>`;
-        })}</section>`}
-        <section class="provider-setup" aria-label=${`${name} setup`}>
-          <h2>${name}</h2>
-          ${!setup ? html`<p role="status">Checking Amplifier on this computer…</p>` : html`
-            <p class="provider-note">${connected ? 'Amplifier reached this provider.' : selected?.source === 'environment' ? `${selected.envName} is available in Muxterm’s environment.` : selected?.source === 'amplifier-keys' ? `${selected.envName} is in ~/.amplifier/keys.env. Amplifier can reuse it.` : selected?.source === 'oauth-cache' ? 'A previous ChatGPT sign-in was found.' : 'Complete setup in the terminal to connect this service.'}</p>
-            <p class="default-note">${setup.primary ? setup.primary === this.chosenAIProvider ? `${name} is your default provider.` : `Current default: ${AI_PROVIDERS.find(provider => provider.id === setup.primary)?.name || setup.primary}. To make ${name} the default, open Manage providers, choose Reorder priorities (p), and move it to first.` : 'The first provider you configure becomes the default. To change it later, use Manage providers → Reorder priorities (p).'}</p>
-            <div class="setup-sequence">
-              <div class="sequence-row"><span class="number">1</span><div><strong>Amplifier</strong><small>${setup.cliInstalled ? 'Installed on this computer' : 'Required for Amplifier chats'}</small></div>${setup.cliInstalled ? html`<span class="setup-status ready">Installed</span>` : html`<button class="setup-action" @click=${() => void this.openTerminal('Install Amplifier', SETUP_AGENTS.find(agent => agent.harness === 'amplifier')!.command)}>Install</button>`}</div>
-              <div class="sequence-row"><span class="number">2</span><div><strong>Configure ${name}</strong><small>${setup.primary === this.chosenAIProvider ? 'Selected as Amplifier’s default' : 'Choose a model and sign in, if needed'}</small></div><button class="setup-action" ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier provider setup', `export PATH="$HOME/.local/bin:$PATH"; amplifier provider add ${this.chosenAIProvider} --scope global`)}>Configure</button></div>
-              <div class="sequence-row"><span class="number">3</span><div><strong>Check connection</strong><small>${connected ? 'A model is available' : 'Ask Amplifier to list available models'}</small></div>${connected ? html`<span class="setup-status ready" role="status">Connected</span>` : html`<button class="setup-action" ?disabled=${!setup.cliInstalled || this.providerCheckBusy} @click=${() => void this.checkAIProvider()}>${this.providerCheckBusy ? 'Checking…' : 'Check'}</button>`}</div>
-            </div>
-            <div class="provider-tools"><button class="setup-link" ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier providers', 'export PATH="$HOME/.local/bin:$PATH"; amplifier provider manage')}>Manage providers</button><button class="setup-link" ?disabled=${!setup.cliInstalled} @click=${() => void this.openTerminal('Amplifier setup', 'export PATH="$HOME/.local/bin:$PATH"; amplifier init')}>Open full setup</button><a href="https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md" target="_blank" rel="noopener noreferrer">Setup guide</a></div>
-            ${this.providerCheckError ? html`<p class="error" role="alert">${this.providerCheckError}</p>` : nothing}
-          `}
-          ${this.providerError ? html`<p class="error" role="alert">${this.providerError}</p>` : nothing}
-        </section>
-      </div>
-      <footer class="setup-footer"><button class="setup-link" @click=${() => void this.loadAmplifierProviderSetup()}>Refresh status</button><span class="hint">A saved key needs a successful connection check.</span>${this.firstRun ? html`<button class="setup-action primary next" ?disabled=${!connected || (!!setup?.primary && setup.primary !== this.chosenAIProvider)} @click=${() => { this.setupStep = 'harness'; }}>Continue to coding agents</button>` : html`<button class="setup-action primary next" @click=${() => { this.providerSettingsOpen = false; }}>Back to new chat</button>`}</footer>
+      <mux-ai-providers .firstRun=${this.firstRun} @provider-ready=${(event: CustomEvent<{ ready: boolean }>) => { this.aiProviderReady = event.detail.ready; }}></mux-ai-providers>
+      <footer class="setup-footer"><button class="setup-action primary next" ?disabled=${!this.aiProviderReady} @click=${() => { this.setupStep = 'harness'; }}>Continue to coding agents</button></footer>
     </div></div>`);
   }
   private async openTerminal(label?: string, command?: string) {
@@ -534,7 +454,7 @@ export class MuxNewChat extends LitElement {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
     if (!this.onboardingLoaded || (this.firstRun && this.setupStep === 'harness' && !this.optionsLoaded)) return this.renderScreen(html`<div class="main setup"><div class="content setup-shell"><h1>Welcome to Muxterm</h1><p class="setup-lead" role="status">Checking your coding agents…</p></div></div>`);
     if (this.onboardingError) return this.renderScreen(html`<div class="main setup"><div class="content setup-shell"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.onboardingError}</p><button class="setup-action" @click=${() => void this.loadOnboarding()}>Try again</button></div></div>`);
-    if ((this.firstRun && this.setupStep === 'provider') || this.providerSettingsOpen) return this.renderProviderSetup();
+    if (this.firstRun && this.setupStep === 'provider') return this.renderProviderSetup();
     if (this.firstRun && !this.startOptions) return this.renderScreen(html`<div class="main setup"><div class="content setup-shell"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.error || 'Could not check coding agents.'}</p><button class="setup-action" @click=${() => void this.loadStartOptions()}>Try again</button></div></div>`);
     const showFirstRun = this.firstRun;
     if (this.startOptions && (showFirstRun || this.startOptions.length === 0)) return this.renderScreen(html`
@@ -554,7 +474,7 @@ export class MuxNewChat extends LitElement {
       </div></div>`);
     return this.renderScreen(html`
     <div class="main"><div class="content">
-      <div class="composer-tools"><button @click=${() => { this.providerSettingsOpen = true; void this.loadAmplifierProviderSetup(); }}>AI provider</button><button @click=${() => void this.openTerminal()}>Tools</button></div>
+      <div class="composer-tools"><button @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action: 'settings', section: 'providers' }, bubbles: true, composed: true }))}>AI provider</button><button @click=${() => void this.openTerminal()}>Tools</button></div>
       <h1>What would you like to do?</h1>
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
         <div class="controls">
