@@ -310,7 +310,10 @@ export class MuxNewChat extends LitElement {
         this.dispatchEvent(new CustomEvent('onboarding-state', { detail:{firstRun:this.firstRun}, bubbles:true, composed:true }));
       }
     } catch (error) {
-      if (this.isConnected) this.onboardingError = (error instanceof Error ? error.message : String(error)) || 'Could not check onboarding state.';
+      if (this.isConnected) {
+        this.onboardingError = (error instanceof Error ? error.message : String(error)) || 'Could not check onboarding state.';
+        this.dispatchEvent(new CustomEvent('onboarding-state', { detail:{firstRun:false}, bubbles:true, composed:true }));
+      }
     } finally {
       if (this.isConnected) this.onboardingLoaded = true;
     }

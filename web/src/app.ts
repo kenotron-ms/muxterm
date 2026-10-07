@@ -2309,7 +2309,7 @@ export class MuxApp extends LitElement {
     this._newChatDraftId = `draft-${crypto.randomUUID()}`;
     this._newChatTerminalWorkspaceId = '';
     this._carriedUtilityChatId = '';
-    this._onboardingState = 'loading';
+    if (this._onboardingState !== 'done') this._onboardingState = 'loading';
     this._newChatHarness = 'codex';
     this._newChatFolder = '';
     this._newChatProject = '';
