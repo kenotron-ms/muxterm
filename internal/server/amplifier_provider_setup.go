@@ -132,7 +132,7 @@ func (s *Server) handleAmplifierProviderCheck(w http.ResponseWriter, r *http.Req
 	}
 	binary, err := amplifierchat.CLIExecutable()
 	if err != nil {
-		http.Error(w, "install Amplifier CLI first", http.StatusPreconditionFailed)
+		http.Error(w, "install Amplifier first", http.StatusPreconditionFailed)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
