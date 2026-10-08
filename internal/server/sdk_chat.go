@@ -112,11 +112,13 @@ type sdkEvent struct {
 	Attachments     []sdkDisplayAttachment `json:"attachments,omitempty"`
 }
 type sdkEventOrigin struct {
-	Type    string `json:"type"`
-	ChatID  string `json:"chatId"`
-	Name    string `json:"name"`
-	Harness string `json:"harness"`
-	Status  string `json:"status"`
+	Type         string `json:"type"`
+	ChatID       string `json:"chatId"`
+	TargetChatID string `json:"targetChatId,omitempty"`
+	Relation     string `json:"relation,omitempty"`
+	Name         string `json:"name"`
+	Harness      string `json:"harness"`
+	Status       string `json:"status"`
 }
 type sdkDisplayAttachment struct {
 	ID   string `json:"id"`
@@ -151,24 +153,26 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 }
 
 type sdkChatHost struct {
-	mu            sync.Mutex
-	nameLocks     map[string]*sync.Mutex
-	dir           string
-	socket        string
-	process       *exec.Cmd
-	done          chan struct{}
-	running       bool
-	ampSup        *amplifierchat.Host
-	ampMu         sync.Mutex
-	chats         map[string]*sdkChat
-	projects      map[string]*sdkProject
-	streams       map[string]map[chan sdkEvent]struct{}
-	nameStreams   map[chan string]struct{}
-	naming        map[string]bool
-	reportRunning map[string]bool
-	reportPending map[string]bool
-	onEvent       func(sdkEvent)
-	estimates     *sdkEffortEstimator
+	mu               sync.Mutex
+	nameLocks        map[string]*sync.Mutex
+	dir              string
+	socket           string
+	process          *exec.Cmd
+	done             chan struct{}
+	running          bool
+	ampSup           *amplifierchat.Host
+	ampMu            sync.Mutex
+	chats            map[string]*sdkChat
+	projects         map[string]*sdkProject
+	streams          map[string]map[chan sdkEvent]struct{}
+	nameStreams      map[chan string]struct{}
+	naming           map[string]bool
+	reportRunning    map[string]bool
+	reportPending    map[string]bool
+	onEvent          func(sdkEvent)
+	estimates        *sdkEffortEstimator
+	originTokens     map[string]string
+	originTokenChats map[string]string
 }
 
 func sdkDataDir() string {
@@ -180,7 +184,7 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}}
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}}
 	h.estimates = newSDKEffortEstimator(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	entries, _ := os.ReadDir(h.dir)
@@ -287,11 +291,16 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		// The server's dispatch record, keyed by input ID, owns attribution.
 		// A sidecar or caller-provided source alone cannot turn a human input
 		// into a lane message in the transcript.
-		if origin := h.operatorInputOrigin(event.SessionID, event.InputID); origin != nil {
-			event.Source, event.Origin = "operator-lane", origin
+		if origin := h.inputOrigin(event.SessionID, event.InputID); origin != nil {
+			event.Origin = origin
+			if origin.Type == "operator-lane" {
+				event.Source = "operator-lane"
+			} else {
+				event.Source = "chat-message"
+			}
 		} else {
 			event.Origin = nil
-			if event.Source == "operator-lane" {
+			if event.Source == "operator-lane" || event.Source == "chat-message" {
 				event.Source = "browser"
 			}
 		}
@@ -332,7 +341,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.LastOutput = ""
 		c.LaneReport = ""
 		c.LaneTodos = nil
-		if event.Kind == "user" && event.Source != "operator-lane" {
+		if event.Kind == "user" && event.Origin == nil && event.Source != "operator-lane" {
 			c.UserTurns++
 		}
 	case "tool.started":
@@ -736,7 +745,7 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never", "permission": c.Permission, "mode": c.Mode})
+	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never", "permission": c.Permission, "mode": c.Mode, "originToken": h.chatOriginToken(c.ID)})
 	return err
 }
 
@@ -1560,6 +1569,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	err = h.saveLocked(c)
 	if err != nil {
 		delete(h.chats, c.ID)
+		h.forgetChatOriginLocked(c.ID)
 		if req.OperatorID != "" {
 			operator := h.chats[req.OperatorID]
 			operator.OperatorLanes = slices.DeleteFunc(operator.OperatorLanes, func(id string) bool { return id == c.ID })
@@ -1576,7 +1586,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "provider": amplifierProviderModule(c.Harness, c.Provider), "approval": c.Approval}); err != nil {
+	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "provider": amplifierProviderModule(c.Harness, c.Provider), "approval": c.Approval, "originToken": h.chatOriginToken(c.ID)}); err != nil {
 		h.appendEvent(sdkEvent{SessionID: c.ID, Type: "error", Message: err.Error()})
 		http.Error(w, fmt.Sprintf("chat %s could not start: %v", c.ID, err), 502)
 		return
@@ -1784,8 +1794,8 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		if req.Kind == "" {
 			req.Kind = "user"
 		}
-		if req.Source == "operator-lane" {
-			http.Error(w, "operator-lane source is reserved for server reports", 422)
+		if req.Source == "operator-lane" || req.Source == "chat-message" {
+			http.Error(w, "chat origin source is reserved for server messages", 422)
 			return
 		}
 		if req.Kind == "service" && c.Harness == "codex" {

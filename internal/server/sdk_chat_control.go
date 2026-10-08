@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,13 +22,14 @@ import (
 // never turn into a retry of the same input: only an input.accepted event can
 // reconcile a dispatching receipt into accepted.
 type sdkControlReceipt struct {
-	SessionID string    `json:"sessionId"`
-	ClientRef string    `json:"clientRef"`
-	InputID   string    `json:"inputId"`
-	Content   string    `json:"content"`
-	Status    string    `json:"status"`
-	Detail    string    `json:"detail,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	SessionID string          `json:"sessionId"`
+	ClientRef string          `json:"clientRef"`
+	InputID   string          `json:"inputId"`
+	Content   string          `json:"content"`
+	Status    string          `json:"status"`
+	Detail    string          `json:"detail,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
+	Origin    *sdkEventOrigin `json:"origin,omitempty"`
 }
 
 func (h *sdkChatHost) controlPath(id, key string) string {
@@ -64,9 +66,54 @@ func (h *sdkChatHost) acceptedEventLocked(id, inputID string) bool {
 	return false
 }
 
+// The capability is issued by the serve process to one harness MCP process.
+// Tool arguments and message text cannot assert a chat identity or relation.
+func (h *sdkChatHost) chatOriginToken(id string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.originTokens[id] == "" {
+		token := sdkID() + sdkID()
+		h.originTokens[id] = token
+		h.originTokenChats[token] = id
+	}
+	return h.originTokens[id]
+}
+
+func (h *sdkChatHost) forgetChatOriginLocked(id string) {
+	if token := h.originTokens[id]; token != "" {
+		delete(h.originTokenChats, token)
+		delete(h.originTokens, id)
+	}
+}
+
+func (h *sdkChatHost) controlOriginLocked(token, targetID string) (sdkEventOrigin, bool) {
+	if token == "" {
+		return sdkEventOrigin{Type: "external-tool", TargetChatID: targetID, Name: "External tool"}, true
+	}
+	sender := h.chats[h.originTokenChats[token]]
+	if sender == nil {
+		return sdkEventOrigin{}, false
+	}
+	origin := sdkEventOrigin{Type: "chat-message", ChatID: sender.ID, TargetChatID: targetID, Name: sender.Title, Harness: sender.Harness, Status: sender.State, Relation: "chat-to-chat"}
+	target := h.chats[targetID]
+	if sender.Operator && slices.Contains(sender.OperatorLanes, targetID) {
+		origin.Relation = "operator-to-lane"
+	} else if target != nil && target.Operator && slices.Contains(target.OperatorLanes, sender.ID) {
+		origin.Relation = "lane-to-operator"
+	} else {
+		for _, operator := range h.chats {
+			if operator.Operator && slices.Contains(operator.OperatorLanes, sender.ID) && slices.Contains(operator.OperatorLanes, targetID) {
+				origin.Relation = "lane-to-lane"
+				break
+			}
+		}
+	}
+	return origin, true
+}
+
 func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var req struct{ ClientRef, Content string }
+	var req struct{ ClientRef, Content, OriginToken string }
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil ||
 		strings.TrimSpace(req.ClientRef) == "" || strings.TrimSpace(req.Content) == "" || len(req.ClientRef) > 256 {
 		http.Error(w, "clientRef and content required", 400)
@@ -81,10 +128,20 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chat := *c
+	// A missing token is an external tool input; an invalid token is rejected.
+	// Only serve issues tokens that identify a sending chat.
+	origin, valid := h.controlOriginLocked(req.OriginToken, id)
+	if !valid {
+		h.mu.Unlock()
+		http.Error(w, "invalid chat origin", http.StatusForbidden)
+		return
+	}
 	path := h.controlPath(id, req.ClientRef)
 	if data, err := os.ReadFile(path); err == nil {
 		var prior sdkControlReceipt
-		if json.Unmarshal(data, &prior) != nil || prior.ClientRef != req.ClientRef || prior.Content != req.Content {
+		if json.Unmarshal(data, &prior) != nil || prior.ClientRef != req.ClientRef || prior.Content != req.Content ||
+			(prior.Origin == nil && req.OriginToken != "") ||
+			(prior.Origin != nil && (prior.Origin.Type != origin.Type || prior.Origin.ChatID != origin.ChatID)) {
 			h.mu.Unlock()
 			http.Error(w, "clientRef already used with different content or invalid receipt", 409)
 			return
@@ -126,8 +183,14 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	receipt := sdkControlReceipt{SessionID: id, ClientRef: req.ClientRef, InputID: sdkID(), Content: req.Content,
-		Status: "dispatching", CreatedAt: time.Now().UTC()}
+		Status: "dispatching", CreatedAt: time.Now().UTC(), Origin: &origin}
+	if err := h.saveInputOrigin(id, receipt.InputID, origin); err != nil {
+		h.mu.Unlock()
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	if err := h.saveControlLocked(receipt); err != nil {
+		_ = os.Remove(h.controlPath(id, "input-origin:"+receipt.InputID))
 		h.mu.Unlock()
 		http.Error(w, err.Error(), 500)
 		return
@@ -141,9 +204,9 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	if s.sdkVoice != nil {
 		voiceContext = h.recentVoiceContext(id)
 	}
-	content := h.operatorInput(id, sdkTaskInputWithVoiceContext(req.Content, voiceContext))
+	content := h.operatorInputFrom(id, sdkTaskInputWithVoiceContext(req.Content, voiceContext), "Message from another chat")
 	result, err := h.call(ctx, "send", map[string]any{"sessionId": id,
-		"input": map[string]any{"kind": kind, "source": "user", "id": receipt.InputID,
+		"input": map[string]any{"kind": kind, "source": "chat-message", "id": receipt.InputID,
 			"content": content, "displayContent": req.Content}})
 	var ack struct{ Status, InputID string }
 	if err == nil {

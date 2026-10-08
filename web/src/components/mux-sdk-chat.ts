@@ -16,12 +16,12 @@ import './mux-sdk-utility.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
-type LaneOrigin = { type: 'operator-lane'; chatId: string; name: string; harness: string; status: string };
+type LaneOrigin = { type: 'operator-lane' | 'chat-message' | 'external-tool'; chatId: string; targetChatId?: string; relation?: 'operator-to-lane' | 'lane-to-lane' | 'lane-to-operator' | 'chat-to-chat'; name: string; harness: string; status: string };
 type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; origin?: LaneOrigin; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string };
+type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
@@ -235,6 +235,19 @@ export class MuxSDKChat extends LitElement {
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
     .bubble a { display:block; margin-top:7px; color:var(--chrome-accent); }
     .lane-report-table { box-sizing:border-box; width:100%; max-width:720px; min-width:0; overflow:hidden; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
+    .chat-message-card.operator-to-lane { background:color-mix(in srgb,var(--chrome-accent) 7%,var(--chrome-bar)); }
+    .chat-message-card.lane-to-lane { background:color-mix(in srgb,var(--mux-ok,#55b981) 8%,var(--chrome-bar)); }
+    .chat-message-card.lane-to-operator { background:color-mix(in srgb,#b78b54 8%,var(--chrome-bar)); }
+    .chat-message-card.chat-to-chat { background:color-mix(in srgb,var(--chrome-text-dim) 6%,var(--chrome-bar)); }
+    .chat-message-card.external-tool { background:color-mix(in srgb,#8c80ad 8%,var(--chrome-bar)); }
+    .chat-message-card .lane-report-toggle { gap:10px; }
+    .chat-message-mark { display:grid; place-items:center; flex:none; width:24px; height:24px; border-radius:6px; background:var(--chrome-hover); color:var(--chrome-text-dim); }
+    .chat-message-card.operator-to-lane .chat-message-mark { color:var(--chrome-accent); }
+    .chat-message-card.lane-to-lane .chat-message-mark { color:var(--mux-ok,#55b981); }
+    .chat-message-card.lane-to-operator .chat-message-mark { color:#aa7c42; }
+    .chat-message-card.chat-to-chat .chat-message-mark { color:var(--chrome-text-bright); }
+    .chat-message-card.external-tool .chat-message-mark { color:#8773b0; }
+    .chat-message-card .lane-report-meta { margin-top:3px; }
     .lane-report-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,196px) 52px; min-height:58px; align-items:center; }
     .lane-report-row:hover,.lane-report-table.expanded .lane-report-row { background:var(--chrome-hover); }
     .lane-report-toggle { display:flex; align-items:center; gap:8px; width:100%; min-width:0; height:100%; border:0; padding:11px 12px; background:none; color:var(--chrome-text-bright); text-align:left; cursor:pointer; }
@@ -713,7 +726,7 @@ export class MuxSDKChat extends LitElement {
       // Keep the cached transcript visible while sparse recent pages fill in.
       const cachedTurns = new Set(this.blocks.filter(block => block.kind === 'user').map(block => block.turn)).size;
       const targetTurns = Math.min(4, cachedTurns);
-      const userTurns = () => events.filter(event => event.type === 'input.accepted' && event.kind !== 'steer' && event.source !== 'operator-lane' && event.origin?.type !== 'operator-lane').length;
+      const userTurns = () => events.filter(event => event.type === 'input.accepted' && event.kind !== 'steer' && event.source !== 'operator-lane' && event.source !== 'chat-message' && !event.origin).length;
       while (hasMore && userTurns() < targetTurns) {
         const olderResponse = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${from}&view=messages`), { signal, cache:'no-store' });
         if (!olderResponse.ok) throw new Error(`History request failed (${olderResponse.status})`);
@@ -1005,6 +1018,13 @@ export class MuxSDKChat extends LitElement {
       // page begins between them, the server-owned origin reconstructs it.
       if (event.origin?.chatId && !blocks.some(block => block.kind === 'lane-report' && block.id === event.origin?.chatId && block.text === event.text))
         this.upsertLaneCard(blocks, event, true);
+      this.busy = true;
+      markStart(this.currentTurn);
+    }
+    else if (event.type === 'input.accepted' && (event.origin?.type === 'chat-message' || event.origin?.type === 'external-tool')) {
+      const origin = event.origin;
+      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'chat-message', id:origin.chatId, name:origin.name, harness:origin.harness,
+        laneState:origin.status, relation:origin.type === 'external-tool' ? 'external-tool' : origin.relation || 'chat-to-chat', text:event.text || '', at:event.at, done:true });
       this.busy = true;
       markStart(this.currentTurn);
     }
@@ -1641,7 +1661,7 @@ export class MuxSDKChat extends LitElement {
     return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map((row, offset) => {
       const block = row.block;
       return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${this.workExpanded.has(block.turn) ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details></div>`
-        : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.messageActions(block)}` : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
+        : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.messageActions(block)}` : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
   private toggleWorkDisclosure(turn: number, event: MouseEvent) {
@@ -1760,6 +1780,24 @@ export class MuxSDKChat extends LitElement {
       .replace(/^#{1,6}\s*|^(?:[-*+]|\d+\.)\s+/g, '')
       .replace(/[*_`]/g, '') || 'Lane update';
     return html`<article class="lane-report-table ${expanded ? 'expanded' : ''}" aria-label=${`Report from lane ${name}`}><div class="lane-report-row"><button class="lane-report-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} report from ${name}`} aria-expanded=${expanded} aria-controls=${detailId} @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}><span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${harness}</span><span class="lane-report-state ${block.laneState || ''}">${state}</span></span></span></button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<button class="lane-report-open" aria-label=${`Open lane chat: ${name}`} title="Open lane chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${laneIcon(17)}</button>` : nothing}</div></div>${expanded ? html`<div class="lane-report-detail" id=${detailId}>${this.markdown(block, block.key)}</div>` : nothing}</article>`;
+  }
+  private chatMessageCard(block: Block) {
+    const relation = block.relation || 'chat-to-chat';
+    const label = relation === 'operator-to-lane' ? 'Operator → Lane' : relation === 'lane-to-lane' ? 'Lane → Lane'
+      : relation === 'lane-to-operator' ? 'Lane → Operator' : relation === 'external-tool' ? 'External tool' : 'Chat → Chat';
+    const name = block.name || (relation === 'external-tool' ? 'External tool' : 'Chat');
+    const expanded = this.laneReportsExpanded.has(block.key);
+    const detailId = `chat-message-${block.key}`;
+    const preview = block.text.split('\n').find(line => line.trim())?.trim().replace(/!?\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/^#{1,6}\s*|^(?:[-*+]|\d+\.)\s+/g, '').replace(/[*_`]/g, '') || 'Message';
+    const sourceIcon = relation === 'operator-to-lane' ? icon(Network,{size:15}) : relation === 'external-tool' ? icon(Wrench,{size:15})
+      : relation === 'chat-to-chat' ? icon(Bot,{size:15}) : laneIcon(15);
+    return html`<article class="lane-report-table chat-message-card ${relation} ${expanded ? 'expanded' : ''}" aria-label=${`${label} message from ${name}`}>
+      <div class="lane-report-row"><button class="lane-report-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} ${label} message from ${name}`} aria-expanded=${expanded} aria-controls=${detailId}
+        @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}>
+        <span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="chat-message-mark" aria-hidden="true">${sourceIcon}</span>
+        <span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${label}</span></span></span>
+      </button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<button class="lane-report-open" aria-label=${`Open source chat: ${name}`} title="Open source chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${sourceIcon}</button>` : nothing}</div></div>
+      ${expanded ? html`<div class="lane-report-detail" id=${detailId}>${this.markdown(block, block.key)}</div>` : nothing}</article>`;
   }
   override render() {
     const agents = this.agents();

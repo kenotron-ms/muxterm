@@ -78,6 +78,16 @@ operator's `input.accepted` event retains source `operator-lane`; the transcript
 shows the durable report card and does not render that accepted input as a human
 message. The operator's response remains an ordinary assistant message.
 
+`send_chat_message` carries a capability issued to the sending chat's MCP
+process. The server resolves it to a chat ID and snapshots the sender name,
+harness, target ID, and current link relationship before dispatch. Accepted
+inputs retain this source for live streaming and history reload. Linked
+operators sending to lanes, sibling lanes sending to each other, lanes sending
+to their operator, and unrelated chats have separate relationship values. A
+call without a chat capability is labeled **External tool**. Browser inputs
+cannot assert a chat source. Sourced messages appear as expandable rows with
+distinct operator and lane icons; human inputs keep the normal user bubble.
+
 The Status tab polls while it is open to show ongoing tool activity and text.
 It stops polling when the tab closes. Lifecycle milestones arrive in the
 operator chat over its existing event stream. Operator instructions are added

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -399,7 +400,15 @@ func registerChatControlTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
-			body, _ := json.Marshal(map[string]string{"clientRef": key, "content": content})
+			originToken := ""
+			if originFile := os.Getenv("MUXTERM_CHAT_ORIGIN_FILE"); originFile != "" {
+				data, err := os.ReadFile(originFile)
+				if err != nil {
+					return "", fmt.Errorf("read chat origin capability: %w", err)
+				}
+				originToken = strings.TrimSpace(string(data))
+			}
+			body, _ := json.Marshal(map[string]string{"clientRef": key, "content": content, "originToken": originToken})
 			result, err := pt.doRequest(http.MethodPost, "/api/sdk-chats/"+url.PathEscape(id)+"/control-send", body)
 			if err != nil {
 				return "", fmt.Errorf("send_chat_message delivery uncertain; retry only with the same client_ref: %w", err)

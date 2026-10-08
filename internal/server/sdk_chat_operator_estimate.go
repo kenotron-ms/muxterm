@@ -177,11 +177,12 @@ func sdkCompletedTurnSamples(dir string) []sdkEffortSample {
 		category := ""
 		for scan.Scan() {
 			var event struct {
-				At     time.Time `json:"at"`
-				Type   string    `json:"type"`
-				Kind   string    `json:"kind"`
-				Source string    `json:"source"`
-				Text   string    `json:"text"`
+				At     time.Time       `json:"at"`
+				Type   string          `json:"type"`
+				Kind   string          `json:"kind"`
+				Source string          `json:"source"`
+				Text   string          `json:"text"`
+				Origin *sdkEventOrigin `json:"origin"`
 			}
 			if json.Unmarshal(scan.Bytes(), &event) != nil || event.At.IsZero() {
 				continue
@@ -189,7 +190,7 @@ func sdkCompletedTurnSamples(dir string) []sdkEffortSample {
 			switch event.Type {
 			case "input.accepted":
 				started, category = time.Time{}, ""
-				if event.Kind == "user" && event.Source != "operator-lane" && event.At.After(cutoff) {
+				if event.Kind == "user" && event.Origin == nil && event.Source != "operator-lane" && event.Source != "chat-message" && event.At.After(cutoff) {
 					started, category = event.At, sdkEffortCategory(event.Text)
 				}
 			case "turn.completed":

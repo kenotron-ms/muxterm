@@ -46,7 +46,8 @@ export class ACPStream {
     let session;
     const mcpBin = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpServers = this.profile.mcp && mcpBin ? [{ name: 'muxterm', command: mcpBin, args: ['mcp'],
-      env: ['XDG_RUNTIME_DIR', 'XDG_DATA_HOME'].filter(key => process.env[key]).map(name => ({ name, value: process.env[name] })) }] : [];
+      env: [...['XDG_RUNTIME_DIR', 'XDG_DATA_HOME'].filter(key => process.env[key]).map(name => ({ name, value: process.env[name] })),
+        ...(this.session.originFile ? [{ name: 'MUXTERM_CHAT_ORIGIN_FILE', value: this.session.originFile }] : [])] }] : [];
     const params = { cwd: this.session.cwd, mcpServers,
       ...(this.session.sourceFolders.length && this.agentCapabilities.sessionCapabilities?.additionalDirectories
         ? { additionalDirectories: this.session.sourceFolders } : {}) };
