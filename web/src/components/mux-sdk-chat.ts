@@ -276,10 +276,11 @@ export class MuxSDKChat extends LitElement {
     .message-actions { display:flex; align-items:center; gap:3px; margin-top:5px; min-height:25px; opacity:0; transition:opacity .12s ease; }
     .user .message-actions { justify-content:flex-end; }
     .block:hover .message-actions,.block:focus-within .message-actions { opacity:1; }
-    .message-actions button { display:inline-flex; align-items:center; gap:5px; border:0; border-radius:6px; padding:4px 6px; background:transparent; color:var(--chrome-text-dim); font-size:11px; line-height:1.2; }
+    .message-actions button { display:inline-flex; align-items:center; justify-content:center; width:25px; height:25px; border:0; border-radius:6px; padding:0; background:transparent; color:var(--chrome-text-dim); }
     .message-actions button:hover,.message-actions button:focus-visible { background:var(--chrome-hover); color:var(--chrome-text-bright); outline:none; }
-    .message-actions button:focus-visible { box-shadow:inset 0 0 0 1px var(--chrome-accent); }
+    .message-actions button:focus-visible { color:var(--chrome-accent); }
     .message-actions button:disabled { opacity:.45; cursor:default; }
+    .message-actions .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
     .message-time { margin-left:5px; color:var(--chrome-text-dim); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .user .message-time { order:-1; margin:0 5px 0 0; }
     .message-edit { box-sizing:border-box; width:min(82%,660px); padding:10px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
@@ -287,7 +288,7 @@ export class MuxSDKChat extends LitElement {
     .message-edit-controls { display:flex; justify-content:flex-end; gap:7px; margin-top:8px; }
     .message-edit-controls button { border:1px solid var(--chrome-border); border-radius:6px; padding:5px 9px; background:var(--chrome-body); color:var(--chrome-text-bright); }
     .message-edit-controls button:last-child { border-color:var(--chrome-accent); color:var(--chrome-accent); }
-    @media (hover:none) { .message-actions { opacity:1; } .message-actions button { min-height:32px; } }
+    @media (hover:none) { .message-actions { opacity:1; } .message-actions button { width:32px; height:32px; } }
     @media (prefers-reduced-motion:reduce) { .message-actions { transition:none; } }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; font-weight:600; margin-bottom:10px; text-transform:capitalize; }
     .text { color:var(--chrome-text-bright,#d9def0); font-size:14px; line-height:1.68; overflow-wrap:anywhere; }
@@ -1618,9 +1619,9 @@ export class MuxSDKChat extends LitElement {
     const canBranch = completed && !this.chat?.goal && !this.chat?.operator;
     const finalAssistant = block.kind === 'assistant' && block.channel !== 'voice' && !this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key);
     return html`<div class="message-actions" role="group" aria-label=${`${block.kind === 'user' ? 'Your' : 'Assistant'} message actions`}>
-      <button type="button" aria-label=${copied ? 'Message copied' : `Copy ${block.kind} message`} title=${copied ? 'Copied' : 'Copy message'} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.copyMessage(block); }}>${icon(copied ? Check : Copy, { size:13 })}<span aria-live="polite">${copied ? 'Copied' : 'Copy'}</span></button>
-      ${block.kind === 'user' && block.id && canBranch ? html`<button type="button" aria-label="Edit message in a new chat" title="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea')?.focus()); }}>${icon(FilePenLine, { size:13 })}Edit</button>` : nothing}
-      ${finalAssistant && canBranch ? html`<button type="button" aria-label="Fork chat from this assistant message" title="Fork from here" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.branchMessage(block, 'fork'); }}>${icon(GitFork, { size:13 })}Fork</button>` : nothing}
+      <button type="button" aria-label=${copied ? 'Message copied' : `Copy ${block.kind} message`} title=${copied ? 'Copied' : 'Copy message'} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.copyMessage(block); }}>${icon(copied ? Check : Copy, { size:14 })}<span class="sr-only" aria-live="polite">${copied ? 'Copied' : ''}</span></button>
+      ${block.kind === 'user' && block.id && canBranch ? html`<button type="button" aria-label="Edit message in a new chat" title="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea')?.focus()); }}>${icon(FilePenLine, { size:14 })}</button>` : nothing}
+      ${finalAssistant && canBranch ? html`<button type="button" aria-label="Fork chat from this assistant message" title="Fork from here" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.branchMessage(block, 'fork'); }}>${icon(GitFork, { size:14 })}</button>` : nothing}
       ${this.messageTime(block)}
     </div>`;
   }
