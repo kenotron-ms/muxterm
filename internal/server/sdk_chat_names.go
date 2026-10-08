@@ -14,8 +14,8 @@ import (
 	"unicode"
 )
 
-// The opening input is named immediately; completed turns 2, 5, 8, ... are
-// checked again so the title can follow subject changes. One check runs per chat.
+// The opening human input gets one naming attempt. Generated and native titles
+// are stable thereafter, including for chats created before this policy.
 func (h *sdkChatHost) scheduleNamingLocked(c *sdkChat) {
 	// Generic ACP chats keep their opening title until a person renames them.
 	// The title generator below invokes Codex and must not become a hidden
@@ -23,7 +23,7 @@ func (h *sdkChatHost) scheduleNamingLocked(c *sdkChat) {
 	if isSDKACPHarness(c.Harness) {
 		return
 	}
-	if c.TitleSource == "manual" || c.TitleCheckedTurn >= c.UserTurns || h.naming[c.ID] {
+	if c.TitleSource != "opening" || c.State != "ready" || c.UserTurns != 1 || c.TitleCheckedTurn != 0 || h.naming[c.ID] {
 		return
 	}
 	c.TitleCheckedTurn = c.UserTurns
@@ -36,9 +36,6 @@ func (h *sdkChatHost) nameAfterTurns(id string) {
 	defer func() {
 		h.mu.Lock()
 		delete(h.naming, id)
-		if c := h.chats[id]; c != nil && c.State == "ready" && c.UserTurns >= 2 && (c.UserTurns-2)%3 == 0 {
-			h.scheduleNamingLocked(c)
-		}
 		h.mu.Unlock()
 	}()
 	nameLock := h.nameLock(id)
@@ -94,7 +91,7 @@ func (h *sdkChatHost) nameAfterTurns(id string) {
 	}
 	h.mu.Lock()
 	c = h.chats[id]
-	stillEligible := c != nil && c.TitleSource != "manual" && c.Title == chat.Title && c.TitleSource == chat.TitleSource && c.UserTurns == chat.UserTurns
+	stillEligible := c != nil && c.TitleSource == "opening" && c.Title == chat.Title
 	h.mu.Unlock()
 	if !stillEligible {
 		return
@@ -126,7 +123,7 @@ func (h *sdkChatHost) nameAfterTurns(id string) {
 	}
 	h.mu.Lock()
 	c = h.chats[id]
-	if c == nil || c.TitleSource == "manual" || c.Title != chat.Title || c.TitleSource != chat.TitleSource {
+	if c == nil || c.TitleSource != "opening" || c.Title != chat.Title {
 		h.mu.Unlock()
 		return
 	}
@@ -149,14 +146,14 @@ func (h *sdkChatHost) namingInputs(id string) ([]string, error) {
 	var inputs []string
 	for scanner.Scan() {
 		var ev sdkEvent
-		if json.Unmarshal(scanner.Bytes(), &ev) == nil && ev.Type == "input.accepted" && ev.Kind == "user" {
+		if json.Unmarshal(scanner.Bytes(), &ev) == nil && ev.Type == "input.accepted" && ev.Kind == "user" && ev.Source != "operator-lane" {
 			if input := strings.TrimSpace(ev.Text); input != "" {
 				inputs = append(inputs, string([]rune(input)[:min(len([]rune(input)), 1200)]))
 			}
 		}
 	}
-	if len(inputs) > 4 {
-		inputs = inputs[len(inputs)-4:]
+	if len(inputs) > 1 {
+		inputs = inputs[:1]
 	}
 	return inputs, scanner.Err()
 }
@@ -202,7 +199,7 @@ func shortPurposeTitle(s string) string {
 
 func generatePurposeTitle(ctx context.Context, cwd string, inputs []string) (string, error) {
 	var prompt strings.Builder
-	prompt.WriteString("Give this conversation a specific, sentence-case sidebar title of 3–5 words, at most 28 characters. Use a concrete action and object. Name the current subject. If the subject changed, follow the newest messages. Do not quote the opening message or describe the assistant. Output the title only. Do not use tools.\n\nRecent human messages, oldest first:\n")
+	prompt.WriteString("Give this conversation a specific, sentence-case sidebar title of 3–5 words, at most 28 characters. Use a concrete action and object from the opening request. Do not quote the request or describe the assistant. Output the title only. Do not use tools.\n\nOpening human message:\n")
 	for _, input := range inputs {
 		prompt.WriteString("- ")
 		prompt.WriteString(input)

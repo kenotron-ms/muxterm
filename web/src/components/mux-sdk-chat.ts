@@ -11,11 +11,13 @@ import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { laneIcon } from '../lib/lane-icon.js';
 import './mux-sdk-utility.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
-type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
+type LaneOrigin = { type: 'operator-lane'; chatId: string; name: string; harness: string; status: string };
+type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; origin?: LaneOrigin; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
@@ -25,7 +27,7 @@ type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEven
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
 type CachedTranscript = { blocks: Block[]; chat?: SDKChat };
 const transcriptCache = new Map<string, CachedTranscript>();
-const transcriptCacheKey = (id: string) => `muxterm-chat-transcript:${id}`;
+const transcriptCacheKey = (id: string) => `muxterm-chat-transcript:v2:${id}`;
 const draftCache = new Map<string, string>();
 const draftKey = (id: string, kind: 'message' | 'agent') => `muxterm-chat-draft:${kind}:${id}`;
 function readDraft(id: string, kind: 'message' | 'agent'): string {
@@ -227,16 +229,20 @@ export class MuxSDKChat extends LitElement {
     .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
     .bubble a { display:block; margin-top:7px; color:var(--chrome-accent); }
-    .lane-report-card { max-width:720px; border:1px solid var(--chrome-border); border-radius:11px; padding:12px 15px; background:var(--chrome-bar); }
-    .lane-report-head { display:flex; align-items:center; gap:9px; min-width:0; }
-    .lane-report-icon { display:grid; place-items:center; flex:none; width:25px; height:25px; border-radius:7px; background:var(--chrome-hover); color:var(--chrome-text-dim); }
-    .lane-report-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:650; }
-    .lane-report-state { margin-left:auto; flex:none; border-radius:99px; padding:2px 8px; background:var(--chrome-hover); color:var(--chrome-text-dim); font-size:11px; }
-    .lane-report-state.failed,.lane-report-state.uncertain { color:var(--chrome-danger); }
-    .lane-report-card p { margin:10px 0 0 34px; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.5; color:var(--chrome-text-bright); }
-    .lane-report-foot { display:flex; align-items:center; gap:10px; margin:9px 0 0 34px; color:var(--chrome-text-dim); font-size:11px; }
-    .lane-report-foot button { margin-left:auto; border:0; padding:0; background:none; color:var(--chrome-accent); font-size:11px; }
+    .lane-report-card { --lane-color:var(--chrome-accent); max-width:720px; border:1px solid var(--chrome-border); border-left:3px solid var(--lane-color); border-radius:8px; padding:12px 16px 12px 14px; background:var(--chrome-bar); }
+    .lane-report-card.failed,.lane-report-card.uncertain { --lane-color:var(--chrome-danger); }
+    .lane-report-card.ready,.lane-report-card.completed { --lane-color:var(--chrome-success,#67af83); }
+    .lane-report-head { display:flex; align-items:center; gap:8px; min-width:0; }
+    .lane-report-icon { display:grid; place-items:center; flex:none; color:var(--lane-color); }
+    .lane-report-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:650; color:var(--chrome-text-bright); }
+    .lane-report-state { margin-left:auto; flex:none; color:var(--lane-color); font-size:12px; }
+    .lane-report-body { margin:10px 0 0 24px; color:var(--chrome-text-bright); font-size:14px; line-height:1.55; overflow-wrap:anywhere; }
+    .lane-report-body > :first-child { margin-top:0; }
+    .lane-report-body > :last-child { margin-bottom:0; }
+    .lane-report-foot { display:flex; align-items:center; gap:10px; margin:10px 0 0 24px; color:var(--chrome-text-dim); font-size:11px; }
+    .lane-report-foot button { margin-left:auto; border:0; border-radius:4px; padding:3px 5px; background:none; color:var(--chrome-accent); font-size:11px; cursor:pointer; }
     .lane-report-foot button:hover { text-decoration:underline; }
+    .lane-report-foot button:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:2px; }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; font-weight:600; margin-bottom:10px; text-transform:capitalize; }
     .text { color:var(--chrome-text-bright,#d9def0); font-size:14px; line-height:1.68; overflow-wrap:anywhere; }
     .text > :first-child { margin-top:0; }
@@ -660,7 +666,7 @@ export class MuxSDKChat extends LitElement {
       // Keep the cached transcript visible while sparse recent pages fill in.
       const cachedTurns = new Set(this.blocks.filter(block => block.kind === 'user').map(block => block.turn)).size;
       const targetTurns = Math.min(4, cachedTurns);
-      const userTurns = () => events.filter(event => event.type === 'input.accepted' && event.kind !== 'steer').length;
+      const userTurns = () => events.filter(event => event.type === 'input.accepted' && event.kind !== 'steer' && event.source !== 'operator-lane' && event.origin?.type !== 'operator-lane').length;
       while (hasMore && userTurns() < targetTurns) {
         const olderResponse = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${from}&view=messages`), { signal, cache:'no-store' });
         if (!olderResponse.ok) throw new Error(`History request failed (${olderResponse.status})`);
@@ -902,23 +908,22 @@ export class MuxSDKChat extends LitElement {
     }
   }
   private upsertLaneCard(blocks: Block[], event: SDKEvent, done: boolean) {
-    let name = event.name || 'Linked lane';
-    let state = event.kind || (done ? 'ready' : 'working');
+    const name = event.origin?.name || event.name || 'Linked lane';
+    const state = event.origin?.status || event.kind || (done ? 'ready' : 'working');
     let body = event.text || (done ? 'No final status was reported.' : 'Working');
-    if (done && body.includes('\n')) {
-      const [heading, ...lines] = body.split('\n');
-      if (heading.startsWith(`${name} (`)) body = lines.join('\n').trim() || body;
-    } else if (!event.name && body.includes(' · ')) {
-      const [legacyName, legacyState, ...detail] = body.split(' · ');
-      name = legacyName || name;
-      state = legacyState || state;
-      body = detail.join(' · ') || state;
+    // Older journals prefixed the report body with a header. Strip only the
+    // exact header built from stored attribution fields; never use text to
+    // decide who authored a message.
+    if (event.type === 'operator.lane.report' && !event.origin && event.name && event.agent && event.kind) {
+      const legacyHeader = `${event.name} (${event.agent}) · ${event.kind}\n`;
+      if (body.startsWith(legacyHeader)) body = body.slice(legacyHeader.length);
     }
+    const laneID = event.origin?.chatId || event.childSessionId;
     let index = -1;
     for (let i = blocks.length - 1; i >= 0; i--) {
-      if (blocks[i].kind === 'lane-report' && blocks[i].id === event.childSessionId && !blocks[i].done) { index = i; break; }
+      if (blocks[i].kind === 'lane-report' && blocks[i].id === laneID && !blocks[i].done) { index = i; break; }
     }
-    const card: Block = { key:index >= 0 ? blocks[index].key : ++this.nextBlockKey, turn:index >= 0 ? blocks[index].turn : this.currentTurn, kind:'lane-report', id:event.childSessionId, name, text:body, done, laneState:state, harness:event.agent || (index >= 0 ? blocks[index].harness : '') };
+    const card: Block = { key:index >= 0 ? blocks[index].key : ++this.nextBlockKey, turn:index >= 0 ? blocks[index].turn : this.currentTurn, kind:'lane-report', id:laneID, name, text:body, done, laneState:state, harness:event.origin?.harness || event.agent || (index >= 0 ? blocks[index].harness : '') };
     if (index >= 0) blocks[index] = card;
     else blocks.push(card);
   }
@@ -948,9 +953,11 @@ export class MuxSDKChat extends LitElement {
       this.upsertLaneCard(blocks, event, true);
       if (!this.replaying) void sdkChats.refresh();
     }
-    else if (event.type === 'input.accepted' && event.source === 'operator-lane') {
-      // The durable sourced report card is already in the transcript. This
-      // accepted input starts the operator's reply but is not a human bubble.
+    else if (event.type === 'input.accepted' && (event.origin?.type === 'operator-lane' || event.source === 'operator-lane')) {
+      // The report event normally precedes this harness input. If a history
+      // page begins between them, the server-owned origin reconstructs it.
+      if (event.origin?.chatId && !blocks.some(block => block.kind === 'lane-report' && block.id === event.origin?.chatId && block.text === event.text))
+        this.upsertLaneCard(blocks, event, true);
       this.busy = true;
       markStart(this.currentTurn);
     }
@@ -1644,9 +1651,10 @@ export class MuxSDKChat extends LitElement {
   }
   private isACPChat() { return this.chat?.harness === 'pi' || this.chat?.harness === 'opencode' || this.chat?.harness === 'deepseek'; }
   private laneCard(block: Block) {
+    const name = sdkChats.chats.find(chat => chat.id === block.id)?.title || block.name || 'Linked lane';
     const state = block.laneState === 'failed' ? 'Failed' : block.laneState === 'uncertain' ? 'Needs attention' : block.laneState === 'stopped' ? 'Stopped' : block.done ? 'Completed' : block.laneState === 'ready' ? 'Ready' : 'Working';
     const harness = block.harness ? sdkHarnessLabel(block.harness as SDKHarnessName) || block.harness : 'Linked chat';
-    return html`<div class="lane-report-card" aria-label=${`${block.name || 'Linked lane'} status update`}><div class="lane-report-head"><span class="lane-report-icon" aria-hidden="true">${icon(Network,{size:14})}</span><span class="lane-report-name" title=${block.name || 'Linked lane'}>${block.name || 'Linked lane'}</span><span class="lane-report-state ${block.laneState || ''}">${state}</span></div><p>${block.text}</p><div class="lane-report-foot"><span>${harness} · Lane update</span>${block.id ? html`<button @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>Open chat</button>` : nothing}</div></div>`;
+    return html`<article class="lane-report-card ${block.laneState || ''}" aria-label=${`Report from lane ${name}`}><div class="lane-report-head"><span class="lane-report-icon" aria-hidden="true">${laneIcon(16)}</span><span class="lane-report-name" title=${name}>From ${name}</span><span class="lane-report-state">${state}</span></div><div class="lane-report-body">${this.markdown(block, block.key)}</div><div class="lane-report-foot"><span>${harness} lane</span>${block.id ? html`<button aria-label=${`Open lane chat: ${name}`} @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>Open chat</button>` : nothing}</div></article>`;
   }
   override render() {
     const agents = this.agents();

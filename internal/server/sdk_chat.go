@@ -90,6 +90,7 @@ type sdkEvent struct {
 	Persisted       *bool                  `json:"persisted,omitempty"`
 	Kind            string                 `json:"kind,omitempty"`
 	Source          string                 `json:"source,omitempty"`
+	Origin          *sdkEventOrigin        `json:"origin,omitempty"`
 	Text            string                 `json:"text,omitempty"`
 	Name            string                 `json:"name,omitempty"`
 	ToolID          string                 `json:"toolId,omitempty"`
@@ -107,6 +108,13 @@ type sdkEvent struct {
 	Failed          bool                   `json:"failed,omitempty"`
 	Complete        bool                   `json:"complete,omitempty"`
 	Attachments     []sdkDisplayAttachment `json:"attachments,omitempty"`
+}
+type sdkEventOrigin struct {
+	Type    string `json:"type"`
+	ChatID  string `json:"chatId"`
+	Name    string `json:"name"`
+	Harness string `json:"harness"`
+	Status  string `json:"status"`
 }
 type sdkDisplayAttachment struct {
 	ID   string `json:"id"`
@@ -273,6 +281,16 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	if event.At.IsZero() {
 		event.At = time.Now().UTC()
 	}
+	if event.Type == "input.accepted" {
+		// The server's dispatch record, keyed by input ID, owns attribution.
+		// A sidecar or caller-provided source alone cannot turn a human input
+		// into a lane message in the transcript.
+		if origin := h.operatorInputOrigin(event.SessionID, event.InputID); origin != nil {
+			event.Source, event.Origin = "operator-lane", origin
+		} else if event.Source == "operator-lane" {
+			event.Source = "browser"
+		}
+	}
 	h.mu.Lock()
 	c := h.chats[event.SessionID]
 	if c == nil {
@@ -371,11 +389,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	case "session.renamed", "input.accepted", "turn.completed", "turn.cancelled", "error", "session.uncertain", "goal.progress":
 		h.notifyCatalogLocked(event.SessionID)
 	}
-	// Name the opening input as soon as it is accepted, while its turn keeps
-	// running. Revisit the subject after completed human turns 2, 5, 8, ...
-	// All title calls run outside the chat event path.
-	if (event.Type == "input.accepted" && event.Kind == "user" && event.Source != "operator-lane" && c.UserTurns == 1) ||
-		(event.Type == "turn.completed" && c.UserTurns >= 2 && (c.UserTurns-2)%3 == 0) {
+	// Name once after the opening turn settles. The native title store is
+	// ready by then, and later turns never schedule another rename.
+	if event.Type == "turn.completed" && c.UserTurns == 1 {
 		h.scheduleNamingLocked(c)
 	}
 	h.mu.Unlock()
@@ -418,7 +434,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			if event.Type == "error" && event.Message != "" {
 				message = event.Message
 			}
-			h.appendEvent(sdkEvent{SessionID: parent, Type: "operator.lane.status", ChildSessionID: event.SessionID, Name: label, Agent: harness, Kind: state, Text: sdkPreview(message, 180)})
+			h.appendEvent(sdkEvent{SessionID: parent, Type: "operator.lane.status", ChildSessionID: event.SessionID, Name: label, Agent: harness, Kind: state, Text: sdkPreview(message, 180), Origin: &sdkEventOrigin{Type: "operator-lane", ChatID: event.SessionID, Name: label, Harness: harness, Status: state}})
 			finishedTurn := !terminalGoal && event.Type == "turn.completed"
 			stopped := event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain"
 			finishedGoal := terminalGoal && event.Type == "goal.progress" && event.GoalState != "" && event.GoalState != "continuing"
@@ -1757,6 +1773,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Kind == "" {
 			req.Kind = "user"
+		}
+		if req.Source == "operator-lane" {
+			http.Error(w, "operator-lane source is reserved for server reports", 422)
+			return
 		}
 		if req.Kind == "service" && c.Harness == "codex" {
 			http.Error(w, "unsupported: attributed service input", 422)
