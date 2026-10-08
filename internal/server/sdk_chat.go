@@ -287,8 +287,11 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		// into a lane message in the transcript.
 		if origin := h.operatorInputOrigin(event.SessionID, event.InputID); origin != nil {
 			event.Source, event.Origin = "operator-lane", origin
-		} else if event.Source == "operator-lane" {
-			event.Source = "browser"
+		} else {
+			event.Origin = nil
+			if event.Source == "operator-lane" {
+				event.Source = "browser"
+			}
 		}
 	}
 	h.mu.Lock()
