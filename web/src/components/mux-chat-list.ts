@@ -9,6 +9,12 @@ import { sdkChats, type FolderListing, type SDKChat, type SDKProject } from '../
 
 interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean }
 
+// The input is already newest-first. Partitioning keeps that order within
+// each section without changing the separate Pinned or Archived sections.
+function operatorsFirst(chats: SDKChat[]): SDKChat[] {
+  return [...chats.filter(chat => chat.operator), ...chats.filter(chat => !chat.operator)];
+}
+
 @customElement('mux-chat-workspace')
 export class MuxChatWorkspace extends LitElement {
   @property({ attribute: false }) model!: ChatGroup;
@@ -334,8 +340,8 @@ export class MuxChatList extends LitElement {
     const chats = [...sdkChats.chats].sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt) || a.id.localeCompare(b.id));
     const active = chats.filter(chat => !chat.archived);
     const laneIds = new Set(chats.filter(chat => chat.operator).flatMap(chat => chat.operatorLanes || []));
-    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:active.filter(chat => chat.workspaceId === project.id), laneIds }));
-    groups.push({ id:'ungrouped', name:'Ungrouped', chats:active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)), laneIds });
+    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:operatorsFirst(active.filter(chat => chat.workspaceId === project.id)), laneIds }));
+    groups.push({ id:'ungrouped', name:'Ungrouped', chats:operatorsFirst(active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId))), laneIds });
     groups.push({ id:'archived', name:`Archived (${chats.length-active.length})`, archived:true, chats:chats.filter(chat => chat.archived), laneIds });
     const pinned = [
       ...projects.filter(project => project.pinned).map(project => ({ kind:'project' as const, id:project.id, name:project.name, operator:false, lane:false, state:'' })),
