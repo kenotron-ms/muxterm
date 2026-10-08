@@ -65,6 +65,8 @@ func sdkMessagePageStart(file *os.File, end int64) (int64, error) {
 		}
 		for _, line := range bytes.Split(data, []byte{'\n'}) {
 			if bytes.Contains(line, []byte("input.accepted")) {
+				// Server-attributed inputs always use a reserved source, so this
+				// small header is enough to count only human turns.
 				var header struct {
 					Type   string `json:"type"`
 					Kind   string `json:"kind"`

@@ -128,6 +128,8 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chat := *c
+	// A missing token is an external tool input; an invalid token is rejected.
+	// Only serve issues tokens that identify a sending chat.
 	origin, valid := h.controlOriginLocked(req.OriginToken, id)
 	if !valid {
 		h.mu.Unlock()
@@ -188,6 +190,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.saveControlLocked(receipt); err != nil {
+		_ = os.Remove(h.controlPath(id, "input-origin:"+receipt.InputID))
 		h.mu.Unlock()
 		http.Error(w, err.Error(), 500)
 		return
