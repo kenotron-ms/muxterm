@@ -1,9 +1,10 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { Archive, ArchiveRestore, ArrowUpRight, ChevronRight, Unlink2 } from 'lucide';
+import { Archive, ArchiveRestore, ChevronRight, Unlink2 } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { chatMarkdownPolicy } from '../lib/chat-markdown-policy.js';
 import { icon } from '../lib/icons.js';
+import { laneIcon } from '../lib/lane-icon.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat } from '../lib/sdk-chats.js';
@@ -11,7 +12,6 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 
 type Snapshot = { operator: SDKChat; lanes: SDKChat[] };
 type LaneFilter = 'all' | 'attention' | 'running' | 'done';
-const barHeights = [4, 7, 5, 9, 6, 10, 5, 8, 6, 10, 7, 9];
 
 @customElement('mux-operator-status')
 export class MuxOperatorStatus extends LitElement {
@@ -26,7 +26,7 @@ export class MuxOperatorStatus extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; height:100%; overflow:auto; box-sizing:border-box; padding:18px; background:var(--chrome-body); color:var(--chrome-text-bright); font:12px/1.5 system-ui,sans-serif; }
+    :host { display:block; width:100%; min-width:0; height:100%; overflow:auto; box-sizing:border-box; padding:18px; background:var(--chrome-body); color:var(--chrome-text-bright); font:12px/1.5 system-ui,sans-serif; }
     * { box-sizing:border-box; }
     h2,p { margin:0; }
     h2 { font-size:17px; line-height:1.25; font-weight:650; }
@@ -44,14 +44,14 @@ export class MuxOperatorStatus extends LitElement {
     .empty { padding:24px 14px; border:1px dashed var(--chrome-border); border-radius:9px; color:var(--chrome-text-dim); text-align:center; }
     .empty .hint { margin-top:7px; }
     .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-    .table-scroll { width:100%; overflow-x:auto; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
-    table { width:100%; min-width:340px; border-collapse:collapse; table-layout:fixed; }
+    .table-scroll { width:100%; min-width:0; overflow:hidden; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; }
     col.lane-col { width:auto; }
-    col.progress-col { width:118px; }
-    col.action-col { width:30px; }
+    col.progress-col { width:196px; }
+    col.action-col { width:52px; }
     th { padding:10px 12px 8px; color:var(--chrome-text-dim); font-size:11px; font-weight:500; text-align:left; border-bottom:1px solid var(--chrome-border); }
-    th:nth-child(2) { text-align:right; }
-    td { padding:12px; border-top:1px solid color-mix(in srgb,var(--chrome-border) 65%,transparent); vertical-align:middle; }
+    td { padding:11px 12px; border-top:1px solid color-mix(in srgb,var(--chrome-border) 65%,transparent); vertical-align:middle; min-width:0; }
+    td:last-child { padding:6px 10px 6px 4px; }
     tbody tr:first-child td { border-top:0; }
     tr.lane-row:hover,tr.lane-row.expanded { background:var(--chrome-hover); }
     button { font:inherit; cursor:pointer; }
@@ -69,18 +69,19 @@ export class MuxOperatorStatus extends LitElement {
     .state.working,.state.starting { color:var(--chrome-accent); }
     .state.ready { color:var(--mux-ok,#55b981); }
     .state.failed,.state.uncertain,.state.stopped { color:var(--chrome-danger); }
-    .progress-cell { text-align:right; }
-    .meter { display:flex; flex-direction:column; align-items:flex-end; gap:2px; width:100%; color:var(--chrome-accent); }
+    .progress-cell { text-align:left; }
+    .meter { display:grid; gap:4px; width:100%; min-width:0; color:var(--chrome-accent); }
     .meter.ready { color:var(--mux-ok,#55b981); }
     .meter.failed,.meter.uncertain,.meter.stopped { color:var(--chrome-danger); }
-    .bars { display:inline-flex; align-items:end; gap:2px; height:11px; }
-    .bars span { display:block; width:2px; flex:none; border-radius:2px 2px 0 0; background:color-mix(in srgb,var(--chrome-border) 82%,transparent); }
-    .bars span.filled { background:currentColor; }
-    .time-value { color:var(--chrome-text-bright); font-size:12px; font-weight:650; line-height:1.2; font-variant-numeric:tabular-nums; white-space:nowrap; }
-    .meter-foot { display:inline-flex; align-items:center; gap:7px; }
-    .time-caption { color:var(--chrome-text-dim); font-size:10px; white-space:nowrap; }
-    .open { display:grid; place-items:center; width:22px; height:22px; border:0; border-radius:5px; padding:0; background:none; color:var(--chrome-text-dim); }
-    .open:hover { background:var(--chrome-hover); color:var(--chrome-accent); }
+    .meter-head { display:flex; align-items:baseline; justify-content:space-between; gap:6px; min-width:0; font-variant-numeric:tabular-nums; }
+    .progress-value { color:var(--chrome-text-bright); font-size:12px; font-weight:650; white-space:nowrap; }
+    .progress-basis { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-dim); font-size:10px; }
+    .track { display:block; height:5px; overflow:hidden; border-radius:6px; background:color-mix(in srgb,var(--chrome-border) 75%,transparent); }
+    .fill { display:block; height:100%; border-radius:inherit; background:currentColor; }
+    .meter-time { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-dim); font-size:10px; font-variant-numeric:tabular-nums; }
+    .open { display:grid; place-items:center; width:32px; height:32px; border:1px solid transparent; border-radius:7px; padding:6px; background:none; color:var(--chrome-text-dim); }
+    .open:hover { border-color:var(--chrome-border); background:var(--chrome-hover); color:var(--chrome-accent); }
+    .open:focus-visible { color:var(--chrome-accent); }
     .detail td { padding:0 12px 11px 32px; background:color-mix(in srgb,var(--chrome-hover) 55%,var(--chrome-bar)); border-top:0; }
     .message { padding:12px 0 13px; border-top:1px solid var(--chrome-border); color:var(--chrome-text-bright); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
     .message > :first-child,.message .md-p:first-child { margin-top:0; }
@@ -103,7 +104,7 @@ export class MuxOperatorStatus extends LitElement {
     .detail-actions button:hover { color:var(--chrome-text-bright); }
     .detail-actions button:disabled { opacity:.5; cursor:default; }
     .detail-actions .archive-action { margin-left:auto; }
-    @media(max-width:470px) { :host { padding:14px; } table { min-width:320px; } }
+    @media(max-width:560px) { :host { padding:12px; } col.progress-col { width:122px; } col.action-col { width:40px; } th,td { padding-left:7px; padding-right:7px; } td:last-child { padding:6px 4px; } .lane-toggle { gap:3px; } .meter-time { display:none; } .progress-basis { font-size:9px; } }
     @media(prefers-reduced-motion:reduce) { .chevron { transition:none; } }
   `;
 
@@ -188,33 +189,47 @@ export class MuxOperatorStatus extends LitElement {
   }
   private timingDisplay(lane: SDKChat) {
     const timing = lane.timing;
-    if (this.isStopped(lane)) return { value:'—', caption:'stopped' };
-    if (lane.state === 'ready') return timing?.actualSeconds ? { value:this.duration(timing.actualSeconds), caption:'actual' } : { value:'—', caption:'no duration' };
-    if (lane.state !== 'working' && lane.state !== 'starting') return { value:'—', caption:'unknown' };
-    if (timing?.remainingLowSeconds !== undefined && timing.remainingHighSeconds !== undefined) return { value:`~${this.duration(timing.remainingLowSeconds)}–${this.duration(timing.remainingHighSeconds)}`, caption:'remaining' };
-    if (timing?.sampleSize && timing.effortLowSeconds !== undefined && timing.effortHighSeconds !== undefined && !timing.elapsedSeconds) return { value:`~${this.duration(timing.effortLowSeconds)}–${this.duration(timing.effortHighSeconds)}`, caption:'estimate' };
-    return { value:'—', caption:timing?.sampleSize ? 'uncertain' : 'no estimate' };
+    if (this.isStopped(lane)) return '';
+    if (lane.state === 'ready') return timing?.actualSeconds ? this.duration(timing.actualSeconds) : '';
+    if (lane.state !== 'working' && lane.state !== 'starting') return '';
+    if (timing?.remainingLowSeconds !== undefined && timing.remainingHighSeconds !== undefined) return `~${this.duration(timing.remainingLowSeconds)}–${this.duration(timing.remainingHighSeconds)} left`;
+    if (timing?.sampleSize && timing.effortLowSeconds !== undefined && timing.effortHighSeconds !== undefined && !timing.elapsedSeconds) return `~${this.duration(timing.effortLowSeconds)}–${this.duration(timing.effortHighSeconds)} total`;
+    return '';
   }
   private timingHelp(lane: SDKChat) {
     if (this.isStopped(lane)) return 'The latest turn was stopped.';
-    if (lane.state === 'ready') return lane.timing?.actualSeconds ? 'Actual duration of the latest completed turn.' : 'Duration unavailable for this completed turn.';
+    if (lane.state === 'ready') return lane.timing?.actualSeconds ? 'Elapsed time for the latest completed turn.' : 'Elapsed time is unavailable for this turn.';
     if (lane.state !== 'working' && lane.state !== 'starting') return 'No estimate for this lane state.';
     const timing = lane.timing;
     if (!timing || timing.sampleSize < 8) return 'No estimate: fewer than eight completed turns.';
-    return `Approximate range from ${timing.sampleSize} ${timing.broadHistory ? 'recent' : 'similar'} completed turns. Actual time may vary.`;
+    return `Approximate range from ${timing.sampleSize} ${timing.broadHistory ? 'recent' : 'similar'} completed turns. Time may vary.`;
   }
-  private meter(lane: SDKChat) {
+  private progress(lane: SDKChat) {
     const done = lane.laneTodos?.filter(todo => todo.status === 'completed' || todo.status === 'done').length || 0;
     const total = lane.laneTodos?.length || 0;
-    const todoCount = total > 0;
-    const elapsed = lane.timing?.elapsedSeconds || 0;
-    const high = lane.timing?.effortHighSeconds || 0;
-    const filled = todoCount ? Math.round(done / total * barHeights.length) : lane.state === 'ready' && !this.isStopped(lane) ? barHeights.length : lane.state === 'working' && high > 0 ? Math.min(barHeights.length, Math.max(1, Math.round(elapsed / high * barHeights.length))) : lane.state === 'working' ? 1 : 0;
-    const display = todoCount ? { value:`${done}/${total}`, caption:'tasks' } : this.timingDisplay(lane);
-    const help = todoCount ? `${done} of ${total} tasks complete.` : this.timingHelp(lane);
-    return html`<div class="meter ${this.isStopped(lane) ? 'stopped' : lane.state}" aria-label=${`${lane.title}: ${display.value} ${display.caption}. ${help}`} title=${help}>
-      <span class="time-value">${display.value}</span>
-      <span class="meter-foot"><span class="bars" aria-hidden="true">${barHeights.map((height, index) => html`<span class=${index < filled ? 'filled' : ''} style=${`height:${height}px`}></span>`)}</span><span class="time-caption">${display.caption}</span></span>
+    if (total > 0) {
+      const percent = done === total ? 100 : Math.min(99, Math.round(done / total * 100));
+      return { percent, value:`${percent}%`, basis:`${done}/${total} tasks`, help:`${done} of ${total} reported tasks complete.` };
+    }
+    if (lane.state === 'ready' && lane.lastTurnOutcome === 'completed') {
+      return { percent:100, value:'100%', basis:'run ended', help:'The latest turn completed. No task list was reported.' };
+    }
+    const timing = lane.timing;
+    const elapsed = timing?.elapsedSeconds || 0;
+    if ((lane.state === 'working' || lane.state === 'starting') && timing && timing.sampleSize >= 8 && (timing.survivorCount || 0) >= 5 && elapsed > 0 && timing.remainingLowSeconds !== undefined && timing.remainingHighSeconds !== undefined) {
+      const remainingMidpoint = (timing.remainingLowSeconds + timing.remainingHighSeconds) / 2;
+      const percent = Math.min(90, Math.max(5, Math.round(elapsed / (elapsed + remainingMidpoint) * 100)));
+      return { percent, value:`~${percent}%`, basis:'time estimate', help:`Approximate time-based progress from ${timing.sampleSize} completed turns, bounded to 5–90%. This does not measure completed tasks. ${this.timingHelp(lane)}` };
+    }
+    return { percent:0, value:'—', basis:'unknown', help:'No completed task count or reliable progress estimate is available.' };
+  }
+  private meter(lane: SDKChat) {
+    const progress = this.progress(lane);
+    const time = this.timingDisplay(lane);
+    return html`<div class="meter ${this.isStopped(lane) ? 'stopped' : lane.state}" aria-label=${`${lane.title}: ${progress.value}, ${progress.basis}. ${progress.help}`} title=${progress.help}>
+      <span class="meter-head"><span class="progress-value">${progress.value}</span><span class="progress-basis">${progress.basis}</span></span>
+      <span class="track" aria-hidden="true"><span class="fill" style=${`width:${progress.percent}%`}></span></span>
+      ${time ? html`<span class="meter-time">${time}</span>` : nothing}
     </div>`;
   }
   private filterButton(value: LaneFilter, label: string, count: number) {
@@ -244,14 +259,14 @@ export class MuxOperatorStatus extends LitElement {
           ${this.filterButton('done', 'Done', done)}
         </div>${visible.length ? html`<div class="table-scroll"><table aria-label="Operator lanes">
           <colgroup><col class="lane-col"><col class="progress-col"><col class="action-col"></colgroup>
-          <thead><tr><th scope="col">Lane</th><th scope="col">Time / tasks</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
+          <thead><tr><th scope="col">Lane</th><th scope="col">Progress</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
           <tbody>${visible.map(lane => {
             const expanded = this.expandedLane === lane.id;
             const detailId = `operator-lane-${lane.id}`;
             return html`<tr class="lane-row ${expanded ? 'expanded' : ''}">
               <td><button class="lane-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} ${lane.title}`} aria-expanded=${expanded} aria-controls=${detailId} @click=${() => { this.expandedLane = expanded ? '' : lane.id; }}><span class="chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-primary" title=${lane.title}><span class="lane-title">${lane.title}</span><span class="lane-meta"><span class="harness">${sdkHarnessLabel(lane.harness)}</span><span class="state ${this.isStopped(lane) ? 'stopped' : lane.state}">${this.isStopped(lane) ? 'Stopped' : lane.state === 'ready' ? 'Ready' : lane.state === 'uncertain' ? 'Uncertain' : lane.state === 'starting' ? 'Starting' : lane.state === 'failed' ? 'Failed' : 'Working'}</span>${lane.archived ? html`<span class="archived-label">Archived</span>` : nothing}</span></span></button></td>
               <td class="progress-cell">${this.meter(lane)}</td>
-              <td><button class="open" aria-label=${`Open chat: ${lane.title}`} title="Open chat" @click=${() => this.open(lane.id)}>${icon(ArrowUpRight,{size:15})}</button></td>
+              <td><button class="open" aria-label=${`Open lane chat: ${lane.title}`} title="Open lane chat" @click=${() => this.open(lane.id)}>${laneIcon(17)}</button></td>
             </tr>${expanded ? html`<tr class="detail"><td colspan="3"><div class="message" id=${detailId}>${this.message(lane)}</div>
               <div class="detail-actions"><button aria-label=${`Unlink ${lane.title} from operator`} ?disabled=${!!this.pendingLane} @click=${() => void this.unlink(lane)}>${icon(Unlink2,{size:13})} Unlink lane</button>
                 <button class="archive-action" aria-label=${`${lane.archived ? 'Restore' : 'Archive'} chat ${lane.title}`} ?disabled=${!!this.pendingLane} @click=${() => void this.setArchived(lane, !lane.archived)}>${icon(lane.archived ? ArchiveRestore : Archive,{size:13})} ${lane.archived ? 'Restore chat' : 'Archive chat'}</button></div>
