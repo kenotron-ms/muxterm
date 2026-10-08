@@ -145,6 +145,7 @@ export class MuxSDKChat extends LitElement {
   };
   private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
   private workExpanded = new Set<number>();
+  private laneReportsExpanded = new Set<number>();
   private stepExpanded = new Set<string>();
   private turnStarted = new Map<number, number>();
   private turnFinished = new Map<number, number>();
@@ -229,20 +230,38 @@ export class MuxSDKChat extends LitElement {
     .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
     .bubble a { display:block; margin-top:7px; color:var(--chrome-accent); }
-    .lane-report-card { --lane-color:var(--chrome-accent); max-width:720px; border:1px solid var(--chrome-border); border-left:3px solid var(--lane-color); border-radius:8px; padding:12px 16px 12px 14px; background:var(--chrome-bar); }
-    .lane-report-card.failed,.lane-report-card.uncertain { --lane-color:var(--chrome-danger); }
-    .lane-report-card.ready,.lane-report-card.completed { --lane-color:var(--chrome-success,#67af83); }
-    .lane-report-head { display:flex; align-items:center; gap:8px; min-width:0; }
-    .lane-report-icon { display:grid; place-items:center; flex:none; color:var(--lane-color); }
-    .lane-report-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:650; color:var(--chrome-text-bright); }
-    .lane-report-state { margin-left:auto; flex:none; color:var(--lane-color); font-size:12px; }
-    .lane-report-body { margin:10px 0 0 24px; color:var(--chrome-text-bright); font-size:14px; line-height:1.55; overflow-wrap:anywhere; }
-    .lane-report-body > :first-child { margin-top:0; }
-    .lane-report-body > :last-child { margin-bottom:0; }
-    .lane-report-foot { display:flex; align-items:center; gap:10px; margin:10px 0 0 24px; color:var(--chrome-text-dim); font-size:11px; }
-    .lane-report-foot button { margin-left:auto; border:0; border-radius:4px; padding:3px 5px; background:none; color:var(--chrome-accent); font-size:11px; cursor:pointer; }
-    .lane-report-foot button:hover { text-decoration:underline; }
-    .lane-report-foot button:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:2px; }
+    .lane-report-table { width:100%; max-width:720px; min-width:0; border:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    .lane-report-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,196px) 52px; min-height:58px; align-items:center; }
+    .lane-report-row:hover,.lane-report-table.expanded .lane-report-row { background:var(--chrome-hover); }
+    .lane-report-toggle { display:flex; align-items:center; gap:8px; width:100%; min-width:0; height:100%; border:0; padding:11px 12px; background:none; color:var(--chrome-text-bright); text-align:left; cursor:pointer; }
+    .lane-report-chevron { display:inline-flex; flex:none; color:var(--chrome-text-dim); transition:transform .15s; }
+    .lane-report-table.expanded .lane-report-chevron { transform:rotate(90deg); }
+    .lane-report-primary { display:block; min-width:0; flex:1; }
+    .lane-report-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
+    .lane-report-meta { display:flex; align-items:center; gap:8px; margin-top:2px; white-space:nowrap; }
+    .lane-report-harness { color:var(--chrome-text-dim); font-size:10px; }
+    .lane-report-state { display:inline-flex; align-items:center; gap:5px; color:var(--chrome-text-dim); font-size:10px; }
+    .lane-report-state::before { content:''; width:6px; height:6px; flex:none; border-radius:50%; background:currentColor; }
+    .lane-report-state.working,.lane-report-state.starting { color:var(--chrome-accent); }
+    .lane-report-state.ready { color:var(--mux-ok,#55b981); }
+    .lane-report-state.failed,.lane-report-state.uncertain,.lane-report-state.stopped { color:var(--chrome-danger); }
+    .lane-report-preview { min-width:0; padding:11px 12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-dim); font-size:11px; }
+    .lane-report-open-cell { display:grid; place-items:center; padding:6px 10px 6px 4px; }
+    .lane-report-open { display:grid; place-items:center; width:32px; height:32px; border:1px solid transparent; border-radius:7px; padding:6px; background:none; color:var(--chrome-text-dim); cursor:pointer; }
+    .lane-report-open:hover { border-color:var(--chrome-border); background:var(--chrome-hover); color:var(--chrome-accent); }
+    .lane-report-toggle:focus-visible,.lane-report-open:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:-2px; }
+    .lane-report-detail { padding:12px 12px 13px 32px; border-top:1px solid var(--chrome-border); background:color-mix(in srgb,var(--chrome-hover) 55%,var(--chrome-bar)); color:var(--chrome-text-bright); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
+    .lane-report-detail > :first-child,.lane-report-detail .md-p:first-child { margin-top:0; }
+    .lane-report-detail > :last-child,.lane-report-detail .md-p:last-child { margin-bottom:0; }
+    .lane-report-detail .md-p { margin:0 0 9px; }
+    .lane-report-detail .md-h { margin:12px 0 6px; font-size:13px; line-height:1.3; }
+    .lane-report-detail .md-ul,.lane-report-detail .md-ol { margin:6px 0 9px; padding-left:20px; }
+    .lane-report-detail .md-li { margin:3px 0; }
+    .lane-report-detail .md-pre,.lane-report-detail .md-tablewrap { max-width:100%; overflow:auto; }
+    .lane-report-detail .md-pre { padding:8px; background:var(--chrome-body); font:11px/1.45 ui-monospace,monospace; }
+    .lane-report-detail .md-link { color:var(--chrome-accent); }
+    @media(max-width:560px) { .lane-report-row { grid-template-columns:minmax(0,1fr) 40px; } .lane-report-preview { display:none; } .lane-report-toggle { gap:3px; padding-left:7px; padding-right:7px; } .lane-report-open-cell { padding:6px 4px; } }
+    @media(prefers-reduced-motion:reduce) { .lane-report-chevron { transition:none; } }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; font-weight:600; margin-bottom:10px; text-transform:capitalize; }
     .text { color:var(--chrome-text-bright,#d9def0); font-size:14px; line-height:1.68; overflow-wrap:anywhere; }
     .text > :first-child { margin-top:0; }
@@ -651,7 +670,7 @@ export class MuxSDKChat extends LitElement {
     this.cacheTimer = window.setTimeout(() => { this.cacheTimer = undefined; this.persistTranscriptCache(); }, 150);
   }
   private resetTranscript() {
-    this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear(); this.stepExpanded.clear();
+    this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear(); this.laneReportsExpanded.clear(); this.stepExpanded.clear();
     this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now();
     this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.pendingInputs.clear(); this.rowsCache = undefined;
   }
@@ -1652,9 +1671,12 @@ export class MuxSDKChat extends LitElement {
   private isACPChat() { return this.chat?.harness === 'pi' || this.chat?.harness === 'opencode' || this.chat?.harness === 'deepseek'; }
   private laneCard(block: Block) {
     const name = sdkChats.chats.find(chat => chat.id === block.id)?.title || block.name || 'Linked lane';
-    const state = block.laneState === 'failed' ? 'Failed' : block.laneState === 'uncertain' ? 'Needs attention' : block.laneState === 'stopped' ? 'Stopped' : block.done ? 'Completed' : block.laneState === 'ready' ? 'Ready' : 'Working';
+    const state = block.laneState === 'failed' ? 'Failed' : block.laneState === 'uncertain' ? 'Uncertain' : block.laneState === 'stopped' ? 'Stopped' : block.laneState === 'starting' ? 'Starting' : block.laneState === 'ready' ? 'Ready' : 'Working';
     const harness = block.harness ? sdkHarnessLabel(block.harness as SDKHarnessName) || block.harness : 'Linked chat';
-    return html`<article class="lane-report-card ${block.laneState || ''}" aria-label=${`Report from lane ${name}`}><div class="lane-report-head"><span class="lane-report-icon" aria-hidden="true">${laneIcon(16)}</span><span class="lane-report-name" title=${name}>From ${name}</span><span class="lane-report-state">${state}</span></div><div class="lane-report-body">${this.markdown(block, block.key)}</div><div class="lane-report-foot"><span>${harness} lane</span>${block.id ? html`<button aria-label=${`Open lane chat: ${name}`} @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>Open chat</button>` : nothing}</div></article>`;
+    const expanded = this.laneReportsExpanded.has(block.key);
+    const detailId = `lane-report-${block.key}`;
+    const preview = block.text.split('\n').find(line => line.trim())?.replace(/[*_`#]/g, '').trim() || 'Lane update';
+    return html`<article class="lane-report-table ${expanded ? 'expanded' : ''}" aria-label=${`Report from lane ${name}`}><div class="lane-report-row"><button class="lane-report-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} report from ${name}`} aria-expanded=${expanded} aria-controls=${detailId} @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}><span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${harness}</span><span class="lane-report-state ${block.laneState || ''}">${state}</span></span></span></button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<button class="lane-report-open" aria-label=${`Open lane chat: ${name}`} title="Open lane chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${laneIcon(17)}</button>` : nothing}</div></div>${expanded ? html`<div class="lane-report-detail" id=${detailId}>${this.markdown(block, block.key)}</div>` : nothing}</article>`;
   }
   override render() {
     const agents = this.agents();
