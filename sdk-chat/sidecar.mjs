@@ -1,7 +1,7 @@
 // Versioned NDJSON over a Unix socket. Go owns IDs, receipts, and the event log.
 import net from 'node:net';
 import { unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CodexStream } from './codex-stream.mjs';
@@ -15,6 +15,14 @@ const sessions = new Map();
 const clients = new Set();
 const muxtermMcpEnv = Object.fromEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
   .filter(key => process.env[key]).map(key => [key, process.env[key]]));
+function originFile(sessionId, token) {
+  if (!token) return '';
+  const dir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'origin');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const path = join(dir, `${sessionId}.token`);
+  writeFileSync(path, token, { mode: 0o600 });
+  return path;
+}
 const githubMcpEnv = Object.fromEntries(['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR', 'XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
   .filter(key => process.env[key]).map(key => [key, process.env[key]]));
 const githubMarker = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'github-enabled');
@@ -79,7 +87,7 @@ async function runClaude(s) {
   const agentTools = new Set();
   let thinkingStreamed = false;
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, additionalDirectories: s.sourceFolders, resume: s.nativeId || undefined,
-    mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: muxtermMcpEnv },
+    mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: { ...muxtermMcpEnv, MUXTERM_CHAT_ORIGIN_FILE: s.originFile } },
       ...(existsSync(githubMarker) ? { github: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'github'], env: githubMcpEnv } } : {}),
       ...(existsSync(join(microsoftRoot, 'personal', 'enabled')) ? { microsoft_personal: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'microsoft-personal'], env: microsoftMcpEnv } } : {}),
       ...(existsSync(remoteConnectionFile) ? { remote: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'remote'], env: muxtermMcpEnv } } : {}) },
@@ -158,7 +166,7 @@ async function command(cmd) {
     if (harness !== 'codex' && harness !== 'claude' && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
-    const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval, inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
+    const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval, originFile: originFile(sessionId, cmd.originToken), inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
     if (isACPHarness(harness)) {
       try {

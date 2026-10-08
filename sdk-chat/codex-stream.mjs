@@ -36,6 +36,7 @@ export class CodexStream {
     const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpConfig = muxterm ? ['-c', `mcp_servers.muxterm.command=${JSON.stringify(muxterm)}`,
       '-c', 'mcp_servers.muxterm.args=["mcp"]'] : [];
+    if (muxterm && session.originFile) mcpConfig.push('-c', `mcp_servers.muxterm.env.MUXTERM_CHAT_ORIGIN_FILE=${JSON.stringify(session.originFile)}`);
     const githubMarker = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'github-enabled');
     const githubEnabled = !!muxterm && existsSync(githubMarker);
     if (githubEnabled) mcpConfig.push('-c', `mcp_servers.github.command=${JSON.stringify(muxterm)}`,

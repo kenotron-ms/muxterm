@@ -13,8 +13,8 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/atomicfile"
 )
 
-func (h *sdkChatHost) saveOperatorInputOrigin(operatorID, inputID string, origin sdkEventOrigin) error {
-	path := h.controlPath(operatorID, "operator-input:"+inputID)
+func (h *sdkChatHost) saveInputOrigin(targetID, inputID string, origin sdkEventOrigin) error {
+	path := h.controlPath(targetID, "input-origin:"+inputID)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -25,16 +25,19 @@ func (h *sdkChatHost) saveOperatorInputOrigin(operatorID, inputID string, origin
 	return atomicfile.Write(path, data, 0600)
 }
 
-func (h *sdkChatHost) operatorInputOrigin(operatorID, inputID string) *sdkEventOrigin {
+func (h *sdkChatHost) inputOrigin(targetID, inputID string) *sdkEventOrigin {
 	if inputID == "" {
 		return nil
 	}
-	data, err := os.ReadFile(h.controlPath(operatorID, "operator-input:"+inputID))
+	data, err := os.ReadFile(h.controlPath(targetID, "input-origin:"+inputID))
+	if os.IsNotExist(err) {
+		data, err = os.ReadFile(h.controlPath(targetID, "operator-input:"+inputID))
+	}
 	if err != nil {
 		return nil
 	}
 	var origin sdkEventOrigin
-	if json.Unmarshal(data, &origin) != nil || origin.Type != "operator-lane" || origin.ChatID == "" {
+	if json.Unmarshal(data, &origin) != nil || (origin.Type != "operator-lane" && origin.Type != "chat-message" && origin.Type != "external-tool") || (origin.Type != "external-tool" && origin.ChatID == "") {
 		return nil
 	}
 	return &origin
@@ -211,7 +214,7 @@ func (h *sdkChatHost) drainOperatorReports(id string) {
 				}
 				receipt := sdkControlReceipt{SessionID: id, ClientRef: "operator-report:" + report.InputID, InputID: sdkID(), Content: report.Text, Status: "dispatching", CreatedAt: time.Now().UTC()}
 				origin := sdkEventOrigin{Type: "operator-lane", ChatID: report.ChildSessionID, Name: report.Name, Harness: report.Agent, Status: report.Kind}
-				if err := h.saveOperatorInputOrigin(id, receipt.InputID, origin); err != nil {
+				if err := h.saveInputOrigin(id, receipt.InputID, origin); err != nil {
 					h.mu.Unlock()
 					cancel()
 					time.Sleep(2 * time.Second)

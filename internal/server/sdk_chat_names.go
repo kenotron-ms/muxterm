@@ -146,7 +146,7 @@ func (h *sdkChatHost) namingInputs(id string) ([]string, error) {
 	var inputs []string
 	for scanner.Scan() {
 		var ev sdkEvent
-		if json.Unmarshal(scanner.Bytes(), &ev) == nil && ev.Type == "input.accepted" && ev.Kind == "user" && ev.Source != "operator-lane" {
+		if json.Unmarshal(scanner.Bytes(), &ev) == nil && ev.Type == "input.accepted" && ev.Kind == "user" && ev.Origin == nil && ev.Source != "operator-lane" && ev.Source != "chat-message" {
 			if input := strings.TrimSpace(ev.Text); input != "" {
 				inputs = append(inputs, string([]rune(input)[:min(len([]rune(input)), 1200)]))
 			}

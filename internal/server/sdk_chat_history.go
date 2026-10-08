@@ -70,7 +70,7 @@ func sdkMessagePageStart(file *os.File, end int64) (int64, error) {
 					Kind   string `json:"kind"`
 					Source string `json:"source"`
 				}
-				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" && header.Kind == "user" && header.Source != "operator-lane" {
+				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" && header.Kind == "user" && header.Source != "operator-lane" && header.Source != "chat-message" {
 					turns++
 				}
 			}

@@ -86,8 +86,11 @@ func (s *Server) handleSDKChatBranch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, event := range userRows {
-			copied = append(copied, sdkEvent{Type: "input.accepted", At: event.At, Kind: event.Kind, Source: event.Source, InputID: event.InputID, Text: event.Text, Attachments: event.Attachments})
+			copied = append(copied, sdkEvent{Type: "input.accepted", At: event.At, Kind: event.Kind, Source: event.Source, Origin: event.Origin, InputID: event.InputID, Text: event.Text, Attachments: event.Attachments})
 			line := "User: " + event.Text
+			if event.Origin != nil {
+				line = "Message from another chat: " + event.Text
+			}
 			for _, attachment := range event.Attachments {
 				line += "\n[Attachment: " + attachment.Name + "]"
 			}
