@@ -153,25 +153,26 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 }
 
 type sdkChatHost struct {
-	mu            sync.Mutex
-	nameLocks     map[string]*sync.Mutex
-	dir           string
-	socket        string
-	process       *exec.Cmd
-	done          chan struct{}
-	running       bool
-	ampSup        *amplifierchat.Host
-	ampMu         sync.Mutex
-	chats         map[string]*sdkChat
-	projects      map[string]*sdkProject
-	streams       map[string]map[chan sdkEvent]struct{}
-	nameStreams   map[chan string]struct{}
-	naming        map[string]bool
-	reportRunning map[string]bool
-	reportPending map[string]bool
-	onEvent       func(sdkEvent)
-	estimates     *sdkEffortEstimator
-	originTokens  map[string]string
+	mu               sync.Mutex
+	nameLocks        map[string]*sync.Mutex
+	dir              string
+	socket           string
+	process          *exec.Cmd
+	done             chan struct{}
+	running          bool
+	ampSup           *amplifierchat.Host
+	ampMu            sync.Mutex
+	chats            map[string]*sdkChat
+	projects         map[string]*sdkProject
+	streams          map[string]map[chan sdkEvent]struct{}
+	nameStreams      map[chan string]struct{}
+	naming           map[string]bool
+	reportRunning    map[string]bool
+	reportPending    map[string]bool
+	onEvent          func(sdkEvent)
+	estimates        *sdkEffortEstimator
+	originTokens     map[string]string
+	originTokenChats map[string]string
 }
 
 func sdkDataDir() string {
@@ -183,7 +184,7 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}, originTokens: map[string]string{}}
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}}
 	h.estimates = newSDKEffortEstimator(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	entries, _ := os.ReadDir(h.dir)
@@ -1568,6 +1569,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	err = h.saveLocked(c)
 	if err != nil {
 		delete(h.chats, c.ID)
+		h.forgetChatOriginLocked(c.ID)
 		if req.OperatorID != "" {
 			operator := h.chats[req.OperatorID]
 			operator.OperatorLanes = slices.DeleteFunc(operator.OperatorLanes, func(id string) bool { return id == c.ID })

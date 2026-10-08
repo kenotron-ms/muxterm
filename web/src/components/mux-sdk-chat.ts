@@ -237,10 +237,16 @@ export class MuxSDKChat extends LitElement {
     .lane-report-table { box-sizing:border-box; width:100%; max-width:720px; min-width:0; overflow:hidden; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
     .chat-message-card.operator-to-lane { background:color-mix(in srgb,var(--chrome-accent) 7%,var(--chrome-bar)); }
     .chat-message-card.lane-to-lane { background:color-mix(in srgb,var(--mux-ok,#55b981) 8%,var(--chrome-bar)); }
+    .chat-message-card.lane-to-operator { background:color-mix(in srgb,#b78b54 8%,var(--chrome-bar)); }
+    .chat-message-card.chat-to-chat { background:color-mix(in srgb,var(--chrome-text-dim) 6%,var(--chrome-bar)); }
+    .chat-message-card.external-tool { background:color-mix(in srgb,#8c80ad 8%,var(--chrome-bar)); }
     .chat-message-card .lane-report-toggle { gap:10px; }
     .chat-message-mark { display:grid; place-items:center; flex:none; width:24px; height:24px; border-radius:6px; background:var(--chrome-hover); color:var(--chrome-text-dim); }
     .chat-message-card.operator-to-lane .chat-message-mark { color:var(--chrome-accent); }
     .chat-message-card.lane-to-lane .chat-message-mark { color:var(--mux-ok,#55b981); }
+    .chat-message-card.lane-to-operator .chat-message-mark { color:#aa7c42; }
+    .chat-message-card.chat-to-chat .chat-message-mark { color:var(--chrome-text-bright); }
+    .chat-message-card.external-tool .chat-message-mark { color:#8773b0; }
     .chat-message-card .lane-report-meta { margin-top:3px; }
     .lane-report-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,196px) 52px; min-height:58px; align-items:center; }
     .lane-report-row:hover,.lane-report-table.expanded .lane-report-row { background:var(--chrome-hover); }
@@ -1783,7 +1789,8 @@ export class MuxSDKChat extends LitElement {
     const expanded = this.laneReportsExpanded.has(block.key);
     const detailId = `chat-message-${block.key}`;
     const preview = block.text.split('\n').find(line => line.trim())?.trim().replace(/!?\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/^#{1,6}\s*|^(?:[-*+]|\d+\.)\s+/g, '').replace(/[*_`]/g, '') || 'Message';
-    const sourceIcon = relation === 'operator-to-lane' ? icon(Network,{size:15}) : laneIcon(15);
+    const sourceIcon = relation === 'operator-to-lane' ? icon(Network,{size:15}) : relation === 'external-tool' ? icon(Wrench,{size:15})
+      : relation === 'chat-to-chat' ? icon(Bot,{size:15}) : laneIcon(15);
     return html`<article class="lane-report-table chat-message-card ${relation} ${expanded ? 'expanded' : ''}" aria-label=${`${label} message from ${name}`}>
       <div class="lane-report-row"><button class="lane-report-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} ${label} message from ${name}`} aria-expanded=${expanded} aria-controls=${detailId}
         @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}>

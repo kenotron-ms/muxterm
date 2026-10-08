@@ -1,7 +1,7 @@
 // Versioned NDJSON over a Unix socket. Go owns IDs, receipts, and the event log.
 import net from 'node:net';
 import { unlink } from 'node:fs/promises';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CodexStream } from './codex-stream.mjs';
@@ -13,14 +13,29 @@ if (!socketPath) throw new Error('Unix socket path required');
 try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 const sessions = new Map();
 const clients = new Set();
+const originFiles = new Set();
+const originDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'origin');
+// A previous serve may have stopped abruptly. Its in-memory capabilities are
+// gone, so its files cannot authenticate a new MCP process and can be pruned.
+try {
+  for (const name of readdirSync(originDir)) if (/^[0-9a-f]{32}\.token$/.test(name)) unlinkSync(join(originDir, name));
+} catch (error) { if (error.code !== 'ENOENT') throw error; }
+function forgetOriginFile(path) {
+  if (!path) return;
+  originFiles.delete(path);
+  try { unlinkSync(path); } catch { /* The serve process invalidates capabilities on exit. */ }
+}
+process.on('exit', () => { for (const path of originFiles) forgetOriginFile(path); });
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
 const muxtermMcpEnv = Object.fromEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
   .filter(key => process.env[key]).map(key => [key, process.env[key]]));
 function originFile(sessionId, token) {
   if (!token) return '';
-  const dir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'origin');
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = join(dir, `${sessionId}.token`);
+  mkdirSync(originDir, { recursive: true, mode: 0o700 });
+  const path = join(originDir, `${sessionId}.token`);
   writeFileSync(path, token, { mode: 0o600 });
+  originFiles.add(path);
   return path;
 }
 const githubMcpEnv = Object.fromEntries(['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR', 'XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
@@ -304,6 +319,7 @@ async function command(cmd) {
   }
   if (op === 'close') {
     s.closed = true; s.wake?.(); s.acp?.close(); s.codex?.close(); s.query?.close?.(); sessions.delete(sessionId);
+    forgetOriginFile(s.originFile);
     return { status: 'closed' };
   }
   throw new Error(`Unknown operation: ${op}`);

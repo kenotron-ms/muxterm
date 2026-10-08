@@ -89,7 +89,14 @@ func (s *Server) handleSDKChatBranch(w http.ResponseWriter, r *http.Request) {
 			copied = append(copied, sdkEvent{Type: "input.accepted", At: event.At, Kind: event.Kind, Source: event.Source, Origin: event.Origin, InputID: event.InputID, Text: event.Text, Attachments: event.Attachments})
 			line := "User: " + event.Text
 			if event.Origin != nil {
-				line = "Message from another chat: " + event.Text
+				switch event.Origin.Type {
+				case "operator-lane":
+					line = "Linked lane report: " + event.Text
+				case "external-tool":
+					line = "External tool input: " + event.Text
+				default:
+					line = "Message from another chat: " + event.Text
+				}
 			}
 			for _, attachment := range event.Attachments {
 				line += "\n[Attachment: " + attachment.Name + "]"
@@ -175,6 +182,7 @@ func (s *Server) handleSDKChatBranch(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		delete(h.chats, chat.ID)
+		h.forgetChatOriginLocked(chat.ID)
 		_ = os.Remove(filepath.Join(h.dir, chat.ID+".json"))
 		_ = os.Remove(filepath.Join(h.dir, chat.ID+".ndjson"))
 		_ = os.Remove(filepath.Join(h.dir, chat.ID+".branch-context"))
@@ -204,6 +212,7 @@ func (s *Server) handleSDKChatBranch(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			h.mu.Lock()
 			delete(h.chats, chat.ID)
+			h.forgetChatOriginLocked(chat.ID)
 			_ = os.Remove(filepath.Join(h.dir, chat.ID+".json"))
 			_ = os.Remove(filepath.Join(h.dir, chat.ID+".ndjson"))
 			_ = os.Remove(filepath.Join(h.dir, chat.ID+".branch-context"))

@@ -72,22 +72,25 @@ func (h *sdkChatHost) chatOriginToken(id string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.originTokens[id] == "" {
-		h.originTokens[id] = sdkID() + sdkID()
+		token := sdkID() + sdkID()
+		h.originTokens[id] = token
+		h.originTokenChats[token] = id
 	}
 	return h.originTokens[id]
+}
+
+func (h *sdkChatHost) forgetChatOriginLocked(id string) {
+	if token := h.originTokens[id]; token != "" {
+		delete(h.originTokenChats, token)
+		delete(h.originTokens, id)
+	}
 }
 
 func (h *sdkChatHost) controlOriginLocked(token, targetID string) (sdkEventOrigin, bool) {
 	if token == "" {
 		return sdkEventOrigin{Type: "external-tool", TargetChatID: targetID, Name: "External tool"}, true
 	}
-	var sender *sdkChat
-	for id, issued := range h.originTokens {
-		if issued == token {
-			sender = h.chats[id]
-			break
-		}
-	}
+	sender := h.chats[h.originTokenChats[token]]
 	if sender == nil {
 		return sdkEventOrigin{}, false
 	}
