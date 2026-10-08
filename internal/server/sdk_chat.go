@@ -62,6 +62,8 @@ type sdkChat struct {
 	LastActivity        string        `json:"lastActivity,omitempty"`
 	LastOutput          string        `json:"lastOutput,omitempty"`
 	HasVoiceHistory     bool          `json:"hasVoiceHistory,omitempty"`
+	BranchContext       string        `json:"-"`
+	BranchPending       bool          `json:"branchPending,omitempty"`
 	Operator            bool          `json:"operator,omitempty"`
 	OperatorLanes       []string      `json:"operatorLanes,omitempty"`
 	LaneTodos           []sdkLaneTodo `json:"laneTodos,omitempty"`
@@ -317,6 +319,11 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	}
 	switch event.Type {
 	case "input.accepted":
+		if c.BranchPending && event.Kind == "user" && event.Source != "voice" {
+			c.BranchPending = false
+			c.BranchContext = ""
+			_ = os.Remove(filepath.Join(h.dir, c.ID+".branch-context"))
+		}
 		c.State = "working"
 		c.TurnStartedAt = event.At
 		c.LastTurnSeconds = 0
@@ -1824,6 +1831,17 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content := req.Content
+		if req.Kind == "user" && c.BranchPending {
+			if c.BranchContext == "" {
+				contextData, readErr := os.ReadFile(filepath.Join(h.dir, c.ID+".branch-context"))
+				if readErr != nil {
+					http.Error(w, "branch history is unavailable", 500)
+					return
+				}
+				c.BranchContext = string(contextData)
+			}
+			content = c.BranchContext + "\n\nContinue this conversation with the user's new message:\n" + content
+		}
 		if (req.Kind == "user" || req.Kind == "steer") && s.sdkVoice != nil {
 			content = sdkTaskInputWithVoiceContext(content, h.recentVoiceContext(id))
 		}
