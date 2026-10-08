@@ -66,10 +66,11 @@ func sdkMessagePageStart(file *os.File, end int64) (int64, error) {
 		for _, line := range bytes.Split(data, []byte{'\n'}) {
 			if bytes.Contains(line, []byte("input.accepted")) {
 				var header struct {
-					Type string `json:"type"`
-					Kind string `json:"kind"`
+					Type   string `json:"type"`
+					Kind   string `json:"kind"`
+					Source string `json:"source"`
 				}
-				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" && header.Kind == "user" {
+				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" && header.Kind == "user" && header.Source != "operator-lane" {
 					turns++
 				}
 			}
