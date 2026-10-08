@@ -230,7 +230,7 @@ export class MuxSDKChat extends LitElement {
     .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
     .bubble a { display:block; margin-top:7px; color:var(--chrome-accent); }
-    .lane-report-table { width:100%; max-width:720px; min-width:0; border:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    .lane-report-table { box-sizing:border-box; width:100%; max-width:720px; min-width:0; overflow:hidden; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
     .lane-report-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,196px) 52px; min-height:58px; align-items:center; }
     .lane-report-row:hover,.lane-report-table.expanded .lane-report-row { background:var(--chrome-hover); }
     .lane-report-toggle { display:flex; align-items:center; gap:8px; width:100%; min-width:0; height:100%; border:0; padding:11px 12px; background:none; color:var(--chrome-text-bright); text-align:left; cursor:pointer; }
@@ -250,16 +250,23 @@ export class MuxSDKChat extends LitElement {
     .lane-report-open { display:grid; place-items:center; width:32px; height:32px; border:1px solid transparent; border-radius:7px; padding:6px; background:none; color:var(--chrome-text-dim); cursor:pointer; }
     .lane-report-open:hover { border-color:var(--chrome-border); background:var(--chrome-hover); color:var(--chrome-accent); }
     .lane-report-toggle:focus-visible,.lane-report-open:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:-2px; }
-    .lane-report-detail { padding:12px 12px 13px 32px; border-top:1px solid var(--chrome-border); background:color-mix(in srgb,var(--chrome-hover) 55%,var(--chrome-bar)); color:var(--chrome-text-bright); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
+    .lane-report-detail { min-width:0; padding:12px 12px 13px 32px; border-top:1px solid var(--chrome-border); background:color-mix(in srgb,var(--chrome-hover) 55%,var(--chrome-bar)); color:var(--chrome-text-bright); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
     .lane-report-detail > :first-child,.lane-report-detail .md-p:first-child { margin-top:0; }
     .lane-report-detail > :last-child,.lane-report-detail .md-p:last-child { margin-bottom:0; }
     .lane-report-detail .md-p { margin:0 0 9px; }
     .lane-report-detail .md-h { margin:12px 0 6px; font-size:13px; line-height:1.3; }
     .lane-report-detail .md-ul,.lane-report-detail .md-ol { margin:6px 0 9px; padding-left:20px; }
     .lane-report-detail .md-li { margin:3px 0; }
-    .lane-report-detail .md-pre,.lane-report-detail .md-tablewrap { max-width:100%; overflow:auto; }
-    .lane-report-detail .md-pre { padding:8px; background:var(--chrome-body); font:11px/1.45 ui-monospace,monospace; }
-    .lane-report-detail .md-link { color:var(--chrome-accent); }
+    .lane-report-detail .md-code { padding:1px 3px; border-radius:3px; background:var(--chrome-hover); font:11px ui-monospace,monospace; }
+    .lane-report-detail .md-pre { box-sizing:border-box; max-width:100%; padding:8px; background:var(--chrome-body); font:11px/1.45 ui-monospace,monospace; }
+    .lane-report-detail .md-pre code { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
+    .lane-report-detail .md-quote { margin:7px 0; padding-left:9px; border-left:2px solid var(--chrome-border); color:var(--chrome-text-dim); }
+    .lane-report-detail .md-link { color:var(--chrome-accent); text-decoration:underline; text-underline-offset:2px; }
+    .lane-report-detail .md-link,.lane-report-detail .md-code { overflow-wrap:anywhere; word-break:break-word; }
+    .lane-report-detail .md-img { max-width:100%; max-height:240px; object-fit:contain; }
+    .lane-report-detail .md-tablewrap { max-width:100%; min-width:0; overflow:auto; }
+    .lane-report-detail .md-table { width:100%; table-layout:fixed; border-collapse:collapse; }
+    .lane-report-detail .md-th,.lane-report-detail .md-td { padding:4px 7px; border:1px solid var(--chrome-border); overflow-wrap:anywhere; }
     @media(max-width:560px) { .lane-report-row { grid-template-columns:minmax(0,1fr) 40px; } .lane-report-preview { display:none; } .lane-report-toggle { gap:3px; padding-left:7px; padding-right:7px; } .lane-report-open-cell { padding:6px 4px; } }
     @media(prefers-reduced-motion:reduce) { .lane-report-chevron { transition:none; } }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; font-weight:600; margin-bottom:10px; text-transform:capitalize; }
@@ -1675,7 +1682,10 @@ export class MuxSDKChat extends LitElement {
     const harness = block.harness ? sdkHarnessLabel(block.harness as SDKHarnessName) || block.harness : 'Linked chat';
     const expanded = this.laneReportsExpanded.has(block.key);
     const detailId = `lane-report-${block.key}`;
-    const preview = block.text.split('\n').find(line => line.trim())?.replace(/[*_`#]/g, '').trim() || 'Lane update';
+    const preview = block.text.split('\n').find(line => line.trim())?.trim()
+      .replace(/!?\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/^#{1,6}\s*|^(?:[-*+]|\d+\.)\s+/g, '')
+      .replace(/[*_`]/g, '') || 'Lane update';
     return html`<article class="lane-report-table ${expanded ? 'expanded' : ''}" aria-label=${`Report from lane ${name}`}><div class="lane-report-row"><button class="lane-report-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} report from ${name}`} aria-expanded=${expanded} aria-controls=${detailId} @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}><span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${harness}</span><span class="lane-report-state ${block.laneState || ''}">${state}</span></span></span></button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<button class="lane-report-open" aria-label=${`Open lane chat: ${name}`} title="Open lane chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${laneIcon(17)}</button>` : nothing}</div></div>${expanded ? html`<div class="lane-report-detail" id=${detailId}>${this.markdown(block, block.key)}</div>` : nothing}</article>`;
   }
   override render() {
