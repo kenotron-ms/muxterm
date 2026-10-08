@@ -21,7 +21,7 @@ type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; pare
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report'; text: string; channel?: 'voice' | 'task'; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string };
+type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
@@ -59,7 +59,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { BookOpen, Bot, Brain, ChevronDown, ChevronRight, Columns2, FilePenLine, Globe, Mic, Network, PanelLeft, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
+import { BookOpen, Bot, Brain, Check, ChevronDown, ChevronRight, Columns2, Copy, FilePenLine, GitFork, Globe, Mic, Network, PanelLeft, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
@@ -78,6 +78,10 @@ export class MuxSDKChat extends LitElement {
   @state() private recoveryPrepared = false;
   @state() private draft = '';
   @state() private error = '';
+  @state() private editingKey = 0;
+  @state() private editDraft = '';
+  @state() private actionPending = false;
+  @state() private copiedKey = 0;
   @state() private busy = false;
   @state() private stopping = false;
   @state() private drawerOpen = false;
@@ -226,7 +230,7 @@ export class MuxSDKChat extends LitElement {
     .work-disclosure[open] > summary svg { transform:rotate(180deg); }
     .work-items { padding:12px 0 2px; }
     .work-item { margin-bottom:5px; }
-    .user { display:flex; justify-content:flex-end; }
+    .user { display:flex; flex-direction:column; align-items:flex-end; }
     .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
     .bubble a { display:block; margin-top:7px; color:var(--chrome-accent); }
@@ -269,6 +273,23 @@ export class MuxSDKChat extends LitElement {
     .lane-report-detail .md-th,.lane-report-detail .md-td { padding:4px 7px; border:1px solid var(--chrome-border); overflow-wrap:anywhere; }
     @media(max-width:560px) { .lane-report-row { grid-template-columns:minmax(0,1fr) 40px; } .lane-report-preview { display:none; } .lane-report-toggle { gap:3px; padding-left:7px; padding-right:7px; } .lane-report-open-cell { padding:6px 4px; } }
     @media(prefers-reduced-motion:reduce) { .lane-report-chevron { transition:none; } }
+    .message-actions { display:flex; align-items:center; gap:3px; margin-top:5px; min-height:25px; opacity:0; transition:opacity .12s ease; }
+    .user .message-actions { justify-content:flex-end; }
+    .block:hover .message-actions,.block:focus-within .message-actions { opacity:1; }
+    .message-actions button { display:inline-flex; align-items:center; justify-content:center; width:25px; height:25px; border:0; border-radius:6px; padding:0; background:transparent; color:var(--chrome-text-dim); }
+    .message-actions button:hover,.message-actions button:focus-visible { background:var(--chrome-hover); color:var(--chrome-text-bright); outline:none; }
+    .message-actions button:focus-visible { color:var(--chrome-accent); }
+    .message-actions button:disabled { opacity:.45; cursor:default; }
+    .message-actions .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+    .message-time { margin-left:5px; color:var(--chrome-text-dim); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .user .message-time { order:-1; margin:0 5px 0 0; }
+    .message-edit { box-sizing:border-box; width:min(82%,660px); padding:10px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
+    .message-edit textarea { width:100%; min-height:96px; max-height:none; resize:vertical; }
+    .message-edit-controls { display:flex; justify-content:flex-end; gap:7px; margin-top:8px; }
+    .message-edit-controls button { border:1px solid var(--chrome-border); border-radius:6px; padding:5px 9px; background:var(--chrome-body); color:var(--chrome-text-bright); }
+    .message-edit-controls button:last-child { border-color:var(--chrome-accent); color:var(--chrome-accent); }
+    @media (hover:none) { .message-actions { opacity:1; } .message-actions button { width:32px; height:32px; } }
+    @media (prefers-reduced-motion:reduce) { .message-actions { transition:none; } }
     .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; font-weight:600; margin-bottom:10px; text-transform:capitalize; }
     .text { color:var(--chrome-text-bright,#d9def0); font-size:14px; line-height:1.68; overflow-wrap:anywhere; }
     .text > :first-child { margin-top:0; }
@@ -998,13 +1019,13 @@ export class MuxSDKChat extends LitElement {
       if (event.inputId) this.pendingInputs.delete(event.inputId);
       const pendingIndex = pendingKey === undefined ? -1 : blocks.findIndex(block => block.key === pendingKey);
       if (pendingIndex >= 0) {
-        blocks[pendingIndex] = { ...blocks[pendingIndex], text:event.text || blocks[pendingIndex].text, attachments:event.attachments || blocks[pendingIndex].attachments };
+        blocks[pendingIndex] = { ...blocks[pendingIndex], text:event.text || blocks[pendingIndex].text, id:event.kind === 'user' ? event.inputId : undefined, at:event.at, attachments:event.attachments || blocks[pendingIndex].attachments };
       } else
       if (event.kind === 'steer') {
         const last = blocks[blocks.length - 1];
         if (last?.kind === 'assistant') blocks[blocks.length - 1] = { ...last, done:true };
         markStart(this.currentTurn);
-        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'user', text:event.text || '' });
+        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'user', at:event.at, text:event.text || '' });
       } else {
         // The harness can stream a fast reply before its send receipt arrives.
         const anchor = event.inputId ? this.completedInputAnchors.get(event.inputId) : undefined;
@@ -1014,7 +1035,7 @@ export class MuxSDKChat extends LitElement {
         while (blocks[at]?.kind === 'user') at++;
         const turn = anchoredTurn ?? blocks[at]?.turn ?? this.currentTurn;
         markStart(turn);
-        blocks.splice(at, 0, { key:++this.nextBlockKey, turn, kind:'user', text:event.text || '', attachments:event.attachments || [] });
+        blocks.splice(at, 0, { key:++this.nextBlockKey, turn, kind:'user', id:event.inputId, at:event.at, text:event.text || '', attachments:event.attachments || [] });
         if (at < this.turnStart) this.turnStart++;
         if (turn === this.currentTurn) this.busy = true;
       }
@@ -1027,8 +1048,8 @@ export class MuxSDKChat extends LitElement {
     else if (event.type === 'assistant.delta') {
       markStart(this.currentTurn);
       const last = blocks[blocks.length - 1];
-      if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
-      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'assistant', channel:'task', text:event.text || '' });
+      if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || ''), at:event.at || last.at };
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'assistant', channel:'task', at:event.at, text:event.text || '' });
     } else if (event.type === 'assistant.interim') {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
@@ -1558,6 +1579,58 @@ export class MuxSDKChat extends LitElement {
     if (body) body.scrollTop = body.scrollHeight;
     this.updateScrollBottomVisibility();
   }
+  private messageTime(block: Block) {
+    const value = Date.parse(block.at || '');
+    if (!Number.isFinite(value)) return nothing;
+    const date = new Date(value);
+    const today = new Date(this.now).toDateString() === date.toDateString();
+    const short = new Intl.DateTimeFormat(undefined, today ? { hour:'numeric', minute:'2-digit' } : { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }).format(date);
+    const full = new Intl.DateTimeFormat(undefined, { dateStyle:'full', timeStyle:'long' }).format(date);
+    return html`<time class="message-time" datetime=${date.toISOString()} title=${full} aria-label=${full}>${short}</time>`;
+  }
+  private async copyMessage(block: Block) {
+    try {
+      await navigator.clipboard.writeText(block.text);
+      this.copiedKey = block.key;
+      window.setTimeout(() => { if (this.copiedKey === block.key) this.copiedKey = 0; }, 1800);
+    } catch { this.error = 'Could not copy message to clipboard.'; }
+  }
+  private async branchMessage(block: Block, mode: 'fork' | 'edit') {
+    if (this.actionPending) return;
+    this.actionPending = true;
+    this.error = '';
+    try {
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/branch`), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ mode, turn:block.turn, inputId:block.id, content:mode === 'edit' ? this.editDraft : undefined,
+          attachments:mode === 'edit' ? block.attachments?.map(item => item.id) : undefined }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const chat = await response.json() as SDKChat;
+      await sdkChats.refresh();
+      this.editingKey = 0;
+      this.dispatchEvent(new CustomEvent('chat-open', { detail:{ sessionId:chat.id }, bubbles:true, composed:true }));
+    } catch (error) { this.error = String(error); }
+    finally { this.actionPending = false; }
+  }
+  private messageActions(block: Block) {
+    const copied = this.copiedKey === block.key;
+    const completed = this.turnFinished.has(block.turn) && !this.busy && this.chat?.state !== 'uncertain';
+    const canBranch = completed && !this.chat?.goal && !this.chat?.operator;
+    const finalAssistant = block.kind === 'assistant' && block.channel !== 'voice' && !this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key);
+    return html`<div class="message-actions" role="group" aria-label=${`${block.kind === 'user' ? 'Your' : 'Assistant'} message actions`}>
+      <button type="button" aria-label=${copied ? 'Message copied' : `Copy ${block.kind} message`} title=${copied ? 'Copied' : 'Copy message'} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.copyMessage(block); }}>${icon(copied ? Check : Copy, { size:14 })}<span class="sr-only" aria-live="polite">${copied ? 'Copied' : ''}</span></button>
+      ${block.kind === 'user' && block.id && canBranch ? html`<button type="button" aria-label="Edit message in a new chat" title="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea')?.focus()); }}>${icon(FilePenLine, { size:14 })}</button>` : nothing}
+      ${finalAssistant && canBranch ? html`<button type="button" aria-label="Fork chat from this assistant message" title="Fork from here" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.branchMessage(block, 'fork'); }}>${icon(GitFork, { size:14 })}</button>` : nothing}
+      ${this.messageTime(block)}
+    </div>`;
+  }
+  private messageEdit(block: Block) {
+    return html`<div class="message-edit" @click=${(event: MouseEvent) => event.stopPropagation()}>
+      <textarea aria-label="Revise your message" .value=${this.editDraft} @input=${(event: InputEvent) => { this.editDraft = (event.target as HTMLTextAreaElement).value; }} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Escape') { this.editingKey = 0; } }}></textarea>
+      <div class="message-edit-controls"><button type="button" @click=${() => { this.editingKey = 0; }}>Cancel</button><button type="button" ?disabled=${!this.editDraft.trim() || this.actionPending} @click=${() => void this.branchMessage(block, 'edit')}>${this.actionPending ? 'Saving…' : 'Send edit in new chat'}</button></div>
+    </div>`;
+  }
   private transcript(agents: AgentView[]) {
     const rows = this.transcriptRows();
     const start = Math.min(this.visibleStart, rows.length);
@@ -1568,7 +1641,7 @@ export class MuxSDKChat extends LitElement {
     return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map((row, offset) => {
       const block = row.block;
       return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${this.workExpanded.has(block.turn) ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details></div>`
-        : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.userBubble(block) : block.kind === 'assistant' ? block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>` : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
+        : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.messageActions(block)}` : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
   private toggleWorkDisclosure(turn: number, event: MouseEvent) {
@@ -1665,8 +1738,8 @@ export class MuxSDKChat extends LitElement {
   }
   private sendVoiceButton() {
     const mode = this.voiceState !== 'idle' ? 'voice-stop' : this.busy ? 'task-stop' : this.draft.trim() || this.attachments.length ? 'send' : 'voice-start';
-    const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'send' ? 'Send message' : this.voiceAvailable ? 'Start voice mode' : 'Voice mode unavailable; check Voice settings';
-    const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending
+    const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'send' ? 'Send message' : this.chat?.branchPending ? 'Send a text message to start this branch before using voice' : this.voiceAvailable ? 'Start voice mode' : 'Voice mode unavailable; check Voice settings';
+    const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending || !!this.chat?.branchPending
       : mode === 'task-stop' ? this.stopping
       : mode === 'send' ? this.stopping || this.settingsPending || this.attachments.some(a => a.uploading || !!a.error)
       : false;

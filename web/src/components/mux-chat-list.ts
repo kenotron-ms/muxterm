@@ -101,7 +101,7 @@ export class MuxChatWorkspace extends LitElement {
     .status.lane.starting,.status.lane.working { background:none; color:var(--chrome-accent); }
     .status.lane.ready { color:var(--mux-ok,#55b981); }
     .status.lane.failed,.status.lane.uncertain { color:var(--chrome-danger); }
-    .title { font-weight:550; }
+    .title { font-weight:400; }
     .harness { color:var(--chrome-text-dim,#aab2c1); font-size:10px; flex:none; text-transform:lowercase; }
     .chat-row:hover .harness,.chat-row:has(.chat:focus-visible) .harness { display:none; }
     .rename-input,.editor input { min-width:0; border:1px solid var(--chrome-border); border-radius:5px; padding:6px 7px; background:var(--chrome-bar); color:inherit; font:inherit; }

@@ -607,6 +607,13 @@ func (s *Server) handleSDKVoiceSDP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	s.sdkChats.mu.Lock()
+	branchPending := s.sdkChats.chats[id] != nil && s.sdkChats.chats[id].BranchPending
+	s.sdkChats.mu.Unlock()
+	if branchPending {
+		http.Error(w, "send a text message to start this branch before using voice", http.StatusConflict)
+		return
+	}
 	if _, ok := s.sdkVoice.chat(id); !ok {
 		http.NotFound(w, r)
 		return
