@@ -199,7 +199,14 @@ func (s *Server) handleSDKChatBranch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err != nil {
-			http.Error(w, fmt.Sprintf("branch %s was created but revised message was not accepted: %v", chat.ID, err), http.StatusBadGateway)
+			h.mu.Lock()
+			delete(h.chats, chat.ID)
+			_ = os.Remove(filepath.Join(h.dir, chat.ID+".json"))
+			_ = os.Remove(filepath.Join(h.dir, chat.ID+".ndjson"))
+			_ = os.Remove(filepath.Join(h.dir, chat.ID+".branch-context"))
+			h.notifyCatalogLocked(chat.ID)
+			h.mu.Unlock()
+			http.Error(w, fmt.Sprintf("revised message was not accepted: %v", err), http.StatusBadGateway)
 			return
 		}
 	}

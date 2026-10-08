@@ -1831,16 +1831,19 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content := req.Content
-		if req.Kind == "user" && c.BranchPending {
-			if c.BranchContext == "" {
-				contextData, readErr := os.ReadFile(filepath.Join(h.dir, c.ID+".branch-context"))
+		h.mu.Lock()
+		branchPending, branchContext := c.BranchPending, c.BranchContext
+		h.mu.Unlock()
+		if req.Kind == "user" && branchPending {
+			if branchContext == "" {
+				contextData, readErr := os.ReadFile(filepath.Join(h.dir, id+".branch-context"))
 				if readErr != nil {
 					http.Error(w, "branch history is unavailable", 500)
 					return
 				}
-				c.BranchContext = string(contextData)
+				branchContext = string(contextData)
 			}
-			content = c.BranchContext + "\n\nContinue this conversation with the user's new message:\n" + content
+			content = branchContext + "\n\nContinue this conversation with the user's new message:\n" + content
 		}
 		if (req.Kind == "user" || req.Kind == "steer") && s.sdkVoice != nil {
 			content = sdkTaskInputWithVoiceContext(content, h.recentVoiceContext(id))
