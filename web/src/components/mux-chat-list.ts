@@ -2,8 +2,9 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
+import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
 import { icon } from '../lib/icons.js';
+import { laneIcon } from '../lib/lane-icon.js';
 import { sdkChats, type FolderListing, type SDKChat, type SDKProject } from '../lib/sdk-chats.js';
 
 interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean }
@@ -53,7 +54,9 @@ export class MuxChatWorkspace extends LitElement {
     super.disconnectedCallback();
   }
   override willUpdate(changed: Map<string, unknown>) {
-    if ((changed.has('selectedSession') || changed.has('model')) && this.model?.chats.some(chat => chat.id === this.selectedSession)) this.open = true;
+    // Archiving the selected chat updates this group's model. Keep the user's
+    // Archived folder expansion choice instead of opening it as a side effect.
+    if (!this.model?.archived && (changed.has('selectedSession') || changed.has('model')) && this.model?.chats.some(chat => chat.id === this.selectedSession)) this.open = true;
   }
   override updated(changed: Map<string, unknown>) {
     if ((changed.has('selectedSession') || changed.has('model')) && this.selectedSession) {
@@ -267,7 +270,7 @@ export class MuxChatWorkspace extends LitElement {
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="action more" aria-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</button>` : html`
             <button class="chat" title=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
-              <span class="status ${chat.operator ? 'operator' : group.laneIds.has(chat.id) ? 'lane' : ''} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : group.laneIds.has(chat.id) ? `Lane · ${chat.state}` : chat.state}>${chat.operator ? icon(Network,{size:13}) : group.laneIds.has(chat.id) ? icon(GitBranch,{size:13}) : nothing}</span><span class="title">${chat.title}</span><span class="harness">${chat.harness}</span>
+              <span class="status ${chat.operator ? 'operator' : group.laneIds.has(chat.id) ? 'lane' : ''} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : group.laneIds.has(chat.id) ? `Lane · ${chat.state}` : chat.state}>${chat.operator ? icon(Network,{size:13}) : group.laneIds.has(chat.id) ? laneIcon(14) : nothing}</span><span class="title">${chat.title}</span><span class="harness">${chat.harness}</span>
             </button>
             <button class="action" aria-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} title=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</button>
             <button class="action" aria-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} title=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</button>`}
@@ -281,6 +284,7 @@ export class MuxChatWorkspace extends LitElement {
 @customElement('mux-chat-list')
 export class MuxChatList extends LitElement {
   @state() private version = 0;
+  @state() private pinError = '';
   @property() selectedSession = '';
   private unsub?: () => void;
   private readonly onChatOpen = (event: Event) => {
@@ -292,13 +296,20 @@ export class MuxChatList extends LitElement {
     :host { display:block; color:var(--chrome-text-dim,#9299a5); font:12px/1.35 system-ui,sans-serif; }
     .heading { padding:9px 5px 3px; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
     .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--chrome-border,#3b4355); }
-    .pin-row { width:100%; display:flex; align-items:center; gap:8px; min-height:29px; padding:4px 5px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-bright,#d8dce5); text-align:left; font:12px system-ui,sans-serif; cursor:pointer; }
-    .pin-row:hover { background:var(--chrome-hover); }
-    .pin-row span:not(.pin-icon) { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pin-row { width:100%; display:flex; align-items:center; min-height:29px; padding:2px 3px; border-radius:6px; color:var(--chrome-text-bright,#d8dce5); }
+    .pin-row:hover,.pin-row:focus-within { background:var(--chrome-hover); }
+    .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:25px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:12px system-ui,sans-serif; cursor:pointer; }
+    .pin-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pin-icon { display:flex; flex:none; color:var(--chrome-text-dim); }
     .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--chrome-accent); }
     .pin-icon.lane.ready { color:var(--mux-ok,#55b981); }
     .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--chrome-danger); }
+    .pin-unpin { display:grid; place-items:center; flex:none; width:26px; height:26px; border:0; border-radius:5px; padding:4px; background:transparent; color:var(--chrome-text-dim); opacity:0; cursor:pointer; }
+    .pin-row:hover .pin-unpin,.pin-row:focus-within .pin-unpin { opacity:1; }
+    .pin-unpin:hover { background:color-mix(in srgb,var(--chrome-border) 45%,transparent); color:var(--chrome-text-bright); }
+    .pin-link:focus-visible,.pin-unpin:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:1px; }
+    .pin-error { margin:3px 5px 8px; color:var(--chrome-danger); }
+    @media(hover:none) { .pin-unpin { opacity:1; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -309,6 +320,13 @@ export class MuxChatList extends LitElement {
   override disconnectedCallback() { this.removeEventListener('chat-open', this.onChatOpen); this.unsub?.(); super.disconnectedCallback(); }
   private locateProject(id: string) {
     this.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace').forEach(row => { if (row.model.id === id) row.reveal(); });
+  }
+  private async unpin(kind: 'project' | 'chat', id: string, name: string) {
+    try {
+      if (kind === 'project') await sdkChats.updateProject(id, { pinned:false });
+      else await sdkChats.setPinned(id, false);
+      this.pinError = '';
+    } catch (error) { this.pinError = `Could not unpin ${name}: ${String(error)}`; }
   }
   override render() {
     void this.version;
@@ -324,7 +342,8 @@ export class MuxChatList extends LitElement {
       ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, operator:!!chat.operator, lane:laneIds.has(chat.id), state:chat.state })),
     ];
     return html`
-      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<button class="pin-row" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}><span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${icon(item.kind === 'project' ? Folder : item.operator ? Network : item.lane ? GitBranch : MessageSquare,{size:15})}</span><span>${item.name}</span></button>`)}</div>` : nothing}
+      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row"><button class="pin-link" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}><span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(item.kind === 'project' ? Folder : item.operator ? Network : MessageSquare,{size:15})}</span><span class="pin-name">${item.name}</span></button><button class="pin-unpin" aria-label=${`Unpin ${item.kind} ${item.name}`} title=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</button></div>`)}</div>` : nothing}
+      ${this.pinError ? html`<div class="pin-error" role="alert">${this.pinError}</div>` : nothing}
       <div class="heading">Chats</div>
       ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
     `;
