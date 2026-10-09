@@ -11,6 +11,7 @@ import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { fitTextarea } from '../lib/fit-textarea.js';
 import { laneIcon } from '../lib/lane-icon.js';
 import './mux-sdk-utility.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
@@ -106,6 +107,7 @@ export class MuxSDKChat extends LitElement {
   private pendingDraft?: string;
   private agentDraftTimer?: number;
   private pendingAgentDraft?: string;
+  private editResizeTimer?: number;
   private streamCursor = 0;
   private reconnectFailures = 0;
   private streamOpenedAt = 0;
@@ -315,7 +317,7 @@ export class MuxSDKChat extends LitElement {
     .message-time { margin-left:5px; color:var(--chrome-text-dim); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .user .message-time { order:-1; margin:0 5px 0 0; }
     .message-edit { box-sizing:border-box; width:min(82%,660px); padding:10px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
-    .message-edit textarea { width:100%; min-height:96px; max-height:none; resize:vertical; }
+    .message-edit textarea { width:100%; min-height:96px; max-height:320px; resize:none; overflow-y:auto; }
     .message-edit-controls { display:flex; justify-content:flex-end; gap:7px; margin-top:8px; }
     .message-edit-controls button { border:1px solid var(--chrome-border); border-radius:6px; padding:5px 9px; background:var(--chrome-body); color:var(--chrome-text-bright); }
     .message-edit-controls button:last-child { border-color:var(--chrome-accent); color:var(--chrome-accent); }
@@ -392,7 +394,7 @@ export class MuxSDKChat extends LitElement {
     .composer-row { display:flex; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
-    textarea { display:block; flex:1; min-width:0; resize:vertical; border:0; outline:none; background:transparent; color:inherit; font:14px/1.55 system-ui,sans-serif; min-height:76px; height:76px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
+    textarea { display:block; flex:1; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:14px/1.55 system-ui,sans-serif; min-height:76px; height:76px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
     textarea::placeholder { color:var(--chrome-text-dim,#9aa3b8); opacity:.8; }
     .send, .stop { flex:none; width:34px; height:34px; display:grid; place-items:center; border-radius:10px; }
     .send { border:0; background:var(--chrome-accent,#9bb8f7); color:var(--chrome-body); font-size:20px; line-height:1; }
@@ -454,6 +456,7 @@ export class MuxSDKChat extends LitElement {
   override disconnectedCallback() {
     this.flushDraft();
     this.flushAgentDraft();
+    if (this.editResizeTimer) window.clearTimeout(this.editResizeTimer);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     window.removeEventListener('focus', this.resumeConnection);
     window.removeEventListener('online', this.onOnline);
@@ -633,6 +636,7 @@ export class MuxSDKChat extends LitElement {
     this.draftHasContent = !!this.draft.trim();
     this.agentDraft = readDraft(this.activeSession, 'agent');
     this.agentDraftHasContent = !!this.agentDraft.trim();
+    void this.updateComplete.then(() => this.fitComposer('message'));
     const epoch = ++this.historyEpoch;
     this.historyAbort?.abort();
     this.historyAbort = new AbortController();
@@ -681,6 +685,7 @@ export class MuxSDKChat extends LitElement {
       this.draftRevisions.set(key, (this.draftRevisions.get(key) || 0) + 1);
       writeDraft(this.activeSession, 'message', value);
     }
+    void this.updateComplete.then(() => this.fitComposer('message'));
   }
   private onDraftInput(event: InputEvent) {
     const value = (event.currentTarget as HTMLTextAreaElement).value;
@@ -706,6 +711,21 @@ export class MuxSDKChat extends LitElement {
       this.draftRevisions.set(key, (this.draftRevisions.get(key) || 0) + 1);
       writeDraft(this.activeSession, 'agent', value);
     }
+    void this.updateComplete.then(() => this.fitComposer('agent'));
+  }
+  private fitComposer(kind: 'message' | 'agent') {
+    if (!this.isConnected || !!this.selectedAgent !== (kind === 'agent')) return;
+    const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea');
+    if (textarea) fitTextarea(textarea);
+  }
+  private onEditInput(event: InputEvent) {
+    this.editDraftHasContent = !!(event.currentTarget as HTMLTextAreaElement).value.trim();
+    if (this.editResizeTimer) window.clearTimeout(this.editResizeTimer);
+    this.editResizeTimer = window.setTimeout(() => {
+      this.editResizeTimer = undefined;
+      const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea');
+      if (textarea) fitTextarea(textarea);
+    }, 700);
   }
   private onAgentDraftInput(event: InputEvent) {
     const value = (event.currentTarget as HTMLTextAreaElement).value;
@@ -1395,7 +1415,7 @@ export class MuxSDKChat extends LitElement {
     this.selectedAgent = id;
     this.agentNotice = '';
     if (!this.detailsLoaded) void this.loadDetails();
-    void this.updateComplete.then(() => { const body = this.shadowRoot?.querySelector<HTMLElement>('.body'); if (body) body.scrollTop = 0; });
+    void this.updateComplete.then(() => { const body = this.shadowRoot?.querySelector<HTMLElement>('.body'); if (body) body.scrollTop = 0; this.fitComposer('agent'); });
   }
   private returnToParent() {
     this.selectedAgent = '';
@@ -1403,6 +1423,7 @@ export class MuxSDKChat extends LitElement {
     void this.updateComplete.then(() => {
       const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
       if (body) { body.scrollTop = this.parentScrollTop; this.updateVisibleRows(); }
+      this.fitComposer('message');
     });
   }
   private agentBreadcrumbs(agents: AgentView[]) {
@@ -1708,14 +1729,14 @@ export class MuxSDKChat extends LitElement {
     const finalAssistant = block.kind === 'assistant' && block.channel !== 'voice' && !this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key);
     return html`<div class="message-actions" role="group" aria-label=${`${block.kind === 'user' ? 'Your' : 'Assistant'} message actions`}>
       <button type="button" aria-label=${copied ? 'Message copied' : `Copy ${block.kind} message`} title=${copied ? 'Copied' : 'Copy message'} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.copyMessage(block); }}>${icon(copied ? Check : Copy, { size:14 })}<span class="sr-only" aria-live="polite">${copied ? 'Copied' : ''}</span></button>
-      ${block.kind === 'user' && block.id && canBranch ? html`<button type="button" aria-label="Edit message in a new chat" title="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; this.editDraftHasContent = !!block.text.trim(); void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea')?.focus()); }}>${icon(FilePenLine, { size:14 })}</button>` : nothing}
+      ${block.kind === 'user' && block.id && canBranch ? html`<button type="button" aria-label="Edit message in a new chat" title="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; this.editDraftHasContent = !!block.text.trim(); void this.updateComplete.then(() => { const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea'); if (textarea) { fitTextarea(textarea); textarea.focus(); } }); }}>${icon(FilePenLine, { size:14 })}</button>` : nothing}
       ${finalAssistant && canBranch ? html`<button type="button" aria-label="Fork chat from this assistant message" title="Fork from here" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.branchMessage(block, 'fork'); }}>${icon(GitFork, { size:14 })}</button>` : nothing}
       ${this.messageTime(block)}
     </div>`;
   }
   private messageEdit(block: Block) {
     return html`<div class="message-edit" @click=${(event: MouseEvent) => event.stopPropagation()}>
-      <textarea aria-label="Revise your message" .value=${this.editDraft} @input=${(event: InputEvent) => { this.editDraftHasContent = !!(event.target as HTMLTextAreaElement).value.trim(); }} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Escape') { this.editingKey = 0; } }}></textarea>
+      <textarea aria-label="Revise your message" .value=${this.editDraft} @input=${this.onEditInput} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Escape') { this.editingKey = 0; } }}></textarea>
       <div class="message-edit-controls"><button type="button" @click=${() => { this.editingKey = 0; }}>Cancel</button><button type="button" ?disabled=${!this.editDraftHasContent || this.actionPending} @click=${() => void this.branchMessage(block, 'edit')}>${this.actionPending ? 'Saving…' : 'Send edit in new chat'}</button></div>
     </div>`;
   }
