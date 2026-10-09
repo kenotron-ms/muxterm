@@ -11,7 +11,7 @@ import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
-import { fitTextarea, TEXTAREA_RESIZE_DELAY_MS } from '../lib/fit-textarea.js';
+import { fitTextarea } from '../lib/fit-textarea.js';
 import { laneIcon } from '../lib/lane-icon.js';
 import './mux-sdk-utility.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
@@ -107,8 +107,6 @@ export class MuxSDKChat extends LitElement {
   private pendingDraft?: string;
   private agentDraftTimer?: number;
   private pendingAgentDraft?: string;
-  private composerResizeTimer?: number;
-  private editResizeTimer?: number;
   private streamCursor = 0;
   private reconnectFailures = 0;
   private streamOpenedAt = 0;
@@ -457,8 +455,6 @@ export class MuxSDKChat extends LitElement {
   override disconnectedCallback() {
     this.flushDraft();
     this.flushAgentDraft();
-    this.cancelComposerResize();
-    if (this.editResizeTimer) window.clearTimeout(this.editResizeTimer);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     window.removeEventListener('focus', this.resumeConnection);
     window.removeEventListener('online', this.onOnline);
@@ -490,7 +486,6 @@ export class MuxSDKChat extends LitElement {
     }
     this.flushDraft();
     this.flushAgentDraft();
-    this.cancelComposerResize();
     this.idleSuspended = true;
     this.historyEpoch++;
     this.historyAbort?.abort();
@@ -503,7 +498,6 @@ export class MuxSDKChat extends LitElement {
   private readonly onPageHide = () => {
     this.flushDraft();
     this.flushAgentDraft();
-    this.cancelComposerResize();
     this.persistTranscriptCache();
   };
   private readonly resumeConnection = () => {
@@ -636,7 +630,6 @@ export class MuxSDKChat extends LitElement {
     if (!this.isConnected || !this.sessionId || this.activeSession === this.sessionId) return;
     this.flushDraft();
     this.flushAgentDraft();
-    this.cancelComposerResize();
     this.persistTranscriptCache();
     this.voice?.stop();
     this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
@@ -695,17 +688,17 @@ export class MuxSDKChat extends LitElement {
       writeDraft(this.activeSession, 'message', value);
     }
     if (resize) {
-      this.cancelComposerResize();
       void this.updateComplete.then(() => this.fitComposer('message'));
     }
   }
   private onDraftInput(event: InputEvent) {
-    const value = (event.currentTarget as HTMLTextAreaElement).value;
+    const textarea = event.currentTarget as HTMLTextAreaElement;
+    const value = textarea.value;
     this.pendingDraft = value;
     this.draftHasContent = !!value.trim();
     if (this.draftTimer) window.clearTimeout(this.draftTimer);
     this.draftTimer = window.setTimeout(() => this.flushDraft(), 700);
-    this.scheduleComposerResize('message');
+    fitTextarea(textarea);
   }
   private flushDraft(): string {
     if (this.pendingDraft === undefined) return this.draft;
@@ -725,20 +718,8 @@ export class MuxSDKChat extends LitElement {
       writeDraft(this.activeSession, 'agent', value);
     }
     if (resize) {
-      this.cancelComposerResize();
       void this.updateComplete.then(() => this.fitComposer('agent'));
     }
-  }
-  private cancelComposerResize() {
-    if (this.composerResizeTimer) window.clearTimeout(this.composerResizeTimer);
-    this.composerResizeTimer = undefined;
-  }
-  private scheduleComposerResize(kind: 'message' | 'agent') {
-    this.cancelComposerResize();
-    this.composerResizeTimer = window.setTimeout(() => {
-      this.composerResizeTimer = undefined;
-      this.fitComposer(kind);
-    }, TEXTAREA_RESIZE_DELAY_MS);
   }
   private fitComposer(kind: 'message' | 'agent') {
     if (!this.isConnected || !!this.selectedAgent !== (kind === 'agent')) return;
@@ -746,21 +727,18 @@ export class MuxSDKChat extends LitElement {
     if (textarea) fitTextarea(textarea);
   }
   private onEditInput(event: InputEvent) {
-    this.editDraftHasContent = !!(event.currentTarget as HTMLTextAreaElement).value.trim();
-    if (this.editResizeTimer) window.clearTimeout(this.editResizeTimer);
-    this.editResizeTimer = window.setTimeout(() => {
-      this.editResizeTimer = undefined;
-      const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea');
-      if (textarea) fitTextarea(textarea);
-    }, TEXTAREA_RESIZE_DELAY_MS);
+    const textarea = event.currentTarget as HTMLTextAreaElement;
+    this.editDraftHasContent = !!textarea.value.trim();
+    fitTextarea(textarea);
   }
   private onAgentDraftInput(event: InputEvent) {
-    const value = (event.currentTarget as HTMLTextAreaElement).value;
+    const textarea = event.currentTarget as HTMLTextAreaElement;
+    const value = textarea.value;
     this.pendingAgentDraft = value;
     this.agentDraftHasContent = !!value.trim();
     if (this.agentDraftTimer) window.clearTimeout(this.agentDraftTimer);
     this.agentDraftTimer = window.setTimeout(() => this.flushAgentDraft(), 700);
-    this.scheduleComposerResize('agent');
+    fitTextarea(textarea);
   }
   private flushAgentDraft(): string {
     if (this.pendingAgentDraft === undefined) return this.agentDraft;
