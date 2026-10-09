@@ -1256,6 +1256,8 @@ export class MuxApp extends LitElement {
     // fixed string set once at disconnect: only the socket knows whether an
     // attempt is in flight or a timer is pending, and when it is due.
     this._socket.onConnectionState = (state: ReconnectState) => {
+      this._connectionStatus = state.phase === 'connected' ? 'connected'
+        : state.phase === 'retrying' ? 'reconnecting' : 'disconnected';
       if (state.phase === 'connected') return;
       this._reconnectPhase = state.phase;
       this._reconnectNextAttemptAt = state.phase === 'waiting' ? state.nextAttemptAt : 0;
@@ -1319,8 +1321,6 @@ export class MuxApp extends LitElement {
       // explicitly chooses v2 selection or the unscoped legacy fallback.
     };
     this._socket.connect();
-    this._connectionStatus = 'reconnecting';
-    this._pollConnectionStatus();
 
     // Reconnect-while-already-wide: if <mux-app> disconnects and reconnects
     // while _layoutMode was already 'wide' throughout, no _layoutMode change
@@ -2624,21 +2624,6 @@ export class MuxApp extends LitElement {
     terminalRegistry.write(paneId, data);
   }
 
-  private _pollConnectionStatus(): void {
-    const poll = (): void => {
-      if (!this._socket) return;
-      const newStatus = this._socket.connected
-        ? 'connected'
-        : this._connectionStatus === 'connected'
-        ? 'disconnected'
-        : this._connectionStatus;
-      if (newStatus !== this._connectionStatus) {
-        this._connectionStatus = this._socket.connected ? 'connected' : 'disconnected';
-      }
-      requestAnimationFrame(poll);
-    };
-    requestAnimationFrame(poll);
-  }
 }
 
 declare global {

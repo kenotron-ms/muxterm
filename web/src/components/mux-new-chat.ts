@@ -33,6 +33,9 @@ export class MuxNewChat extends LitElement {
   @state() private provider: ProviderName = 'openai';
   @state() private startOptions?: StartOption[];
   @state() private prompt = '';
+  @state() private promptHasContent = false;
+  private promptTimer?: number;
+  private pendingPrompt?: string;
   @state() private listing?: FolderListing;
   @state() private pickerOpen = false;
   @state() private locationOpen = false;
@@ -114,7 +117,7 @@ export class MuxNewChat extends LitElement {
     .folder-entry { display:block; width:100%; text-align:left; }
     .composer { position:relative; display:flex; flex-direction:column; gap:9px; border:1px solid var(--chrome-border,#475067); border-radius:18px; background:var(--chrome-bar,#202632); padding:15px 14px 10px; transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 58%,var(--chrome-border,#475067)); box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent,#9bb8f7) 14%,transparent); }
-    textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:100px; height:100px; max-height:220px; resize:none; border:0; outline:0; padding:3px 0; color:inherit; background:transparent; font:16px/1.55 system-ui,sans-serif; overflow-y:auto; }
+    textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:100px; height:100px; max-height:220px; resize:vertical; border:0; outline:0; padding:3px 0; color:inherit; background:transparent; font:16px/1.55 system-ui,sans-serif; overflow-y:auto; }
     textarea::placeholder { color:var(--chrome-text-dim,#a9b0c0); opacity:.8; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; }
     .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
@@ -166,7 +169,10 @@ export class MuxNewChat extends LitElement {
     window.addEventListener('drop', this.resetDrop);
     window.addEventListener('dragend', this.resetDrop);
     this.harness = this.initialHarness;
-    if (this.initialPrompt) this.prompt = this.initialPrompt;
+    if (this.initialPrompt) {
+      this.prompt = this.initialPrompt;
+      this.promptHasContent = !!this.initialPrompt.trim();
+    }
     void this.loadStartOptions();
     if (this.initialFolder) this.folder = this.initialFolder;
     if (this.initialProject) this.projectId = this.initialProject;
@@ -176,6 +182,7 @@ export class MuxNewChat extends LitElement {
     void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) this.folder = listing.base; }).catch(error => { this.error = String(error); });
   }
   override disconnectedCallback() {
+    this.flushPrompt();
     this.unsub?.();
     document.removeEventListener('pointerdown', this.closeDropdowns);
     window.removeEventListener('dragover', this.preventFileNavigation);
@@ -186,12 +193,21 @@ export class MuxNewChat extends LitElement {
     super.disconnectedCallback();
   }
   override firstUpdated() { this.shadowRoot?.querySelector('textarea')?.focus(); }
-  override updated(changed: Map<string, unknown>) { if (changed.has('prompt')) this.sizeTextarea(); }
-  private sizeTextarea() {
-    const textarea = this.shadowRoot?.querySelector('textarea');
-    if (!textarea) return;
-    textarea.style.height = '100px';
-    textarea.style.height = `${Math.min(220, Math.max(100, textarea.scrollHeight))}px`;
+  private onPromptInput(event: InputEvent) {
+    const value = (event.currentTarget as HTMLTextAreaElement).value;
+    this.pendingPrompt = value;
+    this.promptHasContent = !!value.trim();
+    if (this.promptTimer) window.clearTimeout(this.promptTimer);
+    this.promptTimer = window.setTimeout(() => this.flushPrompt(), 700);
+  }
+  private flushPrompt(): string {
+    if (this.pendingPrompt === undefined) return this.prompt;
+    const value = this.pendingPrompt;
+    if (this.promptTimer) window.clearTimeout(this.promptTimer);
+    this.promptTimer = undefined;
+    this.pendingPrompt = undefined;
+    this.prompt = value;
+    return value;
   }
   private async browse(path = this.folder) {
     try { this.listing = await sdkChats.folders(path); if (this.listing.path === path) { this.folder = this.listing.path; this.onFolderChanged(); } this.pickerOpen = true; this.error = ''; }
@@ -298,7 +314,7 @@ export class MuxNewChat extends LitElement {
     this.attachments = this.attachments.filter(a => a.localId !== localId);
   }
   private async send() {
-    const prompt = this.prompt.trim();
+    const prompt = this.flushPrompt().trim();
     if ((!prompt && !this.attachments.length) || this.busy || !this.startOptions?.some(item => item.harness === this.harness && item.provider === this.provider) || this.attachments.some(a => a.uploading || a.error)) return;
     this.busy = true; this.error = '';
     try {
@@ -353,8 +369,8 @@ export class MuxNewChat extends LitElement {
         <button class="worktree-toggle" type="button" role="switch" aria-label="Use a separate Git worktree" aria-checked=${this.workMode === 'worktree'} title=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @click=${() => { this.workMode = this.workMode === 'worktree' ? 'local' : 'worktree'; }}><span>Worktree</span><span class="track" aria-hidden="true"><span class="thumb"></span></span></button>
         </div>
         ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button></div>`)}</div>` : nothing}
-        <textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${(e:Event) => { this.prompt = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea>
-        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><button class="send" aria-label="Send message" ?disabled=${(!this.prompt.trim() && !this.attachments.length) || this.busy || !this.startOptions?.some(item => item.harness === this.harness && item.provider === this.provider) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
+        <textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${this.onPromptInput} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea>
+        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><button class="send" aria-label="Send message" ?disabled=${(!this.promptHasContent && !this.attachments.length) || this.busy || !this.startOptions?.some(item => item.harness === this.harness && item.provider === this.provider) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
 
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
