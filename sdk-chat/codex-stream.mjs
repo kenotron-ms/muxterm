@@ -146,7 +146,7 @@ export class CodexStream {
       for (const item of attachments) if (item.kind === 'image') turnInput.push({ type: 'localImage', path: item.path });
       const model = input.model || this.session.model;
       const result = await this.request('turn/start', { threadId: this.session.nativeId,
-        summary: 'detailed',
+        summary: 'none',
         approvalPolicy: 'never', sandboxPolicy: this.sandboxPolicy(),
         ...(model ? { collaborationMode: { mode: this.session.mode === 'plan' ? 'plan' : 'default', settings: { model, reasoning_effort: input.effort || this.session.effort || null, developer_instructions: null } } } : {}),
         ...(input.model ? { model: input.model } : {}),
