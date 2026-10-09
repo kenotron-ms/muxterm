@@ -1683,7 +1683,7 @@ export class MuxSDKChat extends LitElement {
   }
   private async branchMessage(block: Block, mode: 'fork' | 'edit') {
     if (this.actionPending) return;
-    const edited = mode === 'edit' ? this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea')?.value ?? this.editDraft : undefined;
+    const edited = mode === 'edit' ? this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea')?.value : undefined;
     if (mode === 'edit' && !edited?.trim()) return;
     this.actionPending = true;
     this.error = '';
