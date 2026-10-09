@@ -1376,6 +1376,39 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	writeSDKJSON(w, 200, options)
 }
 
+// The completion marker lives beside SDK chat records, not in browser storage:
+// the desktop app gets a new localhost port (and origin) on every launch.
+func (s *Server) handleSDKChatOnboarding(w http.ResponseWriter, r *http.Request) {
+	marker := filepath.Join(sdkDataDir(), "onboarding-complete")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodGet {
+		_, err := os.Stat(marker)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "could not read onboarding state", http.StatusInternalServerError)
+			return
+		}
+		complete := err == nil
+		if !complete {
+			s.sdkChats.mu.Lock()
+			complete = len(s.sdkChats.chats) > 0
+			s.sdkChats.mu.Unlock()
+		}
+		writeSDKJSON(w, http.StatusOK, struct {
+			Complete bool `json:"complete"`
+		}{complete})
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(marker), 0700); err != nil {
+		http.Error(w, "could not save onboarding state", http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(marker, []byte("done\n"), 0600); err != nil {
+		http.Error(w, "could not save onboarding state", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == "GET" {
@@ -1389,8 +1422,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode, OperatorID string
-		Attachments                                                                               []string `json:"attachments"`
+		WorkspaceID, TerminalWorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode, OperatorID string
+		Attachments                                                                                                    []string `json:"attachments"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -1398,6 +1431,10 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness) {
 		http.Error(w, "unsupported harness", 400)
+		return
+	}
+	if len(req.TerminalWorkspaceID) > 200 {
+		http.Error(w, "terminal workspace ID too long", 400)
 		return
 	}
 	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" && len(req.Attachments) == 0 {
@@ -1547,7 +1584,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
-	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
+	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, TerminalWorkspaceID: req.TerminalWorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	if req.OperatorID != "" {
 		operator := h.chats[req.OperatorID]

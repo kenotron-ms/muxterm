@@ -1,20 +1,22 @@
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
-import { LitElement, css, html, nothing } from 'lit';
+import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import { ChevronDown, Folder, Plus } from 'lucide';
 import { icon } from '../lib/icons.js';
+import { carryUtilityTabs, type MuxSDKUtility } from './mux-sdk-utility.js';
+import './mux-ai-providers.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
 type StartOption = { harness: SDKHarnessName; provider: ProviderName };
 const SETUP_AGENTS = [
-  { name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
-  { name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
-  { name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
-  { name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
-  { name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
-  { name:'Amplifier', command:'uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
+  { harness:'codex', name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
+  { harness:'claude', name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
+  { harness:'opencode', name:'OpenCode', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode auth login', docs:'https://opencode.ai/docs/' },
+  { harness:'pi', name:'Pi', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
+  { harness:'deepseek', name:'DeepSeek Harness', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
+  { harness:'amplifier', name:'Amplifier', command:'export PATH="$HOME/.local/bin:$PATH"; command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh; uv tool install git+https://github.com/microsoft/amplifier', login:'export PATH="$HOME/.local/bin:$PATH"; amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; uploading: boolean; error?: string };
 
@@ -24,6 +26,8 @@ export class MuxNewChat extends LitElement {
   @property() initialFolder = '';
   @property() initialProject = '';
   @property() initialPrompt = '';
+  @property() draftId = '';
+  @property() terminalWorkspaceId = '';
   @state() private projectId = 'ungrouped';
   @state() private folder = '';
   @state() private workMode: 'local' | 'worktree' = 'local';
@@ -39,10 +43,19 @@ export class MuxNewChat extends LitElement {
   @state() private projectPickerOpen = false;
   @state() private busy = false;
   @state() private error = '';
-  @state() private copiedSetup = '';
+  @state() private utilityOpen = false;
+  @state() private terminalRequested = false;
+  @state() private firstRun = false;
+  @state() private onboardingLoaded = false;
+  @state() private onboardingError = '';
+  @state() private optionsLoaded = false;
+  @state() private aiProviderReady = false;
+  @state() private setupStep: 'provider' | 'harness' = 'provider';
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   private dragDepth = 0;
+  private optionsRefreshTimer?: number;
+  private optionsRefreshing = false;
   private hasFiles(event: DragEvent) { return Array.from(event.dataTransfer?.types || []).includes('Files'); }
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
   private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
@@ -61,8 +74,17 @@ export class MuxNewChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
+    .layout { flex:1; display:flex; min-width:0; min-height:0; }
+    .utility-drawer { display:flex; flex-direction:column; flex:none; box-sizing:border-box; width:min(48%,620px); min-width:320px; min-height:0; border-left:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    .utility-drawer > header { display:flex; align-items:center; justify-content:space-between; flex:none; height:39px; padding:0 12px; color:var(--chrome-text-dim); font-size:11px; }
+    .utility-drawer > header button { border:0; border-radius:6px; padding:3px 8px; background:transparent; color:var(--chrome-text-bright); }
+    .utility-drawer > header button:hover { background:var(--chrome-hover); }
+    .utility-drawer mux-sdk-utility { flex:1; min-height:0; }
+    .composer-tools { display:flex; justify-content:flex-end; width:min(100%,780px); margin:0 0 12px; }
+    .composer-tools button { padding:7px 11px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); color:var(--chrome-text-bright); }
     .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:24px; overflow:auto; }
     .main.setup { justify-content:flex-start; }
+    .main.setup .content { width:min(100%,1060px); }
     .content { width:min(100%,780px); }
     h1 { font-size:28px; font-weight:600; margin:0 0 20px; }
     .controls { display:flex; align-items:center; flex-wrap:wrap; gap:7px; padding-bottom:9px; border-bottom:1px solid var(--chrome-border,#475067); }
@@ -134,16 +156,70 @@ export class MuxNewChat extends LitElement {
     .send:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
     .send:disabled { opacity:.4; cursor:default; }
     .error { margin:10px 0; color:var(--chrome-danger); }
-    .setup-intro { margin:0 0 18px; color:var(--chrome-text-dim); font-size:14px; }
-    .setup-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:10px; }
-    .setup-card { padding:15px; border:1px solid var(--chrome-border); border-radius:13px; background:var(--chrome-bar); }
-    .setup-card h2 { margin:0 0 8px; font-size:15px; }
-    .setup-card code { display:block; min-height:42px; padding:8px; border-radius:7px; overflow-wrap:anywhere; background:var(--chrome-body); color:var(--chrome-text-bright); font:12px/1.45 ui-monospace,SFMono-Regular,monospace; }
-    .setup-card p { margin:9px 0; color:var(--chrome-text-dim); font-size:12px; }
-    .setup-actions { display:flex; align-items:center; gap:12px; margin-top:10px; }
-    .setup-actions button,.setup-refresh { padding:7px 11px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-hover); color:var(--chrome-text-bright); }
-    .setup-actions a { color:var(--chrome-accent); text-decoration:none; }
-    .setup-refresh { margin-top:16px; }
+    .setup-shell { max-width:1080px; margin:28px auto 34px; }
+    .setup-header { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:26px; }
+    .setup-header h1 { margin:0 0 8px; font-size:32px; font-weight:650; letter-spacing:-.035em; line-height:1.13; }
+    .setup-lead { max-width:620px; margin:0; color:var(--chrome-text-dim); font-size:14px; line-height:1.6; }
+    .setup-progress { display:flex; align-items:center; gap:15px; padding:0 0 20px; margin-bottom:24px; border-bottom:1px solid var(--chrome-border); color:var(--chrome-text-dim); font-size:12px; }
+    .setup-progress span { display:inline-flex; align-items:center; gap:7px; }
+    .setup-progress b { display:grid; place-items:center; width:23px; height:23px; border:1px solid var(--chrome-border); border-radius:50%; font-size:11px; font-weight:600; }
+    .setup-progress .current { color:var(--chrome-text-bright); font-weight:600; }
+    .setup-progress .current b,.setup-progress .done b { border-color:var(--chrome-accent); background:var(--chrome-accent); color:var(--chrome-body); }
+    .setup-progress i { width:30px; height:1px; background:var(--chrome-border); }
+    .setup-action { display:inline-flex; align-items:center; justify-content:center; min-height:34px; padding:7px 12px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-hover); color:var(--chrome-text-bright); font-size:12px; font-weight:550; white-space:nowrap; }
+    .setup-action:hover:not(:disabled) { border-color:var(--chrome-accent); }
+    .setup-action:focus-visible,.provider-choice:focus-visible,.setup-link:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:2px; }
+    .setup-action:disabled { opacity:.5; cursor:default; }
+    .setup-action.primary { border-color:var(--chrome-accent); background:var(--chrome-accent); color:var(--chrome-body); font-weight:650; }
+    .setup-link { padding:4px 0; border:0; background:transparent; color:var(--chrome-accent); font-size:12px; text-decoration:none; }
+    .setup-link:hover { text-decoration:underline; }
+    .provider-workspace { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr)); gap:28px; align-items:start; }
+    .provider-workspace.compact { grid-template-columns:minmax(0,1fr); gap:14px; }
+    .provider-picker { display:flex; align-items:center; gap:12px; color:var(--chrome-text-dim); font-size:12px; }
+    .provider-picker select { width:min(100%,280px); height:34px; }
+    .provider-browser { border-top:1px solid var(--chrome-border); }
+    .provider-choice { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:center; width:100%; padding:15px 12px 15px 14px; border:0; border-bottom:1px solid var(--chrome-border); border-left:3px solid transparent; border-radius:0; background:transparent; color:var(--chrome-text-bright); text-align:left; }
+    .provider-choice:hover { background:color-mix(in srgb,var(--chrome-accent) 5%,var(--chrome-body)); }
+    .provider-choice[aria-pressed="true"] { border-left-color:var(--chrome-accent); background:color-mix(in srgb,var(--chrome-accent) 8%,var(--chrome-body)); }
+    .provider-choice strong { font-size:14px; font-weight:620; }
+    .provider-choice .detail { grid-column:1; color:var(--chrome-text-dim); font-size:12px; line-height:1.4; }
+    .provider-choice .provider-status { grid-column:2; grid-row:1 / 3; max-width:115px; color:var(--chrome-text-dim); font-size:11px; line-height:1.3; text-align:right; }
+    .provider-choice .provider-status.active { color:var(--chrome-accent); font-weight:650; }
+    .provider-setup { box-sizing:border-box; min-height:365px; padding:22px 24px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
+    .provider-setup h2 { margin:0 0 5px; font-size:20px; font-weight:650; letter-spacing:-.02em; }
+    .provider-setup p { max-width:58ch; margin:5px 0 12px; color:var(--chrome-text-dim); font-size:12px; line-height:1.55; }
+    .provider-setup .provider-note { margin:0 0 13px; }
+    .provider-setup .default-note { padding:9px 11px; border-left:2px solid var(--chrome-accent); background:var(--chrome-body); }
+    .setup-sequence { margin-top:20px; border-top:1px solid var(--chrome-border); }
+    .sequence-row { display:grid; grid-template-columns:22px minmax(0,1fr) auto; gap:12px; align-items:center; min-height:58px; padding:11px 0; border-bottom:1px solid var(--chrome-border); }
+    .sequence-row .number { color:var(--chrome-text-dim); font:12px ui-monospace,SFMono-Regular,monospace; }
+    .sequence-row strong { display:block; font-size:13px; font-weight:600; }
+    .sequence-row small { display:block; margin-top:2px; color:var(--chrome-text-dim); font-size:11px; line-height:1.4; }
+    .sequence-row .setup-status { text-align:right; }
+    .provider-tools { display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-top:15px; }
+    .provider-tools a { color:var(--chrome-accent); font-size:12px; text-decoration:none; }
+    .provider-tools a:hover { text-decoration:underline; }
+    .setup-status { color:var(--chrome-text-dim); font-size:11px; }
+    .setup-status.ready { color:var(--chrome-accent); font-weight:650; }
+    .setup-footer { display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin-top:24px; padding-top:17px; border-top:1px solid var(--chrome-border); }
+    .setup-footer .next { margin-left:auto; }
+    .setup-footer .hint { color:var(--chrome-text-dim); font-size:11px; }
+    .setup-list { display:flex; flex-direction:column; border-top:1px solid var(--chrome-border); }
+    .setup-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px 20px; align-items:center; padding:17px 4px; border-bottom:1px solid var(--chrome-border); }
+    .setup-card-heading { display:flex; align-items:baseline; gap:12px; }
+    .setup-card h2 { margin:0; font-size:15px; font-weight:620; }
+    .setup-card p { max-width:70ch; margin:4px 0 0; color:var(--chrome-text-dim); font-size:12px; line-height:1.45; }
+    .setup-card .setup-actions { display:flex; align-items:center; gap:12px; margin:0; }
+    .setup-card .setup-actions a { color:var(--chrome-accent); font-size:12px; text-decoration:none; white-space:nowrap; }
+    .setup-card .setup-actions a:hover { text-decoration:underline; }
+    .setup-card details { margin-top:5px; color:var(--chrome-text-dim); font-size:11px; }
+    .setup-card details summary { width:fit-content; cursor:pointer; }
+    .setup-card code { display:block; max-width:70ch; margin-top:5px; overflow-wrap:anywhere; color:var(--chrome-text-bright); font:11px/1.5 ui-monospace,SFMono-Regular,monospace; }
+    .layout.with-utility .setup-header h1 { font-size:28px; }
+    .layout.with-utility .setup-card { grid-template-columns:1fr; }
+    .layout.with-utility .setup-card .setup-actions { justify-content:flex-start; }
+    @media(max-width:860px) { .setup-shell { margin-top:10px; } .setup-header h1 { font-size:27px; } .setup-card { grid-template-columns:1fr; } .setup-card .setup-actions { justify-content:flex-start; } }
+    @media(max-width:560px) { .provider-setup { padding:17px; } .sequence-row { grid-template-columns:18px minmax(0,1fr); } .sequence-row > :last-child { grid-column:2; justify-self:start; } .setup-header { gap:10px; } .setup-header .setup-action { padding:5px 7px; white-space:normal; } }
     .receipt { display:flex; align-items:center; gap:8px; margin:12px 2px 0; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; }
     .receipt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--chrome-accent,#9bb8f7); animation:receipt-pulse 1.35s ease-in-out infinite; }
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
@@ -156,7 +232,7 @@ export class MuxNewChat extends LitElement {
     .location-settings summary:hover,.location-settings[open] summary { border-color:var(--chrome-accent,#9bb8f7); }
     .location-fields { position:absolute; z-index:20; top:37px; left:0; display:grid; gap:9px; box-sizing:border-box; width:min(400px,calc(100vw - 72px)); max-height:300px; overflow:auto; padding:11px; border:1px solid var(--chrome-border,#475067); border-radius:10px; background:var(--chrome-bar,#252a39); box-shadow:0 12px 30px #0009; }
     .location-note { margin:0; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
-    @media(max-width:550px) { .main { padding:16px; } h1 { font-size:24px; } .controls { gap:6px; } .controls select { max-width:125px; } .project-trigger { max-width:135px; } }
+    @media(max-width:700px) { .utility-drawer { position:absolute; z-index:5; inset:0 0 0 auto; width:min(100%,580px); min-width:0; box-shadow:-12px 0 35px #0005; } .main { padding:16px; } h1 { font-size:24px; } .controls { gap:6px; } .controls select { max-width:125px; } .project-trigger { max-width:135px; } }
   `;
 
   override connectedCallback() {
@@ -166,17 +242,22 @@ export class MuxNewChat extends LitElement {
     window.addEventListener('drop', this.resetDrop);
     window.addEventListener('dragend', this.resetDrop);
     this.harness = this.initialHarness;
+    void this.loadOnboarding();
     if (this.initialPrompt) this.prompt = this.initialPrompt;
     void this.loadStartOptions();
+    this.optionsRefreshTimer = window.setInterval(() => {
+      if (this.firstRun || (this.utilityOpen && this.startOptions?.length === 0)) void this.loadStartOptions(true);
+    }, 4000);
     if (this.initialFolder) this.folder = this.initialFolder;
     if (this.initialProject) this.projectId = this.initialProject;
     document.addEventListener('pointerdown', this.closeDropdowns);
     this.unsub = sdkChats.subscribe(() => this.requestUpdate());
-    void sdkChats.refresh().then(() => { const project = sdkChats.projects.find(p => p.id === this.projectId); if (project) this.folder = project.path; });
+    void sdkChats.refresh().then(() => { const project = sdkChats.projects.find(p => p.id === this.projectId); if (project) this.folder = project.path; }).catch(error => { this.error = String(error); });
     void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) this.folder = listing.base; }).catch(error => { this.error = String(error); });
   }
   override disconnectedCallback() {
     this.unsub?.();
+    if (this.optionsRefreshTimer) window.clearInterval(this.optionsRefreshTimer);
     document.removeEventListener('pointerdown', this.closeDropdowns);
     window.removeEventListener('dragover', this.preventFileNavigation);
     window.removeEventListener('drop', this.preventFileNavigation);
@@ -233,23 +314,77 @@ export class MuxNewChat extends LitElement {
     this.harness = option.harness;
     this.provider = option.provider;
   }
-  private async loadStartOptions() {
+  private async loadStartOptions(silent = false) {
+    if (this.optionsRefreshing) return;
+    this.optionsRefreshing = true;
+    if (!silent) this.optionsLoaded = false;
     try {
       const response = await fetch(apiPath('/api/sdk-chat-start-options'));
       if (!response.ok) throw new Error(await response.text());
       const options = await response.json() as StartOption[];
       if (!this.isConnected) return;
       this.startOptions = options;
-      const selected = options.find(item => item.harness === this.initialHarness) || options[0];
-      if (selected) this.onHarnessChange(selected.harness);
+      const selected = options.find(item => item.harness === this.harness && item.provider === this.provider)
+        || options.find(item => item.harness === this.initialHarness) || options[0];
+      if (selected && (selected.harness !== this.harness || selected.provider !== this.provider)) this.onHarnessChange(selected.harness);
       else this.error = '';
+    } catch (error) {
+      if (this.isConnected && (!silent || !this.startOptions)) this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.optionsRefreshing = false;
+      if (this.isConnected && !silent) this.optionsLoaded = true;
+    }
+  }
+  private renderProviderSetup(): TemplateResult {
+    return this.renderScreen(html`<div class="main setup"><div class="content setup-shell">
+      <header class="setup-header"><div><h1>${this.firstRun ? 'Connect an AI provider' : 'AI providers'}</h1><p class="setup-lead">Amplifier uses this connection for its chats. Configure a provider and check that it can reach a model.</p></div></header>
+      ${this.firstRun ? html`<nav class="setup-progress" aria-label="Setup progress"><span class="current" aria-current="step"><b>1</b>AI provider</span><i aria-hidden="true"></i><span><b>2</b>Coding agents</span></nav>` : nothing}
+      <mux-ai-providers .firstRun=${this.firstRun} @provider-ready=${(event: CustomEvent<{ ready: boolean }>) => { this.aiProviderReady = event.detail.ready; }}></mux-ai-providers>
+      <footer class="setup-footer"><button class="setup-action primary next" ?disabled=${!this.aiProviderReady} @click=${() => { this.setupStep = 'harness'; }}>Continue to coding agents</button></footer>
+    </div></div>`);
+  }
+  private async openTerminal(label?: string, command?: string) {
+    if (!this.folder) { this.error = 'Choose a folder before opening a terminal.'; return; }
+    this.terminalRequested = true;
+    this.utilityOpen = true;
+    await this.updateComplete;
+    const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
+    if (!utility) return;
+    if (label && command) utility.openSetupTerminal(label, command);
+    else utility.showPanel('terminal');
+  }
+  private renderScreen(content: TemplateResult): TemplateResult {
+    return html`<div class="layout ${this.utilityOpen ? 'with-utility' : ''}">${content}${this.utilityOpen ? html`<aside class="utility-drawer" aria-label="Setup tools"><header><span>Tools · terminals stay with your chat</span><button aria-label="Close tools" @click=${() => { this.utilityOpen = false; }}>Close</button></header><mux-sdk-utility .sessionId=${this.draftId} .projectPath=${this.folder} .chatTitle=${'Setup'} .terminalWorkspaceId=${this.terminalWorkspaceId}></mux-sdk-utility></aside>` : nothing}</div>`;
+  }
+  private async loadOnboarding() {
+    try {
+      const response = await fetch(apiPath('/api/sdk-chat-onboarding'));
+      if (!response.ok) throw new Error(await response.text());
+      const state = await response.json() as { complete: boolean };
+      if (this.isConnected) {
+        this.firstRun = !state.complete; this.onboardingError = '';
+        this.dispatchEvent(new CustomEvent('onboarding-state', { detail:{firstRun:this.firstRun}, bubbles:true, composed:true }));
+      }
+    } catch (error) {
+      if (this.isConnected) {
+        this.onboardingError = (error instanceof Error ? error.message : String(error)) || 'Could not check onboarding state.';
+        this.dispatchEvent(new CustomEvent('onboarding-state', { detail:{firstRun:false}, bubbles:true, composed:true }));
+      }
+    } finally {
+      if (this.isConnected) this.onboardingLoaded = true;
+    }
+  }
+  private async finishFirstRun() {
+    try {
+      const response = await fetch(apiPath('/api/sdk-chat-onboarding'), { method:'POST' });
+      if (!response.ok) throw new Error(await response.text());
+      if (this.isConnected) {
+        this.firstRun = false;
+        this.dispatchEvent(new CustomEvent('onboarding-state', { detail:{firstRun:false}, bubbles:true, composed:true }));
+      }
     } catch (error) {
       if (this.isConnected) this.error = error instanceof Error ? error.message : String(error);
     }
-  }
-  private async copySetup(command: string, name: string) {
-    try { await navigator.clipboard.writeText(command); this.copiedSetup = name; this.error = ''; }
-    catch { this.error = 'Could not copy the command. Select it above and copy it manually.'; }
   }
   private onDragEnter(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth++; this.dropActive = true; }
   private onDragOver(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; this.dropActive = true; }
@@ -299,6 +434,7 @@ export class MuxNewChat extends LitElement {
   }
   private async send() {
     const prompt = this.prompt.trim();
+    if (this.terminalRequested && !this.terminalWorkspaceId) { this.error = 'Wait for the setup terminal to open before starting the chat.'; return; }
     if ((!prompt && !this.attachments.length) || this.busy || !this.startOptions?.some(item => item.harness === this.harness && item.provider === this.provider) || this.attachments.some(a => a.uploading || a.error)) return;
     this.busy = true; this.error = '';
     try {
@@ -308,29 +444,37 @@ export class MuxNewChat extends LitElement {
         if (!this.folder.startsWith('/')) throw new Error('Choose an absolute folder for the new project.');
         workspaceId = (await sdkChats.createProject(this.folder, this.projectName.trim())).id;
       } else if (this.projectId !== 'ungrouped') workspaceId = this.projectId;
-      const chat = await sdkChats.create({ workspaceId, projectPath:this.folder, workMode:this.workMode, harness:this.harness, provider:this.provider, prompt, attachments:this.attachments.map(a => a.id!) });
+      const chat = await sdkChats.create({ workspaceId, terminalWorkspaceId:this.terminalWorkspaceId || undefined, projectPath:this.folder, workMode:this.workMode, harness:this.harness, provider:this.provider, prompt, attachments:this.attachments.map(a => a.id!) });
+      carryUtilityTabs(this.draftId, chat.id);
       this.dispatchEvent(new CustomEvent('chat-created', { detail:{sessionId:chat.id}, bubbles:true, composed:true }));
     } catch (error) { this.error = error instanceof Error ? error.message.trim() : String(error); }
     finally { this.busy = false; }
   }
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
-    if (this.startOptions?.length === 0) return html`
-      <div class="main setup"><div class="content">
-        <h1>Choose your coding agent</h1>
-        <p class="setup-intro">Install an agent in a terminal, sign in to its provider, then refresh this list. Muxterm will use the agent already on your computer.</p>
-        <button class="setup-refresh" style="margin:0 0 16px" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open a terminal in muxterm</button>
-        <div class="setup-list">${SETUP_AGENTS.map(agent => html`
-          <section class="setup-card"><h2>${agent.name}</h2>
-            <code>${agent.command}</code>
-            <p>After installing, run <strong>${agent.login}</strong> to connect your account.</p>
-            <div class="setup-actions"><button @click=${() => void this.copySetup(agent.command, agent.name)}>${this.copiedSetup === agent.name ? 'Copied' : 'Copy install command'}</button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
-          </section>`)}</div>
-        <button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Refresh installed agents</button>
+    if (!this.onboardingLoaded || (this.firstRun && this.setupStep === 'harness' && !this.optionsLoaded)) return this.renderScreen(html`<div class="main setup"><div class="content setup-shell"><h1>Welcome to Muxterm</h1><p class="setup-lead" role="status">Checking your coding agents…</p></div></div>`);
+    if (this.onboardingError) return this.renderScreen(html`<div class="main setup"><div class="content setup-shell"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.onboardingError}</p><button class="setup-action" @click=${() => void this.loadOnboarding()}>Try again</button></div></div>`);
+    if (this.firstRun && this.setupStep === 'provider') return this.renderProviderSetup();
+    if (this.firstRun && !this.startOptions) return this.renderScreen(html`<div class="main setup"><div class="content setup-shell"><h1>Welcome to Muxterm</h1><p class="error" role="alert">${this.error || 'Could not check coding agents.'}</p><button class="setup-action" @click=${() => void this.loadStartOptions()}>Try again</button></div></div>`);
+    const showFirstRun = this.firstRun;
+    if (this.startOptions && (showFirstRun || this.startOptions.length === 0)) return this.renderScreen(html`
+      <div class="main setup"><div class="content setup-shell">
+        <header class="setup-header"><div><h1>${showFirstRun ? 'Choose your coding agents' : 'Connect a coding agent'}</h1><p class="setup-lead">Install or sign in to the agents you want to use. Setup opens in a terminal beside this screen.</p></div></header>
+        ${showFirstRun ? html`<nav class="setup-progress" aria-label="Setup progress"><span class="done"><b>✓</b>AI provider</span><i aria-hidden="true"></i><span class="current" aria-current="step"><b>2</b>Coding agents</span></nav>` : nothing}
+        <p class="setup-lead">${this.startOptions.length} of ${SETUP_AGENTS.length} agents found. <strong>Ready</strong> means Muxterm can start a chat. <strong>Detected</strong> means an ACP command exists; sign-in still needs confirmation.</p>
+        <div class="setup-list">${SETUP_AGENTS.map(agent => {
+          const found = this.startOptions!.some(option => option.harness === agent.harness);
+          const acp = agent.harness === 'opencode' || agent.harness === 'pi' || agent.harness === 'deepseek';
+          const status = found ? acp ? 'Detected' : 'Ready' : agent.harness === 'codex' || agent.harness === 'claude' ? 'Sign-in needed' : 'Needs setup';
+          const detail = found ? acp ? 'Command found. Sign in before the first chat.' : agent.harness === 'amplifier' ? 'Ready for Amplifier chats.' : 'Ready for new chats.' : agent.harness === 'codex' || agent.harness === 'claude' ? 'The SDK is included. Sign in with the CLI to use your account.' : agent.harness === 'amplifier' ? 'Install Amplifier, then configure a provider.' : 'Install the command and connect its account.';
+          return html`<section class="setup-card"><div><div class="setup-card-heading"><h2>${agent.name}</h2><span class="setup-status ${found && !acp ? 'ready' : ''}">${status}</span></div><p>${detail}</p>${!found ? html`<details><summary>Show install command</summary><code>${agent.command}</code></details>` : nothing}</div><div class="setup-actions">${found && !acp ? nothing : html`<button class="setup-action" @click=${() => void this.openTerminal(`${agent.name} setup`, found ? agent.login : `${agent.command} && ${agent.login}`)}>${found ? 'Open sign-in terminal' : 'Install and sign in'}</button>`}<a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide</a></div></section>`;
+        })}</div>
+        <footer class="setup-footer">${showFirstRun ? html`<button class="setup-link" @click=${() => { this.setupStep = 'provider'; }}>Back to provider</button>` : nothing}<button class="setup-link" @click=${() => void this.loadStartOptions()}>Refresh status</button><span class="hint">Checks refresh automatically while setup is open.</span>${showFirstRun && this.startOptions.length ? html`<button class="setup-action primary next" @click=${this.finishFirstRun}>Start using Muxterm</button>` : nothing}</footer>
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-      </div></div>`;
-    return html`
+      </div></div>`);
+    return this.renderScreen(html`
     <div class="main"><div class="content">
+      <div class="composer-tools"><button @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action: 'settings', section: 'providers' }, bubbles: true, composed: true }))}>AI provider</button><button @click=${() => void this.openTerminal()}>Tools</button></div>
       <h1>What would you like to do?</h1>
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
         <div class="controls">
@@ -354,12 +498,12 @@ export class MuxNewChat extends LitElement {
         </div>
         ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button></div>`)}</div>` : nothing}
         <textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${(e:Event) => { this.prompt = (e.target as HTMLTextAreaElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea>
-        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><button class="send" aria-label="Send message" ?disabled=${(!this.prompt.trim() && !this.attachments.length) || this.busy || !this.startOptions?.some(item => item.harness === this.harness && item.provider === this.provider) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
+        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><button class="send" aria-label="Send message" ?disabled=${(!this.prompt.trim() && !this.attachments.length) || this.busy || (this.terminalRequested && !this.terminalWorkspaceId) || !this.startOptions?.some(item => item.harness === this.harness && item.provider === this.provider) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
 
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
     </div></div>
-  `; }
+  `); }
 }

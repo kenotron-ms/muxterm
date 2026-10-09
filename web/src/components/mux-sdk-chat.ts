@@ -65,6 +65,7 @@ type Attachment = { localId: string; file: File; id?: string; kind?: string; pre
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
+  @property({ type: Boolean }) initialUtilityOpen = false;
   @state() private chat?: SDKChat;
   @state() private scheduledJob?: { name:string };
   @state() private blocks: Block[] = [];
@@ -425,6 +426,7 @@ export class MuxSDKChat extends LitElement {
   `;
   override connectedCallback() {
     super.connectedCallback();
+    if (this.initialUtilityOpen) this.openDrawer();
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     window.addEventListener('focus', this.resumeConnection);
     window.addEventListener('online', this.onOnline);

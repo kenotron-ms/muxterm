@@ -80,6 +80,7 @@ export function configureTerminals(cfg: ResolvedConfig): void {
   PREVIEW_PALETTE = paletteAnsiArray(newConfig.theme);
 
   for (const entry of _map.values()) {
+    _syncTerminalBackground(entry, newConfig.theme.background);
     if (!entry.opened) continue;
     // Apply each option individually — xterm.js 5 accepts live option changes
     // and schedules a re-render automatically.
@@ -114,6 +115,8 @@ interface PaneEntry {
   webFontsAddon: WebFontsAddon;
   /** Stable host element that moves between containers on attach/detach. */
   hostEl: HTMLElement;
+  /** Inset mount: xterm's fit addon measures this element's actual content area. */
+  mountEl: HTMLElement;
   handlers: PaneHandlers;
   /** Last dimensions reported to the server — gate for idempotent resize. */
   lastCols: number;
@@ -135,7 +138,7 @@ interface PaneEntry {
    * client's own conflicting resize message right back at the daemon.
    */
   applyingServerResize: boolean;
-  /** True once term.open(hostEl) has been called (on first attach). */
+  /** True once term.open(mountEl) has been called (on first attach). */
   opened: boolean;
   /** True once the initial replay has been flushed at a settled layout size; gates direct writes. */
   ready: boolean;
@@ -236,6 +239,12 @@ function _fitIfPlausible(entry: PaneEntry): boolean {
 function _isVisible(el: HTMLElement): boolean {
   // offsetParent is null when element is display:none or disconnected.
   return el.isConnected && el.offsetParent !== null;
+}
+
+function _syncTerminalBackground(entry: PaneEntry, background: string): void {
+  entry.hostEl.style.backgroundColor = background;
+  const viewport = entry.term.element?.querySelector<HTMLElement>('.xterm-viewport');
+  if (viewport) viewport.style.backgroundColor = background;
 }
 
 /**
@@ -399,7 +408,8 @@ export const terminalRegistry = {
       return;
     }
 
-    // Host element: a plain div that moves between shadow-DOM containers.
+    // The host moves between tabs. Keep a theme-coloured inset around the
+    // mount so xterm's fit addon measures the usable grid, including padding.
     const hostEl = document.createElement('div');
     // touch-action:none tells the browser we handle all touch gestures ourselves,
     // preventing it from firing default pan/zoom behaviors that would fight our
@@ -409,7 +419,11 @@ export const terminalRegistry = {
     // grid, or sit anchored top-left with empty space when larger. This is a
     // no-op visually for the normal (authoritative) case, where the terminal's
     // natural size always matches the container exactly.
-    hostEl.style.cssText = 'width:100%;height:100%;touch-action:none;overflow:auto;';
+    hostEl.style.cssText = 'box-sizing:border-box;width:100%;height:100%;padding:8px 10px;touch-action:none;overflow:auto;';
+    hostEl.style.backgroundColor = TERMINAL_CONFIG.theme.background;
+    const mountEl = document.createElement('div');
+    mountEl.style.cssText = 'width:100%;height:100%;overflow:auto;';
+    hostEl.appendChild(mountEl);
 
     const term = new Terminal(TERMINAL_CONFIG);
 
@@ -463,6 +477,7 @@ export const terminalRegistry = {
       fitAddon,
       webFontsAddon,
       hostEl,
+      mountEl,
       handlers,
       lastCols: -1,
       lastRows: -1,
@@ -740,8 +755,9 @@ export const terminalRegistry = {
       // @font-face rules are already declared by injectTerminalFont() in fonts.ts.
       container.appendChild(entry.hostEl);
       const openTerminal = () => {
-        entry.term.open(entry.hostEl);
+        entry.term.open(entry.mountEl);
         entry.opened = true;
+        _syncTerminalBackground(entry, TERMINAL_CONFIG.theme.background);
         // Only focus when explicitly requested (i.e. this is the active pane). On a
         // multi-group layout restore EVERY pane attaches; if each one grabbed focus,
         // dockview's onDidFocus would activate that pane's group, and the last

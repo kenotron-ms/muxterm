@@ -52,8 +52,9 @@ plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Inf
 codesign --force --options runtime --timestamp \
   --sign "$identity" "$app/Contents/MacOS/muxterm-server"
 codesign --force --options runtime --timestamp \
+  --entitlements "$root/desktop/node-entitlements.plist" \
   --sign "$identity" "$app/Contents/MacOS/node"
-codesign --force --deep --options runtime --timestamp \
+codesign --force --options runtime --timestamp \
   --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 

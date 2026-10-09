@@ -358,6 +358,13 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-jobs/{id}/runs", protect(http.HandlerFunc(s.handleSDKJobRuns)))
 	s.mux.Handle("GET /api/sdk-jobs/{id}/runs/{run}", protect(http.HandlerFunc(s.handleSDKJobRunDetail)))
 	s.mux.Handle("GET /api/sdk-chat-start-options", protect(http.HandlerFunc(s.handleSDKChatStartOptions)))
+	s.mux.Handle("GET /api/amplifier-provider-setup", protect(http.HandlerFunc(s.handleAmplifierProviderSetup)))
+	s.mux.Handle("POST /api/amplifier-provider-setup/install", protect(http.HandlerFunc(s.handleAmplifierInstall)))
+	s.mux.Handle("POST /api/amplifier-provider-setup/save", protect(http.HandlerFunc(s.handleAmplifierProviderSave)))
+	s.mux.Handle("POST /api/amplifier-provider-setup/check", protect(http.HandlerFunc(s.handleAmplifierProviderCheck)))
+	s.mux.Handle("POST /api/amplifier-provider-setup/reorder", protect(http.HandlerFunc(s.handleAmplifierProviderReorder)))
+	s.mux.Handle("GET /api/sdk-chat-onboarding", protect(http.HandlerFunc(s.handleSDKChatOnboarding)))
+	s.mux.Handle("POST /api/sdk-chat-onboarding", protect(http.HandlerFunc(s.handleSDKChatOnboarding)))
 	s.mux.Handle("GET /api/sdk-chat-names/events", protect(http.HandlerFunc(s.handleSDKChatNameEvents)))
 	s.mux.Handle("GET /api/sdk-chats/search-content", protect(http.HandlerFunc(s.handleSDKChatContentSearch)))
 	if err := chatattachments.RegisterRoutes(s.mux, s.sdkChatAttachments, protect); err != nil {

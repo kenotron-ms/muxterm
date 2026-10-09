@@ -21,6 +21,7 @@ import {
   type AIStatus,
 } from '../lib/ai.js';
 import { apiPath } from '../lib/base-path.js';
+import './mux-ai-providers.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
   DEFAULT_VOICE_STATUS,
@@ -32,7 +33,7 @@ import {
   type VoiceMode,
 } from '../lib/voice-settings.js';
 
-export type SettingsSection = 'appearance' | 'notifications' | 'ai' | 'voice' | 'remotes';
+export type SettingsSection = 'appearance' | 'notifications' | 'ai' | 'providers' | 'voice' | 'remotes';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -2171,6 +2172,10 @@ export class MuxSettingsSurface extends LitElement {
             @click="${() => { this._setSection('ai'); }}"
           >AI</button>
           <button
+            class="sidebar-item ${this._section === 'providers' ? 'active' : ''}"
+            @click="${() => { this._setSection('providers'); }}"
+          >AI Providers</button>
+          <button
             class="sidebar-item ${this._section === 'voice' ? 'active' : ''}"
             @click="${() => { this._setSection('voice'); void this._loadVoice(); }}"
           >Voice</button>
@@ -2186,8 +2191,10 @@ export class MuxSettingsSurface extends LitElement {
               ? this._renderNotifications()
               : this._section === 'remotes'
                 ? this._renderRemotes()
-                : this._section === 'voice'
+              : this._section === 'voice'
                   ? this._renderVoice()
+                  : this._section === 'providers'
+                    ? html`<h2>AI Providers</h2><p>Manage the providers Amplifier uses for chats.</p><mux-ai-providers></mux-ai-providers>`
                   : this._renderAI()}
         </div>
       </div>
