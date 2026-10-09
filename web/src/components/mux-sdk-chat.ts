@@ -11,7 +11,7 @@ import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
-import { fitTextarea } from '../lib/fit-textarea.js';
+import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
 import { laneIcon } from '../lib/lane-icon.js';
 import './mux-sdk-utility.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
@@ -316,7 +316,8 @@ export class MuxSDKChat extends LitElement {
     .message-time { margin-left:5px; color:var(--chrome-text-dim); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .user .message-time { order:-1; margin:0 5px 0 0; }
     .message-edit { box-sizing:border-box; width:min(82%,660px); padding:10px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
-    .message-edit textarea { width:100%; min-height:96px; max-height:320px; resize:none; overflow-y:auto; }
+    .message-edit .textarea-sizing { width:100%; min-height:96px; max-height:320px; }
+    .message-edit textarea,.message-edit .textarea-mirror { min-height:96px; max-height:320px; }
     .message-edit-controls { display:flex; justify-content:flex-end; gap:7px; margin-top:8px; }
     .message-edit-controls button { border:1px solid var(--chrome-border); border-radius:6px; padding:5px 9px; background:var(--chrome-body); color:var(--chrome-text-bright); }
     .message-edit-controls button:last-child { border-color:var(--chrome-accent); color:var(--chrome-accent); }
@@ -393,7 +394,12 @@ export class MuxSDKChat extends LitElement {
     .composer-row { display:flex; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
-    textarea { display:block; flex:1; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:14px/1.55 system-ui,sans-serif; min-height:50px; height:50px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
+    .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:220px; font:14px/1.55 system-ui,sans-serif; }
+    textarea { display:block; width:100%; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; min-height:50px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
+    .native-textarea-sizing textarea { field-sizing:content; height:auto; }
+    .legacy-textarea-sizing textarea { position:absolute; inset:0; height:100%; min-height:0; max-height:none; }
+    .textarea-mirror { box-sizing:border-box; width:100%; min-height:50px; max-height:220px; padding:3px 0; visibility:hidden; white-space:pre-wrap; overflow-wrap:break-word; overflow-y:auto; }
+    .native-textarea-sizing .textarea-mirror { display:none; }
     textarea::placeholder { color:var(--chrome-text-dim,#9aa3b8); opacity:.8; }
     .send, .stop { flex:none; width:34px; height:34px; display:grid; place-items:center; border-radius:10px; }
     .send { border:0; background:var(--chrome-accent,#9bb8f7); color:var(--chrome-body); font-size:20px; line-height:1; }
@@ -527,9 +533,13 @@ export class MuxSDKChat extends LitElement {
       if (this.sessionId === id) this.scheduledJob = jobs.find(job => job.chatId === id);
     } catch { /* Chat remains usable if job metadata is unavailable. */ }
   }
-  override updated() {
+  override updated(changed: Map<string, unknown>) {
     this.rowObserver.disconnect();
     this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]').forEach(row => this.rowObserver.observe(row));
+    // The empty legacy mirror follows placeholder changes from turn and chat state.
+    if (!nativeTextareaSizing && (changed.has('busy') || changed.has('chat') || changed.has('selectedAgent'))) {
+      this.fitComposer(this.selectedAgent ? 'agent' : 'message');
+    }
   }
   private drawerKey() { return `muxterm.sdk.utility.width.${this.sessionId}`; }
   private widthLimits() {
@@ -698,7 +708,7 @@ export class MuxSDKChat extends LitElement {
     this.draftHasContent = !!value.trim();
     if (this.draftTimer) window.clearTimeout(this.draftTimer);
     this.draftTimer = window.setTimeout(() => this.flushDraft(), 700);
-    fitTextarea(textarea);
+    syncTextareaSizing(textarea);
   }
   private flushDraft(): string {
     if (this.pendingDraft === undefined) return this.draft;
@@ -724,12 +734,12 @@ export class MuxSDKChat extends LitElement {
   private fitComposer(kind: 'message' | 'agent') {
     if (!this.isConnected || !!this.selectedAgent !== (kind === 'agent')) return;
     const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea');
-    if (textarea) fitTextarea(textarea);
+    if (textarea) syncTextareaSizing(textarea);
   }
   private onEditInput(event: InputEvent) {
     const textarea = event.currentTarget as HTMLTextAreaElement;
     this.editDraftHasContent = !!textarea.value.trim();
-    fitTextarea(textarea);
+    syncTextareaSizing(textarea);
   }
   private onAgentDraftInput(event: InputEvent) {
     const textarea = event.currentTarget as HTMLTextAreaElement;
@@ -738,7 +748,7 @@ export class MuxSDKChat extends LitElement {
     this.agentDraftHasContent = !!value.trim();
     if (this.agentDraftTimer) window.clearTimeout(this.agentDraftTimer);
     this.agentDraftTimer = window.setTimeout(() => this.flushAgentDraft(), 700);
-    fitTextarea(textarea);
+    syncTextareaSizing(textarea);
   }
   private flushAgentDraft(): string {
     if (this.pendingAgentDraft === undefined) return this.agentDraft;
@@ -1735,14 +1745,14 @@ export class MuxSDKChat extends LitElement {
     const finalAssistant = block.kind === 'assistant' && block.channel !== 'voice' && !this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key);
     return html`<div class="message-actions" role="group" aria-label=${`${block.kind === 'user' ? 'Your' : 'Assistant'} message actions`}>
       <button type="button" aria-label=${copied ? 'Message copied' : `Copy ${block.kind} message`} title=${copied ? 'Copied' : 'Copy message'} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.copyMessage(block); }}>${icon(copied ? Check : Copy, { size:14 })}<span class="sr-only" aria-live="polite">${copied ? 'Copied' : ''}</span></button>
-      ${block.kind === 'user' && block.id && canBranch ? html`<button type="button" aria-label="Edit message in a new chat" title="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; this.editDraftHasContent = !!block.text.trim(); void this.updateComplete.then(() => { const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea'); if (textarea) { fitTextarea(textarea); textarea.focus(); } }); }}>${icon(FilePenLine, { size:14 })}</button>` : nothing}
+      ${block.kind === 'user' && block.id && canBranch ? html`<button type="button" aria-label="Edit message in a new chat" title="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; this.editDraftHasContent = !!block.text.trim(); void this.updateComplete.then(() => { const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea'); if (textarea) { syncTextareaSizing(textarea); textarea.focus(); } }); }}>${icon(FilePenLine, { size:14 })}</button>` : nothing}
       ${finalAssistant && canBranch ? html`<button type="button" aria-label="Fork chat from this assistant message" title="Fork from here" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.branchMessage(block, 'fork'); }}>${icon(GitFork, { size:14 })}</button>` : nothing}
       ${this.messageTime(block)}
     </div>`;
   }
   private messageEdit(block: Block) {
     return html`<div class="message-edit" @click=${(event: MouseEvent) => event.stopPropagation()}>
-      <textarea aria-label="Revise your message" .value=${this.editDraft} @input=${this.onEditInput} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Escape') { this.editingKey = 0; } }}></textarea>
+      <div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Revise your message" .value=${this.editDraft} @input=${this.onEditInput} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Escape') { this.editingKey = 0; } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div>
       <div class="message-edit-controls"><button type="button" @click=${() => { this.editingKey = 0; }}>Cancel</button><button type="button" ?disabled=${!this.editDraftHasContent || this.actionPending} @click=${() => void this.branchMessage(block, 'edit')}>${this.actionPending ? 'Saving…' : 'Send edit in new chat'}</button></div>
     </div>`;
   }
@@ -1914,14 +1924,14 @@ export class MuxSDKChat extends LitElement {
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
-      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraftHasContent}>Send to root ↗</button></div>` : html`
+      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraftHasContent}>Send to root ↗</button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
         ${a.preview ? html`<img src=${a.preview} alt=${a.file.name}>` : nothing}
         <span class="filename" title=${a.file.name}>${a.file.name}</span>
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
-      <div class="composer-row"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${this.onDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
+      <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${this.onDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
