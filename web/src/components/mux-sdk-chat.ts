@@ -59,7 +59,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { BookOpen, Bot, Brain, Check, ChevronDown, ChevronRight, Columns2, Copy, FilePenLine, GitFork, Globe, Mic, Network, PanelLeft, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
+import { BookOpen, Bot, Check, ChevronDown, ChevronRight, Columns2, Copy, FilePenLine, GitFork, Globe, Mic, Network, PanelLeft, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
@@ -149,6 +149,7 @@ export class MuxSDKChat extends LitElement {
   };
   private resetDrop = () => { this.dragDepth = 0; this.dropActive = false; };
   private workExpanded = new Set<number>();
+  private workCollapsedWhileWorking = new Set<number>();
   private laneReportsExpanded = new Set<number>();
   private stepExpanded = new Set<string>();
   private turnStarted = new Map<number, number>();
@@ -230,19 +231,18 @@ export class MuxSDKChat extends LitElement {
     .work-disclosure[open] > summary svg { transform:rotate(180deg); }
     .work-items { padding:12px 0 2px; }
     .work-item { margin-bottom:5px; }
-    .work-live { padding:10px 0 2px; color:var(--chrome-text-dim,#9aa3b8); font-size:12px; line-height:1.55; }
-    .work-live-thinking { margin:0 0 10px; overflow-wrap:anywhere; }
-    .work-live-thinking > :first-child,.work-thinking-markdown > :first-child { margin-top:0; }
-    .work-live-thinking > :last-child,.work-thinking-markdown > :last-child { margin-bottom:0; }
-    .work-live-thinking .md-p,.work-thinking-markdown .md-p { margin:0 0 7px; }
-    .work-live-thinking .md-p:first-child::first-line,.work-thinking-markdown .md-p:first-child::first-line { font-weight:600; color:var(--chrome-text-bright,#d9def0); }
-    .work-live-thinking .md-h,.work-thinking-markdown .md-h { margin:8px 0 5px; font-size:12px; line-height:1.45; color:var(--chrome-text-bright,#d9def0); }
-    .work-live-thinking .md-ul,.work-live-thinking .md-ol,.work-thinking-markdown .md-ul,.work-thinking-markdown .md-ol { margin:5px 0; padding-left:19px; }
-    .work-live-thinking .md-pre,.work-thinking-markdown .md-pre { max-width:100%; overflow:auto; padding:7px 9px; border-radius:6px; background:var(--chrome-bar); }
-    .work-live-thinking .md-code,.work-thinking-markdown .md-code { font:11px ui-monospace,monospace; }
-    .work-live-tool { display:flex; align-items:center; gap:8px; min-height:25px; overflow:hidden; }
-    .work-live-tool .work-line { flex:1; }
-    .work-live-tool.failed { color:var(--chrome-danger); }
+    .work-passage { margin:0 0 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:12px; line-height:1.55; overflow-wrap:anywhere; }
+    .work-passage > :first-child { margin-top:0; }
+    .work-passage > :last-child { margin-bottom:0; }
+    .work-passage .md-p { margin:0 0 7px; }
+    .work-passage .md-p:first-child::first-line { font-weight:600; color:var(--chrome-text-bright,#d9def0); }
+    .work-passage .md-h { margin:8px 0 5px; font-size:12px; line-height:1.45; color:var(--chrome-text-bright,#d9def0); }
+    .work-passage .md-ul,.work-passage .md-ol { margin:5px 0; padding-left:19px; }
+    .work-passage .md-pre { max-width:100%; overflow:auto; padding:7px 9px; border-radius:6px; background:var(--chrome-bar); }
+    .work-passage .md-code { font:11px ui-monospace,monospace; }
+    .work-current-tool { display:flex; align-items:center; gap:8px; min-height:27px; overflow:hidden; color:var(--chrome-text-dim,#9aa3b8); font-size:12px; }
+    .work-current-tool .work-line { flex:1; }
+    .work-current-tool.failed { color:var(--chrome-danger); }
     .user { display:flex; flex-direction:column; align-items:flex-end; }
     .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
@@ -347,20 +347,18 @@ export class MuxSDKChat extends LitElement {
     .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--chrome-border,#41485f); text-align:left; vertical-align:top; overflow-wrap:break-word; word-break:normal; }
     .text .md-table .md-link, .text .md-table .md-code { overflow-wrap:break-word; }
     .text .md-th { background:var(--chrome-bar,#202632); }
-    .thinking-entry, .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; }
-    .thinking-entry > summary, .tool-activity > summary, .tool-entry > summary { display:flex; align-items:center; gap:8px; min-height:27px; list-style:none; cursor:pointer; }
-    .thinking-entry > summary::-webkit-details-marker, .tool-activity > summary::-webkit-details-marker, .tool-entry > summary::-webkit-details-marker { display:none; }
-    .thinking-entry > summary:focus-visible, .tool-activity > summary:focus-visible, .tool-entry > summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
-    .thinking-entry > summary:hover, .tool-activity > summary:hover, .tool-entry > summary:hover { color:var(--chrome-text-bright,#d9def0); }
+    .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; }
+    .tool-activity > summary, .tool-entry > summary { display:flex; align-items:center; gap:8px; min-height:27px; list-style:none; cursor:pointer; }
+    .tool-activity > summary::-webkit-details-marker, .tool-entry > summary::-webkit-details-marker { display:none; }
+    .tool-activity > summary:focus-visible, .tool-entry > summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
+    .tool-activity > summary:hover, .tool-entry > summary:hover { color:var(--chrome-text-bright,#d9def0); }
     .work-icon { display:inline-flex; align-items:center; justify-content:center; width:16px; flex:none; }
     .work-line { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .thinking-entry .work-line { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; white-space:normal; overflow-wrap:anywhere; line-height:1.45; }
     .work-chevron { display:inline-flex; flex:none; opacity:.65; transition:transform .15s ease; }
-    .thinking-entry[open] > summary .work-chevron, .tool-activity[open] > summary .work-chevron, .tool-entry[open] > summary .work-chevron { transform:rotate(180deg); }
-    .thinking-entry .detail { margin:4px 0 9px 24px; padding:0 0 0 10px; border-left:1px solid var(--chrome-border,#41485f); }
-    .work-thinking-markdown { overflow-wrap:anywhere; line-height:1.55; }
+    .tool-activity[open] > summary .work-chevron, .tool-entry[open] > summary .work-chevron { transform:rotate(180deg); }
     .tool-activity { margin:5px 0 7px; }
-    .tool-activity-items { margin:2px 0 0 2px; }
+    .tool-activity-items { max-height:260px; margin:2px 0 0 2px; overflow:auto; overscroll-behavior:contain; }
+    .tool-activity-items:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:-2px; border-radius:4px; }
     .tool-entry > summary { padding-left:22px; }
     .tool-entry.failed > summary { color:var(--chrome-danger); }
     .tool-entry .detail { box-sizing:border-box; max-width:min(100%,650px); margin:5px 0 11px 23px; padding:10px 12px 12px; border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:color-mix(in srgb,var(--chrome-accent) 5%,var(--chrome-body)); }
@@ -725,7 +723,7 @@ export class MuxSDKChat extends LitElement {
     this.cacheTimer = window.setTimeout(() => { this.cacheTimer = undefined; this.persistTranscriptCache(); }, 150);
   }
   private resetTranscript() {
-    this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear(); this.laneReportsExpanded.clear(); this.stepExpanded.clear();
+    this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear(); this.workCollapsedWhileWorking.clear(); this.laneReportsExpanded.clear(); this.stepExpanded.clear();
     this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now();
     this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.pendingInputs.clear(); this.rowsCache = undefined;
   }
@@ -916,12 +914,14 @@ export class MuxSDKChat extends LitElement {
     const oldStart = this.visibleStart, oldEnd = this.visibleEnd;
     const oldHeights = this.rowHeights;
     const expanded = new Set(this.workExpanded);
+    const collapsedWhileWorking = new Set(this.workCollapsedWhileWorking);
     const expandedSteps = new Set(this.stepExpanded);
     const oldTurn = this.currentTurn;
     this.loadedEvents = events;
     this.replayEvents();
     const turnShift = prepending ? this.currentTurn - oldTurn : 0;
     this.workExpanded = new Set([...expanded].map(turn => turn + turnShift));
+    this.workCollapsedWhileWorking = new Set([...collapsedWhileWorking].map(turn => turn + turnShift));
     this.stepExpanded = new Set([...expandedSteps].map(key => {
       const [turn, index] = key.split(':');
       return `${Number(turn) + turnShift}:${index}`;
@@ -1124,6 +1124,7 @@ export class MuxSDKChat extends LitElement {
     } else if (event.type === 'turn.completed') {
       this.busy = false;
       this.turnFinished.set(this.currentTurn, eventTime);
+      this.workCollapsedWhileWorking.delete(this.currentTurn);
       for (const b of blocks) if (b.kind === 'assistant') b.done = true;
       const anchor = blocks[this.turnStart]?.key;
       if (anchor !== undefined) for (const id of event.inputIds || []) this.completedInputAnchors.set(id, anchor);
@@ -1134,6 +1135,7 @@ export class MuxSDKChat extends LitElement {
     else if (event.type === 'turn.cancelled') {
       this.busy = false;
       this.turnFinished.set(this.currentTurn, eventTime);
+      this.workCollapsedWhileWorking.delete(this.currentTurn);
       this.stopping = false;
       for (const b of blocks) if (b.kind === 'assistant') b.done = true;
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:'Stopped by you · partial output kept' });
@@ -1157,7 +1159,7 @@ export class MuxSDKChat extends LitElement {
       if (!this.replaying && event.generationId && this.voice?.providerSessionId === event.generationId) this.voice.stop();
     }
     else if (event.type === 'session.renamed') { if (!this.replaying) void sdkChats.refresh(); }
-    else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
+    else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); this.workCollapsedWhileWorking.delete(this.currentTurn); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
     this.blocks = blocks;
     if (this.replaying) return;
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
@@ -1491,11 +1493,6 @@ export class MuxSDKChat extends LitElement {
       return count === 1 ? 'used a tool' : `used ${count} tools`;
     }).join(', ').replace(/^./, first => first.toUpperCase());
   }
-  private thinkingEntry(block: Block, key: string) {
-    const open = this.stepExpanded.has(key);
-    const preview = block.text.trim().replace(/\s+/g, ' ') || 'Thinking…';
-    return html`<details class="thinking-entry" aria-label="Thinking detail" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(Brain, { size: 14 })}</span><span class="work-line" title=${preview}>${preview}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><div class="work-thinking-markdown">${this.markdown({ ...block, done:this.turnFinished.has(block.turn) }, block.key)}</div></div>` : nothing}</details>`;
-  }
   private toolEntry(block: Block, key: string) {
     const kind = this.toolKind(block);
     const label = this.toolLine(block);
@@ -1510,44 +1507,43 @@ export class MuxSDKChat extends LitElement {
     const inputText = kind === 'shell' && command ? `$ ${command}` : this.detail(input);
     return html`<details class="tool-entry ${this.toolFailed(block) ? 'failed' : ''}" aria-label=${`${block.name || 'Tool'} detail`} ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(kind), { size: 14 })}</span><span class="work-line" title=${label}>${label}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><div class="tool-detail-title">${heading}</div><div class="detail-label">${inputLabel}</div><pre>${inputText}</pre><div class="detail-label">${outputLabel}</div><pre>${output}</pre></div>` : nothing}</details>`;
   }
-  private workTimeline(turn: number, items: Block[]) {
-    // Raw session events arrive in order. Keep each thinking passage at its
-    // original position and collapse only the adjacent tool calls after it.
+  private workTimeline(turn: number, items: Block[], working: boolean) {
+    // Keep reasoning and adjacent tool runs in event order. During Working,
+    // show only the newest tool individually; older calls fold into groups.
     const steps: ReturnType<typeof html>[] = [];
     let run: Block[] = [];
     let group = 0;
-    const flush = () => {
-      if (!run.length) return;
-      const tools = run;
+    let latestTool: Block | undefined;
+    if (working) for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'tool') { latestTool = items[i]; break; }
+    const toolGroup = (tools: Block[]) => {
       const key = `${turn}:tools-${group++}`;
       const open = this.stepExpanded.has(key);
-      steps.push(html`<details class="tool-activity" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(this.toolKind(tools[0])), { size: 14 })}</span><span class="work-line">${this.activityLineForTools(tools)}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="tool-activity-items">${tools.map(item => this.toolEntry(item, `${turn}:tool-${item.key}`))}</div>` : nothing}</details>`);
+      steps.push(html`<details class="tool-activity" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(this.toolKind(tools[0])), { size: 14 })}</span><span class="work-line">${this.activityLineForTools(tools)}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="tool-activity-items" role="region" aria-label="Tool calls" tabindex="0">${tools.map(item => this.toolEntry(item, `${turn}:tool-${item.key}`))}</div>` : nothing}</details>`);
+    };
+    const flush = () => {
+      if (!run.length) return;
+      const current = latestTool && run[run.length - 1].key === latestTool.key ? run.pop() : undefined;
+      if (run.length) toolGroup(run);
+      if (current) steps.push(html`<div class="work-current-tool ${this.toolFailed(current) ? 'failed' : ''}"><span class="work-icon">${icon(this.toolIcon(this.toolKind(current)), { size: 14 })}</span><span class="work-line" title=${this.toolLine(current)}>${this.toolLine(current)}</span></div>`);
       run = [];
     };
     for (const item of items) {
       if (item.kind === 'tool') run.push(item);
       else {
         flush();
-        if (item.kind === 'thinking') steps.push(this.thinkingEntry(item, `${turn}:thinking-${item.key}`));
+        if (item.kind === 'thinking' && item.text.trim()) steps.push(html`<div class="work-passage">${this.markdown({ ...item, done:!working }, item.key)}</div>`);
       }
     }
     flush();
     if (steps.length) return html`${steps}`;
     // Lightweight message history intentionally omits raw thought and tool
     // payloads. Do not display its flattened activity summary as a timeline.
+    if (working) return html`<div class="work-item">Waiting for activity…</div>`;
     if (this.loadingDetails || !this.detailsLoaded) return html`<div class="work-item">Loading work details…</div>`;
-    if (this.turnFinished.get(turn) === undefined) return html`<div class="work-item">Waiting for activity…</div>`;
     return html`<div class="work-item">No work details were reported.</div>`;
   }
-  private liveWork(items: Block[]) {
-    const thinking = items.filter(item => item.kind === 'thinking' && item.text.trim());
-    let latestTool: Block | undefined;
-    for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'tool') { latestTool = items[i]; break; }
-    if (!thinking.length && !latestTool) return nothing;
-    return html`<div class="work-live" aria-label="Current turn activity">
-      ${thinking.map(item => html`<div class="work-live-thinking">${this.markdown({ ...item, done:false }, item.key)}</div>`)}
-      ${latestTool ? html`<div class="work-live-tool ${this.toolFailed(latestTool) ? 'failed' : ''}"><span class="work-icon">${icon(this.toolIcon(this.toolKind(latestTool)), { size:14 })}</span><span class="work-line" title=${this.toolLine(latestTool)}>${this.toolLine(latestTool)}</span></div>` : nothing}
-    </div>`;
+  private workDisclosureOpen(turn: number) {
+    return this.workExpanded.has(turn) || (!this.turnFinished.has(turn) && !this.workCollapsedWhileWorking.has(turn));
   }
   private workedLabel(turn: number) {
     const started = this.turnStarted.get(turn);
@@ -1684,13 +1680,20 @@ export class MuxSDKChat extends LitElement {
     for (let i = end; i < rows.length; i++) after += this.rowHeight(rows[i]);
     return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map((row, offset) => {
       const block = row.block;
-      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${this.workExpanded.has(block.turn) ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details>${this.turnFinished.get(block.turn) === undefined && !this.workExpanded.has(block.turn) ? this.liveWork(row.work) : nothing}</div>`
-        : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.messageActions(block)}` : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
+      if (row.work) {
+        const working = !this.turnFinished.has(block.turn);
+        const open = this.workDisclosureOpen(block.turn);
+        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${working && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work, working)}</div>` : nothing}</details></div>`;
+      }
+      return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.messageActions(block)}` : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
   private toggleWorkDisclosure(turn: number, event: MouseEvent) {
     event.preventDefault();
-    if (this.workExpanded.has(turn)) this.workExpanded.delete(turn);
+    if (this.workDisclosureOpen(turn)) {
+      this.workExpanded.delete(turn);
+      if (!this.turnFinished.has(turn)) this.workCollapsedWhileWorking.add(turn);
+    } else if (!this.turnFinished.has(turn)) this.workCollapsedWhileWorking.delete(turn);
     else {
       this.workExpanded.add(turn);
       if (!this.detailsLoaded) void this.loadDetails();
