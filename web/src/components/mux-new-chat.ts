@@ -5,7 +5,7 @@ import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } fr
 import { apiPath } from '../lib/base-path.js';
 import { ChevronDown, Folder, Plus } from 'lucide';
 import { icon } from '../lib/icons.js';
-import { fitTextarea, TEXTAREA_RESIZE_DELAY_MS } from '../lib/fit-textarea.js';
+import { fitTextarea } from '../lib/fit-textarea.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
 type StartOption = { harness: SDKHarnessName; provider: ProviderName };
@@ -36,7 +36,6 @@ export class MuxNewChat extends LitElement {
   @state() private prompt = '';
   @state() private promptHasContent = false;
   private promptTimer?: number;
-  private resizeTimer?: number;
   private pendingPrompt?: string;
   @state() private listing?: FolderListing;
   @state() private pickerOpen = false;
@@ -185,7 +184,6 @@ export class MuxNewChat extends LitElement {
   }
   override disconnectedCallback() {
     this.flushPrompt();
-    if (this.resizeTimer) window.clearTimeout(this.resizeTimer);
     this.unsub?.();
     document.removeEventListener('pointerdown', this.closeDropdowns);
     window.removeEventListener('dragover', this.preventFileNavigation);
@@ -200,17 +198,13 @@ export class MuxNewChat extends LitElement {
     if (textarea) { fitTextarea(textarea); textarea.focus(); }
   }
   private onPromptInput(event: InputEvent) {
-    const value = (event.currentTarget as HTMLTextAreaElement).value;
+    const textarea = event.currentTarget as HTMLTextAreaElement;
+    const value = textarea.value;
     this.pendingPrompt = value;
     this.promptHasContent = !!value.trim();
     if (this.promptTimer) window.clearTimeout(this.promptTimer);
     this.promptTimer = window.setTimeout(() => this.flushPrompt(), 700);
-    if (this.resizeTimer) window.clearTimeout(this.resizeTimer);
-    this.resizeTimer = window.setTimeout(() => {
-      this.resizeTimer = undefined;
-      const textarea = this.shadowRoot?.querySelector('textarea');
-      if (textarea) fitTextarea(textarea);
-    }, TEXTAREA_RESIZE_DELAY_MS);
+    fitTextarea(textarea);
   }
   private flushPrompt(): string {
     if (this.pendingPrompt === undefined) return this.prompt;
