@@ -533,9 +533,13 @@ export class MuxSDKChat extends LitElement {
       if (this.sessionId === id) this.scheduledJob = jobs.find(job => job.chatId === id);
     } catch { /* Chat remains usable if job metadata is unavailable. */ }
   }
-  override updated() {
+  override updated(changed: Map<string, unknown>) {
     this.rowObserver.disconnect();
     this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]').forEach(row => this.rowObserver.observe(row));
+    // The empty legacy mirror follows placeholder changes from turn and chat state.
+    if (!nativeTextareaSizing && (changed.has('busy') || changed.has('chat') || changed.has('selectedAgent'))) {
+      this.fitComposer(this.selectedAgent ? 'agent' : 'message');
+    }
   }
   private drawerKey() { return `muxterm.sdk.utility.width.${this.sessionId}`; }
   private widthLimits() {
