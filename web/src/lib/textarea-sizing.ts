@@ -6,7 +6,8 @@ export function syncTextareaSizing(textarea: HTMLTextAreaElement) {
   if (!container?.classList.contains('legacy-textarea-sizing')) return;
   const mirror = textarea.nextElementSibling;
   if (mirror?.classList.contains('textarea-mirror')) {
-    // Preserve the line created by a trailing newline.
-    mirror.textContent = `${textarea.value || textarea.placeholder}\u200b`;
+    // Preserve a trailing blank line without adding a wrap to other values.
+    const content = textarea.value || textarea.placeholder;
+    mirror.textContent = content.endsWith('\n') ? `${content}\u200b` : content;
   }
 }
