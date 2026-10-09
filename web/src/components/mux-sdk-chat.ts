@@ -21,7 +21,7 @@ type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; pare
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
+type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
@@ -230,6 +230,19 @@ export class MuxSDKChat extends LitElement {
     .work-disclosure[open] > summary svg { transform:rotate(180deg); }
     .work-items { padding:12px 0 2px; }
     .work-item { margin-bottom:5px; }
+    .work-live { padding:10px 0 2px; color:var(--chrome-text-dim,#9aa3b8); font-size:12px; line-height:1.55; }
+    .work-live-thinking { margin:0 0 10px; overflow-wrap:anywhere; }
+    .work-live-thinking > :first-child,.work-thinking-markdown > :first-child { margin-top:0; }
+    .work-live-thinking > :last-child,.work-thinking-markdown > :last-child { margin-bottom:0; }
+    .work-live-thinking .md-p,.work-thinking-markdown .md-p { margin:0 0 7px; }
+    .work-live-thinking .md-p:first-child::first-line,.work-thinking-markdown .md-p:first-child::first-line { font-weight:600; color:var(--chrome-text-bright,#d9def0); }
+    .work-live-thinking .md-h,.work-thinking-markdown .md-h { margin:8px 0 5px; font-size:12px; line-height:1.45; color:var(--chrome-text-bright,#d9def0); }
+    .work-live-thinking .md-ul,.work-live-thinking .md-ol,.work-thinking-markdown .md-ul,.work-thinking-markdown .md-ol { margin:5px 0; padding-left:19px; }
+    .work-live-thinking .md-pre,.work-thinking-markdown .md-pre { max-width:100%; overflow:auto; padding:7px 9px; border-radius:6px; background:var(--chrome-bar); }
+    .work-live-thinking .md-code,.work-thinking-markdown .md-code { font:11px ui-monospace,monospace; }
+    .work-live-tool { display:flex; align-items:center; gap:8px; min-height:25px; overflow:hidden; }
+    .work-live-tool .work-line { flex:1; }
+    .work-live-tool.failed { color:var(--chrome-danger); }
     .user { display:flex; flex-direction:column; align-items:flex-end; }
     .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
@@ -345,6 +358,7 @@ export class MuxSDKChat extends LitElement {
     .work-chevron { display:inline-flex; flex:none; opacity:.65; transition:transform .15s ease; }
     .thinking-entry[open] > summary .work-chevron, .tool-activity[open] > summary .work-chevron, .tool-entry[open] > summary .work-chevron { transform:rotate(180deg); }
     .thinking-entry .detail { margin:4px 0 9px 24px; padding:0 0 0 10px; border-left:1px solid var(--chrome-border,#41485f); }
+    .work-thinking-markdown { overflow-wrap:anywhere; line-height:1.55; }
     .tool-activity { margin:5px 0 7px; }
     .tool-activity-items { margin:2px 0 0 2px; }
     .tool-entry > summary { padding-left:22px; }
@@ -1076,8 +1090,8 @@ export class MuxSDKChat extends LitElement {
     } else if (event.type === 'thinking.delta') {
       markStart(this.currentTurn);
       const last = blocks[blocks.length - 1];
-      if (last?.kind === 'thinking') blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
-      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'thinking', text:event.text || '' });
+      if (last?.kind === 'thinking' && last.source === event.source) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'thinking', source:event.source, text:event.text || '' });
     } else if (event.type === 'tool.started') {
       markStart(this.currentTurn);
       // Text before a tool call was an interim progress note, not the final answer.
@@ -1480,7 +1494,7 @@ export class MuxSDKChat extends LitElement {
   private thinkingEntry(block: Block, key: string) {
     const open = this.stepExpanded.has(key);
     const preview = block.text.trim().replace(/\s+/g, ' ') || 'Thinking…';
-    return html`<details class="thinking-entry" aria-label="Thinking detail" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(Brain, { size: 14 })}</span><span class="work-line" title=${preview}>${preview}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><pre>${block.text}</pre></div>` : nothing}</details>`;
+    return html`<details class="thinking-entry" aria-label="Thinking detail" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(Brain, { size: 14 })}</span><span class="work-line" title=${preview}>${preview}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><div class="work-thinking-markdown">${this.markdown({ ...block, done:this.turnFinished.has(block.turn) }, block.key)}</div></div>` : nothing}</details>`;
   }
   private toolEntry(block: Block, key: string) {
     const kind = this.toolKind(block);
@@ -1524,6 +1538,15 @@ export class MuxSDKChat extends LitElement {
     if (this.loadingDetails || !this.detailsLoaded) return html`<div class="work-item">Loading work details…</div>`;
     if (this.turnFinished.get(turn) === undefined) return html`<div class="work-item">Waiting for activity…</div>`;
     return html`<div class="work-item">No work details were reported.</div>`;
+  }
+  private liveWork(items: Block[]) {
+    const thinking = items.filter(item => item.kind === 'thinking' && item.text.trim());
+    const latestTool = items.findLast(item => item.kind === 'tool');
+    if (!thinking.length && !latestTool) return nothing;
+    return html`<div class="work-live" aria-label="Current turn activity">
+      ${thinking.map(item => html`<div class="work-live-thinking">${this.markdown({ ...item, done:false }, item.key)}</div>`)}
+      ${latestTool ? html`<div class="work-live-tool ${this.toolFailed(latestTool) ? 'failed' : ''}"><span class="work-icon">${icon(this.toolIcon(this.toolKind(latestTool)), { size:14 })}</span><span class="work-line" title=${this.toolLine(latestTool)}>${this.toolLine(latestTool)}</span></div>` : nothing}
+    </div>`;
   }
   private workedLabel(turn: number) {
     const started = this.turnStarted.get(turn);
@@ -1660,7 +1683,7 @@ export class MuxSDKChat extends LitElement {
     for (let i = end; i < rows.length; i++) after += this.rowHeight(rows[i]);
     return html`<div class="virtual-spacer" style=${`height:${before}px`}></div>${rows.slice(start, end).map((row, offset) => {
       const block = row.block;
-      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${this.workExpanded.has(block.turn) ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details></div>`
+      return row.work ? html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${this.workExpanded.has(block.turn)}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${this.turnFinished.get(block.turn) === undefined ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${this.turnFinished.get(block.turn) === undefined && row.work.length === 1 && row.work[0].kind === 'progress' && row.work[0].text === 'Message received' ? 'Message received' : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${this.workExpanded.has(block.turn) ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details>${this.turnFinished.get(block.turn) === undefined && !this.workExpanded.has(block.turn) ? this.liveWork(row.work) : nothing}</div>`
         : html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.messageActions(block)}` : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
