@@ -9,6 +9,16 @@ import { sdkChats, type FolderListing, type SDKChat, type SDKProject } from '../
 
 interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean }
 
+// The input is already newest-first. Keep that order within each role while
+// leaving Pinned and Archived as separate sections.
+function chatsByRole(chats: SDKChat[], laneIds: Set<string>): SDKChat[] {
+  return [
+    ...chats.filter(chat => chat.operator),
+    ...chats.filter(chat => !chat.operator && laneIds.has(chat.id)),
+    ...chats.filter(chat => !chat.operator && !laneIds.has(chat.id)),
+  ];
+}
+
 @customElement('mux-chat-workspace')
 export class MuxChatWorkspace extends LitElement {
   @property({ attribute: false }) model!: ChatGroup;
@@ -101,6 +111,9 @@ export class MuxChatWorkspace extends LitElement {
     .status.lane.starting,.status.lane.working { background:none; color:var(--chrome-accent); }
     .status.lane.ready { color:var(--mux-ok,#55b981); }
     .status.lane.failed,.status.lane.uncertain { color:var(--chrome-danger); }
+    .status.chat { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--chrome-text-dim); }
+    .status.chat.working { color:var(--mux-ok); }
+    .status.chat.failed,.status.chat.uncertain { color:var(--chrome-danger); }
     .title { font-weight:400; }
     .harness { color:var(--chrome-text-dim,#aab2c1); font-size:10px; flex:none; text-transform:lowercase; }
     .chat-row:hover .harness,.chat-row:has(.chat:focus-visible) .harness { display:none; }
@@ -270,7 +283,7 @@ export class MuxChatWorkspace extends LitElement {
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="action more" aria-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</button>` : html`
             <button class="chat" title=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
-              <span class="status ${chat.operator ? 'operator' : group.laneIds.has(chat.id) ? 'lane' : ''} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : group.laneIds.has(chat.id) ? `Lane · ${chat.state}` : chat.state}>${chat.operator ? icon(Network,{size:13}) : group.laneIds.has(chat.id) ? laneIcon(14) : nothing}</span><span class="title">${chat.title}</span><span class="harness">${chat.harness}</span>
+              <span class="status ${chat.operator ? 'operator' : group.laneIds.has(chat.id) ? 'lane' : 'chat'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : group.laneIds.has(chat.id) ? `Lane · ${chat.state}` : `Chat · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : group.laneIds.has(chat.id) ? laneIcon(14) : icon(MessageSquare,{size:13})}</span><span class="title">${chat.title}</span><span class="harness">${chat.harness}</span>
             </button>
             <button class="action" aria-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} title=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</button>
             <button class="action" aria-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} title=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</button>`}
@@ -334,8 +347,8 @@ export class MuxChatList extends LitElement {
     const chats = [...sdkChats.chats].sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt) || a.id.localeCompare(b.id));
     const active = chats.filter(chat => !chat.archived);
     const laneIds = new Set(chats.filter(chat => chat.operator).flatMap(chat => chat.operatorLanes || []));
-    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:active.filter(chat => chat.workspaceId === project.id), laneIds }));
-    groups.push({ id:'ungrouped', name:'Ungrouped', chats:active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)), laneIds });
+    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:chatsByRole(active.filter(chat => chat.workspaceId === project.id), laneIds), laneIds }));
+    groups.push({ id:'ungrouped', name:'Ungrouped', chats:chatsByRole(active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)), laneIds), laneIds });
     groups.push({ id:'archived', name:`Archived (${chats.length-active.length})`, archived:true, chats:chats.filter(chat => chat.archived), laneIds });
     const pinned = [
       ...projects.filter(project => project.pinned).map(project => ({ kind:'project' as const, id:project.id, name:project.name, operator:false, lane:false, state:'' })),
