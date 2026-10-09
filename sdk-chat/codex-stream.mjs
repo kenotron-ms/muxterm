@@ -229,24 +229,24 @@ export class CodexStream {
       this.phaseByItem.set(p.item.id, p.item.phase);
     } else if (method === 'item/agentMessage/delta') {
       this.textByItem.set(p.itemId, (this.textByItem.get(p.itemId) || '') + p.delta);
-      if (p.delta) this.emit(this.session.id, this.phaseByItem.get(p.itemId) === 'commentary' ? 'thinking.delta' : 'assistant.delta', { text: p.delta });
+      if (p.delta) this.emit(this.session.id, this.phaseByItem.get(p.itemId) === 'commentary' ? 'thinking.delta' : 'assistant.delta', { text: p.delta, source: `codex-message:${p.itemId}` });
     } else if (method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
       const delta = p.delta || '';
       this.reasoningByItem.set(p.itemId, (this.reasoningByItem.get(p.itemId) || '') + delta);
-      if (delta) this.emit(this.session.id, 'thinking.delta', { text: delta });
+      if (delta) this.emit(this.session.id, 'thinking.delta', { text: delta, source: `codex-reasoning:${p.itemId}` });
     } else if (method === 'item/completed' && p.item?.type === 'reasoning') {
       const full = (p.item.summary || []).map(part => typeof part === 'string' ? part : part.text || '').join('')
         || (p.item.content || []).map(part => typeof part === 'string' ? part : part.text || '').join('')
         || p.item.text || '';
       const sent = this.reasoningByItem.get(p.item.id) || '';
       const rest = full.startsWith(sent) ? full.slice(sent.length) : (sent ? '' : full);
-      if (rest) this.emit(this.session.id, 'thinking.delta', { text: rest });
+      if (rest) this.emit(this.session.id, 'thinking.delta', { text: rest, source: `codex-reasoning:${p.item.id}` });
     } else if (method === 'item/completed' && p.item?.type === 'agentMessage') {
       // Keep compatibility with an older app-server that only sends a final item.
       const sent = this.textByItem.get(p.item.id) || '';
       const full = p.item.text || '';
       const rest = full.startsWith(sent) ? full.slice(sent.length) : full;
-      if (rest) this.emit(this.session.id, p.item.phase === 'commentary' ? 'thinking.delta' : 'assistant.delta', { text: rest });
+      if (rest) this.emit(this.session.id, p.item.phase === 'commentary' ? 'thinking.delta' : 'assistant.delta', { text: rest, source: `codex-message:${p.item.id}` });
     } else if (method === 'item/started' && p.item?.type !== 'agentMessage' && p.item?.type !== 'reasoning' && p.item?.type !== 'userMessage') {
       const tool = toolDetails(p.item);
       this.emit(this.session.id, 'tool.started', { name: tool.name, toolId: p.item.id, raw: tool.input });
