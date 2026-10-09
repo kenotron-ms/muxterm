@@ -1541,7 +1541,8 @@ export class MuxSDKChat extends LitElement {
   }
   private liveWork(items: Block[]) {
     const thinking = items.filter(item => item.kind === 'thinking' && item.text.trim());
-    const latestTool = items.findLast(item => item.kind === 'tool');
+    let latestTool: Block | undefined;
+    for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'tool') { latestTool = items[i]; break; }
     if (!thinking.length && !latestTool) return nothing;
     return html`<div class="work-live" aria-label="Current turn activity">
       ${thinking.map(item => html`<div class="work-live-thinking">${this.markdown({ ...item, done:false }, item.key)}</div>`)}
