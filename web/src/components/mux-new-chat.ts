@@ -5,7 +5,7 @@ import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } fr
 import { apiPath } from '../lib/base-path.js';
 import { ChevronDown, Folder, Plus } from 'lucide';
 import { icon } from '../lib/icons.js';
-import { fitTextarea } from '../lib/fit-textarea.js';
+import { fitTextarea, TEXTAREA_RESIZE_DELAY_MS } from '../lib/fit-textarea.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
 type StartOption = { harness: SDKHarnessName; provider: ProviderName };
@@ -36,6 +36,7 @@ export class MuxNewChat extends LitElement {
   @state() private prompt = '';
   @state() private promptHasContent = false;
   private promptTimer?: number;
+  private resizeTimer?: number;
   private pendingPrompt?: string;
   @state() private listing?: FolderListing;
   @state() private pickerOpen = false;
@@ -118,7 +119,7 @@ export class MuxNewChat extends LitElement {
     .folder-entry { display:block; width:100%; text-align:left; }
     .composer { position:relative; display:flex; flex-direction:column; gap:9px; border:1px solid var(--chrome-border,#475067); border-radius:18px; background:var(--chrome-bar,#202632); padding:15px 14px 10px; transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 58%,var(--chrome-border,#475067)); box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent,#9bb8f7) 14%,transparent); }
-    textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:100px; height:100px; max-height:220px; resize:none; border:0; outline:0; padding:3px 0; color:inherit; background:transparent; font:16px/1.55 system-ui,sans-serif; overflow-y:auto; }
+    textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:56px; height:56px; max-height:220px; resize:none; border:0; outline:0; padding:3px 0; color:inherit; background:transparent; font:16px/1.55 system-ui,sans-serif; overflow-y:auto; }
     textarea::placeholder { color:var(--chrome-text-dim,#a9b0c0); opacity:.8; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; }
     .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
@@ -184,6 +185,7 @@ export class MuxNewChat extends LitElement {
   }
   override disconnectedCallback() {
     this.flushPrompt();
+    if (this.resizeTimer) window.clearTimeout(this.resizeTimer);
     this.unsub?.();
     document.removeEventListener('pointerdown', this.closeDropdowns);
     window.removeEventListener('dragover', this.preventFileNavigation);
@@ -203,6 +205,12 @@ export class MuxNewChat extends LitElement {
     this.promptHasContent = !!value.trim();
     if (this.promptTimer) window.clearTimeout(this.promptTimer);
     this.promptTimer = window.setTimeout(() => this.flushPrompt(), 700);
+    if (this.resizeTimer) window.clearTimeout(this.resizeTimer);
+    this.resizeTimer = window.setTimeout(() => {
+      this.resizeTimer = undefined;
+      const textarea = this.shadowRoot?.querySelector('textarea');
+      if (textarea) fitTextarea(textarea);
+    }, TEXTAREA_RESIZE_DELAY_MS);
   }
   private flushPrompt(): string {
     if (this.pendingPrompt === undefined) return this.prompt;
@@ -211,10 +219,6 @@ export class MuxNewChat extends LitElement {
     this.promptTimer = undefined;
     this.pendingPrompt = undefined;
     this.prompt = value;
-    void this.updateComplete.then(() => {
-      const textarea = this.shadowRoot?.querySelector('textarea');
-      if (this.isConnected && textarea) fitTextarea(textarea);
-    });
     return value;
   }
   private async browse(path = this.folder) {
