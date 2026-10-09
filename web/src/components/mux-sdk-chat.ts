@@ -1518,7 +1518,7 @@ export class MuxSDKChat extends LitElement {
     const toolGroup = (tools: Block[]) => {
       const key = `${turn}:tools-${group++}`;
       const open = this.stepExpanded.has(key);
-      steps.push(html`<details class="tool-activity" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(this.toolKind(tools[0])), { size: 14 })}</span><span class="work-line">${this.activityLineForTools(tools)}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="tool-activity-items" role="region" aria-label="Tool calls" tabindex="0">${tools.map(item => this.toolEntry(item, `${turn}:tool-${item.key}`))}</div>` : nothing}</details>`);
+      steps.push(html`<details class="tool-activity" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(this.toolKind(tools[0])), { size: 14 })}</span><span class="work-line">${this.activityLineForTools(tools)}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="tool-activity-items" role="group" aria-label="Tool calls" tabindex="0">${tools.map(item => this.toolEntry(item, `${turn}:tool-${item.key}`))}</div>` : nothing}</details>`);
     };
     const flush = () => {
       if (!run.length) return;
