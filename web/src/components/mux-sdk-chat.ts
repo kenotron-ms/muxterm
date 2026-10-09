@@ -73,13 +73,16 @@ export class MuxSDKChat extends LitElement {
   @state() private agentHistoryError = '';
   @state() private selectedAgent = '';
   @state() private agentDraft = '';
+  @state() private agentDraftHasContent = false;
   @state() private agentNotice = '';
   @state() private recoveryRequired = false;
   @state() private recoveryPrepared = false;
   @state() private draft = '';
+  @state() private draftHasContent = false;
   @state() private error = '';
   @state() private editingKey = 0;
   @state() private editDraft = '';
+  @state() private editDraftHasContent = false;
   @state() private actionPending = false;
   @state() private copiedKey = 0;
   @state() private busy = false;
@@ -99,6 +102,10 @@ export class MuxSDKChat extends LitElement {
   private stream?: EventSource;
   private reconnectTimer?: number;
   private cacheTimer?: number;
+  private draftTimer?: number;
+  private pendingDraft?: string;
+  private agentDraftTimer?: number;
+  private pendingAgentDraft?: string;
   private streamCursor = 0;
   private reconnectFailures = 0;
   private streamOpenedAt = 0;
@@ -155,8 +162,6 @@ export class MuxSDKChat extends LitElement {
   private turnStarted = new Map<number, number>();
   private turnFinished = new Map<number, number>();
   private currentTurn = 0;
-  @state() private now = Date.now();
-  private clock?: ReturnType<typeof setInterval>;
   private nextBlockKey = 0;
   private turnStart = 0;
   private completedInputAnchors = new Map<string, number>();
@@ -387,7 +392,7 @@ export class MuxSDKChat extends LitElement {
     .composer-row { display:flex; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
-    textarea { display:block; flex:1; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:14px/1.55 system-ui,sans-serif; min-height:34px; height:34px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
+    textarea { display:block; flex:1; min-width:0; resize:vertical; border:0; outline:none; background:transparent; color:inherit; font:14px/1.55 system-ui,sans-serif; min-height:76px; height:76px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
     textarea::placeholder { color:var(--chrome-text-dim,#9aa3b8); opacity:.8; }
     .send, .stop { flex:none; width:34px; height:34px; display:grid; place-items:center; border-radius:10px; }
     .send { border:0; background:var(--chrome-accent,#9bb8f7); color:var(--chrome-body); font-size:20px; line-height:1; }
@@ -434,7 +439,7 @@ export class MuxSDKChat extends LitElement {
     window.addEventListener('drop', this.preventFileNavigation);
     window.addEventListener('drop', this.resetDrop);
     window.addEventListener('dragend', this.resetDrop);
-    window.addEventListener('pagehide', this.persistTranscriptCache);
+    window.addEventListener('pagehide', this.onPageHide);
     this.unsubscribeChats = sdkChats.subscribe(() => {
       const updated = sdkChats.chats.find(chat => chat.id === this.sessionId);
       if (updated) {
@@ -443,24 +448,24 @@ export class MuxSDKChat extends LitElement {
       }
       this.requestUpdate();
     });
-    this.clock = setInterval(() => { if (this.busy) this.now = Date.now(); }, 1000);
     this.connect();
     void fetchVoiceStatus().then(status => { this.voiceAvailable = status.enabled && !status.restartRequired; });
   }
   override disconnectedCallback() {
+    this.flushDraft();
+    this.flushAgentDraft();
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     window.removeEventListener('focus', this.resumeConnection);
     window.removeEventListener('online', this.onOnline);
     window.removeEventListener('pageshow', this.resumeConnection);
     window.removeEventListener('keydown', this.stopVoiceOnEscape);
     this.persistTranscriptCache();
-    window.removeEventListener('pagehide', this.persistTranscriptCache);
+    window.removeEventListener('pagehide', this.onPageHide);
     window.removeEventListener('dragover', this.preventFileNavigation);
     window.removeEventListener('drop', this.preventFileNavigation);
     window.removeEventListener('drop', this.resetDrop);
     window.removeEventListener('dragend', this.resetDrop);
     this.unsubscribeChats?.();
-    if (this.clock) clearInterval(this.clock);
     this.historyEpoch++;
     this.historyAbort?.abort();
     this.stream?.close();
@@ -474,6 +479,8 @@ export class MuxSDKChat extends LitElement {
   }
   private readonly onVisibilityChange = () => {
     if (!document.hidden) { this.resumeConnection(); return; }
+    this.flushDraft();
+    this.flushAgentDraft();
     this.idleSuspended = true;
     this.historyEpoch++;
     this.historyAbort?.abort();
@@ -482,6 +489,11 @@ export class MuxSDKChat extends LitElement {
     this.reconnectTimer = undefined;
     this.reconnectFailures = 0;
     if (this.reconnectFailed) { this.reconnectFailed = false; this.error = ''; }
+  };
+  private readonly onPageHide = () => {
+    this.flushDraft();
+    this.flushAgentDraft();
+    this.persistTranscriptCache();
   };
   private readonly resumeConnection = () => {
     const away = Date.now() - this.lastActivationAt;
@@ -510,16 +522,9 @@ export class MuxSDKChat extends LitElement {
       if (this.sessionId === id) this.scheduledJob = jobs.find(job => job.chatId === id);
     } catch { /* Chat remains usable if job metadata is unavailable. */ }
   }
-  override updated(changed: Map<string, unknown>) {
-    if (changed.has('draft')) this.sizeTextarea();
+  override updated() {
     this.rowObserver.disconnect();
     this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]').forEach(row => this.rowObserver.observe(row));
-  }
-  private sizeTextarea() {
-    const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('textarea');
-    if (!textarea) return;
-    textarea.style.height = '34px';
-    textarea.style.height = `${Math.min(220, Math.max(34, textarea.scrollHeight))}px`;
   }
   private drawerKey() { return `muxterm.sdk.utility.width.${this.sessionId}`; }
   private widthLimits() {
@@ -560,6 +565,7 @@ export class MuxSDKChat extends LitElement {
     this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('status');
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
+    this.flushDraft();
     const { path, selected } = event.detail;
     this.selectedAgent = '';
     this.setPaneMode('split');
@@ -568,6 +574,7 @@ export class MuxSDKChat extends LitElement {
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
   }
   private stagePagePrompt(event: CustomEvent<{ pageId: string; title: string; kind: 'generate' | 'visualize' }>) {
+    this.flushDraft();
     this.selectedAgent = '';
     this.setPaneMode('split');
     const request = event.detail.kind === 'visualize'
@@ -616,12 +623,16 @@ export class MuxSDKChat extends LitElement {
   }
   private connect() {
     if (!this.isConnected || !this.sessionId || this.activeSession === this.sessionId) return;
+    this.flushDraft();
+    this.flushAgentDraft();
     this.persistTranscriptCache();
     this.voice?.stop();
     this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
     this.activeSession = this.sessionId;
     this.draft = readDraft(this.activeSession, 'message');
+    this.draftHasContent = !!this.draft.trim();
     this.agentDraft = readDraft(this.activeSession, 'agent');
+    this.agentDraftHasContent = !!this.agentDraft.trim();
     const epoch = ++this.historyEpoch;
     this.historyAbort?.abort();
     this.historyAbort = new AbortController();
@@ -660,20 +671,54 @@ export class MuxSDKChat extends LitElement {
     }
   }
   private setDraft(value: string) {
+    if (this.draftTimer) window.clearTimeout(this.draftTimer);
+    this.draftTimer = undefined;
+    this.pendingDraft = undefined;
     this.draft = value;
+    this.draftHasContent = !!value.trim();
     if (this.activeSession) {
       const key = draftKey(this.activeSession, 'message');
       this.draftRevisions.set(key, (this.draftRevisions.get(key) || 0) + 1);
       writeDraft(this.activeSession, 'message', value);
     }
   }
+  private onDraftInput(event: InputEvent) {
+    const value = (event.currentTarget as HTMLTextAreaElement).value;
+    this.pendingDraft = value;
+    this.draftHasContent = !!value.trim();
+    if (this.draftTimer) window.clearTimeout(this.draftTimer);
+    this.draftTimer = window.setTimeout(() => this.flushDraft(), 700);
+  }
+  private flushDraft(): string {
+    if (this.pendingDraft === undefined) return this.draft;
+    const value = this.pendingDraft;
+    this.setDraft(value);
+    return value;
+  }
   private setAgentDraft(value: string) {
+    if (this.agentDraftTimer) window.clearTimeout(this.agentDraftTimer);
+    this.agentDraftTimer = undefined;
+    this.pendingAgentDraft = undefined;
     this.agentDraft = value;
+    this.agentDraftHasContent = !!value.trim();
     if (this.activeSession) {
       const key = draftKey(this.activeSession, 'agent');
       this.draftRevisions.set(key, (this.draftRevisions.get(key) || 0) + 1);
       writeDraft(this.activeSession, 'agent', value);
     }
+  }
+  private onAgentDraftInput(event: InputEvent) {
+    const value = (event.currentTarget as HTMLTextAreaElement).value;
+    this.pendingAgentDraft = value;
+    this.agentDraftHasContent = !!value.trim();
+    if (this.agentDraftTimer) window.clearTimeout(this.agentDraftTimer);
+    this.agentDraftTimer = window.setTimeout(() => this.flushAgentDraft(), 700);
+  }
+  private flushAgentDraft(): string {
+    if (this.pendingAgentDraft === undefined) return this.agentDraft;
+    const value = this.pendingAgentDraft;
+    this.setAgentDraft(value);
+    return value;
   }
   private async loadAgentHistory(id: string, epoch: number, signal: AbortSignal) {
     this.agentHistoryError = '';
@@ -724,7 +769,7 @@ export class MuxSDKChat extends LitElement {
   }
   private resetTranscript() {
     this.blocks = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear(); this.workCollapsedWhileWorking.clear(); this.laneReportsExpanded.clear(); this.stepExpanded.clear();
-    this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0; this.now = Date.now();
+    this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0;
     this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.pendingInputs.clear(); this.rowsCache = undefined;
   }
   private async loadRecent(id: string, epoch: number, signal: AbortSignal) {
@@ -1385,7 +1430,7 @@ export class MuxSDKChat extends LitElement {
   }
   private agentDuration(agent?: AgentView) {
     if (agent?.startedAt === undefined) return '';
-    const finishedAt = agent.finishedAt ?? (agent.status === 'Running' ? this.now : undefined);
+    const finishedAt = agent.finishedAt;
     if (finishedAt === undefined) return '';
     const seconds = Math.max(1, Math.round((finishedAt - agent.startedAt) / 1000));
     return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
@@ -1415,7 +1460,7 @@ export class MuxSDKChat extends LitElement {
   private async steerAgent() {
     if (this.voiceState !== 'idle') return;
     const agent = this.agents().find(item => item.id === this.selectedAgent);
-    const originalDraft = this.agentDraft;
+    const originalDraft = this.flushAgentDraft();
     const message = originalDraft.trim();
     if (!agent || !message) return;
     const sessionId = this.activeSession;
@@ -1548,10 +1593,11 @@ export class MuxSDKChat extends LitElement {
   private workedLabel(turn: number) {
     const started = this.turnStarted.get(turn);
     const finished = this.turnFinished.get(turn);
-    if (started === undefined) return finished === undefined ? 'Working…' : 'Worked';
-    const seconds = Math.max(1, Math.round(((finished ?? this.now) - started) / 1000));
+    if (finished === undefined) return 'Working…';
+    if (started === undefined) return 'Worked';
+    const seconds = Math.max(1, Math.round((finished - started) / 1000));
     const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    return `${finished === undefined ? 'Working' : 'Worked'} for ${duration}`;
+    return `Worked for ${duration}`;
   }
   private transcriptRows(): TranscriptRow[] {
     if (this.rowsCache?.blocks === this.blocks) return this.rowsCache.rows;
@@ -1623,7 +1669,7 @@ export class MuxSDKChat extends LitElement {
     const value = Date.parse(block.at || '');
     if (!Number.isFinite(value)) return nothing;
     const date = new Date(value);
-    const today = new Date(this.now).toDateString() === date.toDateString();
+    const today = new Date().toDateString() === date.toDateString();
     const short = new Intl.DateTimeFormat(undefined, today ? { hour:'numeric', minute:'2-digit' } : { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }).format(date);
     const full = new Intl.DateTimeFormat(undefined, { dateStyle:'full', timeStyle:'long' }).format(date);
     return html`<time class="message-time" datetime=${date.toISOString()} title=${full} aria-label=${full}>${short}</time>`;
@@ -1637,12 +1683,14 @@ export class MuxSDKChat extends LitElement {
   }
   private async branchMessage(block: Block, mode: 'fork' | 'edit') {
     if (this.actionPending) return;
+    const edited = mode === 'edit' ? this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea')?.value ?? this.editDraft : undefined;
+    if (mode === 'edit' && !edited?.trim()) return;
     this.actionPending = true;
     this.error = '';
     try {
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/branch`), {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ mode, turn:block.turn, inputId:block.id, content:mode === 'edit' ? this.editDraft : undefined,
+        body:JSON.stringify({ mode, turn:block.turn, inputId:block.id, content:edited,
           attachments:mode === 'edit' ? block.attachments?.map(item => item.id) : undefined }),
       });
       if (!response.ok) throw new Error(await response.text());
@@ -1660,15 +1708,15 @@ export class MuxSDKChat extends LitElement {
     const finalAssistant = block.kind === 'assistant' && block.channel !== 'voice' && !this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key);
     return html`<div class="message-actions" role="group" aria-label=${`${block.kind === 'user' ? 'Your' : 'Assistant'} message actions`}>
       <button type="button" aria-label=${copied ? 'Message copied' : `Copy ${block.kind} message`} title=${copied ? 'Copied' : 'Copy message'} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.copyMessage(block); }}>${icon(copied ? Check : Copy, { size:14 })}<span class="sr-only" aria-live="polite">${copied ? 'Copied' : ''}</span></button>
-      ${block.kind === 'user' && block.id && canBranch ? html`<button type="button" aria-label="Edit message in a new chat" title="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea')?.focus()); }}>${icon(FilePenLine, { size:14 })}</button>` : nothing}
+      ${block.kind === 'user' && block.id && canBranch ? html`<button type="button" aria-label="Edit message in a new chat" title="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; this.editDraftHasContent = !!block.text.trim(); void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea')?.focus()); }}>${icon(FilePenLine, { size:14 })}</button>` : nothing}
       ${finalAssistant && canBranch ? html`<button type="button" aria-label="Fork chat from this assistant message" title="Fork from here" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.branchMessage(block, 'fork'); }}>${icon(GitFork, { size:14 })}</button>` : nothing}
       ${this.messageTime(block)}
     </div>`;
   }
   private messageEdit(block: Block) {
     return html`<div class="message-edit" @click=${(event: MouseEvent) => event.stopPropagation()}>
-      <textarea aria-label="Revise your message" .value=${this.editDraft} @input=${(event: InputEvent) => { this.editDraft = (event.target as HTMLTextAreaElement).value; }} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Escape') { this.editingKey = 0; } }}></textarea>
-      <div class="message-edit-controls"><button type="button" @click=${() => { this.editingKey = 0; }}>Cancel</button><button type="button" ?disabled=${!this.editDraft.trim() || this.actionPending} @click=${() => void this.branchMessage(block, 'edit')}>${this.actionPending ? 'Saving…' : 'Send edit in new chat'}</button></div>
+      <textarea aria-label="Revise your message" .value=${this.editDraft} @input=${(event: InputEvent) => { this.editDraftHasContent = !!(event.target as HTMLTextAreaElement).value.trim(); }} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Escape') { this.editingKey = 0; } }}></textarea>
+      <div class="message-edit-controls"><button type="button" @click=${() => { this.editingKey = 0; }}>Cancel</button><button type="button" ?disabled=${!this.editDraftHasContent || this.actionPending} @click=${() => void this.branchMessage(block, 'edit')}>${this.actionPending ? 'Saving…' : 'Send edit in new chat'}</button></div>
     </div>`;
   }
   private transcript(agents: AgentView[]) {
@@ -1707,7 +1755,7 @@ export class MuxSDKChat extends LitElement {
     this.requestUpdate();
   }
   private async send() {
-    const originalDraft = this.draft;
+    const originalDraft = this.flushDraft();
     const content = originalDraft.trim();
     if (this.voiceState !== 'idle' || (!content && !this.attachments.length) || this.stopping || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || a.error) || (this.busy && (this.attachments.length > 0 || this.isACPChat()))) return;
     const kind = this.busy ? 'steer' : 'user';
@@ -1725,6 +1773,7 @@ export class MuxSDKChat extends LitElement {
     // Keep the saved copy until the server accepts the message. A reload during
     // an in-flight request must still recover what the user typed.
     this.draft = '';
+    this.draftHasContent = false;
     try {
       await this.scrollToBottom();
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind, source:'browser', id, content, attachments: sent.map(a => a.id) }) });
@@ -1774,7 +1823,7 @@ export class MuxSDKChat extends LitElement {
   private async toggleVoice() {
     if (!this.voice || !this.voiceAvailable) return;
     if (this.voiceState !== 'idle') { this.voice.stop(); return; }
-    if (this.draft.trim() || this.attachments.length || this.settingsPending) return;
+    if (this.draftHasContent || this.attachments.length || this.settingsPending) return;
     try { await this.voice.start(); this.error = ''; }
     catch (error) { this.error = error instanceof Error ? error.message : 'Voice could not start.'; }
   }
@@ -1784,7 +1833,7 @@ export class MuxSDKChat extends LitElement {
     bars.forEach((bar, index) => { bar.style.height = `${Math.round(resting[index] + Math.min(1, levels[index] || 0) * 10)}px`; });
   }
   private sendVoiceButton() {
-    const mode = this.voiceState !== 'idle' ? 'voice-stop' : this.busy ? 'task-stop' : this.draft.trim() || this.attachments.length ? 'send' : 'voice-start';
+    const mode = this.voiceState !== 'idle' ? 'voice-stop' : this.busy ? 'task-stop' : this.draftHasContent || this.attachments.length ? 'send' : 'voice-start';
     const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'send' ? 'Send message' : this.chat?.branchPending ? 'Send a text message to start this branch before using voice' : this.voiceAvailable ? 'Start voice mode' : 'Voice mode unavailable; check Voice settings';
     const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending || !!this.chat?.branchPending
       : mode === 'task-stop' ? this.stopping
@@ -1838,14 +1887,14 @@ export class MuxSDKChat extends LitElement {
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
-      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${(e: InputEvent) => { this.setAgentDraft((e.target as HTMLTextAreaElement).value); }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraft.trim()}>Send to root ↗</button></div>` : html`
+      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraftHasContent}>Send to root ↗</button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
         ${a.preview ? html`<img src=${a.preview} alt=${a.file.name}>` : nothing}
         <span class="filename" title=${a.file.name}>${a.file.name}</span>
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
-      <div class="composer-row"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${(e: InputEvent) => { this.setDraft((e.target as HTMLTextAreaElement).value); }} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
+      <div class="composer-row"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${this.onDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea></div>
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
