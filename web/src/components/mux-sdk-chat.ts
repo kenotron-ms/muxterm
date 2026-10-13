@@ -143,10 +143,16 @@ export class MuxSDKChat extends LitElement {
       const row = entry.target as HTMLElement;
       const key = row.dataset.rowKey;
       if (!key) continue;
-      const height = entry.borderBoxSize?.[0]?.blockSize || row.offsetHeight;
-      if (Math.abs((this.rowHeights.get(key) || 110) - height) > 2) { this.rowHeights.set(key, height); changed = true; }
+      const style = getComputedStyle(row);
+      const height = (entry.borderBoxSize?.[0]?.blockSize ?? row.offsetHeight) + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+      const previous = this.rowHeights.get(key);
+      if (previous === undefined || Math.abs(previous - height) > .5) { this.rowHeights.set(key, height); changed = true; }
     }
-    if (changed) this.requestUpdate();
+    if (changed) {
+      const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+      if (body && this.transcriptRows().length > 80) this.updateWithScrollAnchor(body, () => this.requestUpdate());
+      else this.requestUpdate();
+    }
   });
   private unsubscribeChats?: () => void;
   private parsers = new Map<number, MarkdownStream>();
@@ -1693,7 +1699,20 @@ export class MuxSDKChat extends LitElement {
     this.rowsCache = { blocks:this.blocks, rows };
     return rows;
   }
-  private rowHeight(row: TranscriptRow) { return this.rowHeights.get(row.key) || (row.work ? 50 : row.block.kind === 'user' ? 75 : 118); }
+  private rowHeight(row: TranscriptRow) { return this.rowHeights.get(row.key) ?? (row.work ? 50 : row.block.kind === 'user' ? 75 : 118); }
+  private updateWithScrollAnchor(body: HTMLElement, update: () => void) {
+    if (this.restoringScroll || this.selectedAgent) { update(); return; }
+    const epoch = this.historyEpoch;
+    const anchor = this.scrollAnchor(body);
+    const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight <= 2;
+    update();
+    void this.updateComplete.then(() => {
+      if (!this.isConnected || epoch !== this.historyEpoch || this.restoringScroll || this.selectedAgent || body !== this.shadowRoot?.querySelector('.body')) return;
+      if (atBottom) body.scrollTop = body.scrollHeight;
+      else if (anchor) this.restoreScrollAnchor(body, anchor.index, anchor.bottom);
+      this.updateScrollBottomVisibility();
+    });
+  }
   private updateVisibleRows() {
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     if (!body) return;
@@ -1709,8 +1728,12 @@ export class MuxSDKChat extends LitElement {
     while (start < rows.length && offset + this.rowHeight(rows[start]) < top) offset += this.rowHeight(rows[start++]);
     let end = start;
     while (end < rows.length && offset < bottom) offset += this.rowHeight(rows[end++]);
-    if (start !== this.visibleStart) this.visibleStart = start;
-    if (end !== this.visibleEnd) this.visibleEnd = end;
+    const anchor = this.scrollAnchor(body);
+    if (anchor) { start = Math.min(start, anchor.index); end = Math.max(end, anchor.index + 1); }
+    if (start !== this.visibleStart || end !== this.visibleEnd) this.updateWithScrollAnchor(body, () => {
+      this.visibleStart = start;
+      this.visibleEnd = end;
+    });
   }
   private onBodyScroll() {
     // Prepending changes spacer heights before the anchor is restored. Keep
