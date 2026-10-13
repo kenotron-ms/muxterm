@@ -104,6 +104,7 @@ export class MuxSDKChat extends LitElement {
   private stream?: EventSource;
   private reconnectTimer?: number;
   private cacheTimer?: number;
+  private workTimer?: number;
   private draftTimer?: number;
   private pendingDraft?: string;
   private agentDraftTimer?: number;
@@ -245,7 +246,6 @@ export class MuxSDKChat extends LitElement {
     .work-passage > :first-child { margin-top:0; }
     .work-passage > :last-child { margin-bottom:0; }
     .work-passage .md-p { margin:0 0 7px; }
-    .work-passage .md-p:first-child::first-line { font-weight:600; color:var(--chrome-text-bright,#d9def0); }
     .work-passage .md-h { margin:8px 0 5px; font-size:12px; line-height:1.45; color:var(--chrome-text-bright,#d9def0); }
     .work-passage .md-ul,.work-passage .md-ol { margin:5px 0; padding-left:19px; }
     .work-passage .md-pre { max-width:100%; overflow:auto; padding:7px 9px; border-radius:6px; background:var(--chrome-bar); }
@@ -483,13 +483,17 @@ export class MuxSDKChat extends LitElement {
     this.voice?.stop();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.cacheTimer) clearTimeout(this.cacheTimer);
+    if (this.workTimer) clearTimeout(this.workTimer);
+    this.workTimer = undefined;
     this.rowObserver.disconnect();
     this.activeSession = '';
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
     super.disconnectedCallback();
   }
   private readonly onVisibilityChange = () => {
+    this.syncWorkTimer();
     if (!document.hidden) {
+      this.requestUpdate();
       this.fitComposer(this.selectedAgent ? 'agent' : 'message');
       this.resumeConnection();
       return;
@@ -538,6 +542,7 @@ export class MuxSDKChat extends LitElement {
     } catch { /* Chat remains usable if job metadata is unavailable. */ }
   }
   override updated(changed: Map<string, unknown>) {
+    this.syncWorkTimer();
     this.rowObserver.disconnect();
     this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]').forEach(row => this.rowObserver.observe(row));
     // The empty legacy mirror follows placeholder changes from turn and chat state.
@@ -546,6 +551,18 @@ export class MuxSDKChat extends LitElement {
     }
   }
   private drawerKey() { return `muxterm.sdk.utility.width.${this.sessionId}`; }
+  private syncWorkTimer() {
+    const visibleWork = this.isConnected && !document.hidden && !!this.shadowRoot?.querySelector('[data-working]');
+    if (!visibleWork) {
+      if (this.workTimer) clearTimeout(this.workTimer);
+      this.workTimer = undefined;
+    } else if (this.workTimer === undefined) {
+      this.workTimer = window.setTimeout(() => {
+        this.workTimer = undefined;
+        this.requestUpdate();
+      }, 1000);
+    }
+  }
   private widthLimits() {
     const available = this.shadowRoot?.querySelector<HTMLElement>('.layout')?.clientWidth || this.clientWidth || window.innerWidth;
     return { min: Math.min(280, available * .6), max: available <= 700 ? available * .9 : Math.max(280, available - 480), available };
@@ -1612,7 +1629,10 @@ export class MuxSDKChat extends LitElement {
       if (item.kind === 'tool') run.push(item);
       else {
         flush();
-        if (item.kind === 'thinking' && item.text.trim()) steps.push(html`<div class="work-passage">${this.markdown({ ...item, done:true }, item.key)}</div>`);
+        if (item.kind === 'thinking' && item.text.trim()) {
+          const streaming = !item.done && !this.turnFinished.has(turn) && item === this.blocks[this.blocks.length - 1];
+          steps.push(html`<div class="work-passage">${this.markdown({ ...item, done:!streaming }, item.key)}</div>`);
+        }
       }
     }
     flush();
@@ -1623,24 +1643,22 @@ export class MuxSDKChat extends LitElement {
     return html`<div class="work-item">No work details were reported.</div>`;
   }
   private workDisclosureOpen(turn: number) {
-    return this.workExpanded.has(turn);
+    return this.turnFinished.has(turn) ? this.workExpanded.has(turn) : !this.workCollapsedWhileWorking.has(turn);
   }
-  private streamingWorkLabel(items: Block[]) {
-    for (let index = items.length - 1; index >= 0; index--) {
-      const item = items[index];
-      if (item.kind === 'tool') return this.toolLine(item);
-      if (item.kind === 'thinking' && item.text.trim()) break;
-    }
-    return 'Thinking…';
+  private streamingWorkLabel(turn: number) {
+    const started = this.turnStarted.get(turn);
+    return started === undefined ? 'Working' : `Working for ${this.workDuration(started, Date.now())}`;
+  }
+  private workDuration(started: number, finished: number) {
+    const seconds = Math.max(0, Math.round((finished - started) / 1000));
+    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   }
   private workedLabel(turn: number) {
     const started = this.turnStarted.get(turn);
     const finished = this.turnFinished.get(turn);
-    if (finished === undefined) return 'Thinking…';
+    if (finished === undefined) return this.streamingWorkLabel(turn);
     if (started === undefined) return 'Worked';
-    const seconds = Math.max(1, Math.round((finished - started) / 1000));
-    const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    return `Worked for ${duration}`;
+    return `Worked for ${this.workDuration(started, finished)}`;
   }
   private transcriptRows(): TranscriptRow[] {
     if (this.rowsCache?.blocks === this.blocks) return this.rowsCache.rows;
@@ -1784,12 +1802,8 @@ export class MuxSDKChat extends LitElement {
       const block = row.block;
       if (row.work) {
         const working = !this.turnFinished.has(block.turn);
-        if (working) {
-          const label = this.streamingWorkLabel(row.work);
-          return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><div class="work-stream" role="status"><span class="activity-label" title=${label}>${label}</span></div></div>`;
-        }
         const open = this.workDisclosureOpen(block.turn);
-        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}><span class="activity-label">${this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details></div>`;
+        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}><span class="activity-label">${working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details></div>`;
       }
       return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.messageActions(block)}` : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
