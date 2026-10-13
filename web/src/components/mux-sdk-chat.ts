@@ -246,7 +246,6 @@ export class MuxSDKChat extends LitElement {
     .work-passage > :first-child { margin-top:0; }
     .work-passage > :last-child { margin-bottom:0; }
     .work-passage .md-p { margin:0 0 7px; }
-    .work-passage .md-p:first-child::first-line { font-weight:600; color:var(--chrome-text-bright,#d9def0); }
     .work-passage .md-h { margin:8px 0 5px; font-size:12px; line-height:1.45; color:var(--chrome-text-bright,#d9def0); }
     .work-passage .md-ul,.work-passage .md-ol { margin:5px 0; padding-left:19px; }
     .work-passage .md-pre { max-width:100%; overflow:auto; padding:7px 9px; border-radius:6px; background:var(--chrome-bar); }
