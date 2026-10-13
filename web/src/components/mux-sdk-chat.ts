@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
+import { live } from 'lit/directives/live.js';
 import { customElement, property, state } from 'lit/decorators.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
@@ -1507,6 +1508,7 @@ export class MuxSDKChat extends LitElement {
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ kind:this.busy ? 'steer' : 'user', source:'browser', id:crypto.randomUUID(), content }) });
       if (!response.ok) throw new Error(await response.text());
+      if (this.activeSession === sessionId) this.flushAgentDraft();
       if ((this.draftRevisions.get(draftKey(sessionId, 'agent')) || 0) === draftRevision && readDraft(sessionId, 'agent') === originalDraft) {
         if (this.activeSession === sessionId) this.setAgentDraft('');
         else writeDraft(sessionId, 'agent', '');
@@ -1811,10 +1813,12 @@ export class MuxSDKChat extends LitElement {
     // an in-flight request must still recover what the user typed.
     this.draft = '';
     this.draftHasContent = false;
+    void this.updateComplete.then(() => this.fitComposer('message'));
     try {
       await this.scrollToBottom();
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}`), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind, source:'browser', id, content, attachments: sent.map(a => a.id) }) });
       if (!response.ok) throw new Error(await response.text());
+      if (this.activeSession === sessionId) this.flushDraft();
       if ((this.draftRevisions.get(draftKey(sessionId, 'message')) || 0) === draftRevision && readDraft(sessionId, 'message') === originalDraft) {
         if (this.activeSession === sessionId) this.setDraft('');
         else writeDraft(sessionId, 'message', '');
@@ -1825,6 +1829,7 @@ export class MuxSDKChat extends LitElement {
         this.error = '';
       }
     } catch (error) {
+      if (this.activeSession === sessionId) this.flushDraft();
       const saved = readDraft(sessionId, 'message');
       const edited = (this.draftRevisions.get(draftKey(sessionId, 'message')) || 0) !== draftRevision || saved !== originalDraft;
       const restored = edited && saved ? `${originalDraft}\n\n${saved}` : originalDraft;
@@ -1924,14 +1929,14 @@ export class MuxSDKChat extends LitElement {
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
-      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${this.agentDraft} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraftHasContent}>Send to root ↗</button></div>` : html`
+      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraftHasContent}>Send to root ↗</button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
         ${a.preview ? html`<img src=${a.preview} alt=${a.file.name}>` : nothing}
         <span class="filename" title=${a.file.name}>${a.file.name}</span>
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
-      <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${this.draft} @input=${this.onDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
+      <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
