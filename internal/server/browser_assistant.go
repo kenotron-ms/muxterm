@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -56,6 +57,38 @@ type browserAssistantRegistry struct {
 	localToken  string
 	pairings    map[string]browserAssistantPairing
 	connections map[string]*browserAssistantConnection
+}
+
+type browserAssistantResponse struct {
+	http.ResponseWriter
+	status int
+	body   bytes.Buffer
+}
+
+func (response *browserAssistantResponse) WriteHeader(status int) {
+	if response.status == 0 {
+		response.status = status
+	}
+}
+
+func (response *browserAssistantResponse) Write(value []byte) (int, error) {
+	if response.status == 0 {
+		response.status = http.StatusOK
+	}
+	return response.body.Write(value)
+}
+
+func (registry *browserAssistantRegistry) lockResponse(writer http.ResponseWriter) (http.ResponseWriter, func()) {
+	registry.mu.Lock()
+	response := &browserAssistantResponse{ResponseWriter: writer}
+	return response, func() {
+		registry.mu.Unlock()
+		if response.status == 0 {
+			response.status = http.StatusOK
+		}
+		writer.WriteHeader(response.status)
+		_, _ = writer.Write(response.body.Bytes())
+	}
 }
 
 func newBrowserAssistantRegistry(localToken string) *browserAssistantRegistry {
@@ -198,8 +231,8 @@ func (server *Server) handleBrowserAssistantConnections(writer http.ResponseWrit
 		return
 	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
 	items := []*browserAssistantConnection{}
 	for _, connection := range registry.connections {
@@ -226,8 +259,8 @@ func (server *Server) handleBrowserAssistantPairing(writer http.ResponseWriter, 
 		return
 	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
 	for prior, pairing := range registry.pairings {
 		if pairing.Owner == owner {
@@ -267,8 +300,8 @@ func (server *Server) handleBrowserAssistantClaim(writer http.ResponseWriter, ht
 		return
 	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
 	pairing, valid := registry.pairings[body.Code]
 	if !valid {
@@ -291,7 +324,7 @@ func (server *Server) handleBrowserAssistantClaim(writer http.ResponseWriter, ht
 	browserAssistantJSON(writer, http.StatusCreated, map[string]any{"id": id, "token": token})
 }
 
-func (server *Server) browserAssistantBridge(httpRequest *http.Request) *browserAssistantConnection {
+func (server *Server) browserAssistantBridgeLocked(httpRequest *http.Request) *browserAssistantConnection {
 	connection := server.browserAssistant.connections[httpRequest.PathValue("id")]
 	token, valid := bearerToken(httpRequest)
 	hash := sha256.Sum256([]byte(token))
@@ -303,10 +336,10 @@ func (server *Server) browserAssistantBridge(httpRequest *http.Request) *browser
 
 func (server *Server) handleBrowserAssistantPoll(writer http.ResponseWriter, httpRequest *http.Request) {
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
-	connection := server.browserAssistantBridge(httpRequest)
+	connection := server.browserAssistantBridgeLocked(httpRequest)
 	if connection == nil {
 		http.Error(writer, "Browser pairing unavailable; pair again", http.StatusUnauthorized)
 		return
@@ -326,11 +359,16 @@ func (server *Server) handleBrowserAssistantRevoke(writer http.ResponseWriter, h
 	if !server.browserAssistantMutation(writer, httpRequest) {
 		return
 	}
+	owner := server.browserAssistantOwner(httpRequest)
+	if owner == "" {
+		http.Error(writer, "Authentication required", http.StatusUnauthorized)
+		return
+	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	connection := registry.connections[httpRequest.PathValue("id")]
-	if connection == nil || connection.Owner != server.browserAssistantOwner(httpRequest) {
+	if connection == nil || connection.Owner != owner {
 		http.Error(writer, "Browser not found", http.StatusNotFound)
 		return
 	}
@@ -340,10 +378,10 @@ func (server *Server) handleBrowserAssistantRevoke(writer http.ResponseWriter, h
 
 func (server *Server) handleBrowserAssistantBridgeRevoke(writer http.ResponseWriter, httpRequest *http.Request) {
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
-	connection := server.browserAssistantBridge(httpRequest)
+	connection := server.browserAssistantBridgeLocked(httpRequest)
 	if connection == nil {
 		http.Error(writer, "Browser pairing unavailable", http.StatusUnauthorized)
 		return
@@ -354,6 +392,11 @@ func (server *Server) handleBrowserAssistantBridgeRevoke(writer http.ResponseWri
 
 func (server *Server) handleBrowserAssistantRequest(writer http.ResponseWriter, httpRequest *http.Request) {
 	if !server.browserAssistantMutation(writer, httpRequest) {
+		return
+	}
+	owner := server.browserAssistantOwner(httpRequest)
+	if owner == "" {
+		http.Error(writer, "Authentication required", http.StatusUnauthorized)
 		return
 	}
 	var body struct {
@@ -373,11 +416,11 @@ func (server *Server) handleBrowserAssistantRequest(writer http.ResponseWriter, 
 		return
 	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
 	connection := registry.connections[httpRequest.PathValue("id")]
-	if connection == nil || connection.Owner != server.browserAssistantOwner(httpRequest) {
+	if connection == nil || connection.Owner != owner {
 		http.Error(writer, "Browser not found", http.StatusNotFound)
 		return
 	}
@@ -393,8 +436,8 @@ func (server *Server) handleBrowserAssistantRequest(writer http.ResponseWriter, 
 func (server *Server) handleBrowserAssistantRequestResult(writer http.ResponseWriter, httpRequest *http.Request) {
 	owner := server.browserAssistantOwner(httpRequest)
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
 	for _, connection := range registry.connections {
 		if connection.Owner == owner {
@@ -420,10 +463,10 @@ func (server *Server) handleBrowserAssistantResult(writer http.ResponseWriter, h
 		return
 	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
-	connection := server.browserAssistantBridge(httpRequest)
+	connection := server.browserAssistantBridgeLocked(httpRequest)
 	if connection == nil {
 		http.Error(writer, "Browser pairing unavailable", http.StatusUnauthorized)
 		return

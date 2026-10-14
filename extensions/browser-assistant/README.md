@@ -20,6 +20,7 @@ For an update, replace the files in the existing unpacked folder, then click **R
 - Chrome’s debugger banner is expected while access is active. It cannot be hidden by this extension.
 - Agent tools: `list_browser_assistants`, `browser_action`, `get_browser_action`, `stop_browser_control`. Actions: `inspect`, `screenshot`, `navigate`, `click`, `type`, `key`, `scroll`, `tabs`, `new_tab`, `select_tab`. Supply `tab_id` from `tabs` for `select_tab`.
 - Wait for each action to reach a terminal state before another. Cancellation does not undo actions already dispatched. Screenshots are returned as MCP JPEG image content.
+- Result history is bounded. Under memory pressure, only this connection’s older results may be evicted; if other connections fill the shared budget, a new result is omitted with an explicit error. A failed, cancelled, or expired result does not prove that its action never executed.
 
 ## Permissions and boundaries
 

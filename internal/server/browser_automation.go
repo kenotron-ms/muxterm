@@ -69,10 +69,10 @@ func (server *Server) handleBrowserControl(writer http.ResponseWriter, httpReque
 		return
 	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
-	connection := server.browserAssistantBridge(httpRequest)
+	connection := server.browserAssistantBridgeLocked(httpRequest)
 	if connection == nil {
 		http.Error(writer, "Browser pairing unavailable", http.StatusUnauthorized)
 		return
@@ -97,11 +97,16 @@ func (server *Server) handleBrowserControlStop(writer http.ResponseWriter, httpR
 	if !server.browserAssistantMutation(writer, httpRequest) {
 		return
 	}
+	owner := server.browserAssistantOwner(httpRequest)
+	if owner == "" {
+		http.Error(writer, "Authentication required", http.StatusUnauthorized)
+		return
+	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	connection := registry.connections[httpRequest.PathValue("id")]
-	if connection == nil || connection.Owner != server.browserAssistantOwner(httpRequest) {
+	if connection == nil || connection.Owner != owner {
 		http.Error(writer, "Browser not found", http.StatusNotFound)
 		return
 	}
@@ -111,6 +116,11 @@ func (server *Server) handleBrowserControlStop(writer http.ResponseWriter, httpR
 
 func (server *Server) handleBrowserCommand(writer http.ResponseWriter, httpRequest *http.Request) {
 	if !server.browserAssistantMutation(writer, httpRequest) {
+		return
+	}
+	owner := server.browserAssistantOwner(httpRequest)
+	if owner == "" {
+		http.Error(writer, "Authentication required", http.StatusUnauthorized)
 		return
 	}
 	var body struct {
@@ -131,11 +141,11 @@ func (server *Server) handleBrowserCommand(writer http.ResponseWriter, httpReque
 		return
 	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
 	connection := registry.connections[httpRequest.PathValue("id")]
-	if connection == nil || connection.Owner != server.browserAssistantOwner(httpRequest) {
+	if connection == nil || connection.Owner != owner {
 		http.Error(writer, "Browser not found", http.StatusNotFound)
 		return
 	}
@@ -174,10 +184,10 @@ func (server *Server) handleBrowserCommand(writer http.ResponseWriter, httpReque
 
 func (server *Server) handleBrowserCommandStart(writer http.ResponseWriter, httpRequest *http.Request) {
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
-	connection := server.browserAssistantBridge(httpRequest)
+	connection := server.browserAssistantBridgeLocked(httpRequest)
 	if connection == nil {
 		http.Error(writer, "Browser pairing unavailable", http.StatusUnauthorized)
 		return
@@ -208,10 +218,10 @@ func (server *Server) handleBrowserCommandResult(writer http.ResponseWriter, htt
 		return
 	}
 	registry := server.browserAssistant
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
+	writer, flush := registry.lockResponse(writer)
+	defer flush()
 	registry.prune()
-	connection := server.browserAssistantBridge(httpRequest)
+	connection := server.browserAssistantBridgeLocked(httpRequest)
 	if connection == nil {
 		http.Error(writer, "Browser pairing unavailable", http.StatusUnauthorized)
 		return
@@ -231,14 +241,16 @@ func (server *Server) handleBrowserCommandResult(writer http.ResponseWriter, htt
 	}
 	for retained+len(body.Result) > 16<<20 {
 		var oldest *browserAssistantRequest
-		for _, browser := range registry.connections {
-			for _, previous := range browser.Requests {
-				if len(previous.Result) > 0 && (oldest == nil || previous.Expires.Before(oldest.Expires)) {
-					oldest = previous
-				}
+		for _, previous := range connection.Requests {
+			if len(previous.Result) > 0 && (oldest == nil || previous.Expires.Before(oldest.Expires)) {
+				oldest = previous
 			}
 		}
 		if oldest == nil {
+			body.Result = nil
+			if body.Error == "" {
+				body.Error = "Result not retained: shared history is full; action already completed. Do not retry blindly."
+			}
 			break
 		}
 		retained -= len(oldest.Result)
