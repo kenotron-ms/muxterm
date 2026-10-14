@@ -26,6 +26,8 @@ For an update, replace the files in the existing unpacked folder, then click **R
 
 Pairing alone does not expose page contents. Enabling access authorizes agents on the paired server account to use signed-in sessions, read visible contents, screenshot, type, and submit forms. Those actions can make irreversible changes. The current single-owner server shares authorization across its agents; this is not yet per-agent consent or full multi-user isolation.
 
+A dedicated window is a control boundary, **not a separate browser profile or cookie sandbox**. It shares this Chrome profile’s sign-ins, cookies, and site permissions. Agents can open signed-in sites inside their window, even if you also have those sites open elsewhere. Use a separate Chrome profile if you need session/data separation.
+
 The extension requests access to the exact paired server hostname. HTTPS is recommended. Non-loopback HTTP requires explicit acknowledgment because pairing credentials and browser data can be intercepted. Do not expose a `--no-auth` instance to untrusted networks.
 
 Chrome permissions are `activeTab`, `tabs`, `scripting`, `storage`, `alarms`, and `debugger`. `tabs` permits tab metadata discovery; every automation dispatch checks the original authorization generation and the authorized window or adopted tab. No cookie API, filesystem access, raw CDP, or arbitrary agent-supplied JavaScript is exposed. DOM inspection uses fixed expressions in an isolated execution world; page contents remain untrusted and may contain secrets. Main-frame DOM selectors do not inspect cross-origin iframe contents; viewport interactions and screenshots can still operate visually.

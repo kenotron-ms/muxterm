@@ -97,8 +97,9 @@ async function handle(message) {
     const pair = {base: parsed.href.replace(/\/$/, ''), name: String(message.name || '').trim()};
     if (!pair.name || pair.name.length > 80) throw new Error('Supply a browser name up to 80 characters.');
     const result = await api(pair, '/claim', 'POST', {code: String(message.code || '').trim(), name: pair.name});
+    if (!/^[A-Za-z0-9_-]{16}$/.test(result.id || '') || !/^[A-Za-z0-9_-]{43}$/.test(result.token || '')) throw new Error('Muxterm returned invalid pairing credentials.');
     await chrome.storage.session.clear();
-    await chrome.storage.local.set({[PAIR_KEY]: {...pair, ...result}});
+    await chrome.storage.local.set({[PAIR_KEY]: {...pair, id: result.id, token: result.token}});
     return poll();
   }
   if (message.action === 'status') return poll();

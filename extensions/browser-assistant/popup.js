@@ -29,7 +29,7 @@ function render(status) {
   element('connection-name').textContent = status.name;
   element('instance').textContent = new URL(status.base).host;
   element('control-status').textContent = status.control ? 'Active · no time limit' : 'Paused';
-  element('scope').textContent = status.control ? status.control.managed ? `${status.tabCount} managed ${status.tabCount === 1 ? 'tab' : 'tabs'} · other windows stay private` : `This tab only · ${status.control.origin}` : 'Turn on to open a dedicated browser window for your agents.';
+  element('scope').textContent = status.control ? status.control.managed ? `${status.tabCount} managed ${status.tabCount === 1 ? 'tab' : 'tabs'} · only this window is controlled` : `This tab only · ${status.control.origin}` : 'Turn on to open a dedicated browser window for your agents.';
   element('activity').textContent = status.control ? status.activity || 'Ready for your agents.' : 'Pairing stays connected while access is paused.';
 }
 
