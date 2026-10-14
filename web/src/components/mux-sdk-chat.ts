@@ -1181,9 +1181,6 @@ export class MuxSDKChat extends LitElement {
         if (at < this.turnStart) this.turnStart++;
         if (turn === this.currentTurn) this.busy = true;
       }
-      if (pendingIndex < 0 && event.kind !== 'steer' && !blocks.some(block => block.turn === this.currentTurn && block.kind === 'progress'))
-        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Message received' });
-      for (const block of blocks) if (block.turn === this.currentTurn && block.kind === 'progress') block.text = 'Starting…';
       markStart(this.currentTurn);
       if (event.kind === 'steer') this.busy = true;
     }
@@ -1268,6 +1265,11 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'session.renamed') { if (!this.replaying) void sdkChats.refresh(); }
     else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); this.workCollapsedWhileWorking.delete(this.currentTurn); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
+    if (event.type === 'input.accepted' && event.source !== 'voice') {
+      if (!blocks.some(block => block.turn === this.currentTurn && block.kind === 'progress'))
+        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Starting…' });
+      for (const block of blocks) if (block.turn === this.currentTurn && block.kind === 'progress') block.text = 'Starting…';
+    }
     this.blocks = blocks;
     if (this.replaying) return;
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
