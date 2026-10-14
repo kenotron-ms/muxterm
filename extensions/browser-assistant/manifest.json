@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Muxterm Browser Assistant",
+  "version": "0.3.1",
+  "description": "Pair your real browser with self-hosted muxterm. Authorize tab-scoped agent automation.",
+  "minimum_chrome_version": "120",
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "alarms", "debugger"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {"service_worker": "worker.js", "type": "module"},
+  "action": {"default_title": "Muxterm Browser Assistant", "default_popup": "popup.html"},
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"}
+}

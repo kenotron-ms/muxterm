@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
+import './mux-browser-assistant.js';
 
 type Service = { id:string; name:string; group:string; description:string; docsUrl:string; endpoint?:string; availability:string; scopes?:string[]; readTools?:string[] };
 type GitHubState = { state:string; enabled:boolean; ghInstalled:boolean; serverInstalled:boolean; signedIn:boolean; toolCount:number; checkedAt?:string; error:string; installing:boolean; loginState:string; loginCode:string; loginError:string };
@@ -282,8 +283,11 @@ export class MuxConnections extends LitElement {
     const groups=['Developer','Microsoft personal','Google Workspace'];
     const service=this.data?.catalog.find(item=>item.id===this.selected);
     return html`<header><div class="eyebrow">Services</div><h1>Connections</h1><p>Bring your services into chats.</p></header>
-      <div class="layout"><nav class="catalog" aria-label="Connection catalog"><div class="group">Your services</div><button class="service ${this.selected==='remote'?'active':''}" aria-current=${this.selected==='remote'?'page':'false'} @click=${()=>this.selectService('remote')}><span><strong>Remote services</strong><small>Add a public service</small></span><i class="dot ${this.remotes?.items.some(item=>!item.provider&&item.state==='needs-attention')?'attention':this.remotes?.items.some(item=>!item.provider&&item.state==='ready')?'ready':''}"></i></button>${groups.map(group=>html`<div class="group">${group}</div>${this.data?.catalog.filter(item=>item.group===group).map(item=>html`<button class="service ${item.id===this.selected?'active':''}" aria-current=${item.id===this.selected?'page':'false'} @click=${()=>this.selectService(item.id)}><span><strong>${item.name}</strong><small>${item.description}</small></span><i class="dot ${this.serviceDotClass(item)}"></i></button>`)}`)}</nav>
-        <main><div class="detail">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}${!this.data||!this.remotes||!this.microsoft?html`<p>Loading connections…</p>`:this.selected==='remote'?this.remoteDetail():service?.id==='github'?this.githubDetail(this.data.github):service?.group==='Microsoft personal'?this.microsoftDetail(service):service?.group==='Google Workspace'?this.googleDetail(service):nothing}</div></main></div>`;
+      <div class="layout"><nav class="catalog" aria-label="Connection catalog"><div class="group">Your services</div>
+        <button class="service ${this.selected==='browser-assistant'?'active':''}" aria-current=${this.selected==='browser-assistant'?'page':'false'} @click=${()=>this.selectService('browser-assistant')}><span><strong>Browser Assistant</strong><small>Pair your local browser</small></span></button>
+        <button class="service ${this.selected==='remote'?'active':''}" aria-current=${this.selected==='remote'?'page':'false'} @click=${()=>this.selectService('remote')}><span><strong>Remote services</strong><small>Add a public service</small></span><i class="dot ${this.remotes?.items.some(item=>!item.provider&&item.state==='needs-attention')?'attention':this.remotes?.items.some(item=>!item.provider&&item.state==='ready')?'ready':''}"></i></button>${groups.map(group=>html`<div class="group">${group}</div>${this.data?.catalog.filter(item=>item.group===group).map(item=>html`<button class="service ${item.id===this.selected?'active':''}" aria-current=${item.id===this.selected?'page':'false'} @click=${()=>this.selectService(item.id)}><span><strong>${item.name}</strong><small>${item.description}</small></span><i class="dot ${this.serviceDotClass(item)}"></i></button>`)}`)}</nav>
+        <main><div class="detail">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}
+          ${this.selected==='browser-assistant'?html`<mux-browser-assistant></mux-browser-assistant>`:!this.data||!this.remotes||!this.microsoft?html`<p>Loading connections…</p>`:this.selected==='remote'?this.remoteDetail():service?.id==='github'?this.githubDetail(this.data.github):service?.group==='Microsoft personal'?this.microsoftDetail(service):service?.group==='Google Workspace'?this.googleDetail(service):nothing}</div></main></div>`;
   }
 }
 

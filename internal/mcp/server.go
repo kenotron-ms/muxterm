@@ -34,6 +34,7 @@ type tool struct {
 	description string
 	schema      map[string]any
 	fn          ToolFunc
+	content     func(string) []map[string]any
 }
 
 // Server is the MCP JSON-RPC 2.0 server.
@@ -265,14 +266,11 @@ func (s *Server) handleToolsCall(id json.RawMessage, rawParams json.RawMessage) 
 		return
 	}
 
-	result := map[string]any{
-		"content": []map[string]any{
-			{
-				"type": "text",
-				"text": text,
-			},
-		},
+	content := []map[string]any{{"type": "text", "text": text}}
+	if t.content != nil {
+		content = t.content(text)
 	}
+	result := map[string]any{"content": content}
 	s.writeResult(id, result)
 }
 
