@@ -116,6 +116,13 @@ make build
 - **Agent integration (MCP)** — connect any MCP-compatible AI agent to drive workspaces, panes, and terminals
 - **Agent sessions** — Claude, Codex, and Amplifier report native lifecycle hooks into one durable fleet, with terminals as optional attachments
 - **Mission Control** — one persistent Operator conversation alongside the terminal and agent fleet
+- **Browser Assistant (developer preview)** — pair your local Chrome browser with self-hosted Muxterm for scoped agent interaction and real-browser verification
+
+## Browser Assistant
+
+Download `muxterm-browser-assistant-dev.zip` from the [GitHub release assets](https://github.com/kenotron-ms/muxterm/releases/latest), extract it, and load the `browser-assistant` folder through Chrome’s **Load unpacked** option. In Muxterm, use **Connections → Browser Assistant → Connect browser**, then confirm the connection in the extension popup.
+
+**Browser access** opens a dedicated agent window; **Control this tab** authorizes your current tab and site. Access has no timer, and browser restarts pause it. Signed-in browser actions can read private data and submit forms: enable access only for an instance and agents you trust. Use HTTPS for remote pairing. This developer preview uses the current shared-owner authorization model, not per-agent or full multi-user isolation. See [setup, permissions, and limitations](extensions/browser-assistant/README.md).
 
 ## Agent integration (MCP)
 
