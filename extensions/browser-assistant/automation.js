@@ -167,14 +167,14 @@ export function createAutomation(api, savedPair) {
       }
       case 'click': {
         const location = await point();
-        await checked(request.controlId);
+        await checked(request.controlId, executionGeneration);
         await command(tabId, 'Input.dispatchMouseEvent', {type: 'mousePressed', ...location, button: 'left', clickCount: 1});
         await command(tabId, 'Input.dispatchMouseEvent', {type: 'mouseReleased', ...location, button: 'left', clickCount: 1});
         return {clicked: true};
       }
       case 'type':
         if (action.selector) await point();
-        await checked(request.controlId);
+        await checked(request.controlId, executionGeneration);
         if (typeof action.text !== 'string') throw new Error('Supply text to insert.');
         await command(tabId, 'Input.insertText', {text: action.text});
         return {typed: true};
@@ -193,9 +193,10 @@ export function createAutomation(api, savedPair) {
   }
 
   async function tick() {
-    if (running || !await stored()) return;
+    if (running) return;
     running = true;
     try {
+      if (!await stored()) return;
       const control = await checked();
       const pair = await savedPair();
       if (!pair) { await stop(false); return; }
