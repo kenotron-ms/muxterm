@@ -13,7 +13,7 @@ fi
 : "${APPLE_TEAM_ID:?Missing Apple Developer team ID}"
 
 version="${1:?Pass the release version without its leading v}"
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+root="$(cd "${2:-$(dirname "${BASH_SOURCE[0]}")/..}" && pwd)"
 app="$root/desktop/bin/Muxterm.app"
 dmg="$root/desktop/bin/Muxterm-${version}-macos-arm64.dmg"
 work="$(mktemp -d)"
@@ -63,8 +63,27 @@ xcrun notarytool submit "$work/Muxterm.zip" \
   --password "$APPLE_APP_PASSWORD" \
   --team-id "$APPLE_TEAM_ID" \
   --wait --timeout 2h
-xcrun stapler staple "$app"
-xcrun stapler validate "$app"
+stapler_with_retry() {
+  local attempt staple_status delay
+  for attempt in 1 2 3; do
+    if xcrun stapler "$@" > "$work/stapler.log" 2>&1; then
+      cat "$work/stapler.log"
+      return 0
+    else
+      staple_status=$?
+      cat "$work/stapler.log" >&2
+    fi
+    if [[ "$staple_status" != 68 || "$attempt" == 3 ]] ||
+      ! grep -Eq 'NSURLErrorDomain Code=-(1001|1005|1009)' "$work/stapler.log"; then
+      return "$staple_status"
+    fi
+    delay=$((attempt * 30))
+    echo "Apple ticket transport failure; retrying stapler $1 in ${delay}s (${attempt}/3)." >&2
+    sleep "$delay"
+  done
+}
+stapler_with_retry staple "$app"
+stapler_with_retry validate "$app"
 spctl --assess --type execute --verbose=2 "$app"
 
 mkdir -p "$work/dmg"

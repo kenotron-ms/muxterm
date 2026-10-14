@@ -1,0 +1,97 @@
+name: Recover Mac Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing published release tag missing its Mac DMG
+        required: true
+        type: string
+      release_commit:
+        description: Exact immutable commit behind the existing tag
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: recover-macos-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+
+      - name: Validate recovery target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,assets > release.json
+          jq -e --arg asset "Muxterm-${RELEASE_TAG#v}-macos-arm64.dmg" '
+            .isDraft == false and .isPrerelease == false and
+            ([.assets[].name] | index($asset) == null) and
+            ([.assets[].name] | index("checksums.txt") != null)
+          ' release.json
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+          path: source
+          fetch-depth: 0
+
+      - name: Verify immutable application source
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C source rev-parse HEAD)" == "$RELEASE_COMMIT" ]]
+          [[ "$(git -C source rev-parse "$RELEASE_TAG^{commit}")" == "$RELEASE_COMMIT" ]]
+          printf 'Application commit: %s\nRecovery tooling commit: %s\n' "$RELEASE_COMMIT" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: source/desktop/go.mod
+          cache-dependency-path: source/desktop/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: source/web/package-lock.json
+
+      - name: Sign, notarize, and package tagged Mac app
+        env:
+          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_NOTARY_APPLE_ID: ${{ vars.APPLE_NOTARY_APPLE_ID }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: bash tooling/desktop/release-mac.sh "${RELEASE_TAG#v}" "$GITHUB_WORKSPACE/source"
+
+      - name: Verify tag and attach missing asset without replacement
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          set -euo pipefail
+          git -C source fetch origin "refs/tags/$RELEASE_TAG"
+          [[ "$(git -C source rev-parse 'FETCH_HEAD^{commit}')" == "$RELEASE_COMMIT" ]]
+          asset="source/desktop/bin/Muxterm-${RELEASE_TAG#v}-macos-arm64.dmg"
+          gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
+          shasum -a 256 "$asset" >> "$GITHUB_STEP_SUMMARY"
