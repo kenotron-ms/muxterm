@@ -5,7 +5,7 @@ before:
     - go mod tidy
     - npm --prefix web ci --prefer-offline
     - npm --prefix web run build
-    - node extensions/package-browser-assistant.mjs dist/muxterm-browser-assistant-dev.zip
+    - node extensions/package-browser-assistant.mjs
 
 builds:
   - id: muxterm-linux
@@ -61,11 +61,11 @@ archives:
 checksum:
   name_template: "checksums.txt"
   extra_files:
-    - glob: dist/muxterm-browser-assistant-dev.zip
+    - glob: extensions/muxterm-browser-assistant-dev.zip
 
 release:
   extra_files:
-    - glob: dist/muxterm-browser-assistant-dev.zip
+    - glob: extensions/muxterm-browser-assistant-dev.zip
 
 changelog:
   sort: asc
