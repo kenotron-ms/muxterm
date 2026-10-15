@@ -67,6 +67,7 @@ export function isSafeHref(url: string): boolean {
  * which is sufficient to stop a published document phoning home.
  */
 export interface MdLinkPolicy {
+  draggable?: boolean;
   /** Same-origin URL inside the publication, or null to refuse. */
   resolve?(raw: string): string | null;
   image?(raw: string): string | null;
@@ -136,6 +137,7 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
         return html`<a
           class="md-link"
           href="${href}"
+          draggable=${policy?.draggable ?? nothing}
           target="_blank"
           rel="noopener noreferrer nofollow"
           >${renderInline(t.tokens, policy)}</a
