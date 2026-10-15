@@ -304,7 +304,7 @@ export class MuxSidebar extends LitElement {
          roots do not inherit index.html's global box-sizing reset. */
       box-sizing: border-box;
       padding: 0 12px;
-      font-size: 13px;
+      font-size:var(--mux-font-size,16px);
       font-weight: 700;
       color: var(--chrome-text-bright);
       letter-spacing: 0.06em;
@@ -966,7 +966,7 @@ export class MuxSidebar extends LitElement {
     }
 
     .footer-line {
-      font-size: 12px;
+      font-size:var(--mux-font-size,16px);
       color: var(--chrome-text-dim);
       white-space: nowrap;
       overflow: hidden;
@@ -1043,13 +1043,13 @@ export class MuxSidebar extends LitElement {
       --sidebar-text: var(--chrome-text-bright);
       background: var(--sidebar-bg);
       border-right-color: var(--sidebar-edge);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family:var(--mux-font-family,system-ui,sans-serif);
     }
 
     .header {
       height: var(--sidebar-header-height);
       padding: 0 12px;
-      font-size: 13px;
+      font-size:var(--mux-font-size,16px);
       font-weight: 760;
       letter-spacing: 0.08em;
     }
@@ -1077,7 +1077,7 @@ export class MuxSidebar extends LitElement {
       align-items: center;
       gap: 7px;
       text-align: left;
-      font: 780 9.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      font:780 var(--mux-font-size,16px)/1 var(--mux-font-family,system-ui,sans-serif);
       letter-spacing: 0.075em;
       text-transform: uppercase;
       cursor: pointer;
@@ -1317,7 +1317,7 @@ export class MuxSidebar extends LitElement {
     .hg-body.stale .ws-card { opacity: 0.5; border: 0; border-style: none; }
 
     .footer { min-height: 31px; padding: 6px 11px; }
-    .footer-line { font-size: 9.5px; }
+    .footer-line { font-size:var(--mux-font-size,16px); }
     .footer-note { display: none; }
   `;
 

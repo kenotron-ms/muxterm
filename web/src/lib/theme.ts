@@ -292,6 +292,8 @@ export function paletteAnsiArray(p: Palette): string[] {
 /** Maps a Palette to canonical --mux-* CSS custom property names. */
 export function paletteToCSSVars(p: Palette): Record<string, string> {
   const vars: Record<string, string> = {
+    '--mux-font-size': '16px',
+    '--mux-font-family': 'system-ui, sans-serif',
     '--mux-bg': p.background,
     '--mux-fg': p.foreground,
     '--mux-accent': p.blue,
@@ -312,7 +314,7 @@ export function paletteToCSSVars(p: Palette): Record<string, string> {
     // bar" and "how tall is a dock slot" are different questions.
     '--mux-titlebar-height':    'var(--mux-dock-height, 44px)',
     '--mux-dock-item-padding':  '0 16px',           // horizontal padding on each dock slot
-    '--mux-dock-font-size':     '0.85rem',          // workspace label font size
+    '--mux-dock-font-size':     'var(--mux-font-size,16px)',
     '--mux-dock-active-weight': '600',              // active workspace label font weight
   };
   // All 16 ANSI colours. Only 8 of 21 palette entries were exposed before,
