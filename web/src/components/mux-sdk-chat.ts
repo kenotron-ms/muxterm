@@ -349,7 +349,7 @@ export class MuxSDKChat extends LitElement {
     .text strong { color:var(--chrome-text-bright,#d9def0); font-weight:700; }
     .text .md-code { padding:.13em .38em; border:1px solid var(--chrome-border,#41485f); border-radius:5px; background:var(--chrome-bar,#202632); font:1em/1.4 ui-monospace,monospace; }
     .text .md-pre { box-sizing:border-box; max-width:100%; overflow:auto; margin:0 0 18px; padding:16px 18px; border:1px solid var(--chrome-border,#41485f); border-radius:12px; background:var(--chrome-bar,#202632); }
-    .text .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:-4px 0 12px; color:var(--chrome-text-dim,#9aa3b8); font:11px/1.4 var(--mux-font-family,system-ui,sans-serif); text-transform:uppercase; letter-spacing:.04em; }
+    .text .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:-4px 0 12px; color:var(--chrome-text-dim,#9aa3b8); font:var(--mux-font-size,16px)/1.4 var(--mux-font-family,system-ui,sans-serif); text-transform:uppercase; letter-spacing:.04em; }
     .text .md-pre code { color:inherit; font:var(--mux-font-size,16px)/1.6 ui-monospace,monospace; white-space:pre; }
     .text .md-pre[data-streaming] { border-bottom-color:var(--chrome-accent,#9bb8f7); }
     .text .md-link { color:var(--chrome-accent,#9bb8f7); text-decoration:underline; text-underline-offset:3px; }
