@@ -36,6 +36,7 @@ function chatFromHref(href: string): SDKChat | undefined {
 
 function chatLink(chat: SDKChat, label: string): TemplateResult {
   return html`<a class="md-link md-chat-link" href=${`#chat=${encodeURIComponent(chat.id)}`}
+    draggable="false"
     title=${`Open chat: ${chat.title}`} aria-label=${`Open chat: ${chat.title}`}
     @click=${(event: MouseEvent) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -79,6 +80,7 @@ function localImage(raw: string): string | null {
 }
 
 export const chatMarkdownPolicy: MdLinkPolicy = {
+  draggable: false,
   image: localImage,
   remoteImages: true,
   reference: (href, label) => {
