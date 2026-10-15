@@ -862,7 +862,7 @@ export class MuxSDKChat extends LitElement {
         throw new Error('The history response contained no displayable messages.');
       }
       this.historyFrom = from; this.historyTo = page.to; this.hasOlder = hasMore;
-      this.loadedEvents = events; this.liveEvents = [];
+      this.loadedEvents = events; this.liveEvents = []; this.detailsLoaded = false;
       this.streamCursor = page.to;
       this.reconnectFailures = 0; this.reconnectFailed = false; this.error = '';
       this.replayEvents();
