@@ -28,6 +28,7 @@ export class CodexStream {
     this.pending = new Map();
     this.nextId = 0;
     this.textByItem = new Map();
+    this.reasoningByItem = new Map();
     this.phaseByItem = new Map();
     this.inputIds = [];
     this.cancelRequested = false;
@@ -64,8 +65,7 @@ export class CodexStream {
     if (githubEnabled) for (const key of ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
       if (process.env[key]) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${JSON.stringify(process.env[key])}`);
     }
-    // The Chat timeline uses commentary and tool events, not generated reasoning summaries.
-    this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="none"', ...mcpConfig], {
+    this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="detailed"', ...mcpConfig], {
       cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.stderr = '';
@@ -135,6 +135,7 @@ export class CodexStream {
     this.inputIds = [input.id];
     this.cancelRequested = false;
     this.textByItem.clear();
+    this.reasoningByItem.clear();
     this.phaseByItem.clear();
     try {
       const attachments = input.attachments || [];
@@ -146,7 +147,7 @@ export class CodexStream {
       for (const item of attachments) if (item.kind === 'image') turnInput.push({ type: 'localImage', path: item.path });
       const model = input.model || this.session.model;
       const result = await this.request('turn/start', { threadId: this.session.nativeId,
-        summary: 'none',
+        summary: 'detailed',
         approvalPolicy: 'never', sandboxPolicy: this.sandboxPolicy(),
         ...(model ? { collaborationMode: { mode: this.session.mode === 'plan' ? 'plan' : 'default', settings: { model, reasoning_effort: input.effort || this.session.effort || null, developer_instructions: null } } } : {}),
         ...(input.model ? { model: input.model } : {}),
@@ -229,6 +230,20 @@ export class CodexStream {
     } else if (method === 'item/agentMessage/delta') {
       this.textByItem.set(p.itemId, (this.textByItem.get(p.itemId) || '') + p.delta);
       if (p.delta) this.emit(this.session.id, this.phaseByItem.get(p.itemId) === 'commentary' ? 'thinking.delta' : 'assistant.delta', { text: p.delta, source: `codex-message:${p.itemId}` });
+    } else if (method === 'item/reasoning/summaryTextDelta') {
+      const key = `${p.itemId}:${p.summaryIndex ?? 0}`;
+      const delta = p.delta || '';
+      this.reasoningByItem.set(key, (this.reasoningByItem.get(key) || '') + delta);
+      if (delta) this.emit(this.session.id, 'thinking.delta', { text: delta, source: `codex-reasoning:${key}` });
+    } else if (method === 'item/completed' && p.item?.type === 'reasoning') {
+      for (const [index, part] of (p.item.summary || []).entries()) {
+        const key = `${p.item.id}:${index}`;
+        const full = typeof part === 'string' ? part : part.text || '';
+        const sent = this.reasoningByItem.get(key) || '';
+        const rest = full.startsWith(sent) ? full.slice(sent.length) : (sent ? '' : full);
+        if (rest) this.emit(this.session.id, 'thinking.delta', { text: rest, source: `codex-reasoning:${key}` });
+        this.reasoningByItem.set(key, sent + rest);
+      }
     } else if (method === 'item/completed' && p.item?.type === 'agentMessage') {
       // Keep compatibility with an older app-server that only sends a final item.
       const sent = this.textByItem.get(p.item.id) || '';

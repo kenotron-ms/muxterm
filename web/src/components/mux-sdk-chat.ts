@@ -125,6 +125,8 @@ export class MuxSDKChat extends LitElement {
   @state() private hasOlder = false;
   @state() private loadingOlder = false;
   @state() private loadingDetails = false;
+  @state() private detailsError = '';
+  private detailsDeferred = false;
   private loadedEvents: SDKEvent[] = [];
   private liveEvents: SDKEvent[] = [];
   private detailsLoaded = false;
@@ -687,7 +689,7 @@ export class MuxSDKChat extends LitElement {
     this.streamCursor = 0; this.reconnectFailures = 0; this.reconnectFailed = false;
     this.idleSuspended = false;
     this.resetTranscript();
-    this.loadedEvents = []; this.liveEvents = []; this.historyFrom = 0; this.historyTo = 0; this.hasOlder = false; this.loadingOlder = false; this.loadingDetails = false; this.detailsLoaded = false;
+    this.loadedEvents = []; this.liveEvents = []; this.historyFrom = 0; this.historyTo = 0; this.hasOlder = false; this.loadingOlder = false; this.loadingDetails = false; this.detailsLoaded = false; this.detailsError = ''; this.detailsDeferred = false;
     this.fillingRecent = false; this.restoringScroll = false; this.historyUserInteracted = false; this.olderTask = undefined;
     this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
     this.selectedAgent = ''; this.parentScrollTop = 0; this.agentEvents = null; this.agentHistoryError = '';
@@ -860,7 +862,7 @@ export class MuxSDKChat extends LitElement {
         throw new Error('The history response contained no displayable messages.');
       }
       this.historyFrom = from; this.historyTo = page.to; this.hasOlder = hasMore;
-      this.loadedEvents = events; this.liveEvents = [];
+      this.loadedEvents = events; this.liveEvents = []; this.detailsLoaded = false;
       this.streamCursor = page.to;
       this.reconnectFailures = 0; this.reconnectFailed = false; this.error = '';
       this.replayEvents();
@@ -874,7 +876,8 @@ export class MuxSDKChat extends LitElement {
       if (body && !this.historyUserInteracted) body.scrollTop = body.scrollHeight;
       // The byte offset precedes any events written during the history fetch.
       this.openStream(id, epoch);
-      void this.fillRecentHistory(epoch);
+      await this.fillRecentHistory(epoch);
+      if (epoch === this.historyEpoch) this.loadOpenWorkDetails();
     } catch {
       if (epoch === this.historyEpoch && !signal.aborted) this.scheduleReconnect(epoch, () => void this.loadRecent(id, epoch, signal));
     }
@@ -930,7 +933,7 @@ export class MuxSDKChat extends LitElement {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined; this.reconnectFailures = 0; this.reconnectFailed = false; this.error = '';
     this.historyAbort = new AbortController();
-    this.hasOlder = false; this.fillingRecent = false; this.loadingOlder = false; this.loadingDetails = false; this.restoringScroll = false; this.olderTask = undefined;
+    this.hasOlder = false; this.fillingRecent = false; this.loadingOlder = false; this.loadingDetails = false; this.detailsError = ''; this.detailsDeferred = false; this.restoringScroll = false; this.olderTask = undefined;
     void this.loadRecent(this.sessionId, this.historyEpoch, this.historyAbort.signal);
     void this.loadAgentHistory(this.sessionId, this.historyEpoch, this.historyAbort.signal);
   }
@@ -988,7 +991,11 @@ export class MuxSDKChat extends LitElement {
     if (this.olderTask) return this.olderTask;
     const task = this.fetchOlder();
     this.olderTask = task;
-    void task.finally(() => { if (this.olderTask === task) this.olderTask = undefined; });
+    void task.finally(() => {
+      if (this.olderTask !== task) return;
+      this.olderTask = undefined;
+      if (!this.fillingRecent) this.loadOpenWorkDetails();
+    });
     return task;
   }
   private async fetchOlder(): Promise<boolean> {
@@ -1061,9 +1068,15 @@ export class MuxSDKChat extends LitElement {
       if (epoch === this.historyEpoch) this.restoringScroll = false;
     }
   }
+  private loadOpenWorkDetails() {
+    if (this.historyTo > this.historyFrom && this.blocks.some(block => (block.kind === 'progress' || block.kind === 'tool' || block.kind === 'thinking') && this.workDisclosureOpen(block.turn))) void this.loadDetails();
+  }
   private async loadDetails() {
     if (this.detailsLoaded || this.loadingDetails) return;
+    if (this.submittingSessions.has(this.activeSession) || this.pendingInputs.size) { this.detailsDeferred = true; return; }
     const epoch = this.historyEpoch;
+    this.detailsDeferred = false;
+    this.detailsError = '';
     this.loadingDetails = true;
     try {
       await this.olderTask;
@@ -1071,9 +1084,10 @@ export class MuxSDKChat extends LitElement {
       const from = this.historyFrom, to = this.historyTo;
       const id = this.activeSession;
       const pages: SDKEvent[][] = [];
+      const signal = AbortSignal.any([...(this.historyAbort ? [this.historyAbort.signal] : []), AbortSignal.timeout(30_000)]);
       let cursor = to;
       while (cursor > from) {
-        const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${cursor}`), { signal:this.historyAbort?.signal });
+        const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/history?before=${cursor}`), { signal });
         if (!response.ok) throw new Error(`Work details request failed (${response.status})`);
         const page = await response.json() as HistoryPage;
         if (epoch !== this.historyEpoch) return;
@@ -1081,13 +1095,16 @@ export class MuxSDKChat extends LitElement {
         pages.push(page.events);
         cursor = page.from;
       }
-      this.detailsLoaded = true;
-      this.loadingDetails = false;
+      if (this.submittingSessions.has(id) || this.pendingInputs.size) { this.detailsDeferred = true; return; }
       await this.replayWithAnchor([...pages.reverse().flat(), ...this.liveEvents], epoch);
+      if (epoch === this.historyEpoch) this.detailsLoaded = true;
     } catch (error) {
-      if (epoch === this.historyEpoch && !this.historyAbort?.signal.aborted) this.error = String(error);
+      if (epoch === this.historyEpoch && !this.historyAbort?.signal.aborted) this.detailsError = String(error);
     } finally {
-      if (epoch === this.historyEpoch) this.loadingDetails = false;
+      if (epoch === this.historyEpoch) {
+        this.loadingDetails = false;
+        if (this.detailsDeferred && !this.submittingSessions.has(this.activeSession) && !this.pendingInputs.size) void this.loadDetails();
+      }
     }
   }
   private upsertLaneCard(blocks: Block[], event: SDKEvent, done: boolean) {
@@ -1273,6 +1290,7 @@ export class MuxSDKChat extends LitElement {
     }
     this.blocks = blocks;
     if (this.replaying) return;
+    if (this.detailsDeferred && !this.submittingSessions.has(this.activeSession) && !this.pendingInputs.size) void this.loadDetails();
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     const follow = !body || body.scrollHeight - body.scrollTop - body.clientHeight < 100;
     if (follow) { const count = this.transcriptRows().length; this.visibleStart = count <= 80 ? 0 : Math.max(0, count - 35); this.visibleEnd = count; }
@@ -1655,10 +1673,13 @@ export class MuxSDKChat extends LitElement {
       }
     }
     flush();
+    if (this.detailsError) return html`${steps}<div class="work-item" role="status">Work details could not be loaded. <button title=${this.detailsError} @click=${() => void this.loadDetails()}>Retry work details</button></div>`;
     if (steps.length) return html`${steps}`;
     // Lightweight message history intentionally omits raw thought and tool
     // payloads. Do not display its flattened activity summary as a timeline.
-    if (this.loadingDetails || !this.detailsLoaded) return html`<div class="work-item">Loading work details…</div>`;
+    if (this.loadingDetails) return html`<div class="work-item">Loading work details…</div>`;
+    if (!this.turnFinished.has(turn)) return html`<div class="work-item">Waiting for work updates…</div>`;
+    if (!this.detailsLoaded) return html`<div class="work-item">Work details are not loaded. <button @click=${() => void this.loadDetails()}>Load work details</button></div>`;
     return html`<div class="work-item">No work details were reported.</div>`;
   }
   private workDisclosureOpen(turn: number) {
@@ -1849,9 +1870,9 @@ export class MuxSDKChat extends LitElement {
     if (this.workDisclosureOpen(turn)) {
       this.workExpanded.delete(turn);
       if (!this.turnFinished.has(turn)) this.workCollapsedWhileWorking.add(turn);
-    } else if (!this.turnFinished.has(turn)) this.workCollapsedWhileWorking.delete(turn);
-    else {
-      this.workExpanded.add(turn);
+    } else {
+      if (!this.turnFinished.has(turn)) this.workCollapsedWhileWorking.delete(turn);
+      else this.workExpanded.add(turn);
       if (!this.detailsLoaded) void this.loadDetails();
     }
     this.requestUpdate();
@@ -1909,6 +1930,7 @@ export class MuxSDKChat extends LitElement {
       if (!wasBusy) { this.busy = false; this.turnStarted.delete(this.currentTurn); }
     } finally {
       this.submittingSessions.delete(sessionId);
+      if (this.activeSession === sessionId && this.detailsDeferred) void this.loadDetails();
     }
   }
   private prepareRecovery() {
