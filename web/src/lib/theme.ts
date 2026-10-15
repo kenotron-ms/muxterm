@@ -293,6 +293,7 @@ export function paletteAnsiArray(p: Palette): string[] {
 export function paletteToCSSVars(p: Palette): Record<string, string> {
   const vars: Record<string, string> = {
     '--mux-font-size': '16px',
+    '--mux-font-family': 'system-ui, sans-serif',
     '--mux-bg': p.background,
     '--mux-fg': p.foreground,
     '--mux-accent': p.blue,

@@ -77,7 +77,7 @@ export class MuxChatWorkspace extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; margin:2px 0; font:var(--mux-font-size,16px)/1.35 system-ui,sans-serif; color:var(--chrome-text-bright,#d8dce5); }
+    :host { display:block; margin:2px 0; font:var(--mux-font-size,16px)/1.35 var(--mux-font-family,system-ui,sans-serif); color:var(--chrome-text-bright,#d8dce5); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
     .row,.chat-row { display:flex; align-items:center; min-height:30px; border-radius:6px; position:relative; }
     .row:hover,.chat-row:hover { background:var(--chrome-hover); }
@@ -306,12 +306,12 @@ export class MuxChatList extends LitElement {
   };
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; color:var(--chrome-text-dim,#9299a5); font:var(--mux-font-size,16px)/1.35 system-ui,sans-serif; }
+    :host { display:block; color:var(--chrome-text-dim,#9299a5); font:var(--mux-font-size,16px)/1.35 var(--mux-font-family,system-ui,sans-serif); }
     .heading { padding:9px 5px 3px; font-size:var(--mux-font-size,16px); letter-spacing:.1em; text-transform:uppercase; }
     .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--chrome-border,#3b4355); }
     .pin-row { width:100%; display:flex; align-items:center; min-height:29px; padding:2px 3px; border-radius:6px; color:var(--chrome-text-bright,#d8dce5); }
     .pin-row:hover,.pin-row:focus-within { background:var(--chrome-hover); }
-    .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:25px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:var(--mux-font-size,16px) system-ui,sans-serif; cursor:pointer; }
+    .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:25px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:var(--mux-font-size,16px) var(--mux-font-family,system-ui,sans-serif); cursor:pointer; }
     .pin-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pin-icon { display:flex; flex:none; color:var(--chrome-text-dim); }
     .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--chrome-accent); }
