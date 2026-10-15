@@ -100,7 +100,7 @@ export class MuxChatWorkspace extends LitElement {
     .menu button:hover { background:var(--chrome-hover); }
     .menu .danger { color:var(--chrome-danger); }
     .chats { margin:0 0 5px; }
-    .chat { flex:1; min-width:0; min-height:28px; padding:3px 5px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:7px; }
+    button.chat { flex:1; min-width:0; min-height:28px; padding:3px 5px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:7px; }
     .chat-row[selected] { background:color-mix(in srgb, var(--chrome-accent) 18%, var(--chrome-bar)); }
     .status { width:6px; height:6px; border-radius:50%; background:var(--chrome-text-dim); flex:none; }
     .status.working { background:var(--mux-ok); }
