@@ -371,8 +371,8 @@ export class MuxSidebar extends LitElement {
     }
 
     .sb-heading {
-      font-family: var(--mux-font-family,system-ui,sans-serif);
-      font-size:var(--mux-font-size,16px);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
       letter-spacing: 0.11em;
       text-transform: uppercase;
       color: var(--chrome-text-dim);
@@ -436,7 +436,7 @@ export class MuxSidebar extends LitElement {
 
     .ws-name {
       flex: 1;
-      font-size:var(--mux-font-size,16px);
+      font-size: 13px;
       font-weight: 500;
       color: var(--chrome-text-bright);
       white-space: nowrap;
@@ -453,7 +453,7 @@ export class MuxSidebar extends LitElement {
       border-radius: 3px;
       color: var(--chrome-text-bright);
       font: inherit;
-      font-size:var(--mux-font-size,16px);
+      font-size: 13px;
       padding: 1px 5px;
       outline: none;
       min-width: 0;
@@ -484,8 +484,8 @@ export class MuxSidebar extends LitElement {
        verdict is not a good one. */
     .ws-completion {
       flex-shrink: 0;
-      font-family: var(--mux-font-family,system-ui,sans-serif);
-      font-size:var(--mux-font-size,16px);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
       line-height: 1.5;
       white-space: nowrap;
       padding: 0 4px;
@@ -509,8 +509,8 @@ export class MuxSidebar extends LitElement {
     /* Zero needs is not a zero badge: a plain pane count, and nothing warm. */
     .ws-panes {
       flex-shrink: 0;
-      font-family: var(--mux-font-family,system-ui,sans-serif);
-      font-size:var(--mux-font-size,16px);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
       line-height: 1.5;
       color: var(--chrome-text-dim);
       white-space: nowrap;
@@ -592,7 +592,7 @@ export class MuxSidebar extends LitElement {
     .preview-tooltip-message {
       padding: 4px 8px;
       color: var(--chrome-text-dim);
-      font-size:var(--mux-font-size,16px);
+      font-size: 12px;
       white-space: nowrap;
     }
 
@@ -650,7 +650,7 @@ export class MuxSidebar extends LitElement {
     }
 
     .ws-card.preview .ws-name {
-      font-size:var(--mux-font-size,16px);
+      font-size: 12px;
       font-weight: 600;
     }
 
@@ -688,7 +688,7 @@ export class MuxSidebar extends LitElement {
       align-items: center;
       justify-content: center;
       color: var(--chrome-text-dim);
-      font-size:var(--mux-font-size,16px);
+      font-size: 13px;
       letter-spacing: 3px;
       pointer-events: none;
     }
@@ -704,7 +704,7 @@ export class MuxSidebar extends LitElement {
       box-sizing: border-box;
       padding: 1px 4px;
       border-radius: 3px;
-      font-size:var(--mux-font-size,16px);
+      font-size: 10px;
       line-height: 1.4;
       color: var(--chrome-text-dim);
       background: color-mix(in srgb, var(--chrome-bar) 80%, transparent);
@@ -730,7 +730,7 @@ export class MuxSidebar extends LitElement {
       border-radius: 5px;
       color: var(--chrome-accent);
       font: inherit;
-      font-size:var(--mux-font-size,16px);
+      font-size: 12px;
       text-align: left;
       cursor: pointer;
       transition: border-color 0.12s, background 0.12s;
@@ -776,7 +776,7 @@ export class MuxSidebar extends LitElement {
       width: 12px;
       flex-shrink: 0;
       color: var(--chrome-text-dim);
-      font-size:var(--mux-font-size,16px);
+      font-size: 9px;
       line-height: 1;
       transition: transform 0.12s ease;
       display: inline-block;
@@ -812,8 +812,8 @@ export class MuxSidebar extends LitElement {
     .hg-name {
       flex: 1;
       min-width: 0;
-      font-family: var(--mux-font-family,system-ui,sans-serif);
-      font-size:var(--mux-font-size,16px);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
       letter-spacing: 0.11em;
       text-transform: uppercase;
       color: var(--chrome-text-dim);
@@ -831,8 +831,8 @@ export class MuxSidebar extends LitElement {
       flex-shrink: 0;
       border-radius: 3px;
       color: var(--chrome-text-dim);
-      font-family: var(--mux-font-family,system-ui,sans-serif);
-      font-size:var(--mux-font-size,16px);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 8px;
       letter-spacing: 0.04em;
       padding: 1px 4px;
       border: 1px solid var(--chrome-border);
@@ -860,8 +860,8 @@ export class MuxSidebar extends LitElement {
 
     .hg-meta {
       flex-shrink: 0;
-      font-family: var(--mux-font-family,system-ui,sans-serif);
-      font-size:var(--mux-font-size,16px);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
       color: var(--mux-warn);
       white-space: nowrap;
     }
@@ -897,7 +897,7 @@ export class MuxSidebar extends LitElement {
       margin: 3px 6px;
       padding: 5px 8px;
       border-radius: 5px;
-      font-size:var(--mux-font-size,16px);
+      font-size: 11px;
       border: 1px solid color-mix(in srgb, var(--mux-warn) 45%, transparent);
       background: color-mix(in srgb, var(--mux-warn) 10%, var(--chrome-bar));
       color: var(--chrome-text-bright);
@@ -906,16 +906,16 @@ export class MuxSidebar extends LitElement {
     .stale-banner .spin {
       flex-shrink: 0;
       color: var(--mux-warn);
-      font-family: var(--mux-font-family,system-ui,sans-serif);
-      font-size:var(--mux-font-size,16px);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
     }
 
     .retry-btn {
       margin-left: auto;
       flex-shrink: 0;
       font: inherit;
-      font-size:var(--mux-font-size,16px);
-      font-family: var(--mux-font-family,system-ui,sans-serif);
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       padding: 1px 6px;
       border-radius: 3px;
       border: 1px solid var(--chrome-border);
@@ -974,7 +974,7 @@ export class MuxSidebar extends LitElement {
     }
 
     .footer-note {
-      font-size:var(--mux-font-size,16px);
+      font-size: 11px;
       color: var(--chrome-text-dim);
       margin-top: 2px;
       overflow-wrap: anywhere;
@@ -993,7 +993,7 @@ export class MuxSidebar extends LitElement {
       border-radius: 5px;
       color: var(--chrome-accent);
       font: inherit;
-      font-size:var(--mux-font-size,16px);
+      font-size: 12px;
       text-align: left;
       cursor: pointer;
       transition: background 0.12s, border-color 0.12s;
@@ -1043,7 +1043,7 @@ export class MuxSidebar extends LitElement {
       --sidebar-text: var(--chrome-text-bright);
       background: var(--sidebar-bg);
       border-right-color: var(--sidebar-edge);
-      font-family: var(--mux-font-family,system-ui,sans-serif);
+      font-family:var(--mux-font-family,system-ui,sans-serif);
     }
 
     .header {
@@ -1077,7 +1077,7 @@ export class MuxSidebar extends LitElement {
       align-items: center;
       gap: 7px;
       text-align: left;
-      font: 780 var(--mux-font-size,16px)/1 var(--mux-font-family,system-ui,sans-serif);
+      font:780 var(--mux-font-size,16px)/1 var(--mux-font-family,system-ui,sans-serif);
       letter-spacing: 0.075em;
       text-transform: uppercase;
       cursor: pointer;
@@ -1103,7 +1103,7 @@ export class MuxSidebar extends LitElement {
       padding: 12px 5px 2px;
       border-top: 1px solid var(--sidebar-edge);
       color: var(--chrome-text-dim, #9299a5);
-      font-size:var(--mux-font-size,16px);
+      font-size: 10px;
       letter-spacing: .1em;
       text-transform: uppercase;
     }
@@ -1139,8 +1139,8 @@ export class MuxSidebar extends LitElement {
     .hg-name,
     .hg-name.remote {
       flex: 0 1 auto;
-      font-family: var(--mux-font-family,system-ui,sans-serif);
-      font-size:var(--mux-font-size,16px);
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      font-size: 11px;
       font-weight: 790;
       letter-spacing: 0.025em;
       text-transform: none;
@@ -1155,14 +1155,14 @@ export class MuxSidebar extends LitElement {
       padding: 0 5px;
       border: 1px solid color-mix(in srgb, var(--chrome-border) 72%, var(--chrome-text-dim));
       border-radius: 999px;
-      font: 700 var(--mux-font-size,16px)/1 var(--mux-font-family,system-ui,sans-serif);
+      font: 700 7.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
       letter-spacing: 0.055em;
       text-transform: uppercase;
       color: var(--chrome-text-dim);
     }
 
     .hg-status {
-      font: 700 var(--mux-font-size,16px)/1 var(--mux-font-family,system-ui,sans-serif);
+      font: 700 7.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
       letter-spacing: 0.01em;
       white-space: nowrap;
       text-align: right;
@@ -1177,7 +1177,7 @@ export class MuxSidebar extends LitElement {
     .hg-status.reconnecting::before { content: '↻'; }
     .hg-status.unreachable { color: var(--sidebar-status-unreachable); font-weight: 850; }
     .hg-status.unreachable::before { content: '!'; }
-    .hg-status.never-connected { color: var(--sidebar-status-never-connected); font-size:var(--mux-font-size,16px); letter-spacing: -0.01em; }
+    .hg-status.never-connected { color: var(--sidebar-status-never-connected); font-size: 6.75px; letter-spacing: -0.01em; }
     .hg-status.never-connected::before { content: '◇'; margin-right: 2px; font-size: 8px; }
 
     .hg-chev,
@@ -1264,7 +1264,7 @@ export class MuxSidebar extends LitElement {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      font: 500 var(--mux-font-size,16px)/1 var(--mux-font-family,system-ui,sans-serif);
+      font: 500 11px/1 Inter, ui-sans-serif, system-ui, sans-serif;
       color: color-mix(in srgb, var(--chrome-text-bright) 82%, var(--chrome-text-dim));
     }
     .ws-card.active .ws-name,
@@ -1272,7 +1272,7 @@ export class MuxSidebar extends LitElement {
     .ws-panes {
       grid-column: 3;
       grid-row: 1;
-      font: 700 var(--mux-font-size,16px)/1 var(--mux-font-family,system-ui,sans-serif);
+      font: 700 9.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
       font-variant-numeric: tabular-nums lining-nums;
       color: color-mix(in srgb, var(--chrome-text-dim) 76%, var(--chrome-text-bright));
       text-align: center;
@@ -1309,7 +1309,7 @@ export class MuxSidebar extends LitElement {
       border-radius: 0;
       background: transparent;
       color: color-mix(in srgb, var(--chrome-accent) 48%, var(--chrome-text-dim));
-      font: 500 var(--mux-font-size,16px)/1 var(--mux-font-family,system-ui,sans-serif);
+      font: 500 10.5px/1 Inter, ui-sans-serif, system-ui, sans-serif;
     }
     .new-ws-btn:hover,
     .new-ws-btn.remote:hover { border: 0; background: var(--sidebar-hover); color: var(--chrome-accent); }
