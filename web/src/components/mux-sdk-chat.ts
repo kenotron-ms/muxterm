@@ -300,6 +300,7 @@ export class MuxSDKChat extends LitElement {
     .lane-report-detail > :first-child,.lane-report-detail .md-p:first-child { margin-top:0; }
     .lane-report-detail > :last-child,.lane-report-detail .md-p:last-child { margin-bottom:0; }
     .lane-report-detail .md-p { margin:0 0 9px; }
+    .input-message-detail .md-p { margin:0; }
     .lane-report-detail .md-h { margin:12px 0 6px; font-size:13px; line-height:1.3; }
     .lane-report-detail .md-ul,.lane-report-detail .md-ol { margin:6px 0 9px; padding-left:20px; }
     .lane-report-detail .md-li { margin:3px 0; }
@@ -1283,10 +1284,20 @@ export class MuxSDKChat extends LitElement {
       this.updateScrollBottomVisibility();
     });
   }
-  private markdown(block: Block, index: number) {
+  private markdown(block: Block, index: number, preserveNewlines = false) {
     let parser = this.parsers.get(index);
     if (!parser) { parser = new MarkdownStream(); this.parsers.set(index, parser); }
-    return renderSegments(parser.update(block.text, !block.done), chatMarkdownPolicy);
+    const segments = parser.update(block.text, !block.done);
+    if (!preserveNewlines) return renderSegments(segments, chatMarkdownPolicy);
+    let hasContent = false;
+    return html`${segments.map(segment => segment.tokens.map((token, tokenIndex) => {
+      if (token.type === 'space') {
+        const blankLines = Math.max(0, (token.raw.match(/\n/g)?.length || 0) - Number(hasContent));
+        return blankLines ? html`<div aria-hidden="true" style=${`height:${blankLines}lh`}></div>` : nothing;
+      }
+      hasContent = true;
+      return keyed(`${segment.key}:${tokenIndex}`, renderSegments([{ ...segment, tokens:[token] }], chatMarkdownPolicy));
+    }))}`;
   }
   private userBubble(block: Block) {
     return html`<div class="bubble">${block.text}${block.attachments?.map(attachment => attachment.kind === 'image'
@@ -1671,9 +1682,9 @@ export class MuxSDKChat extends LitElement {
   private transcriptRows(): TranscriptRow[] {
     if (this.rowsCache?.blocks === this.blocks) return this.rowsCache.rows;
     const work = new Map<number, Block[]>();
-    const latestUser = new Map<number, number>();
+    const latestInput = new Map<number, number>();
     for (const block of this.blocks) {
-      if (block.kind === 'user') latestUser.set(block.turn, block.key);
+      if (block.kind === 'user' || block.kind === 'chat-message') latestInput.set(block.turn, block.key);
       if (block.kind === 'thinking' || block.kind === 'tool' || block.kind === 'progress') {
         const items = work.get(block.turn) || [];
         items.push(block);
@@ -1684,12 +1695,12 @@ export class MuxSDKChat extends LitElement {
     const rows: TranscriptRow[] = [];
     for (const block of this.blocks) {
       if (block.kind === 'thinking' || block.kind === 'tool' || block.kind === 'progress') {
-        if (shown.has(block.turn) || latestUser.has(block.turn)) continue;
+        if (shown.has(block.turn) || latestInput.has(block.turn)) continue;
         shown.add(block.turn);
         rows.push({ key:`work-${block.turn}`, block, work:work.get(block.turn) });
       } else {
         rows.push({ key:`block-${block.key}`, block });
-        if (block.kind === 'user' && latestUser.get(block.turn) === block.key) {
+        if (latestInput.get(block.turn) === block.key) {
           const items = work.get(block.turn);
           if (items?.length) {
             shown.add(block.turn);
@@ -1973,7 +1984,7 @@ export class MuxSDKChat extends LitElement {
         <span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="chat-message-mark" aria-hidden="true">${sourceIcon}</span>
         <span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${label}</span></span></span>
       </button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<button class="lane-report-open" aria-label=${`Open source chat: ${name}`} title="Open source chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${sourceIcon}</button>` : nothing}</div></div>
-      ${expanded ? html`<div class="lane-report-detail" id=${detailId}>${this.markdown(block, block.key)}</div>` : nothing}</article>`;
+      ${expanded ? html`<div class="lane-report-detail input-message-detail" id=${detailId}>${this.markdown(block, block.key, true)}</div>` : nothing}</article>`;
   }
   override render() {
     const agents = this.agents();
