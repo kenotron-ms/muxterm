@@ -1096,9 +1096,8 @@ export class MuxSDKChat extends LitElement {
         cursor = page.from;
       }
       if (this.submittingSessions.has(id) || this.pendingInputs.size) { this.detailsDeferred = true; return; }
-      this.detailsLoaded = true;
-      this.loadingDetails = false;
       await this.replayWithAnchor([...pages.reverse().flat(), ...this.liveEvents], epoch);
+      if (epoch === this.historyEpoch) this.detailsLoaded = true;
     } catch (error) {
       if (epoch === this.historyEpoch && !this.historyAbort?.signal.aborted) this.detailsError = String(error);
     } finally {
