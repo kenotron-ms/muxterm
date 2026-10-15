@@ -29,7 +29,7 @@ describe('paletteToCSSVars', () => {
     expect(vars['--mux-bell']).toBe('var(--mux-warn)');
     expect(vars['--mux-dock-height']).toBe('44px');
     expect(vars['--mux-dock-item-padding']).toBe('0 16px');
-    expect(vars['--mux-dock-font-size']).toBe('0.85rem');
+    expect(vars['--mux-dock-font-size']).toBe('var(--mux-font-size,16px)');
     expect(vars['--mux-dock-active-weight']).toBe('600');
   });
 
