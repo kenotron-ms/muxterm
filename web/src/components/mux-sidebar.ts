@@ -1025,13 +1025,13 @@ export class MuxSidebar extends LitElement {
     :host {
       --sidebar-header-height: 42px;
       --sidebar-mc-height: 36px;
-      --sidebar-global-action-height: 30px;
-      --sidebar-machine-height: 30px;
-      --sidebar-row-height: 31px;
+      --sidebar-global-action-height: 38px;
+      --sidebar-machine-height: 36px;
+      --sidebar-row-height: 36px;
       --sidebar-control-track: 28px;
       --sidebar-dot-track: 14px;
       --sidebar-row-gap: 5px;
-      --sidebar-group-gap: 18px;
+      --sidebar-group-gap: 22px;
       --sidebar-status-local: var(--chrome-text-dim);
       --sidebar-status-connected: color-mix(in srgb, var(--mux-ok) 65%, var(--chrome-text-bright));
       --sidebar-status-reconnecting: var(--chrome-driver-accent);
@@ -1050,8 +1050,8 @@ export class MuxSidebar extends LitElement {
       height: var(--sidebar-header-height);
       padding: 0 12px;
       font-size:var(--mux-font-size,16px);
-      font-weight: 760;
-      letter-spacing: 0.08em;
+      font-weight: 600;
+      letter-spacing: normal;
     }
 
     .tab-content {
@@ -1077,15 +1077,15 @@ export class MuxSidebar extends LitElement {
       align-items: center;
       gap: 7px;
       text-align: left;
-      font:780 var(--mux-font-size,16px)/1 var(--mux-font-family,system-ui,sans-serif);
-      letter-spacing: 0.075em;
-      text-transform: uppercase;
+      font: 400 calc(var(--mux-font-size,16px) * .875)/1.4 var(--mux-font-family,system-ui,sans-serif);
+      letter-spacing: normal;
+      text-transform: none;
       cursor: pointer;
     }
 
     .header + .new-chat-action { margin-top: 6px; }
 
-    .new-chat-action.active { color: var(--sidebar-text); background: color-mix(in srgb, var(--chrome-accent) 18%, var(--chrome-bar)); }
+    .new-chat-action.active { color: var(--sidebar-text); background: var(--sidebar-hover); }
     .new-chat-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
     .new-chat-action-mark {
       width: 14px;
@@ -1103,17 +1103,17 @@ export class MuxSidebar extends LitElement {
       padding: 12px 5px 2px;
       border-top: 1px solid var(--sidebar-edge);
       color: var(--chrome-text-dim, #9299a5);
-      font-size: 10px;
-      letter-spacing: .1em;
-      text-transform: uppercase;
+      font-size: 12px;
+      letter-spacing: normal;
+      text-transform: none;
     }
 
     .hostgroup { margin: var(--sidebar-group-gap) 0 0; }
     .hostgroup:first-child { margin-top: 11px; }
     .workspace-groups.busy {
-      --sidebar-machine-height: 27px;
-      --sidebar-row-height: 27px;
-      --sidebar-group-gap: 14px;
+      --sidebar-machine-height: 36px;
+      --sidebar-row-height: 36px;
+      --sidebar-group-gap: 22px;
     }
     .workspace-groups.busy .hostgroup:first-child { margin-top: 8px; }
     .workspace-groups.busy .new-ws-btn { height: 22px; }
@@ -1140,9 +1140,9 @@ export class MuxSidebar extends LitElement {
     .hg-name.remote {
       flex: 0 1 auto;
       font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-      font-size: 11px;
-      font-weight: 790;
-      letter-spacing: 0.025em;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: normal;
       text-transform: none;
       color: var(--chrome-text-bright);
     }
@@ -1232,7 +1232,7 @@ export class MuxSidebar extends LitElement {
     .ws-card.active,
     .ws-card.preview.active,
     .ws-card.preview.remote.active {
-      background: color-mix(in srgb, var(--chrome-accent) 18%, var(--chrome-bar));
+      background: var(--sidebar-hover);
       box-shadow: none;
       transform: none;
     }
@@ -1264,11 +1264,11 @@ export class MuxSidebar extends LitElement {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      font: 500 11px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      font: 400 calc(var(--mux-font-size,16px) * .875)/1.4 var(--mux-font-family,system-ui,sans-serif);
       color: color-mix(in srgb, var(--chrome-text-bright) 82%, var(--chrome-text-dim));
     }
     .ws-card.active .ws-name,
-    .ws-card.live .ws-name { font-weight: 790; color: var(--chrome-text-bright); }
+    .ws-card.live .ws-name { font-weight: 500; color: var(--chrome-text-bright); }
     .ws-panes {
       grid-column: 3;
       grid-row: 1;

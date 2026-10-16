@@ -6,7 +6,7 @@ import './launcher-menu.js';
 import './mux-pane-picker.js';
 import './mic-button.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis, Menu } from 'lucide';
+import { Ellipsis, Menu, SquarePen } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
@@ -38,7 +38,48 @@ export class MuxTitleBar extends LitElement {
       flex-shrink: 0;
       user-select: none;
       position: relative;
-      /* Structure ready for env(titlebar-area-*) WCO — apply here when needed */
+    }
+
+    :host([window-chrome]) {
+      --nav-h: env(titlebar-area-height, 44px);
+      position: fixed;
+      top: env(titlebar-area-y, 0px);
+      left: env(titlebar-area-x, 0px);
+      width: env(titlebar-area-width, 100%);
+      height: env(titlebar-area-height, 44px);
+      padding: 0 8px;
+      border: 0;
+      z-index: 50;
+      -webkit-app-region: drag;
+      app-region: drag;
+    }
+    :host([window-chrome]) button,
+    :host([window-chrome]) mux-pane-picker,
+    :host([window-chrome]) mux-mic-button,
+    :host([window-chrome]) mux-launcher-menu {
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
+    }
+    :host([window-chrome]) .chat-title { font-weight: 500; }
+    :host([window-chrome]) .brand { font-weight: 500; }
+    :host([window-chrome]) .brand-sha { display: none; }
+    :host([window-chrome]) .window-new-chat {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      height: var(--nav-h);
+      padding: 0 10px;
+      color: var(--chrome-text-bright);
+      background: transparent;
+      border: 0;
+      border-radius: 6px;
+      font: 400 13px/1 system-ui, sans-serif;
+      cursor: pointer;
+    }
+    .window-new-chat:hover { background: var(--chrome-hover); }
+    @media (max-width: 640px) {
+      .window-new-chat span { display: none; }
     }
 
     .brand {
@@ -80,6 +121,9 @@ export class MuxTitleBar extends LitElement {
     .chat-title {
       flex: 1;
       min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       padding: 0 6px;
       color: var(--chrome-text-bright);
       font-size: 13.5px;
@@ -184,6 +228,7 @@ export class MuxTitleBar extends LitElement {
 
   /** Bound handler so we can remove it in disconnectedCallback. */
   private _onOpenLauncher = (): void => {
+    if (this.getClientRects().length === 0) return;
     const menu = this.shadowRoot?.querySelector<HTMLElement>('mux-launcher-menu');
     try {
       menu?.showPopover();
@@ -292,6 +337,9 @@ export class MuxTitleBar extends LitElement {
             <span class="brand-sha">${__GIT_SHA__}</span>
           </div><mux-pane-picker></mux-pane-picker>`}
       <div class="right">
+        ${this.hasAttribute('window-chrome') ? html`<button class="window-new-chat" type="button" aria-label="New chat"
+          @click=${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}
+        >${icon(SquarePen, { size: 16 })}<span>New chat</span></button>` : ''}
         ${this.desktop || this.chatTitle ? '' : html`<mux-mic-button></mux-mic-button>`}
         ${this.desktop && this.dockActionsVisible
           ? ''

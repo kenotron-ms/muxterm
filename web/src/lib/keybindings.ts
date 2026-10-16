@@ -89,7 +89,7 @@ export function installHomeToggle(chord: string, action: () => void): () => void
 
 /** Returns true when muxterm is running as an installed PWA in standalone mode. */
 function isPwa(): boolean {
-  return window.matchMedia('(display-mode: standalone)').matches;
+  return window.matchMedia('(display-mode: standalone), (display-mode: window-controls-overlay)').matches;
 }
 
 /**
