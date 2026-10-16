@@ -77,15 +77,15 @@ export class MuxChatWorkspace extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; margin:2px 0; font:var(--mux-font-size,16px)/1.35 var(--mux-font-family,system-ui,sans-serif); color:var(--chrome-text-bright,#d8dce5); }
+    :host { display:block; margin:6px 0; font:calc(var(--mux-font-size,16px) * .875)/1.45 var(--mux-font-family,system-ui,sans-serif); color:var(--chrome-text-bright,#d8dce5); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
-    .row,.chat-row { display:flex; align-items:center; min-height:30px; border-radius:6px; position:relative; }
+    .row,.chat-row { display:flex; align-items:center; min-height:38px; border-radius:8px; position:relative; }
     .row:hover,.chat-row:hover { background:var(--chrome-hover); }
     .group { display:flex; align-items:center; gap:7px; flex:1; min-width:0; padding:5px; text-align:left; }
     .folder { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
     .folder { width:17px; color:var(--chrome-text-dim); }
     .name,.title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .name { font-weight:600; }
+    .name { font-weight:500; }
     .archived .name { color:var(--chrome-text-dim,#aab2c1); }
     .action { display:inline-flex; align-items:center; justify-content:center; width:25px; height:25px; flex:none; border-radius:5px; color:var(--chrome-text-dim,#aab2c1); opacity:0; }
     .row:hover .action,.row:focus-within .action { opacity:1; }
@@ -100,8 +100,8 @@ export class MuxChatWorkspace extends LitElement {
     .menu button:hover { background:var(--chrome-hover); }
     .menu .danger { color:var(--chrome-danger); }
     .chats { margin:0 0 5px; }
-    button.chat { flex:1; min-width:0; min-height:28px; padding:3px 5px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:7px; }
-    .chat-row[selected] { background:color-mix(in srgb, var(--chrome-accent) 18%, var(--chrome-bar)); }
+    button.chat { flex:1; min-width:0; min-height:36px; padding:3px 7px; text-align:left; border-radius:8px; display:flex; align-items:center; gap:9px; }
+    .chat-row[selected] { background:var(--chrome-hover); }
     .status { width:6px; height:6px; border-radius:50%; background:var(--chrome-text-dim); flex:none; }
     .status.working { background:var(--mux-ok); }
     .status.operator { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--chrome-accent); }
@@ -115,7 +115,7 @@ export class MuxChatWorkspace extends LitElement {
     .status.chat.working { color:var(--mux-ok); }
     .status.chat.failed,.status.chat.uncertain { color:var(--chrome-danger); }
     .title { font-weight:400; }
-    .harness { color:var(--chrome-text-dim,#aab2c1); font-size:var(--mux-font-size,16px); flex:none; text-transform:lowercase; }
+    .harness { color:var(--chrome-text-dim,#aab2c1); font-size:calc(var(--mux-font-size,16px) * .75); flex:none; text-transform:lowercase; }
     .chat-row:hover .harness,.chat-row:has(.chat:focus-visible) .harness { display:none; }
     .rename-input,.editor input { min-width:0; border:1px solid var(--chrome-border); border-radius:5px; padding:6px 7px; background:var(--chrome-bar); color:inherit; font:inherit; }
     .rename-input { flex:1; margin:3px 5px; }
@@ -306,12 +306,12 @@ export class MuxChatList extends LitElement {
   };
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; color:var(--chrome-text-dim,#9299a5); font:var(--mux-font-size,16px)/1.35 var(--mux-font-family,system-ui,sans-serif); }
-    .heading { padding:9px 5px 3px; font-size:var(--mux-font-size,16px); letter-spacing:.1em; text-transform:uppercase; }
+    :host { display:block; color:var(--chrome-text-dim,#9299a5); font:calc(var(--mux-font-size,16px) * .875)/1.45 var(--mux-font-family,system-ui,sans-serif); }
+    .heading { padding:18px 7px 7px; font-size:12px; letter-spacing:normal; }
     .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--chrome-border,#3b4355); }
-    .pin-row { width:100%; display:flex; align-items:center; min-height:29px; padding:2px 3px; border-radius:6px; color:var(--chrome-text-bright,#d8dce5); }
+    .pin-row { width:100%; display:flex; align-items:center; min-height:38px; padding:2px 3px; border-radius:8px; color:var(--chrome-text-bright,#d8dce5); }
     .pin-row:hover,.pin-row:focus-within { background:var(--chrome-hover); }
-    .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:25px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:var(--mux-font-size,16px) var(--mux-font-family,system-ui,sans-serif); cursor:pointer; }
+    .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:36px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:calc(var(--mux-font-size,16px) * .875)/1.45 var(--mux-font-family,system-ui,sans-serif); cursor:pointer; }
     .pin-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pin-icon { display:flex; flex:none; color:var(--chrome-text-dim); }
     .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--chrome-accent); }

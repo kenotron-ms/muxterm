@@ -29,6 +29,7 @@ type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEven
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
 type CachedTranscript = { blocks: Block[]; chat?: SDKChat };
 const transcriptCache = new Map<string, CachedTranscript>();
+const retainedChatViews = new Map<string, { restore: (view: MuxSDKChat) => void; scrollTop: number; follow: boolean }>();
 const transcriptCacheKey = (id: string) => `muxterm-chat-transcript:v2:${id}`;
 const draftCache = new Map<string, string>();
 const draftKey = (id: string, kind: 'message' | 'agent') => `muxterm-chat-draft:${kind}:${id}`;
@@ -474,6 +475,7 @@ export class MuxSDKChat extends LitElement {
   override disconnectedCallback() {
     this.flushDraft();
     this.flushAgentDraft();
+    this.retainChatView();
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     window.removeEventListener('focus', this.resumeConnection);
     window.removeEventListener('online', this.onOnline);
@@ -670,6 +672,7 @@ export class MuxSDKChat extends LitElement {
     if (!this.isConnected || !this.sessionId || this.activeSession === this.sessionId) return;
     this.flushDraft();
     this.flushAgentDraft();
+    this.retainChatView();
     this.persistTranscriptCache();
     this.voice?.stop();
     this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
@@ -695,6 +698,16 @@ export class MuxSDKChat extends LitElement {
     this.selectedAgent = ''; this.parentScrollTop = 0; this.agentEvents = null; this.agentHistoryError = '';
     this.recoveryPrepared = false;
     this.error = ''; this.settingsPending = false; this.showScrollBottom = false;
+    const retained = retainedChatViews.get(this.sessionId);
+    if (retained) {
+      retainedChatViews.delete(this.sessionId);
+      retained.restore(this);
+      this.chat = sdkChats.chats.find(chat => chat.id === this.sessionId) || this.chat;
+      this.recoveryRequired = this.chat?.state === 'uncertain';
+      this.restoringScroll = true;
+      void this.restoreRetainedScroll(epoch, retained.scrollTop, retained.follow);
+      return;
+    }
     const cached = readTranscriptCache(this.sessionId);
     this.chat = sdkChats.chats.find(c => c.id === this.sessionId) || cached?.chat;
     this.recoveryRequired = this.chat?.state === 'uncertain';
@@ -715,6 +728,50 @@ export class MuxSDKChat extends LitElement {
       void this.loadRecent(this.sessionId, epoch, this.historyAbort.signal);
       void this.loadAgentHistory(this.sessionId, epoch, this.historyAbort.signal);
     }
+  }
+  private retainChatView() {
+    if (!this.activeSession || !this.loadedEvents.length) return;
+    const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+    const state = {
+      chat: this.chat, blocks: this.blocks, trajectory: this.trajectory, busy: this.busy,
+      loadedEvents: [...this.loadedEvents], liveEvents: [...this.liveEvents],
+      historyFrom: this.historyFrom, historyTo: this.historyTo, hasOlder: this.hasOlder,
+      detailsLoaded: this.detailsLoaded, detailsError: this.detailsError, detailsDeferred: this.detailsDeferred, streamCursor: this.streamCursor,
+      currentTurn: this.currentTurn, nextBlockKey: this.nextBlockKey, turnStart: this.turnStart,
+      turnStarted: new Map(this.turnStarted), turnFinished: new Map(this.turnFinished),
+      completedInputAnchors: new Map(this.completedInputAnchors), pendingInputs: new Map(this.pendingInputs),
+      parsers: new Map(this.parsers), rowHeights: new Map(this.rowHeights),
+      workExpanded: new Set(this.workExpanded), workCollapsedWhileWorking: new Set(this.workCollapsedWhileWorking),
+      laneReportsExpanded: new Set(this.laneReportsExpanded), stepExpanded: new Set(this.stepExpanded),
+      visibleStart: this.visibleStart, visibleEnd: this.visibleEnd,
+      selectedAgent: this.selectedAgent, agentEvents: this.agentEvents, agentHistoryError: this.agentHistoryError,
+      parentScrollTop: this.parentScrollTop,
+    };
+    retainedChatViews.delete(this.activeSession);
+    retainedChatViews.set(this.activeSession, {
+      restore: view => { Object.assign(view, state); },
+      scrollTop: body?.scrollTop || 0,
+      follow: !body || body.scrollHeight - body.scrollTop - body.clientHeight < 100,
+    });
+    while (retainedChatViews.size > 4) retainedChatViews.delete(retainedChatViews.keys().next().value!);
+  }
+  private async restoreRetainedScroll(epoch: number, top: number, follow: boolean) {
+    try {
+      for (let frame = 0; frame < 3; frame++) {
+        await this.updateComplete;
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        if (epoch !== this.historyEpoch || !this.isConnected) return;
+        const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+        if (body && !this.historyUserInteracted) body.scrollTop = follow ? body.scrollHeight : top;
+      }
+    } finally {
+      if (epoch === this.historyEpoch) this.restoringScroll = false;
+    }
+    if (epoch !== this.historyEpoch || !this.isConnected) return;
+    this.updateScrollBottomVisibility();
+    if (document.hidden) this.idleSuspended = true;
+    else this.openStream(this.activeSession, epoch);
+    if (this.agentEvents === null && this.historyAbort) void this.loadAgentHistory(this.activeSession, epoch, this.historyAbort.signal);
   }
   private setDraft(value: string, resize = true) {
     if (this.draftTimer) window.clearTimeout(this.draftTimer);
@@ -1293,8 +1350,10 @@ export class MuxSDKChat extends LitElement {
     if (this.detailsDeferred && !this.submittingSessions.has(this.activeSession) && !this.pendingInputs.size) void this.loadDetails();
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     const follow = !body || body.scrollHeight - body.scrollTop - body.clientHeight < 100;
+    const epoch = this.historyEpoch;
     if (follow) { const count = this.transcriptRows().length; this.visibleStart = count <= 80 ? 0 : Math.max(0, count - 35); this.visibleEnd = count; }
     void this.updateComplete.then(() => {
+      if (epoch !== this.historyEpoch) return;
       if (follow) {
         const b = this.shadowRoot?.querySelector<HTMLElement>('.body');
         if (b) b.scrollTop = b.scrollHeight;

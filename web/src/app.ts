@@ -551,6 +551,20 @@ export class MuxApp extends LitElement {
       border-color: var(--chrome-accent);
     }
 
+    .window-chrome { display: none; }
+
+    @media (display-mode: window-controls-overlay) {
+      .window-chrome {
+        display: block;
+        flex: none;
+        height: max(44px, calc(env(titlebar-area-y, 0px) + env(titlebar-area-height, 44px)));
+        background: var(--mux-titlebar-bg, var(--chrome-bar));
+        -webkit-app-region: drag;
+        app-region: drag;
+      }
+      .mobile-title-bar { display: none; }
+    }
+
     .content-area {
       flex: 1;
       display: flex;
@@ -858,6 +872,7 @@ export class MuxApp extends LitElement {
 
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
+  private _unsubscribeChats: (() => void) | null = null;
   private _unsubHomeSessions: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
   private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
@@ -935,6 +950,7 @@ export class MuxApp extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
+    this._unsubscribeChats = sdkChats.subscribe(() => this.requestUpdate());
 
     // Return from service authorization to the Connections page. Consume only
     // muxterm's own marker and preserve any unrelated URL parameters.
@@ -1334,6 +1350,8 @@ export class MuxApp extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    this._unsubscribeChats?.();
+    this._unsubscribeChats = null;
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
@@ -1552,11 +1570,26 @@ export class MuxApp extends LitElement {
     const panes = store.panes.filter((p) => p.paneId >= 0);
     const isWide = this._layoutMode === 'wide';
     const selectedSDKChat = this._sdkChatId && !UTILITY_TITLES.has(this._sdkChatId) ? this._sdkChatId : '';
+    const chatTitle = this._sdkChatId
+      ? UTILITY_TITLES.get(this._sdkChatId) || sdkChats.chats.find(chat => chat.id === this._sdkChatId)?.title || 'Chat'
+      : '';
 
     return html`
+      <div class="window-chrome">
+        <mux-title-bar window-chrome .desktop=${isWide}
+          .drawerOpen=${this._drawerOpen}
+          .chatTitle=${chatTitle}
+          @drawer-toggle=${this._onDrawerToggle}
+          @chat-new=${this._onChatNew}
+          @launcher-action=${this._onLauncherAction}
+          @pane-select=${this._onActivePane}
+          @pane-create-request=${this._createPaneOptimistic}
+        ></mux-title-bar>
+      </div>
       ${!isWide ? html`<mux-title-bar
+        class="mobile-title-bar"
         .drawerOpen="${this._drawerOpen}"
-        .chatTitle="${this._sdkChatId ? UTILITY_TITLES.get(this._sdkChatId) || 'Chat' : ''}"
+        .chatTitle="${chatTitle}"
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
         @pane-create-request="${this._createPaneOptimistic}"
