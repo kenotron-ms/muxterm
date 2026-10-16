@@ -65,7 +65,7 @@ export class CodexStream {
     if (githubEnabled) for (const key of ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
       if (process.env[key]) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${JSON.stringify(process.env[key])}`);
     }
-    this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="detailed"', ...mcpConfig], {
+    this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="detailed"', '-c', 'tools.update_plan.enabled=true', ...mcpConfig], {
       cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.stderr = '';
@@ -217,6 +217,13 @@ export class CodexStream {
       return;
     }
     if (p.threadId !== this.session.nativeId) return;
+    if (method === 'turn/plan/updated' && Array.isArray(p.plan)) {
+      const plan = p.plan.map(item => ({ step: item.step, status: item.status === 'inProgress' ? 'in_progress' : item.status }));
+      const toolId = `codex-plan:${p.turnId}`;
+      this.emit(this.session.id, 'tool.started', { toolId, name: 'update_plan', raw: { plan, explanation: p.explanation } });
+      this.emit(this.session.id, 'tool.completed', { toolId, name: 'update_plan', raw: { plan, explanation: p.explanation } });
+      return;
+    }
     if (method === 'item/started' && p.item?.type === 'subAgentActivity' && p.item.kind === 'started' && p.item.agentThreadId) {
       this.childThreads.set(p.item.agentThreadId, p.item.agentPath || 'Agent');
       this.emit(this.session.id, 'delegate.spawned', { childSessionId: p.item.agentThreadId,

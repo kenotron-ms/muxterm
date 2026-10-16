@@ -350,11 +350,11 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		// message aligned with the latest assistant reply after that tool.
 		c.LastOutput = ""
 		c.LaneReport = ""
-		if todos := sdkTodosFromTool(event); len(todos) > 0 {
+		if todos := sdkTodosFromTool(event); todos != nil {
 			c.LaneTodos = todos
 		}
 	case "tool.completed":
-		if todos := sdkTodosFromTool(event); len(todos) > 0 {
+		if todos := sdkTodosFromTool(event); todos != nil {
 			c.LaneTodos = todos
 		}
 	case "assistant.delta":

@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { Archive, ArchiveRestore, ChevronRight, Unlink2 } from 'lucide';
+import { Archive, ArchiveRestore, Check, Circle, LoaderCircle, ChevronRight, Unlink2 } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { chatMarkdownPolicy } from '../lib/chat-markdown-policy.js';
 import { icon } from '../lib/icons.js';
@@ -32,6 +32,15 @@ export class MuxOperatorStatus extends LitElement {
     h2 { font-size:17px; line-height:1.25; font-weight:650; }
     .head { margin-bottom:16px; }
     .head p,.hint { margin-top:4px; color:var(--chrome-text-dim); }
+    .checklist { list-style:none; margin:16px 0; padding:0; font:var(--mux-font-size,16px)/1.5 var(--mux-font-family,system-ui,sans-serif); }
+    .todo { display:flex; align-items:baseline; gap:10px; padding:10px 0; border-bottom:1px solid var(--chrome-border); overflow-wrap:anywhere; }
+    .todo-icon { display:inline-flex; flex:none; align-self:flex-start; margin-top:4px; }
+    .todo-label { min-width:0; }
+    .todo-state { display:block; color:var(--chrome-text-dim); font-size:inherit; }
+    .todo.completed .todo-icon { color:var(--chrome-success,#9ece6a); }
+    .todo.in_progress { color:var(--chrome-accent); }
+    .self-progress { max-width:420px; font:var(--mux-font-size,16px)/1.5 var(--mux-font-family,system-ui,sans-serif); }
+    .self-progress progress { display:block; width:100%; height:10px; margin-top:8px; accent-color:var(--chrome-accent); }
     .summary { margin:0 0 12px; color:var(--chrome-text-dim); font-variant-numeric:tabular-nums; }
     .summary strong { color:var(--chrome-text-bright); font-weight:650; }
     .summary .sep { padding:0 7px; color:var(--chrome-border); }
@@ -241,6 +250,18 @@ export class MuxOperatorStatus extends LitElement {
   private needsAttention(lane: SDKChat) {
     return lane.state === 'failed' || lane.state === 'uncertain' || this.isStopped(lane);
   }
+  private checklist(chat: SDKChat) {
+    const todos = chat.laneTodos || [];
+    const completed = todos.filter(todo => todo.status === 'completed' || todo.status === 'done').length;
+    return html`<div class="head"><h2>Task progress</h2><p>${chat.title}</p></div>
+      ${todos.length ? html`<div class="self-progress"><span>${completed} of ${todos.length} tasks complete</span><progress aria-label="Completed tasks" max=${todos.length} value=${completed}></progress></div>
+        <ul class="checklist" aria-label="Task checklist">${todos.map(todo => {
+          const done = todo.status === 'completed' || todo.status === 'done';
+          const active = todo.status === 'in_progress' || todo.status === 'inProgress';
+          const label = done ? 'Completed' : active ? 'In progress' : 'Pending';
+          return html`<li class="todo ${done ? 'completed' : active ? 'in_progress' : 'pending'}" aria-current=${active ? 'step' : nothing}><span class="todo-icon" aria-hidden="true">${icon(done ? Check : active ? LoaderCircle : Circle,{size:18})}</span><span class="todo-label">${todo.text}<span class="todo-state">${label}</span></span></li>`;
+        })}</ul>` : html`<div class="empty"><p>No task list reported yet.</p><p class="hint">The checklist appears when the agent uses its plan or TODO tool.</p></div>`}`;
+  }
   override render() {
     const operator = this.snapshot?.operator;
     const lanes = this.snapshot?.lanes || [];
@@ -248,6 +269,7 @@ export class MuxOperatorStatus extends LitElement {
     const working = lanes.filter(chat => chat.state === 'working' || chat.state === 'starting').length;
     const done = lanes.filter(chat => chat.state === 'ready' && !this.isStopped(chat)).length;
     const visible = lanes.filter(chat => this.filter === 'all' || (this.filter === 'attention' ? this.needsAttention(chat) : this.filter === 'running' ? chat.state === 'working' || chat.state === 'starting' : chat.state === 'ready' && !this.isStopped(chat)));
+    if (operator && !operator.operator) return html`${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}${this.checklist(operator)}`;
     return html`<div class="head"><h2>Operator status</h2><p>Lane work, timing ranges, and latest replies.</p></div>
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       ${!operator ? html`<div class="empty">Loading operator status…</div>` : !operator.operator ? html`<div class="empty"><p>Operator mode is off.</p><p class="hint">Turn it on from the permission and mode menu in the chat composer.</p></div>` : html`
