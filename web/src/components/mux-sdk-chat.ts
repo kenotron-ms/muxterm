@@ -181,12 +181,12 @@ export class MuxSDKChat extends LitElement {
   private parentScrollTop = 0;
   static styles = css`
     ${subtleScrollbars}
-    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright,#d9def0); font:var(--mux-font-size,16px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
+    :host { --chat-font-size:calc(var(--mux-font-size,16px) * .875); position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright,#d9def0); font:var(--chat-font-size,14px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
     .topbar { box-sizing:border-box; height:42px; flex:none; display:flex; align-items:center; gap:12px; padding:0 12px 0 22px; border-bottom:1px solid var(--chrome-border,#343a4c); }
     .breadcrumbs { display:flex; align-items:center; gap:7px; min-width:0; }
     .breadcrumbs button { border:0; padding:4px; border-radius:5px; background:transparent; color:var(--chrome-accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
     .breadcrumbs button:hover { background:var(--chrome-hover); }
-    .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:7px 0; color:var(--chrome-danger); font-size:var(--mux-font-size,16px); }
+    .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:7px 0; color:var(--chrome-danger); font-size:var(--chat-font-size,14px); }
     .agent-history-error button { border:0; padding:2px 4px; background:transparent; color:var(--chrome-accent); }
     .agent-history-error button:hover { text-decoration:underline; }
     .delegate-card { box-sizing:border-box; display:grid; grid-template-columns:18px minmax(0,1fr) auto; align-items:center; gap:9px; width:100%; max-width:560px; min-height:54px; border:1px solid var(--chrome-border,#41485f); border-radius:9px; padding:7px 10px; background:var(--chrome-bar,#222b3c); color:var(--chrome-text-bright,#d9def0); text-align:left; }
@@ -194,9 +194,9 @@ export class MuxSDKChat extends LitElement {
     .delegate-card:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
     .delegate-icon { display:inline-flex; color:var(--chrome-accent,#9bb8f7); }
     .delegate-copy { display:flex; flex-direction:column; min-width:0; gap:2px; }
-    .delegate-name { font-size:var(--mux-font-size,16px); font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .delegate-task { color:var(--chrome-text-dim,#aabbd6); font-size:var(--mux-font-size,16px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .delegate-meta { display:flex; align-items:center; align-self:start; gap:8px; min-height:18px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); font-variant-numeric:tabular-nums; }
+    .delegate-name { font-size:var(--chat-font-size,14px); font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .delegate-task { color:var(--chrome-text-dim,#aabbd6); font-size:var(--chat-font-size,14px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .delegate-meta { display:flex; align-items:center; align-self:start; gap:8px; min-height:18px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--chat-font-size,14px); font-variant-numeric:tabular-nums; }
     .delegate-status-dot { width:7px; height:7px; border-radius:50%; background:var(--mux-ok); }
     .delegate-status-dot.running { background:var(--chrome-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--chrome-accent) 14%,transparent); }
     .delegate-status-dot.failed { background:var(--chrome-danger); }
@@ -206,14 +206,14 @@ export class MuxSDKChat extends LitElement {
     .agent-chat .reply { padding:13px 16px; border-radius:12px; background:var(--chrome-bar); white-space:pre-wrap; }
     .agent-chat .reply pre { white-space:pre-wrap; overflow-wrap:anywhere; }
     .agent-step { margin:12px 0; padding:10px 12px; border:1px solid var(--chrome-border); border-radius:9px; background:var(--chrome-bar); }
-    .agent-step pre { margin:6px 0 0; max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:var(--mux-font-size,16px)/1.5 ui-monospace,monospace; }
-    .agent-notice { color:var(--chrome-text-dim); font-size:var(--mux-font-size,16px); }
+    .agent-step pre { margin:6px 0 0; max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:var(--chat-font-size,14px)/1.5 ui-monospace,monospace; }
+    .agent-notice { color:var(--chrome-text-dim); font-size:var(--chat-font-size,14px); }
     .recovery { max-width:760px; width:calc(100% - 48px); box-sizing:border-box; align-self:center; margin:12px auto 0; padding:12px 14px; border:1px solid color-mix(in srgb,var(--mux-warn) 55%,var(--chrome-border)); border-radius:9px; background:color-mix(in srgb,var(--mux-warn) 10%,var(--chrome-body)); color:var(--chrome-text-bright); }
     .recovery strong { display:block; margin-bottom:3px; }
     .recovery p { margin:0 0 9px; }
     .recovery button { border:1px solid var(--mux-warn); border-radius:6px; padding:5px 9px; background:color-mix(in srgb,var(--mux-warn) 15%,var(--chrome-bar)); color:var(--chrome-text-bright); }
     .recovery button:hover { background:color-mix(in srgb,var(--mux-warn) 25%,var(--chrome-bar)); }
-    h1 { font-size:var(--mux-font-size,16px); margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    h1 { font-size:var(--chat-font-size,14px); margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     button { font:inherit; cursor:pointer; }
     .pane-controls { display:inline-flex; align-items:center; flex:none; margin-left:auto; border:1px solid var(--chrome-border); border-radius:8px; padding:2px; background:var(--chrome-bar); }
     .pane-controls button { display:grid; place-items:center; width:29px; height:27px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-dim); padding:0; cursor:pointer; }
@@ -225,7 +225,7 @@ export class MuxSDKChat extends LitElement {
     .operator-parent:hover,.operator-parent:focus-visible { background:var(--chrome-hover); outline:none; }
     .operator-parent:focus-visible { box-shadow:0 0 0 2px var(--chrome-accent); }
     .operator-crumb { display:inline-flex; flex:none; color:var(--chrome-text-dim); }
-    .chat-title small { display:block; color:var(--chrome-text-dim); font-size:var(--mux-font-size,16px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .chat-title small { display:block; color:var(--chrome-text-dim); font-size:var(--chat-font-size,14px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .layout { display:flex; flex:1; min-height:0; }
     .layout.preview-focused .chat { display:none; }
     .layout.preview-focused .drawer { width:100%; flex:1; border-left:0; }
@@ -237,9 +237,9 @@ export class MuxSDKChat extends LitElement {
     .virtual-spacer { width:1px; flex:none; pointer-events:none; }
     .block { max-width:760px; width:100%; align-self:center; margin-bottom:28px; box-sizing:border-box; }
     .block.work { margin-top:-12px; margin-bottom:20px; }
-    .work-stream { display:flex; align-items:center; gap:7px; min-height:25px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); }
+    .work-stream { display:flex; align-items:center; gap:7px; min-height:25px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--chat-font-size,14px); }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; animation:thinking-pulse 1.6s ease-in-out infinite; }
-    .work-disclosure > summary { display:flex; align-items:center; gap:7px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); list-style:none; cursor:pointer; }
+    .work-disclosure > summary { display:flex; align-items:center; gap:7px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:var(--chat-font-size,14px); list-style:none; cursor:pointer; }
     .work-disclosure .activity-label { flex:none; }
     .work-disclosure .pulse { width:7px; height:7px; flex:none; border-radius:50%; background:var(--chrome-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--chrome-accent) 14%,transparent); animation:activity-pulse 1.35s ease-in-out infinite; }
     @keyframes activity-pulse { 50% { opacity:.35; transform:scale(.7); } }
@@ -251,19 +251,19 @@ export class MuxSDKChat extends LitElement {
     .work-disclosure[open] > summary svg { transform:rotate(180deg); }
     .work-items { padding:12px 0 2px; }
     .work-item { margin-bottom:5px; }
-    .work-passage { margin:0 0 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); line-height:1.55; overflow-wrap:anywhere; }
+    .work-passage { margin:0 0 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--chat-font-size,14px); line-height:1.55; overflow-wrap:anywhere; }
     .work-passage > :first-child { margin-top:0; }
     .work-passage > :last-child { margin-bottom:0; }
     .work-passage .md-p { margin:0 0 7px; }
-    .work-passage .md-h { margin:8px 0 5px; font-size:var(--mux-font-size,16px); line-height:1.45; color:var(--chrome-text-bright,#d9def0); }
+    .work-passage .md-h { margin:8px 0 5px; font-size:var(--chat-font-size,14px); line-height:1.45; color:var(--chrome-text-bright,#d9def0); }
     .work-passage .md-ul,.work-passage .md-ol { margin:5px 0; padding-left:19px; }
     .work-passage .md-pre { max-width:100%; overflow:auto; padding:7px 9px; border-radius:6px; background:var(--chrome-bar); }
-    .work-passage .md-code { font:var(--mux-font-size,16px) ui-monospace,monospace; }
-    .work-current-tool { display:flex; align-items:center; gap:8px; min-height:27px; overflow:hidden; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); }
+    .work-passage .md-code { font:var(--chat-font-size,14px) ui-monospace,monospace; }
+    .work-current-tool { display:flex; align-items:center; gap:8px; min-height:27px; overflow:hidden; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--chat-font-size,14px); }
     .work-current-tool .work-line { flex:1; }
     .work-current-tool.failed { color:var(--chrome-danger); }
     .user { display:flex; flex-direction:column; align-items:flex-end; }
-    .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:var(--mux-font-size,16px); line-height:1.55; }
+    .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:var(--chat-font-size,14px); line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
     .bubble a { display:block; margin-top:7px; color:var(--chrome-accent); }
     .lane-report-table { box-sizing:border-box; width:100%; max-width:720px; min-width:0; overflow:hidden; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
@@ -286,29 +286,29 @@ export class MuxSDKChat extends LitElement {
     .lane-report-chevron { display:inline-flex; flex:none; color:var(--chrome-text-dim); transition:transform .15s; }
     .lane-report-table.expanded .lane-report-chevron { transform:rotate(90deg); }
     .lane-report-primary { display:block; min-width:0; flex:1; }
-    .lane-report-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--mux-font-size,16px); font-weight:600; }
+    .lane-report-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--chat-font-size,14px); font-weight:600; }
     .lane-report-meta { display:flex; align-items:center; gap:8px; margin-top:2px; white-space:nowrap; }
-    .lane-report-harness { color:var(--chrome-text-dim); font-size:var(--mux-font-size,16px); }
-    .lane-report-state { display:inline-flex; align-items:center; gap:5px; color:var(--chrome-text-dim); font-size:var(--mux-font-size,16px); }
+    .lane-report-harness { color:var(--chrome-text-dim); font-size:var(--chat-font-size,14px); }
+    .lane-report-state { display:inline-flex; align-items:center; gap:5px; color:var(--chrome-text-dim); font-size:var(--chat-font-size,14px); }
     .lane-report-state::before { content:''; width:6px; height:6px; flex:none; border-radius:50%; background:currentColor; }
     .lane-report-state.working,.lane-report-state.starting { color:var(--chrome-accent); }
     .lane-report-state.ready { color:var(--mux-ok,#55b981); }
     .lane-report-state.failed,.lane-report-state.uncertain,.lane-report-state.stopped { color:var(--chrome-danger); }
-    .lane-report-preview { min-width:0; padding:11px 12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-dim); font-size:var(--mux-font-size,16px); }
+    .lane-report-preview { min-width:0; padding:11px 12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-dim); font-size:var(--chat-font-size,14px); }
     .lane-report-open-cell { display:grid; place-items:center; padding:6px 10px 6px 4px; }
     .lane-report-open { display:grid; place-items:center; width:32px; height:32px; border:1px solid transparent; border-radius:7px; padding:6px; background:none; color:var(--chrome-text-dim); cursor:pointer; }
     .lane-report-open:hover { border-color:var(--chrome-border); background:var(--chrome-hover); color:var(--chrome-accent); }
     .lane-report-toggle:focus-visible,.lane-report-open:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:-2px; }
-    .lane-report-detail { min-width:0; padding:12px 12px 13px 32px; border-top:1px solid var(--chrome-border); background:color-mix(in srgb,var(--chrome-hover) 55%,var(--chrome-bar)); color:var(--chrome-text-bright); font-size:var(--mux-font-size,16px); line-height:1.6; overflow-wrap:anywhere; }
+    .lane-report-detail { min-width:0; padding:12px 12px 13px 32px; border-top:1px solid var(--chrome-border); background:color-mix(in srgb,var(--chrome-hover) 55%,var(--chrome-bar)); color:var(--chrome-text-bright); font-size:var(--chat-font-size,14px); line-height:1.6; overflow-wrap:anywhere; }
     .lane-report-detail > :first-child,.lane-report-detail .md-p:first-child { margin-top:0; }
     .lane-report-detail > :last-child,.lane-report-detail .md-p:last-child { margin-bottom:0; }
     .lane-report-detail .md-p { margin:0 0 9px; }
     .input-message-detail .md-p { margin:0; }
-    .lane-report-detail .md-h { margin:12px 0 6px; font-size:var(--mux-font-size,16px); line-height:1.3; }
+    .lane-report-detail .md-h { margin:12px 0 6px; font-size:var(--chat-font-size,14px); line-height:1.3; }
     .lane-report-detail .md-ul,.lane-report-detail .md-ol { margin:6px 0 9px; padding-left:20px; }
     .lane-report-detail .md-li { margin:3px 0; }
-    .lane-report-detail .md-code { padding:1px 3px; border-radius:3px; background:var(--chrome-hover); font:var(--mux-font-size,16px) ui-monospace,monospace; }
-    .lane-report-detail .md-pre { box-sizing:border-box; max-width:100%; padding:8px; background:var(--chrome-body); font:var(--mux-font-size,16px)/1.45 ui-monospace,monospace; }
+    .lane-report-detail .md-code { padding:1px 3px; border-radius:3px; background:var(--chrome-hover); font:var(--chat-font-size,14px) ui-monospace,monospace; }
+    .lane-report-detail .md-pre { box-sizing:border-box; max-width:100%; padding:8px; background:var(--chrome-body); font:var(--chat-font-size,14px)/1.45 ui-monospace,monospace; }
     .lane-report-detail .md-pre code { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
     .lane-report-detail .md-quote { margin:7px 0; padding-left:9px; border-left:2px solid var(--chrome-border); color:var(--chrome-text-dim); }
     .lane-report-detail .md-link { color:var(--chrome-accent); text-decoration:underline; text-underline-offset:2px; }
@@ -327,7 +327,7 @@ export class MuxSDKChat extends LitElement {
     .message-actions button:focus-visible { color:var(--chrome-accent); }
     .message-actions button:disabled { opacity:.45; cursor:default; }
     .message-actions .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
-    .message-time { margin-left:5px; color:var(--chrome-text-dim); font-size:var(--mux-font-size,16px); font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .message-time { margin-left:5px; color:var(--chrome-text-dim); font-size:var(--chat-font-size,14px); font-variant-numeric:tabular-nums; white-space:nowrap; }
     .user .message-time { order:-1; margin:0 5px 0 0; }
     .message-edit { box-sizing:border-box; width:min(82%,660px); padding:10px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
     .message-edit .textarea-sizing { width:100%; min-height:96px; max-height:320px; }
@@ -337,8 +337,8 @@ export class MuxSDKChat extends LitElement {
     .message-edit-controls button:last-child { border-color:var(--chrome-accent); color:var(--chrome-accent); }
     @media (hover:none) { .message-actions { opacity:1; } .message-actions button { width:32px; height:32px; } }
     @media (prefers-reduced-motion:reduce) { .message-actions { transition:none; } }
-    .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); font-weight:600; margin-bottom:10px; text-transform:capitalize; }
-    .text { color:var(--chrome-text-bright,#d9def0); font-size:var(--mux-font-size,16px); line-height:1.68; overflow-wrap:anywhere; }
+    .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:var(--chat-font-size,14px); font-weight:600; margin-bottom:10px; text-transform:capitalize; }
+    .text { color:var(--chrome-text-bright,#d9def0); font-size:var(--chat-font-size,14px); line-height:1.68; overflow-wrap:anywhere; }
     .text > :first-child { margin-top:0; }
     .text > :last-child { margin-bottom:0; }
     .text .md-p { margin:0 0 15px; }
@@ -350,8 +350,8 @@ export class MuxSDKChat extends LitElement {
     .text strong { color:var(--chrome-text-bright,#d9def0); font-weight:700; }
     .text .md-code { padding:.13em .38em; border:1px solid var(--chrome-border,#41485f); border-radius:5px; background:var(--chrome-bar,#202632); font:1em/1.4 ui-monospace,monospace; }
     .text .md-pre { box-sizing:border-box; max-width:100%; overflow:auto; margin:0 0 18px; padding:16px 18px; border:1px solid var(--chrome-border,#41485f); border-radius:12px; background:var(--chrome-bar,#202632); }
-    .text .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:-4px 0 12px; color:var(--chrome-text-dim,#9aa3b8); font:var(--mux-font-size,16px)/1.4 var(--mux-font-family,system-ui,sans-serif); text-transform:uppercase; letter-spacing:.04em; }
-    .text .md-pre code { color:inherit; font:var(--mux-font-size,16px)/1.6 ui-monospace,monospace; white-space:pre; }
+    .text .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:-4px 0 12px; color:var(--chrome-text-dim,#9aa3b8); font:var(--chat-font-size,14px)/1.4 var(--mux-font-family,system-ui,sans-serif); text-transform:uppercase; letter-spacing:.04em; }
+    .text .md-pre code { color:inherit; font:var(--chat-font-size,14px)/1.6 ui-monospace,monospace; white-space:pre; }
     .text .md-pre[data-streaming] { border-bottom-color:var(--chrome-accent,#9bb8f7); }
     .text .md-link { color:var(--chrome-accent,#9bb8f7); text-decoration:underline; text-underline-offset:3px; }
     .text .md-chat-link { display:inline-flex; align-items:baseline; gap:4px; max-width:100%; padding:1px 6px; border:1px solid color-mix(in srgb,var(--chrome-accent,#9bb8f7) 48%,transparent); border-radius:6px; background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 12%,transparent); font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
@@ -368,7 +368,7 @@ export class MuxSDKChat extends LitElement {
     .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--chrome-border,#41485f); text-align:left; vertical-align:top; overflow-wrap:break-word; word-break:normal; }
     .text .md-table .md-link, .text .md-table .md-code { overflow-wrap:break-word; }
     .text .md-th { background:var(--chrome-bar,#202632); }
-    .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); }
+    .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:var(--chat-font-size,14px); }
     .tool-activity > summary, .tool-entry > summary { display:flex; align-items:center; gap:8px; min-height:27px; list-style:none; cursor:pointer; }
     .tool-activity > summary::-webkit-details-marker, .tool-entry > summary::-webkit-details-marker { display:none; }
     .tool-activity > summary:focus-visible, .tool-entry > summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
@@ -383,17 +383,17 @@ export class MuxSDKChat extends LitElement {
     .tool-entry > summary { padding-left:22px; }
     .tool-entry.failed > summary { color:var(--chrome-danger); }
     .tool-entry .detail { box-sizing:border-box; max-width:min(100%,650px); margin:5px 0 11px 23px; padding:10px 12px 12px; border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:color-mix(in srgb,var(--chrome-accent) 5%,var(--chrome-body)); }
-    .tool-detail-title { color:var(--chrome-text-bright,#d9def0); font-size:var(--mux-font-size,16px); font-weight:600; }
+    .tool-detail-title { color:var(--chrome-text-bright,#d9def0); font-size:var(--chat-font-size,14px); font-weight:600; }
     .detail-label { color:var(--chrome-accent); font-weight:600; margin:9px 0 4px; }
-    .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:var(--chrome-bar); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:var(--mux-font-size,16px)/1.5 ui-monospace,monospace; }
+    .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:var(--chrome-bar); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:var(--chat-font-size,14px)/1.5 ui-monospace,monospace; }
     .error { color:var(--chrome-danger); }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { padding:0 19px 18px; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 11px; }
     .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
     .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:6px; background:var(--chrome-body); }
-    .attachment .filename { min-width:0; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--mux-font-size,16px); }
-    .attachment .status { color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); }
+    .attachment .filename { min-width:0; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--chat-font-size,14px); }
+    .attachment .status { color:var(--chrome-text-dim,#9aa3b8); font-size:var(--chat-font-size,14px); }
     .attachment .status.failed { color:var(--chrome-danger); }
     .attachment button { position:absolute; top:4px; right:4px; width:22px; height:22px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-dim,#9aa3b8); font-size:18px; line-height:20px; }
     .attachment button:hover { background:var(--chrome-hover); color:inherit; }
@@ -408,7 +408,7 @@ export class MuxSDKChat extends LitElement {
     .composer-row { display:flex; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
-    .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:220px; font:var(--mux-font-size,16px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
+    .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:220px; font:var(--chat-font-size,14px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
     textarea { display:block; width:100%; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; min-height:50px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
     .native-textarea-sizing textarea { field-sizing:content; height:auto; }
     .legacy-textarea-sizing textarea { position:absolute; inset:0; height:100%; min-height:0; max-height:none; }
@@ -422,7 +422,7 @@ export class MuxSDKChat extends LitElement {
     .voice-text { white-space:pre-wrap; overflow-wrap:anywhere; }
     .send-icon { display:grid; place-items:center; animation:send-icon-in .18s ease-out both; }
     @keyframes send-icon-in { from { opacity:0; } to { opacity:1; } }
-    .send.voice-active { width:78px; font-size:var(--mux-font-size,16px); font-weight:650; }
+    .send.voice-active { width:78px; font-size:var(--chat-font-size,14px); font-weight:650; }
     .send.voice-active .send-icon { display:flex; align-items:center; gap:6px; }
     .voice-bars { display:inline-flex; align-items:center; justify-content:center; gap:2px; height:16px; }
     .voice-bars i { display:block; width:2px; border-radius:99px; background:currentColor; transition:height .075s ease-out; }
@@ -432,17 +432,17 @@ export class MuxSDKChat extends LitElement {
     .voice-bars i:nth-child(4) { height:16px; }
     .voice-bars i:nth-child(5) { height:10px; }
     .voice-compose-row { min-height:34px; display:flex; align-items:center; gap:9px; color:var(--chrome-text-dim,#9aa3b8); }
-    .voice-compose-row .voice-label { flex:1; font-size:var(--mux-font-size,16px); }
+    .voice-compose-row .voice-label { flex:1; font-size:var(--chat-font-size,14px); }
     .voice-compose-row .voice-mic { font-size:18px; line-height:1; }
     .voice-compose-row .voice-attach { flex:none; width:30px; height:30px; border:0; background:transparent; color:inherit; font-size:22px; line-height:1; }
     @media (prefers-reduced-motion:reduce) { .voice-bars i { transition:none; } .send-icon { animation:none; } }
-    .stop { border:1px solid var(--chrome-danger); background:var(--chrome-danger); color:var(--chrome-body); font-size:var(--mux-font-size,16px); }
+    .stop { border:1px solid var(--chrome-danger); background:var(--chrome-danger); color:var(--chrome-body); font-size:var(--chat-font-size,14px); }
     .stop:hover:not(:disabled) { background:color-mix(in srgb,var(--chrome-danger) 85%,var(--chrome-text-bright)); }
     .stop:disabled { opacity:.6; }
     .steer { margin-left:auto; border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:transparent; color:var(--chrome-text-bright,#d9def0); padding:6px 10px; }
     .steer + .stop { margin-left:0; }
     .composer button:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
-    .status { color:color-mix(in srgb,var(--mux-warn) 70%,var(--chrome-text-bright)); font-size:var(--mux-font-size,16px); }
+    .status { color:color-mix(in srgb,var(--mux-warn) 70%,var(--chrome-text-bright)); font-size:var(--chat-font-size,14px); }
     .drawer { position:relative; flex:none; width:var(--utility-width); min-width:0; border-left:1px solid var(--chrome-border,#343a4c); background:var(--chrome-bar,#202632); animation:drawer-in .16s ease-out; }
     .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--chrome-accent) 25%,transparent); outline:none; }
