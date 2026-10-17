@@ -27,8 +27,10 @@ as a new native goal. Completed goals likewise require explicit resume.
 
 ## Storage and receipts
 
-Muxterm owns `sdk-chat/goals.sqlite` beneath its data directory. SQLite stores one
-versioned JSON document per chat; relational fields are identity and a transactional
+Muxterm owns `sdk-chat/goals.sqlite` beneath its data directory.
+The SQLite driver is pure Go, including the CGO-disabled Darwin release builds;
+the ledger file format is unchanged.
+SQLite stores one versioned JSON document per chat; relational fields are identity and a transactional
 compare-and-swap version only. Documents contain human condition revisions,
 ownership/operator association, requested/applied revisions, human pause holds,
 idempotent control receipts, native execution references and observations, and

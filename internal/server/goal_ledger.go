@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type goalRevision struct {
@@ -87,7 +87,7 @@ func openGoalLedger(dir string) *goalLedger {
 	if ledger.err = os.MkdirAll(dir, 0700); ledger.err != nil {
 		return ledger
 	}
-	ledger.db, ledger.err = sql.Open("sqlite3", filepath.Join(dir, "goals.sqlite")+"?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on")
+	ledger.db, ledger.err = sql.Open("sqlite", filepath.Join(dir, "goals.sqlite")+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 	if ledger.err != nil {
 		return ledger
 	}

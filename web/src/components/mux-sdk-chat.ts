@@ -2088,7 +2088,7 @@ export class MuxSDKChat extends LitElement {
       if (this.goalDocument && record.version < this.goalDocument.version) return;
       this.goalDocument = record;
       if (this.goalLedgerOpen) {
-        const ledger = await fetch(apiPath('/api/goal-ledger'), { cache:'no-store' });
+        const ledger = await fetch(apiPath('/api/sdk-goal-ledger'), { cache:'no-store' });
         if (!ledger.ok) throw new Error(await ledger.text());
         const records = await ledger.json() as GoalDocument[];
         if (id === this.activeSession) this.goalLedgerDocuments = records.some(existing => existing.chatId === id) ? records : [record,...records];
