@@ -1,167 +1,196 @@
-const PAIR_KEY = 'muxtermBrowserPair';
-const GRANT_KEY = 'muxtermBrowserGrant';
-const PREVIEW_KEY = 'muxtermBrowserPreview';
+import {createAutomation} from './automation.js';
 
-chrome.storage.local.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
-chrome.storage.session.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
+const PAIR_KEY = 'muxtermBrowserPair';
+const INSTANCES_KEY = 'muxtermBrowserInstances';
+let instances;
+let writes = Promise.resolve();
+let operations = Promise.resolve();
+let pending = 0;
+const ready = initialize();
+const automation = createAutomation(api, savedPair);
+
+async function initialize() {
+  await chrome.storage.local.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
+  await chrome.storage.session.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
+  const stored = await chrome.storage.local.get([PAIR_KEY, INSTANCES_KEY]);
+  instances = stored[INSTANCES_KEY] || {items: [], selected: null};
+  if (!stored[INSTANCES_KEY] && stored[PAIR_KEY]) {
+    const pair = stored[PAIR_KEY];
+    const key = crypto.randomUUID();
+    instances = {selected: key, items: [{key, name: pair.name || new URL(pair.base).host, base: pair.base, allowInsecure: insecure(pair.base), pair: {id: pair.id, token: pair.token}}]};
+    await persist();
+  }
+}
+
+function persist() {
+  writes = writes.catch(() => {}).then(() => chrome.storage.local.set({[INSTANCES_KEY]: instances}));
+  return writes;
+}
 
 async function savedPair() {
+  await ready;
   return (await chrome.storage.local.get(PAIR_KEY))[PAIR_KEY];
 }
 
-const automation = createAutomation(api, savedPair);
+function insecure(base) {
+  const parsed = new URL(base);
+  return parsed.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+}
+
+function entry(key = instances.selected) {
+  const item = instances.items.find(candidate => candidate.key === key);
+  if (!item) throw new Error('Choose a saved Muxterm first.');
+  return item;
+}
+
+function samePair(first, second) {
+  return Boolean(first && second && first.base === second.base && first.id === second.id && first.token === second.token);
+}
 
 async function api(pair, path, method = 'GET', body) {
   const response = await fetch(`${pair.base}/api/browser-assistant${path}`, {
-    method,
-    credentials: 'omit',
-    redirect: 'error',
-    signal: AbortSignal.timeout(8000),
+    method, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(8000),
     headers: {'Content-Type': 'application/json', ...(pair.token ? {Authorization: `Bearer ${pair.token}`} : {})},
     ...(body === undefined ? {} : {body: JSON.stringify(body)}),
   });
   if (!response.ok) {
     if (response.status === 401 && pair.token) {
-      await automation.stop(false);
-      await chrome.storage.local.remove(PAIR_KEY);
-      await chrome.storage.session.clear();
-      await chrome.action.setBadgeText({text: ''});
+      const current = await savedPair();
+      if (samePair(current, pair)) {
+        await automation.stop(false);
+        await chrome.storage.local.remove(PAIR_KEY);
+        await chrome.storage.session.clear();
+        await chrome.action.setBadgeText({text: ''});
+      }
+      for (const item of instances.items) {
+        if (item.base === pair.base && item.pair?.id === pair.id && item.pair?.token === pair.token) delete item.pair;
+      }
+      await persist();
     }
-    throw new Error(`Muxterm returned ${response.status}. ${response.status === 401 ? 'Pair again; the code or connection expired or was revoked.' : 'Check the connection and try again.'}`);
+    throw new Error(`Muxterm returned ${response.status}. ${response.status === 401 ? 'Create a fresh pairing code in Muxterm.' : 'Check the connection and try again.'}`);
   }
   return response.json();
 }
 
-async function poll() {
+async function localStatus(extra = {}) {
+  await ready;
   const pair = await savedPair();
-  if (!pair) return {paired: false, requests: []};
-  const result = await api(pair, `/bridge/${pair.id}`);
-  const automationStatus = await automation.status();
-  await chrome.action.setBadgeText({text: automationStatus.control ? 'ON' : result.requests.length ? String(result.requests.length) : ''});
-  const grant = (await chrome.storage.session.get(GRANT_KEY))[GRANT_KEY];
-  return {paired: true, base: pair.base, name: pair.name, expiresAt: pair.expiresAt, grant: grant?.expires > Date.now() ? grant : null, requests: result.requests.filter(request => !request.command), ...automationStatus};
-}
-
-function snapshotPage(expectedOrigin) {
-  if (location.origin !== expectedOrigin) throw new Error('The shared tab changed origin.');
-  const text = element => (element.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 240);
-  const visible = element => element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible' && !element.closest('[hidden], [aria-hidden="true"], [contenteditable], input, textarea, select');
-  const collect = selector => [...document.querySelectorAll(selector)].filter(visible).slice(0, 60).map(text).filter(Boolean);
   return {
-    title: document.title.slice(0, 240),
-    url: `${location.origin}${location.pathname}`,
-    headings: collect('h1,h2,h3'),
-    buttons: collect('button,[role="button"]'),
-    links: [...document.querySelectorAll('a[href]')].filter(visible).slice(0, 60).map(element => {
-      let target;
-      try { target = new URL(element.href); } catch { return ''; }
-      if (!['http:', 'https:'].includes(target.protocol)) return '';
-      return `${text(element)} — ${target.origin}${target.pathname}`.slice(0, 400);
-    }).filter(Boolean),
+    instances: instances.items.map(item => ({key: item.key, name: item.name, base: item.base, allowInsecure: item.allowInsecure, hasPair: Boolean(item.pair)})),
+    selected: instances.selected,
+    paired: Boolean(pair),
+    ...(pair ? {base: pair.base, name: pair.name} : {}),
+    ...await automation.status(), ...extra,
   };
 }
 
-async function checkedGrant() {
-  const grant = (await chrome.storage.session.get(GRANT_KEY))[GRANT_KEY];
-  if (!grant || grant.expires <= Date.now()) throw new Error('Share a tab first. Tab grants expire after 15 minutes.');
-  const tab = await chrome.tabs.get(grant.tabId);
-  if (!tab.url || new URL(tab.url).origin !== grant.origin) throw new Error('The tab changed site. Stop sharing and select it again.');
-  return {grant, tab};
+async function poll() {
+  const pair = await savedPair();
+  if (!pair) return localStatus();
+  try {
+    await api(pair, `/bridge/${pair.id}`);
+    if (!samePair(await savedPair(), pair)) return localStatus();
+    const status = await localStatus();
+    await chrome.action.setBadgeText({text: status.control ? 'ON' : ''});
+    return status;
+  } catch (error) {
+    if (!samePair(await savedPair(), pair)) return localStatus();
+    await chrome.action.setBadgeText({text: '!'});
+    return localStatus({offline: true, connectionError: error.message});
+  }
+}
+
+async function disconnect() {
+  await automation.stop().catch(() => {});
+  await chrome.storage.local.remove(PAIR_KEY);
+  await chrome.storage.session.clear();
+  await chrome.action.setBadgeText({text: ''});
+}
+
+async function mutate(message) {
+  await ready;
+  if (message.action === 'save') {
+    const parsed = new URL(message.base);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.href.length > 2048) throw new Error('Use a plain HTTP or HTTPS Muxterm URL.');
+    const base = parsed.href.replace(/\/+$/, '');
+    if (insecure(base) && message.allowInsecure !== true) throw new Error('Confirm insecure LAN HTTP, or use HTTPS.');
+    const name = String(message.name || '').trim();
+    if (!name || name.length > 80) throw new Error('Enter a name up to 80 characters.');
+    if (instances.items.some(item => item.base === base && item.key !== message.key)) throw new Error('That Muxterm URL is already saved.');
+    const existing = message.key ? entry(message.key) : null;
+    if (!existing && instances.items.length >= 50) throw new Error('You can save up to 50 instances.');
+    if (existing && existing.base !== base) {
+      if (instances.selected === existing.key) await disconnect();
+      delete existing.pair;
+    }
+    const item = existing || {key: crypto.randomUUID()};
+    Object.assign(item, {name, base, allowInsecure: insecure(base) && message.allowInsecure === true});
+    if (!existing) {
+      await disconnect();
+      instances.items.push(item);
+      instances.selected = item.key;
+    }
+    await persist();
+    return localStatus();
+  }
+  if (message.action === 'select') {
+    const item = entry(message.key);
+    if (instances.selected !== item.key) await disconnect();
+    instances.selected = item.key;
+    await persist();
+    return localStatus();
+  }
+  if (message.action === 'remove') {
+    const item = entry(message.key);
+    if (instances.selected === item.key) await disconnect();
+    instances.items = instances.items.filter(candidate => candidate.key !== item.key);
+    if (instances.selected === item.key) instances.selected = instances.items[0]?.key || null;
+    await persist();
+    return localStatus();
+  }
+  if (message.action === 'disconnect') {
+    await disconnect();
+    return localStatus();
+  }
+  if (message.action === 'connect' || message.action === 'pair') {
+    const item = entry(message.key);
+    await disconnect();
+    instances.selected = item.key;
+    await persist();
+    const parsed = new URL(item.base);
+    if (!await chrome.permissions.contains({origins: [`${parsed.protocol}//${parsed.hostname}/*`]})) throw new Error('Allow this Muxterm hostname before connecting.');
+    if (message.action === 'pair') {
+      const code = String(message.code || '').trim();
+      if (!code || code.length > 256) throw new Error('Enter a fresh pairing code from Muxterm.');
+      const result = await api(item, '/claim', 'POST', {code, name: 'My browser'});
+      if (!/^[A-Za-z0-9_-]{16}$/.test(result.id || '') || !/^[A-Za-z0-9_-]{43}$/.test(result.token || '')) throw new Error('Muxterm returned invalid pairing credentials.');
+      item.pair = {id: result.id, token: result.token};
+      await persist();
+    }
+    if (!item.pair) return localStatus({needsPair: true});
+    await chrome.storage.local.set({[PAIR_KEY]: {base: item.base, name: item.name, ...item.pair}});
+    const status = await poll();
+    return {...status, needsPair: !status.paired};
+  }
+  throw new Error('Unknown Browser Assistant operation.');
 }
 
 async function handle(message) {
-  if (message.action === 'control') { await automation.start(message.tabId, message.managed === true); return poll(); }
-  if (message.action === 'current-tab') {
-    const tabs = await chrome.tabs.query({active: true, currentWindow: true});
-    return tabs.find(tab => tab.url && /^https?:/.test(tab.url) && !tab.incognito) || null;
-  }
-  if (message.action === 'pair-offer') {
-    const tabs = await chrome.tabs.query({active: true, currentWindow: true});
-    const tab = tabs[0];
-    if (!tab?.url || !/^https?:/.test(tab.url)) return null;
-    try {
-      const results = await chrome.scripting.executeScript({target: {tabId: tab.id}, func: () => document.body.dataset.muxtermBrowserPairing || ''});
-      const raw = results[0]?.result;
-      if (!raw || raw.length > 2048) return null;
-      const offer = JSON.parse(raw);
-      if (new URL(offer.base).origin !== new URL(tab.url).origin || typeof offer.code !== 'string') return null;
-      return offer;
-    } catch { return null; }
-  }
-  if (message.action === 'stop-control') { await automation.stop(); return poll(); }
-  if (message.action === 'pair') {
-    const parsed = new URL(message.base);
-    if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error('Use a plain HTTPS muxterm address.');
-    if (parsed.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname) && !message.allowInsecure) throw new Error('LAN HTTP requires explicit acknowledgement. Prefer HTTPS.');
-    if (await savedPair()) throw new Error('Disconnect the current instance before pairing another.');
-    const pair = {base: parsed.href.replace(/\/$/, ''), name: String(message.name || '').trim()};
-    if (!pair.name || pair.name.length > 80) throw new Error('Supply a browser name up to 80 characters.');
-    const result = await api(pair, '/claim', 'POST', {code: String(message.code || '').trim(), name: pair.name});
-    if (!/^[A-Za-z0-9_-]{16}$/.test(result.id || '') || !/^[A-Za-z0-9_-]{43}$/.test(result.token || '')) throw new Error('Muxterm returned invalid pairing credentials.');
-    await chrome.storage.session.clear();
-    await chrome.storage.local.set({[PAIR_KEY]: {...pair, id: result.id, token: result.token}});
-    return poll();
-  }
   if (message.action === 'status') return poll();
-  if (message.action === 'tabs') {
-    const tabs = await chrome.tabs.query({});
-    return tabs.filter(tab => tab.url && /^https?:/.test(tab.url) && !tab.incognito).map(tab => ({id: tab.id, title: tab.title || tab.url, origin: new URL(tab.url).origin}));
+  if (message.action === 'local-status') return localStatus();
+  if (message.action === 'stop-control') {
+    await automation.stop().catch(() => {});
+    return localStatus();
   }
-  if (message.action === 'share') {
-    if (!await savedPair()) throw new Error('Pair with muxterm first.');
-    const tab = await chrome.tabs.get(Number(message.tabId));
-    if (!tab.url || !/^https?:/.test(tab.url) || tab.incognito) throw new Error('Choose a normal HTTP or HTTPS tab.');
-    const origin = new URL(tab.url).origin;
-    await chrome.scripting.executeScript({target: {tabId: tab.id}, func: () => true});
-    await chrome.storage.session.set({[GRANT_KEY]: {tabId: tab.id, origin, title: tab.title, expires: Date.now() + 15 * 60000}});
-    await chrome.storage.session.remove(PREVIEW_KEY);
+  if (message.action === 'control') {
+    if (pending) throw new Error('Wait for the instance change to finish before enabling access.');
+    await automation.start(undefined, true);
     return poll();
   }
-  if (message.action === 'stop') {
-    await chrome.storage.session.remove([GRANT_KEY, PREVIEW_KEY]);
-    return poll();
-  }
-  if (message.action === 'disconnect') {
-    await automation.stop();
-    const pair = await savedPair();
-    if (pair) await api(pair, `/bridge/${pair.id}`, 'DELETE');
-    await chrome.storage.local.remove(PAIR_KEY);
-    await chrome.storage.session.clear();
-    await chrome.action.setBadgeText({text: ''});
-    return {paired: false, requests: []};
-  }
-  if (message.action === 'forget') {
-    await automation.stop(false);
-    await chrome.storage.local.remove(PAIR_KEY);
-    await chrome.storage.session.clear();
-    await chrome.action.setBadgeText({text: ''});
-    return {paired: false, requests: []};
-  }
-  if (['preview', 'approve', 'deny'].includes(message.action)) {
-    const status = await poll();
-    if (!status.requests.some(request => request.id === message.requestId)) throw new Error('This request expired or was already answered.');
-    const pair = await savedPair();
-    if (message.action === 'deny') {
-      await api(pair, `/bridge/${pair.id}/results/${message.requestId}`, 'POST', {approved: false, snapshot: null});
-      await chrome.storage.session.remove(PREVIEW_KEY);
-      return poll();
-    }
-    const {grant, tab} = await checkedGrant();
-    if (message.action === 'preview') {
-      const results = await chrome.scripting.executeScript({target: {tabId: grant.tabId}, func: snapshotPage, args: [grant.origin]});
-      const snapshot = results[0]?.result;
-      if (!snapshot) throw new Error('No snapshot could be read.');
-      if (new TextEncoder().encode(JSON.stringify(snapshot)).length > 40 * 1024) throw new Error('The page structure is too large for this developer preview.');
-      await chrome.storage.session.set({[PREVIEW_KEY]: {requestId: message.requestId, tabId: grant.tabId, url: tab.url, expires: Math.min(grant.expires, Date.now() + 60000), snapshot}});
-      return {snapshot};
-    }
-    const preview = (await chrome.storage.session.get(PREVIEW_KEY))[PREVIEW_KEY];
-    if (!preview || preview.requestId !== message.requestId || preview.tabId !== grant.tabId || preview.url !== tab.url || preview.expires <= Date.now()) throw new Error('Preview this request again before sending.');
-    await api(pair, `/bridge/${pair.id}/results/${message.requestId}`, 'POST', {approved: true, snapshot: preview.snapshot});
-    await chrome.storage.session.remove(PREVIEW_KEY);
-    return poll();
-  }
-  throw new Error('Unknown Browser Assistant operation.');
+  pending++;
+  const operation = operations.then(() => mutate(message)).finally(() => { pending--; });
+  operations = operation.catch(() => {});
+  return operation;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -171,4 +200,3 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 });
 chrome.alarms.create('muxterm-browser-poll', {periodInMinutes: 0.5});
 chrome.alarms.onAlarm.addListener(() => { void automation.tick(); void poll().catch(() => chrome.action.setBadgeText({text: '!'})); });
-import {createAutomation} from './automation.js';

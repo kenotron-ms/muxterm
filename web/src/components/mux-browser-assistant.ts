@@ -54,9 +54,9 @@ export class MuxBrowserAssistant extends LitElement {
   }
   override render() {
     return html`<h2>Browser Assistant</h2>
-      <p>Connect your real browser, then turn on Browser access in the extension. Agents get a dedicated browser window for navigation, interaction, and verification. They cannot directly control other windows. The dedicated window shares your Chrome profile’s sign-ins and site permissions; use a separate profile for stronger separation. Pairing alone grants no control.</p>
+      <p>Connect your real browser, then turn on Browser access in the extension. Agents get a dedicated browser window for navigation, interaction, and verification. Other windows stay private. Pairing alone grants no control.</p>
       <h3>Load the development extension</h3>
-      <p><a href="https://github.com/kenotron-ms/muxterm/releases/latest/download/muxterm-browser-assistant-dev.zip" target="_blank" rel="noopener noreferrer">Download the development extension</a> from GitHub Releases and extract it. On your laptop, open <code>chrome://extensions</code>, enable Developer mode, choose Load unpacked, and select the extracted <code>browser-assistant</code> folder. Pin Browser Assistant to the toolbar.</p>
+      <p>On your laptop, open <code>chrome://extensions</code>, enable Developer mode, choose Load unpacked, and select <code>extensions/browser-assistant</code> from your muxterm checkout. Pin Browser Assistant to the toolbar.</p>
       <p>Use HTTPS for remote pairing. LAN HTTP requires an explicit development opt-in. Access has no timer; browser restarts pause it. This prototype’s pairings do not survive a Muxterm server restart.</p>
       <button ?disabled=${this.busy} @click=${() => void this.run(async () => {
         this.pairing = await this.request('/pairings', 'POST');
