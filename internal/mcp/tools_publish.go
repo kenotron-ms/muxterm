@@ -175,6 +175,9 @@ func (pt *publishTools) doRequest(method, path string, body []byte) ([]byte, err
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if err := setChatCaller(req); err != nil {
+		return nil, err
+	}
 	if token, terr := sessiond.ServerToken(); terr == nil && token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

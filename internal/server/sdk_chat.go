@@ -105,6 +105,7 @@ type sdkEvent struct {
 	Bundle          string                 `json:"bundle,omitempty"`
 	Raw             json.RawMessage        `json:"raw,omitempty"`
 	GoalState       string                 `json:"goalState,omitempty"`
+	Goal            *string                `json:"goal,omitempty"`
 	GoalReason      string                 `json:"goalReason,omitempty"`
 	GoalSummary     string                 `json:"goalSummary,omitempty"`
 	Failed          bool                   `json:"failed,omitempty"`
@@ -173,6 +174,7 @@ type sdkChatHost struct {
 	estimates        *sdkEffortEstimator
 	originTokens     map[string]string
 	originTokenChats map[string]string
+	goals            *goalLedger
 }
 
 func sdkDataDir() string {
@@ -186,6 +188,7 @@ func sdkDataDir() string {
 func newSDKChatHost() *sdkChatHost {
 	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}}
 	h.estimates = newSDKEffortEstimator(h.dir)
+	h.goals = openGoalLedger(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	entries, _ := os.ReadDir(h.dir)
 	// A catalog is authoritative once written. A removed project must stay
@@ -327,6 +330,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.HasVoiceHistory = true
 	}
 	switch event.Type {
+	case "turn.started":
+		c.State = "working"
+		c.TurnStartedAt = event.At
 	case "input.accepted":
 		if c.BranchPending && event.Kind == "user" && event.Source != "voice" {
 			c.BranchPending = false
@@ -372,7 +378,10 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			c.LastTurnSeconds = int(event.At.Sub(c.TurnStartedAt).Seconds() + .5)
 		}
 		c.LastActivity = "Turn completed"
-	case "goal.progress":
+	case "goal.progress", "goal.snapshot":
+		if event.Goal != nil {
+			c.Goal = *event.Goal
+		}
 		c.GoalState, c.GoalReason, c.GoalSummary = event.GoalState, event.GoalReason, event.GoalSummary
 		c.LastActivity = "Goal: " + event.GoalState
 	case "turn.cancelled":
@@ -388,6 +397,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	case "operator.lane.status":
 		c.LastActivity = sdkPreview(event.Text, 160)
 	}
+	h.observeGoalLocked(c, event)
 	_ = h.saveLocked(c)
 	line, _ := json.Marshal(event)
 	f, err := os.OpenFile(filepath.Join(h.dir, c.ID+".ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -405,7 +415,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		}
 	}
 	switch event.Type {
-	case "session.renamed", "input.accepted", "turn.completed", "turn.cancelled", "error", "session.uncertain", "goal.progress":
+	case "session.renamed", "input.accepted", "turn.started", "turn.completed", "turn.cancelled", "error", "session.uncertain", "goal.progress":
 		h.notifyCatalogLocked(event.SessionID)
 	}
 	// Name once after the opening turn settles. The native title store is
@@ -456,7 +466,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			h.appendEvent(sdkEvent{SessionID: parent, Type: "operator.lane.status", ChildSessionID: event.SessionID, Name: label, Agent: harness, Kind: state, Text: sdkPreview(message, 180), Origin: &sdkEventOrigin{Type: "operator-lane", ChatID: event.SessionID, Name: label, Harness: harness, Status: state}})
 			finishedTurn := !terminalGoal && event.Type == "turn.completed"
 			stopped := event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain"
-			finishedGoal := terminalGoal && event.Type == "goal.progress" && event.GoalState != "" && event.GoalState != "continuing"
+			finishedGoal := terminalGoal && event.Type == "goal.progress" && event.GoalState != "" && event.GoalState != "continuing" && event.GoalState != "active" && event.GoalState != "paused" && event.GoalState != "cleared"
 			if finishedTurn || stopped || finishedGoal {
 				h.queueOperatorReport(parent, event.SessionID, event)
 			}
@@ -745,6 +755,15 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
+	if ctx.Value(goalControlContextKey{}) != true {
+		document, err := h.goals.update(*c, nil)
+		if err != nil {
+			return fmt.Errorf("goal ledger unavailable: %w", err)
+		}
+		if document.RequestedRevision > 0 && document.State == "uncertain" || c.Goal != "" && document.RequestedRevision == 0 {
+			return errors.New("native goal requires reconciliation; use the human goal editor or an explicit scoped goal control before loading this session")
+		}
+	}
 	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never", "permission": c.Permission, "mode": c.Mode, "originToken": h.chatOriginToken(c.ID)})
 	return err
 }
@@ -1409,8 +1428,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 422)
 		return
 	}
-	if req.Goal != "" && req.Harness != "amplifier" {
-		http.Error(w, "goal requires amplifier", 400)
+	if req.Goal != "" {
+		http.Error(w, "create an ordinary chat, then use the human goal editor", 400)
 		return
 	}
 	if req.Approval != "" && req.Approval != "never" {

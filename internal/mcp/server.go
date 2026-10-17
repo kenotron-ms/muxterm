@@ -85,6 +85,9 @@ func (s *Server) SetResourceProvider(
 // Register adds or updates a tool. If the name is new, it is appended to the
 // ordered list; re-registration overwrites the tool but keeps its list position.
 func (s *Server) Register(name, description string, schema map[string]any, fn ToolFunc) {
+	if !scopedChatTool(name) {
+		return
+	}
 	if _, exists := s.tools[name]; !exists {
 		s.order = append(s.order, name)
 	}
@@ -260,6 +263,10 @@ func (s *Server) handleToolsCall(id json.RawMessage, rawParams json.RawMessage) 
 		params.Arguments = make(map[string]any)
 	}
 
+	if !scopedChatTool(params.Name) {
+		s.writeError(id, codeInvalidParams, "this agent tool cannot mutate terminals, topology, or alternative chat write surfaces; use scoped direct-lane controls")
+		return
+	}
 	text, err := t.fn(params.Arguments)
 	if err != nil {
 		s.writeError(id, codeInternalError, err.Error())

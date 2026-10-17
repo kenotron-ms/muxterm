@@ -33,6 +33,7 @@ export class CodexStream {
     this.inputIds = [];
     this.cancelRequested = false;
     this.childThreads = new Map();
+    this.goalSequence = 0;
     const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpConfig = muxterm ? ['-c', `mcp_servers.muxterm.command=${JSON.stringify(muxterm)}`,
       '-c', 'mcp_servers.muxterm.args=["mcp"]'] : [];
@@ -99,6 +100,13 @@ export class CodexStream {
     this.emit(this.session.id, 'session.started', { nativeId: result.thread.id,
       capabilities: { approvals: false, transcript_read: false, interrupt: true,
         live_input: false, attributed_service_input: false, native_steering: true } });
+    try {
+      const sequence = this.goalSequence;
+      const current = await this.request('thread/goal/get', { threadId: result.thread.id });
+      if (sequence === this.goalSequence) this.emit(this.session.id, 'goal.snapshot', { ...this.goalSnapshot(current.goal), raw: current });
+    } catch (error) {
+      this.emit(this.session.id, 'goal.capability', { message: `Native goal snapshot unavailable: ${error.message}` });
+    }
   }
 
   async options() {
@@ -115,6 +123,26 @@ export class CodexStream {
       cursor = page.nextCursor;
     } while (cursor);
     return { model: this.session.model || '', effort: this.session.effort || '', models };
+  }
+
+  goalSnapshot(goal) {
+    return { goal: goal?.objective || '', goalState: goal?.status || 'cleared' };
+  }
+
+  async goal(action, objective, paused = false) {
+    await this.ready;
+    let result;
+    if (action === 'clear') {
+      const cleared = await this.request('thread/goal/clear', { threadId: this.session.nativeId });
+      result = { ...cleared, goal: null };
+    } else {
+      result = await this.request('thread/goal/set', { threadId: this.session.nativeId,
+        ...(action === 'set' || action === 'resume' ? { objective } : {}),
+        ...(action === 'pause' || (action === 'set' && paused) ? { status: 'paused' }
+          : action === 'resume' ? { status: 'active' } : {}) });
+      if (!result.goal?.objective || !result.goal?.status) throw new Error('Native goal acknowledgement has no goal snapshot; inspect before retrying');
+    }
+    return { ...this.goalSnapshot(result.goal), native: result };
   }
 
   sandboxName() {
@@ -224,6 +252,24 @@ export class CodexStream {
       this.emit(this.session.id, 'tool.completed', { toolId, name: 'update_plan', raw: { plan, explanation: p.explanation } });
       return;
     }
+    if (method === 'thread/goal/updated') {
+      this.goalSequence++;
+      const snapshot = this.goalSnapshot(p.goal);
+      this.emit(this.session.id, 'goal.progress', { ...snapshot, raw: p });
+      return;
+    }
+    if (method === 'thread/goal/cleared') {
+      this.goalSequence++;
+      this.emit(this.session.id, 'goal.progress', { goal: '', goalState: 'cleared', raw: p });
+      return;
+    }
+    if (method === 'turn/started') {
+      this.turnId = p.turn.id;
+      this.session.busy = true;
+      this.textByItem.clear();
+      this.phaseByItem.clear();
+      this.emit(this.session.id, 'turn.started', { generationId: p.turn.id });
+    }
     if (method === 'item/started' && p.item?.type === 'subAgentActivity' && p.item.kind === 'started' && p.item.agentThreadId) {
       this.childThreads.set(p.item.agentThreadId, p.item.agentPath || 'Agent');
       this.emit(this.session.id, 'delegate.spawned', { childSessionId: p.item.agentThreadId,
@@ -275,7 +321,7 @@ export class CodexStream {
       this.session.busy = false;
       this.emit(this.session.id, this.cancelRequested || p.turn.status === 'interrupted' ? 'turn.cancelled'
         : p.turn.status === 'completed' ? 'turn.completed' : 'error',
-        { inputIds: this.inputIds, message: p.turn.error?.message || p.turn.status });
+        { inputIds: this.inputIds, generationId: p.turn.id, message: p.turn.error?.message || p.turn.status });
     }
   }
 

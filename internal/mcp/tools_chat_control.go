@@ -91,6 +91,7 @@ func (pt *publishTools) chatDiscovery() ([]discoverChat, []discoverProject, []di
 // These tools use the same authenticated serve-layer handoff as publications.
 // They address Go-owned SDK chat IDs, never terminal pane IDs.
 func registerChatControlTools(srv *Server) {
+	registerGoalControlTools(srv)
 	pt := newPublishTools()
 	srv.Register("get_operator_lanes", "Read an operator Chat's linked lanes and their hook-backed state, activity and recent output. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"operator_id": map[string]any{"type": "string"}}), "required": []string{"operator_id"}},

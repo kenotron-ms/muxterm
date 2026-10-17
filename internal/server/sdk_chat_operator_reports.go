@@ -163,6 +163,11 @@ func (h *sdkChatHost) drainOperatorReports(id string) {
 					h.mu.Unlock()
 					return
 				}
+				goal, goalErr := h.goals.update(*operator, nil)
+				if goalErr != nil || goal.HumanPaused || goal.State == "uncertain" {
+					h.mu.Unlock()
+					return
+				}
 				if !slices.Contains(operator.OperatorLanes, report.ChildSessionID) {
 					h.mu.Unlock()
 					break
@@ -211,6 +216,12 @@ func (h *sdkChatHost) drainOperatorReports(id string) {
 					h.mu.Unlock()
 					cancel()
 					continue
+				}
+				goal, goalErr = h.goals.update(*h.chats[id], nil)
+				if goalErr != nil || goal.HumanPaused || goal.State == "uncertain" {
+					h.mu.Unlock()
+					cancel()
+					return
 				}
 				receipt := sdkControlReceipt{SessionID: id, ClientRef: "operator-report:" + report.InputID, InputID: sdkID(), Content: report.Text, Status: "dispatching", CreatedAt: time.Now().UTC()}
 				origin := sdkEventOrigin{Type: "operator-lane", ChatID: report.ChildSessionID, Name: report.Name, Harness: report.Agent, Status: report.Kind}

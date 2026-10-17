@@ -4,6 +4,7 @@ import { unlink } from 'node:fs/promises';
 import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { CodexStream } from './codex-stream.mjs';
 import { ACPStream, isACPHarness } from './acp-stream.mjs';
 import { query, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
@@ -107,6 +108,13 @@ async function runClaude(s) {
       ...(existsSync(join(microsoftRoot, 'personal', 'enabled')) ? { microsoft_personal: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'microsoft-personal'], env: microsoftMcpEnv } } : {}),
       ...(existsSync(remoteConnectionFile) ? { remote: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'remote'], env: muxtermMcpEnv } } : {}) },
     includePartialMessages: true, permissionMode: s.permission === 'read-only' ? 'plan' : 'bypassPermissions', allowDangerouslySkipPermissions: true,
+    hooks: { PreToolUse: [{ matcher: 'ProposeGoal', hooks: [async input => {
+      if (input.tool_name !== 'ProposeGoal') return {};
+      if (typeof input.tool_input?.condition === 'string') emit(s.id, 'goal.proposal', {
+        inputId: input.tool_use_id || randomUUID(), message: input.tool_input.condition });
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+        permissionDecisionReason: 'Proposal recorded in muxterm. A human must approve it or authorize the direct operator to start it. Do not start or replace the goal yourself.' } };
+    }] }] },
     thinking: { type: 'adaptive', display: 'summarized' }, effort: 'high', maxTurns: 20 } });
   s.query = q;
   try {
@@ -114,6 +122,17 @@ async function runClaude(s) {
       if (msg.type === 'system' && msg.subtype === 'init') {
         s.nativeId = msg.session_id;
         emit(s.id, 'session.started', { nativeId: s.nativeId, capabilities: capabilities('claude') });
+      } else if (msg.type === 'active_goal') {
+        const snapshot = msg.value
+          ? { goal: msg.value.condition, goalState: 'active', goalReason: msg.value.last_reason || '' }
+          : { goalState: 'ended',
+            goalReason: 'Native goal ended or cleared; the SDK event does not distinguish the outcome.' };
+        if (msg.value) s.goalObjective = msg.value.condition;
+        s.goalState = snapshot.goalState;
+        emit(s.id, 'goal.progress', { ...snapshot, raw: msg });
+      } else if (msg.type === 'system' && msg.subtype === 'session_state_changed') {
+        if (msg.state === 'running') { s.busy = true; emit(s.id, 'turn.started'); }
+        if (msg.state === 'idle') { s.busy = false; emit(s.id, 'turn.completed'); }
       } else if (msg.type === 'stream_event') {
         const event = msg.event;
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta')
@@ -132,6 +151,13 @@ async function runClaude(s) {
             }
             emit(s.id, 'tool.started', { toolId: event.content_block.id, name: event.content_block.name, raw: event.content_block.input }); }
       } else if (msg.type === 'assistant') {
+        const control = s.goalControl;
+        if (control && msg.local_command_run?.command === 'goal' && msg.local_command_run.args === control.args) {
+          emit(s.id, 'goal.command', { raw: msg.local_command_run });
+          if (control.args === 'clear') emit(s.id, 'goal.snapshot', {
+            goalState: control.action === 'clear' ? 'cleared' : 'paused', raw: msg.local_command_run });
+          control.resolve({ command: msg.local_command_run, awaitingNativeObservation: control.args !== 'clear' });
+        }
         if (!thinkingStreamed) for (const block of msg.message?.content || []) if (block.type === 'thinking' && block.thinking)
           emit(s.id, 'thinking.delta', { text: block.thinking });
         for (const block of msg.message?.content || []) if (block.type === 'tool_use') {
@@ -161,14 +187,16 @@ async function runClaude(s) {
         s.busy = s.inFlightInputs.size > 0;
         emit(s.id, steeringAbort ? 'turn.continued'
           : s.cancelRequested || msg.subtype === 'interrupted' ? 'turn.cancelled'
-          : msg.subtype === 'success' ? (s.busy ? 'turn.continued' : 'turn.completed') : 'error',
-          { inputIds: accepted, message: msg.subtype });
+          : msg.subtype === 'success' && !msg.is_error ? (s.busy ? 'turn.continued' : 'turn.completed') : 'error',
+          { inputIds: accepted, message: msg.is_error ? msg.result || msg.subtype : msg.subtype });
         s.cancelRequested = false;
         s.steering = false;
       }
     }
   } catch (error) { s.busy = false; emit(s.id, 'error', { message: String(error) }); }
   finally {
+    s.claudeEnded = true;
+    s.goalControl?.reject(new Error('Claude stream ended before native command acknowledgement'));
     for (const pending of s.pendingInputs.values()) pending.reject(new Error('Claude stream ended before input acceptance was confirmed'));
     s.pendingInputs.clear();
   }
@@ -203,6 +231,31 @@ async function command(cmd) {
   }
   const s = sessions.get(sessionId);
   if (!s) throw new Error('Session is not resident; resume it first');
+  if (op === 'goal') {
+    if (s.harness === 'codex') {
+      s.codex ||= new CodexStream(s, emit);
+      const snapshot = await s.codex.goal(cmd.action, cmd.objective, cmd.paused);
+      return snapshot;
+    }
+    if (s.harness === 'claude') {
+      if (s.claudeEnded) { s.claudeEnded = false; void runClaude(s); }
+      if (s.goalControl) throw new Error('A native goal command is already pending; inspect its receipt');
+      const commands = await s.query.supportedCommands();
+      if (!commands.some(item => item.name === 'goal' && item.builtin)) return { unsupported: true, message: 'The installed Claude runtime does not advertise the native goal command.' };
+      const clearing = cmd.action === 'pause' || cmd.action === 'clear' || cmd.paused;
+      const args = clearing ? 'clear' : cmd.objective;
+      if (!clearing && (!args || args === 'clear')) throw new Error('The native command reserves clear; choose another goal condition');
+      let control;
+      const acknowledgement = new Promise((resolve, reject) => { control = { args, action: cmd.action, resolve, reject }; });
+      s.goalControl = control;
+      const timer = setTimeout(() => control.reject(new Error('Native goal command acknowledgement unavailable; do not blindly retry')), 35000);
+      try {
+        queue(s, { id: randomUUID(), kind: 'user', content: `/goal ${args}` });
+        return await acknowledgement;
+      } finally { clearTimeout(timer); if (s.goalControl === control) s.goalControl = null; }
+    }
+    throw new Error('Native goal controls unavailable for this adapter');
+  }
   if (op === 'options') {
     if (s.acp) return s.acp.options();
     if (s.harness === 'codex') {
@@ -262,6 +315,7 @@ async function command(cmd) {
     if (s.busy && input.kind !== 'steer' && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');
     if (s.acp) return await s.acp.send(input);
     if (s.harness === 'claude') {
+      if (s.claudeEnded) { s.claudeEnded = false; void runClaude(s); }
       if (input.model && input.model !== s.model) { await s.query.setModel(input.model); s.model = input.model; }
       if (input.effort !== s.effort) { await s.query.applyFlagSettings({ effortLevel: input.effort || null }); s.effort = input.effort || ''; }
     }

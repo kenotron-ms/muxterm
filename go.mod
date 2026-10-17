@@ -15,6 +15,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/creack/pty v1.1.24
 	github.com/go-oauth2/oauth2/v4 v4.5.4
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/msteinert/pam/v2 v2.1.0
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/sys v0.41.0
