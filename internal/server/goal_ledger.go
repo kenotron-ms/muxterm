@@ -179,6 +179,10 @@ func (ledger *goalLedger) update(chat sdkChat, change func(*goalDocument) error)
 	if change == nil {
 		return document, nil
 	}
+	beforeChange, err := json.Marshal(document)
+	if err != nil {
+		return document, err
+	}
 	previousVersion := document.Version
 	if err = change(&document); err != nil {
 		return document, err
@@ -187,7 +191,7 @@ func (ledger *goalLedger) update(chat sdkChat, change func(*goalDocument) error)
 	if err != nil {
 		return document, err
 	}
-	if bytes.Equal(data, unchanged) {
+	if bytes.Equal(beforeChange, unchanged) {
 		return document, nil
 	}
 	document.Version++

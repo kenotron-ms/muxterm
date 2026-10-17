@@ -36,6 +36,8 @@ ownership/operator association, requested/applied revisions, human pause holds,
 idempotent control receipts, native execution references and observations, and
 agent evidence/proposals. Native chat metadata remains a display projection,
 not an independent condition editor.
+Ordinary chat lifecycle events do not create empty goal records: no-op updates
+compare the document before and after the change, including when no row exists.
 
 `controlVersion` guards competing admissions; the storage `version` also changes
 with observations. Native progress therefore cannot invalidate an otherwise
