@@ -45,6 +45,11 @@ dispatch. An acknowledged receipt and an observed applied revision are distinct.
 Applied means the native goal configuration was observed, not that every already
 running tool has seen the new condition.
 
+HTTP rejections distinguish invalid requests (400), forbidden controls (403),
+missing proposals (404), stale control versions (409), pending native controls
+(423), and unavailable ledger storage (503). Storage failures fail closed without
+being reported as human authorization decisions.
+
 On restart, pending receipts become uncertain and active state becomes uncertain.
 Nothing is replayed. Human pause holds survive restart, including failed or
 uncertain native acknowledgements. Reconcile before making another request.
@@ -65,6 +70,10 @@ and `report_goal_evidence`. Mutations use the ledger's `controlVersion` as
 also target its directly owned lanes. Both are inert records, not instructions
 or notifications to peers. Only the owner or direct
 operator can control execution, and neither can release a human pause.
+
+New MCP tools require an authority audit: `scopedChatTool` currently excludes
+known alternative write/topology tools and registers other tools by default.
+Keep that exclusion list and the server authority boundary aligned.
 
 ## Proposals and changeable policy
 

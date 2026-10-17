@@ -199,7 +199,11 @@ func (ledger *goalLedger) update(chat sdkChat, change func(*goalDocument) error)
 	if err != nil {
 		return document, err
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return document, err
+	}
+	if affected != 1 {
 		return document, errGoalConflict
 	}
 	return document, transaction.Commit()

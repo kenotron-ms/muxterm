@@ -137,9 +137,14 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	chat := *c
 	if !humanBrowserRequest(r) {
 		document, err := h.goals.update(chat, nil)
-		if err != nil || document.HumanPaused {
+		if err != nil {
 			h.mu.Unlock()
-			http.Error(w, "human pause held or ledger unavailable; agent sends cannot wake this goal", http.StatusForbidden)
+			http.Error(w, "goal ledger unavailable; agent send was not admitted", http.StatusServiceUnavailable)
+			return
+		}
+		if document.HumanPaused {
+			h.mu.Unlock()
+			http.Error(w, "human pause held; agent sends cannot wake this goal", http.StatusForbidden)
 			return
 		}
 	}

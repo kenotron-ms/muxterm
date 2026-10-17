@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,6 +13,15 @@ import (
 )
 
 type goalControlContextKey struct{}
+
+type goalRequestError struct {
+	status  int
+	message string
+}
+
+func (err *goalRequestError) Error() string {
+	return err.message
+}
 
 func (h *sdkChatHost) directGoalOperatorsLocked(id string) []string {
 	operators := []string{}
@@ -164,7 +173,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		for _, receipt := range document.Receipts {
 			if receipt.ID == req.ClientRef {
 				if receipt.Actor != actor || receipt.Action != req.Action || (req.Action != "approve" && receipt.Objective != objective) || receipt.ProposalID != req.ProposalID || receipt.StartBy != req.StartBy || !slices.Equal(receipt.Evidence, req.Evidence) {
-					return fmt.Errorf("clientRef already used for another request")
+					return &goalRequestError{http.StatusBadRequest, "clientRef already used for another request"}
 				}
 				return nil
 			}
@@ -173,14 +182,14 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 			return errGoalConflict
 		}
 		if document.HumanPaused && !human && (req.Action == "resume" || req.Action == "start") {
-			return fmt.Errorf("only a human can release a human pause")
+			return &goalRequestError{http.StatusForbidden, "only a human can release a human pause"}
 		}
 		if (req.Action == "pause" || req.Action == "resume" || req.Action == "clear" || req.Action == "start" || req.Action == "authorize") && document.RequestedRevision == 0 {
-			return fmt.Errorf("no human goal is set")
+			return &goalRequestError{http.StatusBadRequest, "no human goal is set"}
 		}
 		for _, receipt := range document.Receipts {
 			if receipt.Status == "dispatching" {
-				return fmt.Errorf("native control acknowledgement is still pending; inspect ledger")
+				return &goalRequestError{http.StatusLocked, "native control acknowledgement is still pending; inspect ledger"}
 			}
 		}
 		if req.Action == "approve" {
@@ -195,7 +204,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !found {
-				return fmt.Errorf("pending proposal not found")
+				return &goalRequestError{http.StatusNotFound, "pending proposal not found"}
 			}
 		}
 		if req.Action == "set" || req.Action == "approve" {
@@ -209,7 +218,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Action == "authorize" || (req.Action == "approve" && req.StartBy == "operator") {
 			if operatorID == "" {
-				return fmt.Errorf("link a direct operator before authorizing a start")
+				return &goalRequestError{http.StatusBadRequest, "link a direct operator before authorizing a start"}
 			}
 			document.Policy.OperatorStart = &goalStartAuthorization{OperatorID: operatorID, Revision: document.RequestedRevision, GrantedBy: actor}
 		}
@@ -217,7 +226,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 			if !human && (req.Action == "start" || document.AgentPauseRevision != document.RequestedRevision || document.ExecutionAuthorizedRevision != document.RequestedRevision) {
 				grant := document.Policy.OperatorStart
 				if grant == nil || grant.OperatorID != actor || !slices.Contains(operatorIDs, actor) || grant.Revision != document.RequestedRevision || grant.ConsumedBy != "" {
-					return fmt.Errorf("human authorization for this operator and revision is required")
+					return &goalRequestError{http.StatusForbidden, "human authorization for this operator and revision is required"}
 				}
 				grant.ConsumedBy = req.ClientRef
 			}
@@ -259,7 +268,14 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		http.Error(w, err.Error(), 409)
+		status := http.StatusServiceUnavailable
+		var rejection *goalRequestError
+		if errors.As(err, &rejection) {
+			status = rejection.status
+		} else if errors.Is(err, errGoalConflict) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	if admitted {

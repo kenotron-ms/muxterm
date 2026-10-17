@@ -760,7 +760,7 @@ func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
 		if err != nil {
 			return fmt.Errorf("goal ledger unavailable: %w", err)
 		}
-		if document.RequestedRevision > 0 && document.State == "uncertain" || c.Goal != "" && document.RequestedRevision == 0 {
+		if (document.RequestedRevision > 0 && document.State == "uncertain") || (c.Goal != "" && document.RequestedRevision == 0) {
 			return errors.New("native goal requires reconciliation; use the human goal editor or an explicit scoped goal control before loading this session")
 		}
 	}

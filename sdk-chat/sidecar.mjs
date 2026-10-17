@@ -132,7 +132,7 @@ async function runClaude(s) {
         emit(s.id, 'goal.progress', { ...snapshot, raw: msg });
       } else if (msg.type === 'system' && msg.subtype === 'session_state_changed') {
         if (msg.state === 'running') { s.busy = true; emit(s.id, 'turn.started'); }
-        if (msg.state === 'idle') { s.busy = false; emit(s.id, 'turn.completed'); }
+        if (msg.state === 'idle') s.busy = false;
       } else if (msg.type === 'stream_event') {
         const event = msg.event;
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta')
