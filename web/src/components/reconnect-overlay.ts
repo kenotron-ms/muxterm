@@ -107,6 +107,45 @@ export class MuxReconnectOverlay extends LitElement {
       cursor: default;
     }
 
+    .overlay.notice {
+      inset: auto 16px 16px;
+      background: transparent;
+      padding: 0;
+      pointer-events: none;
+    }
+
+    .notice .container {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      gap: 4px 12px;
+      max-width: 520px;
+      padding: 14px 16px;
+      box-sizing: border-box;
+      text-align: left;
+      border: 1px solid var(--chrome-border, #414868);
+      border-radius: 10px;
+      background: var(--chrome-body, #1a1b26);
+      box-shadow: 0 4px 20px #0003;
+    }
+
+    .notice .spinner, .notice .dot {
+      grid-column: 1;
+      grid-row: 1 / 3;
+      width: 14px;
+      height: 14px;
+      box-sizing: border-box;
+    }
+
+    .notice .message { grid-column: 2; font-size: 13px; }
+    .notice .detail { grid-column: 2; color: var(--chrome-text, #a9b1d6); font-size: 12px; }
+    .notice button { grid-column: 3; grid-row: 1 / 3; pointer-events: auto; }
+    button:focus-visible { outline: 2px solid var(--chrome-accent, #7aa2f7); outline-offset: 3px; }
+
+    @media (max-width: 420px) {
+      .overlay.notice { inset-inline: 8px; bottom: 8px; }
+      .notice button { grid-column: 2; grid-row: 3; justify-self: start; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .spinner {
         animation: none;
@@ -208,9 +247,9 @@ export class MuxReconnectOverlay extends LitElement {
   private _detail(): string {
     switch (this.phase) {
       case 'offline':
-        return 'Waiting for the network to come back.';
+        return 'Workspace kept open. Reconnecting when your network returns.';
       case 'retrying':
-        return 'Contacting the server...';
+        return 'Workspace kept open. Contacting the server…';
       case 'waiting': {
         const secs = Math.max(0, Math.ceil((this.nextAttemptAt - this._now) / 1000));
         return secs <= 1 ? 'Next attempt in under a second' : `Next attempt in ${secs}s`;
@@ -244,7 +283,7 @@ export class MuxReconnectOverlay extends LitElement {
       `;
     }
     return html`
-      <div class="overlay" role="status" aria-live="polite">
+      <div class="overlay notice" role="status" aria-live="polite">
         <div class="container">
           ${busy ? html`<div class="spinner"></div>` : html`<div class="dot"></div>`}
           <div class="message">${this._headline()}</div>
