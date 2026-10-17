@@ -147,6 +147,7 @@ type Server struct {
 	sdkJobs            *sdkJobs
 	connections        *serviceConnections
 	browserAssistant   *browserAssistantRegistry
+	connectionSetups   *connectionSetupRegistry
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -174,6 +175,7 @@ func New(cfg Config) *Server {
 	s.sdkJobs = newSDKJobs(s.sdkChats)
 	s.connections = newServiceConnections()
 	s.browserAssistant = newBrowserAssistantRegistry(cfg.LocalToken)
+	s.connectionSetups = newConnectionSetupRegistry()
 	attachmentRoot, err := chatattachments.DefaultRoot()
 	if err != nil {
 		log.Panicf("sdk chat attachment root: %v", err)
@@ -257,6 +259,7 @@ func New(cfg Config) *Server {
 	// bearer token) is required — see internal/server/authmiddleware.go.
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
 	s.registerBrowserAssistantRoutes(protect)
+	s.registerConnectionSetupRoutes(protect)
 	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
 
 	// Opt-in AI capability. Deliberately a separate route family from

@@ -332,6 +332,7 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 	registerChatPageTools(srv)
 	registerConfigTools(srv)
 	registerBrowserAssistantTools(srv)
+	registerConnectionSetupTools(srv)
 	registerTriggerTools(srv, localOnly)
 
 	// attachOnce guards the one-time workspace attach for resources/list.

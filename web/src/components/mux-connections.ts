@@ -55,6 +55,7 @@ export class MuxConnections extends LitElement {
     h2 { margin:0; font-size:20px; } h3 { margin:25px 0 8px; font-size:13px; } .badge { padding:3px 9px; border-radius:999px; background:var(--chrome-hover); white-space:nowrap; font-size:11px; }
     .badge.ready { color:var(--mux-ok); } .badge.attention { color:var(--mux-warn); }
     .lead { margin-top:9px; } .box { margin-top:19px; padding:17px; border:1px solid var(--chrome-border); border-radius:10px; background:var(--chrome-bar); }
+    details.box summary { cursor:pointer; font-weight:650; } details.box summary:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:3px; }
     label { display:block; margin:13px 0; font-size:12px; font-weight:650; }
     input { display:block; width:100%; margin-top:5px; padding:8px 10px; border:1px solid var(--chrome-border); border-radius:7px; color:var(--chrome-text-bright); background:var(--chrome-body); }
     input[readonly] { color:var(--chrome-text-dim); }
@@ -174,6 +175,20 @@ export class MuxConnections extends LitElement {
     await this.request('/api/connections/remote',{method:'POST',body:JSON.stringify({provider:service.id,clientID:this.googleClientID.trim(),clientSecret:this.googleClientSecret})});
     this.googleClientID='';this.googleClientSecret='';
   }); }
+  private startGoogleSetup(service:Service) {
+    const existing=this.remotes?.items.some(item=>item.provider===service.id)??false;
+    const prompt=`Help me ${existing?'review and, if needed, redo':'set up'} ${service.name} in this Muxterm using Browser Assistant. Start by checking whether my Google account and Cloud project are eligible for the Google Workspace Developer Preview MCP service. Ask me which account and project to use; inspect existing registrations before creating another one.
+
+Use prepare_connection with provider "google" and services ["${service.id}"] on this Muxterm. Compare its exact callback, endpoint, and scopes with these displayed values:
+Callback: ${this.remotes?.callbackUrl||'Check the Connections page'}
+Endpoint: ${service.endpoint||'Check the Connections page'}
+Scopes: ${service.scopes?.join(', ')||'Check the Connections page'}
+
+Guide me through the Google Cloud Console using my paired Browser Assistant. Stop before any client secret appears. I will pause browser access and upload the Web OAuth JSON or enter credentials on the private Muxterm setup page. Never put a client ID, secret, registration file, or its contents in chat or agent tools. Then use check_connection and the opaque credential handle to configure the connection. Guide me through Google sign-in, checking tools, and choosing which read tools to enable. Do not read mail content just to verify setup.
+
+If I already have a connection, check its status first. Do not remove or replace it without my agreement. If the setup tools are unavailable, guide me through the existing private manual entry instead. If the Google account is ineligible, explain the blocker and stop.`;
+    this.dispatchEvent(new CustomEvent('connection-setup-chat',{detail:{prompt},bubbles:true,composed:true}));
+  }
   private authorizeRemote(id:string) { void this.run('remote-start',async()=>{
     const result=await this.request<{url:string}>(`/api/connections/remote/${encodeURIComponent(id)}/start`,{method:'POST'});
     window.location.assign(result.url);
@@ -214,6 +229,9 @@ export class MuxConnections extends LitElement {
     const ready=items.some(item=>item.state==='ready'&&item.allowedTools.length>0);
     return html`<div class="head"><h2>${service.name}</h2><span class="badge ${ready?'ready':''}">${ready?'Ready':'Developer preview · setup required'}</span></div>
       <p class="lead">${service.description}. Connect through Google's official service using a Web OAuth client from your Google Cloud project.</p>
+      <div class="box"><strong>${items.length?'Need to set up again?':'Set up with an agent'}</strong><p class="note">An agent can guide the Cloud registration in your paired browser. You enter credentials privately and choose when to authorize access.</p>
+        <div class="actions"><button class="action primary" @click=${()=>this.startGoogleSetup(service)}>${items.length?'Open setup chat again':'Open setup chat'}</button></div></div>
+      <details class="box"><summary>Setup requirements and manual entry</summary>
       <div class="box"><strong>Google Workspace Developer Preview</strong><p class="note">These official Google services require an enrolled Google Workspace account and Cloud project. This setup is not a supported route for a personal @gmail.com account. Google does not allow preview services in public apps before general availability. <a href="https://developers.google.com/workspace/preview" target="_blank" rel="noopener noreferrer">Preview requirements ↗</a></p></div>
       <div class="box"><strong>Before connecting</strong><p class="note">For permitted preview testing, enable the product and connector APIs in your enrolled Cloud project, configure the OAuth consent screen, and register this exact callback URL on a Web OAuth client. External apps may need test users and scope verification.</p>
         <label>Callback URL<input aria-label="Google callback URL" readonly .value=${this.remotes?.callbackUrl||''}></label>
@@ -222,14 +240,14 @@ export class MuxConnections extends LitElement {
         <ul>${service.scopes?.map(scope=>html`<li><code>${scope}</code></li>`)}</ul>
         <p class="note">Only these read tools can be enabled after a successful check: ${service.readTools?.join(', ')}. Newly discovered tools stay off. Google still controls the account grant, and data returned by tools can contain untrusted instructions.</p>
         <div class="actions"><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Google setup guide ↗</a></div></div>
+      <div class="box"><strong>Add ${service.name} manually</strong><p class="note">Enter the client ID and secret from the Web OAuth client registered with the callback URL above. Authorization and a live tool check are required before this connection is ready.</p>
+        <label>Client ID<input aria-label="Google client ID" autocomplete="off" .value=${this.googleClientID} @input=${(e:Event)=>this.googleClientID=(e.target as HTMLInputElement).value}></label>
+        <label>Client secret<input aria-label="Google client secret" type="password" autocomplete="off" .value=${this.googleClientSecret} @input=${(e:Event)=>this.googleClientSecret=(e.target as HTMLInputElement).value}></label>
+        <div class="actions"><button class="action primary" ?disabled=${!!this.busy||!this.googleClientID.trim()||!this.googleClientSecret.trim()} @click=${()=>this.createGoogle(service)}>Save app details</button></div></div></details>
       ${items.map(item=>html`<div class="box"><div class="head"><strong>${item.name} connection</strong><span class="badge ${item.state==='ready'?'ready':item.state==='needs-attention'?'attention':''}">${item.state==='ready'?(item.allowedTools.length?'Ready':'Choose tools'):item.state==='authorized'?'Authorized · check tools':item.state==='needs-attention'?'Needs attention':'Sign in required'}</span></div>
         <p class="note">${item.error||(item.state==='ready'?`${item.toolCount} approved read tools found; ${item.allowedTools.length} enabled for chats.`:item.state==='authorized'?'Check service access to discover read tools.':'Sign in, then check service access to discover read tools.')}</p>
         <div class="actions"><button class="action primary" ?disabled=${!!this.busy} @click=${()=>this.authorizeRemote(item.id)}>${item.state==='authorization-required'?'Sign in with Google':'Reauthorize'}</button><button class="action" ?disabled=${!!this.busy||item.state==='authorization-required'} @click=${()=>this.checkRemote(item.id)}>Check tools</button><button class="action" ?disabled=${!!this.busy} @click=${()=>this.removeRemote(item.id)}>Remove</button></div>
         ${item.discoveredTools?.length?html`<h3>Enable read tools for chats</h3><p class="note">These tools are off until you save your selection. Enabled tools appear in new chats across all harnesses.</p>${item.discoveredTools.map(tool=>html`<label><input type="checkbox" .checked=${(this.allowedDraft[item.id]??item.allowedTools).includes(tool.name)} @change=${(e:Event)=>this.toggleRemoteTool(item,tool.name,(e.target as HTMLInputElement).checked)}><strong>${tool.name}</strong>${tool.description?html`<small> — ${tool.description}</small>`:nothing}</label>`)}<button class="action" ?disabled=${!!this.busy||!this.allowedDraft[item.id]} @click=${()=>this.saveRemoteTools(item)}>Save enabled tools</button>`:nothing}</div>`)}
-      <div class="box"><strong>Add ${service.name}</strong><p class="note">Enter the client ID and secret from the Web OAuth client registered with the callback URL above. Authorization and a live tool check are required before this connection is ready.</p>
-        <label>Client ID<input aria-label="Google client ID" autocomplete="off" .value=${this.googleClientID} @input=${(e:Event)=>this.googleClientID=(e.target as HTMLInputElement).value}></label>
-        <label>Client secret<input aria-label="Google client secret" type="password" autocomplete="off" .value=${this.googleClientSecret} @input=${(e:Event)=>this.googleClientSecret=(e.target as HTMLInputElement).value}></label>
-        <div class="actions"><button class="action primary" ?disabled=${!!this.busy||!this.googleClientID.trim()||!this.googleClientSecret.trim()} @click=${()=>this.createGoogle(service)}>Save app details</button></div></div>
       <p class="note">Google's service is in Developer Preview. A saved app registration or public endpoint alone does not establish access. Refresh tokens for external apps in Testing mode can expire after seven days.</p>`;
   }
   private githubDetail(g:GitHubState) {
