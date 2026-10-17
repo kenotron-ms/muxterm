@@ -28,6 +28,7 @@ import (
 // Remote MCP registration is deliberately a pre-registered OAuth client. Dynamic
 // registration and arbitrary local commands are outside this connection surface.
 type remoteConnection struct {
+	SetupOwner            string              `json:"setupOwner,omitempty"`
 	ID                    string              `json:"id"`
 	Provider              string              `json:"provider,omitempty"`
 	Name                  string              `json:"name"`
@@ -460,17 +461,40 @@ func (s *Server) handleRemoteConnections(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+type remoteConnectionInput struct {
+	Provider, Name, Endpoint, IssuerURL, ClientID, ClientSecret, Scopes string
+}
+
 func (s *Server) handleRemoteCreate(w http.ResponseWriter, r *http.Request) {
-	var input struct{ Provider, Name, Endpoint, IssuerURL, ClientID, ClientSecret, Scopes string }
+	var input remoteConnectionInput
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384)).Decode(&input); err != nil {
 		http.Error(w, "invalid connection details", 400)
 		return
 	}
+	connection, status, err := s.buildRemoteConnection(r.Context(), input)
+	if err != nil {
+		http.Error(w, err.Error(), status)
+		return
+	}
+	err = withRemoteConnections(func(records map[string]remoteConnection) error {
+		if len(records) >= 20 {
+			return errors.New("connection limit reached")
+		}
+		records[connection.ID] = connection
+		return saveRemoteConnections(records)
+	})
+	if err != nil {
+		http.Error(w, "could not save connection", 500)
+		return
+	}
+	writeSDKJSON(w, 201, connection.public())
+}
+
+func (s *Server) buildRemoteConnection(ctx context.Context, input remoteConnectionInput) (remoteConnection, int, error) {
 	if input.Provider != "" {
 		preset, ok := googleConnectionPresets[input.Provider]
 		if !ok {
-			http.Error(w, "unknown service preset", 400)
-			return
+			return remoteConnection{}, 400, errors.New("unknown service preset")
 		}
 		// The endpoint and read scopes belong to this preset, not the caller.
 		input.Name = preset.Name
@@ -482,84 +506,60 @@ func (s *Server) handleRemoteCreate(w http.ResponseWriter, r *http.Request) {
 	input.ClientID = strings.TrimSpace(input.ClientID)
 	input.ClientSecret = strings.TrimSpace(input.ClientSecret)
 	if input.Name == "" || len(input.Name) > 80 || input.ClientID == "" || len(input.ClientID) > 512 || len(input.ClientSecret) > 2048 {
-		http.Error(w, "name and OAuth client ID are required", 400)
-		return
+		return remoteConnection{}, 400, errors.New("name and OAuth client ID are required")
 	}
 	if input.Provider != "" && strings.TrimSpace(input.ClientSecret) == "" {
-		http.Error(w, "Google Web OAuth client secret is required", 400)
-		return
+		return remoteConnection{}, 400, errors.New("Google Web OAuth client secret is required")
 	}
 	endpoint, err := validatedPublicURL(strings.TrimSpace(input.Endpoint))
 	if err != nil {
-		http.Error(w, "invalid service endpoint: "+err.Error(), 400)
-		return
+		return remoteConnection{}, 400, errors.New("invalid service endpoint: " + err.Error())
 	}
 	if endpoint.RawQuery != "" {
-		http.Error(w, "service endpoint cannot contain a query", 400)
-		return
+		return remoteConnection{}, 400, errors.New("service endpoint cannot contain a query")
 	}
-	issuers, err := discoverProtectedResource(r.Context(), endpoint)
+	issuers, err := discoverProtectedResource(ctx, endpoint)
 	if err != nil {
-		http.Error(w, "service OAuth metadata could not be verified", 400)
-		return
+		return remoteConnection{}, 400, errors.New("service OAuth metadata could not be verified")
 	}
 	selectedIssuer := canonicalRootIssuer(strings.TrimSpace(input.IssuerURL))
 	if selectedIssuer == "" {
 		selectedIssuer = canonicalRootIssuer(issuers[0])
 	}
 	if !slices.ContainsFunc(issuers, func(issuer string) bool { return canonicalRootIssuer(issuer) == selectedIssuer }) {
-		http.Error(w, "OAuth issuer is not advertised by this service", 400)
-		return
+		return remoteConnection{}, 400, errors.New("OAuth issuer is not advertised by this service")
 	}
 	issuer, err := validatedPublicURL(selectedIssuer)
 	if err != nil || issuer.RawQuery != "" {
-		http.Error(w, "invalid OAuth issuer", 400)
-		return
+		return remoteConnection{}, 400, errors.New("invalid OAuth issuer")
 	}
-	authURL, tokenURL, requireIss, err := discoverRemoteOAuth(r.Context(), issuer)
+	authURL, tokenURL, requireIss, err := discoverRemoteOAuth(ctx, issuer)
 	if err != nil {
-		http.Error(w, "OAuth issuer discovery failed", 400)
-		return
+		return remoteConnection{}, 400, errors.New("OAuth issuer discovery failed")
 	}
 	authorizationEndpoint, err := validatedPublicURL(authURL)
 	if err != nil {
-		http.Error(w, "invalid discovered authorization endpoint", 400)
-		return
+		return remoteConnection{}, 400, errors.New("invalid discovered authorization endpoint")
 	}
 	for _, reserved := range []string{"state", "client_id", "redirect_uri", "response_type", "scope", "code_challenge", "code_challenge_method", "resource"} {
 		if _, ok := authorizationEndpoint.Query()[reserved]; ok {
-			http.Error(w, "authorization endpoint contains reserved parameters", 400)
-			return
+			return remoteConnection{}, 400, errors.New("authorization endpoint contains reserved parameters")
 		}
 	}
 	tokenEndpoint, err := validatedPublicURL(tokenURL)
 	if err != nil || tokenEndpoint.RawQuery != "" {
-		http.Error(w, "invalid discovered token endpoint", 400)
-		return
+		return remoteConnection{}, 400, errors.New("invalid discovered token endpoint")
 	}
 	scopes := strings.Fields(input.Scopes)
 	if len(scopes) == 0 || len(scopes) > 30 {
-		http.Error(w, "enter the scopes required by this service", 400)
-		return
+		return remoteConnection{}, 400, errors.New("enter the scopes required by this service")
 	}
 	id, err := randomURLSafeString(9)
 	if err != nil {
-		http.Error(w, "could not create connection", 500)
-		return
+		return remoteConnection{}, 500, errors.New("could not create connection")
 	}
-	c := remoteConnection{ID: id, Provider: input.Provider, Name: input.Name, Endpoint: endpoint.String(), Issuer: selectedIssuer, RequireIssuerResponse: requireIss, AuthURL: authURL, TokenURL: tokenURL, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: scopes}
-	err = withRemoteConnections(func(records map[string]remoteConnection) error {
-		if len(records) >= 20 {
-			return errors.New("connection limit reached")
-		}
-		records[id] = c
-		return saveRemoteConnections(records)
-	})
-	if err != nil {
-		http.Error(w, "could not save connection", 500)
-		return
-	}
-	writeSDKJSON(w, 201, c.public())
+	connection := remoteConnection{ID: id, Provider: input.Provider, Name: input.Name, Endpoint: endpoint.String(), Issuer: selectedIssuer, RequireIssuerResponse: requireIss, AuthURL: authURL, TokenURL: tokenURL, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: scopes}
+	return connection, http.StatusCreated, nil
 }
 
 func (s *Server) handleRemoteItem(w http.ResponseWriter, r *http.Request) {
