@@ -5,35 +5,37 @@ go 1.24.2
 toolchain go1.24.4
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.20.0
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1
 	github.com/BurntSushi/toml v1.6.0
 	github.com/anthropics/anthropic-sdk-go v1.62.0
 	github.com/charmbracelet/x/ansi v0.11.7
-	github.com/charmbracelet/x/term v0.2.2
 	github.com/charmbracelet/x/vt v0.0.0-20260602025833-85a30b5e440a
 	github.com/coder/websocket v1.8.14
 	github.com/creack/pty v1.1.24
 	github.com/go-oauth2/oauth2/v4 v4.5.4
+	github.com/modelcontextprotocol/go-sdk v1.3.1
 	github.com/msteinert/pam/v2 v2.1.0
 	github.com/yuin/goldmark v1.8.6
+	golang.org/x/oauth2 v0.30.0
 	golang.org/x/sys v0.41.0
+	modernc.org/sqlite v1.46.0
 )
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.11.2 // indirect
-	github.com/AzureAD/microsoft-authentication-library-for-go v1.6.0 // indirect
+	github.com/charmbracelet/x/term v0.2.2 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
-	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.3.1 // indirect
-	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	golang.org/x/crypto v0.41.0 // indirect
+	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/net v0.43.0 // indirect
-	golang.org/x/oauth2 v0.30.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
+	golang.org/x/term v0.34.0 // indirect
+	modernc.org/libc v1.67.6 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.11.0 // indirect
 )
 
 require (

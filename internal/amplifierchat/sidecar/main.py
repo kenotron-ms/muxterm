@@ -11,6 +11,7 @@
 import os  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
+import uuid  # noqa: E402
 _PROCESS_T0 = time.monotonic()
 
 _REAL_STDOUT_FD = os.dup(1)
@@ -165,8 +166,9 @@ def sdk_provider_context(messages, provider):
 
 
 class SDKChatSession:
-    def __init__(self, session_id, cwd, bundle="anchors", provider="", model="", effort="", mode=""):
+    def __init__(self, session_id, cwd, bundle="anchors", provider="", model="", effort="", mode="", origin_token=""):
         self.id, self.cwd = session_id, cwd
+        self.origin_token = origin_token
         self.bundle, self.provider = bundle or "anchors", provider or ""
         self.selected_model, self.effort = model or "", effort or ""
         # Amplifier's own mode overlay (bundle-modes), not the harness-generic
@@ -185,6 +187,8 @@ class SDKChatSession:
         self.cancel_requested = False
         self.steering = False
         self.finish_task = None
+        self.goal_paused = False
+        self.saved_goal = None
 
     @staticmethod
     def image_content(command, coordinator):
@@ -290,7 +294,7 @@ class SDKChatSession:
             raise RuntimeError("muxterm SDK chat MCP binary unavailable")
         mcp_tool = {"module": "tool-mcp",
                     "source": "git+https://github.com/microsoft/amplifier-module-tool-mcp@main",
-                    "config": {"servers": {"muxterm": {"command": mcp_bin, "args": ["mcp"]}}}}
+                    "config": {"servers": {"muxterm": {"command": mcp_bin, "args": ["mcp"], "env": {"MUXTERM_CHAT_ORIGIN_TOKEN": self.origin_token}}}}}
         github_marker = (Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
                          / "muxterm" / "sdk-chat" / "connections" / "github-enabled")
         github_enabled = github_marker.is_file()
@@ -314,7 +318,7 @@ class SDKChatSession:
                 tool_plan.append(copy.deepcopy(mcp_tool))
             else:
                 entry.setdefault("config", {}).setdefault("servers", {})["muxterm"] = {
-                    "command": mcp_bin, "args": ["mcp"]}
+                    "command": mcp_bin, "args": ["mcp"], "env": {"MUXTERM_CHAT_ORIGIN_TOKEN": self.origin_token}}
                 if github_enabled:
                     entry["config"]["servers"]["github"] = {"command": mcp_bin,
                                                           "args": ["connection-mcp", "github"]}
@@ -415,6 +419,9 @@ class SDKChatSession:
         timing("sdk.loop_live_mount", mount_start)
         self.runtime = Runtime(session_id=self.id, observer=self.observe)
         self.session.coordinator.register_capability("live.runtime", self.runtime)
+        async def goal_continuation_allowed():
+            return not self.goal_paused
+        self.session.coordinator.register_capability("live.continuation_guard", goal_continuation_allowed)
         self.session.coordinator.register_capability("live.attachments.encode", self.image_content)
         if transcript:
             context = self.session.coordinator.get("context")
@@ -534,6 +541,7 @@ class SDKChatSession:
             return cont
         async def goal_progress(event, data):
             frame(self.id, "goal.progress", goalState=str(data.get("state") or ""),
+                  goal=str(data.get("condition") or ""),
                   goalReason=str(data.get("reason") or ""),
                   goalSummary=str(data.get("summary") or ""), raw=data)
             return cont
@@ -645,6 +653,34 @@ class SDKChatSession:
                            for item in attachments])
         return {"status": "accepted", "inputId": input_id}
 
+    async def goal(self, action, objective, paused=False, revision=0):
+        coordinator = self.session.coordinator
+        if not coordinator.get_capability("live.continuation_guard_supported"):
+            return {"unsupported": True, "message": "The mounted loop lacks native goal continuation guards."}
+        previous = coordinator.session_state.get("goal") or self.saved_goal or {}
+        if action in ("pause", "clear") or paused:
+            self.saved_goal = copy.deepcopy(previous) if previous.get("condition") == objective else {}
+            if objective:
+                self.saved_goal.update(condition=objective, task_revision=revision)
+            self.goal_paused = True
+            coordinator.session_state["goal"] = None
+            snapshot = {"goal": objective, "goalState": "cleared" if action == "clear" else "paused"}
+        elif action in ("set", "resume"):
+            goal = copy.deepcopy(previous) if previous.get("condition") == objective else {}
+            goal.update(condition=objective, task_id=self.id, task_revision=revision)
+            goal.setdefault("turns_used", 0)
+            goal.setdefault("cap", None)
+            self.goal_paused = False
+            self.saved_goal = goal
+            coordinator.session_state["goal"] = goal
+            snapshot = {"goal": objective, "goalState": "active"}
+        else:
+            raise ValueError("unsupported native goal action")
+        frame(self.id, "goal.snapshot", **snapshot, raw={"revision": revision, "source": "loop-live-coordinator"})
+        if action in ("set", "resume") and not paused and not self.active:
+            await self.send({"kind": "user", "id": str(uuid.uuid4()), "content": objective, "source": "user"})
+        return snapshot
+
     async def close(self):
         self.closed = True
         if self.task and not self.task.done():
@@ -671,12 +707,14 @@ async def command(cmd):
             cwd = cmd.get("cwd")
             if not cwd or not Path(cwd).is_dir(): raise ValueError("Amplifier project folder unavailable")
             session = SDKChatSession(sid, cwd, cmd.get("bundle") or "anchors", cmd.get("provider") or "",
-                                     cmd.get("model") or "", cmd.get("effort") or "", cmd.get("mode") or "")
+                                     cmd.get("model") or "", cmd.get("effort") or "", cmd.get("mode") or "", cmd.get("originToken") or "")
             await session.build()
             SDK_CHAT_SESSIONS[sid] = session
         return {"sessionId": sid, "capabilities": CAPS}
     session = SDK_CHAT_SESSIONS.get(sid)
     if session is None: raise ValueError("Amplifier session is not resident; resume it first")
+    if op == "goal":
+        return await session.goal(cmd.get("action"), cmd.get("objective") or "", bool(cmd.get("paused")), cmd.get("revision", 0))
     if op == "title":
         from amplifier_foundation.session.metadata import SessionMetadataStore
         metadata_store = SessionMetadataStore(session.store.base_dir / sid)
@@ -741,7 +779,7 @@ async def command(cmd):
             selected = next((row for row in current["models"] if row["id"] == model), None)
             if selected is None or (effort and effort not in selected["efforts"]):
                 raise ValueError("unsupported model or effort for the active Amplifier provider")
-        replacement = SDKChatSession(sid, session.cwd, bundle, provider, model, effort, mode)
+        replacement = SDKChatSession(sid, session.cwd, bundle, provider, model, effort, mode, session.origin_token)
         try:
             await replacement.build()
         except BaseException:
@@ -758,7 +796,7 @@ async def command(cmd):
             await session.close()
             if session.finish_task: await session.finish_task
             replacement = SDKChatSession(sid, session.cwd, session.bundle, session.provider,
-                                         session.selected_model, session.effort, session.mode)
+                                         session.selected_model, session.effort, session.mode, session.origin_token)
             try:
                 await replacement.build()
             except BaseException as exc:

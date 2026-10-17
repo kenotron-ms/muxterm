@@ -62,13 +62,24 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { BookOpen, Bot, Check, ChevronDown, ChevronRight, Columns2, Copy, FilePenLine, GitFork, Globe, Mic, Network, PanelLeft, PanelRight, Search, Terminal, Wrench, type IconNode } from 'lucide';
+import { BookOpen, Bot, Check, ChevronDown, ChevronRight, CircleX, Columns2, Copy, FilePenLine, GitFork, Globe, Mic, Network, NotebookTabs, PanelLeft, PanelRight, Pause, Pencil, Play, Search, Target, Terminal, Wrench, X, type IconNode } from 'lucide';
+
+type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
   @state() private chat?: SDKChat;
+  @state() private goalDocument?: GoalDocument;
+  @state() private goalEditor = false;
+  @state() private goalDraft = '';
+  @state() private goalNotice = '';
+  @state() private goalSaving = false;
+  @state() private goalLedgerOpen = false;
+  @state() private goalLedgerDocuments: GoalDocument[] = [];
+  private goalTimer?: ReturnType<typeof setInterval>;
+  private goalEditorVersion = 0;
   @state() private scheduledJob?: { name:string };
   @state() private blocks: Block[] = [];
   @state() private trajectory: SDKEvent[] = [];
@@ -406,6 +417,27 @@ export class MuxSDKChat extends LitElement {
     .composer { box-sizing:border-box; max-width:790px; margin:auto; border:1px solid var(--chrome-border,#41485f); border-radius:18px; background:var(--chrome-bar,#202632); padding:13px 14px 9px; box-shadow:0 8px 28px rgba(0,0,0,.08); transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 58%,var(--chrome-border,#41485f)); box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent,#9bb8f7) 14%,transparent); }
     .composer-row { display:flex; }
+    .goal-banner { display:flex; align-items:center; gap:8px; min-width:0; height:29px; margin-bottom:7px; border-bottom:1px solid var(--chrome-border,#41485f); padding-bottom:6px; font-size:12px; }
+    .goal-condition { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:0; }
+    .goal-state { flex-shrink:0; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; max-width:36%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .goal-icon { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; flex-shrink:0; border:0; border-radius:5px; padding:0; color:inherit; background:transparent; cursor:pointer; }
+    .goal-icon:hover { background:var(--chrome-hover,#ffffff12); }
+    .goal-icon:disabled { opacity:.35; cursor:not-allowed; }
+    .goal-overlay { position:absolute; inset:0; z-index:80; display:flex; align-items:center; justify-content:center; background:#0006; padding:18px; }
+    .goal-editor { width:min(570px,100%); padding:20px; border:1px solid var(--chrome-border,#41485f); border-radius:12px; background:var(--chrome-bar,#202632); box-shadow:0 12px 40px #0006; }
+    .goal-editor h2, .goal-utility h2 { margin:0 0 12px; font-size:16px; }
+    .goal-editor textarea { box-sizing:border-box; width:100%; min-height:140px; resize:vertical; background:transparent; color:inherit; border:1px solid var(--chrome-border,#41485f); padding:10px; border-radius:6px; font:inherit; }
+    .goal-editor p, .goal-utility p { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; line-height:1.5; }
+    .goal-editor-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:14px; }
+    .goal-editor-actions button { padding:7px 12px; border-radius:6px; border:1px solid var(--chrome-border,#41485f); color:inherit; background:transparent; cursor:pointer; }
+    .goal-utility { position:absolute; z-index:60; top:42px; right:0; bottom:0; box-sizing:border-box; width:min(470px,100%); overflow:auto; padding:20px; background:var(--chrome-bar,#202632); border-left:1px solid var(--chrome-border,#41485f); box-shadow:-8px 0 28px #0003; }
+    .goal-utility header { display:flex; align-items:center; justify-content:space-between; }
+    .goal-ledger-record { border-top:1px solid var(--chrome-border,#41485f); padding:14px 0; overflow-wrap:anywhere; }
+    .goal-ledger-record li { font-size:12px; margin:7px 0; line-height:1.5; }
+    .goal-ledger-record ol { padding-left:20px; }
+    .goal-notice { font-size:12px; color:var(--chrome-text-dim,#9aa3b8); padding:4px 0; }
+    .goal-utility select, .goal-utility button:not(.goal-icon) { padding:6px 9px; border:1px solid var(--chrome-border,#41485f); border-radius:6px; background:var(--chrome-bar,#202632); color:inherit; font:inherit; }
+    .goal-utility button:disabled { opacity:.5; cursor:not-allowed; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
     .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:220px; font:var(--mux-font-size,16px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
@@ -473,6 +505,7 @@ export class MuxSDKChat extends LitElement {
     void fetchVoiceStatus().then(status => { this.voiceAvailable = status.enabled && !status.restartRequired; });
   }
   override disconnectedCallback() {
+    if (this.goalTimer) clearInterval(this.goalTimer);
     this.flushDraft();
     this.flushAgentDraft();
     this.retainChatView();
@@ -677,6 +710,10 @@ export class MuxSDKChat extends LitElement {
     this.voice?.stop();
     this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
     this.activeSession = this.sessionId;
+    this.goalDocument = undefined; this.goalEditor = false; this.goalLedgerOpen = false; this.goalNotice = '';
+    if (this.goalTimer) clearInterval(this.goalTimer);
+    void this.refreshGoal();
+    this.goalTimer = setInterval(() => { if (!document.hidden) void this.refreshGoal(); }, 2000);
     this.draft = readDraft(this.activeSession, 'message');
     this.draftHasContent = !!this.draft.trim();
     this.agentDraft = readDraft(this.activeSession, 'agent');
@@ -1206,6 +1243,11 @@ export class MuxSDKChat extends LitElement {
       if (last?.kind === kind && last.channel === 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind, channel:'voice', text:event.text || '' });
     }
+    else if (event.type === 'turn.started') {
+      this.busy = true;
+      markStart(this.currentTurn);
+      if (!blocks.some(block => block.turn === this.currentTurn && block.kind === 'progress')) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Working…' });
+    }
     else if (event.type === 'operator.lane.report') {
       this.upsertLaneCard(blocks, event, true);
       if (!this.replaying) void sdkChats.refresh();
@@ -1325,7 +1367,7 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'goal.progress') {
       if (this.chat) this.chat = { ...this.chat, goalState: event.goalState, goalReason: event.goalReason, goalSummary: event.goalSummary };
-      if (event.goalState !== 'continuing') blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:`Goal ${event.goalState || 'updated'}: ${event.goalSummary || event.goalReason || ''}` });
+      if (event.goalState && !['active','continuing','paused','cleared'].includes(event.goalState)) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:`Goal ${event.goalState}: ${event.goalSummary || event.goalReason || ''}` });
     }
     else if (event.type === 'operator.lane.status') {
       this.upsertLaneCard(blocks, event, false);
@@ -2036,6 +2078,115 @@ export class MuxSDKChat extends LitElement {
       : mode === 'send' ? html`<span aria-hidden="true">↑</span>` : html`<span aria-hidden="true">■</span>`;
     return html`<button class="send ${mode === 'voice-stop' ? 'voice-active' : ''}" aria-label=${label} title=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</button>`;
   }
+  private async refreshGoal() {
+    const id = this.activeSession;
+    try {
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/goal`), { cache:'no-store' });
+      if (!response.ok) throw new Error(await response.text());
+      const record = await response.json() as GoalDocument;
+      if (id !== this.activeSession) return;
+      if (this.goalDocument && record.version < this.goalDocument.version) return;
+      this.goalDocument = record;
+      if (this.goalLedgerOpen) {
+        const ledger = await fetch(apiPath('/api/sdk-goal-ledger'), { cache:'no-store' });
+        if (!ledger.ok) throw new Error(await ledger.text());
+        const records = await ledger.json() as GoalDocument[];
+        if (id === this.activeSession) this.goalLedgerDocuments = records.some(existing => existing.chatId === id) ? records : [record,...records];
+      }
+    } catch (error) { if (id === this.activeSession) this.goalNotice = String(error); }
+  }
+  private async openGoalEditor() {
+    const id = this.activeSession;
+    await this.refreshGoal();
+    if (id !== this.activeSession) return;
+    this.goalDraft = this.goalDocument?.revisions.at(-1)?.condition || this.chat?.goal || '';
+    this.goalEditorVersion = this.goalDocument?.controlVersion || 0;
+    this.goalEditor = true;
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.goal-editor textarea')?.focus());
+  }
+  private async linkGoalOperator(record:GoalDocument, operatorId:string) {
+    const operator = sdkChats.chats.find(chat => chat.id === operatorId && chat.operator);
+    if (!operator || this.goalSaving) return;
+    this.goalSaving = true;
+    try {
+      await sdkChats.operator(operatorId,{laneIds:[...new Set([...(operator.operatorLanes || []),record.chatId])]});
+      await this.refreshGoal();
+    } catch (error) { this.goalNotice = String(error); }
+    finally { this.goalSaving = false; }
+  }
+  private async controlGoal(action:string, target = this.goalDocument, details:{proposalId?:string;startBy?:string} = {}) {
+    if (!target || this.goalSaving) return;
+    const id = target.chatId;
+    this.goalSaving = true; this.goalNotice = '';
+    try {
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/goal`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action,objective:action === 'set' ? this.goalDraft : '',clientRef:crypto.randomUUID(),expectedVersion:action === 'set' ? this.goalEditorVersion : target.controlVersion,...details}) });
+      if (!response.ok) throw new Error(await response.text());
+      const record = await response.json() as GoalDocument;
+      if (id === this.activeSession && record.version >= (this.goalDocument?.version || 0)) this.goalDocument = record;
+      this.goalLedgerDocuments = this.goalLedgerDocuments.map(existing => existing.chatId === id ? record : existing);
+      this.goalEditor = false;
+      this.goalNotice = '';
+    } catch (error) { this.goalNotice = String(error); }
+    finally { this.goalSaving = false; }
+  }
+  private goalBanner() {
+    const record = this.goalDocument;
+    const condition = record?.revisions.at(-1)?.condition || this.chat?.goal || '';
+    const supported = ['codex','amplifier','claude'].includes(this.chat?.harness || '');
+    const pending = record?.requestedRevision !== record?.appliedRevision;
+    const pausePending = record?.receipts.some(receipt => receipt.action === 'pause' && receipt.status === 'dispatching');
+    const humanHold = pausePending ? 'Pause requested' : record?.state === 'paused' ? 'Paused by you' : `Human hold · ${record?.state}`;
+    const state = record?.humanPaused ? `${humanHold}${pending ? ` · v${record.requestedRevision} pending` : ''}` : !supported ? 'Controls unavailable' : pending ? `v${record?.requestedRevision} requested · v${record?.appliedRevision || 0} applied` : record?.state || 'Not set';
+    const paused = record?.humanPaused || ['not-set','paused','complete','achieved','stalled','cap_hit','cancelled','error','ended','cleared'].includes(record?.state || '');
+    const button = (label:string, glyph:IconNode, action:()=>void, disabled=false, title=label) => html`<button class="goal-icon" aria-label=${label} title=${title} ?disabled=${disabled || this.goalSaving} @click=${action}>${icon(glyph,{size:14})}</button>`;
+    const executionTitle = !supported ? record?.gap : this.chat?.harness === 'claude' ? paused ? 'Reactivate the native goal; counters reset' : 'Suspend by clearing the native Claude goal; current tool effects are retained' : record?.state === 'cleared' ? 'Resume the saved condition as a new native goal' : paused ? 'Resume goal' : 'Pause goal';
+    return html`<div class="goal-banner" aria-label="Goal"><span aria-hidden="true">${icon(Target,{size:14})}</span><span class="goal-condition" title=${condition || 'Set a human-owned stop condition'}>${condition || 'No goal set'}</span><span class="goal-state" title=${`${state}. ${record?.gap || ''}`}>${condition ? state : ''}</span>${button('Edit goal',Pencil,() => this.openGoalEditor())}${button(paused ? 'Resume goal' : 'Pause goal',paused ? Play : Pause,() => void this.controlGoal(paused ? 'resume' : 'pause'),!condition || !supported, executionTitle)}${button('Cancel goal',CircleX,() => void this.controlGoal('clear'),!condition || !supported)}${button('Open ledger',NotebookTabs,() => { this.goalLedgerOpen = !this.goalLedgerOpen; void this.refreshGoal(); })}</div>${this.goalNotice ? html`<div class="goal-notice" role="status">${this.goalNotice}</div>` : nothing}`;
+  }
+  private goalEditorKeys(event:KeyboardEvent) {
+    if (event.key === 'Escape' && !this.goalSaving) {
+      event.stopPropagation();
+      this.goalEditor = false;
+      void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Edit goal"]')?.focus());
+    }
+    if (event.key === 'Tab') {
+      const controls = Array.from(this.shadowRoot?.querySelectorAll<HTMLElement>('.goal-editor textarea, .goal-editor button:not(:disabled)') || []);
+      const first = controls[0], last = controls.at(-1), active = this.shadowRoot?.activeElement;
+      if (event.shiftKey && active === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && active === last) { event.preventDefault(); first?.focus(); }
+    }
+  }
+  private goalLedgerRecord(record:GoalDocument) {
+    return html`<section class="goal-ledger-record">
+      <strong>${sdkChats.chats.find(chat => chat.id === record.chatId)?.title || record.chatId}</strong>
+      <p>${record.harness} · requested v${record.requestedRevision} · applied v${record.appliedRevision} · ${record.state}${record.humanPaused ? ' · human pause held' : ''}</p>
+      <p>${record.gap}</p>
+      ${!record.operatorId ? html`<label>Link direct operator <select aria-label="Link direct operator" ?disabled=${this.goalSaving} @change=${(event:Event) => void this.linkGoalOperator(record,(event.target as HTMLSelectElement).value)}><option value="">Choose an operator…</option>${sdkChats.chats.filter(chat => chat.operator && chat.id !== record.chatId).map(operator => html`<option value=${operator.id}>${operator.title}</option>`)}</select></label>` : html`<p>Direct operator: ${sdkChats.chats.find(chat => chat.id === record.operatorId)?.title || record.operatorId}</p>`}
+      ${record.policy?.operatorStart ? html`<p>Operator start: v${record.policy.operatorStart.revision} · ${record.policy.operatorStart.consumedBy ? 'used' : 'authorized by human'}</p>${!record.policy.operatorStart.consumedBy ? html`<button ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('revoke',record)}>Revoke operator authorization</button>` : nothing}` : nothing}
+      ${record.requestedRevision && record.operatorId && (!record.policy?.operatorStart || record.policy.operatorStart.consumedBy) ? html`<button ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('authorize',record)}>Allow operator to start v${record.requestedRevision}</button>` : nothing}
+      ${record.receipts.filter(receipt => receipt.action === 'propose' && receipt.status === 'recorded').map(proposal => html`<section aria-label="Pending goal proposal"><h3>Goal proposed · not started</h3><p>${proposal.objective}</p><div class="goal-editor-actions"><button ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('approve',record,{proposalId:proposal.id,startBy:'human'})}>Approve and start</button><button ?disabled=${this.goalSaving || !record.operatorId} title=${record.operatorId ? 'Authorize this direct operator for this approved revision only' : 'Link a direct operator first'} @click=${() => void this.controlGoal('approve',record,{proposalId:proposal.id,startBy:'operator'})}>Allow operator to start</button></div></section>`)}
+      <ol>${record.revisions.map(revision => html`<li>v${revision.revision} · ${revision.provenance}<br>${revision.condition}</li>`)}</ol>
+      <h3>Control receipts</h3>
+      <ol>${record.receipts.map(receipt => html`<li>${receipt.action} · v${receipt.revision} · ${receipt.status}${receipt.detail ? ` — ${receipt.detail}` : ''}${receipt.action === 'propose' ? html`<p>Proposal only: ${receipt.objective}</p>` : nothing}${receipt.evidence?.map(reference => html`<p>${reference}</p>`)}</li>`)}</ol>
+      <details><summary>Native evidence (${record.observations.length})</summary><ol>${record.observations.map(observation => html`<li>${observation.at} · ${observation.event.type} · ${observation.event.goalState || ''}<br>${observation.event.goalReason || observation.event.goalSummary || ''}</li>`)}</ol></details>
+    </section>`;
+  }
+  private goalSurfaces() {
+    return html`${this.goalLedgerOpen ? html`<aside class="goal-utility" aria-label="Shared goal ledger">
+      <header><h2>Shared goal ledger</h2><button class="goal-icon" aria-label="Close ledger" title="Close ledger" @click=${() => this.goalLedgerOpen = false}>${icon(X,{size:16})}</button></header>
+      <p>Human revisions, native observations, and durable control receipts. Shared visibility does not grant shared control.</p>
+      ${this.goalNotice ? html`<p role="status">${this.goalNotice}</p>` : nothing}
+      ${this.goalLedgerDocuments.map(record => this.goalLedgerRecord(record))}
+    </aside>` : nothing}${this.goalEditor ? html`<div class="goal-overlay" @keydown=${this.goalEditorKeys}>
+      <section class="goal-editor" role="dialog" aria-modal="true" aria-label="Edit goal">
+        <h2>Edit goal</h2><p>Human edit · applies at the next supported harness boundary. Editing does not resume a stopped goal. Saving the first condition starts a native goal. Agent proposals stay inert until you approve them or authorize an operator.</p>
+        <textarea aria-label="Stop condition" maxlength="4000" .value=${this.goalDraft} @input=${(event:InputEvent) => this.goalDraft = (event.target as HTMLTextAreaElement).value}></textarea>
+        <p>${this.goalDocument?.gap}</p><div class="goal-editor-actions">
+          <button ?disabled=${this.goalSaving} @click=${() => this.goalEditor = false}>Discard</button>
+          <button ?disabled=${this.goalSaving || !this.goalDraft.trim()} @click=${() => void this.controlGoal('set')}>${this.goalDocument?.requestedRevision ? 'Save revision' : 'Save and start goal'}</button>
+        </div>
+      </section>
+    </div>` : nothing}`;
+  }
   private isACPChat() { return this.chat?.harness === 'pi' || this.chat?.harness === 'opencode' || this.chat?.harness === 'deepseek'; }
   private laneCard(block: Block) {
     const name = sdkChats.chats.find(chat => chat.id === block.id)?.title || block.name || 'Linked lane';
@@ -2078,7 +2229,8 @@ export class MuxSDKChat extends LitElement {
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
-    </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
+    </div>${this.goalSurfaces()}${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
+      ${this.goalBanner()}
       ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraftHasContent}>Send to root ↗</button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
         ${a.preview ? html`<img src=${a.preview} alt=${a.file.name}>` : nothing}

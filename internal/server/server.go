@@ -199,7 +199,7 @@ func New(cfg Config) *Server {
 
 	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken)
 	protect := func(h http.Handler) http.Handler {
-		return authMW.Wrap(h)
+		return authMW.Wrap(s.chatAuthorityBoundary(h))
 	}
 
 	// NOTE for the Phase 2 (MCP-over-HTTP) surface: muxterm does not yet
@@ -401,6 +401,9 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/pr", protect(http.HandlerFunc(s.handleSDKUtilityPR)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/control-send", protect(http.HandlerFunc(s.handleSDKControlSend)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/control-history", protect(http.HandlerFunc(s.handleSDKControlHistory)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/goal", protect(http.HandlerFunc(s.handleSDKGoal)))
+	s.mux.Handle("GET /api/sdk-goal-ledger", protect(http.HandlerFunc(s.handleGoalLedger)))
+	s.mux.Handle("PATCH /api/sdk-chats/{id}/goal", protect(http.HandlerFunc(s.handleSDKGoal)))
 	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
 	if cfg.StaticFS != nil {

@@ -120,6 +120,13 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := s.sdkChats
+	if !humanBrowserRequest(r) {
+		if req.OriginToken != "" && req.OriginToken != r.Header.Get("X-Muxterm-Origin") {
+			http.Error(w, "sender capability mismatch", http.StatusForbidden)
+			return
+		}
+		req.OriginToken = r.Header.Get("X-Muxterm-Origin")
+	}
 	h.mu.Lock()
 	c := h.chats[id]
 	if c == nil {
@@ -128,12 +135,30 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chat := *c
+	if !humanBrowserRequest(r) {
+		document, err := h.goals.update(chat, nil)
+		if err != nil {
+			h.mu.Unlock()
+			http.Error(w, "goal ledger unavailable; agent send was not admitted", http.StatusServiceUnavailable)
+			return
+		}
+		if document.HumanPaused {
+			h.mu.Unlock()
+			http.Error(w, "human pause held; agent sends cannot wake this goal", http.StatusForbidden)
+			return
+		}
+	}
 	// A missing token is an external tool input; an invalid token is rejected.
 	// Only serve issues tokens that identify a sending chat.
 	origin, valid := h.controlOriginLocked(req.OriginToken, id)
 	if !valid {
 		h.mu.Unlock()
 		http.Error(w, "invalid chat origin", http.StatusForbidden)
+		return
+	}
+	if origin.Type == "chat-message" && origin.Relation != "operator-to-lane" && origin.Relation != "lane-to-operator" {
+		h.mu.Unlock()
+		http.Error(w, "agent messages require a direct operator/lane relationship", http.StatusForbidden)
 		return
 	}
 	path := h.controlPath(id, req.ClientRef)

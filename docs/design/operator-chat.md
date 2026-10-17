@@ -20,6 +20,13 @@ operator; cycles are rejected.
    `unlink_operator_lane`, `get_operator_lanes`, `send_chat_message`, and
    `read_chat_session` through the muxterm MCP bridge. A new lane is linked
    before its opening turn, so its reporting contract is active from the start.
+   Linked lanes cannot send messages to peers or unrelated chats. The server
+   rejects these sends before persisting a receipt or dispatching input, using
+   the sending harness identity and current lane links.
+   Direct operator-to-lane instructions and lane-to-operator escalations remain
+   available, including for nested operators. Cross-lane coordination belongs
+   to the operator; lanes stay on their original assignments and rely on hooks
+   for routine progress rather than acknowledgement or status-message loops.
 4. Each linked harness's event bridge reports start, tools, completion,
    cancellation, failure, uncertainty, and goal milestones. Plan and todo tool
    payloads become a shared checklist and task count. Without a plan, the

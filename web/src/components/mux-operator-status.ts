@@ -294,6 +294,6 @@ export class MuxOperatorStatus extends LitElement {
                 <button class="archive-action" aria-label=${`${lane.archived ? 'Restore' : 'Archive'} chat ${lane.title}`} ?disabled=${!!this.pendingLane} @click=${() => void this.setArchived(lane, !lane.archived)}>${icon(lane.archived ? ArchiveRestore : Archive,{size:13})} ${lane.archived ? 'Restore chat' : 'Archive chat'}</button></div>
             </td></tr>` : nothing}`;
           })}</tbody>
-        </table></div>` : html`<div class="empty">${this.filter === 'attention' ? 'No lanes need attention.' : this.filter === 'running' ? 'No lanes are running.' : 'No lanes are done yet.'}</div>`}` : html`<div class="empty"><p>No lanes yet.</p><p class="hint">Ask the operator in chat to start a lane or attach an existing chat.</p></div>`}`}`;
+        </table></div>` : html`<div class="empty">${this.filter === 'attention' ? 'No lanes need attention.' : this.filter === 'running' ? 'No lanes are running.' : 'No lanes are done yet.'}</div>`}` : html`<div class="empty"><p>No lanes yet.</p><p class="hint">Open a chat’s goal ledger to link it to this operator. Goal proposals need human approval or explicit operator start authorization.</p></div>`}`}`;
   }
 }
