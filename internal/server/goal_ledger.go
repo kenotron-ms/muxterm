@@ -215,7 +215,7 @@ func (ledger *goalLedger) update(chat sdkChat, change func(*goalDocument) error)
 		return document, err
 	}
 	if ledger.onChange != nil {
-		ledger.onChange(chat.ID)
+		go ledger.onChange(chat.ID)
 	}
 	return document, nil
 }
