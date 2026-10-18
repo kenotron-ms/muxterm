@@ -1266,6 +1266,7 @@ export class MuxApp extends LitElement {
       this._routePaneOutput(paneId, data);
     });
     this._socket.onControlMessage((msg: Record<string, unknown>) => {
+      if (typeof msg.goalChanged === 'string') window.dispatchEvent(new CustomEvent('muxterm-goal-changed', { detail: msg.goalChanged }));
       this._handleControlMessage(msg);
     });
     // The overlay's honest state comes from the socket itself, not from a
@@ -1274,7 +1275,10 @@ export class MuxApp extends LitElement {
     this._socket.onConnectionState = (state: ReconnectState) => {
       this._connectionStatus = state.phase === 'connected' ? 'connected'
         : state.phase === 'retrying' ? 'reconnecting' : 'disconnected';
-      if (state.phase === 'connected') return;
+      if (state.phase === 'connected') {
+        window.dispatchEvent(new Event('muxterm-goal-reconnected'));
+        return;
+      }
       this._reconnectPhase = state.phase;
       this._reconnectNextAttemptAt = state.phase === 'waiting' ? state.nextAttemptAt : 0;
     };

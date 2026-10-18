@@ -171,6 +171,7 @@ func New(cfg Config) *Server {
 		version:        cfg.Version,
 	}
 	s.sdkChats = newSDKChatHost()
+	s.sdkChats.goals.onChange = s.hub.BroadcastGoalChanged
 	s.sdkJobs = newSDKJobs(s.sdkChats)
 	s.connections = newServiceConnections()
 	s.browserAssistant = newBrowserAssistantRegistry(cfg.LocalToken)

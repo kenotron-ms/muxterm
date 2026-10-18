@@ -78,7 +78,6 @@ export class MuxSDKChat extends LitElement {
   @state() private goalSaving = false;
   @state() private goalLedgerOpen = false;
   @state() private goalLedgerDocuments: GoalDocument[] = [];
-  private goalTimer?: ReturnType<typeof setInterval>;
   private goalEditorVersion = 0;
   @state() private scheduledJob?: { name:string };
   @state() private blocks: Block[] = [];
@@ -493,6 +492,8 @@ export class MuxSDKChat extends LitElement {
     window.addEventListener('drop', this.resetDrop);
     window.addEventListener('dragend', this.resetDrop);
     window.addEventListener('pagehide', this.onPageHide);
+    window.addEventListener('muxterm-goal-changed', this.onGoalChanged);
+    window.addEventListener('muxterm-goal-reconnected', this.onGoalReconnected);
     this.unsubscribeChats = sdkChats.subscribe(() => {
       const updated = sdkChats.chats.find(chat => chat.id === this.sessionId);
       if (updated) {
@@ -505,7 +506,8 @@ export class MuxSDKChat extends LitElement {
     void fetchVoiceStatus().then(status => { this.voiceAvailable = status.enabled && !status.restartRequired; });
   }
   override disconnectedCallback() {
-    if (this.goalTimer) clearInterval(this.goalTimer);
+    window.removeEventListener('muxterm-goal-changed', this.onGoalChanged);
+    window.removeEventListener('muxterm-goal-reconnected', this.onGoalReconnected);
     this.flushDraft();
     this.flushAgentDraft();
     this.retainChatView();
@@ -711,9 +713,7 @@ export class MuxSDKChat extends LitElement {
     this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
     this.activeSession = this.sessionId;
     this.goalDocument = undefined; this.goalEditor = false; this.goalLedgerOpen = false; this.goalNotice = '';
-    if (this.goalTimer) clearInterval(this.goalTimer);
     void this.refreshGoal();
-    this.goalTimer = setInterval(() => { if (!document.hidden) void this.refreshGoal(); }, 2000);
     this.draft = readDraft(this.activeSession, 'message');
     this.draftHasContent = !!this.draft.trim();
     this.agentDraft = readDraft(this.activeSession, 'agent');
@@ -2078,6 +2078,10 @@ export class MuxSDKChat extends LitElement {
       : mode === 'send' ? html`<span aria-hidden="true">↑</span>` : html`<span aria-hidden="true">■</span>`;
     return html`<button class="send ${mode === 'voice-stop' ? 'voice-active' : ''}" aria-label=${label} title=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</button>`;
   }
+  private readonly onGoalChanged = (event: Event) => {
+    if ((event as CustomEvent<string>).detail === this.activeSession || this.goalLedgerOpen) void this.refreshGoal();
+  };
+  private readonly onGoalReconnected = () => { if (this.activeSession) void this.refreshGoal(); };
   private async refreshGoal() {
     const id = this.activeSession;
     try {
