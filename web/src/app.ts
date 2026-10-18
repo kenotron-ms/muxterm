@@ -1662,7 +1662,7 @@ export class MuxApp extends LitElement {
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
             <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
-            <mux-connections .initialSelection=${this._connectionSelection}></mux-connections>` : this._sdkChatId === 'skills' ? html`
+            <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
             <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @chat-terminal-open=${this._onChatTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
@@ -2385,6 +2385,10 @@ export class MuxApp extends LitElement {
     this._sdkChatId = 'new';
     setChatHash(null);
     this._closeDrawer();
+  };
+  private _onConnectionSetupChat = (event: CustomEvent<{prompt:string}>): void => {
+    this._onChatNew();
+    this._newChatPrompt = event.detail.prompt;
   };
   private _onJobNew = (): void => {
     this._onChatNew();
