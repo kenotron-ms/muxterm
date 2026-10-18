@@ -105,12 +105,10 @@ The Status table defaults to **All**. **Needs attention** contains failed,
 uncertain, and cancelled lanes; **Running** contains starting and working
 lanes; **Done** contains ready lanes that were not cancelled. A cancelled
 turn is labeled **Stopped** until another turn starts. Archiving a chat
-changes its sidebar placement only: an archived lane keeps its operator link,
-reporting contract, state, and filter
-category. It is marked **Archived** in Status and can be restored there.
-Archiving a linked lane happens immediately and can be reversed with
-**Restore chat**. **Unlink lane** removes only this operator's link; the chat
-and its archive state remain intact. Status
+removes it from every operator's lanes and moves it to the archived sidebar.
+Restoring the chat does not reattach it; link it again if needed.
+**Unlink lane** removes only this operator's link; the chat and its archive
+state remain intact. Status
 snapshots contain only chats currently named by that operator's link list.
 
 Timing uses completed human turns from the last 180 days of local SDK chat
