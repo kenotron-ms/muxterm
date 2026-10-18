@@ -39,6 +39,7 @@ import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
+import './components/mux-toast.js';
 import type { MuxSDKChat } from './components/mux-sdk-chat.js';
 import './components/mux-new-chat.js';
 import './components/mux-scheduled-jobs.js';
@@ -1730,6 +1731,7 @@ export class MuxApp extends LitElement {
           `,
         )}
       </div>
+      <mux-toast></mux-toast>
       ${this._closeConfirmation
         ? html`
             <close-confirmation-modal

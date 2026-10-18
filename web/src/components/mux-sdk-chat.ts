@@ -62,6 +62,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
+import { showToast } from '../lib/toast.js';
 import { BookOpen, Bot, Check, ChevronDown, ChevronRight, CircleX, Columns2, Copy, FilePenLine, GitFork, Globe, Mic, Network, NotebookTabs, PanelLeft, PanelRight, Pause, Pencil, Play, Search, Target, Terminal, Wrench, X, type IconNode } from 'lucide';
 
 type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
@@ -74,8 +75,9 @@ export class MuxSDKChat extends LitElement {
   @state() private goalDocument?: GoalDocument;
   @state() private goalEditor = false;
   @state() private goalDraft = '';
-  @state() private goalNotice = '';
+  @state() private goalLoadError = false;
   @state() private goalSaving = false;
+  @state() private goalPendingAction = '';
   @state() private goalLedgerOpen = false;
   @state() private goalLedgerDocuments: GoalDocument[] = [];
   private goalEditorVersion = 0;
@@ -434,7 +436,13 @@ export class MuxSDKChat extends LitElement {
     .goal-ledger-record { border-top:1px solid var(--chrome-border,#41485f); padding:14px 0; overflow-wrap:anywhere; }
     .goal-ledger-record li { font-size:12px; margin:7px 0; line-height:1.5; }
     .goal-ledger-record ol { padding-left:20px; }
-    .goal-notice { font-size:12px; color:var(--chrome-text-dim,#9aa3b8); padding:4px 0; }
+    .goal-status-line { display:flex; align-items:center; gap:8px; margin:8px 0; color:var(--chrome-text-bright); font-size:12px; }
+    .goal-status-line::before { content:''; flex:none; width:7px; height:7px; border-radius:50%; background:var(--chrome-accent); }
+    .goal-status-line.attention::before { background:var(--chrome-danger); }
+    .goal-empty { padding:16px; border:1px dashed var(--chrome-border); border-radius:8px; }
+    .goal-empty p { margin:0 0 12px; }
+    .goal-ledger-record details { margin-top:12px; }
+    .goal-ledger-record summary { cursor:pointer; color:var(--chrome-text-dim); font-size:12px; }
     .goal-utility select, .goal-utility button:not(.goal-icon) { padding:6px 9px; border:1px solid var(--chrome-border,#41485f); border-radius:6px; background:var(--chrome-bar,#202632); color:inherit; font:inherit; }
     .goal-utility button:disabled { opacity:.5; cursor:not-allowed; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
@@ -712,7 +720,7 @@ export class MuxSDKChat extends LitElement {
     this.voice?.stop();
     this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
     this.activeSession = this.sessionId;
-    this.goalDocument = undefined; this.goalEditor = false; this.goalLedgerOpen = false; this.goalNotice = '';
+    this.goalDocument = undefined; this.goalEditor = false; this.goalLedgerOpen = false; this.goalLoadError = false;
     void this.refreshGoal();
     this.draft = readDraft(this.activeSession, 'message');
     this.draftHasContent = !!this.draft.trim();
@@ -1367,7 +1375,6 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'goal.progress') {
       if (this.chat) this.chat = { ...this.chat, goalState: event.goalState, goalReason: event.goalReason, goalSummary: event.goalSummary };
-      if (event.goalState && !['active','continuing','paused','cleared'].includes(event.goalState)) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:`Goal ${event.goalState}: ${event.goalSummary || event.goalReason || ''}` });
     }
     else if (event.type === 'operator.lane.status') {
       this.upsertLaneCard(blocks, event, false);
@@ -2082,26 +2089,28 @@ export class MuxSDKChat extends LitElement {
     if ((event as CustomEvent<string>).detail === this.activeSession || this.goalLedgerOpen) void this.refreshGoal();
   };
   private readonly onGoalReconnected = () => { if (this.activeSession) void this.refreshGoal(); };
-  private async refreshGoal() {
+  private async refreshGoal(): Promise<boolean> {
     const id = this.activeSession;
     try {
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/goal`), { cache:'no-store' });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error('Goal status unavailable');
       const record = await response.json() as GoalDocument;
-      if (id !== this.activeSession) return;
-      if (this.goalDocument && record.version < this.goalDocument.version) return;
+      if (id !== this.activeSession) return false;
+      if (this.goalDocument && record.version < this.goalDocument.version) return true;
       this.goalDocument = record;
       if (this.goalLedgerOpen) {
         const ledger = await fetch(apiPath('/api/sdk-goal-ledger'), { cache:'no-store' });
-        if (!ledger.ok) throw new Error(await ledger.text());
+        if (!ledger.ok) throw new Error('Goal ledger unavailable');
         const records = await ledger.json() as GoalDocument[];
         if (id === this.activeSession) this.goalLedgerDocuments = records.some(existing => existing.chatId === id) ? records : [record,...records];
       }
-    } catch (error) { if (id === this.activeSession) this.goalNotice = String(error); }
+      if (id === this.activeSession) this.goalLoadError = false;
+      return true;
+    } catch { if (id === this.activeSession) this.goalLoadError = true; return false; }
   }
   private async openGoalEditor() {
     const id = this.activeSession;
-    await this.refreshGoal();
+    if (!await this.refreshGoal()) { showToast('Could not load the goal. Try again.'); return; }
     if (id !== this.activeSession) return;
     this.goalDraft = this.goalDocument?.revisions.at(-1)?.condition || this.chat?.goal || '';
     this.goalEditorVersion = this.goalDocument?.controlVersion || 0;
@@ -2111,41 +2120,55 @@ export class MuxSDKChat extends LitElement {
   private async linkGoalOperator(record:GoalDocument, operatorId:string) {
     const operator = sdkChats.chats.find(chat => chat.id === operatorId && chat.operator);
     if (!operator || this.goalSaving) return;
-    this.goalSaving = true;
+    this.goalSaving = true; this.goalPendingAction = 'Linking operator…';
     try {
       await sdkChats.operator(operatorId,{laneIds:[...new Set([...(operator.operatorLanes || []),record.chatId])]});
       await this.refreshGoal();
-    } catch (error) { this.goalNotice = String(error); }
-    finally { this.goalSaving = false; }
+    } catch { showToast('Could not link the operator. Try again.'); }
+    finally { this.goalSaving = false; this.goalPendingAction = ''; }
   }
   private async controlGoal(action:string, target = this.goalDocument, details:{proposalId?:string;startBy?:string} = {}) {
     if (!target || this.goalSaving) return;
     const id = target.chatId;
-    this.goalSaving = true; this.goalNotice = '';
+    const labels:Record<string,string> = {set:'Saving goal…',pause:'Requesting pause…',resume:'Resuming goal…',clear:'Clearing goal…',approve:'Approving proposal…',authorize:'Authorizing operator…',revoke:'Revoking authorization…'};
+    this.goalSaving = true; this.goalPendingAction = labels[action] || 'Updating goal…';
     try {
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/goal`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action,objective:action === 'set' ? this.goalDraft : '',clientRef:crypto.randomUUID(),expectedVersion:action === 'set' ? this.goalEditorVersion : target.controlVersion,...details}) });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) {
+        const detail = (await response.text()).trim();
+        if (response.status === 409) throw new Error('This goal changed in another window. Refresh and try again.');
+        if (response.status === 423) throw new Error('Another goal change is still in progress. Wait for it to finish.');
+        if (detail.includes('no human goal is set')) throw new Error('Set a goal before using this control.');
+        throw new Error(`Could not ${action === 'set' ? 'save' : action} the goal. Try again.`);
+      }
       const record = await response.json() as GoalDocument;
       if (id === this.activeSession && record.version >= (this.goalDocument?.version || 0)) this.goalDocument = record;
       this.goalLedgerDocuments = this.goalLedgerDocuments.map(existing => existing.chatId === id ? record : existing);
       this.goalEditor = false;
-      this.goalNotice = '';
-    } catch (error) { this.goalNotice = String(error); }
-    finally { this.goalSaving = false; }
+      this.goalLoadError = false;
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Could not update the goal. Try again.'); void this.refreshGoal(); }
+    finally { this.goalSaving = false; this.goalPendingAction = ''; }
   }
   private goalBanner() {
     const record = this.goalDocument;
     const condition = record?.revisions.at(-1)?.condition || this.chat?.goal || '';
     if (!condition.trim()) return nothing;
     const supported = ['codex','amplifier','claude'].includes(this.chat?.harness || '');
-    const pending = record?.requestedRevision !== record?.appliedRevision;
-    const pausePending = record?.receipts.some(receipt => receipt.action === 'pause' && receipt.status === 'dispatching');
-    const humanHold = pausePending ? 'Pause requested' : record?.state === 'paused' ? 'Paused by you' : `Human hold · ${record?.state}`;
-    const state = record?.humanPaused ? `${humanHold}${pending ? ` · v${record.requestedRevision} pending` : ''}` : !supported ? 'Controls unavailable' : pending ? `v${record?.requestedRevision} requested · v${record?.appliedRevision || 0} applied` : record?.state || 'Not set';
+    const state = this.goalPendingAction || this.goalStatus(record);
     const paused = record?.humanPaused || ['not-set','paused','complete','achieved','stalled','cap_hit','cancelled','error','ended','cleared'].includes(record?.state || '');
     const button = (label:string, glyph:IconNode, action:()=>void, disabled=false, title=label) => html`<button class="goal-icon" aria-label=${label} title=${title} ?disabled=${disabled || this.goalSaving} @click=${action}>${icon(glyph,{size:14})}</button>`;
-    const executionTitle = !supported ? record?.gap : this.chat?.harness === 'claude' ? paused ? 'Reactivate the native goal; counters reset' : 'Suspend by clearing the native Claude goal; current tool effects are retained' : record?.state === 'cleared' ? 'Resume the saved condition as a new native goal' : paused ? 'Resume goal' : 'Pause goal';
-    return html`<div class="goal-banner" aria-label="Goal"><span aria-hidden="true">${icon(Target,{size:14})}</span><span class="goal-condition" title=${condition || 'Set a human-owned stop condition'}>${condition || 'No goal set'}</span><span class="goal-state" title=${`${state}. ${record?.gap || ''}`}>${condition ? state : ''}</span>${button('Edit goal',Pencil,() => this.openGoalEditor())}${button(paused ? 'Resume goal' : 'Pause goal',paused ? Play : Pause,() => void this.controlGoal(paused ? 'resume' : 'pause'),!condition || !supported, executionTitle)}${button('Cancel goal',CircleX,() => void this.controlGoal('clear'),!condition || !supported)}${button('Open ledger',NotebookTabs,() => { this.goalLedgerOpen = !this.goalLedgerOpen; void this.refreshGoal(); })}</div>${this.goalNotice ? html`<div class="goal-notice" role="status">${this.goalNotice}</div>` : nothing}`;
+    const executionTitle = !supported ? 'Goal controls are unavailable for this harness' : this.chat?.harness === 'claude' ? paused ? 'Resume goal; Claude counters reset' : 'Pause goal; current tool effects are retained' : paused ? 'Resume goal' : 'Pause goal';
+    return html`<div class="goal-banner" aria-label="Goal"><span aria-hidden="true">${icon(Target,{size:14})}</span><span class="goal-condition" title=${condition}>${condition}</span><span class="goal-state" role="status" title=${state}>${state}</span>${button('Edit goal',Pencil,() => this.openGoalEditor())}${button(paused ? 'Resume goal' : 'Pause goal',paused ? Play : Pause,() => void this.controlGoal(paused ? 'resume' : 'pause'),!supported, executionTitle)}${button('Clear goal',CircleX,() => void this.controlGoal('clear'),!supported)}${button('Open ledger',NotebookTabs,() => { this.goalLedgerOpen = !this.goalLedgerOpen; void this.refreshGoal(); })}</div>`;
+  }
+  private goalStatus(record?: GoalDocument): string {
+    if (!record) return 'No goal set';
+    if (!record.requestedRevision) return record.receipts.some(receipt => receipt.action === 'propose' && receipt.status === 'recorded') ? 'Proposal needs review' : 'No goal set';
+    if (!['codex','amplifier','claude'].includes(record.harness)) return 'Controls unavailable';
+    if (record.receipts.some(receipt => receipt.status === 'dispatching')) return 'Applying change…';
+    if (record.humanPaused) return 'Paused by you';
+    if (record.requestedRevision > record.appliedRevision && !['uncertain','error'].includes(record.state)) return 'Waiting for agent';
+    const labels:Record<string,string> = {active:'Working',continuing:'Working',paused:'Paused',complete:'Complete',achieved:'Complete',stalled:'Stalled',cap_hit:'Stopped',cancelled:'Stopped',error:'Needs attention',uncertain:'Needs attention',ended:'Ended',cleared:'Cleared','awaiting-native-observation':'Waiting for agent','not-set':'No goal set'};
+    return labels[record.state] || 'Waiting for agent';
   }
   private goalEditorKeys(event:KeyboardEvent) {
     if (event.key === 'Escape' && !this.goalSaving) {
@@ -2161,34 +2184,43 @@ export class MuxSDKChat extends LitElement {
     }
   }
   private goalLedgerRecord(record:GoalDocument) {
+    const condition = record.revisions.at(-1)?.condition;
+    const status = this.goalStatus(record);
+    const attention = status === 'Needs attention' || status === 'Stalled';
     return html`<section class="goal-ledger-record">
       <strong>${sdkChats.chats.find(chat => chat.id === record.chatId)?.title || record.chatId}</strong>
-      <p>${record.harness} · requested v${record.requestedRevision} · applied v${record.appliedRevision} · ${record.state}${record.humanPaused ? ' · human pause held' : ''}</p>
-      <p>${record.gap}</p>
-      ${!record.operatorId ? html`<label>Link direct operator <select aria-label="Link direct operator" ?disabled=${this.goalSaving} @change=${(event:Event) => void this.linkGoalOperator(record,(event.target as HTMLSelectElement).value)}><option value="">Choose an operator…</option>${sdkChats.chats.filter(chat => chat.operator && chat.id !== record.chatId).map(operator => html`<option value=${operator.id}>${operator.title}</option>`)}</select></label>` : html`<p>Direct operator: ${sdkChats.chats.find(chat => chat.id === record.operatorId)?.title || record.operatorId}</p>`}
-      ${record.policy?.operatorStart ? html`<p>Operator start: v${record.policy.operatorStart.revision} · ${record.policy.operatorStart.consumedBy ? 'used' : 'authorized by human'}</p>${!record.policy.operatorStart.consumedBy ? html`<button ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('revoke',record)}>Revoke operator authorization</button>` : nothing}` : nothing}
+      <div class="goal-status-line ${attention ? 'attention' : ''}" role="status">${status}</div>
+      ${condition ? html`<p>${condition}</p>` : nothing}
+      ${record.requestedRevision > record.appliedRevision && record.requestedRevision > 0 ? html`<p>${record.humanPaused ? 'Changes will apply after you resume the goal.' : `Revision ${record.requestedRevision} is waiting for the agent.`}</p>` : nothing}
+      ${attention ? html`<p>The agent could not confirm this goal. Review the history below before trying again.</p>` : nothing}
+      ${!record.operatorId && sdkChats.chats.some(chat => chat.operator && chat.id !== record.chatId) ? html`<label>Link direct operator <select aria-label="Link direct operator" ?disabled=${this.goalSaving} @change=${(event:Event) => void this.linkGoalOperator(record,(event.target as HTMLSelectElement).value)}><option value="">Choose an operator…</option>${sdkChats.chats.filter(chat => chat.operator && chat.id !== record.chatId).map(operator => html`<option value=${operator.id}>${operator.title}</option>`)}</select></label>` : record.operatorId ? html`<p>Direct operator: ${sdkChats.chats.find(chat => chat.id === record.operatorId)?.title || record.operatorId}</p>` : nothing}
+      ${record.policy?.operatorStart ? html`<p>${record.policy.operatorStart.consumedBy ? 'Operator authorization used' : 'Operator can start this goal'}</p>${!record.policy.operatorStart.consumedBy ? html`<button ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('revoke',record)}>Revoke operator authorization</button>` : nothing}` : nothing}
       ${record.requestedRevision && record.operatorId && (!record.policy?.operatorStart || record.policy.operatorStart.consumedBy) ? html`<button ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('authorize',record)}>Allow operator to start v${record.requestedRevision}</button>` : nothing}
-      ${record.receipts.filter(receipt => receipt.action === 'propose' && receipt.status === 'recorded').map(proposal => html`<section aria-label="Pending goal proposal"><h3>Goal proposed · not started</h3><p>${proposal.objective}</p><div class="goal-editor-actions"><button ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('approve',record,{proposalId:proposal.id,startBy:'human'})}>Approve and start</button><button ?disabled=${this.goalSaving || !record.operatorId} title=${record.operatorId ? 'Authorize this direct operator for this approved revision only' : 'Link a direct operator first'} @click=${() => void this.controlGoal('approve',record,{proposalId:proposal.id,startBy:'operator'})}>Allow operator to start</button></div></section>`)}
-      <ol>${record.revisions.map(revision => html`<li>v${revision.revision} · ${revision.provenance}<br>${revision.condition}</li>`)}</ol>
-      <h3>Control receipts</h3>
-      <ol>${record.receipts.map(receipt => html`<li>${receipt.action} · v${receipt.revision} · ${receipt.status}${receipt.detail ? ` — ${receipt.detail}` : ''}${receipt.action === 'propose' ? html`<p>Proposal only: ${receipt.objective}</p>` : nothing}${receipt.evidence?.map(reference => html`<p>${reference}</p>`)}</li>`)}</ol>
-      <details><summary>Native evidence (${record.observations.length})</summary><ol>${record.observations.map(observation => html`<li>${observation.at} · ${observation.event.type} · ${observation.event.goalState || ''}<br>${observation.event.goalReason || observation.event.goalSummary || ''}</li>`)}</ol></details>
+      ${record.receipts.filter(receipt => receipt.action === 'propose' && receipt.status === 'recorded').map(proposal => html`<section aria-label="Pending goal proposal"><h3>Proposed goal</h3><p>${proposal.objective}</p><div class="goal-editor-actions"><button ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('approve',record,{proposalId:proposal.id,startBy:'human'})}>Approve and start</button><button ?disabled=${this.goalSaving || !record.operatorId} title=${record.operatorId ? 'Authorize this direct operator for this approved revision only' : 'Link a direct operator first'} @click=${() => void this.controlGoal('approve',record,{proposalId:proposal.id,startBy:'operator'})}>Allow operator to start</button></div></section>`)}
+      <details><summary>Goal history</summary>
+        <h3>Revisions</h3><ol>${record.revisions.map(revision => html`<li>v${revision.revision} · ${revision.provenance}<br>${revision.condition}</li>`)}</ol>
+        <h3>Control receipts</h3><ol>${record.receipts.map(receipt => html`<li>${receipt.action} · v${receipt.revision} · ${receipt.status}${receipt.detail ? ` — ${receipt.detail}` : ''}${receipt.action === 'propose' ? html`<p>Proposal only: ${receipt.objective}</p>` : nothing}${receipt.evidence?.map(reference => html`<p>${reference}</p>`)}</li>`)}</ol>
+        <details><summary>Agent events (${record.observations.length})</summary><ol>${record.observations.map(observation => html`<li>${observation.at} · ${observation.event.type} · ${observation.event.goalState || ''}<br>${observation.event.goalReason || observation.event.goalSummary || ''}</li>`)}</ol></details>
+      </details>
     </section>`;
   }
   private goalSurfaces() {
+    const current = this.goalDocument;
+    const otherGoals = this.goalLedgerDocuments.filter(record => record.chatId !== this.activeSession && (record.requestedRevision > 0 || record.receipts.some(receipt => receipt.action === 'propose' && receipt.status === 'recorded')));
     return html`${this.goalLedgerOpen ? html`<aside class="goal-utility" aria-label="Shared goal ledger">
       <header><h2>Shared goal ledger</h2><button class="goal-icon" aria-label="Close ledger" title="Close ledger" @click=${() => this.goalLedgerOpen = false}>${icon(X,{size:16})}</button></header>
-      <p>Human revisions, native observations, and durable control receipts. Shared visibility does not grant shared control.</p>
-      <button ?disabled=${this.goalSaving} @click=${() => void this.openGoalEditor()}>${this.goalDocument?.requestedRevision ? 'Edit current goal' : 'Set goal'}</button>
-      ${this.goalNotice ? html`<p role="status">${this.goalNotice}</p>` : nothing}
-      ${this.goalLedgerDocuments.map(record => this.goalLedgerRecord(record))}
+      ${this.goalLoadError ? html`<div class="goal-empty" role="status"><p>Goal status could not be loaded.</p><button @click=${() => void this.refreshGoal()}>Retry</button></div>` : !current ? html`<p role="status">Loading goal status…</p>` : html`
+        ${current.requestedRevision === 0 && !current.receipts.some(receipt => receipt.action === 'propose' && receipt.status === 'recorded') ? html`<div class="goal-empty"><p>No goal for this chat yet.</p><button ?disabled=${this.goalSaving} @click=${() => void this.openGoalEditor()}>Set goal</button></div>` : html`<button ?disabled=${this.goalSaving} @click=${() => void this.openGoalEditor()}>${current.requestedRevision ? 'Edit goal' : 'Set goal'}</button>${this.goalLedgerRecord(current)}`}
+        ${this.goalPendingAction ? html`<p role="status">${this.goalPendingAction}</p>` : nothing}
+        ${otherGoals.length ? html`<h3>Other chats</h3>${otherGoals.map(record => this.goalLedgerRecord(record))}` : nothing}
+      `}
     </aside>` : nothing}${this.goalEditor ? html`<div class="goal-overlay" @keydown=${this.goalEditorKeys}>
-      <section class="goal-editor" role="dialog" aria-modal="true" aria-label="Edit goal">
-        <h2>Edit goal</h2><p>Human edit · applies at the next supported harness boundary. Editing does not resume a stopped goal. Saving the first condition starts a native goal. Agent proposals stay inert until you approve them or authorize an operator.</p>
+      <section class="goal-editor" role="dialog" aria-modal="true" aria-label=${this.goalDocument?.requestedRevision ? 'Edit goal' : 'Set goal'}>
+        <h2>${this.goalDocument?.requestedRevision ? 'Edit goal' : 'Set goal'}</h2><p>Describe what the agent should finish. Changes apply when the agent next checks its goal.</p>
         <textarea aria-label="Stop condition" maxlength="4000" .value=${this.goalDraft} @input=${(event:InputEvent) => this.goalDraft = (event.target as HTMLTextAreaElement).value}></textarea>
-        <p>${this.goalDocument?.gap}</p><div class="goal-editor-actions">
+        <div class="goal-editor-actions">
           <button ?disabled=${this.goalSaving} @click=${() => this.goalEditor = false}>Discard</button>
-          <button ?disabled=${this.goalSaving || !this.goalDraft.trim()} @click=${() => void this.controlGoal('set')}>${this.goalDocument?.requestedRevision ? 'Save revision' : 'Save and start goal'}</button>
+          <button ?disabled=${this.goalSaving || !this.goalDraft.trim()} @click=${() => void this.controlGoal('set')}>${this.goalSaving ? this.goalPendingAction : this.goalDocument?.requestedRevision ? 'Save goal' : 'Save and start goal'}</button>
         </div>
       </section>
     </div>` : nothing}`;
