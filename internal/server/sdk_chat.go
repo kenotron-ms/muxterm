@@ -1747,19 +1747,43 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		if (req.Archived != nil || req.Pinned != nil) && req.Title == "" {
 			h.mu.Lock()
 			previousArchived, previousPinned := c.Archived, c.Pinned
+			previousParents := map[*sdkChat][]string{}
 			if req.Archived != nil {
 				c.Archived = *req.Archived
+				if *req.Archived {
+					for _, parent := range h.chats {
+						if slices.Contains(parent.OperatorLanes, id) {
+							previousParents[parent] = append([]string(nil), parent.OperatorLanes...)
+							parent.OperatorLanes = slices.DeleteFunc(parent.OperatorLanes, func(laneID string) bool { return laneID == id })
+						}
+					}
+				}
 			}
 			if req.Pinned != nil {
 				c.Pinned = *req.Pinned
 			}
 			err := h.saveLocked(c)
+			if err == nil {
+				for parent := range previousParents {
+					if err = h.saveLocked(parent); err != nil {
+						break
+					}
+				}
+			}
 			if err != nil {
 				c.Archived, c.Pinned = previousArchived, previousPinned
+				_ = h.saveLocked(c)
+				for parent, lanes := range previousParents {
+					parent.OperatorLanes = lanes
+					_ = h.saveLocked(parent)
+				}
 			}
 			updated := *c
 			if err == nil {
 				h.notifyCatalogLocked(id)
+				for parent := range previousParents {
+					h.notifyCatalogLocked(parent.ID)
+				}
 			}
 			h.mu.Unlock()
 			if err != nil {

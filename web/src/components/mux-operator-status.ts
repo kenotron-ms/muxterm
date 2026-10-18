@@ -23,6 +23,7 @@ export class MuxOperatorStatus extends LitElement {
   @state() private pendingLane = '';
   private poll?: number;
   private requestVersion = 0;
+  private unsubscribeChats?: () => void;
 
   static styles = css`
     ${subtleScrollbars}
@@ -119,10 +120,16 @@ export class MuxOperatorStatus extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    this.unsubscribeChats = sdkChats.subscribe(() => {
+      const current = sdkChats.chats.find(chat => chat.id === this.sessionId);
+      const shown = this.snapshot?.operator;
+      if (current && shown && JSON.stringify(current.operatorLanes || []) !== JSON.stringify(shown.operatorLanes || [])) void this.load();
+    });
     this.poll = window.setInterval(() => { if (!document.hidden) void this.load(); }, 2500);
   }
   override disconnectedCallback() {
     if (this.poll) window.clearInterval(this.poll);
+    this.unsubscribeChats?.();
     this.requestVersion++;
     super.disconnectedCallback();
   }
@@ -178,7 +185,12 @@ export class MuxOperatorStatus extends LitElement {
     this.error = '';
     try {
       await sdkChats.setArchived(lane.id, archived);
-      if (this.sessionId === operatorId && this.snapshot) this.snapshot = { ...this.snapshot, lanes:this.snapshot.lanes.map(row => row.id === lane.id ? { ...row, archived } : row) };
+      if (this.sessionId === operatorId && this.snapshot) {
+        this.snapshot = archived
+          ? { operator:{ ...this.snapshot.operator, operatorLanes:this.snapshot.operator.operatorLanes?.filter(id => id !== lane.id) }, lanes:this.snapshot.lanes.filter(row => row.id !== lane.id) }
+          : { ...this.snapshot, lanes:this.snapshot.lanes.map(row => row.id === lane.id ? { ...row, archived } : row) };
+        if (archived) this.expandedLane = '';
+      }
     } catch (error) { if (this.sessionId === operatorId) this.error = `Could not ${archived ? 'archive' : 'restore'} chat: ${String(error)}`; }
     finally { this.pendingLane = ''; void this.load(); }
   }

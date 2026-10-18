@@ -27,8 +27,8 @@ func (s *Server) handleSDKOperator(w http.ResponseWriter, r *http.Request) {
 		lanes := make([]sdkChat, 0, len(operator.OperatorLanes))
 		if operator.Operator {
 			for _, laneID := range operator.OperatorLanes {
-				// Membership belongs to this operator, including archived lanes.
-				// Archiving a chat never creates or removes a lane link.
+				// The archive action removes lane links. Older saved links may
+				// still name archived chats until they are archived again.
 				if lane := h.chats[laneID]; lane != nil {
 					lanes = append(lanes, *lane)
 				}
