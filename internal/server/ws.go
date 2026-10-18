@@ -1373,6 +1373,24 @@ func (h *Hub) BroadcastAIStatus(status any) {
 	}
 }
 
+func (h *Hub) BroadcastGoalChanged(chatID string) {
+	data, err := json.Marshal(map[string]any{"goalChanged": chatID})
+	if err != nil {
+		return
+	}
+	h.mu.RLock()
+	clients := make([]*Client, 0, len(h.clients))
+	for client := range h.clients {
+		clients = append(clients, client)
+	}
+	h.mu.RUnlock()
+	for _, client := range clients {
+		if err := client.writeText(data); err != nil {
+			log.Printf("BroadcastGoalChanged: write error: %v", err)
+		}
+	}
+}
+
 // BroadcastChatUINavigation relays an authenticated request to connected
 // browser views. It reports zero when no browser could have shown the result.
 func (h *Hub) BroadcastChatUINavigation(nav chatUINavigation) int {

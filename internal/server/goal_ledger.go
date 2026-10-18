@@ -75,9 +75,10 @@ type goalDocument struct {
 }
 
 type goalLedger struct {
-	mu  sync.Mutex
-	db  *sql.DB
-	err error
+	mu       sync.Mutex
+	db       *sql.DB
+	err      error
+	onChange func(string)
 }
 
 var errGoalConflict = errors.New("goal ledger changed; refresh before trying again")
@@ -210,7 +211,13 @@ func (ledger *goalLedger) update(chat sdkChat, change func(*goalDocument) error)
 	if affected != 1 {
 		return document, errGoalConflict
 	}
-	return document, transaction.Commit()
+	if err = transaction.Commit(); err != nil {
+		return document, err
+	}
+	if ledger.onChange != nil {
+		ledger.onChange(chat.ID)
+	}
+	return document, nil
 }
 
 func goalCapabilityGap(harness string) string {
