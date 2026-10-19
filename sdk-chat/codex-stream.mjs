@@ -22,7 +22,7 @@ function toolDetails(item) {
 // reports completed agent messages but no text deltas. The app-server protocol
 // exposes item/agentMessage/delta while preserving the same native thread ID.
 export class CodexStream {
-  constructor(session, emit) {
+  constructor(session, emit, catalogOnly = false) {
     this.session = session;
     this.emit = emit;
     this.pending = new Map();
@@ -34,6 +34,7 @@ export class CodexStream {
     this.cancelRequested = false;
     this.childThreads = new Map();
     this.goalSequence = 0;
+    this.catalogOnly = catalogOnly;
     const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpConfig = muxterm ? ['-c', `mcp_servers.muxterm.command=${JSON.stringify(muxterm)}`,
       '-c', 'mcp_servers.muxterm.args=["mcp"]'] : [];
@@ -91,6 +92,7 @@ export class CodexStream {
   async initialize() {
     await this.request('initialize', { clientInfo: { name: 'muxterm', title: 'muxterm SDK chat', version: '1' }, capabilities: { experimentalApi: true } });
     this.process.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
+    if (this.catalogOnly) return;
     const options = { cwd: this.session.cwd, additionalDirectories: this.session.sourceFolders, approvalPolicy: 'never', sandbox: this.sandboxName() };
     const result = await this.request(this.session.nativeId ? 'thread/resume' : 'thread/start',
       this.session.nativeId ? { threadId: this.session.nativeId, ...options } : options);
@@ -122,7 +124,21 @@ export class CodexStream {
       });
       cursor = page.nextCursor;
     } while (cursor);
-    return { model: this.session.model || '', effort: this.session.effort || '', models };
+    let configuredModel = '';
+    const unlistedEfforts = ['low', 'medium', 'high', 'xhigh'];
+    try {
+      const settings = await this.request('config/read', { includeLayers: false });
+      configuredModel = settings.config?.model || '';
+    } catch { /* Older Codex builds may not expose config/read. */ }
+    // The installed app-server can lag behind the models accepted by Codex.
+    // Keep this supported model selectable with its documented effort range.
+    if (!models.some(model => model.id === 'gpt-6.1-sol'))
+      models.unshift({ id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' });
+    if (configuredModel && !models.some(model => model.id === configuredModel))
+      models.unshift({ id: configuredModel, label: configuredModel, efforts: unlistedEfforts, defaultEffort: '' });
+    if (this.session.model && !models.some(model => model.id === this.session.model))
+      models.unshift({ id: this.session.model, label: this.session.model, efforts: unlistedEfforts, defaultEffort: '' });
+    return { model: this.session.model || '', effort: this.session.effort || '', defaultModel: configuredModel, models };
   }
 
   goalSnapshot(goal) {

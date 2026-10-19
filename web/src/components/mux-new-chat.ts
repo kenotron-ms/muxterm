@@ -9,6 +9,9 @@ import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
 type StartOption = { harness: SDKHarnessName; provider: ProviderName };
+type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
+type ChatCatalog = { model: string; effort: string; defaultModel?: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[] };
+const providerLabel = (value: string) => value === 'provider-openai' ? 'OpenAI' : value === 'provider-anthropic' ? 'Anthropic' : value.replace(/^provider-/, '');
 const SETUP_AGENTS = [
   { name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
   { name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
@@ -31,7 +34,18 @@ export class MuxNewChat extends LitElement {
   @state() private projectName = '';
   @state() private newFolderName = '';
   @state() private harness: SDKHarnessName = 'codex';
-  @state() private provider: ProviderName = 'openai';
+  @state() private provider = 'openai';
+  @state() private bundle = '';
+  @state() private model = '';
+  @state() private effort = '';
+  @state() private customModel = false;
+  @state() private catalog?: ChatCatalog;
+  @state() private catalogLoading = false;
+  @state() private catalogError = '';
+  private catalogVersion = 0;
+  private catalogHarness = '';
+  private catalogPath = '';
+  private catalogTimer?: number;
   @state() private startOptions?: StartOption[];
   @state() private prompt = '';
   @state() private promptHasContent = false;
@@ -60,6 +74,9 @@ export class MuxNewChat extends LitElement {
     if (this.projectPickerOpen && !inside('.project-picker')) this.projectPickerOpen = false;
     if (this.pickerOpen && !inside('.picker') && !inside('.browse')) this.pickerOpen = false;
     if (this.locationOpen && !inside('.location-settings')) this.locationOpen = false;
+    this.renderRoot.querySelectorAll<HTMLDetailsElement>('.chat-picker[open]').forEach(picker => {
+      if (!path.includes(picker)) picker.open = false;
+    });
   };
 
   static styles = css`
@@ -74,6 +91,33 @@ export class MuxNewChat extends LitElement {
     .controls label { display:block; }
     .controls .project { min-width:0; }
     .controls .harness { min-width:0; }
+    .chat-picker { position:relative; min-width:0; }
+    .chat-picker summary { display:flex; align-items:center; box-sizing:border-box; height:31px; max-width:170px; padding:0 29px 0 9px; border:1px solid var(--chrome-border,#475067); border-radius:8px; background:var(--chrome-bar,#252a39); color:var(--chrome-text-bright,#e2e6f1); cursor:pointer; font-size:12px; list-style:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .chat-picker summary::-webkit-details-marker { display:none; }
+    .chat-picker summary::after { content:'⌄'; position:absolute; right:10px; color:var(--chrome-text-dim,#a9b0c0); }
+    .chat-picker summary:hover,.chat-picker[open] summary { border-color:var(--chrome-accent,#9bb8f7); }
+    .chat-picker .panel { position:absolute; z-index:30; top:37px; width:min(350px,calc(100vw - 44px)); max-height:min(48vh,340px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:14px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px #0007; }
+    .bundle-picker .panel { left:0; }
+    .settings-picker .panel { right:0; }
+    .chat-picker .heading { padding:8px 10px 5px; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
+    .chat-picker .divider { height:1px; margin:7px 5px; background:var(--chrome-border,#41485f); }
+    .chat-picker .choice { display:flex; align-items:center; gap:9px; width:100%; min-height:36px; padding:7px 10px; border:0; border-radius:9px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:12px/1.4 system-ui,sans-serif; text-align:left; cursor:pointer; }
+    .chat-picker .choice:hover:not(:disabled),.chat-picker .choice:focus-visible { background:var(--chrome-hover); outline:none; }
+    .chat-picker .choice.selected { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 15%,transparent); }
+    .chat-picker .choice:disabled { opacity:.5; cursor:default; }
+    .chat-picker .choice-main { display:grid; gap:2px; min-width:0; flex:1; }
+    .chat-picker .choice-name { font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .chat-picker .hint { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
+    .chat-picker .check { color:var(--chrome-accent,#9bb8f7); font-weight:700; }
+    .chat-picker .model-list { max-height:180px; overflow-y:auto; }
+    .chat-picker .slider { padding:4px 10px 12px; }
+    .chat-picker .slider-header,.chat-picker .slider-ends { display:flex; justify-content:space-between; gap:8px; }
+    .chat-picker .slider-header { font-weight:600; }
+    .chat-picker .slider-ends { color:var(--chrome-text-dim,#9aa3b8); font-size:10px; }
+    .chat-picker input[type=range] { width:100%; height:auto; margin:12px 0 4px; padding:0; border:0; accent-color:var(--chrome-accent,#9bb8f7); cursor:pointer; }
+    .chat-picker .custom-model { width:calc(100% - 20px); margin:6px 10px; }
+    .catalog-status { color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
+    .catalog-status.error { color:var(--chrome-danger); }
     .worktree-toggle { display:inline-flex; align-items:center; gap:7px; height:31px; margin-left:auto; padding:0 3px 0 8px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; white-space:nowrap; }
     .worktree-toggle:hover:not(:disabled),.worktree-toggle:focus-visible { background:var(--chrome-hover); color:var(--chrome-text-bright,#e2e6f1); outline:none; }
     .worktree-toggle:disabled { opacity:.45; cursor:default; }
@@ -185,7 +229,7 @@ export class MuxNewChat extends LitElement {
     document.addEventListener('pointerdown', this.closeDropdowns);
     this.unsub = sdkChats.subscribe(() => this.requestUpdate());
     void sdkChats.refresh().then(() => { const project = sdkChats.projects.find(p => p.id === this.projectId); if (project) this.folder = project.path; });
-    void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) this.folder = listing.base; }).catch(error => { this.error = String(error); });
+    void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) { this.folder = listing.base; void this.loadCatalog(); } }).catch(error => { this.error = String(error); });
   }
   override disconnectedCallback() {
     this.flushPrompt();
@@ -196,6 +240,7 @@ export class MuxNewChat extends LitElement {
     window.removeEventListener('drop', this.resetDrop);
     window.removeEventListener('dragend', this.resetDrop);
     for (const item of this.attachments) if (item.preview) URL.revokeObjectURL(item.preview);
+    if (this.catalogTimer) window.clearTimeout(this.catalogTimer);
     super.disconnectedCallback();
   }
   override firstUpdated() {
@@ -227,6 +272,8 @@ export class MuxNewChat extends LitElement {
   private onFolderChanged() {
     const selected = sdkChats.projects.find(p => p.id === this.projectId);
     if (selected && selected.path !== this.folder) this.projectId = 'new';
+    if (this.catalogTimer) window.clearTimeout(this.catalogTimer);
+    this.catalogTimer = window.setTimeout(() => { this.catalogTimer = undefined; void this.loadCatalog(); }, 400);
   }
   private locationLabel() {
     if (!this.folder) return 'Choose a folder';
@@ -253,12 +300,88 @@ export class MuxNewChat extends LitElement {
     if (project) this.folder = project.path;
     else if (value === 'ungrouped' && this.listing) this.folder = this.listing.base;
     if (value === 'ungrouped' || value === 'new') this.workMode = 'local';
+    void this.loadCatalog();
   }
   private onHarnessChange(value: SDKHarnessName) {
     const option = this.startOptions?.find(item => item.harness === value);
     if (!option) return;
     this.harness = option.harness;
     this.provider = option.provider;
+    this.bundle = '';
+    this.model = '';
+    this.effort = '';
+    this.customModel = false;
+    void this.loadCatalog();
+  }
+  private async loadCatalog() {
+    if (!this.startOptions?.some(item => item.harness === this.harness)) return;
+    const version = ++this.catalogVersion;
+    const path = this.folder || this.listing?.base || '';
+    const previous = this.catalogHarness === this.harness && this.catalogPath === path ? this.catalog : undefined;
+    const previousModel = this.model;
+    const previousEffort = this.effort;
+    this.catalogLoading = true;
+    this.catalogError = '';
+    this.catalog = previous;
+    const params = new URLSearchParams({ harness:this.harness, projectPath:path, bundle:this.bundle, provider:this.harness === 'amplifier' ? this.provider === 'configured' ? '' : this.provider : '' });
+    try {
+      const response = await fetch(apiPath(`/api/sdk-chat-catalog?${params}`));
+      if (!response.ok) throw new Error((await response.text()).trim());
+      const catalog = await response.json() as ChatCatalog;
+      if (!this.isConnected || version !== this.catalogVersion) return;
+      this.catalog = catalog;
+      this.catalogHarness = this.harness;
+      this.catalogPath = path;
+      this.bundle = catalog.bundle || '';
+      this.provider = this.harness === 'amplifier' ? catalog.provider || 'configured' : this.provider;
+      this.model = catalog.model || '';
+      this.effort = catalog.effort || '';
+      this.customModel = false;
+    } catch (error) {
+      if (this.isConnected && version === this.catalogVersion) {
+        if (previous) {
+          this.catalog = previous;
+          this.bundle = previous.bundle || '';
+          this.provider = previous.provider || this.provider;
+          this.model = previousModel;
+          this.effort = previousEffort;
+        }
+        this.catalogError = error instanceof Error ? error.message : String(error);
+      }
+    } finally { if (version === this.catalogVersion) this.catalogLoading = false; }
+  }
+  private onModelChange(value: string) {
+    this.customModel = value === '__custom__';
+    this.model = this.customModel ? '' : value;
+    this.effort = '';
+  }
+  private pickerChoice(name: string, hint: string, selected: boolean, action: () => void) {
+    return html`<button class="choice ${selected ? 'selected' : ''}" type="button" ?disabled=${this.catalogLoading} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span>${hint ? html`<span class="hint">${hint}</span>` : nothing}</span>${selected ? html`<span class="check">✓</span>` : nothing}</button>`;
+  }
+  private renderBundlePicker() {
+    return html`<details class="chat-picker bundle-picker" aria-label="Bundle"><summary>${this.bundle || 'Bundle'}</summary><div class="panel">
+      <div class="heading">Bundle</div>
+      ${(this.catalog?.bundles || []).map(value => this.pickerChoice(value, '', this.bundle === value, () => { this.bundle = value; this.provider = 'configured'; void this.loadCatalog(); }))}
+      ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
+    </div></details>`;
+  }
+  private renderModelPicker(models: ModelOption[], selectedModel: ModelOption | undefined, efforts: string[]) {
+    const effortIndex = Math.max(0, efforts.indexOf(this.effort || selectedModel?.defaultEffort || efforts[0]));
+    const modelLabel = selectedModel?.label || this.model || (this.catalog?.defaultModel ? `Default (${this.catalog.defaultModel})` : 'Model');
+    return html`<details class="chat-picker settings-picker" aria-label="Provider, model and thinking"><summary>${modelLabel}${this.effort ? ` · ${this.effort}` : ''}</summary><div class="panel">
+      <div class="heading">Provider</div>
+      ${this.harness === 'amplifier' ? (this.catalog?.providers || []).map(value => this.pickerChoice(providerLabel(value), '', this.provider === value, () => { this.provider = value; void this.loadCatalog(); })) : html`<div class="hint">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${sdkHarnessLabel(this.harness)}</div>`}
+      <div class="divider"></div><div class="heading">Model</div>
+      <div class="model-list">
+        ${this.harness !== 'amplifier' ? this.pickerChoice(this.catalog?.defaultModel ? `Harness default (${this.catalog.defaultModel})` : 'Harness default', '', !this.customModel && !this.model, () => this.onModelChange('')) : nothing}
+        ${this.model && !selectedModel && !this.customModel ? this.pickerChoice(this.model, '', true, () => this.onModelChange(this.model)) : nothing}
+        ${models.map(item => this.pickerChoice(item.label, item.id, !this.customModel && this.model === item.id, () => this.onModelChange(item.id)))}
+        ${this.pickerChoice('Other model ID…', '', this.customModel, () => this.onModelChange('__custom__'))}
+      </div>
+      ${this.customModel ? html`<input class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(event:Event) => { this.model = (event.target as HTMLInputElement).value; }}>` : nothing}
+      ${efforts.length > 1 ? html`<div class="divider"></div><div class="slider"><div class="slider-header"><span>Thinking</span><span>${efforts[effortIndex]}</span></div><input type="range" aria-label="Thinking effort" min="0" max=${efforts.length - 1} step="1" .value=${String(effortIndex)} @input=${(event:Event) => { this.effort = efforts[Number((event.target as HTMLInputElement).value)]; }}><div class="slider-ends"><span>${efforts[0]}</span><span>${efforts[efforts.length - 1]}</span></div></div>` : nothing}
+      ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
+    </div></details>`;
   }
   private async loadStartOptions() {
     try {
@@ -326,7 +449,7 @@ export class MuxNewChat extends LitElement {
   }
   private async send() {
     const prompt = this.flushPrompt().trim();
-    if ((!prompt && !this.attachments.length) || this.busy || !this.startOptions?.some(item => item.harness === this.harness && item.provider === this.provider) || this.attachments.some(a => a.uploading || a.error)) return;
+    if ((!prompt && !this.attachments.length) || this.busy || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || a.error)) return;
     this.busy = true; this.error = '';
     try {
       await this.updateComplete;
@@ -335,13 +458,16 @@ export class MuxNewChat extends LitElement {
         if (!this.folder.startsWith('/')) throw new Error('Choose an absolute folder for the new project.');
         workspaceId = (await sdkChats.createProject(this.folder, this.projectName.trim())).id;
       } else if (this.projectId !== 'ungrouped') workspaceId = this.projectId;
-      const chat = await sdkChats.create({ workspaceId, projectPath:this.folder, workMode:this.workMode, harness:this.harness, provider:this.provider, prompt, attachments:this.attachments.map(a => a.id!) });
+      const chat = await sdkChats.create({ workspaceId, projectPath:this.folder, workMode:this.workMode, harness:this.harness, provider:this.provider, bundle:this.bundle, model:this.model.trim(), effort:this.effort, prompt, attachments:this.attachments.map(a => a.id!) });
       this.dispatchEvent(new CustomEvent('chat-created', { detail:{sessionId:chat.id}, bubbles:true, composed:true }));
     } catch (error) { this.error = error instanceof Error ? error.message.trim() : String(error); }
     finally { this.busy = false; }
   }
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
+    const models = this.catalog?.models || [];
+    const selectedModel = models.find(item => item.id === this.model);
+    const efforts = selectedModel?.efforts?.length ? selectedModel.efforts : this.harness === 'codex' && this.model ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : [];
     if (this.startOptions?.length === 0) return html`
       <div class="main setup"><div class="content">
         <h1>Choose your coding agent</h1>
@@ -377,15 +503,19 @@ export class MuxNewChat extends LitElement {
           </div>
         </details>
         ${this.startOptions?.length ? html`<label class="harness"><select aria-label="Harness" .value=${this.harness} @change=${(e:Event) => this.onHarnessChange((e.target as HTMLSelectElement).value as SDKHarnessName)}>${this.startOptions.map(option => html`<option value=${option.harness} ?selected=${this.harness === option.harness}>${sdkHarnessLabel(option.harness)}</option>`)}</select></label>` : nothing}
+        ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
+        ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
+        ${this.catalogLoading ? html`<span class="catalog-status" role="status">Loading models…</span>` : nothing}
         <button class="worktree-toggle" type="button" role="switch" aria-label="Use a separate Git worktree" aria-checked=${this.workMode === 'worktree'} title=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @click=${() => { this.workMode = this.workMode === 'worktree' ? 'local' : 'worktree'; }}><span>Worktree</span><span class="track" aria-hidden="true"><span class="thumb"></span></span></button>
         </div>
         ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button></div>`)}</div>` : nothing}
         <div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${this.onPromptInput} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div>
-        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><button class="send" aria-label="Send message" ?disabled=${(!this.promptHasContent && !this.attachments.length) || this.busy || !this.startOptions?.some(item => item.harness === this.harness && item.provider === this.provider) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
+        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><button class="send" aria-label="Send message" ?disabled=${(!this.promptHasContent && !this.attachments.length) || this.busy || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
 
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
+      ${this.catalogError ? html`<div class="catalog-status error" role="alert">Could not load models: ${this.catalogError} <button @click=${() => void this.loadCatalog()}>Retry</button></div>` : nothing}
       ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
     </div></div>
   `; }

@@ -1395,6 +1395,69 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	writeSDKJSON(w, 200, options)
 }
 
+// Discover choices before creating a chat. Temporary sessions are closed before
+// returning, so changing harnesses in the composer leaves no chat behind.
+func (s *Server) handleSDKChatCatalog(w http.ResponseWriter, r *http.Request) {
+	harness := r.URL.Query().Get("harness")
+	if harness != "codex" && harness != "claude" && harness != "amplifier" && !isSDKACPHarness(harness) {
+		http.Error(w, "unsupported harness", 400)
+		return
+	}
+	cwd := r.URL.Query().Get("projectPath")
+	if cwd == "" {
+		cwd, _ = os.UserHomeDir()
+	}
+	if !filepath.IsAbs(cwd) {
+		http.Error(w, "absolute project path required", 400)
+		return
+	}
+	for {
+		if info, err := os.Stat(cwd); err == nil && info.IsDir() {
+			break
+		}
+		parent := filepath.Dir(cwd)
+		if parent == cwd {
+			http.Error(w, "project folder unavailable", 400)
+			return
+		}
+		cwd = parent
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	args := map[string]any{"harness": harness, "cwd": cwd}
+	var result json.RawMessage
+	var err error
+	if harness == "codex" {
+		result, err = s.sdkChats.call(ctx, "catalog", args)
+	} else {
+		id := sdkID()
+		args["sessionId"] = id
+		args["approval"] = "never"
+		args["bundle"] = r.URL.Query().Get("bundle")
+		args["provider"] = amplifierProviderModule(harness, r.URL.Query().Get("provider"))
+		_, err = s.sdkChats.call(ctx, "start", args)
+		if err == nil {
+			defer func() {
+				closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer closeCancel()
+				_, _ = s.sdkChats.call(closeCtx, "close", map[string]any{"harness": harness, "sessionId": id})
+			}()
+			if harness == "amplifier" {
+				result, err = s.sdkChats.call(ctx, "settings", map[string]any{"harness": harness, "sessionId": id})
+			} else {
+				result, err = s.sdkChats.call(ctx, "options", map[string]any{"harness": harness, "sessionId": id})
+			}
+		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 502)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(result)
+}
+
 func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == "GET" {
@@ -1408,7 +1471,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		WorkspaceID, ProjectPath, Harness, Provider, Prompt, Goal, Approval, WorkMode, OperatorID string
+		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, OperatorID string
 		Attachments                                                                               []string `json:"attachments"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
@@ -1454,7 +1517,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "configured"
 		}
 	}
-	if req.Provider != "openai" && req.Provider != "anthropic" && req.Provider != "configured" {
+	if req.Provider != "openai" && req.Provider != "anthropic" && req.Provider != "configured" && !(req.Harness == "amplifier" && strings.HasPrefix(req.Provider, "provider-")) {
 		http.Error(w, "unsupported provider", 400)
 		return
 	}
@@ -1566,7 +1629,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
-	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
+	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Bundle: req.Bundle, Model: req.Model, Effort: req.Effort, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	if req.OperatorID != "" {
 		operator := h.chats[req.OperatorID]
@@ -1605,13 +1668,13 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "provider": amplifierProviderModule(c.Harness, c.Provider), "approval": c.Approval, "originToken": h.chatOriginToken(c.ID)}); err != nil {
+	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": c.Approval, "originToken": h.chatOriginToken(c.ID)}); err != nil {
 		h.appendEvent(sdkEvent{SessionID: c.ID, Type: "error", Message: err.Error()})
 		http.Error(w, fmt.Sprintf("chat %s could not start: %v", c.ID, err), 502)
 		return
 	}
 	openingID := sdkID()
-	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": h.laneInput(c.ID, req.Prompt), "displayContent": req.Prompt, "goal": req.Goal, "attachments": attachments}})
+	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": h.laneInput(c.ID, req.Prompt), "displayContent": req.Prompt, "goal": req.Goal, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
 	if err == nil {
 		var ack struct{ Status, InputID string }
 		err = json.Unmarshal(result, &ack)

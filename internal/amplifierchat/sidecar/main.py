@@ -178,6 +178,7 @@ class SDKChatSession:
         self.active = set()
         self.partial = ""
         self.model = ""
+        self.configured_model = ""
         self.available_providers = []
         self.available_bundles = []
         self.model_rows = None
@@ -276,6 +277,7 @@ class SDKChatSession:
                     or entry.get("instance_id") == self.provider]
         if not selected:
             raise RuntimeError(f"provider '{self.provider or 'default'}' is unavailable for bundle '{self.bundle}'")
+        self.configured_model = str((selected[0].get("config") or {}).get("default_model") or "")
         cfg["providers"] = selected
         prepared.mount_plan["providers"] = copy.deepcopy(selected)
         prepared.bundle.providers = copy.deepcopy(selected)
@@ -731,10 +733,31 @@ async def command(cmd):
             active_name)
         provider = next(iter((session.session.coordinator.get("providers") or {}).values()), None)
         active_model = session.model.split("/", 1)[-1]
-        rows = self_rows = session.model_rows
-        if self_rows is None:
-            rows = []
-        if provider is not None and self_rows is None:
+        rows = list(session.model_rows or [])
+        def model_efforts(item):
+            model_id = str(item.id)
+            if hasattr(provider, "_get_capabilities"):
+                try:
+                    caps = provider._get_capabilities(model_id)
+                    if getattr(caps, "supports_output_config", False):
+                        efforts = list(getattr(caps, "supported_efforts", ()) or ())
+                        if efforts:
+                            return efforts
+                except Exception:
+                    pass
+            efforts = list(getattr(item, "supported_efforts", ()) or ())
+            if efforts:
+                return efforts
+            if "reasoning" in set(getattr(item, "capabilities", ()) or ()) and hasattr(provider, "get_info"):
+                try:
+                    fields = provider.get_info().config_fields or []
+                    field = next((field for field in fields if field.id == "reasoning_effort"), None)
+                    if field:
+                        return [str(value) for value in field.choices or [] if value != "none"]
+                except Exception:
+                    pass
+            return []
+        if provider is not None and session.model_rows is None:
             try:
                 listed = await asyncio.wait_for(provider.list_models(), timeout=12)
                 for item in listed:
@@ -742,17 +765,12 @@ async def command(cmd):
                     if "tools" not in capabilities or "streaming" not in capabilities:
                         continue
                     model_id = str(item.id)
-                    efforts = []
-                    if hasattr(provider, "_get_capabilities"):
-                        caps = provider._get_capabilities(model_id)
-                        if getattr(caps, "supports_output_config", False):
-                            efforts = list(getattr(caps, "supported_efforts", ()))
-                    if not efforts:
-                        efforts = list(getattr(item, "supported_efforts", ()) or ())
-                    rows.append({"id": model_id, "label": str(item.display_name), "efforts": efforts})
+                    rows.append({"id": model_id, "label": str(item.display_name), "efforts": model_efforts(item)})
             except Exception:
                 pass
-            session.model_rows = rows
+            session.model_rows = list(rows)
+        if session.configured_model and not any(row["id"] == session.configured_model for row in rows):
+            rows.insert(0, {"id": session.configured_model, "label": session.configured_model, "efforts": []})
         if not any(row["id"] == active_model for row in rows):
             rows.insert(0, {"id": active_model, "label": active_model, "efforts": []})
         return {"bundle": session.bundle, "provider": active_provider,
@@ -780,6 +798,8 @@ async def command(cmd):
             if selected is None or (effort and effort not in selected["efforts"]):
                 raise ValueError("unsupported model or effort for the active Amplifier provider")
         replacement = SDKChatSession(sid, session.cwd, bundle, provider, model, effort, mode, session.origin_token)
+        if not switched:
+            replacement.model_rows = copy.deepcopy(session.model_rows)
         try:
             await replacement.build()
         except BaseException:
