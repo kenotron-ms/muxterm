@@ -16,6 +16,8 @@
 // should migrate to the ResolvedConfig/config.toml pattern (see theme.ts).
 // ---------------------------------------------------------------------------
 
+import { syncPwaThemeColor } from './theme.js';
+
 const TITLEBAR_COLOR_KEY = 'mux-titlebar-color';
 
 /** A single preset swatch: a friendly name + its hex value. */
@@ -131,4 +133,5 @@ export function applyTitlebarColor(
   } else {
     root.style.removeProperty('--mux-titlebar-bg');
   }
+  syncPwaThemeColor(root);
 }
