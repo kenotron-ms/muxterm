@@ -815,6 +815,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 34%,transparent); border-radius:999px; }
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 58%,transparent); }
     mux-sdk-utility .utility-tabs { display:flex; align-items:center; flex:none; gap:4px; min-height:var(--mux-titlebar-height,44px); box-sizing:border-box; padding:4px max(8px,var(--wco-right-inset,0px)) 4px 8px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); overflow-x:auto; }
+    @media (display-mode: window-controls-overlay) { mux-sdk-utility .utility-tabs { -webkit-app-region:no-drag; app-region:no-drag; } }
     mux-sdk-utility .utility-tab { display:flex; align-items:center; flex:0 1 210px; min-width:120px; height:29px; border:1px solid transparent; border-radius:8px; color:var(--chrome-text-dim); }
     mux-sdk-utility .utility-tab:not(:first-child):not(.active) { border-left-color:var(--chrome-border); border-radius:0; }
     mux-sdk-utility .utility-tab:hover { background:var(--chrome-hover); color:var(--chrome-text-bright); }
