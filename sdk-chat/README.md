@@ -18,6 +18,30 @@ existing SSE renderer. Native Codex thread IDs still resume chats.
 The sidecar path defaults to the extracted copy embedded in the binary.
 `MUXTERM_SDK_CHAT_SIDECAR` can point to an explicit copy.
 
+## Progress updates and reasoning
+
+Muxterm records user-facing progress updates, tool activity, and answers. Codex
+`agentMessage` items with phase `commentary` stream as `commentary.delta`, with
+their item IDs and completion boundaries preserved. These updates describe what
+the assistant is doing and appear in the work timeline.
+
+Classify progress using protocol item types and phase fields. Do not extract or
+classify it using regular expressions, headings, or paragraph positions in model
+output. Pass commentary text through unchanged; use CSS for preview layout.
+
+Codex reasoning summaries are disabled independently of reasoning effort. Reasoning
+items, raw reasoning deltas, Claude thinking blocks, ACP thought chunks, and
+Amplifier thinking blocks are excluded from Muxterm's event log and browser
+stream. Native harness context remains under the harness's control.
+
+Legacy `thinking.delta` events mixed reasoning and commentary without provenance.
+History and reconnect streaming omit those events instead of guessing which
+sentences were progress updates. Existing log files are not rewritten.
+
+The native controls are documented in OpenAI's [App Server item and delta
+protocol](https://developers.openai.com/codex/app-server#items) and
+[`model_reasoning_summary` configuration](https://developers.openai.com/codex/config-reference).
+
 ## ACP agents
 
 Pi, OpenCode, and DeepSeek Harness run as local ACP agents through the official
@@ -38,7 +62,7 @@ muxterm. For Pi, `pi` itself must also be on `PATH` because `pi-acp` launches it
 
 The client keeps one ACP process per chat and saves the native ACP session ID.
 On reconnect it uses `session/resume` where advertised, then `session/load`.
-Streaming text, thoughts, tool activity, cancellation, image prompts, and
+Streaming text, tool activity, cancellation, image prompts, and
 advertised model and thinking controls flow into the existing chat UI. OpenCode
 and DeepSeek Harness receive muxterm's local MCP server through ACP. The Pi ACP
 adapter currently accepts MCP server definitions but does not connect them to

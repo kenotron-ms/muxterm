@@ -126,8 +126,6 @@ export class ACPStream {
       || (update.sessionUpdate === 'session_info_update' && update._meta?.piAcp?.running === true))) this.confirmAccepted?.();
     if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && messageText)
       this.emit(this.session.id, 'assistant.delta', { text: messageText });
-    else if (update.sessionUpdate === 'agent_thought_chunk' && update.content?.type === 'text' && update.content.text)
-      this.emit(this.session.id, 'thinking.delta', { text: update.content.text });
     else if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       const id = update.toolCallId;
       const prior = this.tools.get(id);

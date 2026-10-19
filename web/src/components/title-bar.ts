@@ -2,11 +2,10 @@
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import './launcher-menu.js';
 import './mux-pane-picker.js';
 import './mic-button.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis, Menu } from 'lucide';
+import { Menu, Settings } from 'lucide';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
@@ -183,19 +182,8 @@ export class MuxTitleBar extends LitElement {
 
   private _unsubSessions: (() => void) | null = null;
 
-  /** Bound handler so we can remove it in disconnectedCallback. */
-  private _onOpenLauncher = (): void => {
-    const menu = this.shadowRoot?.querySelector<HTMLElement>('mux-launcher-menu');
-    try {
-      menu?.showPopover();
-    } catch {
-      /* already open */
-    }
-  };
-
   override connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener('open-launcher', this._onOpenLauncher);
     // Same source the Start card counts from — see _needsCount.
     this._unsubSessions = homeSessions.subscribe(() => {
       this._sessionVersion++;
@@ -204,50 +192,14 @@ export class MuxTitleBar extends LitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener('open-launcher', this._onOpenLauncher);
     this._unsubSessions?.();
     this._unsubSessions = null;
-  }
-
-  /**
-   * The launcher sheet is a popover, so open/close is the browser's business
-   * now (light dismiss, Escape, one-at-a-time, focus). The host attribute E2E
-   * selectors key on is kept in sync from the popover's own toggle event
-   * rather than from a component flag, which would only be a second copy of a
-   * truth the browser already holds.
-   */
-  private _onLauncherToggle(e: Event): void {
-    this.toggleAttribute('data-launcher-open', (e as ToggleEvent).newState === 'open');
   }
 
   /** Whether any terminal session needs input. */
   private get _needs(): boolean {
     void this._sessionVersion;
     return needsInputCount(homeSessions.sessions) > 0;
-  }
-
-  private _closeLauncher(): void {
-    const menu = this.shadowRoot?.querySelector<HTMLElement>('mux-launcher-menu');
-    try {
-      menu?.hidePopover();
-    } catch {
-      /* already closed */
-    }
-  }
-
-  private _onLauncherAction(e: Event): void {
-    // Stop the original event from propagating further out of our shadow root
-    e.stopPropagation();
-    this._closeLauncher();
-    // Re-dispatch the event upward (bubbles, composed)
-    const customEvent = e as CustomEvent;
-    this.dispatchEvent(
-      new CustomEvent('launcher-action', {
-        bubbles: true,
-        composed: true,
-        detail: customEvent.detail,
-      }),
-    );
   }
 
   /**
@@ -299,18 +251,11 @@ export class MuxTitleBar extends LitElement {
           : html`<button
                 class="launcher-btn"
                 type="button"
-                title="Open menu"
-                popovertarget="launcher-sheet"
-              >${icon(Ellipsis, { size: 16 })}</button>`}
+                title="Settings"
+                aria-label="Open settings"
+                @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action: 'settings' }, bubbles: true, composed: true }))}
+              >${icon(Settings, { size: 16 })}</button>`}
       </div>
-      <mux-launcher-menu
-        id="launcher-sheet"
-        popover="auto"
-        sheet
-        .showCreateWorkspace="${true}"
-        @toggle="${this._onLauncherToggle}"
-        @launcher-action="${this._onLauncherAction}"
-      ></mux-launcher-menu>
     `;
   }
 }
