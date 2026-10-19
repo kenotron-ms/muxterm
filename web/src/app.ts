@@ -392,6 +392,14 @@ export class MuxApp extends LitElement {
       min-height: 0;
     }
 
+    .settings-page {
+      position: fixed;
+      inset: 0;
+      z-index: 3000;
+      display: flex;
+      background: var(--chrome-body);
+    }
+
     /* shortcuts / about panels rendered inline */
     .info-panel {
       padding: 24px 24px 32px;
@@ -1499,15 +1507,30 @@ export class MuxApp extends LitElement {
     this._split = null;
   }
 
+  private _renderSettings(pageMode = false) {
+    return html`<mux-settings-surface
+      .config=${store.config}
+      .aiStatus=${store.aiStatus}
+      .openSection=${this._settingsOpenSection}
+      .pageMode=${pageMode}
+      serverAddr=${window.location.host}
+      @close=${this._closeOverlayPanel}
+      @launcher-action=${this._onLauncherAction}
+      @config-change=${this._onConfigChange}
+      @ai-status-change=${this._onAIStatusChange}
+    ></mux-settings-surface>`;
+  }
+
   render() {
     // Exclude provisional overlay panes (negative IDs) from layout decisions.
     // They have no terminal and should not render as blank tiles.
     const panes = store.panes.filter((p) => p.paneId >= 0);
     const isWide = this._layoutMode === 'wide';
+    const settingsPage = !isWide && this._overlayPanel === 'settings';
     const selectedSDKChat = this._sdkChatId && !UTILITY_TITLES.has(this._sdkChatId) ? this._sdkChatId : '';
 
     return html`
-      ${!isWide ? html`<mux-title-bar
+      ${!isWide && !settingsPage ? html`<mux-title-bar
         .drawerOpen="${this._drawerOpen}"
         .chatTitle="${this._sdkChatId ? UTILITY_TITLES.get(this._sdkChatId) || 'Chat' : ''}"
         @launcher-action="${this._onLauncherAction}"
@@ -1516,7 +1539,7 @@ export class MuxApp extends LitElement {
         @drawer-toggle="${this._onDrawerToggle}"
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
-      <div class="content-area">
+      <div class="content-area" ?inert=${settingsPage}>
         ${isWide ? html`
           <mux-sidebar
             .newChatActive="${this._sdkChatId === 'new'}"
@@ -1686,7 +1709,7 @@ export class MuxApp extends LitElement {
           </div>
         </div>
       ` : ''}
-      ${this._overlayPanel ? html`
+      ${settingsPage ? html`<section class="settings-page" aria-label="Settings">${this._renderSettings(true)}</section>` : this._overlayPanel ? html`
         <div class="overlay-backdrop" @click="${this._closeOverlayPanel}">
           <div
             class="overlay-dialog${this._overlayPanel === 'connect' ? ' cdialog' : ''}"
@@ -1697,18 +1720,7 @@ export class MuxApp extends LitElement {
                 <mux-connect-dialog
                   @close="${this._closeOverlayPanel}"
                 ></mux-connect-dialog>
-              ` : this._overlayPanel === 'settings' ? html`
-                <mux-settings-surface
-                  .config="${store.config}"
-                  .aiStatus="${store.aiStatus}"
-                  .openSection="${this._settingsOpenSection}"
-                  serverAddr="${window.location.host}"
-                  @close="${this._closeOverlayPanel}"
-                  @launcher-action="${this._onLauncherAction}"
-                  @config-change="${this._onConfigChange}"
-                  @ai-status-change="${this._onAIStatusChange}"
-                ></mux-settings-surface>
-              ` : ''}
+              ` : this._overlayPanel === 'settings' ? this._renderSettings() : ''}
             </div>
           </div>
         </div>
