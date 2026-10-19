@@ -21,6 +21,7 @@ type Attachment = { localId: string; file: File; id?: string; kind?: string; pre
 
 @customElement('mux-new-chat')
 export class MuxNewChat extends LitElement {
+  @property({ type: Boolean, reflect: true }) compact = false;
   @property() initialHarness: SDKHarnessName = 'codex';
   @property() initialFolder = '';
   @property() initialProject = '';
@@ -65,6 +66,14 @@ export class MuxNewChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
+    :host([compact]) { position:relative; inset:auto; z-index:auto; flex:1; min-height:0; }
+    :host([compact]) .main { justify-content:flex-end; align-items:stretch; padding:16px 10px; }
+    :host([compact]) .content { width:100%; }
+    :host([compact]) h1 { font-size:17px; margin:0 5px 14px; }
+    :host([compact]) .composer { padding:11px 10px 8px; }
+    :host([compact]) .controls { gap:4px; }
+    :host([compact]) .worktree-toggle { margin-left:0; }
+    :host([compact]) textarea { font-size:14px; }
     .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:24px; overflow:auto; }
     .main.setup { justify-content:flex-start; }
     .content { width:min(100%,780px); }
