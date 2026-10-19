@@ -1618,10 +1618,11 @@ export class MuxApp extends LitElement {
     const attachedWorkspace = store.workspaces.find(workspace => workspace.workspaceId === store.attached);
 
     return html`
-      <div class="window-chrome ${isWide && (selectedSDKChat || (!this._sdkChatId && panes.length > 0)) ? 'integrated' : ''}">
+      <div class="window-chrome ${isWide && (this._sdkChatId === 'new' || selectedSDKChat || (!this._sdkChatId && panes.length > 0)) ? 'integrated' : ''}">
         <mux-title-bar window-chrome .desktop=${isWide}
           .drawerOpen=${this._drawerOpen}
           .chatTitle=${chatTitle}
+          .showLauncher=${this._sdkChatId !== 'new'}
           @drawer-toggle=${this._onDrawerToggle}
           @chat-new=${this._onChatNew}
           @launcher-action=${this._onLauncherAction}
@@ -1633,6 +1634,7 @@ export class MuxApp extends LitElement {
         class="mobile-title-bar"
         .drawerOpen="${this._drawerOpen}"
         .chatTitle="${chatTitle}"
+        .showLauncher="${this._sdkChatId !== 'new'}"
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
         @pane-create-request="${this._createPaneOptimistic}"
@@ -1647,7 +1649,7 @@ export class MuxApp extends LitElement {
             .connectionsActive="${this._sdkChatId === 'connections'}"
             .skillsActive="${this._sdkChatId === 'skills'}"
             .selectedSDKChat="${selectedSDKChat}"
-            .showLauncher="${true}"
+            .showLauncher="${this._sdkChatId !== 'new'}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @chat-open="${this._onChatOpen}"
             @home-open="${this._onHomeOpen}"
@@ -1730,6 +1732,7 @@ export class MuxApp extends LitElement {
                 .skillsActive="${this._sdkChatId === 'skills'}"
                 .selectedSDKChat="${selectedSDKChat}"
                 .previewsVisible="${this._drawerOpen}"
+                .showLauncher="${this._sdkChatId !== 'new'}"
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @chat-open="${this._onChatOpen}"
                 @home-open="${this._onHomeOpen}"

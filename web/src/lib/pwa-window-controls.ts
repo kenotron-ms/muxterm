@@ -14,7 +14,6 @@ export function installPwaWindowControls(root: HTMLElement = document.documentEl
       delete root.dataset.wcoControls;
       root.style.removeProperty('--wco-left-inset');
       root.style.removeProperty('--wco-right-inset');
-      root.style.removeProperty('--wco-narrow-bg');
       syncPwaThemeColor(root);
       return;
     }
@@ -24,8 +23,6 @@ export function installPwaWindowControls(root: HTMLElement = document.documentEl
     root.style.setProperty('--wco-left-inset', `${left ? left + 8 : 0}px`);
     root.style.setProperty('--wco-right-inset', `${right ? right + 8 : 0}px`);
     root.dataset.wcoControls = left > 0 ? 'left' : 'right';
-    if (left > 0) root.style.removeProperty('--wco-narrow-bg');
-    else root.style.setProperty('--wco-narrow-bg', 'var(--chrome-body)');
     syncPwaThemeColor(root);
   };
   overlay?.addEventListener('geometrychange', update);

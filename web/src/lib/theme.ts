@@ -347,7 +347,9 @@ export function applyChromeTokens(
   root: HTMLElement = document.documentElement,
 ): void {
   const tokens = isLightTheme(paletteName) ? CHROME_LIGHT : CHROME_DARK;
-  root.style.colorScheme = isLightTheme(paletteName) ? 'light' : 'dark';
+  const scheme = isLightTheme(paletteName) ? 'light' : 'dark';
+  root.style.colorScheme = scheme;
+  document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')?.setAttribute('content', scheme);
   root.style.setProperty('--mux-page-bg', tokens.body);
   root.style.setProperty('--mux-page-fg', tokens.textBright);
   try {
@@ -373,9 +375,7 @@ export function applyChromeTokens(
 
 /** Match browser-owned PWA controls to the surface underneath them. */
 export function syncPwaThemeColor(root: HTMLElement = document.documentElement): void {
-  const main = root.style.getPropertyValue('--chrome-body') || CHROME_DARK.body;
-  const sidebar = root.style.getPropertyValue('--mux-titlebar-bg') ||
+  const color = root.style.getPropertyValue('--mux-titlebar-bg') ||
     root.style.getPropertyValue('--chrome-bar') || CHROME_DARK.bar;
-  const color = root.dataset.wcoControls === 'right' ? main : sidebar;
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', color);
 }

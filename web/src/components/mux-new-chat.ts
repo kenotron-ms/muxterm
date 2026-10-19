@@ -82,6 +82,13 @@ export class MuxNewChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
+    .topbar { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:9px; min-width:0; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); }
+    .topbar .project { display:inline-flex; align-items:center; gap:7px; min-width:0; max-width:38%; color:var(--chrome-text-dim); font:500 12px Inter,system-ui,sans-serif; white-space:nowrap; }
+    .topbar .project span { overflow:hidden; text-overflow:ellipsis; }
+    .topbar .divider { flex:none; color:var(--chrome-text-dim); }
+    .topbar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    @media (max-width:767.98px) { .topbar { display:none; } }
+    @media (display-mode: window-controls-overlay) { .topbar { -webkit-app-region:drag; } }
     .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:24px; overflow:auto; }
     .main.setup { justify-content:flex-start; }
     .content { width:min(100%,780px); }
@@ -463,12 +470,18 @@ export class MuxNewChat extends LitElement {
     } catch (error) { this.error = error instanceof Error ? error.message.trim() : String(error); }
     finally { this.busy = false; }
   }
+  private renderTopbar(projectName: string) {
+    return html`<header class="topbar" aria-label="New chat"><span class="project">${icon(Folder, { size: 14 })}<span>${projectName}</span></span><span class="divider" aria-hidden="true">›</span><strong>New chat</strong></header>`;
+  }
+
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
+    const projectName = selectedProject?.name || (this.projectId === 'new' ? this.projectName || 'New project' : 'Ungrouped');
     const models = this.catalog?.models || [];
     const selectedModel = models.find(item => item.id === this.model);
     const efforts = selectedModel?.efforts?.length ? selectedModel.efforts : this.harness === 'codex' && this.model ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : [];
     if (this.startOptions?.length === 0) return html`
+      ${this.renderTopbar(projectName)}
       <div class="main setup"><div class="content">
         <h1>Choose your coding agent</h1>
         <p class="setup-intro">Install an agent in a terminal, sign in to its provider, then refresh this list. Muxterm will use the agent already on your computer.</p>
@@ -483,6 +496,7 @@ export class MuxNewChat extends LitElement {
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></div>`;
     return html`
+    ${this.renderTopbar(projectName)}
     <div class="main"><div class="content">
       <h1>What would you like to do?</h1>
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
