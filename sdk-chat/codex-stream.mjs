@@ -116,8 +116,8 @@ export class CodexStream {
     const models = [];
     let cursor = null;
     do {
-      const page = await this.request('model/list', { cursor, includeHidden: true, limit: 100 });
-      for (const model of page.data || []) models.push({
+      const page = await this.request('model/list', { cursor, includeHidden: false, limit: 100 });
+      for (const model of page.data || []) if (!model.hidden) models.push({
         id: model.model || model.id, label: model.displayName || model.model || model.id,
         efforts: (model.supportedReasoningEfforts || []).map(option => option.reasoningEffort),
         defaultEffort: model.defaultReasoningEffort || '',
@@ -130,6 +130,10 @@ export class CodexStream {
       const settings = await this.request('config/read', { includeLayers: false });
       configuredModel = settings.config?.model || '';
     } catch { /* Older Codex builds may not expose config/read. */ }
+    // The installed app-server can lag behind the models accepted by Codex.
+    // Keep this supported model selectable with its documented effort range.
+    if (!models.some(model => model.id === 'gpt-6.1-sol'))
+      models.unshift({ id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' });
     if (configuredModel && !models.some(model => model.id === configuredModel))
       models.unshift({ id: configuredModel, label: configuredModel, efforts: unlistedEfforts, defaultEffort: '' });
     if (this.session.model && !models.some(model => model.id === this.session.model))

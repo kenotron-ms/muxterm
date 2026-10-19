@@ -74,6 +74,9 @@ export class MuxNewChat extends LitElement {
     if (this.projectPickerOpen && !inside('.project-picker')) this.projectPickerOpen = false;
     if (this.pickerOpen && !inside('.picker') && !inside('.browse')) this.pickerOpen = false;
     if (this.locationOpen && !inside('.location-settings')) this.locationOpen = false;
+    this.renderRoot.querySelectorAll<HTMLDetailsElement>('.chat-picker[open]').forEach(picker => {
+      if (!path.includes(picker)) picker.open = false;
+    });
   };
 
   static styles = css`
@@ -88,10 +91,31 @@ export class MuxNewChat extends LitElement {
     .controls label { display:block; }
     .controls .project { min-width:0; }
     .controls .harness { min-width:0; }
-    .controls .model { min-width:100px; }
-    .controls .model select { max-width:190px; }
-    .controls .bundle select,.controls .provider select { max-width:150px; }
-    .controls .custom-model { width:145px; height:31px; font-size:12px; }
+    .chat-picker { position:relative; min-width:0; }
+    .chat-picker summary { display:flex; align-items:center; box-sizing:border-box; height:31px; max-width:170px; padding:0 29px 0 9px; border:1px solid var(--chrome-border,#475067); border-radius:8px; background:var(--chrome-bar,#252a39); color:var(--chrome-text-bright,#e2e6f1); cursor:pointer; font-size:12px; list-style:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .chat-picker summary::-webkit-details-marker { display:none; }
+    .chat-picker summary::after { content:'⌄'; position:absolute; right:10px; color:var(--chrome-text-dim,#a9b0c0); }
+    .chat-picker summary:hover,.chat-picker[open] summary { border-color:var(--chrome-accent,#9bb8f7); }
+    .chat-picker .panel { position:absolute; z-index:30; top:37px; width:min(350px,calc(100vw - 44px)); max-height:min(48vh,340px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:14px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px #0007; }
+    .bundle-picker .panel { left:0; }
+    .settings-picker .panel { right:0; }
+    .chat-picker .heading { padding:8px 10px 5px; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
+    .chat-picker .divider { height:1px; margin:7px 5px; background:var(--chrome-border,#41485f); }
+    .chat-picker .choice { display:flex; align-items:center; gap:9px; width:100%; min-height:36px; padding:7px 10px; border:0; border-radius:9px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:12px/1.4 system-ui,sans-serif; text-align:left; cursor:pointer; }
+    .chat-picker .choice:hover:not(:disabled),.chat-picker .choice:focus-visible { background:var(--chrome-hover); outline:none; }
+    .chat-picker .choice.selected { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 15%,transparent); }
+    .chat-picker .choice:disabled { opacity:.5; cursor:default; }
+    .chat-picker .choice-main { display:grid; gap:2px; min-width:0; flex:1; }
+    .chat-picker .choice-name { font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .chat-picker .hint { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
+    .chat-picker .check { color:var(--chrome-accent,#9bb8f7); font-weight:700; }
+    .chat-picker .model-list { max-height:180px; overflow-y:auto; }
+    .chat-picker .slider { padding:4px 10px 12px; }
+    .chat-picker .slider-header,.chat-picker .slider-ends { display:flex; justify-content:space-between; gap:8px; }
+    .chat-picker .slider-header { font-weight:600; }
+    .chat-picker .slider-ends { color:var(--chrome-text-dim,#9aa3b8); font-size:10px; }
+    .chat-picker input[type=range] { width:100%; height:auto; margin:12px 0 4px; padding:0; border:0; accent-color:var(--chrome-accent,#9bb8f7); cursor:pointer; }
+    .chat-picker .custom-model { width:calc(100% - 20px); margin:6px 10px; }
     .catalog-status { color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
     .catalog-status.error { color:var(--chrome-danger); }
     .worktree-toggle { display:inline-flex; align-items:center; gap:7px; height:31px; margin-left:auto; padding:0 3px 0 8px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; white-space:nowrap; }
@@ -298,7 +322,7 @@ export class MuxNewChat extends LitElement {
     const previousEffort = this.effort;
     this.catalogLoading = true;
     this.catalogError = '';
-    this.catalog = undefined;
+    this.catalog = previous;
     const params = new URLSearchParams({ harness:this.harness, projectPath:path, bundle:this.bundle, provider:this.harness === 'amplifier' ? this.provider === 'configured' ? '' : this.provider : '' });
     try {
       const response = await fetch(apiPath(`/api/sdk-chat-catalog?${params}`));
@@ -330,6 +354,34 @@ export class MuxNewChat extends LitElement {
     this.customModel = value === '__custom__';
     this.model = this.customModel ? '' : value;
     this.effort = '';
+  }
+  private pickerChoice(name: string, hint: string, selected: boolean, action: () => void) {
+    return html`<button class="choice ${selected ? 'selected' : ''}" type="button" ?disabled=${this.catalogLoading} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span>${hint ? html`<span class="hint">${hint}</span>` : nothing}</span>${selected ? html`<span class="check">✓</span>` : nothing}</button>`;
+  }
+  private renderBundlePicker() {
+    return html`<details class="chat-picker bundle-picker" aria-label="Bundle"><summary>${this.bundle || 'Bundle'}</summary><div class="panel">
+      <div class="heading">Bundle</div>
+      ${(this.catalog?.bundles || []).map(value => this.pickerChoice(value, '', this.bundle === value, () => { this.bundle = value; this.provider = 'configured'; void this.loadCatalog(); }))}
+      ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
+    </div></details>`;
+  }
+  private renderModelPicker(models: ModelOption[], selectedModel: ModelOption | undefined, efforts: string[]) {
+    const effortIndex = Math.max(0, efforts.indexOf(this.effort || selectedModel?.defaultEffort || efforts[0]));
+    const modelLabel = selectedModel?.label || this.model || (this.catalog?.defaultModel ? `Default (${this.catalog.defaultModel})` : 'Model');
+    return html`<details class="chat-picker settings-picker" aria-label="Provider, model and thinking"><summary>${modelLabel}${this.effort ? ` · ${this.effort}` : ''}</summary><div class="panel">
+      <div class="heading">Provider</div>
+      ${this.harness === 'amplifier' ? (this.catalog?.providers || []).map(value => this.pickerChoice(providerLabel(value), '', this.provider === value, () => { this.provider = value; void this.loadCatalog(); })) : html`<div class="hint">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${sdkHarnessLabel(this.harness)}</div>`}
+      <div class="divider"></div><div class="heading">Model</div>
+      <div class="model-list">
+        ${this.harness !== 'amplifier' ? this.pickerChoice(this.catalog?.defaultModel ? `Harness default (${this.catalog.defaultModel})` : 'Harness default', '', !this.customModel && !this.model, () => this.onModelChange('')) : nothing}
+        ${this.model && !selectedModel && !this.customModel ? this.pickerChoice(this.model, '', true, () => this.onModelChange(this.model)) : nothing}
+        ${models.map(item => this.pickerChoice(item.label, item.id, !this.customModel && this.model === item.id, () => this.onModelChange(item.id)))}
+        ${this.pickerChoice('Other model ID…', '', this.customModel, () => this.onModelChange('__custom__'))}
+      </div>
+      ${this.customModel ? html`<input class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(event:Event) => { this.model = (event.target as HTMLInputElement).value; }}>` : nothing}
+      ${efforts.length > 1 ? html`<div class="divider"></div><div class="slider"><div class="slider-header"><span>Thinking</span><span>${efforts[effortIndex]}</span></div><input type="range" aria-label="Thinking effort" min="0" max=${efforts.length - 1} step="1" .value=${String(effortIndex)} @input=${(event:Event) => { this.effort = efforts[Number((event.target as HTMLInputElement).value)]; }}><div class="slider-ends"><span>${efforts[0]}</span><span>${efforts[efforts.length - 1]}</span></div></div>` : nothing}
+      ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
+    </div></details>`;
   }
   private async loadStartOptions() {
     try {
@@ -451,10 +503,8 @@ export class MuxNewChat extends LitElement {
           </div>
         </details>
         ${this.startOptions?.length ? html`<label class="harness"><select aria-label="Harness" .value=${this.harness} @change=${(e:Event) => this.onHarnessChange((e.target as HTMLSelectElement).value as SDKHarnessName)}>${this.startOptions.map(option => html`<option value=${option.harness} ?selected=${this.harness === option.harness}>${sdkHarnessLabel(option.harness)}</option>`)}</select></label>` : nothing}
-        ${this.harness === 'amplifier' && this.catalog ? html`<label class="bundle"><select aria-label="Bundle" .value=${this.bundle} @change=${(e:Event) => { this.bundle = (e.target as HTMLSelectElement).value; this.provider = 'configured'; void this.loadCatalog(); }}>${(this.catalog.bundles || []).map(value => html`<option value=${value} ?selected=${this.bundle === value}>${value}</option>`)}</select></label><label class="provider"><select aria-label="Provider" .value=${this.provider} @change=${(e:Event) => { this.provider = (e.target as HTMLSelectElement).value; void this.loadCatalog(); }}>${(this.catalog.providers || []).map(value => html`<option value=${value} ?selected=${this.provider === value}>${providerLabel(value)}</option>`)}</select></label>` : nothing}
-        ${this.catalog ? html`<label class="model"><select aria-label="Model" .value=${this.customModel ? '__custom__' : this.model} @change=${(e:Event) => this.onModelChange((e.target as HTMLSelectElement).value)}>${this.harness !== 'amplifier' ? html`<option value="" ?selected=${!this.customModel && !this.model}>${this.catalog.defaultModel ? `Harness default (${this.catalog.defaultModel})` : 'Harness default'}</option>` : nothing}${this.model && !selectedModel && !this.customModel ? html`<option value=${this.model} selected>${this.model}</option>` : nothing}${models.map(item => html`<option value=${item.id} ?selected=${!this.customModel && this.model === item.id}>${item.label}</option>`)}<option value="__custom__" ?selected=${this.customModel}>Other model ID…</option></select></label>` : nothing}
-        ${this.customModel ? html`<input class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(e:Event) => { this.model = (e.target as HTMLInputElement).value; }}> ` : nothing}
-        ${efforts.length ? html`<label class="effort"><select aria-label="Thinking effort" .value=${this.effort} @change=${(e:Event) => { this.effort = (e.target as HTMLSelectElement).value; }}><option value="" ?selected=${!this.effort}>Default thinking</option>${efforts.map(value => html`<option value=${value} ?selected=${this.effort === value}>${value}</option>`)}</select></label>` : nothing}
+        ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
+        ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
         ${this.catalogLoading ? html`<span class="catalog-status" role="status">Loading models…</span>` : nothing}
         <button class="worktree-toggle" type="button" role="switch" aria-label="Use a separate Git worktree" aria-checked=${this.workMode === 'worktree'} title=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @click=${() => { this.workMode = this.workMode === 'worktree' ? 'local' : 'worktree'; }}><span>Worktree</span><span class="track" aria-hidden="true"><span class="thumb"></span></span></button>
         </div>
