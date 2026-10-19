@@ -6,7 +6,7 @@ import './launcher-menu.js';
 import './mux-pane-picker.js';
 import './mic-button.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis, Menu, SquarePen } from 'lucide';
+import { Ellipsis, Menu, MessageSquare, SquarePen } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
@@ -163,6 +163,7 @@ export class MuxTitleBar extends LitElement {
     }
 
     .launcher-btn,
+    .side-chat-btn,
     .drawer-btn {
       position: relative;
       width: var(--nav-h);
@@ -181,9 +182,11 @@ export class MuxTitleBar extends LitElement {
     }
 
     .launcher-btn:hover,
+    .side-chat-btn:hover,
     .drawer-btn:hover {
       background: var(--chrome-hover);
     }
+    .side-chat-btn[aria-pressed="true"] { color:var(--chrome-accent); background:var(--chrome-hover); }
 
     /* Show an attention dot only when a session needs input. */
     .needs-dot {
@@ -228,6 +231,8 @@ export class MuxTitleBar extends LitElement {
 
   /** The dock supplies the wide workspace menu when panes exist. */
   @property({ type: Boolean }) dockActionsVisible = false;
+  @property({ type: Boolean }) sideChatAvailable = false;
+  @property({ type: Boolean }) sideChatOpen = false;
 
   /** Bumped when the session list changes, so the badge re-derives. */
   @state() private _sessionVersion = 0;
@@ -349,6 +354,7 @@ export class MuxTitleBar extends LitElement {
           @click=${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}
         >${icon(SquarePen, { size: 16 })}<span>New chat</span></button>` : ''}
         ${this.desktop || this.chatTitle ? '' : html`<mux-mic-button></mux-mic-button>`}
+        ${this.sideChatAvailable ? html`<button class="side-chat-btn" type="button" aria-label="Open side chat" title="Open side chat" aria-pressed=${this.sideChatOpen} @click=${() => this.dispatchEvent(new CustomEvent('terminal-chat-toggle',{bubbles:true,composed:true}))}>${icon(MessageSquare,{size:17})}</button>` : ''}
         ${this.desktop && this.dockActionsVisible
           ? ''
           : html`<button

@@ -4,7 +4,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { Folder, MonitorX, RefreshCw, SquareTerminal, X } from 'lucide';
+import { Expand, Folder, MonitorX, Plus, RefreshCw, SquareTerminal, X } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { previewStore } from './lib/preview-store.js';
@@ -600,7 +600,7 @@ export class MuxApp extends LitElement {
     }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
-    .terminal-utility { box-sizing:border-box; width:min(360px,42%); min-width:270px; flex:none; display:flex; flex-direction:column; border-left:1px solid var(--chrome-border); background:var(--chrome-body); color:var(--chrome-text-bright); }
+    .terminal-utility { box-sizing:border-box; width:min(430px,45%); min-width:320px; flex:none; display:flex; flex-direction:column; border-left:1px solid var(--chrome-border); background:var(--chrome-body); color:var(--chrome-text-bright); }
     .terminal-utility-tabs { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:4px; padding:0 max(8px,var(--wco-right-inset,0px)) 0 8px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); }
     .terminal-utility-tablist { display:flex; align-items:center; gap:4px; }
     .terminal-utility-tabs button { height:29px; border:0; border-radius:6px; padding:0 9px; background:transparent; color:var(--chrome-text-dim); font:500 11px Inter,system-ui,sans-serif; cursor:pointer; }
@@ -615,6 +615,14 @@ export class MuxApp extends LitElement {
     .terminal-utility-body .utility-detail { display:flex; align-items:center; gap:9px; min-height:36px; border-bottom:1px solid var(--chrome-border); }
     .terminal-utility-body .utility-detail span { color:var(--chrome-text-dim); }
     .terminal-utility-body .utility-detail strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:550; }
+    .side-chat { flex:1; min-height:0; display:flex; flex-direction:column; }
+    .side-chat-picker { display:flex; align-items:center; gap:6px; padding:8px; border-bottom:1px solid var(--chrome-border); }
+    .side-chat-picker select { min-width:0; flex:1; height:29px; border:1px solid var(--chrome-border); border-radius:6px; padding:0 8px; background:var(--chrome-bar); color:var(--chrome-text-bright); font:500 12px Inter,system-ui,sans-serif; }
+    .side-chat-picker .side-chat-heading { flex:1; min-width:0; padding-left:5px; font:600 12px Inter,system-ui,sans-serif; }
+    .side-chat-picker button { display:grid; place-items:center; flex:none; width:29px; height:29px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-dim); cursor:pointer; }
+    .side-chat-picker button:hover,.side-chat-picker button:focus-visible { color:var(--chrome-text-bright); background:var(--chrome-hover); outline:2px solid var(--chrome-accent); outline-offset:-2px; }
+    .side-chat-empty { margin:auto 20px; color:var(--chrome-text-dim); font:12px/1.5 Inter,system-ui,sans-serif; text-align:center; }
+    .side-chat-empty button { display:block; margin:12px auto 0; padding:6px 10px; border:1px solid var(--chrome-border); border-radius:6px; background:var(--chrome-bar); color:var(--chrome-text-bright); cursor:pointer; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:6; top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:-10px 0 25px #0005; } }
 
     /* The gutter remains 4px wide for dragging. Paint it as part of the
@@ -812,7 +820,9 @@ export class MuxApp extends LitElement {
 
   @state() private _sdkChatId: string | null = null;
   @state() private _terminalUtilityOpen = false;
-  @state() private _terminalUtilityTab: 'panes' | 'workspace' = 'panes';
+  @state() private _terminalUtilityTab: 'panes' | 'workspace' | 'chat' = 'panes';
+  @state() private _sideChatId = '';
+  @state() private _sideChatCreating = false;
   @state() private _connectionSelection = 'github';
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
@@ -909,6 +919,7 @@ export class MuxApp extends LitElement {
   private _unsubscribe: (() => void) | null = null;
   private _unsubscribeChats: (() => void) | null = null;
   private _unsubHomeSessions: (() => void) | null = null;
+  private _unsubSDKChats: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
   private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
   private _disposePaneFocusListeners: (() => void) | null = null;
@@ -1049,6 +1060,8 @@ export class MuxApp extends LitElement {
     this._unsubHomeSessions = homeSessions.subscribe(() => {
       this._version++;
     });
+    this._unsubSDKChats = sdkChats.subscribe(() => this.requestUpdate());
+    void sdkChats.refresh();
     // Install fixed app-level shortcuts (Cmd+W close, Cmd+T new pane). These
     // override the browser's native tab-close / new-tab actions so muxterm
     // feels like a native app. Installed once — not re-set on config changes.
@@ -1415,6 +1428,8 @@ export class MuxApp extends LitElement {
     disposeHomeToggle = undefined;
     this._unsubHomeSessions?.();
     this._unsubHomeSessions = null;
+    this._unsubSDKChats?.();
+    this._unsubSDKChats = null;
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -1606,6 +1621,49 @@ export class MuxApp extends LitElement {
     this._split = null;
   }
 
+  private _toggleSideChat = (): void => {
+    if (this._terminalUtilityOpen && this._terminalUtilityTab === 'chat') {
+      this._terminalUtilityOpen = false;
+      return;
+    }
+    if (!this._sideChatId || !sdkChats.chats.some(chat => chat.id === this._sideChatId)) {
+      this._sideChatId = sdkChats.chats.find(chat => !chat.archived)?.id || '';
+    }
+    this._sdkChatId = null;
+    this._terminalUtilityTab = 'chat';
+    this._terminalUtilityOpen = true;
+  };
+
+  private _renderSideChat() {
+    const chats = sdkChats.chats.filter(chat => !chat.archived);
+    const selected = chats.find(chat => chat.id === this._sideChatId)?.id || chats[0]?.id || '';
+    return html`<div class="side-chat" role="tabpanel" aria-label="Chat">
+      <div class="side-chat-picker">
+        ${this._sideChatCreating ? html`<span class="side-chat-heading">New chat</span><button aria-label="Back to side chat" title="Back to side chat" @click=${() => { this._sideChatCreating = false; }}>${icon(X,{size:16})}</button>` : html`<select aria-label="Side chat" .value=${selected} @change=${(event: Event) => { this._sideChatId = (event.target as HTMLSelectElement).value; }}>
+          ${chats.map(chat => html`<option value=${chat.id} ?selected=${chat.id === selected}>${chat.title || 'Untitled chat'}</option>`)}
+        </select>
+        <button aria-label="New chat" title="New chat" @click=${() => { this._sideChatCreating = true; }}>${icon(Plus,{size:16})}</button>
+        <button aria-label="Open chat in main view" title="Open chat in main view" ?disabled=${!selected} @click=${() => this._onChatOpen(new CustomEvent('chat-open',{detail:{sessionId:selected}}))}>${icon(Expand,{size:16})}</button>
+        `}
+      </div>
+      ${this._sideChatCreating ? html`<mux-new-chat compact @chat-created=${(event: CustomEvent<{sessionId:string}>) => { this._sideChatId = event.detail.sessionId; this._sideChatCreating = false; }}></mux-new-chat>` : selected ? keyed(selected, html`<mux-sdk-chat compact .sessionId=${selected} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @chat-terminal-open=${this._onChatTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>`) : html`<div class="side-chat-empty">Start a chat to use it beside your terminal.<button @click=${() => { this._sideChatCreating = true; }}>New chat</button></div>`}
+    </div>`;
+  }
+
+  private _renderTerminalUtility(panes: typeof store.panes, workspaceName: string, projectPath: string) {
+    return html`<aside class="terminal-utility" aria-label="Terminal utility pane">
+      <div class="terminal-utility-tabs" role="tablist" aria-label="Terminal tools">
+        <button role="tab" aria-selected=${this._terminalUtilityTab === 'chat'} @click=${() => { this._terminalUtilityTab = 'chat'; }}>Chat</button>
+        <button role="tab" aria-selected=${this._terminalUtilityTab === 'panes'} @click=${() => { this._terminalUtilityTab = 'panes'; }}>Panes</button>
+        <button role="tab" aria-selected=${this._terminalUtilityTab === 'workspace'} @click=${() => { this._terminalUtilityTab = 'workspace'; }}>Workspace</button>
+        <button class="close-utility" aria-label="Close terminal utility pane" @click=${() => { this._terminalUtilityOpen = false; }}>${icon(X,{size:16})}</button>
+      </div>
+      ${this._terminalUtilityTab === 'chat' ? this._renderSideChat() : html`<div class="terminal-utility-body" role="tabpanel">${this._terminalUtilityTab === 'panes'
+        ? html`<h2>Panes</h2>${panes.map(pane => html`<button class="utility-pane-row" aria-current=${store.activePaneId === pane.paneId} @click=${() => this._onActivePane(new CustomEvent('pane-select',{detail:{paneId:pane.paneId}}))}>${icon(SquareTerminal,{size:16})}<span>${pane.title || `Pane ${pane.paneId}`}</span></button>`)}`
+        : html`<h2>Workspace</h2><div class="utility-detail"><span>Name</span><strong>${workspaceName}</strong></div><div class="utility-detail"><span>Folder</span>${icon(Folder,{size:15})}<strong title=${projectPath}>${projectPath || 'No project folder'}</strong></div><div class="utility-detail"><span>Panes</span><strong>${panes.length}</strong></div>`}</div>`}
+    </aside>`;
+  }
+
   render() {
     // Exclude provisional overlay panes (negative IDs) from layout decisions.
     // They have no terminal and should not render as blank tiles.
@@ -1633,10 +1691,13 @@ export class MuxApp extends LitElement {
         class="mobile-title-bar"
         .drawerOpen="${this._drawerOpen}"
         .chatTitle="${chatTitle}"
+        .sideChatAvailable="${!this._sdkChatId && panes.length > 0}"
+        .sideChatOpen="${this._terminalUtilityOpen && this._terminalUtilityTab === 'chat' && !this._sdkChatId}"
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
         @pane-create-request="${this._createPaneOptimistic}"
         @drawer-toggle="${this._onDrawerToggle}"
+        @terminal-chat-toggle="${this._toggleSideChat}"
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
@@ -1690,6 +1751,7 @@ export class MuxApp extends LitElement {
                   .workspaceKey="${store.attached ?? ''}"
                   .workspaceName="${attachedWorkspace ? workspaceLabel(attachedWorkspace) : 'Workspace'}"
                   .terminalUtilityOpen="${this._terminalUtilityOpen && !this._sdkChatId}"
+                  .sideChatOpen="${this._terminalUtilityOpen && this._terminalUtilityTab === 'chat' && !this._sdkChatId}"
                   .requestedPaneId="${this._requestedPaneId}"
                   .layout="${store.layout}"
                   .narrow="${!isWide}"
@@ -1699,9 +1761,10 @@ export class MuxApp extends LitElement {
                   @pane-rename="${this._onPaneRename}"
                   @workspace-switch="${this._onWorkspaceSelected}"
                   @terminal-utility-toggle="${() => { this._terminalUtilityOpen = !this._terminalUtilityOpen; }}"
+                  @terminal-chat-toggle="${this._toggleSideChat}"
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
-                ${this._terminalUtilityOpen && !this._sdkChatId ? html`<aside class="terminal-utility" aria-label="Terminal utility pane"><div class="terminal-utility-tabs"><div class="terminal-utility-tablist" role="tablist" aria-label="Terminal tools"><button role="tab" aria-selected="${this._terminalUtilityTab === 'panes'}" @click="${() => { this._terminalUtilityTab = 'panes'; }}">Panes</button><button role="tab" aria-selected="${this._terminalUtilityTab === 'workspace'}" @click="${() => { this._terminalUtilityTab = 'workspace'; }}">Workspace</button></div><button class="close-utility" aria-label="Close terminal utility pane" @click="${() => { this._terminalUtilityOpen = false; }}">${icon(X,{size:16})}</button></div><div class="terminal-utility-body" role="tabpanel">${this._terminalUtilityTab === 'panes' ? html`<h2>Panes</h2>${panes.map(pane => html`<button class="utility-pane-row" aria-current="${store.activePaneId === pane.paneId}" @click="${() => this._onActivePane(new CustomEvent('pane-select',{detail:{paneId:pane.paneId}}))}">${icon(SquareTerminal,{size:16})}<span>${pane.title || `Pane ${pane.paneId}`}</span></button>`)}` : html`<h2>Workspace</h2><div class="utility-detail"><span>Name</span><strong>${attachedWorkspace ? workspaceLabel(attachedWorkspace) : 'Workspace'}</strong></div><div class="utility-detail"><span>Folder</span>${icon(Folder,{size:15})}<strong title="${attachedWorkspace?.projectPath || ''}">${attachedWorkspace?.projectPath || 'No project folder'}</strong></div><div class="utility-detail"><span>Panes</span><strong>${panes.length}</strong></div>`}</div></aside>` : ''}
+                ${this._terminalUtilityOpen && !this._sdkChatId ? this._renderTerminalUtility(panes, attachedWorkspace ? workspaceLabel(attachedWorkspace) : 'Workspace', attachedWorkspace?.projectPath || '') : ''}
               </div>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
@@ -2522,6 +2585,7 @@ export class MuxApp extends LitElement {
     const detail = (e as CustomEvent<{ sessionId: string }>).detail;
     if (!detail?.sessionId) return;
     this._sdkChatId = detail.sessionId;
+    this._sideChatId = detail.sessionId;
     setChatHash(detail.sessionId);
     this._jobEditorChatId = '';
     this._newChatForJob = false;

@@ -21,7 +21,7 @@ import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import { parseHostRef } from '../lib/host-ref.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis, PanelRight } from 'lucide';
+import { Ellipsis, MessageSquare, PanelRight } from 'lucide';
 import './launcher-menu.js';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
@@ -335,6 +335,7 @@ export class MuxDock extends LitElement {
   @property({ attribute: false }) workspaceKey = '';
   @property({ attribute: false }) workspaceName = '';
   @property({ type: Boolean, reflect: true }) terminalUtilityOpen = false;
+  @property({ type: Boolean }) sideChatOpen = false;
   /**
    * "After you restore this workspace, activate THIS pane" -- the home view's
    * Enter, crossing a workspace boundary. -1 means no request.
@@ -711,6 +712,19 @@ export class MuxDock extends LitElement {
   private _createWorkspaceActions(): HTMLElement {
     const rail = document.createElement('div');
     rail.className = 'mux-workspace-actions';
+
+    const chat = document.createElement('button');
+    chat.className = 'mux-workspace-launcher mux-chat-toggle';
+    chat.type = 'button';
+    chat.title = 'Open side chat';
+    chat.setAttribute('aria-label', 'Open side chat');
+    chat.setAttribute('aria-pressed', String(this.sideChatOpen));
+    render(icon(MessageSquare, { size: 16 }), chat);
+    chat.addEventListener('click', event => {
+      event.stopPropagation();
+      this.dispatchEvent(new CustomEvent('terminal-chat-toggle', { bubbles:true, composed:true }));
+    });
+    rail.appendChild(chat);
 
     const utility = document.createElement('button');
     utility.className = 'mux-workspace-launcher mux-utility-toggle';
@@ -1110,7 +1124,8 @@ export class MuxDock extends LitElement {
           outline-offset: -2px;
           background: var(--chrome-hover);
         }
-        mux-dock .mux-utility-toggle[aria-pressed="true"] { color:var(--chrome-accent); background:var(--chrome-hover); }
+        mux-dock .mux-utility-toggle[aria-pressed="true"],
+        mux-dock .mux-chat-toggle[aria-pressed="true"] { color:var(--chrome-accent); background:var(--chrome-hover); }
 
         /* dockview's action containers shrink-wrap their button and sit at the
            header's top edge, so the 28px button is top-pinned in the 35px bar.
@@ -1419,6 +1434,7 @@ export class MuxDock extends LitElement {
   override updated(changed: Map<string, unknown>): void {
     super.updated(changed);
     if (changed.has('terminalUtilityOpen')) this.querySelector('.mux-utility-toggle')?.setAttribute('aria-pressed', String(this.terminalUtilityOpen));
+    if (changed.has('sideChatOpen')) this.querySelector('.mux-chat-toggle')?.setAttribute('aria-pressed', String(this.sideChatOpen));
     if (changed.has('workspaceName')) {
       for (const label of this.querySelectorAll<HTMLElement>('.mux-workspace-prefix-label')) label.textContent = this.workspaceName || 'Workspace';
     }

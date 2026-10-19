@@ -70,6 +70,7 @@ type Attachment = { localId: string; file: File; id?: string; kind?: string; pre
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
+  @property({ type: Boolean, reflect: true }) compact = false;
   @state() private chat?: SDKChat;
   @state() private goalDocument?: GoalDocument;
   @state() private goalEditor = false;
@@ -192,6 +193,16 @@ export class MuxSDKChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright,#d9def0); font:var(--mux-font-size,16px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
+    :host([compact]) { position:relative; inset:auto; z-index:auto; flex:1; width:100%; min-height:0; }
+    :host([compact]) .topbar { height:36px; padding:0 12px; background:var(--chrome-body); }
+    :host([compact]) .topbar .workspace-crumb,
+    :host([compact]) .topbar .breadcrumb-divider,
+    :host([compact]) .topbar .operator-button,
+    :host([compact]) .topbar .pane-controls { display:none; }
+    :host([compact]) .body { padding:20px 14px 26px; }
+    :host([compact]) .composer-wrap { padding:0 10px 12px; }
+    :host([compact]) .bubble { max-width:94%; }
+
     .topbar { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:9px; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--chrome-border,#343a4c); background:var(--mux-titlebar-bg,var(--chrome-bar)); }
     .topbar.with-utility { padding-right:calc(var(--utility-width) + 12px); }
     .workspace-crumb { display:inline-flex; align-items:center; gap:7px; min-width:0; max-width:38%; color:var(--chrome-text-dim); font:500 12px Inter,system-ui,sans-serif; white-space:nowrap; }
