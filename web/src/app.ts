@@ -17,7 +17,6 @@ import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
-import { checkUpdateNow, fetchUpdateStatus, type UpdateStatus } from './lib/update.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
@@ -789,10 +788,7 @@ export class MuxApp extends LitElement {
   private _chatTerminalPending: { chatId: string; clientRef: string; workspaceId?: string } | null = null;
 
   @state()
-  private _overlayPanel: 'settings' | 'shortcuts' | 'about' | 'connect' | null = null;
-  @state() private _aboutUpdate: UpdateStatus | null = null;
-  @state() private _aboutChecking = false;
-  @state() private _aboutCheckError = '';
+  private _overlayPanel: 'settings' | 'connect' | null = null;
   private _settingsOpenSection: SettingsSection | null = null;
 
   @state()
@@ -930,10 +926,9 @@ export class MuxApp extends LitElement {
    *  _destroySplit() (force a synthetic mouseup before teardown). */
   private _dragging = false;
 
-  /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
-   *  selectors like document.querySelector('[data-launcher-open]') work. */
-  private _onOpenLauncherAttr = (): void => {
-    this.setAttribute('data-launcher-open', '');
+  private _onOpenSettings = (): void => {
+    this._settingsOpenSection = null;
+    this._overlayPanel = 'settings';
   };
 
   /** Handles window resize; updates _layoutMode when crossing the 768px threshold. */
@@ -1006,7 +1001,7 @@ export class MuxApp extends LitElement {
     // deliberately never enters the config pipeline.
     void fetchAIStatus().then((s) => store.setAIStatus(s));
     // Track launcher-open state on the host element for E2E assertions.
-    window.addEventListener('open-launcher', this._onOpenLauncherAttr);
+    window.addEventListener('open-launcher', this._onOpenSettings);
     // Layout-command relay: window CustomEvent from ws.ts → mux-dock routing.
     window.addEventListener('layout-command', this._onLayoutCommand);
     // One host-level policy boundary catches composed close events from the
@@ -1393,7 +1388,7 @@ export class MuxApp extends LitElement {
     super.disconnectedCallback();
     this._unsubscribeChats?.();
     this._unsubscribeChats = null;
-    window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
+    window.removeEventListener('open-launcher', this._onOpenSettings);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
     window.removeEventListener('hashchange', this._onChatHistory);
@@ -1836,60 +1831,11 @@ export class MuxApp extends LitElement {
                   .openSection="${this._settingsOpenSection}"
                   serverAddr="${window.location.host}"
                   @close="${this._closeOverlayPanel}"
+                  @launcher-action="${this._onLauncherAction}"
                   @config-change="${this._onConfigChange}"
                   @ai-status-change="${this._onAIStatusChange}"
                 ></mux-settings-surface>
-              ` : this._overlayPanel === 'shortcuts' ? html`
-                <div class="info-panel">
-                  <h2>Keyboard Shortcuts
-                    <button class="close-btn" @click="${this._closeOverlayPanel}">×</button>
-                  </h2>
-                  <div class="shortcut-grid">
-                    <span class="sc-label">New pane (any mode)</span>
-                    <span class="sc-key">Cmd+Ctrl+T</span>
-                    <span class="sc-label">Close pane</span>
-                    <span class="sc-key">Cmd+W / Ctrl+W</span>
-                    <span class="sc-label">Cycle tabs (forward)</span>
-                    <span class="sc-key">Ctrl+Tab</span>
-                    <span class="sc-label">Cycle tabs (backward)</span>
-                    <span class="sc-key">Ctrl+Shift+Tab</span>
-                    <span class="sc-label">Next session</span>
-                    <span class="sc-key">${store.config.keys.nextSession}</span>
-                    <span class="sc-label">Split pane</span>
-                    <span class="sc-key">${store.config.keys.split}</span>
-                    <span class="sc-label">Open launcher</span>
-                    <span class="sc-key">${store.config.keys.openLauncher}</span>
-                    <span class="sc-label">Focus driver</span>
-                    <span class="sc-key">${store.config.keys.focusDriver}</span>
-                  </div>
-                </div>
-              ` : html`
-                <div class="info-panel">
-                  <h2>About muxterm
-                    <button class="close-btn" @click="${this._closeOverlayPanel}">×</button>
-                  </h2>
-                  <div class="about-body">
-                    <p><strong>muxterm</strong> is a browser-based terminal multiplexer. It
-                    connects to a <code>sessiond</code> daemon over WebSocket and renders
-                    panes using xterm.js inside a dockview layout.</p>
-                    <p>Config file: <strong>~/.config/muxterm/config.toml</strong></p>
-                    <div class="about-version">
-                      <span>Version ${this._aboutUpdate?.currentVersion || 'unknown'}</span>
-                      <button class="about-check" type="button" title="Check for updates" aria-label="Check for updates" ?disabled=${this._aboutChecking} @click=${this._checkAboutUpdate}>
-                        ${icon(RefreshCw, { size: 15 })}
-                      </button>
-                    </div>
-                    <div class="about-version-note" role="status">
-                      ${this._aboutChecking ? 'Checking for updates…' : this._aboutCheckError ||
-                        (this._aboutUpdate?.devBuild ? 'Development build — updates are managed by your build.' :
-                        this._aboutUpdate?.error ? `Could not check: ${this._aboutUpdate.error}` :
-                        this._aboutUpdate?.updateAvailable ? `Version ${this._aboutUpdate.latestVersion} is available.` :
-                        this._aboutUpdate?.latestVersion ? 'Up to date.' : '')}
-                    </div>
-                  </div>
-                  <div class="about-sha">build ${__GIT_SHA__}</div>
-                </div>
-              `}
+              ` : ''}
             </div>
           </div>
         </div>
@@ -2600,39 +2546,16 @@ export class MuxApp extends LitElement {
         break;
       case 'shortcuts':
       case 'about':
-        this._overlayPanel = action;
-        if (action === 'about') void this._loadAboutUpdate();
+        this._settingsOpenSection = action;
+        this._overlayPanel = 'settings';
         break;
       case 'reconnect':
         window.location.reload();
         break;
       case 'new-workspace':
+        this._overlayPanel = null;
         this._onOpenCreateModal();
         break;
-    }
-  };
-
-  private async _loadAboutUpdate(): Promise<void> {
-    if (this._aboutChecking) return;
-    this._aboutCheckError = '';
-    try {
-      this._aboutUpdate = await fetchUpdateStatus();
-    } catch {
-      this._aboutCheckError = 'Could not load update status.';
-    }
-  }
-
-  private _checkAboutUpdate = async (): Promise<void> => {
-    if (this._aboutChecking) return;
-    this._aboutChecking = true;
-    this._aboutCheckError = '';
-    try {
-      this._aboutUpdate = await checkUpdateNow();
-      window.dispatchEvent(new CustomEvent('muxterm-update-checked', { detail: this._aboutUpdate }));
-    } catch {
-      this._aboutCheckError = 'Could not check for updates.';
-    } finally {
-      this._aboutChecking = false;
     }
   };
 

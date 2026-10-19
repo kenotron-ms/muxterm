@@ -89,6 +89,7 @@ type sdkEvent struct {
 	InputIDs        []string               `json:"inputIds,omitempty"`
 	GenerationID    string                 `json:"generationId,omitempty"`
 	Delivery        string                 `json:"delivery,omitempty"`
+	ItemID          string                 `json:"itemId,omitempty"`
 	Persisted       *bool                  `json:"persisted,omitempty"`
 	Kind            string                 `json:"kind,omitempty"`
 	Source          string                 `json:"source,omitempty"`
@@ -289,6 +290,9 @@ func (h *sdkChatHost) notifyCatalogLocked(id string) {
 func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	if event.At.IsZero() {
 		event.At = time.Now().UTC()
+	}
+	if event.Type == "thinking.delta" {
+		return
 	}
 	if event.Type == "input.accepted" {
 		// The server's dispatch record, keyed by input ID, owns attribution.
@@ -2124,10 +2128,6 @@ func (s *Server) handleSDKChatEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chat := *c
-	var data []byte
-	if afterValue == "" {
-		data, _ = os.ReadFile(path)
-	}
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
@@ -2140,16 +2140,8 @@ func (s *Server) handleSDKChatEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", jsonString(chat))
-	if afterValue != "" {
-		if _, err := sdkStreamLog(w, path, after, end); err != nil {
-			return
-		}
-	} else {
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-			if line != "" {
-				fmt.Fprintf(w, "event: sdk\ndata: %s\n\n", line)
-			}
-		}
+	if _, err := sdkStreamLog(w, path, after, end); err != nil {
+		return
 	}
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()

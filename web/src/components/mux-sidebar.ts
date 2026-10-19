@@ -4,13 +4,12 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { store } from '../state.js';
 import type { SessiondWorkspaceCompletion } from '../types.js';
 import { workspaceLabel } from '../lib/workspace-label.js';
-import './launcher-menu.js';
 import './mux-chat-list.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import type { SessionRunState } from '../lib/session-state.js';
 import { needsInputByWorkspace } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
-import { CalendarClock, ChevronDown, Download, Ellipsis, Plug, Plus, Puzzle, Settings2, SquareTerminal } from 'lucide';
+import { CalendarClock, ChevronDown, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { previewStore, type PreviewEntry, type PreviewMode } from '../lib/preview-store.js';
@@ -23,24 +22,8 @@ import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import { apiPath } from '../lib/base-path.js';
 import {
   fetchUpdateStatus,
-  applyUpdate,
-  UpdateEndpointMissingError,
   type UpdateStatus,
 } from '../lib/update.js';
-
-// ---------------------------------------------------------------------------
-// Self-update footer
-// ---------------------------------------------------------------------------
-
-/** UI phase of the footer's update control. */
-type UpdatePhase = 'idle' | 'updating' | 'failed';
-
-/** Poll cadence while waiting for the restarted server to report a new version. */
-const UPDATE_POLL_INTERVAL_MS = 1000;
-/** Give up after this many polls (~60s) and surface a failure. */
-const UPDATE_POLL_MAX_ATTEMPTS = 60;
-/** Server cache decides whether the 15-minute tick needs a GitHub request. */
-const UPDATE_STATUS_INTERVAL_MS = 15 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Live workspace previews
@@ -275,6 +258,7 @@ export class MuxSidebar extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host {
+      --sidebar-item-font-size: 12.5px;
       display: flex;
       flex-direction: column;
       background: var(--chrome-bar);
@@ -304,7 +288,7 @@ export class MuxSidebar extends LitElement {
          roots do not inherit index.html's global box-sizing reset. */
       box-sizing: border-box;
       padding: 0 12px;
-      font-size:var(--mux-font-size,16px);
+      font-size: var(--sidebar-item-font-size);
       font-weight: 700;
       color: var(--chrome-text-bright);
       letter-spacing: 0.06em;
@@ -436,7 +420,7 @@ export class MuxSidebar extends LitElement {
 
     .ws-name {
       flex: 1;
-      font-size: 13px;
+      font-size: var(--sidebar-item-font-size);
       font-weight: 500;
       color: var(--chrome-text-bright);
       white-space: nowrap;
@@ -1048,15 +1032,10 @@ export class MuxSidebar extends LitElement {
 
     .header {
       height: var(--sidebar-header-height);
-      padding: 0 12px 0 max(12px, var(--wco-left-inset, 0px));
-      font-size:var(--mux-font-size,16px);
-      font-weight: 600;
-      letter-spacing: normal;
-    }
-
-    @media (display-mode: window-controls-overlay) {
-      .header { -webkit-app-region: drag; }
-      .header button, .header mux-launcher-menu { -webkit-app-region: no-drag; }
+      padding: 0 12px;
+      font-size: var(--sidebar-item-font-size);
+      font-weight: 760;
+      letter-spacing: 0;
     }
 
     .tab-content {
@@ -1082,8 +1061,8 @@ export class MuxSidebar extends LitElement {
       align-items: center;
       gap: 10px;
       text-align: left;
-      font: 400 calc(var(--mux-font-size,16px) * .875)/1.4 var(--mux-font-family,system-ui,sans-serif);
-      letter-spacing: normal;
+      font: 500 var(--sidebar-item-font-size)/1 Inter, ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: 0;
       text-transform: none;
       cursor: pointer;
     }
@@ -1322,7 +1301,10 @@ export class MuxSidebar extends LitElement {
     .hg-body.stale .ws-card { opacity: 0.5; border: 0; border-style: none; }
 
     .footer { min-height: 31px; padding: 6px 11px; }
-    .footer-line { font-size:var(--mux-font-size,16px); }
+    .footer-line { font-size: 9.5px; }
+    .settings-row { box-sizing:border-box; flex:none; display:flex; align-items:center; justify-content:space-between; width:100%; min-height:48px; padding:0 17px; border:0; background:transparent; color:var(--chrome-text-dim); font:500 var(--sidebar-item-font-size)/1.35 Inter,system-ui,sans-serif; cursor:pointer; text-align:left; }
+    .settings-row:hover { background:var(--chrome-hover); color:var(--chrome-text-bright); }
+    .settings-row:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:-3px; }
     .footer-note { display: none; }
     .brand-lockup { display:flex; align-items:center; gap:9px; min-width:0; }
     .brand-lockup > span:last-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1384,7 +1366,6 @@ export class MuxSidebar extends LitElement {
 
   @state() private _version = 0;
   @state() private _renaming: string | null = null;
-  @state() private _menuOpen = false;
 
   /**
    * Tile width in columns, derived from the measured card. 0 = not measured
@@ -1395,9 +1376,6 @@ export class MuxSidebar extends LitElement {
 
   /** Server-reported update status; null until the first check resolves. */
   @state() private _updateStatus: UpdateStatus | null = null;
-  @state() private _updatePhase: UpdatePhase = 'idle';
-  @state() private _updateError = '';
-  private _updateStatusTimer: number | null = null;
 
   /** Host groups the user explicitly collapsed during this page session. */
   @state() private _collapsed = new Set<string>();
@@ -1425,8 +1403,6 @@ export class MuxSidebar extends LitElement {
   private _ageTimer: number | null = null;
   /** Set by the render that just ran: is any banner age displayed? */
   private _ageTicking = false;
-  private _updatePollTimer: number | null = null;
-  private _updatePollAttempts = 0;
 
   // --- preview plumbing ------------------------------------------------------
 
@@ -1462,25 +1438,6 @@ export class MuxSidebar extends LitElement {
   /** Touch activation focuses the row before its click; do not treat that as keyboard intent. */
   private _touchFocusGuard = false;
 
-  private _onOutsideClick = (e: PointerEvent): void => {
-    if (!this._menuOpen) return;
-    const path = e.composedPath();
-    const menu = this.renderRoot.querySelector('.menu-anchor');
-    const trigger = this.renderRoot.querySelector('.launcher-btn');
-    if (![menu, trigger].some((el) => el !== null && path.includes(el))) this._menuOpen = false;
-  };
-
-  private _onLauncherAction(e: Event): void {
-    e.stopPropagation();
-    this._menuOpen = false;
-    const customEvent = e as CustomEvent;
-    this.dispatchEvent(new CustomEvent('launcher-action', {
-      bubbles: true,
-      composed: true,
-      detail: customEvent.detail,
-    }));
-  }
-
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
@@ -1488,7 +1445,6 @@ export class MuxSidebar extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener('muxterm-update-checked', this._onUpdateChecked);
-    document.addEventListener('pointerdown', this._onOutsideClick);
 
     // Subscribe to store changes and trigger re-render by bumping _version.
     this._unsub = store.subscribe(() => {
@@ -1529,7 +1485,6 @@ export class MuxSidebar extends LitElement {
 
   override disconnectedCallback(): void {
     window.removeEventListener('muxterm-update-checked', this._onUpdateChecked);
-    document.removeEventListener('pointerdown', this._onOutsideClick);
     super.disconnectedCallback();
     this._unsub?.();
     this._unsub = null;
@@ -1558,29 +1513,17 @@ export class MuxSidebar extends LitElement {
     }
     this._canvases.clear();
     this._cards = [];
-    this._clearUpdatePoll();
-    if (this._updateStatusTimer !== null) {
-      window.clearInterval(this._updateStatusTimer);
-      this._updateStatusTimer = null;
-    }
   }
 
-  /** One status check, after first paint — the footer never blocks rendering. */
   override firstUpdated(): void {
     this._observeCardWidth();
-    void this._refreshUpdateStatus();
-    this._updateStatusTimer = window.setInterval(() => {
-      if (this._updatePhase !== 'updating') void this._refreshUpdateStatus();
-    }, UPDATE_STATUS_INTERVAL_MS);
-  }
-
-  private async _refreshUpdateStatus(): Promise<void> {
-    try {
-      const status = await fetchUpdateStatus();
-      if (this.isConnected && this._updatePhase !== 'updating') this._updateStatus = status;
-    } catch {
-      // Keep the last known status if the network or server is unavailable.
-    }
+    void fetchUpdateStatus()
+      .then((status) => {
+        this._updateStatus = status;
+      })
+      .catch(() => {
+        // Status unknown (offline, old server): the footer stays empty.
+      });
   }
 
   /**
@@ -1655,75 +1598,8 @@ export class MuxSidebar extends LitElement {
   // ---------------------------------------------------------------------------
 
   private _onUpdateChecked = (event: Event): void => {
-    if (this._updatePhase === 'updating') return;
     this._updateStatus = (event as CustomEvent<UpdateStatus>).detail;
   };
-
-  /** Starts (or retries) the update. Safe to call from both button states. */
-  private _onUpdateClick(): void {
-    if (this._updatePhase === 'updating') return;
-    const previousVersion = this._updateStatus?.currentVersion ?? '';
-    this._updatePhase = 'updating';
-    this._updateError = '';
-    this._updatePollAttempts = 0;
-    void applyUpdate()
-      .then(() => {
-        // Binary replaced; the server restarts ~500ms later.
-        this._scheduleUpdatePoll(previousVersion);
-      })
-      .catch((e: unknown) => {
-        this._updatePhase = 'failed';
-        this._updateError = e instanceof Error ? e.message : String(e);
-      });
-  }
-
-  private _clearUpdatePoll(): void {
-    if (this._updatePollTimer !== null) {
-      window.clearTimeout(this._updatePollTimer);
-      this._updatePollTimer = null;
-    }
-  }
-
-  private _scheduleUpdatePoll(previousVersion: string): void {
-    this._clearUpdatePoll();
-    this._updatePollTimer = window.setTimeout(() => {
-      this._updatePollTimer = null;
-      void this._pollForRestart(previousVersion);
-    }, UPDATE_POLL_INTERVAL_MS);
-  }
-
-  /**
-   * Waits for the restarted server to report a different currentVersion, then
-   * reloads. Poll failures are EXPECTED while the server is down and are
-   * swallowed — only the attempt budget running out counts as a failure.
-   */
-  private async _pollForRestart(previousVersion: string): Promise<void> {
-    if (!this.isConnected || this._updatePhase !== 'updating') return;
-    this._updatePollAttempts++;
-    try {
-      const status = await fetchUpdateStatus();
-      if (status.currentVersion !== '' && status.currentVersion !== previousVersion) {
-        window.location.reload();
-        return;
-      }
-    } catch (e: unknown) {
-      // A 404 means an HTTP server is back up but has no update endpoint —
-      // the restart landed on a build predating this feature, so the update
-      // worked. Reload rather than time out and cry failure.
-      if (e instanceof UpdateEndpointMissingError) {
-        window.location.reload();
-        return;
-      }
-      // Otherwise the server is still restarting; connection errors are normal.
-    }
-    if (!this.isConnected || this._updatePhase !== 'updating') return;
-    if (this._updatePollAttempts >= UPDATE_POLL_MAX_ATTEMPTS) {
-      this._updatePhase = 'failed';
-      this._updateError = 'Update did not complete in time';
-      return;
-    }
-    this._scheduleUpdatePoll(previousVersion);
-  }
 
   // ---------------------------------------------------------------------------
   // Live preview plumbing
@@ -2614,77 +2490,9 @@ export class MuxSidebar extends LitElement {
   // ---------------------------------------------------------------------------
 
   private _renderFooter() {
-    // Failure survives a stale/unknown status, so it is checked first.
-    if (this._updatePhase === 'failed') {
-      return html`
-        <div class="footer">
-          <div class="footer-line">Update failed</div>
-          <div class="footer-note">${this._updateError}</div>
-          <button class="update-btn" @click="${() => this._onUpdateClick()}">
-            ${icon(Download, { size: 14 })}Retry
-          </button>
-        </div>
-      `;
-    }
-
-    const status = this._updateStatus;
-    if (!status) return ''; // check still in flight (or it failed): show nothing
-
-    const versionLine = status.currentVersion
-      ? `muxterm ${status.currentVersion}`
-      : 'muxterm';
-
-    if (this._updatePhase === 'updating') {
-      return html`
-        <div class="footer">
-          <div class="footer-line">${versionLine}</div>
-          <button class="update-btn" disabled>
-            ${icon(Download, { size: 14 })}Updating…
-          </button>
-          <div class="footer-note">downloading and restarting…</div>
-        </div>
-      `;
-    }
-
-    // Dev build: nothing actionable, by design.
-    if (status.devBuild) return '';
-
-    if (status.canUpdate) {
-      const label = status.latestVersion ? `Update to ${status.latestVersion}` : 'Update';
-      return html`
-        <div class="footer">
-          <div class="footer-line">${versionLine}</div>
-          <button class="update-btn" @click="${() => this._onUpdateClick()}">
-            ${icon(Download, { size: 14 })}${label}
-          </button>
-        </div>
-      `;
-    }
-
-    // Newer release exists but this install cannot self-update (Homebrew,
-    // unsupported platform): the server's reason, muted and non-actionable.
-    if (status.updateAvailable) {
-      return html`
-        <div class="footer">
-          <div class="footer-line">${versionLine}</div>
-          <div class="footer-note">
-            ${status.reason || 'update available — updates not supported here'}
-          </div>
-        </div>
-      `;
-    }
-
-    // A failed release check is NOT "up to date" — we never learned what the
-    // latest version is. Saying otherwise would be a lie the user can't see
-    // through.
-    return html`
-      <div class="footer">
-        <div class="footer-line">${versionLine}</div>
-        <div class="footer-note">
-          ${status.error ? 'update check unavailable' : 'up to date'}
-        </div>
-      </div>
-    `;
+    const version = this._updateStatus?.currentVersion;
+    const label = version ? version.startsWith('v') ? version : `v${version}` : 'Settings';
+    return html`<button class="settings-row" aria-label="Open settings" title="Settings" @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action: 'settings' }, bubbles: true, composed: true }))}><span>${label}</span>${icon(Settings, { size: 16 })}</button>`;
   }
 
   // ---------------------------------------------------------------------------
@@ -2696,22 +2504,7 @@ export class MuxSidebar extends LitElement {
 
     return html`
       <div class="header">
-        <span class="brand"><img class="brand-logo" src="${apiPath('/icons/icon.svg')}" alt=""><span>Muxterm</span></span>
-        ${this.showLauncher
-          ? html`<button
-              class="launcher-btn"
-              title="Open menu"
-              @click="${() => { this._menuOpen = !this._menuOpen; }}"
-            >${icon(Ellipsis, { size: 15 })}</button>`
-          : ''}
-        ${this.showLauncher && this._menuOpen
-          ? html`<div class="menu-anchor">
-              <mux-launcher-menu
-                .showCreateWorkspace=${true}
-                @launcher-action="${(e: Event) => this._onLauncherAction(e)}"
-              ></mux-launcher-menu>
-            </div>`
-          : ''}
+        <span title="${window.location.hostname}">${instanceLabel()}</span>
       </div>
       <button class="new-chat-action ${this.newChatActive ? 'active' : ''}" title="New chat" aria-current="${this.newChatActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
         <span class="new-chat-action-mark">${icon(Plus, { size: 17 })}</span><span>New Chat</span>
@@ -2728,7 +2521,6 @@ export class MuxSidebar extends LitElement {
       <div class="tab-content">
         <mux-chat-list .selectedSession=${this.selectedSDKChat} .selectedTerminal=${this.selectedSDKChat ? '' : store.attached || ''} .terminalWorkspaces=${store.workspaces}></mux-chat-list>
       </div>
-      <button class="settings-row" aria-label="Open settings" @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail:{ action:'settings' }, bubbles:true, composed:true }))}><span class="settings-avatar">${instanceLabel().slice(0,1).toUpperCase()}</span><span class="settings-label">Settings</span>${icon(Settings2,{size:16})}</button>
       ${this._renderFooter()}
       ${this._renderPreviewTooltip()}
     `;

@@ -101,7 +101,6 @@ async function* claudeInputs(s) {
 async function runClaude(s) {
   const toolNames = new Map();
   const agentTools = new Set();
-  let thinkingStreamed = false;
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, additionalDirectories: s.sourceFolders, resume: s.nativeId || undefined,
     model: s.model || undefined,
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: { ...muxtermMcpEnv, MUXTERM_CHAT_ORIGIN_FILE: s.originFile } },
@@ -139,10 +138,6 @@ async function runClaude(s) {
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta')
           emit(s.id, msg.parent_tool_use_id ? 'delegate.message' : 'assistant.delta',
             { text: event.delta.text, ...(msg.parent_tool_use_id ? { childSessionId: msg.parent_tool_use_id } : {}) });
-        else if (event?.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') {
-          thinkingStreamed = true;
-          emit(s.id, 'thinking.delta', { text: event.delta.thinking });
-        }
         else if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use')
           { toolNames.set(event.content_block.id, event.content_block.name);
             if (event.content_block.name === 'Agent' || event.content_block.name === 'Task') {
@@ -159,8 +154,6 @@ async function runClaude(s) {
             goalState: control.action === 'clear' ? 'cleared' : 'paused', raw: msg.local_command_run });
           control.resolve({ command: msg.local_command_run, awaitingNativeObservation: control.args !== 'clear' });
         }
-        if (!thinkingStreamed) for (const block of msg.message?.content || []) if (block.type === 'thinking' && block.thinking)
-          emit(s.id, 'thinking.delta', { text: block.thinking });
         for (const block of msg.message?.content || []) if (block.type === 'tool_use') {
           if ((block.name === 'Agent' || block.name === 'Task') && !agentTools.has(block.id)) {
             agentTools.add(block.id);
@@ -178,7 +171,6 @@ async function runClaude(s) {
             agent: toolNames.get(block.tool_use_id) || 'Agent', toolId: block.tool_use_id, failed: !!block.is_error });
         }
       } else if (msg.type === 'result') {
-        thinkingStreamed = false;
         // The SDK's result echoes the UUIDs of user inputs the native turn
         // consumed. A local input queue is not proof that a turn was accepted.
         const accepted = msg.user_message_uuids || (msg.user_message_uuid ? [msg.user_message_uuid] : []);
