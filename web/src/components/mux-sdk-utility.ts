@@ -102,7 +102,7 @@ export class MuxSDKUtility extends LitElement {
   @property() terminalWorkspaceId = '';
   @property({ type: Boolean }) focused = false;
   @property({ attribute: false }) touched: string[] = [];
-  private tabs: UtilityTab[] = [{ id: crypto.randomUUID(), kind: 'new' }];
+  private tabs: UtilityTab[] = [{ id: crypto.randomUUID(), kind: 'files' }];
   private activeTabId = this.tabs[0].id;
   private get activeTab(): UtilityTabId { return this.tabs.find(tab => tab.id === this.activeTabId)?.kind || 'new'; }
   private get currentTab(): UtilityTab { return this.tabs.find(tab => tab.id === this.activeTabId) || this.tabs[0]; }
@@ -814,7 +814,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility *::-webkit-scrollbar-track { background:transparent; }
     mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 34%,transparent); border-radius:999px; }
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--chrome-text-dim,#9aa3b8) 58%,transparent); }
-    mux-sdk-utility .utility-tabs { display:flex; align-items:center; flex:none; gap:4px; min-height:38px; box-sizing:border-box; padding:4px 8px; border-bottom:1px solid var(--chrome-border); background:color-mix(in srgb,var(--chrome-bar) 84%,var(--chrome-body)); overflow-x:auto; }
+    mux-sdk-utility .utility-tabs { display:flex; align-items:center; flex:none; gap:4px; min-height:var(--mux-titlebar-height,44px); box-sizing:border-box; padding:4px max(8px,var(--wco-right-inset,0px)) 4px 8px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); overflow-x:auto; }
     mux-sdk-utility .utility-tab { display:flex; align-items:center; flex:0 1 210px; min-width:120px; height:29px; border:1px solid transparent; border-radius:8px; color:var(--chrome-text-dim); }
     mux-sdk-utility .utility-tab:not(:first-child):not(.active) { border-left-color:var(--chrome-border); border-radius:0; }
     mux-sdk-utility .utility-tab:hover { background:var(--chrome-hover); color:var(--chrome-text-bright); }

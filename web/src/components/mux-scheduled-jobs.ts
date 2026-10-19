@@ -51,7 +51,11 @@ export class MuxScheduledJobs extends LitElement {
   static override styles = css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
     button, input, select, textarea { font:inherit; } button { cursor:pointer; }
-    .top { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    .top { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:20px max(28px,var(--wco-right-inset,0px)) 20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    @media (display-mode: window-controls-overlay) {
+      .top { -webkit-app-region:drag; background:var(--chrome-body); }
+      .top button, .top input { -webkit-app-region:no-drag; }
+    }
     .eyebrow { color:var(--chrome-accent); font-size:10px; letter-spacing:.13em; text-transform:uppercase; font-weight:700; }
     h1 { margin:1px 0 1px; font-size:22px; letter-spacing:-.02em; } .subtitle { color:var(--chrome-text-dim); font-size:12px; }
     .primary { border:1px solid var(--chrome-accent); border-radius:7px; padding:8px 12px; background:var(--chrome-accent); color:var(--chrome-body); font-weight:650; }

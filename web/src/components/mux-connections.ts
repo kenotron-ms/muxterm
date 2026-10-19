@@ -39,7 +39,8 @@ export class MuxConnections extends LitElement {
   static override styles=css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
     * { box-sizing:border-box; } button,input { font:inherit; } button { cursor:pointer; }
-    header { padding:20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    header { padding:20px max(28px,var(--wco-right-inset,0px)) 20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    @media (display-mode: window-controls-overlay) { header { -webkit-app-region:drag; background:var(--chrome-body); } }
     .eyebrow { color:var(--chrome-accent); font-size:10px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; }
     h1 { margin:2px 0; font-size:22px; letter-spacing:-.02em; } p { margin:0; color:var(--chrome-text-dim); }
     .layout { min-height:0; display:grid; grid-template-columns:minmax(220px,300px) minmax(0,1fr); flex:1; }

@@ -4,7 +4,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { MonitorX, RefreshCw } from 'lucide';
+import { Folder, MonitorX, RefreshCw, SquareTerminal, X } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { previewStore } from './lib/preview-store.js';
@@ -12,6 +12,7 @@ import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig }
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
 import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
+import { installPwaWindowControls } from './lib/pwa-window-controls.js';
 import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
@@ -53,6 +54,7 @@ import { WorkspaceController } from './lib/workspace-controller.js';
 import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
 import { sdkChats } from './lib/sdk-chats.js';
+import { workspaceLabel } from './lib/workspace-label.js';
 import {
   SessiondType,
   SessiondErrorCode,
@@ -562,6 +564,7 @@ export class MuxApp extends LitElement {
         -webkit-app-region: drag;
         app-region: drag;
       }
+      .window-chrome.integrated { display:none; }
       .mobile-title-bar { display: none; }
     }
 
@@ -583,6 +586,23 @@ export class MuxApp extends LitElement {
          as an absolute overlay rather than replacing the dock — see render(). */
       position: relative;
     }
+    .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
+    .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
+    .terminal-utility { box-sizing:border-box; width:min(360px,42%); min-width:270px; flex:none; display:flex; flex-direction:column; border-left:1px solid var(--chrome-border); background:var(--chrome-body); color:var(--chrome-text-bright); }
+    .terminal-utility-tabs { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:4px; padding:0 max(8px,var(--wco-right-inset,0px)) 0 8px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); }
+    .terminal-utility-tabs button { height:29px; border:0; border-radius:6px; padding:0 9px; background:transparent; color:var(--chrome-text-dim); font:500 11px Inter,system-ui,sans-serif; cursor:pointer; }
+    .terminal-utility-tabs button:hover,.terminal-utility-tabs button[aria-selected="true"] { background:var(--chrome-hover); color:var(--chrome-text-bright); }
+    .terminal-utility-tabs .close-utility { width:28px; padding:0; margin-left:auto; display:grid; place-items:center; }
+    .terminal-utility-body { padding:16px; overflow:auto; font:12px/1.5 Inter,system-ui,sans-serif; }
+    .terminal-utility-body h2 { margin:0 0 12px; font-size:13px; font-weight:650; }
+    .terminal-utility-body p { margin:0 0 14px; color:var(--chrome-text-dim); overflow-wrap:anywhere; }
+    .terminal-utility-body .utility-pane-row { width:100%; min-height:36px; display:flex; align-items:center; gap:9px; padding:0 9px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-bright); text-align:left; font:inherit; cursor:pointer; }
+    .terminal-utility-body .utility-pane-row:hover,.terminal-utility-body .utility-pane-row[aria-current="true"] { background:var(--chrome-hover); }
+    .terminal-utility-body .utility-pane-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .terminal-utility-body .utility-detail { display:flex; align-items:center; gap:9px; min-height:36px; border-bottom:1px solid var(--chrome-border); }
+    .terminal-utility-body .utility-detail span { color:var(--chrome-text-dim); }
+    .terminal-utility-body .utility-detail strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:550; }
+    @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:6; top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:-10px 0 25px #0005; } }
 
     /* The gutter remains 4px wide for dragging. Paint it as part of the
        main pane so the sidebar border meets the content without a gap. */
@@ -594,11 +614,11 @@ export class MuxApp extends LitElement {
       transition: background 0.15s;
     }
 
-    /* Carry the shared 42px header rule across the resize target. */
+    /* Carry the shared 44px header rule across the resize target. */
     .sidebar-gutter::after {
       content: '';
       position: absolute;
-      top: 41px;
+      top: 43px;
       left: 0;
       right: 0;
       border-bottom: 1px solid var(--chrome-border);
@@ -778,6 +798,8 @@ export class MuxApp extends LitElement {
   private _drawerOpen = false;
 
   @state() private _sdkChatId: string | null = null;
+  @state() private _terminalUtilityOpen = false;
+  @state() private _terminalUtilityTab: 'panes' | 'workspace' = 'panes';
   @state() private _connectionSelection = 'github';
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
@@ -877,6 +899,7 @@ export class MuxApp extends LitElement {
   private _controller: WorkspaceController | null = null;
   private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
   private _disposePaneFocusListeners: (() => void) | null = null;
+  private _disposePwaWindowControls: (() => void) | null = null;
 
   /** Split.js instance managing the sidebar/main-pane resize boundary,
    *  owned here (not mux-sidebar.ts) since Split.js needs both sibling DOM
@@ -1001,6 +1024,7 @@ export class MuxApp extends LitElement {
     // Per-browser (localStorage), not server config — see instance-identity.ts.
     applyDocumentTitle();
     applyTitlebarColor(restoreTitlebarColor());
+    this._disposePwaWindowControls = installPwaWindowControls();
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
     disposeKeys = installKeybindings(uiActions);
     disposeHomeToggle?.();
@@ -1366,6 +1390,8 @@ export class MuxApp extends LitElement {
     this.removeEventListener('connect-machine', this._onConnectMachine);
     window.removeEventListener('keydown', this._onOverlayPanelEscape, true);
     this._disposePaneFocusListeners?.();
+    this._disposePwaWindowControls?.();
+    this._disposePwaWindowControls = null;
     this._disposePaneFocusListeners = null;
     this._paneFocusCoordinator = null;
     disposeAppShortcuts?.();
@@ -1577,9 +1603,10 @@ export class MuxApp extends LitElement {
     const chatTitle = this._sdkChatId
       ? UTILITY_TITLES.get(this._sdkChatId) || sdkChats.chats.find(chat => chat.id === this._sdkChatId)?.title || 'Chat'
       : '';
+    const attachedWorkspace = store.workspaces.find(workspace => workspace.workspaceId === store.attached);
 
     return html`
-      <div class="window-chrome">
+      <div class="window-chrome ${isWide && (selectedSDKChat || (!this._sdkChatId && panes.length > 0)) ? 'integrated' : ''}">
         <mux-title-bar window-chrome .desktop=${isWide}
           .drawerOpen=${this._drawerOpen}
           .chatTitle=${chatTitle}
@@ -1608,7 +1635,7 @@ export class MuxApp extends LitElement {
             .connectionsActive="${this._sdkChatId === 'connections'}"
             .skillsActive="${this._sdkChatId === 'skills'}"
             .selectedSDKChat="${selectedSDKChat}"
-            .showLauncher="${!!this._sdkChatId}"
+            .showLauncher="${true}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @chat-open="${this._onChatOpen}"
             @home-open="${this._onHomeOpen}"
@@ -1644,10 +1671,13 @@ export class MuxApp extends LitElement {
                 </div>
               `
             : html`
+              <div class="terminal-session">
                 <mux-dock
                   .panes="${panes}"
                   .activePaneId="${store.activePaneId}"
                   .workspaceKey="${store.attached ?? ''}"
+                  .workspaceName="${attachedWorkspace ? workspaceLabel(attachedWorkspace) : 'Workspace'}"
+                  .terminalUtilityOpen="${this._terminalUtilityOpen && !this._sdkChatId}"
                   .requestedPaneId="${this._requestedPaneId}"
                   .layout="${store.layout}"
                   .narrow="${!isWide}"
@@ -1656,8 +1686,11 @@ export class MuxApp extends LitElement {
                   @pane-create="${this._createPaneOptimistic}"
                   @pane-rename="${this._onPaneRename}"
                   @workspace-switch="${this._onWorkspaceSelected}"
+                  @terminal-utility-toggle="${() => { this._terminalUtilityOpen = !this._terminalUtilityOpen; }}"
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
+                ${this._terminalUtilityOpen && !this._sdkChatId ? html`<aside class="terminal-utility" aria-label="Terminal utility pane"><div class="terminal-utility-tabs" role="tablist" aria-label="Terminal tools"><button role="tab" aria-selected="${this._terminalUtilityTab === 'panes'}" @click="${() => { this._terminalUtilityTab = 'panes'; }}">Panes</button><button role="tab" aria-selected="${this._terminalUtilityTab === 'workspace'}" @click="${() => { this._terminalUtilityTab = 'workspace'; }}">Workspace</button><button class="close-utility" aria-label="Close terminal utility pane" @click="${() => { this._terminalUtilityOpen = false; }}">${icon(X,{size:16})}</button></div><div class="terminal-utility-body" role="tabpanel">${this._terminalUtilityTab === 'panes' ? html`<h2>Panes</h2>${panes.map(pane => html`<button class="utility-pane-row" aria-current="${store.activePaneId === pane.paneId}" @click="${() => this._onActivePane(new CustomEvent('pane-select',{detail:{paneId:pane.paneId}}))}">${icon(SquareTerminal,{size:16})}<span>${pane.title || `Pane ${pane.paneId}`}</span></button>`)}` : html`<h2>Workspace</h2><div class="utility-detail"><span>Name</span><strong>${attachedWorkspace ? workspaceLabel(attachedWorkspace) : 'Workspace'}</strong></div><div class="utility-detail"><span>Folder</span>${icon(Folder,{size:15})}<strong title="${attachedWorkspace?.projectPath || ''}">${attachedWorkspace?.projectPath || 'No project folder'}</strong></div><div class="utility-detail"><span>Panes</span><strong>${panes.length}</strong></div>`}</div></aside>` : ''}
+              </div>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
             <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`

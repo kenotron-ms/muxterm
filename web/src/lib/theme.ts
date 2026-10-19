@@ -347,6 +347,14 @@ export function applyChromeTokens(
   root: HTMLElement = document.documentElement,
 ): void {
   const tokens = isLightTheme(paletteName) ? CHROME_LIGHT : CHROME_DARK;
+  root.style.colorScheme = isLightTheme(paletteName) ? 'light' : 'dark';
+  root.style.setProperty('--mux-page-bg', tokens.body);
+  root.style.setProperty('--mux-page-fg', tokens.textBright);
+  try {
+    localStorage.setItem('mux-theme-palette', paletteName);
+  } catch {
+    // The server config remains authoritative when browser storage is unavailable.
+  }
   root.style.setProperty('--chrome-bar',           tokens.bar);
   root.style.setProperty('--chrome-body',          tokens.body);
   root.style.setProperty('--chrome-border',        tokens.border);
@@ -360,4 +368,14 @@ export function applyChromeTokens(
   root.style.setProperty('--remote',               'var(--chrome-driver-accent)');
   root.style.setProperty('--chrome-hover',         tokens.hover);
   root.style.setProperty('--chrome-danger',        tokens.danger);
+  syncPwaThemeColor(root);
+}
+
+/** Match browser-owned PWA controls to the surface underneath them. */
+export function syncPwaThemeColor(root: HTMLElement = document.documentElement): void {
+  const main = root.style.getPropertyValue('--chrome-body') || CHROME_DARK.body;
+  const sidebar = root.style.getPropertyValue('--mux-titlebar-bg') ||
+    root.style.getPropertyValue('--chrome-bar') || CHROME_DARK.bar;
+  const color = root.dataset.wcoControls === 'right' ? main : sidebar;
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', color);
 }
