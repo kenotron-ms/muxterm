@@ -352,7 +352,6 @@ export class MuxChatList extends LitElement {
     .pin-unpin:hover { background:color-mix(in srgb,var(--chrome-border) 45%,transparent); color:var(--chrome-text-bright); }
     .pin-link:focus-visible,.pin-unpin:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:1px; }
     .pin-error { margin:3px 5px 8px; color:var(--chrome-danger); }
-    .pin-link:focus-visible,.pin-unpin:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:1px; }
     @media(hover:none) { .pin-unpin { opacity:1; } }
   `;
   override connectedCallback() {
@@ -388,7 +387,7 @@ export class MuxChatList extends LitElement {
       ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, operator:!!chat.operator, lane:laneIds.has(chat.id), state:chat.state, chat })),
     ];
     return html`
-      <div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><button class="pin-link" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}<span class="pin-name">${item.name}</span></button><button class="pin-unpin" aria-label=${`Unpin ${item.kind} ${item.name}`} title=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</button></div>`)}</div>
+      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><button class="pin-link" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}<span class="pin-name">${item.name}</span></button><button class="pin-unpin" aria-label=${`Unpin ${item.kind} ${item.name}`} title=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</button></div>`)}</div>` : nothing}
       ${this.pinError ? html`<div class="pin-error" role="alert">${this.pinError}</div>` : nothing}
       ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession} .selectedTerminal=${this.selectedTerminal}></mux-chat-workspace>`)}
     `;

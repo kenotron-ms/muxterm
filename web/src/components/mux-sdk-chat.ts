@@ -435,7 +435,7 @@ export class MuxSDKChat extends LitElement {
     .goal-editor p, .goal-utility p { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; line-height:1.5; }
     .goal-editor-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:14px; }
     .goal-editor-actions button { padding:7px 12px; border-radius:6px; border:1px solid var(--chrome-border,#41485f); color:inherit; background:transparent; cursor:pointer; }
-    .goal-utility { position:absolute; z-index:60; top:42px; right:0; bottom:0; box-sizing:border-box; width:min(470px,100%); overflow:auto; padding:20px; background:var(--chrome-bar,#202632); border-left:1px solid var(--chrome-border,#41485f); box-shadow:-8px 0 28px #0003; }
+    .goal-utility { position:absolute; z-index:60; top:0; right:0; bottom:0; box-sizing:border-box; width:min(470px,100%); overflow:auto; padding:20px; background:var(--chrome-bar,#202632); border-left:1px solid var(--chrome-border,#41485f); box-shadow:-8px 0 28px #0003; }
     .goal-utility header { display:flex; align-items:center; justify-content:space-between; }
     .goal-ledger-record { border-top:1px solid var(--chrome-border,#41485f); padding:14px 0; overflow-wrap:anywhere; }
     .goal-ledger-record li { font-size:12px; margin:7px 0; line-height:1.5; }
