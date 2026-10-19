@@ -21,6 +21,8 @@ import {
   type AIStatus,
 } from '../lib/ai.js';
 import { apiPath } from '../lib/base-path.js';
+import { icon } from '../lib/icons.js';
+import { ArrowLeft } from 'lucide';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
@@ -33,7 +35,7 @@ import {
   type VoiceMode,
 } from '../lib/voice-settings.js';
 
-export type SettingsSection = 'appearance' | 'notifications' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
+export type SettingsSection = 'appearance' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -252,6 +254,27 @@ export class MuxSettingsSurface extends LitElement {
       color: var(--chrome-text-bright);
       background: var(--chrome-hover);
     }
+
+    :host([page-mode]) .header {
+      justify-content: flex-start;
+      gap: 8px;
+      padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px;
+    }
+    .back-btn {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+    }
+    .back-btn:hover { background: var(--chrome-hover); }
+    .back-btn:focus-visible { outline: 2px solid var(--chrome-accent); }
+    :host([page-mode]) .content { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
 
     /* ── Body: sidebar + content ── */
     .body {
@@ -1084,6 +1107,7 @@ export class MuxSettingsSurface extends LitElement {
   @property({ type: String }) serverAddr = '';
   @property({ attribute: false }) aiStatus: AIStatus = DEFAULT_AI_STATUS;
   @property({ attribute: false }) openSection: SettingsSection | null = null;
+  @property({ type: Boolean, attribute: 'page-mode', reflect: true }) pageMode = false;
 
   @state() private _section: SettingsSection = 'appearance';
   @state() private _updateStatus: UpdateStatus | null = null;
@@ -1219,8 +1243,13 @@ export class MuxSettingsSurface extends LitElement {
       </div>
       <p role="status" class=${this._updateError ? 'r-error' : ''}>${message}</p>
       <p>Build <code>${__GIT_SHA__}</code></p>
-      <p>Config file: <code>~/.config/muxterm/config.toml</code></p>
-      <h3>Workspace</h3>
+      <p>Config file: <code>~/.config/muxterm/config.toml</code></p>`;
+  }
+
+  private _renderWorkspaces() {
+    return html`
+      <h3>Workspaces</h3>
+      <p>Create a workspace for your terminals or reconnect to this Muxterm instance.</p>
       <div class="application-actions">
         <button class="application-button" @click=${() => this._applicationAction('new-workspace')}>New workspace</button>
         <button class="application-button" @click=${() => this._applicationAction('reconnect')}>Reconnect</button>
@@ -2282,8 +2311,9 @@ export class MuxSettingsSurface extends LitElement {
 
     return html`
       <div class="header">
+        ${this.pageMode ? html`<button class="back-btn" aria-label="Back" title="Back" @click=${this._close}>${icon(ArrowLeft, { size: 20 })}</button>` : ''}
         <h2>Settings</h2>
-        <button class="close-btn" title="Close" aria-label="Close settings" @click="${this._close}">×</button>
+        ${this.pageMode ? '' : html`<button class="close-btn" title="Close" aria-label="Close settings" @click="${this._close}">×</button>`}
       </div>
       <div class="body">
         <nav class="sidebar">
@@ -2295,6 +2325,7 @@ export class MuxSettingsSurface extends LitElement {
             class="sidebar-item ${this._section === 'notifications' ? 'active' : ''}"
             @click="${() => { this._setSection('notifications'); }}"
           >Notifications</button>
+          <button class="sidebar-item ${this._section === 'workspaces' ? 'active' : ''}" @click=${() => this._setSection('workspaces')}>Workspaces</button>
           <button
             class="sidebar-item ${this._section === 'ai' ? 'active' : ''}"
             @click="${() => { this._setSection('ai'); }}"
@@ -2315,6 +2346,8 @@ export class MuxSettingsSurface extends LitElement {
             ? this._renderAppearance()
             : this._section === 'about'
               ? this._renderAbout()
+            : this._section === 'workspaces'
+              ? this._renderWorkspaces()
             : this._section === 'shortcuts'
               ? this._renderShortcuts()
             : this._section === 'notifications'
