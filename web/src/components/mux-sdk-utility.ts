@@ -464,6 +464,7 @@ export class MuxSDKUtility extends LitElement {
     this.quickAbort?.abort();
     if (this.quickTimer) window.clearTimeout(this.quickTimer);
     if (this.currentTab.kind !== 'files') this.showPanel('files');
+    this.fileMenuOpen = false;
     this.quickOpen = true;
     this.quickQuery = '';
     this.quickResults = [];
@@ -649,6 +650,7 @@ export class MuxSDKUtility extends LitElement {
     const bytes = this.pdfBytes;
     const text = file.name.toLowerCase().endsWith('.pdf') ? null : /\.(html?|svg)$/i.test(file.name) ? this.localSource || file.text : file.text;
     if (!bytes && (file.tooLarge || file.binary || text === null)) return;
+    // Keep source text inert in a new tab; rich HTML/SVG rendering stays in the sandboxed preview.
     const blob = bytes ? new Blob([bytes], { type:'application/pdf' }) : new Blob([text || ''], { type:'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     window.open(url, '_blank', 'noopener');
