@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, Minimize2, Network, NotebookPen, Plus, RefreshCw, Search, Terminal, Trash2, X, type IconNode } from 'lucide';
+import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Plus, RefreshCw, Search, Terminal, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { store } from '../state.js';
 import { icon } from '../lib/icons.js';
@@ -130,6 +130,9 @@ export class MuxSDKUtility extends LitElement {
   private fileSort: 'name' | 'recent' | 'size' = 'name';
   private filesRailOpen = true;
   private fileMode: 'preview' | 'source' = 'preview';
+  private fileMenuOpen = false;
+  private fileActionNotice = '';
+  private fileActionTimer?: number;
   private interactivePreview = false;
   private localSource = '';
   private pdfBytes: Uint8Array<ArrayBuffer> | null = null;
@@ -197,6 +200,7 @@ export class MuxSDKUtility extends LitElement {
     if (this.pageSaveTimer) { window.clearTimeout(this.pageSaveTimer); void this.savePages(); }
     if (this.pagesPollTimer) window.clearInterval(this.pagesPollTimer);
     if (this.terminalRetryTimer) window.clearTimeout(this.terminalRetryTimer);
+    if (this.fileActionTimer) window.clearTimeout(this.fileActionTimer);
     super.disconnectedCallback();
   }
   override render() {
@@ -408,6 +412,7 @@ export class MuxSDKUtility extends LitElement {
   }
   private async loadFile(path: string, refresh = false) {
     this.fileAbort?.abort();
+    this.fileMenuOpen = false;
     const controller = new AbortController();
     this.fileAbort = controller;
     this.selected = path; this.fileError = '';
@@ -459,6 +464,7 @@ export class MuxSDKUtility extends LitElement {
     this.quickAbort?.abort();
     if (this.quickTimer) window.clearTimeout(this.quickTimer);
     if (this.currentTab.kind !== 'files') this.showPanel('files');
+    this.fileMenuOpen = false;
     this.quickOpen = true;
     this.quickQuery = '';
     this.quickResults = [];
@@ -514,7 +520,8 @@ export class MuxSDKUtility extends LitElement {
     const panel = (event.currentTarget as HTMLElement).closest<HTMLElement>('.split-panel');
     if (!panel) return;
     const box = panel.getBoundingClientRect();
-    const width = Math.round(Math.max(160, Math.min(box.width - 230, event.clientX - box.left)));
+    const distance = this.resizingRail === 'files' ? box.right - event.clientX : event.clientX - box.left;
+    const width = Math.round(Math.max(160, Math.min(box.width - 230, distance)));
     this.railWidths[this.resizingRail] = width;
     panel.style.setProperty('--rail-width', `${width}px`);
   }
@@ -529,7 +536,8 @@ export class MuxSDKUtility extends LitElement {
   private keyRailResize(event: KeyboardEvent, key: keyof typeof this.railWidths) {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
-    this.railWidths[key] = Math.max(160, Math.min(900, this.railWidths[key] + (event.key === 'ArrowRight' ? 20 : -20)));
+    const direction = event.key === 'ArrowRight' ? 20 : -20;
+    this.railWidths[key] = Math.max(160, Math.min(900, this.railWidths[key] + (key === 'files' ? -direction : direction)));
     (event.currentTarget as HTMLElement).closest<HTMLElement>('.split-panel')?.style.setProperty('--rail-width', `${this.railWidths[key]}px`);
     try { localStorage.setItem(`muxterm.sdk.utility.rail.${key}.${this.sessionId}`, String(this.railWidths[key])); } catch { /* private browsing */ }
   }
@@ -610,32 +618,93 @@ export class MuxSDKUtility extends LitElement {
     this.fileModes.set(this.selected, mode);
     this.paintAll();
   }
+  private toggleFileMode() {
+    this.setFileMode(this.fileMode === 'preview' ? 'source' : 'preview');
+  }
+  private filePathOnHost(): string {
+    if (!this.projectPath.startsWith('/') || !this.selected || this.selected.startsWith('/') || this.selected.split('/').includes('..')) return '';
+    return `${this.projectPath.replace(/\/+$/, '')}/${this.selected}`;
+  }
+  private vsCodeURL(): string {
+    if (!['localhost','127.0.0.1','[::1]'].includes(window.location.hostname)) return '';
+    const path = this.filePathOnHost();
+    return path ? `vscode://file${path.split('/').map(encodeURIComponent).join('/')}` : '';
+  }
+  private showFileActionNotice(message: string) {
+    this.fileActionNotice = message;
+    if (this.fileActionTimer) window.clearTimeout(this.fileActionTimer);
+    this.fileActionTimer = window.setTimeout(() => { this.fileActionNotice = ''; this.paintAll(); }, 2400);
+    this.paintAll();
+  }
+  private async copyFilePath() {
+    const path = this.filePathOnHost();
+    if (!path) return;
+    try { await navigator.clipboard.writeText(path); this.showFileActionNotice('File path copied'); }
+    catch { this.showFileActionNotice('Could not copy file path'); }
+  }
+  private openFileInBrowser() {
+    const file = this.artifact;
+    if (!file) return;
+    if (file.kind === 'image') { window.open(this.endpoint('raw', this.selected), '_blank', 'noopener'); return; }
+    if (file.kind === 'download' && !file.name.toLowerCase().endsWith('.pdf')) return;
+    const bytes = this.pdfBytes;
+    const text = file.name.toLowerCase().endsWith('.pdf') ? null : /\.(html?|svg)$/i.test(file.name) ? this.localSource || file.text : file.text;
+    if (!bytes && (file.tooLarge || file.binary || text === null)) return;
+    // Keep source text inert in a new tab; rich HTML/SVG rendering stays in the sandboxed preview.
+    const blob = bytes ? new Blob([bytes], { type:'application/pdf' }) : new Blob([text || ''], { type:'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener');
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+  private fileHeader(projectName: string, segments: string[], file: Artifact | undefined, hasAlternateView: boolean): TemplateResult {
+    const canOpenInBrowser = !!file && (file.kind === 'image' || !!this.pdfBytes || (!file.tooLarge && !file.binary && (file.kind === 'markdown' || file.kind === 'text')));
+    const vsCodeURL = this.vsCodeURL();
+    return html`<div class="viewer-header">
+      <nav class="viewer-path" aria-label="Open file path">${segments.length ? html`<button @click=${() => void this.loadDirectory('.')}>${projectName}</button>${segments.map((part,index) => html`<span>›</span>${index < segments.length-1 ? html`<button @click=${() => void this.loadDirectory(segments.slice(0,index+1).join('/'))}>${part}</button>` : html`<strong>${part}</strong>`}`)}` : html`<span>Open a file to preview it</span>`}</nav>
+      <div class="file-header-actions">
+        ${file ? html`<button class="icon-button" aria-label="Ask about file" title="Ask about file" @click=${() => this.askAboutFile()}>${icon(MessageCircleQuestionMark,{size:15})}</button>` : nothing}
+        ${hasAlternateView ? html`<button class="file-action-button" aria-label=${this.fileMode === 'preview' ? 'View source' : 'View preview'} @click=${() => this.toggleFileMode()}>${icon(Code2,{size:14})}<span>${this.fileMode === 'preview' ? 'View source' : 'View preview'}</span></button>` : nothing}
+        <button class="icon-button file-browser-toggle ${this.filesRailOpen ? 'active' : ''}" aria-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} title=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} aria-pressed=${String(this.filesRailOpen)} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.fileMenuOpen = false; this.paintAll(); }}>${icon(Folder,{size:15})}</button>
+        ${file ? html`<div class="file-open-wrap">
+          <button class="file-open-button" aria-label="Open file options" title="Open file options" aria-haspopup="menu" aria-expanded=${String(this.fileMenuOpen)} @click=${() => { this.fileMenuOpen = !this.fileMenuOpen; this.paintAll(); }}>${icon(ExternalLink,{size:14})}<span>Open</span>${icon(ChevronDown,{size:13})}</button>
+          ${this.fileMenuOpen ? html`<div class="file-open-menu" role="menu" aria-label="Open file">
+            ${canOpenInBrowser ? html`<button role="menuitem" @click=${() => { this.fileMenuOpen = false; this.openFileInBrowser(); }}>${icon(ExternalLink,{size:14})}Open in browser tab</button>` : nothing}
+            ${vsCodeURL ? html`<a role="menuitem" href=${vsCodeURL} @click=${() => { this.fileMenuOpen = false; }}>${icon(Code2,{size:14})}Open with VS Code</a>` : nothing}
+            <div class="file-menu-divider"></div>
+            <button role="menuitem" @click=${() => { this.fileMenuOpen = false; void this.copyFilePath(); }}>${icon(Copy,{size:14})}Copy file path</button>
+            <a role="menuitem" href=${this.endpoint('raw', this.selected)} download=${file.name} @click=${() => { this.fileMenuOpen = false; }}>${icon(Download,{size:14})}Download file</a>
+            <div class="file-menu-divider"></div>
+            <button role="menuitem" @click=${() => { this.fileMenuOpen = false; void this.openFile(this.selected, true); }}>${icon(RefreshCw,{size:14})}Refresh file</button>
+            <button role="menuitem" @click=${() => { this.fileMenuOpen = false; this.dispatchEvent(new CustomEvent('sdk-file-focus',{bubbles:true,composed:true})); }}>${icon(this.focused ? Minimize2 : Maximize2,{size:14})}${this.focused ? 'Show chat beside files' : 'Focus file viewer'}</button>
+            <button role="menuitem" @click=${() => { this.fileMenuOpen = false; this.closeTab(this.currentTab.id); }}>${icon(X,{size:14})}Close file</button>
+          </div>` : nothing}
+        </div>` : nothing}
+      </div>
+    </div>`;
+  }
   private filesView() {
     const file = this.artifact;
     const hasAlternateView = !!file && !file.binary && !file.tooLarge && (file.kind === 'markdown' || /\.(csv|tsv|html?|svg)$/i.test(file.name));
     const projectName = (this.projectPath || this.listing?.root || 'Project').split('/').filter(Boolean).pop() || 'Project';
     const segments = this.selected.split('/').filter(Boolean);
     const tree = this.treeRows('.');
-    return html`<section class="files-panel split-panel ${this.filesRailOpen ? '' : 'rail-closed'}" style=${`--rail-width:${this.railWidths.files}px`} @keydown=${(event: KeyboardEvent) => {
+    return html`<section class="files-panel split-panel ${this.filesRailOpen ? '' : 'rail-closed'}" style=${`--rail-width:${this.railWidths.files}px`} @click=${(event: MouseEvent) => { if (this.fileMenuOpen && !(event.target as HTMLElement).closest(".file-open-wrap")) { this.fileMenuOpen = false; this.paintAll(); } }} @keydown=${(event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'p') { event.preventDefault(); this.showQuickOpen(); }
-      if (event.key === 'Escape' && this.quickOpen) this.hideQuickOpen();
+      if (event.key === 'Escape') { if (this.quickOpen) this.hideQuickOpen(); else if (this.fileMenuOpen) { this.fileMenuOpen = false; this.paintAll(); queueMicrotask(() => this.querySelector<HTMLButtonElement>('.file-open-button')?.focus()); } }
     }}>
-      ${this.filesRailOpen ? html`<div class="browser">
-        <div class="browser-heading"><div class="explorer-label">EXPLORER</div><div class="explorer-actions"><button class="icon-button" aria-label="Quick open file" title="Quick Open · Ctrl+P" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})}</button><button class="icon-button" aria-label="Refresh file tree" title="Refresh file tree" @click=${() => void this.refreshTree()}>${icon(RefreshCw,{size:15})}</button><button class="icon-button" aria-label="Collapse folders" title="Collapse folders" @click=${() => { this.expandedDirs = new Set(['.']); this.paintAll(); }}>${icon(ChevronsDownUp,{size:15})}</button></div></div>
-        <button class="project-heading" @click=${() => { if (this.expandedDirs.has('.')) this.expandedDirs.delete('.'); else this.expandedDirs.add('.'); this.paintAll(); }} aria-expanded=${String(this.expandedDirs.has('.'))}>${icon(this.expandedDirs.has('.') ? ChevronDown : ChevronRight,{size:14})}<span>${projectName}</span></button>
-        <div class="project-path" title=${this.listing?.root || this.projectPath}>${this.listing?.root || this.projectPath}</div>
-        <div class="browser-tools"><span class="search-symbol">${icon(Search,{size:14})}</span><input type="search" aria-label="Filter visible files" placeholder="Filter visible files" .value=${this.fileQuery} @input=${(event: InputEvent) => { this.fileQuery = (event.target as HTMLInputElement).value; this.paintAll(); }}><select aria-label="Sort files" .value=${this.fileSort} @change=${(event: Event) => { this.fileSort = (event.target as HTMLSelectElement).value as typeof this.fileSort; this.paintAll(); }}><option value="name">Name</option><option value="recent">Recent</option><option value="size">Size</option></select></div>
-        <div class="file-list" role="tree" aria-label="Project files" @keydown=${(event: KeyboardEvent) => this.onTreeKey(event)}>${this.expandedDirs.has('.') ? tree : nothing}${this.error ? html`<p class="empty">${this.error}</p>` : nothing}${this.listing && !tree.length ? html`<p class="empty">${this.fileQuery ? 'No files match this filter.' : 'This folder is empty.'}</p>` : nothing}${[...this.directoryCache.values()].some(item => item.truncated) ? html`<p class="empty">Some folders show only their first 500 entries.</p>` : nothing}</div>
-        ${this.touched.length ? html`<div class="touched-files"><h3>FROM THIS CHAT <span>${this.touched.length}</span></h3>${this.touched.map(path => html`<button class="touched-entry" title=${path} @click=${() => void this.revealFile(path)}>${icon(fileGlyph(path),{size:14})}<span>${path}</span></button>`)}</div>` : nothing}
-      </div>` : nothing}
-      ${this.filesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize file explorer" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'files')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'files')}></div>` : nothing}
       <div class="viewer">
-        <div class="single-file-bar"><button class="rail-toggle" aria-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} title=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.paintAll(); }}>${icon(this.filesRailOpen ? ChevronRight : Folder,{size:15})}</button>${this.selected ? html`${icon(fileGlyph(this.selected),{size:15})}<strong title=${this.selected}>${this.selected.split('/').pop()}</strong><button class="icon-button" aria-label="Close file" title="Close file" @click=${() => this.closeTab(this.currentTab.id)}>${icon(X,{size:14})}</button>` : html`<span class="single-file-empty">No file open</span>`}</div>
-        <div class="viewer-header"><nav class="viewer-path" aria-label="Open file path">${segments.length ? html`<button @click=${() => void this.loadDirectory('.')}>${projectName}</button>${segments.map((part,index) => html`<span>›</span>${index < segments.length-1 ? html`<button @click=${() => void this.loadDirectory(segments.slice(0,index+1).join('/'))}>${part}</button>` : html`<strong>${part}</strong>`}`)}` : html`<span>Open a file to preview it</span>`}</nav><button class="icon-button" aria-label="Refresh open file" title="Refresh open file" ?disabled=${!this.selected} @click=${() => void this.openFile(this.selected, true)}>${icon(RefreshCw,{size:15})}</button><button class="icon-button" aria-label=${this.focused ? 'Show chat beside files' : 'Focus file viewer'} title=${this.focused ? 'Show chat beside files' : 'Focus file viewer'} @click=${() => this.dispatchEvent(new CustomEvent('sdk-file-focus',{bubbles:true,composed:true}))}>${icon(this.focused ? Minimize2 : Maximize2,{size:15})}</button></div>
-        ${file ? html`<div class="viewer-actions">${hasAlternateView ? html`<div class="view-switch"><button class=${this.fileMode === 'preview' ? 'active' : ''} @click=${() => this.setFileMode('preview')}>Preview</button><button class=${this.fileMode === 'source' ? 'active' : ''} @click=${() => this.setFileMode('source')}>Source</button></div>` : html`<span class="mode-label">${file.kind === 'image' || file.name.endsWith('.pdf') ? 'Preview' : 'Source'}</span>`}<span class="action-spacer"></span><button @click=${() => this.askAboutFile()}>Ask about file</button><a href=${this.endpoint('raw', this.selected)} download=${file.name}>Download</a></div>` : nothing}
+        ${this.fileHeader(projectName, segments, file, hasAlternateView)}
         <div class="viewer-body">${this.selected ? this.fileBody() : html`<div class="welcome-file">${icon(FolderOpen,{size:35})}<h2>Explore this project</h2><p>Choose a file from the explorer or search by name across the project.</p><button @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></button></div>`}</div>
-        ${file ? html`<div class="file-status"><span>${fileLanguage(file.name)}</span>${!file.binary && !file.tooLarge && file.text ? html`<span>${file.text.split('\n').length} lines</span>` : nothing}<span class="status-spacer"></span><span>${readableSize(file.size)}</span><span>Read only</span></div>` : nothing}
+        ${file ? html`<div class="file-status"><span>${fileLanguage(file.name)}</span>${!file.binary && !file.tooLarge && file.text ? html`<span>${file.text.split('\n').length} lines</span>` : nothing}<span class="status-spacer"></span><span class="file-action-notice" role="status">${this.fileActionNotice}</span><span>${readableSize(file.size)}</span><span>Read only</span></div>` : nothing}
       </div>
+      ${this.filesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize file explorer" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'files')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'files')}></div>` : nothing}
+      ${this.filesRailOpen ? html`<div class="browser">
+        <div class="browser-heading"><div class="explorer-label">FILES</div><div class="explorer-actions"><button class="icon-button" aria-label="Quick open file" title="Quick Open · Ctrl+P" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})}</button><button class="icon-button" aria-label="Refresh file tree" title="Refresh file tree" @click=${() => void this.refreshTree()}>${icon(RefreshCw,{size:15})}</button><button class="icon-button" aria-label="Collapse folders" title="Collapse folders" @click=${() => { this.expandedDirs = new Set(['.']); this.paintAll(); }}>${icon(ChevronsDownUp,{size:15})}</button></div></div>
+        <div class="browser-tools"><span class="search-symbol">${icon(Search,{size:14})}</span><input type="search" aria-label="Filter visible files" placeholder="Filter files…" .value=${this.fileQuery} @input=${(event: InputEvent) => { this.fileQuery = (event.target as HTMLInputElement).value; this.paintAll(); }}><select aria-label="Sort files" .value=${this.fileSort} @change=${(event: Event) => { this.fileSort = (event.target as HTMLSelectElement).value as typeof this.fileSort; this.paintAll(); }}><option value="name">Name</option><option value="recent">Recent</option><option value="size">Size</option></select></div>
+        ${this.touched.length ? html`<div class="touched-files"><h3>Changed files <span>${this.touched.length}</span></h3>${this.touched.map(path => html`<button class="touched-entry" title=${path} @click=${() => void this.revealFile(path)}><span class="tree-chevron"></span><span class="file-glyph">${icon(fileGlyph(path),{size:14})}</span><span class="file-name">${path}</span></button>`)}</div>` : nothing}
+        <button class="project-heading" title=${this.listing?.root || this.projectPath} @click=${() => { if (this.expandedDirs.has('.')) this.expandedDirs.delete('.'); else this.expandedDirs.add('.'); this.paintAll(); }} aria-expanded=${String(this.expandedDirs.has('.'))}><span class="tree-chevron">${icon(this.expandedDirs.has('.') ? ChevronDown : ChevronRight,{size:13})}</span><span class="file-glyph">${icon(Folder,{size:16})}</span><span class="file-name">All files</span></button>
+        <div class="file-list" role="tree" aria-label="Project files" @keydown=${(event: KeyboardEvent) => this.onTreeKey(event)}>${this.expandedDirs.has('.') ? tree : nothing}${this.error ? html`<p class="empty">${this.error}</p>` : nothing}${this.listing && !tree.length ? html`<p class="empty">${this.fileQuery ? 'No files match this filter.' : 'This folder is empty.'}</p>` : nothing}${[...this.directoryCache.values()].some(item => item.truncated) ? html`<p class="empty">Some folders show only their first 500 entries.</p>` : nothing}</div>
+      </div>` : nothing}
       ${this.quickOpen ? html`<div class="quick-overlay" @click=${(event: MouseEvent) => { if (event.target === event.currentTarget) this.hideQuickOpen(); }}><div class="quick-open" role="dialog" aria-label="Quick Open"><div class="quick-input">${icon(Search,{size:18})}<input type="search" aria-label="Search project files" placeholder="Search files by name…" .value=${this.quickQuery} @input=${(event: InputEvent) => this.searchQuickOpen((event.target as HTMLInputElement).value)} @keydown=${(event: KeyboardEvent) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); this.quickIndex = Math.max(0,Math.min(this.quickResults.length-1,this.quickIndex+(event.key === 'ArrowDown' ? 1 : -1))); this.paintAll(); } else if (event.key === 'Enter' && this.quickResults[this.quickIndex]) { event.preventDefault(); void this.revealFile(this.quickResults[this.quickIndex].path); } }}><kbd>ESC</kbd></div><div class="quick-results">${this.quickLoading ? html`<p>Searching project…</p>` : this.quickError ? html`<p>${this.quickError}</p>` : this.quickResults.length ? this.quickResults.map((result,index) => html`<button class=${index === this.quickIndex ? 'active' : ''} @mouseenter=${() => { this.quickIndex = index; }} @click=${() => void this.revealFile(result.path)}>${icon(fileGlyph(result.name),{size:16})}<span><strong>${result.name}</strong><small>${result.path}</small></span><em>${readableSize(result.size)}</em></button>`) : html`<p>${this.quickQuery.trim().length < 2 ? 'Type at least two characters to search the project.' : 'No matching files.'}</p>`}${this.quickTruncated && !this.quickLoading ? html`<p>Showing the first matches. Narrow your search for more.</p>` : nothing}</div></div></div>` : nothing}
     </section>`;
   }
@@ -838,23 +907,26 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .utility-placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--chrome-text-dim); }
     mux-sdk-utility .empty { color:var(--chrome-text-dim); line-height:1.6; } mux-sdk-utility a { color:var(--chrome-accent); }
     mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { display:grid; grid-template-columns:clamp(180px,var(--rail-width),45%) 6px minmax(0,1fr); height:100%; min-width:0; overflow:hidden; position:relative; background:var(--chrome-body); }
+    mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr) 6px clamp(180px,var(--rail-width),45%); }
     mux-sdk-utility .files-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
     mux-sdk-utility .browser { display:flex; flex-direction:column; min-width:0; min-height:0; background:color-mix(in srgb,var(--chrome-body) 78%,var(--chrome-bar)); }
+    mux-sdk-utility .files-panel .browser { border-left:1px solid var(--chrome-border); background:var(--chrome-body); }
+    mux-sdk-utility .files-panel .browser-heading { height:42px; flex:none; }
     mux-sdk-utility .browser-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; height:34px; padding:0 9px 0 16px; }
     mux-sdk-utility .explorer-label { color:var(--chrome-text-dim); font:600 10px system-ui,sans-serif; letter-spacing:.13em; }
     mux-sdk-utility .explorer-actions { display:flex; align-items:center; gap:2px; }
     mux-sdk-utility .icon-button, mux-sdk-utility .rail-toggle { display:inline-flex; align-items:center; justify-content:center; flex:none; width:28px; height:26px; padding:0; border:0; border-radius:4px; background:transparent; color:var(--chrome-text-dim); cursor:pointer; }
     mux-sdk-utility .icon-button:hover, mux-sdk-utility .rail-toggle:hover { color:var(--chrome-text-bright); background:var(--chrome-hover); }
     mux-sdk-utility .icon-button:disabled { opacity:.4; cursor:default; }
-    mux-sdk-utility .project-heading { display:flex; align-items:center; gap:3px; width:100%; min-height:28px; padding:0 11px; border:0; background:color-mix(in srgb,var(--chrome-body) 67%,var(--chrome-bar)); color:var(--chrome-text-bright); text-align:left; font:650 11px system-ui,sans-serif; text-transform:uppercase; letter-spacing:.025em; cursor:pointer; }
+    mux-sdk-utility .project-heading { display:flex; align-items:center; gap:5px; width:100%; min-height:28px; padding:0 11px 0 8px; border:0; background:color-mix(in srgb,var(--chrome-body) 67%,var(--chrome-bar)); color:var(--chrome-text-bright); text-align:left; font:600 11px system-ui,sans-serif; cursor:pointer; }
     mux-sdk-utility .project-heading span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    mux-sdk-utility .project-path { padding:4px 13px 8px 28px; color:var(--chrome-text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:10px ui-monospace,monospace; }
     mux-sdk-utility .browser-tools { display:flex; align-items:center; gap:4px; margin:0 9px 7px; border:1px solid var(--chrome-border); border-radius:5px; background:var(--chrome-body); color:var(--chrome-text-dim); }
+    mux-sdk-utility .files-panel .browser-tools { margin-top:5px; margin-bottom:11px; }
     mux-sdk-utility .search-symbol { display:flex; margin-left:7px; }
     mux-sdk-utility .browser-tools input { flex:1; min-width:0; height:25px; padding:0 2px; border:0; outline:0; background:transparent; color:var(--chrome-text-bright); font:11px system-ui,sans-serif; }
     mux-sdk-utility .browser-tools select { width:55px; min-width:0; height:25px; padding:0 2px; border:0; border-left:1px solid var(--chrome-border); background:transparent; color:var(--chrome-text-dim); font:10px system-ui,sans-serif; }
     mux-sdk-utility .file-list { flex:1; min-height:0; overflow:auto; padding:2px 0 10px; }
-    mux-sdk-utility .file-entry { display:flex; align-items:center; gap:5px; width:100%; min-height:24px; border:0; padding:0 11px 0 calc(8px + var(--depth)*14px); background:transparent; color:var(--chrome-text-bright); text-align:left; font:11px system-ui,sans-serif; cursor:pointer; }
+    mux-sdk-utility .file-entry { display:flex; align-items:center; gap:5px; width:100%; min-height:26px; border:0; padding:0 11px 0 calc(8px + var(--depth)*14px); background:transparent; color:var(--chrome-text-bright); text-align:left; font:11px system-ui,sans-serif; cursor:pointer; }
     mux-sdk-utility .file-entry:hover { background:var(--chrome-hover); }
     mux-sdk-utility .file-entry.selected { background:color-mix(in srgb,var(--chrome-accent) 17%,var(--chrome-hover)); box-shadow:inset 2px 0 var(--chrome-accent); }
     mux-sdk-utility .tree-chevron, mux-sdk-utility .file-glyph { display:flex; align-items:center; justify-content:center; flex:none; width:14px; color:var(--chrome-text-dim); }
@@ -862,32 +934,31 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .directory .file-glyph { color:color-mix(in srgb,var(--chrome-accent) 65%,#f5c566); }
     mux-sdk-utility .file-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .file-size { color:var(--chrome-text-dim); font:9px ui-monospace,monospace; white-space:nowrap; }
-    mux-sdk-utility .touched-files { max-height:25%; min-height:50px; overflow:auto; border-top:1px solid var(--chrome-border); padding:8px 0; }
-    mux-sdk-utility .touched-files h3 { display:flex; justify-content:space-between; margin:0 12px 6px; font-size:10px; color:var(--chrome-text-dim); letter-spacing:.09em; }
-    mux-sdk-utility .touched-entry { display:flex; align-items:center; gap:7px; width:100%; overflow:hidden; text-align:left; padding:5px 13px; border:0; color:var(--chrome-text-bright); background:transparent; font:10px ui-monospace,monospace; cursor:pointer; }
+    mux-sdk-utility .touched-files { max-height:25%; min-height:50px; overflow:auto; border-bottom:1px solid var(--chrome-border); padding:2px 0 8px; }
+    mux-sdk-utility .touched-files h3 { display:flex; justify-content:space-between; margin:0 12px 6px; font:600 11px system-ui,sans-serif; color:var(--chrome-text-dim); }
+    mux-sdk-utility .touched-entry { display:flex; align-items:center; gap:5px; width:100%; min-height:26px; overflow:hidden; text-align:left; padding:0 11px 0 8px; border:0; color:var(--chrome-text-bright); background:transparent; font:11px system-ui,sans-serif; cursor:pointer; }
     mux-sdk-utility .touched-entry:hover { background:var(--chrome-hover); }
-    mux-sdk-utility .touched-entry svg { flex:none; color:var(--chrome-accent); }
-    mux-sdk-utility .touched-entry span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    mux-sdk-utility .touched-entry .file-glyph { color:var(--chrome-accent); }
     mux-sdk-utility .file-list .empty { margin:12px 15px; color:var(--chrome-text-dim); font:11px/1.5 system-ui,sans-serif; }
     mux-sdk-utility .viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--chrome-body); }
-    mux-sdk-utility .single-file-bar { display:flex; align-items:center; gap:8px; flex:none; min-height:34px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
-    mux-sdk-utility .single-file-bar > svg { flex:none; color:var(--chrome-accent); }
-    mux-sdk-utility .single-file-bar strong { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:600 11px system-ui,sans-serif; }
-    mux-sdk-utility .single-file-bar .icon-button { margin-right:5px; }
-    mux-sdk-utility .single-file-empty { color:var(--chrome-text-dim); font:11px system-ui,sans-serif; }
-    mux-sdk-utility .rail-toggle { height:33px; width:35px; border-radius:0; border-right:1px solid var(--chrome-border); }
-    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:4px; min-height:31px; box-sizing:border-box; border-bottom:1px solid var(--chrome-border); padding:2px 7px 2px 13px; }
-    mux-sdk-utility .viewer-path { display:flex; align-items:center; gap:5px; flex:1; min-width:0; overflow:hidden; white-space:nowrap; color:var(--chrome-text-dim); font:10px system-ui,sans-serif; }
+    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:7px; flex:none; min-height:42px; box-sizing:border-box; border-bottom:1px solid var(--chrome-border); padding:3px 9px 3px 14px; background:var(--chrome-bar); }
+    mux-sdk-utility .viewer-path { display:flex; align-items:center; gap:6px; flex:1; min-width:0; overflow:hidden; white-space:nowrap; color:var(--chrome-text-dim); font:11px system-ui,sans-serif; }
     mux-sdk-utility .viewer-path button { border:0; padding:0; background:transparent; color:var(--chrome-text-dim); cursor:pointer; }
     mux-sdk-utility .viewer-path button:hover { color:var(--chrome-accent); }
     mux-sdk-utility .viewer-path strong { overflow:hidden; text-overflow:ellipsis; color:var(--chrome-text-bright); font-weight:500; }
-    mux-sdk-utility .viewer-actions { display:flex; align-items:center; gap:6px; min-height:35px; box-sizing:border-box; border-bottom:1px solid var(--chrome-border); padding:3px 10px; }
-    mux-sdk-utility .viewer-actions button, mux-sdk-utility .viewer-actions a, mux-sdk-utility .sandbox-note button { border:1px solid var(--chrome-border); border-radius:4px; background:var(--chrome-bar); color:var(--chrome-text-bright); padding:4px 7px; text-decoration:none; font:10px system-ui,sans-serif; white-space:nowrap; cursor:pointer; }
-    mux-sdk-utility .viewer-actions button:hover, mux-sdk-utility .viewer-actions a:hover, mux-sdk-utility .sandbox-note button:hover { background:var(--chrome-hover); }
-    mux-sdk-utility .view-switch { display:flex; } mux-sdk-utility .view-switch button { border-radius:0; } mux-sdk-utility .view-switch button:first-child { border-radius:4px 0 0 4px; } mux-sdk-utility .view-switch button:last-child { border-radius:0 4px 4px 0; border-left:0; }
-    mux-sdk-utility .view-switch button.active { color:var(--chrome-accent); background:var(--chrome-hover); }
-    mux-sdk-utility .mode-label { color:var(--chrome-text-dim); font:10px system-ui,sans-serif; }
-    mux-sdk-utility .action-spacer, mux-sdk-utility .status-spacer { flex:1; }
+    mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:5px; flex:none; }
+    mux-sdk-utility .file-header-actions .active { color:var(--chrome-accent); background:color-mix(in srgb,var(--chrome-accent) 12%,var(--chrome-bar)); }
+    mux-sdk-utility .file-action-button, mux-sdk-utility .file-open-button { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:27px; border:1px solid var(--chrome-border); border-radius:4px; padding:0 8px; background:var(--chrome-bar); color:var(--chrome-text-bright); font:11px system-ui,sans-serif; white-space:nowrap; cursor:pointer; }
+    mux-sdk-utility .file-action-button:hover, mux-sdk-utility .file-open-button:hover { background:var(--chrome-hover); }
+    mux-sdk-utility .file-open-wrap { position:relative; }
+    mux-sdk-utility .file-open-menu { position:absolute; z-index:21; top:33px; right:0; width:215px; padding:5px; border:1px solid var(--chrome-border); border-radius:6px; background:var(--chrome-body); box-shadow:0 12px 30px #0005; }
+    mux-sdk-utility .file-open-menu button, mux-sdk-utility .file-open-menu a { display:flex; align-items:center; gap:10px; width:100%; min-height:28px; box-sizing:border-box; border:0; border-radius:4px; padding:0 9px; background:transparent; color:var(--chrome-text-bright); text-align:left; text-decoration:none; font:11px system-ui,sans-serif; cursor:pointer; }
+    mux-sdk-utility .file-open-menu button:hover, mux-sdk-utility .file-open-menu a:hover, mux-sdk-utility .file-open-menu button:focus-visible, mux-sdk-utility .file-open-menu a:focus-visible { background:var(--chrome-hover); outline:0; }
+    mux-sdk-utility .file-open-menu svg { flex:none; color:var(--chrome-text-dim); }
+    mux-sdk-utility .file-menu-divider { height:1px; margin:5px 4px; background:var(--chrome-border); }
+    mux-sdk-utility .sandbox-note button { border:1px solid var(--chrome-border); border-radius:4px; background:var(--chrome-bar); color:var(--chrome-text-bright); padding:4px 7px; text-decoration:none; font:10px system-ui,sans-serif; white-space:nowrap; cursor:pointer; }
+    mux-sdk-utility .sandbox-note button:hover { background:var(--chrome-hover); }
+    mux-sdk-utility .status-spacer { flex:1; }
     mux-sdk-utility .viewer-body { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; }
     mux-sdk-utility .file-empty { margin:auto; padding:20px; max-width:340px; text-align:center; color:var(--chrome-text-dim); }
     mux-sdk-utility mux-monaco-source { display:block; flex:1; min-height:0; min-width:0; }
@@ -913,13 +984,13 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .quick-results button strong, mux-sdk-utility .quick-results button small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .quick-results button strong { font:12px system-ui,sans-serif; }
     mux-sdk-utility .quick-results button small, mux-sdk-utility .quick-results button em { color:var(--chrome-text-dim); font:10px ui-monospace,monospace; }
-    mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:840px; margin:0 auto; padding:clamp(22px,4vw,48px) clamp(20px,5vw,56px) 64px; color:var(--chrome-text-bright); font:14px/1.72 system-ui,sans-serif; overflow-wrap:break-word; }
+    mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:840px; margin:0 auto; padding:14px clamp(20px,5vw,56px) 64px; color:var(--chrome-text-bright); font:14px/1.48 system-ui,sans-serif; overflow-wrap:break-word; }
     mux-sdk-utility .document-view > :first-child { margin-top:0; }
     mux-sdk-utility .document-view > :last-child { margin-bottom:0; }
     mux-sdk-utility .document-view .md-p { margin:0 0 1.15em; }
-    mux-sdk-utility .document-view .md-h { margin:1.75em 0 .55em; color:var(--chrome-text-bright); font-weight:700; line-height:1.3; overflow-wrap:break-word; }
-    mux-sdk-utility .document-view h1.md-h { margin-top:0; padding-bottom:.35em; border-bottom:1px solid var(--chrome-border); font-size:2em; letter-spacing:-.025em; }
-    mux-sdk-utility .document-view h2.md-h { padding-bottom:.28em; border-bottom:1px solid var(--chrome-border); font-size:1.5em; letter-spacing:-.015em; }
+    mux-sdk-utility .document-view .md-h { margin:1.5em 0 .65em; color:var(--chrome-text-bright); font-weight:650; line-height:1.3; overflow-wrap:break-word; }
+    mux-sdk-utility .document-view h1.md-h { margin-top:0; margin-bottom:1.05em; font-size:1.72em; letter-spacing:-.025em; white-space:normal; overflow:visible; text-overflow:clip; }
+    mux-sdk-utility .document-view h2.md-h { font-size:1.38em; letter-spacing:-.015em; }
     mux-sdk-utility .document-view h3.md-h { font-size:1.25em; }
     mux-sdk-utility .document-view h4.md-h { font-size:1.08em; }
     mux-sdk-utility .document-view h5.md-h, mux-sdk-utility .document-view h6.md-h { font-size:1em; }
@@ -1023,6 +1094,8 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-no-selection h2 { margin:0; color:#202124; }
     mux-sdk-utility .page-no-selection p { margin:0; }
     mux-sdk-utility .page-no-selection button { margin-top:9px; border:1px solid #ddd; border-radius:7px; padding:7px 12px; background:#fff; color:#333; cursor:pointer; }
-    @container(max-width:520px) { mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(170px,38%) minmax(0,1fr); } mux-sdk-utility .files-panel.rail-closed, mux-sdk-utility .pages-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .vertical-resizer { display:none; } mux-sdk-utility .browser, mux-sdk-utility .changes-list, mux-sdk-utility .pages-list { border-bottom:1px solid var(--chrome-border); } }
+    @container(max-width:650px) { mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) minmax(170px,38%); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .files-panel .vertical-resizer { display:none; } mux-sdk-utility .files-panel .browser { border-left:0; border-top:1px solid var(--chrome-border); } }
+    @container(max-width:430px) { mux-sdk-utility .file-action-button span { display:none; } }
+    @container(max-width:520px) { mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(170px,38%) minmax(0,1fr); } mux-sdk-utility .pages-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .changes-panel .vertical-resizer, mux-sdk-utility .pages-panel .vertical-resizer { display:none; } mux-sdk-utility .changes-list, mux-sdk-utility .pages-list { border-bottom:1px solid var(--chrome-border); } }
   `;
 }
