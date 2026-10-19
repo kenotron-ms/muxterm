@@ -103,6 +103,7 @@ async function runClaude(s) {
   const agentTools = new Set();
   let thinkingStreamed = false;
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, additionalDirectories: s.sourceFolders, resume: s.nativeId || undefined,
+    model: s.model || undefined,
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: { ...muxtermMcpEnv, MUXTERM_CHAT_ORIGIN_FILE: s.originFile } },
       ...(existsSync(githubMarker) ? { github: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'github'], env: githubMcpEnv } } : {}),
       ...(existsSync(join(microsoftRoot, 'personal', 'enabled')) ? { microsoft_personal: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'microsoft-personal'], env: microsoftMcpEnv } } : {}),
@@ -115,7 +116,7 @@ async function runClaude(s) {
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
         permissionDecisionReason: 'Proposal recorded in muxterm. A human must approve it or authorize the direct operator to start it. Do not start or replace the goal yourself.' } };
     }] }] },
-    thinking: { type: 'adaptive', display: 'summarized' }, effort: 'high', maxTurns: 20 } });
+    thinking: { type: 'adaptive', display: 'summarized' }, effort: s.effort || 'high', maxTurns: 20 } });
   s.query = q;
   try {
     for await (const msg of q) {
@@ -204,6 +205,11 @@ async function runClaude(s) {
 async function command(cmd) {
   const { op, sessionId, harness, cwd, nativeId, input } = cmd;
   if (op === 'capabilities') return { capabilities: capabilities(harness) };
+  if (op === 'catalog' && harness === 'codex') {
+    const catalog = new CodexStream({ cwd, sourceFolders: [], model: '', effort: '' }, () => {}, true);
+    try { return await catalog.options(); }
+    finally { catalog.close(); }
+  }
   if (op === 'start' || op === 'resume') {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
     if (harness !== 'codex' && harness !== 'claude' && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
