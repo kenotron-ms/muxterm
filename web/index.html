@@ -20,7 +20,22 @@
 
     <!-- PWA: theme + installability. The web app manifest itself is generated
          and injected by vite-plugin-pwa at build time. -->
-    <meta name="theme-color" content="#1a1b26" />
+    <meta name="theme-color" content="#16161e" />
+    <meta name="color-scheme" content="dark light" />
+    <script>
+      // The server sends the authoritative palette after connection. This
+      // local hint paints the previous palette before the first app frame.
+      try {
+        const light = ['solarized-light', 'one-light', 'github-light']
+          .includes(localStorage.getItem('mux-theme-palette'));
+        const root = document.documentElement;
+        root.style.colorScheme = light ? 'light' : 'dark';
+        root.style.setProperty('--mux-page-bg', light ? '#f2f2f7' : '#1a1b26');
+        root.style.setProperty('--mux-page-fg', light ? '#1c1c1e' : '#c0caf5');
+        document.querySelector('meta[name="theme-color"]').content =
+          localStorage.getItem('mux-titlebar-color') || (light ? '#e8e8ed' : '#16161e');
+      } catch { /* Browser storage may be unavailable. */ }
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
 
@@ -38,8 +53,8 @@
       }
       html, body {
         height: 100%;
-        background: #1a1b26;
-        color: #a9b1d6;
+        background: var(--mux-page-bg, #1a1b26);
+        color: var(--mux-page-fg, #c0caf5);
         font-family: system-ui, -apple-system, sans-serif;
         overflow: hidden;
       }

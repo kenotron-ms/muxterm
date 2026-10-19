@@ -10,7 +10,7 @@ import { homeSessions } from '../lib/home-sessions.js';
 import type { SessionRunState } from '../lib/session-state.js';
 import { needsInputByWorkspace } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
-import { CalendarClock, ChevronDown, Download, Ellipsis, Plug, Puzzle, SquareTerminal } from 'lucide';
+import { CalendarClock, ChevronDown, Download, Ellipsis, Plug, Plus, Puzzle, Settings2, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { previewStore, type PreviewEntry, type PreviewMode } from '../lib/preview-store.js';
@@ -1023,7 +1023,7 @@ export class MuxSidebar extends LitElement {
        single source for the dense and quiet layouts; colour aliases continue
        to follow the application theme. */
     :host {
-      --sidebar-header-height: 42px;
+      --sidebar-header-height: var(--mux-titlebar-height, 44px);
       --sidebar-mc-height: 36px;
       --sidebar-global-action-height: 38px;
       --sidebar-machine-height: 36px;
@@ -1048,10 +1048,15 @@ export class MuxSidebar extends LitElement {
 
     .header {
       height: var(--sidebar-header-height);
-      padding: 0 12px;
+      padding: 0 12px 0 max(12px, var(--wco-left-inset, 0px));
       font-size:var(--mux-font-size,16px);
       font-weight: 600;
       letter-spacing: normal;
+    }
+
+    @media (display-mode: window-controls-overlay) {
+      .header { -webkit-app-region: drag; }
+      .header button, .header mux-launcher-menu { -webkit-app-region: no-drag; }
     }
 
     .tab-content {
@@ -1065,17 +1070,17 @@ export class MuxSidebar extends LitElement {
     }
 
     .new-chat-action {
-      flex: 0 0 var(--sidebar-global-action-height);
-      height: var(--sidebar-global-action-height);
+      flex: 0 0 36px;
+      height: 36px;
       margin: 0 7px;
-      padding: 0 6px;
+      padding: 0 10px;
       border: 0;
       border-radius: 6px;
       background: transparent;
       color: color-mix(in srgb, var(--chrome-text-bright) 72%, var(--chrome-text-dim));
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 10px;
       text-align: left;
       font: 400 calc(var(--mux-font-size,16px) * .875)/1.4 var(--mux-font-family,system-ui,sans-serif);
       letter-spacing: normal;
@@ -1083,19 +1088,19 @@ export class MuxSidebar extends LitElement {
       cursor: pointer;
     }
 
-    .header + .new-chat-action { margin-top: 6px; }
+    .header + .new-chat-action { margin-top: 12px; }
 
     .new-chat-action.active { color: var(--sidebar-text); background: var(--sidebar-hover); }
     .new-chat-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
     .new-chat-action-mark {
-      width: 14px;
-      height: 14px;
+      width: 17px;
+      height: 17px;
       flex: none;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright));
-      font-size: 14px;
+      font-size: 16px;
     }
 
     .terminal-heading {
@@ -1319,6 +1324,18 @@ export class MuxSidebar extends LitElement {
     .footer { min-height: 31px; padding: 6px 11px; }
     .footer-line { font-size:var(--mux-font-size,16px); }
     .footer-note { display: none; }
+    .brand-lockup { display:flex; align-items:center; gap:9px; min-width:0; }
+    .brand-lockup > span:last-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .brand-mark { width:19px; height:19px; display:grid; place-items:center; border:1px solid var(--chrome-accent); border-radius:5px; color:var(--chrome-accent); }
+    .brand-mark .lucide-icon { width:14px; height:14px; }
+    .header { letter-spacing:0; font-weight:700; }
+    .settings-row { flex:none; box-sizing:border-box; width:100%; min-height:50px; display:flex; align-items:center; gap:9px; padding:0 14px; border:0; border-top:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); color:var(--chrome-text-bright); text-align:left; font:500 12px Inter,system-ui,sans-serif; cursor:pointer; }
+    .settings-row:hover { background:var(--chrome-hover); }
+    .settings-row:focus-visible { background:var(--chrome-hover); outline:2px solid var(--chrome-accent); outline-offset:-2px; }
+    .settings-row .settings-avatar { width:25px; height:25px; display:grid; place-items:center; border-radius:50%; background:color-mix(in srgb,var(--chrome-accent) 65%,var(--chrome-bar)); color:var(--chrome-text-bright); font-weight:700; }
+    .settings-row .settings-label { flex:1; }
+    .settings-row .lucide-icon { color:var(--chrome-text-dim); }
+    @media (max-width: 767.98px) { .settings-row { min-height:56px; font-size:14px; } }
   `;
 
   // ---------------------------------------------------------------------------
@@ -2630,14 +2647,7 @@ export class MuxSidebar extends LitElement {
     }
 
     // Dev build: nothing actionable, by design.
-    if (status.devBuild) {
-      return html`
-        <div class="footer">
-          <div class="footer-line">${versionLine}</div>
-          <div class="footer-note">${status.reason || 'dev build — updates disabled'}</div>
-        </div>
-      `;
-    }
+    if (status.devBuild) return '';
 
     if (status.canUpdate) {
       const label = status.latestVersion ? `Update to ${status.latestVersion}` : 'Update';
@@ -2697,13 +2707,14 @@ export class MuxSidebar extends LitElement {
         ${this.showLauncher && this._menuOpen
           ? html`<div class="menu-anchor">
               <mux-launcher-menu
+                .showCreateWorkspace=${true}
                 @launcher-action="${(e: Event) => this._onLauncherAction(e)}"
               ></mux-launcher-menu>
             </div>`
           : ''}
       </div>
       <button class="new-chat-action ${this.newChatActive ? 'active' : ''}" title="New chat" aria-current="${this.newChatActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
-        <span class="new-chat-action-mark">＋</span><span>New Chat</span>
+        <span class="new-chat-action-mark">${icon(Plus, { size: 17 })}</span><span>New Chat</span>
       </button>
       <button class="new-chat-action ${this.jobsActive ? 'active' : ''}" title="Scheduled jobs" aria-current="${this.jobsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('jobs-open', { bubbles: true, composed: true }))}">
         <span class="new-chat-action-mark">${icon(CalendarClock, { size: 14 })}</span><span>Scheduled jobs</span>
@@ -2715,8 +2726,9 @@ export class MuxSidebar extends LitElement {
         <span class="new-chat-action-mark">${icon(Puzzle, { size: 14 })}</span><span>Skills</span>
       </button>
       <div class="tab-content">
-        <mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list>
+        <mux-chat-list .selectedSession=${this.selectedSDKChat} .selectedTerminal=${this.selectedSDKChat ? '' : store.attached || ''} .terminalWorkspaces=${store.workspaces}></mux-chat-list>
       </div>
+      <button class="settings-row" aria-label="Open settings" @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail:{ action:'settings' }, bubbles:true, composed:true }))}><span class="settings-avatar">${instanceLabel().slice(0,1).toUpperCase()}</span><span class="settings-label">Settings</span>${icon(Settings2,{size:16})}</button>
       ${this._renderFooter()}
       ${this._renderPreviewTooltip()}
     `;

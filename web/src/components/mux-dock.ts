@@ -21,7 +21,7 @@ import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import { parseHostRef } from '../lib/host-ref.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis } from 'lucide';
+import { Ellipsis, PanelRight } from 'lucide';
 import './launcher-menu.js';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
@@ -301,6 +301,21 @@ class HeaderButton {
   dispose(): void { this.element.remove(); }
 }
 
+class WorkspacePrefix {
+  readonly element: HTMLElement;
+
+  constructor(name: string) {
+    const label = document.createElement('div');
+    label.className = 'mux-workspace-prefix';
+    label.innerHTML = '<span class="mux-workspace-prefix-label"></span><span aria-hidden="true">›</span>';
+    label.querySelector<HTMLElement>('.mux-workspace-prefix-label')!.textContent = name;
+    this.element = label;
+  }
+
+  init(): void { /* label is ready when dockview inserts it */ }
+  dispose(): void { this.element.remove(); }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MuxDock
 // ─────────────────────────────────────────────────────────────────────────────
@@ -318,6 +333,8 @@ export class MuxDock extends LitElement {
   @property({ attribute: false }) panes: SessiondPaneInfo[] = [];
   @property({ attribute: false }) activePaneId = -1;
   @property({ attribute: false }) workspaceKey = '';
+  @property({ attribute: false }) workspaceName = '';
+  @property({ type: Boolean, reflect: true }) terminalUtilityOpen = false;
   /**
    * "After you restore this workspace, activate THIS pane" -- the home view's
    * Enter, crossing a workspace boundary. -1 means no request.
@@ -695,6 +712,19 @@ export class MuxDock extends LitElement {
     const rail = document.createElement('div');
     rail.className = 'mux-workspace-actions';
 
+    const utility = document.createElement('button');
+    utility.className = 'mux-workspace-launcher mux-utility-toggle';
+    utility.type = 'button';
+    utility.title = 'Toggle terminal utility pane';
+    utility.setAttribute('aria-label', 'Toggle terminal utility pane');
+    utility.setAttribute('aria-pressed', String(this.terminalUtilityOpen));
+    render(icon(PanelRight, { size: 16 }), utility);
+    utility.addEventListener('click', event => {
+      event.stopPropagation();
+      this.dispatchEvent(new CustomEvent('terminal-utility-toggle', { bubbles:true, composed:true }));
+    });
+    rail.appendChild(utility);
+
     const launcher = document.createElement('button');
     launcher.className = 'mux-workspace-launcher';
     launcher.type = 'button';
@@ -914,6 +944,21 @@ export class MuxDock extends LitElement {
           --dv-active-sash-color: var(--chrome-accent);
         }
 
+        @media (display-mode: window-controls-overlay) {
+          mux-dock .dv-dockview {
+            --dv-tabs-and-actions-container-background-color: var(--chrome-body);
+          }
+          mux-dock .dv-tabs-and-actions-container:not(.dv-groupview-header-vertical) {
+            box-sizing: border-box;
+            padding-right: var(--wco-right-inset, 0px);
+          }
+          mux-dock[terminalutilityopen] .dv-tabs-and-actions-container:not(.dv-groupview-header-vertical) { padding-right:0; }
+          mux-dock .dv-void-container { -webkit-app-region: drag; }
+          mux-dock .dv-tab, mux-dock button, mux-dock input {
+            -webkit-app-region: no-drag;
+          }
+        }
+
         /* Chrome-like tab sizing.
            Dockview DOM order: [scrollable+tabs] [left-actions (+)] [void] [right-actions (split)]
            The void has flex-grow:1 by default — it fills the gap so split lands far right.
@@ -936,8 +981,23 @@ export class MuxDock extends LitElement {
           white-space: nowrap;
         }
         mux-dock .dv-tabs-container > .dv-tab:first-child {
-          padding-inline-start: var(--main-header-inline-padding, 24px) !important;
+          padding-inline-start: 8px !important;
         }
+        mux-dock .mux-workspace-prefix {
+          box-sizing: border-box;
+          height: var(--mux-titlebar-height, 44px);
+          max-width: 220px;
+          min-width: 95px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 0 14px 0 16px;
+          border-right: 1px solid var(--chrome-border);
+          color: var(--chrome-text-dim);
+          font: 500 12px Inter, system-ui, sans-serif;
+          white-space: nowrap;
+        }
+        mux-dock .mux-workspace-prefix-label { overflow:hidden; text-overflow:ellipsis; }
         mux-dock:not([workspace-actions-visible]) .mux-workspace-actions {
           visibility: hidden;
           pointer-events: none;
@@ -1020,8 +1080,8 @@ export class MuxDock extends LitElement {
           display: flex;
           align-items: center;
           gap: 4px;
-          flex: 0 0 44px;
-          width: 44px;
+          flex: 0 0 88px;
+          width: 88px;
           height: 100%;
           box-sizing: border-box;
         }
@@ -1050,6 +1110,7 @@ export class MuxDock extends LitElement {
           outline-offset: -2px;
           background: var(--chrome-hover);
         }
+        mux-dock .mux-utility-toggle[aria-pressed="true"] { color:var(--chrome-accent); background:var(--chrome-hover); }
 
         /* dockview's action containers shrink-wrap their button and sit at the
            header's top edge, so the 28px button is top-pinned in the 35px bar.
@@ -1238,6 +1299,7 @@ export class MuxDock extends LitElement {
           (target) => this._emitPaneCloseTarget(target),
         );
       },
+      createPrefixHeaderActionComponent: () => new WorkspacePrefix(this.workspaceName || 'Workspace'),
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
       // The "left" slot therefore renders immediately after the tabs (before
       // the grow-to-fill void), and the "right" slot renders far right.
@@ -1356,6 +1418,10 @@ export class MuxDock extends LitElement {
 
   override updated(changed: Map<string, unknown>): void {
     super.updated(changed);
+    if (changed.has('terminalUtilityOpen')) this.querySelector('.mux-utility-toggle')?.setAttribute('aria-pressed', String(this.terminalUtilityOpen));
+    if (changed.has('workspaceName')) {
+      for (const label of this.querySelectorAll<HTMLElement>('.mux-workspace-prefix-label')) label.textContent = this.workspaceName || 'Workspace';
+    }
     if (changed.has('workspaceActionsVisible')) this._syncWorkspaceActionVisibility();
     if (!this._dv) return;
 

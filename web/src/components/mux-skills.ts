@@ -22,7 +22,8 @@ export class MuxSkills extends LitElement {
   static override styles = css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
     button,input { font:inherit; } button { cursor:pointer; }
-    .top { padding:20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    .top { padding:20px max(28px,var(--wco-right-inset,0px)) 20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    @media (display-mode: window-controls-overlay) { .top { -webkit-app-region:drag; background:var(--chrome-body); } }
     .eyebrow { color:var(--chrome-accent); font-size:10px; letter-spacing:.13em; text-transform:uppercase; font-weight:700; }
     h1 { margin:1px 0; font-size:22px; letter-spacing:-.02em; }
     .subtitle,.hint { color:var(--chrome-text-dim); font-size:12px; }

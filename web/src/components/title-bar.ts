@@ -24,7 +24,7 @@ export class MuxTitleBar extends LitElement {
       display: flex;
       align-items: center;
       gap: 2px;
-      background: var(--mux-titlebar-bg, var(--chrome-bar));
+      background: var(--wco-narrow-bg, var(--mux-titlebar-bg, var(--chrome-bar)));
       border-bottom: 1px solid var(--chrome-border);
       /* D9. viewport-fit=cover has been set for as long as index.html has had
          a viewport meta and env(safe-area-inset-*) appeared in zero files; on
@@ -32,8 +32,9 @@ export class MuxTitleBar extends LitElement {
          height GROWS by the inset rather than eating into the 44px row, so
          every target in here keeps its full touch size. */
       height: calc(var(--nav-h) + env(safe-area-inset-top, 0px));
-      padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0
-        env(safe-area-inset-left, 0px);
+      padding: env(safe-area-inset-top, 0px)
+        max(env(safe-area-inset-right, 0px), var(--wco-right-inset, 0px)) 0
+        max(env(safe-area-inset-left, 0px), var(--wco-left-inset, 0px));
       box-sizing: border-box;
       flex-shrink: 0;
       user-select: none;
@@ -80,6 +81,13 @@ export class MuxTitleBar extends LitElement {
     .window-new-chat:hover { background: var(--chrome-hover); }
     @media (max-width: 640px) {
       .window-new-chat span { display: none; }
+    }
+
+    @media (display-mode: window-controls-overlay) {
+      :host { -webkit-app-region: drag; }
+      button, mux-pane-picker, mux-mic-button, mux-launcher-menu {
+        -webkit-app-region: no-drag;
+      }
     }
 
     .brand {

@@ -2,12 +2,29 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
+import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, SquareTerminal, Trash2, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { laneIcon } from '../lib/lane-icon.js';
-import { sdkChats, type FolderListing, type SDKChat, type SDKProject } from '../lib/sdk-chats.js';
+import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
+import { workspaceLabel } from '../lib/workspace-label.js';
+import type { SessiondWorkspaceInfo } from '../types.js';
+import codexMark from '../assets/harness/codex.svg?url';
+import claudeMark from '../assets/harness/claude.svg?url';
+import amplifierMark from '../assets/harness/amplifier.png?url';
+import piMark from '../assets/harness/pi.svg?url';
+import opencodeMark from '../assets/harness/opencode.svg?url';
+import deepseekMark from '../assets/harness/deepseek.svg?url';
 
-interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean }
+const harnessMarks: Record<SDKHarnessName, string> = {
+  codex: codexMark, claude: claudeMark, amplifier: amplifierMark,
+  pi: piMark, opencode: opencodeMark, deepseek: deepseekMark,
+};
+
+function harnessMark(chat: SDKChat, className = 'chat-icon') {
+  return html`<span class="${className} harness-mark ${chat.state}" style=${`--harness-mark:url("${harnessMarks[chat.harness]}")`} title=${`${sdkHarnessLabel(chat.harness)} · ${chat.state}`}></span>`;
+}
+
+interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; terminals?: SessiondWorkspaceInfo[]; laneIds: Set<string>; archived?: boolean }
 
 // The input is already newest-first. Keep that order within each role while
 // leaving Pinned and Archived as separate sections.
@@ -23,6 +40,7 @@ function chatsByRole(chats: SDKChat[], laneIds: Set<string>): SDKChat[] {
 export class MuxChatWorkspace extends LitElement {
   @property({ attribute: false }) model!: ChatGroup;
   @property() selectedSession = '';
+  @property() selectedTerminal = '';
   @state() private open = true;
   @state() private menuFor = '';
   @state() private contextMenu = false;
@@ -54,7 +72,7 @@ export class MuxChatWorkspace extends LitElement {
   };
   override connectedCallback() {
     super.connectedCallback();
-    if (this.model?.archived) this.open = false;
+    if (this.model?.archived || (this.model?.id === 'ungrouped' && !this.model.chats.some(chat => chat.id === this.selectedSession) && !this.model.terminals?.some(workspace => workspace.workspaceId === this.selectedTerminal))) this.open = false;
     document.addEventListener('pointerdown', this.onOutsidePointer);
     document.addEventListener('keydown', this.onEscape);
   }
@@ -66,7 +84,7 @@ export class MuxChatWorkspace extends LitElement {
   override willUpdate(changed: Map<string, unknown>) {
     // Archiving the selected chat updates this group's model. Keep the user's
     // Archived folder expansion choice instead of opening it as a side effect.
-    if (!this.model?.archived && (changed.has('selectedSession') || changed.has('model')) && this.model?.chats.some(chat => chat.id === this.selectedSession)) this.open = true;
+    if (!this.model?.archived && ((changed.has('selectedSession') && this.model?.chats.some(chat => chat.id === this.selectedSession)) || (changed.has('selectedTerminal') && this.model?.terminals?.some(workspace => workspace.workspaceId === this.selectedTerminal)))) this.open = true;
   }
   override updated(changed: Map<string, unknown>) {
     if ((changed.has('selectedSession') || changed.has('model')) && this.selectedSession) {
@@ -77,11 +95,11 @@ export class MuxChatWorkspace extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; margin:6px 0; font:calc(var(--mux-font-size,16px) * .875)/1.45 var(--mux-font-family,system-ui,sans-serif); color:var(--chrome-text-bright,#d8dce5); }
+    :host { display:block; margin:0 0 12px; font:12px/1.35 Inter,system-ui,sans-serif; color:var(--chrome-text-bright,#d8dce5); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
-    .row,.chat-row { display:flex; align-items:center; min-height:38px; border-radius:8px; position:relative; }
+    .row,.chat-row { display:flex; align-items:center; min-height:34px; border-radius:6px; position:relative; }
     .row:hover,.chat-row:hover { background:var(--chrome-hover); }
-    .group { display:flex; align-items:center; gap:7px; flex:1; min-width:0; padding:5px; text-align:left; }
+    .group { display:flex; align-items:center; gap:7px; flex:1; min-width:0; min-height:34px; padding:0 6px; text-align:left; }
     .folder { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
     .folder { width:17px; color:var(--chrome-text-dim); }
     .name,.title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -90,18 +108,24 @@ export class MuxChatWorkspace extends LitElement {
     .action { display:inline-flex; align-items:center; justify-content:center; width:25px; height:25px; flex:none; border-radius:5px; color:var(--chrome-text-dim,#aab2c1); opacity:0; }
     .row:hover .action,.row:focus-within .action { opacity:1; }
     .chat-row .action { display:none; opacity:1; }
-    .chat-row .action.more { display:inline-flex; }
+    .chat-row .action.more { display:none; }
     .chat-row:hover .action,.chat-row:has(.chat:focus-visible) .action { display:inline-flex; }
     .action:hover { background:var(--chrome-hover); color:inherit; }
-    .more { opacity:1; }
+    .row:has(.menu) .action.more,.chat-row:has(.menu) .action.more { display:inline-flex; opacity:1; }
     .menu { position:absolute; z-index:30; top:28px; right:4px; min-width:180px; max-height:280px; overflow:auto; padding:5px; background:var(--chrome-bar,#252b38); border:1px solid var(--chrome-border,#3b4355); border-radius:9px; box-shadow:0 12px 28px #0008; }
     .menu.context { top:20px; right:12px; }
     .menu button { display:flex; align-items:center; gap:9px; width:100%; padding:8px; text-align:left; border-radius:5px; }
     .menu button:hover { background:var(--chrome-hover); }
     .menu .danger { color:var(--chrome-danger); }
-    .chats { margin:0 0 5px; }
-    button.chat { flex:1; min-width:0; min-height:36px; padding:3px 7px; text-align:left; border-radius:8px; display:flex; align-items:center; gap:9px; }
-    .chat-row[selected] { background:var(--chrome-hover); }
+    .chats { margin:0 0 5px; padding-left:25px; }
+    button.chat { flex:1; min-width:0; min-height:28px; padding:3px 5px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:7px; }
+    .chat-row[selected] { background:color-mix(in srgb,var(--chrome-accent) 18%,var(--chrome-bar)); }
+    .chat-icon { width:17px; height:17px; display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--chrome-text-dim); }
+    .harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
+    .harness-mark.working { color:var(--mux-ok); }
+    .harness-mark.blocked,.harness-mark.failed { color:var(--chrome-danger); }
+    .terminal-row .chat-icon { color:var(--mux-ok); }
+    .row:focus-within,.chat-row:focus-within { outline:2px solid var(--chrome-accent); outline-offset:-2px; }
     .status { width:6px; height:6px; border-radius:50%; background:var(--chrome-text-dim); flex:none; }
     .status.working { background:var(--mux-ok); }
     .status.operator { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--chrome-accent); }
@@ -114,9 +138,7 @@ export class MuxChatWorkspace extends LitElement {
     .status.chat { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--chrome-text-dim); }
     .status.chat.working { color:var(--mux-ok); }
     .status.chat.failed,.status.chat.uncertain { color:var(--chrome-danger); }
-    .title { font-weight:400; }
-    .harness { color:var(--chrome-text-dim,#aab2c1); font-size:calc(var(--mux-font-size,16px) * .75); flex:none; text-transform:lowercase; }
-    .chat-row:hover .harness,.chat-row:has(.chat:focus-visible) .harness { display:none; }
+    .title { font-weight:550; }
     .rename-input,.editor input { min-width:0; border:1px solid var(--chrome-border); border-radius:5px; padding:6px 7px; background:var(--chrome-bar); color:inherit; font:inherit; }
     .rename-input { flex:1; margin:3px 5px; }
     .editor { margin:4px 5px 10px 20px; padding:12px; border:1px solid var(--chrome-border,#3b4355); border-radius:9px; background:var(--chrome-bar,#252b38); display:grid; gap:9px; }
@@ -283,12 +305,14 @@ export class MuxChatWorkspace extends LitElement {
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="action more" aria-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</button>` : html`
             <button class="chat" title=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
-              <span class="status ${chat.operator ? 'operator' : group.laneIds.has(chat.id) ? 'lane' : 'chat'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : group.laneIds.has(chat.id) ? `Lane · ${chat.state}` : `Chat · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : group.laneIds.has(chat.id) ? laneIcon(14) : icon(MessageSquare,{size:13})}</span><span class="title">${chat.title}</span><span class="harness">${chat.harness}</span>
+              ${chat.operator || group.laneIds.has(chat.id) ? html`<span class="status ${chat.operator ? 'operator' : 'lane'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : `Lane · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : laneIcon(14)}</span>` : harnessMark(chat)}<span class="title">${chat.title}</span>
             </button>
             <button class="action" aria-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} title=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</button>
             <button class="action" aria-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} title=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</button>`}
+          ${this.renamingId === chat.id ? nothing : html`<button class="action more" aria-label=${`Options for ${chat.title}`} title="Chat options" @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>`}
           ${this.menuFor === chat.id ? this.chatMenu(chat) : nothing}
         </div>`)}
+        ${group.terminals?.map(workspace => html`<div class="chat-row terminal-row" ?selected=${this.selectedTerminal === workspace.workspaceId}><button class="chat" title=${workspaceLabel(workspace)} @click=${() => this.dispatchEvent(new CustomEvent('workspace-switch', { detail:{workspaceId:workspace.workspaceId}, bubbles:true, composed:true }))}><span class="chat-icon">${icon(SquareTerminal,{size:16})}</span><span class="title">${workspaceLabel(workspace)}</span></button></div>`)}
       </div>` : nothing}
     `;
   }
@@ -299,6 +323,8 @@ export class MuxChatList extends LitElement {
   @state() private version = 0;
   @state() private pinError = '';
   @property() selectedSession = '';
+  @property() selectedTerminal = '';
+  @property({ attribute:false }) terminalWorkspaces: SessiondWorkspaceInfo[] = [];
   private unsub?: () => void;
   private readonly onChatOpen = (event: Event) => {
     const id = (event as CustomEvent<{ sessionId: string }>).detail?.sessionId;
@@ -306,14 +332,18 @@ export class MuxChatList extends LitElement {
   };
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; color:var(--chrome-text-dim,#9299a5); font:calc(var(--mux-font-size,16px) * .875)/1.45 var(--mux-font-family,system-ui,sans-serif); }
-    .heading { padding:18px 7px 7px; font-size:12px; letter-spacing:normal; }
-    .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--chrome-border,#3b4355); }
-    .pin-row { width:100%; display:flex; align-items:center; min-height:38px; padding:2px 3px; border-radius:8px; color:var(--chrome-text-bright,#d8dce5); }
+    :host { display:block; color:var(--chrome-text-dim,#9299a5); font:12px/1.35 Inter,system-ui,sans-serif; }
+    .heading { padding:9px 6px 5px; font-size:11px; font-weight:650; letter-spacing:0; text-transform:none; }
+    .pinned { margin:15px 0 12px; padding:0; border:0; }
+    .pin-row { width:100%; display:flex; align-items:center; min-height:34px; padding:2px 4px; border-radius:6px; color:var(--chrome-text-bright,#d8dce5); }
     .pin-row:hover,.pin-row:focus-within { background:var(--chrome-hover); }
-    .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:36px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:calc(var(--mux-font-size,16px) * .875)/1.45 var(--mux-font-family,system-ui,sans-serif); cursor:pointer; }
+    .pin-row[selected] { background:color-mix(in srgb,var(--chrome-accent) 18%,var(--chrome-bar)); }
+    .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:30px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:12px Inter,system-ui,sans-serif; cursor:pointer; }
     .pin-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .pin-icon { display:flex; flex:none; color:var(--chrome-text-dim); }
+    .pin-icon { display:flex; flex:none; width:17px; height:17px; align-items:center; justify-content:center; color:var(--chrome-text-dim); }
+    .pin-icon.harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
+    .pin-icon.harness-mark.working { color:var(--mux-ok); }
+    .pin-icon.harness-mark.blocked,.pin-icon.harness-mark.failed { color:var(--chrome-danger); }
     .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--chrome-accent); }
     .pin-icon.lane.ready { color:var(--mux-ok,#55b981); }
     .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--chrome-danger); }
@@ -347,18 +377,19 @@ export class MuxChatList extends LitElement {
     const chats = [...sdkChats.chats].sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt) || a.id.localeCompare(b.id));
     const active = chats.filter(chat => !chat.archived);
     const laneIds = new Set(chats.filter(chat => chat.operator).flatMap(chat => chat.operatorLanes || []));
-    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:chatsByRole(active.filter(chat => chat.workspaceId === project.id), laneIds), laneIds }));
-    groups.push({ id:'ungrouped', name:'Ungrouped', chats:chatsByRole(active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)), laneIds), laneIds });
-    groups.push({ id:'archived', name:`Archived (${chats.length-active.length})`, archived:true, chats:chats.filter(chat => chat.archived), laneIds });
+    const linkedTerminals = new Set(active.map(chat => chat.terminalWorkspaceId).filter(Boolean));
+    const terminals = this.terminalWorkspaces.filter(workspace => !linkedTerminals.has(workspace.workspaceId));
+    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:chatsByRole(active.filter(chat => chat.workspaceId === project.id), laneIds), terminals:terminals.filter(workspace => workspace.projectPath === project.path), laneIds }));
+    groups.push({ id:'ungrouped', name:'Ungrouped', chats:chatsByRole(active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)), laneIds), terminals:terminals.filter(workspace => !projects.some(project => project.path === workspace.projectPath)), laneIds });
+    groups.push({ id:'archived', name:'Archived', archived:true, chats:chats.filter(chat => chat.archived), laneIds });
     const pinned = [
       ...projects.filter(project => project.pinned).map(project => ({ kind:'project' as const, id:project.id, name:project.name, operator:false, lane:false, state:'' })),
-      ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, operator:!!chat.operator, lane:laneIds.has(chat.id), state:chat.state })),
+      ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, operator:!!chat.operator, lane:laneIds.has(chat.id), state:chat.state, chat })),
     ];
     return html`
-      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row"><button class="pin-link" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}><span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(item.kind === 'project' ? Folder : item.operator ? Network : MessageSquare,{size:15})}</span><span class="pin-name">${item.name}</span></button><button class="pin-unpin" aria-label=${`Unpin ${item.kind} ${item.name}`} title=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</button></div>`)}</div>` : nothing}
+      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><button class="pin-link" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}<span class="pin-name">${item.name}</span></button><button class="pin-unpin" aria-label=${`Unpin ${item.kind} ${item.name}`} title=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</button></div>`)}</div>` : nothing}
       ${this.pinError ? html`<div class="pin-error" role="alert">${this.pinError}</div>` : nothing}
-      <div class="heading">Chats</div>
-      ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
+      ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession} .selectedTerminal=${this.selectedTerminal}></mux-chat-workspace>`)}
     `;
   }
 }
