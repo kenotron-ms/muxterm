@@ -6,7 +6,7 @@ import './launcher-menu.js';
 import './mux-pane-picker.js';
 import './mic-button.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis, Menu, SquarePen } from 'lucide';
+import { Ellipsis, Menu } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
@@ -24,7 +24,7 @@ export class MuxTitleBar extends LitElement {
       display: flex;
       align-items: center;
       gap: 2px;
-      background: var(--wco-narrow-bg, var(--mux-titlebar-bg, var(--chrome-bar)));
+      background: var(--mux-titlebar-bg, var(--chrome-bar));
       border-bottom: 1px solid var(--chrome-border);
       /* D9. viewport-fit=cover has been set for as long as index.html has had
          a viewport meta and env(safe-area-inset-*) appeared in zero files; on
@@ -64,25 +64,6 @@ export class MuxTitleBar extends LitElement {
     :host([window-chrome]) .chat-title { font-weight: 500; }
     :host([window-chrome]) .brand { font-weight: 500; }
     :host([window-chrome]) .brand-sha { display: none; }
-    :host([window-chrome]) .window-new-chat {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 7px;
-      height: var(--nav-h);
-      padding: 0 10px;
-      color: var(--chrome-text-bright);
-      background: transparent;
-      border: 0;
-      border-radius: 6px;
-      font: 400 13px/1 system-ui, sans-serif;
-      cursor: pointer;
-    }
-    .window-new-chat:hover { background: var(--chrome-hover); }
-    @media (max-width: 640px) {
-      .window-new-chat span { display: none; }
-    }
-
     @media (display-mode: window-controls-overlay) {
       :host { -webkit-app-region: drag; }
       button, mux-pane-picker, mux-mic-button, mux-launcher-menu {
@@ -228,6 +209,7 @@ export class MuxTitleBar extends LitElement {
 
   /** The dock supplies the wide workspace menu when panes exist. */
   @property({ type: Boolean }) dockActionsVisible = false;
+  @property({ type: Boolean }) showLauncher = true;
 
   /** Bumped when the session list changes, so the badge re-derives. */
   @state() private _sessionVersion = 0;
@@ -345,11 +327,8 @@ export class MuxTitleBar extends LitElement {
             <span class="brand-sha">${__GIT_SHA__}</span>
           </div><mux-pane-picker></mux-pane-picker>`}
       <div class="right">
-        ${this.hasAttribute('window-chrome') ? html`<button class="window-new-chat" type="button" aria-label="New chat"
-          @click=${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}
-        >${icon(SquarePen, { size: 16 })}<span>New chat</span></button>` : ''}
         ${this.desktop || this.chatTitle ? '' : html`<mux-mic-button></mux-mic-button>`}
-        ${this.desktop && this.dockActionsVisible
+        ${!this.showLauncher || (this.desktop && this.dockActionsVisible)
           ? ''
           : html`<button
                 class="launcher-btn"

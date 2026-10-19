@@ -920,7 +920,7 @@ export class MuxDock extends LitElement {
 
           /* Tab bar surface — same as the title bar so the chrome reads as one
              continuous band. */
-          --dv-tabs-and-actions-container-background-color: var(--chrome-bar);
+          --dv-tabs-and-actions-container-background-color: var(--mux-titlebar-bg, var(--chrome-bar));
 
           /* Active group: selected tab merges into the body, others into the bar. */
           --dv-activegroup-visiblepanel-tab-background-color: var(--chrome-body);
@@ -945,9 +945,6 @@ export class MuxDock extends LitElement {
         }
 
         @media (display-mode: window-controls-overlay) {
-          mux-dock .dv-dockview {
-            --dv-tabs-and-actions-container-background-color: var(--chrome-body);
-          }
           mux-dock .dv-tabs-and-actions-container:not(.dv-groupview-header-vertical) {
             box-sizing: border-box;
             padding-right: var(--wco-right-inset, 0px);

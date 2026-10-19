@@ -21,7 +21,7 @@
     <!-- PWA: theme + installability. The web app manifest itself is generated
          and injected by vite-plugin-pwa at build time. -->
     <meta name="theme-color" content="#16161e" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="dark" />
     <script>
       // The server sends the authoritative palette after connection. This
       // local hint paints the previous palette before the first app frame.
@@ -29,7 +29,9 @@
         const light = ['solarized-light', 'one-light', 'github-light']
           .includes(localStorage.getItem('mux-theme-palette'));
         const root = document.documentElement;
-        root.style.colorScheme = light ? 'light' : 'dark';
+        const scheme = light ? 'light' : 'dark';
+        root.style.colorScheme = scheme;
+        document.querySelector('meta[name="color-scheme"]').content = scheme;
         root.style.setProperty('--mux-page-bg', light ? '#f2f2f7' : '#1a1b26');
         root.style.setProperty('--mux-page-fg', light ? '#1c1c1e' : '#c0caf5');
         document.querySelector('meta[name="theme-color"]').content =
