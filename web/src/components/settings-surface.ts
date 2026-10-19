@@ -323,6 +323,13 @@ export class MuxSettingsSurface extends LitElement {
 
     .theme-card {
       position: relative;
+      display: block;
+      width: 100%;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      font: inherit;
       cursor: pointer;
       border-radius: 8px;
       border: 2px solid transparent;
@@ -335,6 +342,10 @@ export class MuxSettingsSurface extends LitElement {
     }
     .theme-card.active {
       border-color: var(--chrome-accent);
+    }
+    .theme-card:focus-visible {
+      outline: 2px solid var(--chrome-accent);
+      outline-offset: 2px;
     }
 
     .card-inner {
@@ -1023,6 +1034,30 @@ export class MuxSettingsSurface extends LitElement {
       color: var(--mux-error);
     }
 
+    @media (max-width: 767.98px) {
+      .header { min-height: 56px; box-sizing: border-box; padding: 10px 16px; }
+      .close-btn { min-width: 44px; min-height: 44px; }
+      .body { min-height: 0; flex-direction: column; }
+      .sidebar {
+        box-sizing: border-box;
+        display: flex;
+        flex: none;
+        width: 100%;
+        min-height: 48px;
+        padding: 0 8px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        border-right: 0;
+        border-bottom: 1px solid var(--chrome-border);
+        -webkit-overflow-scrolling: touch;
+      }
+      .sidebar-item { flex: none; width: auto; min-height: 48px; padding: 0 12px; white-space: nowrap; border-bottom: 2px solid transparent; }
+      .sidebar-item.active { background: transparent; border-bottom-color: var(--chrome-accent); }
+      .content { min-width: 0; padding: 20px 16px 32px; }
+      .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 520px; }
+      .card-label { font-size: 12px; }
+    }
+
   `;
 
   @property({ attribute: false }) config: ResolvedConfig | null = null;
@@ -1199,9 +1234,11 @@ export class MuxSettingsSurface extends LitElement {
           if (!palette) return html``;
           const isActive = current === card.id;
           return html`
-            <div
+            <button
+              type="button"
               class="theme-card ${isActive ? 'active' : ''}"
               title="${card.label}"
+              aria-pressed="${isActive}"
               @click="${() => this._setTheme(card.id)}"
             >
               <div class="card-inner" style="background:${palette.background}">
@@ -1222,7 +1259,7 @@ export class MuxSettingsSurface extends LitElement {
               </div>
               <div class="card-label">${card.label}</div>
               ${isActive ? html`<div class="card-check">✓</div>` : ''}
-            </div>
+            </button>
           `;
         });
   }

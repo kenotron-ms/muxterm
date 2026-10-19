@@ -1330,10 +1330,12 @@ export class MuxSidebar extends LitElement {
     .brand-mark .lucide-icon { width:14px; height:14px; }
     .header { letter-spacing:0; font-weight:700; }
     .settings-row { flex:none; box-sizing:border-box; width:100%; min-height:50px; display:flex; align-items:center; gap:9px; padding:0 14px; border:0; border-top:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); color:var(--chrome-text-bright); text-align:left; font:500 12px Inter,system-ui,sans-serif; cursor:pointer; }
-    .settings-row:hover,.settings-row:focus-visible { background:var(--chrome-hover); }
+    .settings-row:hover { background:var(--chrome-hover); }
+    .settings-row:focus-visible { background:var(--chrome-hover); outline:2px solid var(--chrome-accent); outline-offset:-2px; }
     .settings-row .settings-avatar { width:25px; height:25px; display:grid; place-items:center; border-radius:50%; background:color-mix(in srgb,var(--chrome-accent) 65%,var(--chrome-bar)); color:var(--chrome-text-bright); font-weight:700; }
     .settings-row .settings-label { flex:1; }
     .settings-row .lucide-icon { color:var(--chrome-text-dim); }
+    @media (max-width: 767.98px) { .settings-row { min-height:56px; font-size:14px; } }
   `;
 
   // ---------------------------------------------------------------------------

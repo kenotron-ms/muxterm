@@ -399,6 +399,18 @@ export class MuxApp extends LitElement {
       max-height: min(80vh, 600px);
     }
 
+    @media (max-width: 767.98px) {
+      .overlay-dialog.settings-dialog {
+        box-sizing: border-box;
+        width: 100vw;
+        height: 100dvh;
+        padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+    }
+
     .overlay-body {
       flex: 1;
       overflow: hidden;
@@ -1465,10 +1477,9 @@ export class MuxApp extends LitElement {
     //
     // The drawer is a popover, so it lives in the browser's TOP LAYER, which
     // is above EVERY z-index unconditionally — .overlay-backdrop's 3000
-    // included. On a phone the drawer is also where Settings, Shortcuts,
-    // About and Connect are opened from, so all four were being painted
-    // UNDERNEATH the drawer that asked for them. No number fixes that; the
-    // drawer has to leave.
+    // included. On a phone the drawer can open an overlay such as Settings,
+    // which would otherwise be painted UNDERNEATH the drawer. No number
+    // fixes that; the drawer has to leave.
     //
     // Keyed on the STATE rather than on the two call sites that open a panel
     // (_onLauncherAction, _onConnectMachine), because the three sibling
@@ -1806,7 +1817,7 @@ export class MuxApp extends LitElement {
       ${this._overlayPanel ? html`
         <div class="overlay-backdrop" @click="${this._closeOverlayPanel}">
           <div
-            class="overlay-dialog${this._overlayPanel === 'connect' ? ' cdialog' : ''}"
+            class="overlay-dialog${this._overlayPanel === 'connect' ? ' cdialog' : this._overlayPanel === 'settings' ? ' settings-dialog' : ''}"
             @click="${(e: Event) => e.stopPropagation()}"
           >
             <div class="overlay-body">

@@ -2,7 +2,7 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
-import { Info, Keyboard, Plus, RefreshCw, Settings } from 'lucide';
+import { Info, Keyboard, Plus, RefreshCw } from 'lucide';
 
 export type LauncherAction =
   | 'settings'
@@ -199,9 +199,6 @@ export class MuxLauncherMenu extends LitElement {
             <div class="divider"></div>
           `
         : ''}
-      <button data-action="settings" @click="${() => this._dispatch('settings')}">
-        ${icon(Settings, { size: 14 })} Settings
-      </button>
       <button data-action="shortcuts" @click="${() => this._dispatch('shortcuts')}">
         ${icon(Keyboard, { size: 14 })} Keyboard Shortcuts
       </button>
