@@ -335,10 +335,24 @@ export class MuxChatList extends LitElement {
     :host { display:block; color:var(--chrome-text-dim,#9299a5); font:var(--sidebar-item-font-size,12.5px)/1.35 Inter,system-ui,sans-serif; }
     .heading { padding:9px 5px 3px; font-size:inherit; font-weight:600; letter-spacing:0; text-transform:none; }
     .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--chrome-border,#3b4355); }
-    .pin-row { width:100%; display:flex; align-items:center; gap:8px; min-height:29px; padding:4px 5px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-bright,#d8dce5); text-align:left; font:inherit; cursor:pointer; }
-    .pin-row:hover { background:var(--chrome-hover); }
-    .pin-row span:not(.pin-icon) { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .pin-icon { display:flex; flex:none; color:var(--chrome-text-dim); }
+    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:34px; padding:2px 4px; border-radius:6px; color:var(--chrome-text-bright,#d8dce5); }
+    .pin-row:hover,.pin-row:focus-within { background:var(--chrome-hover); }
+    .pin-row[selected] { background:color-mix(in srgb,var(--chrome-accent) 18%,var(--chrome-bar)); }
+    .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:30px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:inherit; cursor:pointer; }
+    .pin-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pin-icon { display:flex; flex:none; width:17px; height:17px; align-items:center; justify-content:center; color:var(--chrome-text-dim); }
+    .pin-icon.harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
+    .pin-icon.harness-mark.working { color:var(--mux-ok); }
+    .pin-icon.harness-mark.blocked,.pin-icon.harness-mark.failed { color:var(--chrome-danger); }
+    .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--chrome-accent); }
+    .pin-icon.lane.ready { color:var(--mux-ok,#55b981); }
+    .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--chrome-danger); }
+    .pin-unpin { display:grid; place-items:center; flex:none; width:26px; height:26px; border:0; border-radius:5px; padding:4px; background:transparent; color:var(--chrome-text-dim); opacity:0; cursor:pointer; }
+    .pin-row:hover .pin-unpin,.pin-row:focus-within .pin-unpin { opacity:1; }
+    .pin-unpin:hover { background:color-mix(in srgb,var(--chrome-border) 45%,transparent); color:var(--chrome-text-bright); }
+    .pin-link:focus-visible,.pin-unpin:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:1px; }
+    .pin-error { margin:3px 5px 8px; color:var(--chrome-danger); }
+    @media(hover:none) { .pin-unpin { opacity:1; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
