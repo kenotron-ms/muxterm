@@ -161,10 +161,6 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 		if len(line) == 0 {
 			continue
 		}
-		if view != "messages" {
-			events = append(events, json.RawMessage(line))
-			continue
-		}
 		var header struct {
 			SessionID      string    `json:"sessionId"`
 			At             time.Time `json:"at"`
@@ -179,6 +175,13 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal(line, &header); err != nil {
 			http.Error(w, "invalid history event", 500)
 			return
+		}
+		if header.Type == "thinking.delta" {
+			continue
+		}
+		if view != "messages" {
+			events = append(events, json.RawMessage(line))
+			continue
 		}
 		// The root needs only an activity label and the boundary between
 		// interim and final assistant text. Tool arguments and output stay lazy.
@@ -216,7 +219,7 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 
 func sdkMessageHistoryEvent(eventType string) bool {
 	switch eventType {
-	case "input.accepted", "assistant.delta", "voice.input.delta", "voice.output.delta", "voice.session.error", "task.cancel.requested", "turn.completed", "turn.cancelled", "turn.continued", "error", "session.uncertain", "goal.progress", "session.renamed", "delegate.spawned", "delegate.completed", "operator.lane.status", "operator.lane.report":
+	case "input.accepted", "assistant.delta", "commentary.delta", "voice.input.delta", "voice.output.delta", "voice.session.error", "task.cancel.requested", "turn.completed", "turn.cancelled", "turn.continued", "error", "session.uncertain", "goal.progress", "session.renamed", "delegate.spawned", "delegate.completed", "operator.lane.status", "operator.lane.report":
 		return true
 	default:
 		return false
@@ -311,6 +314,15 @@ func sdkStreamLog(w http.ResponseWriter, path string, cursor int64, end int64) (
 		cursor += int64(len(line))
 		line = bytes.TrimSuffix(line, []byte{'\n'})
 		if len(line) > 0 {
+			var header struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(line, &header); err != nil {
+				return cursor, err
+			}
+			if header.Type == "thinking.delta" {
+				continue
+			}
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: sdk\ndata: %s\n\n", cursor, line); err != nil {
 				return cursor, err
 			}

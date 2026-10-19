@@ -21,8 +21,7 @@ import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import { parseHostRef } from '../lib/host-ref.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis, PanelRight } from 'lucide';
-import './launcher-menu.js';
+import { PanelRight } from 'lucide';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
 
@@ -597,7 +596,6 @@ export class MuxDock extends LitElement {
   private _workspaceActions: HTMLElement | null = null;
   private _workspaceActionsFrame: number | undefined;
   private _dockObserver: MutationObserver | null = null;
-  private _workspaceLauncher: HTMLElement | null = null;
 
   /**
    * Put the dock into (or out of) the dropped state.
@@ -693,12 +691,7 @@ export class MuxDock extends LitElement {
         bestRight = rect.right;
       }
     }
-    if (!target) return;
-    // appendChild() moves an existing child even when it is already in this
-    // target. That mutation re-triggers our observer forever, so only re-home
-    // when Dockview actually selected a different header.
-    if (this._workspaceActions.parentElement === target) return;
-    target.appendChild(this._workspaceActions);
+    if (target && this._workspaceActions.parentElement !== target) target.appendChild(this._workspaceActions);
   }
 
   /** Keep the covered dock alive for layout/terminal caching, but inert. */
@@ -725,36 +718,7 @@ export class MuxDock extends LitElement {
     });
     rail.appendChild(utility);
 
-    const launcher = document.createElement('button');
-    launcher.className = 'mux-workspace-launcher';
-    launcher.type = 'button';
-    launcher.title = 'Open menu';
-    launcher.setAttribute('aria-label', 'Open menu');
-    render(icon(Ellipsis, { size: 16 }), launcher);
-    launcher.addEventListener('click', (event) => {
-      event.stopPropagation();
-      this._openWorkspaceLauncher(launcher);
-    });
-    rail.appendChild(launcher);
     return rail;
-  }
-
-  private _openWorkspaceLauncher(anchor: HTMLElement): void {
-    const menu = this._workspaceLauncher;
-    if (!menu) return;
-    try {
-      menu.showPopover();
-      const rect = anchor.getBoundingClientRect();
-      const width = menu.getBoundingClientRect().width || 180;
-      menu.style.position = 'fixed';
-      menu.style.margin = '0';
-      menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width))}px`;
-      menu.style.top = `${Math.min(window.innerHeight - 8, rect.bottom + 4)}px`;
-      menu.style.right = 'auto';
-      menu.style.bottom = 'auto';
-    } catch {
-      /* already open */
-    }
   }
 
   private _paintDropbar(bar: HTMLElement, host: DockHost): void {
@@ -1077,8 +1041,8 @@ export class MuxDock extends LitElement {
           display: flex;
           align-items: center;
           gap: 4px;
-          flex: 0 0 88px;
-          width: 88px;
+          flex: 0 0 44px;
+          width: 44px;
           height: 100%;
           box-sizing: border-box;
         }
@@ -1266,17 +1230,6 @@ export class MuxDock extends LitElement {
     this.appendChild(dockRoot);
     this._dockRoot = dockRoot;
     this._workspaceActions = this._createWorkspaceActions();
-    const launcherMenu = document.createElement('mux-launcher-menu');
-    launcherMenu.setAttribute('popover', 'auto');
-    launcherMenu.addEventListener('launcher-action', () => {
-      try {
-        launcherMenu.hidePopover();
-      } catch {
-        /* already closed */
-      }
-    });
-    dockRoot.appendChild(launcherMenu);
-    this._workspaceLauncher = launcherMenu;
     this._dockObserver = new MutationObserver(() => this._scheduleWorkspaceActions());
     this._dockObserver.observe(dockRoot, { childList: true, subtree: true });
     this.addEventListener('dblclick', this._onTabDblClick);
@@ -1314,8 +1267,7 @@ export class MuxDock extends LitElement {
         return new HeaderButton(SPLIT_ICON, 'Split pane', () => this._requestPane('split', group));
       },
     });
-    this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
-    this._dv.onDidLayoutChange(() => this._scheduleWorkspaceActions());
+    this._dv.onDidLayoutChange(() => { this._scheduleLayoutSave(); this._scheduleWorkspaceActions(); });
     this._dv.onDidActivePanelChange((panel) => {
       if (this._settingActive) return;
       if (!panel) return;
@@ -1332,7 +1284,6 @@ export class MuxDock extends LitElement {
       // activeView and the wrong pane is selected after a refresh.
       this._scheduleLayoutSave();
     });
-    this._scheduleWorkspaceActions();
     this._dv.onDidRemovePanel(() => {
       requestAnimationFrame(() => {
         if (this._dv) {
@@ -1340,6 +1291,8 @@ export class MuxDock extends LitElement {
         }
       });
     });
+
+    this._scheduleWorkspaceActions();
 
   }
 
@@ -1357,8 +1310,6 @@ export class MuxDock extends LitElement {
     this._dockObserver = null;
     this._workspaceActions?.remove();
     this._workspaceActions = null;
-    this._workspaceLauncher?.remove();
-    this._workspaceLauncher = null;
     this._dv?.dispose();
     this._dv = null;
     this._dockRoot?.remove();
@@ -1641,7 +1592,6 @@ export class MuxDock extends LitElement {
     // Adding or closing a pane can build a new group, and the bar lives inside
     // one. Idempotent: with nothing dropped this is two no-op class toggles.
     this._syncDropState();
-    if (changed.has('narrow')) this._scheduleWorkspaceActions();
   }
 
   /**

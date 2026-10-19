@@ -19,11 +19,11 @@ import type { MuxSDKUtility } from './mux-sdk-utility.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
 type LaneOrigin = { type: 'operator-lane' | 'chat-message' | 'external-tool'; chatId: string; targetChatId?: string; relation?: 'operator-to-lane' | 'lane-to-lane' | 'lane-to-operator' | 'chat-to-chat'; name: string; harness: string; status: string };
-type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; origin?: LaneOrigin; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
+type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; itemId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; origin?: LaneOrigin; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
+type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
@@ -62,7 +62,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { BookOpen, Bot, Check, ChevronDown, ChevronRight, CircleX, Copy, FilePenLine, Folder, GitFork, Globe, Mic, Network, NotebookTabs, PanelRight, Pause, Pencil, Play, Search, Target, Terminal, Wrench, X, type IconNode } from 'lucide';
+import { BookOpen, Bot, Check, ChevronDown, ChevronRight, CircleX, Copy, FilePenLine, Folder, GitFork, Globe, MessageCircle, Mic, Network, NotebookTabs, PanelRight, Pause, Pencil, Play, Search, Target, Terminal, Wrench, X, type IconNode } from 'lucide';
 
 type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
@@ -378,13 +378,19 @@ export class MuxSDKChat extends LitElement {
     .text .md-li { margin:5px 0; }
     .text .md-li .md-p { margin:0; }
     .text .md-quote { margin:0 0 16px; padding-left:15px; border-left:2px solid var(--chrome-border,#41485f); color:var(--chrome-text-dim,#9aa3b8); }
+    .work-disclosure .activity-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .work-disclosure > summary > svg { flex:none; }
     .text .md-hr { margin:24px 0; border:0; border-top:1px solid var(--chrome-border,#41485f); }
     .text .md-tablewrap { max-width:100%; min-width:0; overflow-x:auto; margin:0 0 18px; }
     .text .md-table { border-collapse:collapse; min-width:max(100%, 40rem); }
     .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--chrome-border,#41485f); text-align:left; vertical-align:top; overflow-wrap:break-word; word-break:normal; }
     .text .md-table .md-link, .text .md-table .md-code { overflow-wrap:break-word; }
     .text .md-th { background:var(--chrome-bar,#202632); }
-    .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); }
+    .progress-entry, .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; }
+    .progress-entry { display:flex; align-items:baseline; gap:8px; margin:5px 0 9px; line-height:1.5; }
+    .progress-text { min-width:0; overflow-wrap:anywhere; }
+    .progress-text > :first-child { margin-top:0; }
+    .progress-text > :last-child { margin-bottom:0; }
     .tool-activity > summary, .tool-entry > summary { display:flex; align-items:center; gap:8px; min-height:27px; list-style:none; cursor:pointer; }
     .tool-activity > summary::-webkit-details-marker, .tool-entry > summary::-webkit-details-marker { display:none; }
     .tool-activity > summary:focus-visible, .tool-entry > summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
@@ -1228,10 +1234,11 @@ export class MuxSDKChat extends LitElement {
     else blocks.push(card);
   }
   private onEvent(event: SDKEvent) {
+    if (event.type === 'thinking.delta') return;
     if (!this.replaying) { this.loadedEvents.push(event); this.liveEvents.push(event); }
     if (!this.replaying && this.agentEvents && (event.type.startsWith('delegate.') || event.type === 'tool.started' || event.type === 'tool.completed'))
       this.agentEvents = [...this.agentEvents, event];
-    if (['input.accepted', 'assistant.delta', 'thinking.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'delegate.message', 'delegate.step', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type)) {
+    if (['input.accepted', 'assistant.delta', 'commentary.delta', 'tool.started', 'tool.completed', 'delegate.spawned', 'delegate.completed', 'delegate.message', 'delegate.step', 'turn.completed', 'turn.cancelled', 'turn.continued', 'error'].includes(event.type)) {
       if (this.replaying) this.trajectory.push(event);
       else this.trajectory = [...this.trajectory, event];
     }
@@ -1314,17 +1321,18 @@ export class MuxSDKChat extends LitElement {
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'assistant', channel:'task', at:event.at, text:event.text || '' });
     } else if (event.type === 'assistant.interim') {
       const last = blocks[blocks.length - 1];
-      if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
-    } else if (event.type === 'thinking.delta') {
+      if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
+    } else if (event.type === 'commentary.delta') {
       markStart(this.currentTurn);
-      const last = blocks[blocks.length - 1];
-      if (last?.kind === 'thinking' && last.source === event.source) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || '') };
-      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'thinking', source:event.source, text:event.text || '' });
+      const index = event.itemId ? blocks.findIndex(block => block.kind === 'commentary' && block.turn === this.currentTurn && block.id === event.itemId) : blocks.length - 1;
+      const last = blocks[index];
+      if (last?.kind === 'commentary' && last.turn === this.currentTurn && !last.done && last.id === event.itemId) blocks[index] = { ...last, text:last.text + (event.text || ''), done:event.complete };
+      else if (event.text) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'commentary', text:event.text, id:event.itemId, done:event.complete });
     } else if (event.type === 'tool.started') {
       markStart(this.currentTurn);
       // Text before a tool call was an interim progress note, not the final answer.
       const last = blocks[blocks.length - 1];
-      if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'thinking', done:true };
+      if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
       const existing = blocks.findIndex(b => b.kind === 'tool' && b.id === event.toolId && !b.done);
       if (existing >= 0) blocks[existing] = { ...blocks[existing], name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input, summary:event.summary || blocks[existing].summary };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw, summary:event.summary });
@@ -1348,12 +1356,12 @@ export class MuxSDKChat extends LitElement {
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId) { index = i; break; }
       if (index >= 0) blocks[index] = { ...blocks[index], output:event.raw, done:true };
     } else if (event.type === 'turn.continued') {
-      for (const b of blocks) if (b.kind === 'assistant') b.done = true;
+      for (const b of blocks) if (b.kind === 'assistant' || b.kind === 'commentary') b.done = true;
     } else if (event.type === 'turn.completed') {
       this.busy = false;
       this.turnFinished.set(this.currentTurn, eventTime);
       this.workCollapsedWhileWorking.delete(this.currentTurn);
-      for (const b of blocks) if (b.kind === 'assistant') b.done = true;
+      for (const b of blocks) if (b.kind === 'assistant' || b.kind === 'commentary') b.done = true;
       const anchor = blocks[this.turnStart]?.key;
       if (anchor !== undefined) for (const id of event.inputIds || []) this.completedInputAnchors.set(id, anchor);
       this.turnStart = blocks.length;
@@ -1365,7 +1373,7 @@ export class MuxSDKChat extends LitElement {
       this.turnFinished.set(this.currentTurn, eventTime);
       this.workCollapsedWhileWorking.delete(this.currentTurn);
       this.stopping = false;
-      for (const b of blocks) if (b.kind === 'assistant') b.done = true;
+      for (const b of blocks) if (b.kind === 'assistant' || b.kind === 'commentary') b.done = true;
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:'Stopped by you · partial output kept' });
       this.turnStart = blocks.length;
       this.currentTurn++;
@@ -1741,6 +1749,9 @@ export class MuxSDKChat extends LitElement {
       return count === 1 ? 'used a tool' : `used ${count} tools`;
     }).join(', ').replace(/^./, first => first.toUpperCase());
   }
+  private commentaryEntry(block: Block) {
+    return html`<div class="progress-entry" aria-label="Progress update"><span class="work-icon">${icon(MessageCircle, { size: 14 })}</span><div class="progress-text">${this.markdown(block, block.key)}</div></div>`;
+  }
   private toolEntry(block: Block, key: string) {
     const kind = this.toolKind(block);
     const label = this.toolLine(block);
@@ -1756,6 +1767,8 @@ export class MuxSDKChat extends LitElement {
     return html`<details class="tool-entry ${this.toolFailed(block) ? 'failed' : ''}" aria-label=${`${block.name || 'Tool'} detail`} ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(kind), { size: 14 })}</span><span class="work-line" title=${label}>${label}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><div class="tool-detail-title">${heading}</div><div class="detail-label">${inputLabel}</div><pre>${inputText}</pre><div class="detail-label">${outputLabel}</div><pre>${output}</pre></div>` : nothing}</details>`;
   }
   private workTimeline(turn: number, items: Block[]) {
+    // Raw session events arrive in order. Keep each progress update at its
+    // original position and collapse only the adjacent tool calls after it.
     const steps: ReturnType<typeof html>[] = [];
     let run: Block[] = [];
     let group = 0;
@@ -1773,10 +1786,7 @@ export class MuxSDKChat extends LitElement {
       if (item.kind === 'tool') run.push(item);
       else {
         flush();
-        if (item.kind === 'thinking' && item.text.trim()) {
-          const streaming = !item.done && !this.turnFinished.has(turn) && item === this.blocks[this.blocks.length - 1];
-          steps.push(html`<div class="work-passage">${this.markdown({ ...item, done:!streaming }, item.key)}</div>`);
-        }
+        if (item.kind === 'commentary') steps.push(this.commentaryEntry(item));
       }
     }
     flush();
@@ -1813,7 +1823,7 @@ export class MuxSDKChat extends LitElement {
     const latestInput = new Map<number, number>();
     for (const block of this.blocks) {
       if (block.kind === 'user' || block.kind === 'chat-message') latestInput.set(block.turn, block.key);
-      if (block.kind === 'thinking' || block.kind === 'tool' || block.kind === 'progress') {
+      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress') {
         const items = work.get(block.turn) || [];
         items.push(block);
         work.set(block.turn, items);
@@ -1822,7 +1832,7 @@ export class MuxSDKChat extends LitElement {
     const shown = new Set<number>();
     const rows: TranscriptRow[] = [];
     for (const block of this.blocks) {
-      if (block.kind === 'thinking' || block.kind === 'tool' || block.kind === 'progress') {
+      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress') {
         if (shown.has(block.turn) || latestInput.has(block.turn)) continue;
         shown.add(block.turn);
         rows.push({ key:`work-${block.turn}`, block, work:work.get(block.turn) });

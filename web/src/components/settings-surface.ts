@@ -21,6 +21,9 @@ import {
   type AIStatus,
 } from '../lib/ai.js';
 import { apiPath } from '../lib/base-path.js';
+import { icon } from '../lib/icons.js';
+import { ArrowLeft } from 'lucide';
+import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
   DEFAULT_VOICE_STATUS,
@@ -32,7 +35,7 @@ import {
   type VoiceMode,
 } from '../lib/voice-settings.js';
 
-export type SettingsSection = 'appearance' | 'notifications' | 'ai' | 'voice' | 'remotes';
+export type SettingsSection = 'appearance' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -252,6 +255,27 @@ export class MuxSettingsSurface extends LitElement {
       background: var(--chrome-hover);
     }
 
+    :host([page-mode]) .header {
+      justify-content: flex-start;
+      gap: 8px;
+      padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px;
+    }
+    .back-btn {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+    }
+    .back-btn:hover { background: var(--chrome-hover); }
+    .back-btn:focus-visible { outline: 2px solid var(--chrome-accent); }
+    :host([page-mode]) .content { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
+
     /* ── Body: sidebar + content ── */
     .body {
       display: flex;
@@ -295,8 +319,17 @@ export class MuxSettingsSurface extends LitElement {
     /* ── Content area ── */
     .content {
       flex: 1;
+      min-width: 0;
       overflow-y: auto;
+      overflow-wrap: anywhere;
       padding: 24px 28px 40px;
+    }
+
+    @media (max-width: 600px) {
+      .body { flex-direction: column; }
+      .sidebar { display:flex; width:auto; padding:8px; border-right:0; border-bottom:1px solid var(--chrome-border); overflow-x:auto; }
+      .sidebar-item { width:auto; padding:8px 10px; white-space:nowrap; }
+      .content { padding:20px; }
     }
 
     /* ── Section headings ── */
@@ -992,6 +1025,16 @@ export class MuxSettingsSurface extends LitElement {
       color: var(--mux-warn);
     }
 
+    .application-version { margin:20px 0 14px; font-size:24px; font-weight:600; color:var(--chrome-text-bright); }
+    .application-actions { display:flex; flex-wrap:wrap; gap:10px; margin:14px 0; }
+    .application-shortcuts { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; }
+    .application-shortcuts dd { margin:0; text-align:right; }
+    .application-shortcuts kbd { font:inherit; color:var(--chrome-text-bright); }
+    .application-button { padding:8px 14px; border:1px solid var(--chrome-border); border-radius:6px; background:transparent; color:var(--chrome-text-bright); font:inherit; cursor:pointer; }
+    .application-button:hover:enabled { background:var(--chrome-hover); }
+    .application-button.primary { border-color:var(--chrome-accent); background:var(--chrome-accent); color:var(--chrome-body); }
+    .application-button:disabled { opacity:.45; cursor:default; }
+    .application-button:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:3px; }
     .r-btn {
       padding: 5px 11px;
       border: 1px solid var(--chrome-border);
@@ -1064,8 +1107,13 @@ export class MuxSettingsSurface extends LitElement {
   @property({ type: String }) serverAddr = '';
   @property({ attribute: false }) aiStatus: AIStatus = DEFAULT_AI_STATUS;
   @property({ attribute: false }) openSection: SettingsSection | null = null;
+  @property({ type: Boolean, attribute: 'page-mode', reflect: true }) pageMode = false;
 
   @state() private _section: SettingsSection = 'appearance';
+  @state() private _updateStatus: UpdateStatus | null = null;
+  @state() private _checkingVersion = false;
+  @state() private _installingUpdate = false;
+  @state() private _updateError = '';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
   @state() private _aiKeyInput = '';
@@ -1143,7 +1191,80 @@ export class MuxSettingsSurface extends LitElement {
   private _setSection(section: SettingsSection): boolean {
     if (this._section === section) return false;
     this._section = section;
+    if (section === 'about') void this._checkVersion();
     return true;
+  }
+
+  private async _checkVersion(): Promise<void> {
+    if (this._checkingVersion || this._installingUpdate) return;
+    this._checkingVersion = true;
+    this._updateError = '';
+    try {
+      this._updateStatus = await fetchUpdateStatus();
+      window.dispatchEvent(new CustomEvent('muxterm-update-checked', { detail: this._updateStatus }));
+    } catch {
+      this._updateError = 'Could not check the version. Try again.';
+    } finally {
+      this._checkingVersion = false;
+    }
+  }
+
+  private async _installUpdate(): Promise<void> {
+    if (this._checkingVersion || this._installingUpdate || !this._updateStatus?.canUpdate) return;
+    this._installingUpdate = true;
+    this._updateError = '';
+    try {
+      await installUpdate(this._updateStatus.currentVersion);
+    } catch (error) {
+      this._updateError = error instanceof Error ? error.message : String(error);
+      this._installingUpdate = false;
+    }
+  }
+
+  private _applicationAction(action: 'reconnect' | 'new-workspace'): void {
+    this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action }, bubbles: true, composed: true }));
+  }
+
+  private _renderAbout() {
+    const status = this._updateStatus;
+    const message = this._installingUpdate ? 'Installing update. Muxterm will reconnect when it is ready.'
+      : this._checkingVersion ? 'Checking version…'
+      : this._updateError || (status?.error ? `Could not check: ${status.error}`
+      : status?.devBuild ? 'Development build. Updates are managed by your build.'
+      : status?.updateAvailable ? `Version ${status.latestVersion} is available.${status.canUpdate ? '' : ` ${status.reason || 'Update through your package manager.'}`}`
+      : status?.latestVersion ? 'You’re up to date.' : 'Check for the latest version.');
+    return html`
+      <h3>About muxterm</h3>
+      <p>muxterm brings your terminals and agent chats into one workspace.</p>
+      <div class="application-version">${status?.currentVersion ? `v${status.currentVersion.startsWith('v') ? status.currentVersion.slice(1) : status.currentVersion}` : 'Version unavailable'}</div>
+      <div class="application-actions">
+        <button class="application-button" ?disabled=${this._checkingVersion || this._installingUpdate} @click=${() => void this._checkVersion()}>${this._checkingVersion ? 'Checking…' : 'Check version'}</button>
+        <button class="application-button primary" ?disabled=${!status?.canUpdate || this._checkingVersion || this._installingUpdate} @click=${() => void this._installUpdate()}>${this._installingUpdate ? 'Updating…' : 'Update'}</button>
+      </div>
+      <p role="status" class=${this._updateError ? 'r-error' : ''}>${message}</p>
+      <p>Build <code>${__GIT_SHA__}</code></p>
+      <p>Config file: <code>~/.config/muxterm/config.toml</code></p>`;
+  }
+
+  private _renderWorkspaces() {
+    return html`
+      <h3>Workspaces</h3>
+      <p>Create a workspace for your terminals or reconnect to this Muxterm instance.</p>
+      <div class="application-actions">
+        <button class="application-button" @click=${() => this._applicationAction('new-workspace')}>New workspace</button>
+        <button class="application-button" @click=${() => this._applicationAction('reconnect')}>Reconnect</button>
+      </div>`;
+  }
+
+  private _renderShortcuts() {
+    const keys = this.config!.keys;
+    const shortcuts = [
+      ['New pane (any mode)', 'Cmd+Ctrl+T'], ['Close pane', 'Cmd+W / Ctrl+W'],
+      ['Cycle tabs (forward)', 'Ctrl+Tab'], ['Cycle tabs (backward)', 'Ctrl+Shift+Tab'],
+      ['Next session', keys.nextSession], ['Split pane', keys.split],
+      ['Open Settings', keys.openLauncher], ['Focus driver', keys.focusDriver],
+    ];
+    return html`<h3>Keyboard Shortcuts</h3><dl class="application-shortcuts">${shortcuts.map(([label, key]) => html`<dt>${label}</dt><dd><kbd>${key}</kbd></dd>`)}</dl>`;
   }
 
   private _refreshNotifPermission(): void {
@@ -2190,8 +2311,9 @@ export class MuxSettingsSurface extends LitElement {
 
     return html`
       <div class="header">
+        ${this.pageMode ? html`<button class="back-btn" aria-label="Back" title="Back" @click=${this._close}>${icon(ArrowLeft, { size: 20 })}</button>` : ''}
         <h2>Settings</h2>
-        <button class="close-btn" title="Close" @click="${this._close}">×</button>
+        ${this.pageMode ? '' : html`<button class="close-btn" title="Close" aria-label="Close settings" @click="${this._close}">×</button>`}
       </div>
       <div class="body">
         <nav class="sidebar">
@@ -2203,6 +2325,7 @@ export class MuxSettingsSurface extends LitElement {
             class="sidebar-item ${this._section === 'notifications' ? 'active' : ''}"
             @click="${() => { this._setSection('notifications'); }}"
           >Notifications</button>
+          <button class="sidebar-item ${this._section === 'workspaces' ? 'active' : ''}" @click=${() => this._setSection('workspaces')}>Workspaces</button>
           <button
             class="sidebar-item ${this._section === 'ai' ? 'active' : ''}"
             @click="${() => { this._setSection('ai'); }}"
@@ -2215,10 +2338,18 @@ export class MuxSettingsSurface extends LitElement {
             class="sidebar-item ${this._section === 'remotes' ? 'active' : ''}"
             @click="${() => { this._setSection('remotes'); void this._loadRemotes(); }}"
           >Remotes</button>
+          <button class="sidebar-item ${this._section === 'shortcuts' ? 'active' : ''}" @click=${() => this._setSection('shortcuts')}>Keyboard Shortcuts</button>
+          <button class="sidebar-item ${this._section === 'about' ? 'active' : ''}" @click=${() => this._setSection('about')}>About</button>
         </nav>
         <div class="content">
           ${this._section === 'appearance'
             ? this._renderAppearance()
+            : this._section === 'about'
+              ? this._renderAbout()
+            : this._section === 'workspaces'
+              ? this._renderWorkspaces()
+            : this._section === 'shortcuts'
+              ? this._renderShortcuts()
             : this._section === 'notifications'
               ? this._renderNotifications()
               : this._section === 'remotes'

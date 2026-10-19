@@ -110,3 +110,30 @@ export async function applyUpdate(): Promise<{ version: string }> {
   }
   return { version: typeof body['version'] === 'string' ? body['version'] : '' };
 }
+
+let installing: Promise<void> | null = null;
+
+export function installUpdate(previousVersion: string): Promise<void> {
+  installing ??= waitForUpdate(previousVersion).finally(() => { installing = null; });
+  return installing;
+}
+
+async function waitForUpdate(previousVersion: string): Promise<void> {
+  await applyUpdate();
+  for (let attempt = 0; attempt < 60; attempt++) {
+    await new Promise(resolve => window.setTimeout(resolve, 1000));
+    try {
+      const status = await fetchUpdateStatus();
+      if (status.currentVersion && status.currentVersion !== previousVersion) {
+        window.location.reload();
+        return;
+      }
+    } catch (error) {
+      if (error instanceof UpdateEndpointMissingError) {
+        window.location.reload();
+        return;
+      }
+    }
+  }
+  throw new Error('Update did not complete in time. Reconnect to check its status.');
+}
