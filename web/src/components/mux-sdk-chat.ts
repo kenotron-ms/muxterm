@@ -1175,7 +1175,7 @@ export class MuxSDKChat extends LitElement {
     }
   }
   private loadOpenWorkDetails() {
-    if (this.historyTo > this.historyFrom && this.blocks.some(block => (block.kind === 'progress' || block.kind === 'tool' || block.kind === 'thinking') && this.workDisclosureOpen(block.turn))) void this.loadDetails();
+    if (this.historyTo > this.historyFrom && this.blocks.some(block => (block.kind === 'progress' || block.kind === 'tool' || block.kind === 'commentary') && this.workDisclosureOpen(block.turn))) void this.loadDetails();
   }
   private async loadDetails() {
     if (this.detailsLoaded || this.loadingDetails) return;

@@ -318,7 +318,7 @@ func sdkStreamLog(w http.ResponseWriter, path string, cursor int64, end int64) (
 				Type string `json:"type"`
 			}
 			if err := json.Unmarshal(line, &header); err != nil {
-				return cursor, err
+				continue
 			}
 			if header.Type == "thinking.delta" {
 				continue
