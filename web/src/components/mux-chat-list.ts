@@ -335,7 +335,7 @@ export class MuxChatList extends LitElement {
     :host { display:block; color:var(--chrome-text-dim,#9299a5); font:12px/1.35 Inter,system-ui,sans-serif; }
     .heading { padding:9px 6px 5px; font-size:11px; font-weight:650; letter-spacing:0; text-transform:none; }
     .pinned { margin:15px 0 12px; padding:0; border:0; }
-    .pin-row { width:100%; display:flex; align-items:center; min-height:34px; padding:2px 4px; border-radius:6px; color:var(--chrome-text-bright,#d8dce5); }
+    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:34px; padding:2px 4px; border-radius:6px; color:var(--chrome-text-bright,#d8dce5); }
     .pin-row:hover,.pin-row:focus-within { background:var(--chrome-hover); }
     .pin-row[selected] { background:color-mix(in srgb,var(--chrome-accent) 18%,var(--chrome-bar)); }
     .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:30px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:12px Inter,system-ui,sans-serif; cursor:pointer; }

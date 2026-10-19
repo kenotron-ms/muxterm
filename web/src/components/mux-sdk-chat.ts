@@ -193,7 +193,7 @@ export class MuxSDKChat extends LitElement {
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright,#d9def0); font:var(--mux-font-size,16px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
     .topbar { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:9px; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--chrome-border,#343a4c); background:var(--mux-titlebar-bg,var(--chrome-bar)); }
-    .topbar.with-utility { padding-right:calc(var(--utility-width) + 12px); }
+    .topbar.with-utility { width:calc(100% - var(--utility-width)); padding-right:12px; }
     .workspace-crumb { display:inline-flex; align-items:center; gap:7px; min-width:0; max-width:38%; color:var(--chrome-text-dim); font:500 12px Inter,system-ui,sans-serif; white-space:nowrap; }
     .workspace-crumb span { overflow:hidden; text-overflow:ellipsis; }
     .workspace-crumb .lucide-icon { flex:none; }
@@ -484,7 +484,7 @@ export class MuxSDKChat extends LitElement {
     .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--chrome-accent) 25%,transparent); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
-    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { position:absolute; right:0; top:0; bottom:0; height:100%; margin-top:0; box-shadow:-10px 0 30px #0008; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar,.topbar.with-utility { padding-left:10px; padding-right:10px; gap:6px; } }
+    @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { box-sizing:border-box; position:absolute; right:0; top:0; bottom:0; width:100%; height:100%; margin-top:0; box-shadow:-10px 0 30px #0008; } .drawer-resizer { display:none; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar,.topbar.with-utility { width:100%; padding-left:10px; padding-right:10px; gap:6px; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
