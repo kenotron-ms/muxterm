@@ -497,9 +497,7 @@ class SDKChatSession:
         if hooks is None: raise RuntimeError("Amplifier hook registry unavailable")
         cont = HookResult(action="continue")
         async def delta(event, data):
-            if data.get("block_type") == "thinking" and data.get("text"):
-                frame(self.id, "thinking.delta", text=data["text"])
-            elif data.get("text"):
+            if data.get("block_type") != "thinking" and data.get("text"):
                 if not self.first_token_seen and self.turn_started is not None:
                     self.first_token_seen = True
                     timing("sdk.first_token", self.turn_started)

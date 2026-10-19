@@ -392,6 +392,14 @@ export class MuxApp extends LitElement {
       min-height: 0;
     }
 
+    .settings-page {
+      position: fixed;
+      inset: 0;
+      z-index: 3000;
+      display: flex;
+      background: var(--chrome-body);
+    }
+
     /* shortcuts / about panels rendered inline */
     .info-panel {
       padding: 24px 24px 32px;
@@ -704,7 +712,7 @@ export class MuxApp extends LitElement {
   private _chatTerminalPending: { chatId: string; clientRef: string; workspaceId?: string } | null = null;
 
   @state()
-  private _overlayPanel: 'settings' | 'shortcuts' | 'about' | 'connect' | null = null;
+  private _overlayPanel: 'settings' | 'connect' | null = null;
   private _settingsOpenSection: SettingsSection | null = null;
 
   @state()
@@ -838,10 +846,9 @@ export class MuxApp extends LitElement {
    *  _destroySplit() (force a synthetic mouseup before teardown). */
   private _dragging = false;
 
-  /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
-   *  selectors like document.querySelector('[data-launcher-open]') work. */
-  private _onOpenLauncherAttr = (): void => {
-    this.setAttribute('data-launcher-open', '');
+  private _onOpenSettings = (): void => {
+    this._settingsOpenSection = null;
+    this._overlayPanel = 'settings';
   };
 
   /** Handles window resize; updates _layoutMode when crossing the 768px threshold. */
@@ -910,7 +917,7 @@ export class MuxApp extends LitElement {
     // deliberately never enters the config pipeline.
     void fetchAIStatus().then((s) => store.setAIStatus(s));
     // Track launcher-open state on the host element for E2E assertions.
-    window.addEventListener('open-launcher', this._onOpenLauncherAttr);
+    window.addEventListener('open-launcher', this._onOpenSettings);
     // Layout-command relay: window CustomEvent from ws.ts → mux-dock routing.
     window.addEventListener('layout-command', this._onLayoutCommand);
     // One host-level policy boundary catches composed close events from the
@@ -1290,7 +1297,7 @@ export class MuxApp extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
+    window.removeEventListener('open-launcher', this._onOpenSettings);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
     this.removeEventListener('pane-close', this._onPaneCloseIntent);
@@ -1500,15 +1507,30 @@ export class MuxApp extends LitElement {
     this._split = null;
   }
 
+  private _renderSettings(pageMode = false) {
+    return html`<mux-settings-surface
+      .config=${store.config}
+      .aiStatus=${store.aiStatus}
+      .openSection=${this._settingsOpenSection}
+      .pageMode=${pageMode}
+      serverAddr=${window.location.host}
+      @close=${this._closeOverlayPanel}
+      @launcher-action=${this._onLauncherAction}
+      @config-change=${this._onConfigChange}
+      @ai-status-change=${this._onAIStatusChange}
+    ></mux-settings-surface>`;
+  }
+
   render() {
     // Exclude provisional overlay panes (negative IDs) from layout decisions.
     // They have no terminal and should not render as blank tiles.
     const panes = store.panes.filter((p) => p.paneId >= 0);
     const isWide = this._layoutMode === 'wide';
+    const settingsPage = !isWide && this._overlayPanel === 'settings';
     const selectedSDKChat = this._sdkChatId && !UTILITY_TITLES.has(this._sdkChatId) ? this._sdkChatId : '';
 
     return html`
-      ${!isWide ? html`<mux-title-bar
+      ${!isWide && !settingsPage ? html`<mux-title-bar
         .drawerOpen="${this._drawerOpen}"
         .chatTitle="${this._sdkChatId ? UTILITY_TITLES.get(this._sdkChatId) || 'Chat' : ''}"
         @launcher-action="${this._onLauncherAction}"
@@ -1517,7 +1539,7 @@ export class MuxApp extends LitElement {
         @drawer-toggle="${this._onDrawerToggle}"
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
-      <div class="content-area">
+      <div class="content-area" ?inert=${settingsPage}>
         ${isWide ? html`
           <mux-sidebar
             .newChatActive="${this._sdkChatId === 'new'}"
@@ -1687,7 +1709,7 @@ export class MuxApp extends LitElement {
           </div>
         </div>
       ` : ''}
-      ${this._overlayPanel ? html`
+      ${settingsPage ? html`<section class="settings-page" aria-label="Settings">${this._renderSettings(true)}</section>` : this._overlayPanel ? html`
         <div class="overlay-backdrop" @click="${this._closeOverlayPanel}">
           <div
             class="overlay-dialog${this._overlayPanel === 'connect' ? ' cdialog' : ''}"
@@ -1698,54 +1720,7 @@ export class MuxApp extends LitElement {
                 <mux-connect-dialog
                   @close="${this._closeOverlayPanel}"
                 ></mux-connect-dialog>
-              ` : this._overlayPanel === 'settings' ? html`
-                <mux-settings-surface
-                  .config="${store.config}"
-                  .aiStatus="${store.aiStatus}"
-                  .openSection="${this._settingsOpenSection}"
-                  serverAddr="${window.location.host}"
-                  @close="${this._closeOverlayPanel}"
-                  @config-change="${this._onConfigChange}"
-                  @ai-status-change="${this._onAIStatusChange}"
-                ></mux-settings-surface>
-              ` : this._overlayPanel === 'shortcuts' ? html`
-                <div class="info-panel">
-                  <h2>Keyboard Shortcuts
-                    <button class="close-btn" @click="${this._closeOverlayPanel}">×</button>
-                  </h2>
-                  <div class="shortcut-grid">
-                    <span class="sc-label">New pane (any mode)</span>
-                    <span class="sc-key">Cmd+Ctrl+T</span>
-                    <span class="sc-label">Close pane</span>
-                    <span class="sc-key">Cmd+W / Ctrl+W</span>
-                    <span class="sc-label">Cycle tabs (forward)</span>
-                    <span class="sc-key">Ctrl+Tab</span>
-                    <span class="sc-label">Cycle tabs (backward)</span>
-                    <span class="sc-key">Ctrl+Shift+Tab</span>
-                    <span class="sc-label">Next session</span>
-                    <span class="sc-key">${store.config.keys.nextSession}</span>
-                    <span class="sc-label">Split pane</span>
-                    <span class="sc-key">${store.config.keys.split}</span>
-                    <span class="sc-label">Open launcher</span>
-                    <span class="sc-key">${store.config.keys.openLauncher}</span>
-                    <span class="sc-label">Focus driver</span>
-                    <span class="sc-key">${store.config.keys.focusDriver}</span>
-                  </div>
-                </div>
-              ` : html`
-                <div class="info-panel">
-                  <h2>About muxterm
-                    <button class="close-btn" @click="${this._closeOverlayPanel}">×</button>
-                  </h2>
-                  <div class="about-body">
-                    <p><strong>muxterm</strong> is a browser-based terminal multiplexer. It
-                    connects to a <code>sessiond</code> daemon over WebSocket and renders
-                    panes using xterm.js inside a dockview layout.</p>
-                    <p>Config file: <strong>~/.config/muxterm/config.toml</strong></p>
-                  </div>
-                  <div class="about-sha">build ${__GIT_SHA__}</div>
-                </div>
-              `}
+              ` : this._overlayPanel === 'settings' ? this._renderSettings() : ''}
             </div>
           </div>
         </div>
@@ -2438,12 +2413,14 @@ export class MuxApp extends LitElement {
         break;
       case 'shortcuts':
       case 'about':
-        this._overlayPanel = action;
+        this._settingsOpenSection = action;
+        this._overlayPanel = 'settings';
         break;
       case 'reconnect':
         window.location.reload();
         break;
       case 'new-workspace':
+        this._overlayPanel = null;
         this._onOpenCreateModal();
         break;
     }
