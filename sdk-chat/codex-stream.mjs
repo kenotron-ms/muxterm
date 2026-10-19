@@ -66,7 +66,7 @@ export class CodexStream {
     if (githubEnabled) for (const key of ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
       if (process.env[key]) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${JSON.stringify(process.env[key])}`);
     }
-    this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="none"', ...mcpConfig], {
+    this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="none"', '-c', 'tools.update_plan.enabled=true', ...mcpConfig], {
       cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.stderr = '';

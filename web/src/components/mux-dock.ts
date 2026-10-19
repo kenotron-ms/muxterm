@@ -1292,6 +1292,8 @@ export class MuxDock extends LitElement {
       });
     });
 
+    this._scheduleWorkspaceActions();
+
   }
 
   override disconnectedCallback(): void {

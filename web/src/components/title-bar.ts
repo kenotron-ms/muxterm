@@ -7,7 +7,6 @@ import './mic-button.js';
 import { icon } from '../lib/icons.js';
 import { Menu, Settings } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
-import { instanceLabel } from '../lib/instance-identity.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
 

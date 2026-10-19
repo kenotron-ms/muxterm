@@ -1360,6 +1360,7 @@ export class MuxSDKChat extends LitElement {
     } else if (event.type === 'turn.completed') {
       this.busy = false;
       this.turnFinished.set(this.currentTurn, eventTime);
+      this.workCollapsedWhileWorking.delete(this.currentTurn);
       for (const b of blocks) if (b.kind === 'assistant' || b.kind === 'commentary') b.done = true;
       const anchor = blocks[this.turnStart]?.key;
       if (anchor !== undefined) for (const id of event.inputIds || []) this.completedInputAnchors.set(id, anchor);
@@ -1822,7 +1823,7 @@ export class MuxSDKChat extends LitElement {
     const latestInput = new Map<number, number>();
     for (const block of this.blocks) {
       if (block.kind === 'user' || block.kind === 'chat-message') latestInput.set(block.turn, block.key);
-      if (block.kind === 'thinking' || block.kind === 'tool' || block.kind === 'progress') {
+      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress') {
         const items = work.get(block.turn) || [];
         items.push(block);
         work.set(block.turn, items);
@@ -1831,7 +1832,7 @@ export class MuxSDKChat extends LitElement {
     const shown = new Set<number>();
     const rows: TranscriptRow[] = [];
     for (const block of this.blocks) {
-      if (block.kind === 'thinking' || block.kind === 'tool' || block.kind === 'progress') {
+      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress') {
         if (shown.has(block.turn) || latestInput.has(block.turn)) continue;
         shown.add(block.turn);
         rows.push({ key:`work-${block.turn}`, block, work:work.get(block.turn) });
