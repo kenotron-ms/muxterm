@@ -22,14 +22,15 @@ async function perform(action) {
 }
 
 function render(status) {
+  element('connection-status').textContent = status.paired ? 'Connected to Muxterm' : 'Connect to Muxterm';
   element('pair-panel').hidden = status.paired;
   element('connected-panel').hidden = !status.paired;
   element('access').checked = Boolean(status.control);
   if (!status.paired) return;
   element('connection-name').textContent = status.name;
   element('instance').textContent = new URL(status.base).host;
-  element('control-status').textContent = status.control ? 'Active · no time limit' : 'Paused';
-  element('scope').textContent = status.control ? status.control.managed ? `${status.tabCount} managed ${status.tabCount === 1 ? 'tab' : 'tabs'} · only this window is controlled` : `This tab only · ${status.control.origin}` : 'Turn on to open a dedicated browser window for your agents.';
+  element('control-status').textContent = status.control ? 'Connected' : 'Paused';
+  element('scope').textContent = status.control ? status.control.managed ? `${status.tabCount} ${status.tabCount === 1 ? 'tab' : 'tabs'} · only this window is shared` : `This tab only · ${status.control.origin}` : 'Turn on to share this browser window with your agents.';
   element('activity').textContent = status.control ? status.activity || 'Ready for your agents.' : 'Pairing stays connected while access is paused.';
 }
 

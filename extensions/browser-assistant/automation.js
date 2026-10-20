@@ -79,11 +79,7 @@ export function createAutomation(api, savedPair) {
     if (!pair) throw new Error('Pair with muxterm first.');
     await stop(true, false);
     assertGeneration(startingGeneration);
-    if (managed) {
-      const window = await chrome.windows.create({url: `${pair.base}/api/browser-assistant/workspace`, focused: true});
-      tabId = window.tabs[0].id;
-    }
-    const tab = managed ? await loadedTab(Number(tabId)) : await chrome.tabs.get(Number(tabId));
+    const tab = await chrome.tabs.get(Number(tabId));
     if (!tab.url || !/^https?:/.test(tab.url) || tab.incognito) throw new Error('Choose a normal HTTP or HTTPS tab.');
     const origin = new URL(tab.url).origin;
     if (generation !== startingGeneration) throw new Error('Browser access was paused.');

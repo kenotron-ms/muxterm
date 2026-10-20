@@ -34,6 +34,7 @@ func browserAssistantRequest(args map[string]any, method, path string, payload a
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Muxterm-Browser-Request", "1")
+	request.Header.Set("X-Muxterm-Agent", "1")
 	if token, err := sessiond.ServerToken(); err == nil && token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
