@@ -22,8 +22,11 @@ export class MuxSkills extends LitElement {
   static override styles = css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
     button,input { font:inherit; } button { cursor:pointer; }
-    .top { padding:20px max(28px,var(--wco-right-inset,0px)) 20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
-    @media (display-mode: window-controls-overlay) { .top { -webkit-app-region:drag; background:var(--chrome-body); } }
+    .titlebar { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:7px; min-width:0; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); font-size:13px; }
+    .titlebar .section-name,.titlebar .divider { color:var(--chrome-text-dim); }
+    .titlebar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    .top { padding:20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-body); }
+    @media (display-mode: window-controls-overlay) { .titlebar { -webkit-app-region:drag; } }
     .eyebrow { color:var(--chrome-accent); font-size:10px; letter-spacing:.13em; text-transform:uppercase; font-weight:700; }
     h1 { margin:1px 0; font-size:22px; letter-spacing:-.02em; }
     .subtitle,.hint { color:var(--chrome-text-dim); font-size:12px; }
@@ -45,6 +48,7 @@ export class MuxSkills extends LitElement {
     .error { color:var(--chrome-danger); margin:0 0 12px; }
     .notice { color:var(--mux-ok); margin:0 0 12px; }
     .footnote { max-width:900px; padding-top:10px; border-top:1px solid var(--chrome-border); color:var(--chrome-text-dim); font-size:11px; }
+    @media(max-width:767.98px) { .titlebar { display:none; } }
     @media(max-width:600px) { .top { padding:16px; } .content { padding:17px 16px; } .row { align-items:flex-start; flex-direction:column; gap:8px; } }
   `;
 
@@ -124,6 +128,7 @@ export class MuxSkills extends LitElement {
     const installedSlugs = new Set(this.installed.map(skill => skill.name));
     const installedIDs = new Set(this.installed.filter(skill => skill.source).map(skill => `${skill.source}/${skill.name}`));
     return html`
+      <header class="titlebar"><span class="section-name">Tools</span><span class="divider" aria-hidden="true">›</span><strong>Skills</strong></header>
       <div class="top"><div class="eyebrow">Extend your chats</div><h1>Skills</h1><div class="subtitle">Find and install shared skills for your chat harnesses.</div></div>
       <div class="content">
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}

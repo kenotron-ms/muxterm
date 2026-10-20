@@ -39,8 +39,11 @@ export class MuxConnections extends LitElement {
   static override styles=css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
     * { box-sizing:border-box; } button,input { font:inherit; } button { cursor:pointer; }
-    header { padding:20px max(28px,var(--wco-right-inset,0px)) 20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
-    @media (display-mode: window-controls-overlay) { header { -webkit-app-region:drag; background:var(--chrome-body); } }
+    .titlebar { height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:7px; min-width:0; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); font-size:13px; }
+    .titlebar .section-name,.titlebar .divider { color:var(--chrome-text-dim); }
+    .titlebar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    .top { padding:20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-body); }
+    @media (display-mode: window-controls-overlay) { .titlebar { -webkit-app-region:drag; } }
     .eyebrow { color:var(--chrome-accent); font-size:10px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; }
     h1 { margin:2px 0; font-size:22px; letter-spacing:-.02em; } p { margin:0; color:var(--chrome-text-dim); }
     .layout { min-height:0; display:grid; grid-template-columns:minmax(220px,300px) minmax(0,1fr); flex:1; }
@@ -68,7 +71,8 @@ export class MuxConnections extends LitElement {
     .error { margin:15px 0; padding:9px 11px; border:1px solid var(--chrome-danger); border-radius:7px; color:var(--chrome-danger); }
     .note { margin-top:11px; font-size:11px; } code { overflow-wrap:anywhere; }
     .device-code { display:inline-block; margin-top:10px; padding:7px 12px; border:1px solid var(--chrome-border); border-radius:7px; background:var(--chrome-body); color:var(--chrome-text-bright); font:700 22px ui-monospace,monospace; letter-spacing:.12em; user-select:all; }
-    @media(max-width:700px) { header { padding:14px 16px; } .layout { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); } .catalog { display:flex; overflow:auto; border-right:0; border-bottom:1px solid var(--chrome-border); padding:9px; gap:4px; } .group { display:none; } .service { width:auto; min-width:150px; } main { padding:20px 16px 40px; } }
+    @media(max-width:767.98px) { .titlebar { display:none; } }
+    @media(max-width:700px) { .top { padding:14px 16px; } .layout { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); } .catalog { display:flex; overflow:auto; border-right:0; border-bottom:1px solid var(--chrome-border); padding:9px; gap:4px; } .group { display:none; } .service { width:auto; min-width:150px; } main { padding:20px 16px 40px; } }
   `;
 
   override connectedCallback() {
@@ -301,7 +305,8 @@ If I already have a connection, check its status first. Do not remove or replace
   override render() {
     const groups=['Developer','Microsoft personal','Google Workspace'];
     const service=this.data?.catalog.find(item=>item.id===this.selected);
-    return html`<header><div class="eyebrow">Services</div><h1>Connections</h1><p>Bring your services into chats.</p></header>
+    return html`<header class="titlebar"><span class="section-name">Services</span><span class="divider" aria-hidden="true">›</span><strong>Connections</strong></header>
+      <div class="top"><div class="eyebrow">Services</div><h1>Connections</h1><p>Bring your services into chats.</p></div>
       <div class="layout"><nav class="catalog" aria-label="Connection catalog"><div class="group">Your services</div>
         <button class="service ${this.selected==='browser-assistant'?'active':''}" aria-current=${this.selected==='browser-assistant'?'page':'false'} @click=${()=>this.selectService('browser-assistant')}><span><strong>Browser Assistant</strong><small>Pair your local browser</small></span></button>
         <button class="service ${this.selected==='remote'?'active':''}" aria-current=${this.selected==='remote'?'page':'false'} @click=${()=>this.selectService('remote')}><span><strong>Remote services</strong><small>Add a public service</small></span><i class="dot ${this.remotes?.items.some(item=>!item.provider&&item.state==='needs-attention')?'attention':this.remotes?.items.some(item=>!item.provider&&item.state==='ready')?'ready':''}"></i></button>${groups.map(group=>html`<div class="group">${group}</div>${this.data?.catalog.filter(item=>item.group===group).map(item=>html`<button class="service ${item.id===this.selected?'active':''}" aria-current=${item.id===this.selected?'page':'false'} @click=${()=>this.selectService(item.id)}><span><strong>${item.name}</strong><small>${item.description}</small></span><i class="dot ${this.serviceDotClass(item)}"></i></button>`)}`)}</nav>
