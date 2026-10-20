@@ -2,7 +2,7 @@
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Muxterm Browser Assistant</title><link rel="stylesheet" href="popup.css"></head>
 <body><main>
-  <header><span class="logo">M</span><div><h1>Browser Assistant</h1><p>Muxterm · your browser, connected</p></div></header>
+  <header><span class="logo">M</span><div><h1>Browser Assistant</h1><p id="connection-status">Connect to Muxterm</p></div></header>
   <p id="error" role="alert" hidden></p>
   <section id="pair-panel">
     <h2>Connect your browser</h2><p>In Muxterm, choose Connections → Browser Assistant → Connect browser. Then open this extension.</p>
@@ -17,12 +17,12 @@
   <section id="connected-panel" hidden>
     <div class="connection"><span class="dot"></span><div><strong id="connection-name"></strong><p id="instance"></p></div></div>
     <div class="access"><div><h2>Browser access</h2><p id="control-status" aria-live="polite">Paused</p></div><label class="switch"><input id="access" type="checkbox" role="switch" aria-label="Browser access"><span></span></label></div>
-    <p id="scope">Turn on to open a dedicated browser window for your agents.</p>
+    <p id="scope">Turn on to share this browser window with your agents.</p>
     <button id="use-tab">Control this tab</button>
     <p id="activity" class="activity" aria-live="polite"></p>
     <details><summary>Settings & permissions</summary>
       <p>Access stays on until you pause it. Browser restarts leave it paused. Pairing stays connected.</p>
-      <p>Agents on this Muxterm account can read, screenshot, navigate, click and type in the dedicated window, including signed-in sites. They can submit forms and make changes. Other windows are outside their control.</p>
+      <p>Agents on this Muxterm account can read, screenshot, navigate, click and type in this window, including signed-in sites. They can submit forms and make changes. Other windows are outside their control.</p>
       <p>This window shares your Chrome profile’s sign-ins and site permissions. For stronger separation, use a separate Chrome profile.</p>
       <p>“Control this tab” limits access to its current site. Chrome shows its debugging banner while control is active.</p>
       <div class="actions"><button id="disconnect">Disconnect</button><button id="forget">Forget locally</button></div>

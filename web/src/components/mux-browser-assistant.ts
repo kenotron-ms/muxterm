@@ -54,7 +54,7 @@ export class MuxBrowserAssistant extends LitElement {
   }
   override render() {
     return html`<h2>Browser Assistant</h2>
-      <p>Connect your real browser, then turn on Browser access in the extension. Agents get a dedicated browser window for navigation, interaction, and verification. They cannot directly control other windows. The dedicated window shares your Chrome profile’s sign-ins and site permissions; use a separate profile for stronger separation. Pairing alone grants no control.</p>
+      <p>Connect your browser, then turn on Browser access in the extension. Agents can navigate and interact with the current browser window. Other windows stay outside their control. This window shares your Chrome profile’s sign-ins and site permissions; use a separate profile for stronger separation. Pairing alone grants no control.</p>
       <h3>Load the development extension</h3>
       <p><a href="https://github.com/kenotron-ms/muxterm/releases/latest/download/muxterm-browser-assistant-dev.zip" target="_blank" rel="noopener noreferrer">Download the development extension</a> from GitHub Releases and extract it. On your laptop, open <code>chrome://extensions</code>, enable Developer mode, choose Load unpacked, and select the extracted <code>browser-assistant</code> folder. Pin Browser Assistant to the toolbar.</p>
       <p>Use HTTPS for remote pairing. LAN HTTP requires an explicit development opt-in. Access has no timer; browser restarts pause it. This prototype’s pairings do not survive a Muxterm server restart.</p>
@@ -69,13 +69,13 @@ export class MuxBrowserAssistant extends LitElement {
       <h3>Paired browsers</h3>
       ${this.items.length ? this.items.map(item => html`<div class="connection"><strong>${item.name}</strong>
         <p>Last contact ${new Date(item.lastSeen).toLocaleTimeString()}</p>
-        <p>${item.control ? item.control.managed ? 'Browser access ON · dedicated window' : `Browser access ON · ${item.control.origin}` : 'Browser access paused — turn it on in your extension.'}</p>
+        <p>${item.control ? item.control.managed ? 'Connected · this browser window is shared' : `Connected · ${item.control.origin}` : 'Connected · Browser access paused'}</p>
         <div class="actions"><button ?disabled=${this.busy || !item.control} @click=${() => void this.run(async () => { this.result = await this.request(`/connections/${item.id}/commands`, 'POST', {reason: 'Verify real browser automation from Connections', command: {action: 'inspect'}}); })}>Inspect controlled tab</button>
         <button ?disabled=${this.busy || !item.control} @click=${() => void this.run(async () => { await this.request(`/connections/${item.id}/control`, 'DELETE'); })}>Stop control</button>
         <button ?disabled=${this.busy} @click=${() => void this.run(async () => { await this.request(`/connections/${item.id}`, 'DELETE'); this.result = undefined; })}>Revoke browser</button></div></div>`) : html`<p>No browsers paired. Create a code and enter it in your local extension.</p>`}
       ${this.result ? html`<h3>Latest request: ${this.result.status}</h3>
         ${this.result.snapshot || this.result.result ? html`<pre>${JSON.stringify(this.result.snapshot || this.result.result, null, 2)}</pre>` : nothing}
         ${this.result.error ? html`<p class="error">${this.result.error}</p>` : nothing}` : nothing}
-      <p>Agent tools: <code>browser_action</code>, <code>get_browser_action</code>, and <code>stop_browser_control</code>. Agents can open and switch tabs inside the dedicated window. “Control this tab” limits navigation to that site. All agents on the current shared-owner instance share access. No arbitrary agent scripts are accepted.</p>`;
+      <p>Agent tools: <code>browser_action</code>, <code>get_browser_action</code>, and <code>stop_browser_control</code>. Agents can open and switch tabs inside the shared window. “Control this tab” limits navigation to that site. All agents on the current shared-owner instance share access. No arbitrary agent scripts are accepted.</p>`;
   }
 }

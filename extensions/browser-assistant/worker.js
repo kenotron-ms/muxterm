@@ -70,7 +70,11 @@ async function checkedGrant() {
 }
 
 async function handle(message) {
-  if (message.action === 'control') { await automation.start(message.tabId, message.managed === true); return poll(); }
+  if (message.action === 'control') {
+    const tabs = message.tabId ? [] : await chrome.tabs.query({active: true, currentWindow: true});
+    await automation.start(message.tabId ?? tabs[0]?.id, message.managed === true);
+    return poll();
+  }
   if (message.action === 'current-tab') {
     const tabs = await chrome.tabs.query({active: true, currentWindow: true});
     return tabs.find(tab => tab.url && /^https?:/.test(tab.url) && !tab.incognito) || null;

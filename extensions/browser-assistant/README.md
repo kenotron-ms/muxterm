@@ -1,4 +1,4 @@
-# Muxterm Browser Assistant — development extension 0.3.1
+# Muxterm Browser Assistant — development extension 0.3.2
 
 Real browser automation across the paired bridge, with one **Browser access** toggle.
 
@@ -8,13 +8,13 @@ Real browser automation across the paired bridge, with one **Browser access** to
 2. Visit `chrome://extensions`, enable Developer mode, and **Load unpacked** the extracted `browser-assistant` folder. Pin it to the toolbar.
 3. In Muxterm, open **Connections → Browser Assistant → Connect browser**.
 4. While that Muxterm tab is active, click the extension’s toolbar icon and choose **Connect**. Confirm the displayed server. No address or code to paste. Manual pairing remains available under its disclosure.
-5. Turn on **Browser access**. A dedicated normal Chrome window opens for agent work. Agents can navigate across HTTP/HTTPS sites and open/switch tabs within that window. Other windows remain outside their automation scope.
+5. Turn on **Browser access**. The current Chrome window is shared for agent work. Agents can navigate across HTTP/HTTPS sites and open/switch tabs within that window. Other windows remain outside their automation scope.
 
-For an update, replace the files in the existing unpacked folder, then click **Reload** on its Chrome extensions card. Confirm version 0.3.1. Reload pauses active control; open the popup and enable access again if desired.
+For an update, replace the files in the existing unpacked folder, then click **Reload** on its Chrome extensions card. Confirm version 0.3.2. Reload pauses active control; open the popup and enable access again if desired.
 
 ## Control and verification
 
-- Access has **no time limit**. Toggle off pauses immediately and retains pairing. Turning on again creates a fresh window; old windows are not automatically reauthorized.
+- Access has **no time limit**. Toggle off pauses immediately and retains pairing. Turning on again shares the window from which you open the extension.
 - Browser restarts leave access paused. The server currently keeps pairings in memory: a Muxterm server restart requires re-pairing.
 - **Control this tab** adopts the tab from which the popup was opened. It remains restricted to that tab’s current origin; leaving the site pauses control.
 - Chrome’s debugger banner is expected while access is active. It cannot be hidden by this extension.
@@ -26,7 +26,7 @@ For an update, replace the files in the existing unpacked folder, then click **R
 
 Pairing alone does not expose page contents. Enabling access authorizes agents on the paired server account to use signed-in sessions, read visible contents, screenshot, type, and submit forms. Those actions can make irreversible changes. The current single-owner server shares authorization across its agents; this is not yet per-agent consent or full multi-user isolation.
 
-A dedicated window is a control boundary, **not a separate browser profile or cookie sandbox**. It shares this Chrome profile’s sign-ins, cookies, and site permissions. Agents can open signed-in sites inside their window, even if you also have those sites open elsewhere. Use a separate Chrome profile if you need session/data separation.
+The shared window is a control boundary, **not a separate browser profile or cookie sandbox**. It shares this Chrome profile’s sign-ins, cookies, and site permissions. Agents can open signed-in sites inside the shared window. Use a separate Chrome profile if you need session/data separation.
 
 The extension requests access to the exact paired server hostname. HTTPS is recommended. Non-loopback HTTP requires explicit acknowledgment because pairing credentials and browser data can be intercepted. Do not expose a `--no-auth` instance to untrusted networks.
 
