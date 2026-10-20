@@ -1806,7 +1806,7 @@ export class MuxApp extends LitElement {
             ></close-confirmation-modal>
           `
         : ''}
-      <div class="overlay ${this._connectionStatus === 'connected' ? 'hidden' : ''}">
+      <div class="overlay ${this._connectionStatus === 'connected' || this._showReconnectOverlay ? 'hidden' : ''}">
         Connecting to muxterm...
       </div>
 

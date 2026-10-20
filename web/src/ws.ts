@@ -422,7 +422,7 @@ export class MuxSocket {
    * reset and an attempt fires immediately. Nobody should ever watch a
    * countdown they cannot see and did not cause.
    *
-   * `offline` is listened for too, but only to repaint: it starts nothing.
+   * `offline` invalidates the socket even before TCP notices the outage.
    *
    * These live on the socket rather than in app.ts because the socket is what
    * owns the timer being cancelled, and because destroy()/disconnect() then
@@ -440,7 +440,14 @@ export class MuxSocket {
     };
     const onFocus = (): void => this._wake();
     const onOnline = (): void => this._wake();
-    const onOffline = (): void => this._emitState();
+    const onOffline = (): void => {
+      if (this._intentionalClose) return;
+      this._discard(this._ws);
+      this._ws = null;
+      this._clearTimer();
+      this._connectionLost();
+      this._emitState();
+    };
 
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('focus', onFocus);
@@ -473,6 +480,7 @@ export class MuxSocket {
    */
   private _wake(): void {
     if (this._intentionalClose) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     const state = this._ws?.readyState;
     if (state === WebSocket.OPEN) return;
 
@@ -855,16 +863,16 @@ export class MuxSocket {
   }
 
   get connected(): boolean {
-    return this._ws?.readyState === WebSocket.OPEN;
+    return this.connectionState.phase === 'connected';
   }
 
   /** What the connection is doing right now. See ReconnectState. */
   get connectionState(): ReconnectState {
     const state = this._ws?.readyState;
-    if (state === WebSocket.OPEN) return { phase: 'connected' };
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       return { phase: 'offline' };
     }
+    if (state === WebSocket.OPEN) return { phase: 'connected' };
     if (state === WebSocket.CONNECTING) return { phase: 'retrying' };
     if (this._nextAttemptAt > 0) {
       return {
@@ -1117,6 +1125,10 @@ export class MuxSocket {
     // are torn down here rather than at each call site, so no future caller of
     // _open() can reintroduce a second ladder by forgetting.
     this._clearTimer();
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      this._emitState();
+      return;
+    }
     this._discard(this._ws);
     this._lastAttemptAt = Date.now();
 
@@ -1196,28 +1208,32 @@ export class MuxSocket {
       // A socket this instance already walked away from. Its close is not our
       // outage and must not schedule a second ladder.
       if (this._ws !== ws) return;
-      // Intent does not survive the connection that carried it. Leaving the
-      // last attach target set would let a reader during the reconnect window
-      // believe the connection is still headed somewhere it can no longer go.
-      this._lastAttachTarget = null;
-      this._rejectPendingCloseRequests(
-        new Error('The close outcome could not be confirmed because the connection was lost.'),
-      );
-      this._rejectPendingWorkspaceScreens(new Error('The workspace preview connection was lost.'));
-      this._rejectPendingFinishedClears(new Error('The Fleet connection was lost.'));
-      if (this._intentionalClose) {
-        return;
-      }
-      // First close of this outage starts its clock; later ones must not
-      // restart it, or the ladder never reaches the long-outage cap.
-      if (this._outageStartedAt === 0) this._outageStartedAt = Date.now();
-      this.onDisconnect?.();
-      this._scheduleReconnect();
+      this._connectionLost();
+      if (!this._intentionalClose) this._scheduleReconnect();
     };
 
     ws.onerror = () => {
       // no-op — onclose fires after onerror
     };
+  }
+
+  private _connectionLost(): void {
+    // Intent does not survive the connection that carried it. Leaving the
+    // last attach target set would let a reader during the reconnect window
+    // believe the connection is still headed somewhere it can no longer go.
+    this._lastAttachTarget = null;
+    this._rejectPendingCloseRequests(
+      new Error('The close outcome could not be confirmed because the connection was lost.'),
+    );
+    this._rejectPendingWorkspaceScreens(new Error('The workspace preview connection was lost.'));
+    this._rejectPendingFinishedClears(new Error('The Fleet connection was lost.'));
+    if (this._intentionalClose) {
+      return;
+    }
+    // First close of this outage starts its clock; later ones must not
+    // restart it, or the ladder never reaches the long-outage cap.
+    if (this._outageStartedAt === 0) this._outageStartedAt = Date.now();
+    this.onDisconnect?.();
   }
 }
 
