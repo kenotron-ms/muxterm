@@ -51,10 +51,12 @@ export class MuxScheduledJobs extends LitElement {
   static override styles = css`
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
     button, input, select, textarea { font:inherit; } button { cursor:pointer; }
-    .top { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:20px max(28px,var(--wco-right-inset,0px)) 20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-bar); }
+    .titlebar { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:7px; min-width:0; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); font-size:13px; }
+    .titlebar .section-name,.titlebar .divider { color:var(--chrome-text-dim); }
+    .titlebar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    .top { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-body); }
     @media (display-mode: window-controls-overlay) {
-      .top { -webkit-app-region:drag; background:var(--chrome-body); }
-      .top button, .top input { -webkit-app-region:no-drag; }
+      .titlebar { -webkit-app-region:drag; }
     }
     .eyebrow { color:var(--chrome-accent); font-size:10px; letter-spacing:.13em; text-transform:uppercase; font-weight:700; }
     h1 { margin:1px 0 1px; font-size:22px; letter-spacing:-.02em; } .subtitle { color:var(--chrome-text-dim); font-size:12px; }
@@ -97,6 +99,7 @@ export class MuxScheduledJobs extends LitElement {
     .editor textarea { height:125px; resize:vertical; line-height:1.5; } .editor .hint { color:var(--chrome-text-dim); font-size:11px; margin-top:4px; }
     .editor .inline { display:grid; grid-template-columns:1fr 1fr; gap:12px; } .editor .check { display:flex; align-items:center; gap:8px; } .editor .check input { width:auto; margin:0; }
     .editor .actions { display:flex; justify-content:flex-end; gap:8px; margin-top:21px; } .editor .actions button:last-child { border-color:var(--chrome-accent); background:var(--chrome-accent); color:var(--chrome-body); font-weight:650; }
+    @media(max-width:767.98px) { .titlebar { display:none; } }
     @media(max-width:700px) { .top { padding:14px; } .content { padding:15px; } .table-wrap { border:0; background:transparent; } table,thead,tbody,tr,td { display:block; min-width:0; } thead { display:none; } tr { margin-bottom:11px; border:1px solid var(--chrome-border); border-radius:9px; background:var(--chrome-bar); } td { padding:7px 12px; border:0; } .history { grid-template-columns:1fr; max-height:none; } .run-list { max-height:210px; border-right:0; border-bottom:1px solid var(--chrome-border); } .editor .inline { grid-template-columns:1fr; } }
   `;
 
@@ -189,7 +192,8 @@ export class MuxScheduledJobs extends LitElement {
     const active=this.jobs.filter(job=>job.enabled).length;
     const attention=this.jobs.filter(job=>this.status(job)==='Needs attention').length;
     const current=this.jobs.find(job=>job.id===this.selectedJob);
-    return html`<header class="top"><div><div class="eyebrow">Automation</div><h1>Scheduled jobs</h1><div class="subtitle">Repeatable work in persistent conversations</div></div><button class="primary" @click=${()=>void this.openEditorForChat()}>＋ New job</button></header>
+    return html`<header class="titlebar"><span class="section-name">Automation</span><span class="divider" aria-hidden="true">›</span><strong>Scheduled jobs</strong></header>
+      <div class="top"><div><div class="eyebrow">Automation</div><h1>Scheduled jobs</h1><div class="subtitle">Repeatable work in persistent conversations</div></div><button class="primary" @click=${()=>void this.openEditorForChat()}>＋ New job</button></div>
       <main class="content">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}
       <div class="summary"><span><strong>${this.jobs.length}</strong><small>Total jobs</small></span><span><strong>${active}</strong><small>Active schedules</small></span><span><strong>${attention}</strong><small>Need attention</small></span></div>
       <div class="toolbar"><input type="search" aria-label="Search scheduled jobs" placeholder="Search jobs" .value=${this.query} @input=${(event:InputEvent)=>{this.query=(event.target as HTMLInputElement).value;}}><select aria-label="Filter jobs by status" .value=${this.statusFilter} @change=${(event:Event)=>{this.statusFilter=(event.target as HTMLSelectElement).value;}}><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="running">Running</option><option value="needs-attention">Needs attention</option></select></div>
