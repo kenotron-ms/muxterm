@@ -410,7 +410,7 @@ export class MuxSDKChat extends LitElement {
     .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:var(--chrome-bar); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:var(--mux-font-size,16px)/1.5 ui-monospace,monospace; }
     .error { color:var(--chrome-danger); }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
-    .composer-wrap { padding:0 19px 18px; }
+    .composer-wrap { flex:none; max-height:50%; overflow-y:auto; padding:0 19px 18px; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 11px; }
     .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
     .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:6px; background:var(--chrome-body); }
@@ -451,11 +451,11 @@ export class MuxSDKChat extends LitElement {
     .goal-utility button:disabled { opacity:.5; cursor:not-allowed; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
-    .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:220px; font:var(--mux-font-size,16px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
-    textarea { display:block; width:100%; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; min-height:50px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
+    .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:min(220px,25dvh); font:var(--mux-font-size,16px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
+    textarea { display:block; width:100%; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; min-height:50px; max-height:min(220px,25dvh); padding:3px 0; box-sizing:border-box; overflow-y:auto; }
     .native-textarea-sizing textarea { field-sizing:content; height:auto; }
     .legacy-textarea-sizing textarea { position:absolute; inset:0; height:100%; min-height:0; max-height:none; }
-    .textarea-mirror { box-sizing:border-box; width:100%; min-height:50px; max-height:220px; padding:3px 0; visibility:hidden; white-space:pre-wrap; overflow-wrap:break-word; overflow-y:auto; }
+    .textarea-mirror { box-sizing:border-box; width:100%; min-height:50px; max-height:min(220px,25dvh); padding:3px 0; visibility:hidden; white-space:pre-wrap; overflow-wrap:break-word; overflow-y:auto; }
     .native-textarea-sizing .textarea-mirror { display:none; }
     textarea::placeholder { color:var(--chrome-text-dim,#9aa3b8); opacity:.8; }
     .send, .stop { flex:none; width:34px; height:34px; display:grid; place-items:center; border-radius:10px; }
