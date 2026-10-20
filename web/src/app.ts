@@ -624,13 +624,16 @@ export class MuxApp extends LitElement {
     .terminal-utility-body .utility-detail strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:550; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:6; top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:-10px 0 25px #0005; } }
 
-    /* The gutter remains 4px wide for dragging. Paint it as part of the
-       main pane so the sidebar border meets the content without a gap. */
+    /* Keep the 4px resize target, but continue the title bar across its top.
+       Painting the whole gutter as chrome-body leaves a visible stripe between
+       the sidebar header and the breadcrumb header. */
     .sidebar-gutter {
       width: 4px;
       position: relative;
       cursor: col-resize;
-      background: var(--chrome-body);
+      background: linear-gradient(to bottom,
+        var(--mux-titlebar-bg, var(--chrome-bar)) 0 var(--mux-titlebar-height, 44px),
+        var(--chrome-body) var(--mux-titlebar-height, 44px) 100%);
       transition: background 0.15s;
     }
 
@@ -638,7 +641,7 @@ export class MuxApp extends LitElement {
     .sidebar-gutter::after {
       content: '';
       position: absolute;
-      top: 43px;
+      top: calc(var(--mux-titlebar-height, 44px) - 1px);
       left: 0;
       right: 0;
       border-bottom: 1px solid var(--chrome-border);
@@ -646,7 +649,9 @@ export class MuxApp extends LitElement {
     }
 
     .sidebar-gutter:hover {
-      background: color-mix(in srgb, var(--chrome-accent) 40%, var(--chrome-body));
+      background: linear-gradient(to bottom,
+        var(--mux-titlebar-bg, var(--chrome-bar)) 0 var(--mux-titlebar-height, 44px),
+        color-mix(in srgb, var(--chrome-accent) 40%, var(--chrome-body)) var(--mux-titlebar-height, 44px) 100%);
     }
 
     /* ── Surface 1: the workspace drawer ─────────────────────────────────
