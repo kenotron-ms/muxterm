@@ -9,6 +9,17 @@ h2 { font-size: 15px; margin: 0; }
 p { color: #a0abba; margin: 6px 0 16px; }
 header p { font-size: 11px; margin: 2px 0 0; }
 .connection { display: flex; gap: 10px; align-items: center; padding-bottom: 20px; border-bottom: 1px solid #29303c; }
+.connection { justify-content: space-between; margin-top: 16px; }
+.connection button { width: auto; padding: 5px 8px; font-size: 12px; }
+.connection strong { font-size: 12px; color: #a9e9cb; }
+.connection strong.offline { color: #ffcf8c; }
+select { width: 100%; padding: 10px; margin-top: 6px; background: #1b222d; color: #edf1f7; border: 1px solid #364252; border-radius: 6px; font: inherit; }
+.toolbar { display: flex; gap: 8px; margin-top: 8px; }
+.toolbar button { width: auto; border: 0; padding: 4px 8px; background: transparent; font-size: 12px; }
+.toolbar button:first-child { margin-right: auto; color: #a9e9cb; }
+.url { font-size: 11px; overflow-wrap: anywhere; margin: 8px 0 16px; }
+.hint, #edit-warning { font-size: 12px; }
+button:disabled, select:disabled { opacity: .45; cursor: default; }
 .connection p { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere; }
 .dot { width: 7px; height: 7px; background: #a9e9cb; border-radius: 50%; }
 .access { display: flex; justify-content: space-between; align-items: center; margin-top: 22px; }

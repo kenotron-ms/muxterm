@@ -1,6 +1,11 @@
 const element = id => document.getElementById(id);
+let state = {instances: [], selected: null, paired: false};
 let busy = false;
-let offer = null;
+let refreshing = false;
+let revision = 0;
+let screen = 'main';
+let editing = null;
+let target = null;
 
 async function send(message) {
   const response = await chrome.runtime.sendMessage(message);
@@ -8,82 +13,150 @@ async function send(message) {
   return response.result;
 }
 
+function selected() { return state.instances.find(item => item.key === state.selected); }
+
 function showError(error) {
   element('error').textContent = error.message;
   element('error').hidden = false;
 }
 
+function showScreen(next) {
+  screen = next;
+  for (const name of ['main', 'editor', 'pair', 'remove']) element(`${name}-panel`).hidden = name !== next;
+}
+
+function setBusy(value) {
+  busy = value;
+  for (const control of document.querySelectorAll('button, select, input:not(#access)')) control.disabled = value;
+  const hasInstance = Boolean(selected());
+  for (const name of ['instances', 'edit', 'remove', 'connect']) element(name).disabled = value || !hasInstance;
+  element('access').disabled = value && !state.control && !element('access').checked;
+}
+
 async function perform(action) {
   if (busy) return;
-  busy = true;
+  revision++;
+  setBusy(true);
   element('error').hidden = true;
   try { await action(); } catch (error) { showError(error); }
-  finally { busy = false; }
+  finally { setBusy(false); void refresh(); }
 }
 
 function render(status) {
-  element('pair-panel').hidden = status.paired;
-  element('connected-panel').hidden = !status.paired;
-  element('access').checked = Boolean(status.control);
-  if (!status.paired) return;
-  element('connection-name').textContent = status.name;
-  element('instance').textContent = new URL(status.base).host;
-  element('control-status').textContent = status.control ? 'Active · no time limit' : 'Paused';
-  element('scope').textContent = status.control ? status.control.managed ? `${status.tabCount} managed ${status.tabCount === 1 ? 'tab' : 'tabs'} · only this window is controlled` : `This tab only · ${status.control.origin}` : 'Turn on to open a dedicated browser window for your agents.';
-  element('activity').textContent = status.control ? status.activity || 'Ready for your agents.' : 'Pairing stays connected while access is paused.';
-}
-
-function insecure(base) {
-  const parsed = new URL(base);
-  return parsed.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
-}
-
-async function pair(base, name, code, allowInsecure) {
-  const parsed = new URL(base);
-  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error('Use a plain HTTP or HTTPS Muxterm address.');
-  if (insecure(base) && !allowInsecure) throw new Error('Confirm insecure LAN HTTP, or use HTTPS.');
-  if (!await chrome.permissions.request({origins: [`${parsed.protocol}//${parsed.hostname}/*`]})) throw new Error('Connection permission declined.');
-  render(await send({action: 'pair', base: parsed.href, name, code, allowInsecure}));
-  element('code').value = '';
-  offer = null;
+  state = status;
+  const options = state.instances.length ? state.instances.map(item => ({key: item.key, label: item.name})) : [{key: '', label: 'Add a Muxterm to get started'}];
+  const signature = JSON.stringify(options);
+  const picker = element('instances');
+  if (picker.dataset.options !== signature) {
+    picker.replaceChildren(...options.map(item => new Option(item.label, item.key)));
+    picker.dataset.options = signature;
+  }
+  picker.value = state.selected || '';
+  element('instance-url').textContent = selected()?.base || '';
+  element('connect').hidden = state.paired;
+  element('connected-panel').hidden = !state.paired;
+  element('connection-status').textContent = state.offline ? 'Cannot reach Muxterm · retrying' : 'Connected';
+  element('connection-status').classList.toggle('offline', Boolean(state.offline));
+  element('access').checked = Boolean(state.control);
+  element('control-status').textContent = state.control ? 'Active · no time limit' : 'Paused';
+  element('scope').textContent = state.control ? `${state.tabCount} managed ${state.tabCount === 1 ? 'tab' : 'tabs'} · only this window is controlled` : 'Paused · Your browser is private.';
+  element('activity').textContent = state.control ? state.activity || 'Ready for your agents.' : '';
+  setBusy(busy);
 }
 
 async function refresh() {
-  const status = await send({action: 'status'});
-  render(status);
-  if (!status.paired) {
-    offer = await send({action: 'pair-offer'});
-    element('offer-panel').hidden = !offer;
-    if (offer) {
-      element('offer-origin').textContent = `Connect to ${new URL(offer.base).host}`;
-      element('offer-warning').hidden = !insecure(offer.base);
-    }
-  }
+  if (busy || refreshing) return;
+  refreshing = true;
+  const started = revision;
+  try {
+    const status = await send({action: 'status'});
+    if (!busy && started === revision) render(status);
+  } catch (error) { if (!busy && started === revision) showError(error); }
+  finally { refreshing = false; }
 }
 
-element('pair-form').addEventListener('submit', event => {
+function insecure(base) {
+  try {
+    const parsed = new URL(base);
+    return parsed.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+  } catch { return false; }
+}
+
+function openEditor(item) {
+  editing = item?.key || null;
+  element('editor-title').textContent = item ? 'Edit Muxterm' : 'Add Muxterm';
+  element('name').value = item?.name || '';
+  element('base').value = item?.base || '';
+  element('insecure').checked = item?.allowInsecure || false;
+  element('insecure-warning').hidden = !insecure(element('base').value);
+  element('edit-warning').hidden = !item;
+  showScreen('editor');
+  element('name').focus();
+}
+
+function openPair(item) {
+  target = item.key;
+  element('pair-title').textContent = `Connect to ${item.name}`;
+  element('code').value = '';
+  showScreen('pair');
+  element('code').focus();
+}
+
+element('add').addEventListener('click', () => openEditor());
+element('edit').addEventListener('click', () => openEditor(selected()));
+element('base').addEventListener('input', () => { element('insecure-warning').hidden = !insecure(element('base').value); element('insecure').checked = false; });
+for (const action of ['edit', 'pair', 'remove']) element(`cancel-${action}`).addEventListener('click', () => { element('code').value = ''; showScreen('main'); });
+element('instance-form').addEventListener('submit', event => {
   event.preventDefault();
-  void perform(() => pair(element('base').value, element('name').value, element('code').value, element('insecure').checked));
+  void perform(async () => {
+    render(await send({action: 'save', key: editing, name: element('name').value, base: element('base').value, allowInsecure: element('insecure').checked}));
+    showScreen('main');
+  });
+});
+element('instances').addEventListener('change', event => {
+  const key = event.target.value;
+  void perform(async () => render(await send({action: 'select', key})));
 });
 element('connect').addEventListener('click', () => void perform(async () => {
-  if (!offer) throw new Error('Create a fresh pairing request in Muxterm.');
-  await pair(offer.base, 'My browser', offer.code, element('offer-insecure').checked);
+  const item = selected();
+  const parsed = new URL(item.base);
+  if (!await chrome.permissions.request({origins: [`${parsed.protocol}//${parsed.hostname}/*`]})) throw new Error('Connection permission declined.');
+  const status = await send({action: 'connect', key: item.key});
+  render(status);
+  if (status.needsPair) openPair(item);
+}));
+element('pair-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void perform(async () => {
+    const status = await send({action: 'pair', key: target, code: element('code').value});
+    render(status);
+    element('code').value = '';
+    if (status.needsPair) throw new Error('Pairing expired. Create a fresh code in Muxterm.');
+    showScreen('main');
+  });
+});
+element('disconnect').addEventListener('click', () => void perform(async () => render(await send({action: 'disconnect'}))));
+element('remove').addEventListener('click', () => {
+  target = selected().key;
+  element('remove-description').textContent = `${selected().name} · ${selected().base}`;
+  showScreen('remove');
+});
+element('confirm-remove').addEventListener('click', () => void perform(async () => {
+  render(await send({action: 'remove', key: target}));
+  showScreen('main');
 }));
 element('access').addEventListener('change', () => {
   if (!element('access').checked) {
+    revision++;
     void send({action: 'stop-control'}).then(render).catch(showError);
   } else {
     void perform(async () => {
-      try { render(await send({action: 'control', managed: true})); }
+      try { render(await send({action: 'control'})); }
       catch (error) { element('access').checked = false; throw error; }
     });
   }
 });
-element('use-tab').addEventListener('click', () => void perform(async () => {
-  const tab = await send({action: 'current-tab'});
-  if (!tab) throw new Error('Open this extension from the HTTP or HTTPS tab you want to use.');
-  render(await send({action: 'control', tabId: tab.id}));
-}));
-for (const action of ['disconnect', 'forget']) element(action).addEventListener('click', () => void perform(async () => render(await send({action}))));
-await perform(refresh);
-setInterval(() => { if (!busy) void perform(refresh); }, 3000);
+
+try { render(await send({action: 'local-status'})); } catch (error) { showError(error); }
+void refresh();
+setInterval(() => { void refresh(); }, 3000);

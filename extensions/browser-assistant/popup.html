@@ -4,29 +4,47 @@
 <body><main>
   <header><span class="logo">M</span><div><h1>Browser Assistant</h1><p>Muxterm · your browser, connected</p></div></header>
   <p id="error" role="alert" hidden></p>
-  <section id="pair-panel">
-    <h2>Connect your browser</h2><p>In Muxterm, choose Connections → Browser Assistant → Connect browser. Then open this extension.</p>
-    <section id="offer-panel" hidden><p id="offer-origin"></p><label id="offer-warning" class="check" hidden><input id="offer-insecure" type="checkbox">Allow insecure LAN HTTP. This connection can be intercepted.</label><button id="connect" class="primary">Connect</button></section>
-    <details><summary>Manual pairing</summary><form id="pair-form">
-      <label>Muxterm address<input id="base" type="url" placeholder="https://muxterm.example" required></label>
-      <label>Browser name<input id="name" value="My browser" maxlength="80" required></label>
-      <label>Pairing code<input id="code" autocomplete="off" spellcheck="false" required></label>
-      <label class="check"><input id="insecure" type="checkbox">Allow insecure LAN HTTP</label><button type="submit">Connect browser</button>
-    </form></details>
+  <section id="main-panel">
+    <label for="instances">Muxterm</label>
+    <select id="instances" aria-label="Muxterm instance"></select>
+    <div class="toolbar"><button id="add">+ Add</button><button id="edit">Edit</button><button id="remove">Remove</button></div>
+    <p id="instance-url" class="url"></p>
+    <button id="connect" class="primary">Connect</button>
+    <div id="connected-panel" hidden>
+      <div class="connection"><strong id="connection-status" role="status">Connected</strong><button id="disconnect">Disconnect</button></div>
+      <div class="access"><div><h2>Browser access</h2><p id="control-status" aria-live="polite">Paused</p></div><label class="switch"><input id="access" type="checkbox" role="switch" aria-label="Browser access"><span></span></label></div>
+      <p id="scope">Paused · Your browser is private.</p>
+      <p id="activity" class="activity" aria-live="polite"></p>
+      <details><summary>What access allows</summary>
+        <p>Enabling access opens a dedicated window. Agents on this Muxterm account can read signed-in sites, screenshot, type, and submit forms inside it.</p>
+        <p>The window shares your Chrome profile’s sign-ins and permissions. Use a separate Chrome profile for stronger separation. Other windows are outside agent control.</p>
+        <p>Access stays on until paused. Browser restarts leave it paused. Chrome shows a debugging banner while access is active.</p>
+      </details>
+    </div>
   </section>
-  <section id="connected-panel" hidden>
-    <div class="connection"><span class="dot"></span><div><strong id="connection-name"></strong><p id="instance"></p></div></div>
-    <div class="access"><div><h2>Browser access</h2><p id="control-status" aria-live="polite">Paused</p></div><label class="switch"><input id="access" type="checkbox" role="switch" aria-label="Browser access"><span></span></label></div>
-    <p id="scope">Turn on to open a dedicated browser window for your agents.</p>
-    <button id="use-tab">Control this tab</button>
-    <p id="activity" class="activity" aria-live="polite"></p>
-    <details><summary>Settings & permissions</summary>
-      <p>Access stays on until you pause it. Browser restarts leave it paused. Pairing stays connected.</p>
-      <p>Agents on this Muxterm account can read, screenshot, navigate, click and type in the dedicated window, including signed-in sites. They can submit forms and make changes. Other windows are outside their control.</p>
-      <p>This window shares your Chrome profile’s sign-ins and site permissions. For stronger separation, use a separate Chrome profile.</p>
-      <p>“Control this tab” limits access to its current site. Chrome shows its debugging banner while control is active.</p>
-      <div class="actions"><button id="disconnect">Disconnect</button><button id="forget">Forget locally</button></div>
-    </details>
+  <section id="editor-panel" hidden>
+    <h2 id="editor-title">Add Muxterm</h2>
+    <form id="instance-form">
+      <label>Name<input id="name" maxlength="80" placeholder="Home" required></label>
+      <label>Muxterm URL<input id="base" type="url" maxlength="2048" placeholder="https://muxterm.example" required></label>
+      <label id="insecure-warning" class="check" hidden><input id="insecure" type="checkbox">Allow insecure LAN HTTP. Credentials and browser data can be intercepted.</label>
+      <p id="edit-warning" hidden>Changing the URL disconnects this instance and requires a new pairing code.</p>
+      <div class="actions"><button type="button" id="cancel-edit">Cancel</button><button type="submit" class="primary">Save</button></div>
+    </form>
   </section>
-  <footer>Local control. Pause whenever you want.</footer>
+  <section id="pair-panel" hidden>
+    <h2 id="pair-title">Connect to Muxterm</h2>
+    <p>Get a pairing code from <strong>Connections → Browser Assistant</strong> in that Muxterm.</p>
+    <form id="pair-form">
+      <label>Pairing code<input id="code" autocomplete="off" spellcheck="false" maxlength="256" required></label>
+      <div class="actions"><button type="button" id="cancel-pair">Cancel</button><button type="submit" class="primary">Pair</button></div>
+    </form>
+    <p class="hint">Pairing does not enable browser access.</p>
+  </section>
+  <section id="remove-panel" hidden>
+    <h2>Remove Muxterm?</h2><p id="remove-description"></p>
+    <p>This stops browser access and deletes its saved URL and pairing from this browser. It does not revoke the connection on the server.</p>
+    <div class="actions"><button id="cancel-remove">Cancel</button><button id="confirm-remove">Remove</button></div>
+  </section>
+  <footer id="notice" role="status">One Muxterm at a time. Access is yours to enable.</footer>
 </main><script src="popup.js" type="module"></script></body></html>
