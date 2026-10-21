@@ -89,6 +89,10 @@ func (s *Server) handleSDKUtilityFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer root.Close()
+	serveUtilityFiles(w, r, root, project)
+}
+
+func serveUtilityFiles(w http.ResponseWriter, r *http.Request, root *os.Root, project string) {
 	rel, ok := utilityRelative(r)
 	if !ok {
 		http.Error(w, "Path leaves the project folder", 400)
@@ -158,6 +162,10 @@ func (s *Server) handleSDKUtilitySearch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer root.Close()
+	serveUtilitySearch(w, r, root)
+}
+
+func serveUtilitySearch(w http.ResponseWriter, r *http.Request, root *os.Root) {
 	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	if len(query) < 2 || len(query) > 128 {
 		http.Error(w, "Search query must be 2–128 characters", http.StatusBadRequest)
@@ -258,6 +266,10 @@ func (s *Server) sdkUtilityFile(w http.ResponseWriter, r *http.Request, raw bool
 		return
 	}
 	defer root.Close()
+	serveUtilityFile(w, r, root, raw)
+}
+
+func serveUtilityFile(w http.ResponseWriter, r *http.Request, root *os.Root, raw bool) {
 	rel, ok := utilityRelative(r)
 	if !ok || rel == "." {
 		http.Error(w, "Path leaves the project folder", 400)

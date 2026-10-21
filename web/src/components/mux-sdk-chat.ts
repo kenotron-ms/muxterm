@@ -654,6 +654,10 @@ export class MuxSDKChat extends LitElement {
   /** Apply a server-relayed request after this chat is on screen. */
   async navigateUI(action: 'chat' | 'panel' | 'tab' | 'file', mode?: string, tab?: string, path?: string): Promise<void> {
     if (action === 'chat') return;
+    if (action === 'tab' && tab === 'terminal') {
+      this.dispatchEvent(new CustomEvent('terminal-open', { bubbles:true, composed:true }));
+      return;
+    }
     if (action === 'panel') {
       if (mode === 'chat' || mode === 'split') this.setPaneMode(mode);
       return;
@@ -662,7 +666,7 @@ export class MuxSDKChat extends LitElement {
     await this.updateComplete;
     const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
     if (action === 'file' && path) await utility?.showFile(path);
-    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'terminal' || tab === 'pages')) utility?.showPanel(tab);
+    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'pages')) utility?.showPanel(tab);
   }
   private async operatorChanged(chat: SDKChat) {
     this.chat = chat;
@@ -2383,7 +2387,7 @@ export class MuxSDKChat extends LitElement {
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
-      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .chatTitle=${this.chat?.title || ''} .terminalWorkspaceId=${this.chat?.terminalWorkspaceId || ''} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}
+      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`;
   }
 }

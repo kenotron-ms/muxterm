@@ -2,12 +2,10 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, SquareTerminal, Trash2, X } from 'lucide';
+import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { laneIcon } from '../lib/lane-icon.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
-import { workspaceLabel } from '../lib/workspace-label.js';
-import type { SessiondWorkspaceInfo } from '../types.js';
 import codexMark from '../assets/harness/codex.svg?url';
 import claudeMark from '../assets/harness/claude.svg?url';
 import amplifierMark from '../assets/harness/amplifier.png?url';
@@ -24,7 +22,7 @@ function harnessMark(chat: SDKChat, className = 'chat-icon') {
   return html`<span class="${className} harness-mark ${chat.state}" style=${`--harness-mark:url("${harnessMarks[chat.harness]}")`} title=${`${sdkHarnessLabel(chat.harness)} · ${chat.state}`}></span>`;
 }
 
-interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; terminals?: SessiondWorkspaceInfo[]; laneIds: Set<string>; archived?: boolean }
+interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean }
 
 // The input is already newest-first. Keep that order within each role while
 // leaving Pinned and Archived as separate sections.
@@ -40,7 +38,6 @@ function chatsByRole(chats: SDKChat[], laneIds: Set<string>): SDKChat[] {
 export class MuxChatWorkspace extends LitElement {
   @property({ attribute: false }) model!: ChatGroup;
   @property() selectedSession = '';
-  @property() selectedTerminal = '';
   @state() private open = true;
   @state() private menuFor = '';
   @state() private contextMenu = false;
@@ -72,7 +69,7 @@ export class MuxChatWorkspace extends LitElement {
   };
   override connectedCallback() {
     super.connectedCallback();
-    if (this.model?.archived || (this.model?.id === 'ungrouped' && !this.model.chats.some(chat => chat.id === this.selectedSession) && !this.model.terminals?.some(workspace => workspace.workspaceId === this.selectedTerminal))) this.open = false;
+    if (this.model?.archived || (this.model?.id === 'ungrouped' && !this.model.chats.some(chat => chat.id === this.selectedSession))) this.open = false;
     document.addEventListener('pointerdown', this.onOutsidePointer);
     document.addEventListener('keydown', this.onEscape);
   }
@@ -84,7 +81,7 @@ export class MuxChatWorkspace extends LitElement {
   override willUpdate(changed: Map<string, unknown>) {
     // Archiving the selected chat updates this group's model. Keep the user's
     // Archived folder expansion choice instead of opening it as a side effect.
-    if (!this.model?.archived && ((changed.has('selectedSession') && this.model?.chats.some(chat => chat.id === this.selectedSession)) || (changed.has('selectedTerminal') && this.model?.terminals?.some(workspace => workspace.workspaceId === this.selectedTerminal)))) this.open = true;
+    if (!this.model?.archived && changed.has('selectedSession') && this.model?.chats.some(chat => chat.id === this.selectedSession)) this.open = true;
   }
   override updated(changed: Map<string, unknown>) {
     if ((changed.has('selectedSession') || changed.has('model')) && this.selectedSession) {
@@ -124,7 +121,6 @@ export class MuxChatWorkspace extends LitElement {
     .harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
     .harness-mark.working { color:var(--mux-ok); }
     .harness-mark.blocked,.harness-mark.failed { color:var(--chrome-danger); }
-    .terminal-row .chat-icon { color:var(--mux-ok); }
     .row:focus-within,.chat-row:focus-within { outline:2px solid var(--chrome-accent); outline-offset:-2px; }
     .status { width:6px; height:6px; border-radius:50%; background:var(--chrome-text-dim); flex:none; }
     .status.working { background:var(--mux-ok); }
@@ -312,7 +308,6 @@ export class MuxChatWorkspace extends LitElement {
           ${this.renamingId === chat.id ? nothing : html`<button class="action more" aria-label=${`Options for ${chat.title}`} title="Chat options" @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>`}
           ${this.menuFor === chat.id ? this.chatMenu(chat) : nothing}
         </div>`)}
-        ${group.terminals?.map(workspace => html`<div class="chat-row terminal-row" ?selected=${this.selectedTerminal === workspace.workspaceId}><button class="chat" title=${workspaceLabel(workspace)} @click=${() => this.dispatchEvent(new CustomEvent('workspace-switch', { detail:{workspaceId:workspace.workspaceId}, bubbles:true, composed:true }))}><span class="chat-icon">${icon(SquareTerminal,{size:16})}</span><span class="title">${workspaceLabel(workspace)}</span></button></div>`)}
       </div>` : nothing}
     `;
   }
@@ -323,8 +318,6 @@ export class MuxChatList extends LitElement {
   @state() private version = 0;
   @state() private pinError = '';
   @property() selectedSession = '';
-  @property() selectedTerminal = '';
-  @property({ attribute:false }) terminalWorkspaces: SessiondWorkspaceInfo[] = [];
   private unsub?: () => void;
   private readonly onChatOpen = (event: Event) => {
     const id = (event as CustomEvent<{ sessionId: string }>).detail?.sessionId;
@@ -377,10 +370,9 @@ export class MuxChatList extends LitElement {
     const chats = [...sdkChats.chats].sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt) || a.id.localeCompare(b.id));
     const active = chats.filter(chat => !chat.archived);
     const laneIds = new Set(chats.filter(chat => chat.operator).flatMap(chat => chat.operatorLanes || []));
-    const linkedTerminals = new Set(active.map(chat => chat.terminalWorkspaceId).filter(Boolean));
-    const terminals = this.terminalWorkspaces.filter(workspace => !linkedTerminals.has(workspace.workspaceId));
-    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:chatsByRole(active.filter(chat => chat.workspaceId === project.id), laneIds), terminals:terminals.filter(workspace => workspace.projectPath === project.path), laneIds }));
-    groups.push({ id:'ungrouped', name:'Ungrouped', chats:chatsByRole(active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)), laneIds), terminals:terminals.filter(workspace => !projects.some(project => project.path === workspace.projectPath)), laneIds });
+    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:chatsByRole(active.filter(chat => chat.workspaceId === project.id), laneIds), laneIds }));
+    const ungrouped = chatsByRole(active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)), laneIds);
+    if (ungrouped.length) groups.push({ id:'ungrouped', name:'Ungrouped', chats:ungrouped, laneIds });
     groups.push({ id:'archived', name:'Archived', archived:true, chats:chats.filter(chat => chat.archived), laneIds });
     const pinned = [
       ...projects.filter(project => project.pinned).map(project => ({ kind:'project' as const, id:project.id, name:project.name, operator:false, lane:false, state:'' })),
@@ -389,7 +381,7 @@ export class MuxChatList extends LitElement {
     return html`
       ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><button class="pin-link" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}<span class="pin-name">${item.name}</span></button><button class="pin-unpin" aria-label=${`Unpin ${item.kind} ${item.name}`} title=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</button></div>`)}</div>` : nothing}
       ${this.pinError ? html`<div class="pin-error" role="alert">${this.pinError}</div>` : nothing}
-      ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession} .selectedTerminal=${this.selectedTerminal}></mux-chat-workspace>`)}
+      ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
     `;
   }
 }

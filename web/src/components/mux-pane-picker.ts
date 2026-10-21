@@ -28,7 +28,6 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from '../state.js';
-import { workspaceLabel } from '../lib/workspace-label.js';
 import { icon } from '../lib/icons.js';
 import { Plus, X } from 'lucide';
 
@@ -116,17 +115,9 @@ export class MuxPanePicker extends LitElement {
       background: var(--chrome-hover);
     }
 
-    .ws-name,
-    .sep,
     .caret {
       flex: none;
       color: var(--chrome-text-dim);
-    }
-
-    .ws-name {
-      max-width: 40%;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
 
     .pane-name {
@@ -403,13 +394,9 @@ export class MuxPanePicker extends LitElement {
     // dependency so store subscription bumps trigger re-renders.
     void this._version;
 
-    const { panes, activePaneId, workspaces, attached } = store;
+    const { panes, activePaneId, attached } = store;
     const validPanes = panes.filter((p) => p.paneId >= 0);
     const activePane = validPanes.find((p) => p.paneId === activePaneId);
-
-    // Workspace label: prefer named workspace, fall back to attached id.
-    const ws = workspaces.find((w) => w.workspaceId === attached);
-    const wsName = ws ? workspaceLabel(ws) : (attached ?? '');
 
     // Active pane display name.
     const activePaneName =
@@ -422,19 +409,17 @@ export class MuxPanePicker extends LitElement {
         class="breadcrumb"
         type="button"
         popovertarget="pane-sheet"
-        aria-label="Panes in ${wsName}"
+        aria-label="Choose pane"
       >
-        <span class="ws-name">${wsName}</span>
-        <span class="sep">›</span>
         ${activeBell ? html`<span class="bell-dot">${BELL_DOT}</span>` : ''}
         <span class="pane-name">${activePaneName}</span>
         <span class="caret">▾</span>
       </button>
 
-      <div id="pane-sheet" class="sheet" popover="auto" aria-label="Panes in ${wsName}">
+      <div id="pane-sheet" class="sheet" popover="auto" aria-label="Panes">
         <div class="sheet-head">
           <div class="grab"></div>
-          <div class="sheet-title">Panes · ${wsName}</div>
+          <div class="sheet-title">Panes</div>
           <button class="rowbtn" type="button" @click="${this._createPane}">
             ${icon(Plus, { size: 18 })}<span>New pane</span>
           </button>

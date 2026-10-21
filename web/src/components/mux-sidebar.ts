@@ -1086,6 +1086,7 @@ export class MuxSidebar extends LitElement {
       color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright));
       font-size: 16px;
     }
+    .terminal-nav { flex:0 0 36px; }
 
     .terminal-heading {
       margin-top: 13px;
@@ -1315,6 +1316,7 @@ export class MuxSidebar extends LitElement {
   // ---------------------------------------------------------------------------
 
   @property({ type: Boolean }) newChatActive = false;
+  @property({ type: Boolean }) terminalActive = false;
   @property({ type: Boolean }) jobsActive = false;
   @property({ type: Boolean }) connectionsActive = false;
   @property({ type: Boolean }) skillsActive = false;
@@ -2499,6 +2501,11 @@ export class MuxSidebar extends LitElement {
       <button class="new-chat-action ${this.newChatActive ? 'active' : ''}" title="New chat" aria-current="${this.newChatActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
         <span class="new-chat-action-mark">${icon(Plus, { size: 17 })}</span><span>New Chat</span>
       </button>
+      <div class="terminal-nav">
+        <button class="new-chat-action ${this.terminalActive ? 'active' : ''}" title="Open terminal" aria-current="${this.terminalActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('terminal-open', { bubbles: true, composed: true }))}">
+          <span class="new-chat-action-mark">${icon(SquareTerminal, { size: 16 })}</span><span>Terminal</span>
+        </button>
+      </div>
       <button class="new-chat-action ${this.jobsActive ? 'active' : ''}" title="Scheduled jobs" aria-current="${this.jobsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('jobs-open', { bubbles: true, composed: true }))}">
         <span class="new-chat-action-mark">${icon(CalendarClock, { size: 14 })}</span><span>Scheduled jobs</span>
       </button>
@@ -2509,7 +2516,7 @@ export class MuxSidebar extends LitElement {
         <span class="new-chat-action-mark">${icon(Puzzle, { size: 14 })}</span><span>Skills</span>
       </button>
       <div class="tab-content">
-        <mux-chat-list .selectedSession=${this.selectedSDKChat} .selectedTerminal=${this.selectedSDKChat ? '' : store.attached || ''} .terminalWorkspaces=${store.workspaces}></mux-chat-list>
+        <mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list>
       </div>
       ${this._renderFooter()}
       ${this._renderPreviewTooltip()}
