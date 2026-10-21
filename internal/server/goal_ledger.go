@@ -233,6 +233,10 @@ func goalCapabilityGap(harness string) string {
 	}
 }
 
+func supportsNativeGoalControl(harness string) bool {
+	return harness == "codex" || harness == "claude" || harness == "amplifier"
+}
+
 func (h *sdkChatHost) observeGoalLocked(chat *sdkChat, event sdkEvent) {
 	if event.Type != "goal.progress" && event.Type != "goal.snapshot" && event.Type != "goal.proposal" && event.Type != "goal.command" && event.Type != "goal.capability" && event.Type != "session.uncertain" && event.Type != "error" && event.Type != "turn.started" && event.Type != "turn.completed" && event.Type != "turn.cancelled" && event.Type != "generation.finished" {
 		return

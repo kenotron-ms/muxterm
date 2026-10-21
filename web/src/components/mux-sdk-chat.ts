@@ -13,6 +13,7 @@ import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
+import { chatCommandSuggestions, parseChatCommand, type ChatCommandInvocation } from '../lib/chat-commands.js';
 import { laneIcon } from '../lib/lane-icon.js';
 import './mux-sdk-utility.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
@@ -76,6 +77,12 @@ export class MuxSDKChat extends LitElement {
   @state() private goalDraft = '';
   @state() private goalNotice = '';
   @state() private goalSaving = false;
+  @state() private commandNotice = '';
+  @state() private commandFailed = false;
+  @state() private commandPending = false;
+  private commandGeneration = 0;
+  @state() private slashSelection = 0;
+  private slashDismissedFor = '';
   @state() private goalLedgerOpen = false;
   @state() private goalLedgerDocuments: GoalDocument[] = [];
   private goalEditorVersion = 0;
@@ -410,7 +417,15 @@ export class MuxSDKChat extends LitElement {
     .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:var(--chrome-bar); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:var(--mux-font-size,16px)/1.5 ui-monospace,monospace; }
     .error { color:var(--chrome-danger); }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
-    .composer-wrap { padding:0 19px 18px; }
+    .composer-wrap { position:relative; padding:0 19px 18px; }
+    .slash-menu { position:absolute; z-index:12; bottom:calc(100% - 1px); left:50%; transform:translateX(-50%); box-sizing:border-box; width:min(790px,calc(100% - 38px)); padding:5px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); box-shadow:0 12px 30px #0003; }
+    .slash-menu button { box-sizing:border-box; display:flex; align-items:center; gap:14px; width:100%; min-height:44px; border:0; border-radius:8px; padding:7px 11px; background:transparent; color:var(--chrome-text-bright); text-align:left; cursor:pointer; }
+    .slash-menu button[aria-selected="true"],.slash-menu button:hover { background:var(--chrome-hover); }
+    .slash-menu code { flex:none; min-width:108px; color:var(--chrome-accent); font:600 12px ui-monospace,monospace; }
+    .slash-menu span { min-width:0; color:var(--chrome-text-dim); font-size:12px; }
+    .slash-menu button:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:-2px; }
+    .command-notice { box-sizing:border-box; width:min(790px,100%); margin:0 auto 8px; color:var(--chrome-text-dim); font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .command-notice.error { color:var(--chrome-danger); }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 11px; }
     .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
     .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:6px; background:var(--chrome-body); }
@@ -725,6 +740,7 @@ export class MuxSDKChat extends LitElement {
     this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
     this.activeSession = this.sessionId;
     this.goalDocument = undefined; this.goalEditor = false; this.goalLedgerOpen = false; this.goalNotice = '';
+    this.commandGeneration++; this.commandNotice = ''; this.commandFailed = false; this.commandPending = false; this.slashDismissedFor = ''; this.slashSelection = 0;
     void this.refreshGoal();
     this.draft = readDraft(this.activeSession, 'message');
     this.draftHasContent = !!this.draft.trim();
@@ -842,9 +858,49 @@ export class MuxSDKChat extends LitElement {
     const value = textarea.value;
     this.pendingDraft = value;
     this.draftHasContent = !!value.trim();
+    if (this.commandNotice) this.commandNotice = '';
+    if (this.commandFailed) this.commandFailed = false;
+    this.slashSelection = 0;
+    this.requestUpdate();
     if (this.draftTimer) window.clearTimeout(this.draftTimer);
     this.draftTimer = window.setTimeout(() => this.flushDraft(), 700);
     syncTextareaSizing(textarea);
+  }
+  private slashSuggestions() {
+    const value = this.pendingDraft ?? this.draft;
+    return value === this.slashDismissedFor ? [] : chatCommandSuggestions(value);
+  }
+  private selectSlashSuggestion(insert: string) {
+    this.slashDismissedFor = insert;
+    this.setDraft(insert);
+    void this.updateComplete.then(() => {
+      const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea');
+      textarea?.focus();
+      textarea?.setSelectionRange(insert.length, insert.length);
+    });
+  }
+  private onMessageKeyDown(event: KeyboardEvent) {
+    const suggestions = this.slashSuggestions();
+    if (suggestions.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault();
+      this.slashSelection = (this.slashSelection + (event.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length;
+      return;
+    }
+    if (event.key === 'Escape' && suggestions.length) {
+      event.preventDefault();
+      this.slashDismissedFor = this.pendingDraft ?? this.draft;
+      this.requestUpdate();
+      return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      const rawValue = this.pendingDraft ?? this.draft;
+      const value = rawValue.trim();
+      const exactCommand = parseChatCommand(value);
+      if (suggestions.length && rawValue !== (exactCommand ? `/${exactCommand.name}` : '') && value !== suggestions[this.slashSelection]?.label) {
+        this.selectSlashSuggestion(suggestions[this.slashSelection % suggestions.length].insert);
+      } else void this.send();
+    }
   }
   private flushDraft(): string {
     if (this.pendingDraft === undefined) return this.draft;
@@ -2000,9 +2056,62 @@ export class MuxSDKChat extends LitElement {
     else this.stepExpanded.add(key);
     this.requestUpdate();
   }
+  private async executeChatCommand(command: ChatCommandInvocation, originalDraft: string) {
+    if (this.commandPending) {
+      this.commandFailed = true;
+      this.commandNotice = 'A goal command is still processing. Try again in a moment.';
+      return;
+    }
+    if (this.attachments.length) {
+      this.commandFailed = true;
+      this.commandNotice = 'Remove attachments before running a chat command.';
+      return;
+    }
+    const sessionId = this.activeSession;
+    const generation = ++this.commandGeneration;
+    this.commandPending = true;
+    this.commandFailed = false;
+    this.commandNotice = '';
+    try {
+      const read = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/goal`), { cache:'no-store' });
+      if (!read.ok) throw new Error((await read.text()).trim());
+      const current = await read.json() as GoalDocument;
+      if (generation !== this.commandGeneration || sessionId !== this.activeSession) return;
+      this.goalDocument = current;
+      if (command.action === 'inspect') {
+        this.commandFailed = false;
+        this.commandNotice = current.revisions.at(-1)?.condition || 'No goal is set for this chat. Type /goal followed by a condition.';
+      } else {
+        const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/goal`), {
+          method:'PATCH', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({ action:command.action, objective:command.condition || '', clientRef:crypto.randomUUID(), expectedVersion:current.controlVersion }),
+        });
+        if (!response.ok) throw new Error((await response.text()).trim());
+        const record = await response.json() as GoalDocument;
+        if (generation !== this.commandGeneration || sessionId !== this.activeSession) return;
+        this.goalDocument = record;
+        this.commandFailed = false;
+        this.commandNotice = command.action === 'set' ? 'Goal condition saved. Waiting for the harness to acknowledge it.' :
+          command.action === 'pause' ? 'Pause requested.' : command.action === 'resume' ? 'Resume requested.' : 'Goal cleared.';
+      }
+      if (generation === this.commandGeneration && sessionId === this.activeSession && this.flushDraft() === originalDraft) this.setDraft('');
+    } catch (error) {
+      if (generation === this.commandGeneration && sessionId === this.activeSession) {
+        this.commandFailed = true;
+        this.commandNotice = String(error instanceof Error ? error.message : error);
+      }
+    } finally {
+      if (generation === this.commandGeneration) this.commandPending = false;
+    }
+  }
   private async send() {
     const originalDraft = this.flushDraft();
     const content = originalDraft.trim();
+    const command = parseChatCommand(content);
+    if (command) {
+      await this.executeChatCommand(command, originalDraft);
+      return;
+    }
     if (this.voiceState !== 'idle' || (!content && !this.attachments.length) || this.stopping || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || a.error) || (this.busy && (this.attachments.length > 0 || this.isACPChat()))) return;
     const kind = this.busy ? 'steer' : 'user';
     const sessionId = this.activeSession;
@@ -2242,6 +2351,7 @@ export class MuxSDKChat extends LitElement {
   }
   override render() {
     const agents = this.agents();
+    const slashSuggestions = this.selectedAgent ? [] : this.slashSuggestions();
     const parentOperator = sdkChats.chats.find(chat => chat.operator && chat.operatorLanes?.includes(this.sessionId));
     const workspaceName = sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped';
     return html`
@@ -2254,7 +2364,10 @@ export class MuxSDKChat extends LitElement {
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
-    </div>${this.goalSurfaces()}${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap"><div class="composer" @paste=${this.onPaste}>
+    </div>${this.goalSurfaces()}${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap">
+      ${slashSuggestions.length ? html`<div class="slash-menu" id="chat-slash-menu" role="listbox" aria-label="Chat commands">${slashSuggestions.map((suggestion,index) => html`<button id=${`chat-slash-option-${index}`} role="option" aria-selected=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}><code>${suggestion.label}</code><span>${suggestion.description}</span></button>`)}</div>` : nothing}
+      ${this.commandNotice ? html`<div class="command-notice ${this.commandFailed ? 'error' : ''}" role=${this.commandFailed ? 'alert' : 'status'}>${this.commandNotice}</div>` : nothing}
+      <div class="composer" @paste=${this.onPaste}>
       ${this.goalBanner()}
       ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraftHasContent}>Send to root ↗</button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
@@ -2263,7 +2376,7 @@ export class MuxSDKChat extends LitElement {
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
-      <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
+      <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
