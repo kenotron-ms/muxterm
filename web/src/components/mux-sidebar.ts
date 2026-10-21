@@ -1053,10 +1053,17 @@ export class MuxSidebar extends LitElement {
       display: none;
     }
 
-    .new-chat-action {
+    .nav-actions {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      padding: 12px 7px 0;
+    }
+
+    .nav-action {
       flex: 0 0 36px;
       height: 36px;
-      margin: 0 7px;
       padding: 0 10px;
       border: 0;
       border-radius: 6px;
@@ -1072,11 +1079,10 @@ export class MuxSidebar extends LitElement {
       cursor: pointer;
     }
 
-    .header + .new-chat-action { margin-top: 12px; }
-
-    .new-chat-action.active { color: var(--sidebar-text); background: var(--sidebar-hover); }
-    .new-chat-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
-    .new-chat-action-mark {
+    .nav-action.active,
+    .nav-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
+    .nav-action:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: -2px; }
+    .nav-action-icon {
       width: 17px;
       height: 17px;
       flex: none;
@@ -1086,8 +1092,6 @@ export class MuxSidebar extends LitElement {
       color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright));
       font-size: 16px;
     }
-    .terminal-nav { flex:0 0 36px; }
-
     .terminal-heading {
       margin-top: 13px;
       padding: 12px 5px 2px;
@@ -2494,27 +2498,25 @@ export class MuxSidebar extends LitElement {
   override render() {
     void this._version; // suppress unused-variable lint; triggers re-render on store change
 
+    const navActions = [
+      { label: 'New Chat', title: 'New chat', icon: Plus, active: this.newChatActive, event: 'chat-new' },
+      { label: 'Terminal', title: 'Open terminal', icon: SquareTerminal, active: this.terminalActive, event: 'terminal-open' },
+      { label: 'Scheduled jobs', title: 'Scheduled jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
+      { label: 'Connections', title: 'Connections', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
+      { label: 'Skills', title: 'Skills', icon: Puzzle, active: this.skillsActive, event: 'skills-open' },
+    ];
+
     return html`
       <div class="header">
         <span title="${window.location.hostname}">${instanceLabel()}</span>
       </div>
-      <button class="new-chat-action ${this.newChatActive ? 'active' : ''}" title="New chat" aria-current="${this.newChatActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}">
-        <span class="new-chat-action-mark">${icon(Plus, { size: 17 })}</span><span>New Chat</span>
-      </button>
-      <div class="terminal-nav">
-        <button class="new-chat-action ${this.terminalActive ? 'active' : ''}" title="Open terminal" aria-current="${this.terminalActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('terminal-open', { bubbles: true, composed: true }))}">
-          <span class="new-chat-action-mark">${icon(SquareTerminal, { size: 16 })}</span><span>Terminal</span>
-        </button>
-      </div>
-      <button class="new-chat-action ${this.jobsActive ? 'active' : ''}" title="Scheduled jobs" aria-current="${this.jobsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('jobs-open', { bubbles: true, composed: true }))}">
-        <span class="new-chat-action-mark">${icon(CalendarClock, { size: 14 })}</span><span>Scheduled jobs</span>
-      </button>
-      <button class="new-chat-action ${this.connectionsActive ? 'active' : ''}" title="Connections" aria-current="${this.connectionsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('connections-open', { bubbles: true, composed: true }))}">
-        <span class="new-chat-action-mark">${icon(Plug, { size: 14 })}</span><span>Connections</span>
-      </button>
-      <button class="new-chat-action ${this.skillsActive ? 'active' : ''}" title="Skills" aria-current="${this.skillsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('skills-open', { bubbles: true, composed: true }))}">
-        <span class="new-chat-action-mark">${icon(Puzzle, { size: 14 })}</span><span>Skills</span>
-      </button>
+      <nav class="nav-actions" aria-label="Sidebar actions">
+        ${navActions.map(action => html`
+          <button class="nav-action ${action.active ? 'active' : ''}" title=${action.title} aria-current=${action.active ? 'page' : 'false'} @click=${() => this.dispatchEvent(new CustomEvent(action.event, { bubbles: true, composed: true }))}>
+            <span class="nav-action-icon">${icon(action.icon, { size: 16 })}</span><span>${action.label}</span>
+          </button>
+        `)}
+      </nav>
       <div class="tab-content">
         <mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list>
       </div>
