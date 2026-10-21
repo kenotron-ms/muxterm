@@ -5,7 +5,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import './mux-pane-picker.js';
 import './mic-button.js';
 import { icon } from '../lib/icons.js';
-import { Menu, Settings } from 'lucide';
+import { Folder, FolderOpen, Menu, Settings } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
@@ -209,6 +209,8 @@ export class MuxTitleBar extends LitElement {
   /** The dock supplies the wide workspace menu when panes exist. */
   @property({ type: Boolean }) dockActionsVisible = false;
   @property({ type: Boolean }) showLauncher = true;
+  @property({ type: Boolean }) terminalActive = false;
+  @property({ type: Boolean }) filesOpen = false;
 
   /** Bumped when the session list changes, so the badge re-derives. */
   @state() private _sessionVersion = 0;
@@ -278,6 +280,14 @@ export class MuxTitleBar extends LitElement {
             <span class="brand-sha">${__GIT_SHA__}</span>
           </div><mux-pane-picker></mux-pane-picker>`}
       <div class="right">
+        ${!this.desktop && !this.chatTitle && this.terminalActive ? html`<button
+          class="launcher-btn"
+          type="button"
+          title="${this.filesOpen ? 'Hide file explorer' : 'Show file explorer'}"
+          aria-label="${this.filesOpen ? 'Hide file explorer' : 'Show file explorer'}"
+          aria-pressed="${this.filesOpen}"
+          @click=${() => this.dispatchEvent(new CustomEvent('file-explorer-toggle', { bubbles:true, composed:true }))}
+        >${icon(this.filesOpen ? FolderOpen : Folder, { size:17 })}</button>` : ''}
         ${this.desktop || this.chatTitle ? '' : html`<mux-mic-button></mux-mic-button>`}
         ${!this.showLauncher || (this.desktop && this.dockActionsVisible)
           ? ''

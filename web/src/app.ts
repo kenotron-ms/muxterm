@@ -4,7 +4,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { MonitorX, SquareTerminal, X } from 'lucide';
+import { MonitorX } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { previewStore } from './lib/preview-store.js';
@@ -44,6 +44,7 @@ import './components/mux-new-chat.js';
 import './components/mux-scheduled-jobs.js';
 import './components/mux-connections.js';
 import './components/mux-skills.js';
+import './components/mux-terminal-files.js';
 import { homeSessions } from './lib/home-sessions.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -607,15 +608,7 @@ export class MuxApp extends LitElement {
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
     .terminal-utility { box-sizing:border-box; width:min(360px,42%); min-width:270px; flex:none; display:flex; flex-direction:column; border-left:1px solid var(--chrome-border); background:var(--chrome-body); color:var(--chrome-text-bright); }
-    .terminal-utility-tabs { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:4px; padding:0 max(8px,var(--wco-right-inset,0px)) 0 8px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); }
-    .terminal-utility-tabs strong { padding-left:8px; font:650 12px Inter,system-ui,sans-serif; }
-    .terminal-utility-tabs button { height:29px; border:0; border-radius:6px; padding:0 9px; background:transparent; color:var(--chrome-text-dim); font:500 11px Inter,system-ui,sans-serif; cursor:pointer; }
-    .terminal-utility-tabs button:hover { background:var(--chrome-hover); color:var(--chrome-text-bright); }
-    .terminal-utility-tabs .close-utility { width:28px; padding:0; margin-left:auto; display:grid; place-items:center; }
-    .terminal-utility-body { padding:16px; overflow:auto; font:12px/1.5 Inter,system-ui,sans-serif; }
-    .terminal-utility-body .utility-pane-row { width:100%; min-height:36px; display:flex; align-items:center; gap:9px; padding:0 9px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-bright); text-align:left; font:inherit; cursor:pointer; }
-    .terminal-utility-body .utility-pane-row:hover,.terminal-utility-body .utility-pane-row[aria-current="true"] { background:var(--chrome-hover); }
-    .terminal-utility-body .utility-pane-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .terminal-utility > mux-terminal-files { min-height:0; flex:1; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:6; top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:-10px 0 25px #0005; } }
 
     /* Keep the 4px resize target, but continue the title bar across its top.
@@ -1645,7 +1638,10 @@ export class MuxApp extends LitElement {
         .drawerOpen="${this._drawerOpen}"
         .chatTitle="${chatTitle}"
         .showLauncher="${this._sdkChatId !== 'new'}"
+        .terminalActive="${this._sdkChatId === null}"
+        .filesOpen="${this._terminalUtilityOpen}"
         @launcher-action="${this._onLauncherAction}"
+        @file-explorer-toggle="${() => { this._terminalUtilityOpen = !this._terminalUtilityOpen; }}"
         @pane-select="${this._onActivePane}"
         @pane-create-request="${this._createPaneOptimistic}"
         @drawer-toggle="${this._onDrawerToggle}"
@@ -1715,14 +1711,8 @@ export class MuxApp extends LitElement {
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
                 ${this._terminalUtilityOpen && !this._sdkChatId ? html`
-                  <aside class="terminal-utility" aria-label="Panes">
-                    <div class="terminal-utility-tabs">
-                      <strong>Panes</strong>
-                      <button class="close-utility" aria-label="Close terminal utility pane" @click="${() => { this._terminalUtilityOpen = false; }}">${icon(X,{size:16})}</button>
-                    </div>
-                    <div class="terminal-utility-body">
-                      ${panes.map(pane => html`<button class="utility-pane-row" aria-current="${store.activePaneId === pane.paneId}" @click="${() => this._onActivePane(new CustomEvent('pane-select',{detail:{paneId:pane.paneId}}))}">${icon(SquareTerminal,{size:16})}<span>${pane.title || `Pane ${pane.paneId}`}</span></button>`)}
-                    </div>
+                  <aside class="terminal-utility" aria-label="File explorer">
+                    <mux-terminal-files @close="${() => { this._terminalUtilityOpen = false; }}"></mux-terminal-files>
                   </aside>
                 ` : ''}
               </div>

@@ -404,6 +404,8 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/file", protect(http.HandlerFunc(s.handleSDKUtilityFile)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/raw", protect(http.HandlerFunc(s.handleSDKUtilityRaw)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/pr", protect(http.HandlerFunc(s.handleSDKUtilityPR)))
+	s.mux.Handle("GET /api/terminal/files", protect(http.HandlerFunc(s.handleTerminalFiles)))
+	s.mux.Handle("GET /api/terminal/file", protect(http.HandlerFunc(s.handleTerminalFile)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/control-send", protect(http.HandlerFunc(s.handleSDKControlSend)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/control-history", protect(http.HandlerFunc(s.handleSDKControlHistory)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/goal", protect(http.HandlerFunc(s.handleSDKGoal)))

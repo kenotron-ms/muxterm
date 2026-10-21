@@ -21,7 +21,7 @@ import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import { parseHostRef } from '../lib/host-ref.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
-import { PanelRight } from 'lucide';
+import { Folder } from 'lucide';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
 
@@ -93,7 +93,7 @@ class TerminalRenderer implements IContentRenderer {
     this._paneId = parseInt(id, 10);
     this._isActivePane = isActivePane;
     const el = document.createElement('div');
-    el.style.cssText = 'width:100%;height:100%;overflow:hidden;';
+    el.style.cssText = 'box-sizing:border-box;width:100%;height:100%;overflow:hidden;padding:12px 14px;background:var(--mux-bg);';
 
     // Isolate xterm's pointer events from dockview's panel drag-and-drop.
     //
@@ -692,10 +692,10 @@ export class MuxDock extends LitElement {
     const utility = document.createElement('button');
     utility.className = 'mux-workspace-launcher mux-utility-toggle';
     utility.type = 'button';
-    utility.title = 'Toggle terminal utility pane';
-    utility.setAttribute('aria-label', 'Toggle terminal utility pane');
+    utility.title = 'Toggle file explorer';
+    utility.setAttribute('aria-label', 'Toggle file explorer');
     utility.setAttribute('aria-pressed', String(this.terminalUtilityOpen));
-    render(icon(PanelRight, { size: 16 }), utility);
+    render(icon(Folder, { size: 16 }), utility);
     utility.addEventListener('click', event => {
       event.stopPropagation();
       this.dispatchEvent(new CustomEvent('terminal-utility-toggle', { bubbles:true, composed:true }));
