@@ -798,7 +798,7 @@ export class MuxApp extends LitElement {
    * surface ever sets it and every create is byte-identical to today's.
    */
   private _createModalHost = '';
-  private _chatTerminalPending: { chatId: string; clientRef: string; workspaceId?: string } | null = null;
+  private _terminalCreateRef = '';
 
   @state()
   private _overlayPanel: 'settings' | 'connect' | null = null;
@@ -1133,14 +1133,9 @@ export class MuxApp extends LitElement {
     // just below.
     this._disposePaneFocusListeners = this._paneFocusCoordinator.installWindowListeners();
     this._socket.onSessiondMessage = (msg) => {
-      const pendingChatTerminal = this._chatTerminalPending;
-      if (msg.type === SessiondType.WorkspaceCreated && pendingChatTerminal && pendingChatTerminal.clientRef === msg.clientRef && msg.workspaceId) {
-        const chatId = pendingChatTerminal.chatId;
-        pendingChatTerminal.workspaceId = msg.workspaceId;
-        void sdkChats.setTerminalWorkspace(chatId, msg.workspaceId).catch(error => {
-          if (this._chatTerminalPending === pendingChatTerminal) this._chatTerminalPending = null;
-          console.error('Could not link chat terminal:', error);
-        });
+      if (msg.type === SessiondType.WorkspaceCreated && this._terminalCreateRef && msg.clientRef === this._terminalCreateRef && msg.workspaceId) {
+        this._terminalCreateRef = '';
+        this._socket?.attachWithBreakpoint(msg.workspaceId, currentLayoutMode());
       }
       // For pane-added events carrying an explicit placement token (e.g. from
       // an MCP create_pane call), pre-wire the dock's placement intent BEFORE
@@ -1668,6 +1663,7 @@ export class MuxApp extends LitElement {
         ${isWide ? html`
           <mux-sidebar
             .newChatActive="${this._sdkChatId === 'new'}"
+            .terminalActive="${this._sdkChatId === null}"
             .jobsActive="${this._sdkChatId === 'jobs'}"
             .connectionsActive="${this._sdkChatId === 'connections'}"
             .skillsActive="${this._sdkChatId === 'skills'}"
@@ -1677,6 +1673,7 @@ export class MuxApp extends LitElement {
             @chat-open="${this._onChatOpen}"
             @home-open="${this._onHomeOpen}"
             @chat-new="${this._onChatNew}"
+            @terminal-open="${this._onTerminalOpen}"
             @jobs-open="${this._onJobsOpen}"
             @connections-open="${this._onConnectionsOpen}"
             @skills-open="${this._onSkillsOpen}"
@@ -1734,7 +1731,7 @@ export class MuxApp extends LitElement {
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @chat-terminal-open=${this._onChatTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -1750,6 +1747,7 @@ export class MuxApp extends LitElement {
             >
               <mux-sidebar
                 .newChatActive="${this._sdkChatId === 'new'}"
+                .terminalActive="${this._sdkChatId === null}"
                 .jobsActive="${this._sdkChatId === 'jobs'}"
                 .connectionsActive="${this._sdkChatId === 'connections'}"
                 .skillsActive="${this._sdkChatId === 'skills'}"
@@ -1760,6 +1758,7 @@ export class MuxApp extends LitElement {
                 @chat-open="${this._onChatOpen}"
                 @home-open="${this._onHomeOpen}"
                 @chat-new="${this._onChatNew}"
+                @terminal-open="${this._onTerminalOpen}"
                 @jobs-open="${this._onJobsOpen}"
                 @connections-open="${this._onConnectionsOpen}"
                 @skills-open="${this._onSkillsOpen}"
@@ -2397,6 +2396,21 @@ export class MuxApp extends LitElement {
     setChatHash(null);
     this._closeDrawer();
   };
+  private _onTerminalOpen = (): void => {
+    this._sdkChatId = null;
+    setChatHash(null);
+    (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = '';
+    this._closeDrawer();
+    if (store.attached) return;
+    const existing = store.workspaces[0];
+    if (existing) {
+      this._socket?.attachWithBreakpoint(existing.workspaceId, currentLayoutMode());
+      return;
+    }
+    if (this._terminalCreateRef) return;
+    const clientRef = mintClientRef();
+    if (this._socket?.createWorkspace('Terminal', clientRef)) this._terminalCreateRef = clientRef;
+  };
   private _onConnectionSetupChat = (event: CustomEvent<{prompt:string}>): void => {
     this._onChatNew();
     this._newChatPrompt = event.detail.prompt;
@@ -2510,24 +2524,6 @@ export class MuxApp extends LitElement {
     // terminalRegistry isolate paneIds across workspaces, so old terminals
     // stay alive with their scrollback until explicitly pruned or disposed.
     this._socket?.attachWithBreakpoint(e.detail.workspaceId, currentLayoutMode());
-  };
-
-  private _onChatTerminalOpen = (e: CustomEvent<{ chatId: string; title: string; projectPath: string; workspaceId?: string; force?: boolean }>): void => {
-    const { chatId, title, projectPath, workspaceId, force } = e.detail;
-    if (!chatId || this._sdkChatId !== chatId) return;
-    if (workspaceId) {
-      if (this._chatTerminalPending?.chatId === chatId && this._chatTerminalPending.workspaceId === workspaceId) this._chatTerminalPending = null;
-      if (force || (store.attached !== workspaceId && this._socket?.lastAttachTarget !== workspaceId)) {
-        voiceInputController.invalidateIfActive();
-        this._socket?.attachWithBreakpoint(workspaceId, currentLayoutMode());
-      }
-      return;
-    }
-    if (this._chatTerminalPending?.chatId === chatId) return;
-    const clientRef = mintClientRef();
-    if (this._socket?.createWorkspace(`Chat: ${title.slice(0, 52)}`, clientRef, '', projectPath)) {
-      this._chatTerminalPending = { chatId, clientRef };
-    }
   };
 
   /** The live <mux-dock> element in our shadow root, or null when absent. */

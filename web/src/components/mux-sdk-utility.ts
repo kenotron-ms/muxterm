@@ -1,8 +1,7 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Plus, RefreshCw, Search, Terminal, Trash2, X, type IconNode } from 'lucide';
+import { ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Plus, RefreshCw, Search, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
-import { store } from '../state.js';
 import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
@@ -10,7 +9,6 @@ import type { PartialBlock } from '@blocknote/core';
 import './mux-sdk-pdf-preview.js';
 import './mux-monaco-source.js';
 import './mux-monaco-diff.js';
-import './mux-chat-terminal.js';
 import './mux-operator-status.js';
 type Artifact = {
   path: string; name: string; size: number; modified: number;
@@ -46,10 +44,10 @@ function legacyPageContent(blocks: PageBlock[]): PartialBlock[] {
   });
   return converted.length ? converted : [{type:'paragraph'}];
 }
-type UtilityTabId = 'new' | 'files' | 'status' | 'changes' | 'terminal' | 'pages';
-type UtilityTab = { id: string; kind: UtilityTabId; paneId?: number; pageId?: string; filePath?: string };
+type UtilityTabId = 'new' | 'files' | 'status' | 'changes' | 'pages';
+type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string };
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
-const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, terminal:Terminal, pages:NotebookPen };
+const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, pages:NotebookPen };
 
 function readableSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -98,8 +96,6 @@ function tableRows(source: string, separator: string): { rows: string[][]; trunc
 export class MuxSDKUtility extends LitElement {
   @property() sessionId = '';
   @property() projectPath = '';
-  @property() chatTitle = '';
-  @property() terminalWorkspaceId = '';
   @property({ type: Boolean }) focused = false;
   @property({ attribute: false }) touched: string[] = [];
   private tabs: UtilityTab[] = [{ id: crypto.randomUUID(), kind: 'files' }];
@@ -108,7 +104,6 @@ export class MuxSDKUtility extends LitElement {
   private get currentTab(): UtilityTab { return this.tabs.find(tab => tab.id === this.activeTabId) || this.tabs[0]; }
   private railWidths = { files: 240, changes: 240, pages: 240 };
   private resizingRail: keyof typeof this.railWidths | null = null;
-  private unsubscribeStore?: () => void;
   private listing?: Listing;
   private directoryCache = new Map<string, Listing>();
   private expandedDirs = new Set<string>(['.']);
@@ -153,9 +148,6 @@ export class MuxSDKUtility extends LitElement {
   private pageSaving = false;
   private pagesConflict = false;
   private pagesRailOpen = true;
-  private terminalRetryTimer?: number;
-  private terminalRetryCount = 0;
-  private terminalCreatePending = false;
   private error = '';
   private fileError = '';
   private pendingFile = 0;
@@ -167,12 +159,12 @@ export class MuxSDKUtility extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     try {
-      const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: (UtilityTab | { id: string; kind: 'web' })[]; activeTabId?: string } | null;
+      const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string }[]; activeTabId?: string } | null;
       const valid = new Set<string>(['new','files','status','changes','terminal','pages','web']);
       if (saved?.tabs?.length && saved.tabs.length <= 30 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
-        this.tabs = saved.tabs.map(tab => tab.kind === 'web' ? { id:tab.id, kind:'new' } : tab);
+        this.tabs = saved.tabs.map(tab => ({ id:tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath }));
         this.activeTabId = this.tabs.some(tab => tab.id === saved.activeTabId) ? saved.activeTabId! : this.tabs[0].id;
-        if (saved.tabs.some(tab => tab.kind === 'web')) this.saveTabs();
+        if (saved.tabs.some(tab => tab.kind === 'web' || tab.kind === 'terminal')) this.saveTabs();
       }
       for (const key of ['files','changes','pages'] as const) {
         const width = Number(localStorage.getItem(`muxterm.sdk.utility.rail.${key}.${this.sessionId}`));
@@ -187,31 +179,26 @@ export class MuxSDKUtility extends LitElement {
     if (this.activeTab === 'changes') void this.loadChanges();
     if (this.activeTab === 'pages') void this.loadPages();
     this.pagesPollTimer = window.setInterval(() => { if (this.activeTab === 'pages' && this.pages && !this.pageSaving && !this.pagesConflict) void this.refreshPages(); }, 2500);
-    if (this.activeTab === 'terminal') queueMicrotask(() => this.requestChatTerminal());
-    this.unsubscribeStore = store.subscribe(() => { if (this.activeTab === 'terminal') { this.assignTerminalPane(); this.paintAll(); } });
   }
   override disconnectedCallback() {
     this.fileAbort?.abort();
     this.changeAbort?.abort();
-    this.unsubscribeStore?.();
-    this.unsubscribeStore = undefined;
     this.quickAbort?.abort();
     if (this.quickTimer) window.clearTimeout(this.quickTimer);
     if (this.pageSaveTimer) { window.clearTimeout(this.pageSaveTimer); void this.savePages(); }
     if (this.pagesPollTimer) window.clearInterval(this.pagesPollTimer);
-    if (this.terminalRetryTimer) window.clearTimeout(this.terminalRetryTimer);
     if (this.fileActionTimer) window.clearTimeout(this.fileActionTimer);
     super.disconnectedCallback();
   }
   override render() {
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${item.filePath || this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'terminal' ? this.terminalView(tab) : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${item.filePath || this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : this.pagesView()}</div>`;
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
     if (tab.kind === 'files') return tab.filePath?.split('/').pop() || 'Files';
     if (tab.kind === 'pages') return this.pages?.find(page => page.id === tab.pageId)?.title || 'Page';
-    return ({ status:'Status', changes:'Changes', terminal:'Terminal' } as Record<string,string>)[tab.kind] || 'Tab';
+    return ({ status:'Status', changes:'Changes' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
   private migrateLegacyFile(): boolean {
@@ -257,8 +244,6 @@ export class MuxSDKUtility extends LitElement {
     if (tab.kind === 'pages' && tab.pageId) this.pageId = tab.pageId;
     if (tab.kind === 'changes' && !this.changes) void this.loadChanges();
     if (tab.kind === 'pages' && !this.pages) void this.loadPages();
-    if (tab.kind === 'terminal') { this.terminalRetryCount = 0; this.assignTerminalPane(); this.requestChatTerminal(); }
-    else if (this.terminalRetryTimer) { window.clearTimeout(this.terminalRetryTimer); this.terminalRetryTimer = undefined; }
     return fileLoad;
   }
   private endpoint(kind: string, path?: string) {
@@ -270,14 +255,8 @@ export class MuxSDKUtility extends LitElement {
     if (existing) this.selectTab(existing.id);
     else this.addTab(id);
   }
-  private chooseTool(kind: 'terminal' | 'files' | 'status' | 'changes' | 'pages') {
+  private chooseTool(kind: 'files' | 'status' | 'changes' | 'pages') {
     const current = this.currentTab;
-    if (kind === 'terminal') {
-      const existing = this.tabs.some(tab => tab.kind === 'terminal');
-      this.terminalCreatePending = existing;
-      current.kind = 'terminal'; this.saveTabs(); this.activateTab(current); this.paintAll();
-      return;
-    }
     current.kind = kind;
     if (kind === 'pages') {
       if (!this.pages) { void this.loadPages().then(() => { const page = this.newPage(); current.pageId = page.id; this.saveTabs(); }); }
@@ -286,24 +265,7 @@ export class MuxSDKUtility extends LitElement {
     this.saveTabs(); this.paintAll();
   }
   private newTabView(): TemplateResult {
-    return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Tools</h2><div class="new-tab-tools"><button @click=${() => this.chooseTool('terminal')}>${icon(Terminal,{size:16})}<span>Terminal</span></button><button @click=${() => this.chooseTool('files')}>${icon(Folder,{size:16})}<span>Files</span></button><button @click=${() => this.chooseTool('status')}>${icon(Network,{size:16})}<span>Status</span></button><button @click=${() => this.chooseTool('changes')}>${icon(GitCompare,{size:16})}<span>Changes</span></button><button @click=${() => this.chooseTool('pages')}>${icon(NotebookPen,{size:16})}<span>New page</span></button></div></div></section>`;
-  }
-  private assignTerminalPane() {
-    if (!this.terminalWorkspaceId || store.attached !== this.terminalWorkspaceId) return;
-    const panes = store.panes.filter(pane => pane.paneId >= 0);
-    const claimed = new Set(this.tabs.filter(tab => tab.kind === 'terminal' && tab.paneId !== undefined).map(tab => tab.paneId));
-    let changed = false;
-    for (const tab of this.tabs.filter(tab => tab.kind === 'terminal' && tab.paneId === undefined)) {
-      const pane = panes.find(item => !claimed.has(item.paneId));
-      if (!pane) break;
-      tab.paneId = pane.paneId; claimed.add(pane.paneId); changed = true;
-    }
-    if (changed) this.saveTabs();
-    if (this.terminalCreatePending) {
-      this.terminalCreatePending = false;
-      if (this.currentTab.kind === 'terminal' && this.currentTab.paneId === undefined)
-        this.dispatchEvent(new CustomEvent('pane-create',{bubbles:true,composed:true}));
-    }
+    return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Tools</h2><div class="new-tab-tools"><button @click=${() => this.chooseTool('files')}>${icon(Folder,{size:16})}<span>Files</span></button><button @click=${() => this.chooseTool('status')}>${icon(Network,{size:16})}<span>Status</span></button><button @click=${() => this.chooseTool('changes')}>${icon(GitCompare,{size:16})}<span>Changes</span></button><button @click=${() => this.chooseTool('pages')}>${icon(NotebookPen,{size:16})}<span>New page</span></button></div></div></section>`;
   }
   private async loadChanges() {
     this.changesError = '';
@@ -716,32 +678,6 @@ export class MuxSDKUtility extends LitElement {
       ${changes?.truncated ? html`<p class="empty">Showing the first changes. Refresh after narrowing the project.</p>` : nothing}
     </div><div class="vertical-resizer" role="separator" aria-label="Resize changes list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'changes')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'changes')}></div><div class="change-viewer"><header><span>${this.selectedChange?.path || 'Select a changed file'}</span>${this.selectedChange ? html`<small>${this.selectedChange.status.trim() || 'Modified'}</small>` : nothing}</header>${!this.selectedChange ? html`<div class="change-empty">${icon(GitCompare,{size:34})}<h2>Review project changes</h2><p>Select a file to compare it with HEAD.</p></div>` : !detail ? html`<div class="change-empty">Loading diff…</div>` : detail.tooLarge ? html`<div class="change-empty">This file is too large for the diff viewer.</div>` : detail.binary ? html`<div class="change-empty">Binary changes cannot be shown as text.</div>` : html`<mux-monaco-diff .repo=${detail.repo} .path=${detail.path} .originalText=${detail.before} .modifiedText=${detail.after}></mux-monaco-diff>`}</div></section>`;
   }
-  private terminalView(tab: UtilityTab): TemplateResult {
-    const active = !!this.terminalWorkspaceId && store.attached === this.terminalWorkspaceId;
-    const paneExists = active && store.panes.some(pane => pane.paneId === tab.paneId);
-    return html`<section class="terminal-panel"><div class="terminal-content">${paneExists ? html`<mux-chat-terminal .paneId=${tab.paneId!}></mux-chat-terminal>` : html`<div class="terminal-empty">${active ? 'Opening terminal pane…' : this.terminalWorkspaceId ? 'Opening this chat’s terminal…' : 'Creating this chat’s terminal…'}<button @click=${() => this.requestChatTerminal()}>Retry</button></div>`}</div></section>`;
-  }
-  private requestChatTerminal(force = false) {
-    if (!this.sessionId || !this.projectPath) return;
-    this.dispatchEvent(new CustomEvent('chat-terminal-open',{detail:{chatId:this.sessionId,title:this.chatTitle,projectPath:this.projectPath,workspaceId:this.terminalWorkspaceId,force},bubbles:true,composed:true}));
-    this.scheduleTerminalRetry();
-  }
-  private scheduleTerminalRetry() {
-    if (this.activeTab !== 'terminal') return;
-    if (this.terminalWorkspaceId && store.attached === this.terminalWorkspaceId && store.panes.some(pane => pane.paneId >= 0)) {
-      if (this.terminalRetryTimer) window.clearTimeout(this.terminalRetryTimer);
-      this.terminalRetryTimer = undefined;
-      this.terminalRetryCount = 0;
-      return;
-    }
-    if (this.terminalRetryTimer) return;
-    if (this.terminalRetryCount >= 3) return;
-    this.terminalRetryTimer = window.setTimeout(() => {
-      this.terminalRetryTimer = undefined;
-      this.terminalRetryCount++;
-      if (this.isConnected && this.activeTab === 'terminal') this.requestChatTerminal(true);
-    }, 2500);
-  }
   private async loadPages() {
     this.pagesError = '';
     try {
@@ -848,12 +784,6 @@ export class MuxSDKUtility extends LitElement {
     if (this.migrateLegacyFile()) {
       if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
       this.paintAll();
-    }
-    if (this.activeTab === 'terminal') {
-      const previousPane = this.currentTab.paneId;
-      this.assignTerminalPane();
-      if (this.currentTab.paneId !== previousPane) this.paintAll();
-      this.requestChatTerminal();
     }
     if (this.activeTab !== 'pages') return;
     for (const field of this.querySelectorAll<HTMLTextAreaElement>('.page-title')) {
@@ -1047,14 +977,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .change-empty p { margin:0; font:12px system-ui,sans-serif; }
     mux-sdk-utility mux-monaco-diff { display:block; flex:1; min-height:0; min-width:0; }
     mux-sdk-utility mux-monaco-diff .monaco-diff-host { width:100%; height:100%; }
-    mux-sdk-utility .terminal-panel { display:flex; flex-direction:column; width:100%; height:100%; min-width:0; min-height:0; background:var(--chrome-body); }
-    mux-sdk-utility .terminal-panel > header { display:flex; align-items:center; justify-content:space-between; flex:none; min-height:40px; padding:0 9px 0 12px; border-bottom:1px solid var(--chrome-border); }
-    mux-sdk-utility .terminal-workspace { display:flex; align-items:center; gap:8px; min-width:0; color:var(--chrome-accent); }
-    mux-sdk-utility .terminal-workspace strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-bright); font:600 11px system-ui,sans-serif; }
-    mux-sdk-utility .terminal-content { flex:1; min-height:0; min-width:0; }
-    mux-sdk-utility .terminal-content mux-chat-terminal { display:block; width:100%; height:100%; }
-    mux-sdk-utility .terminal-empty { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px; height:100%; color:var(--chrome-text-dim); text-align:center; }
-    mux-sdk-utility .terminal-empty button { border:1px solid var(--chrome-border); border-radius:6px; padding:6px 10px; background:var(--chrome-bar); color:var(--chrome-text-bright); cursor:pointer; }
     mux-sdk-utility .pages-list { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:color-mix(in srgb,var(--chrome-body) 78%,var(--chrome-bar)); }
     mux-sdk-utility .pages-list .browser-heading { flex:none; }
     mux-sdk-utility .pages-list .empty, mux-sdk-utility .pages-error { margin:14px; font:11px/1.5 system-ui,sans-serif; color:var(--chrome-text-dim); }
