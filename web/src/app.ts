@@ -44,7 +44,7 @@ import './components/mux-new-chat.js';
 import './components/mux-scheduled-jobs.js';
 import './components/mux-connections.js';
 import './components/mux-skills.js';
-import './components/mux-terminal-files.js';
+import './components/mux-sdk-utility.js';
 import { homeSessions } from './lib/home-sessions.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -608,7 +608,7 @@ export class MuxApp extends LitElement {
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
     .terminal-utility { box-sizing:border-box; width:min(360px,42%); min-width:270px; flex:none; display:flex; flex-direction:column; border-left:1px solid var(--chrome-border); background:var(--chrome-body); color:var(--chrome-text-bright); }
-    .terminal-utility > mux-terminal-files { min-height:0; flex:1; }
+    .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:6; top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:-10px 0 25px #0005; } }
 
     /* Keep the 4px resize target, but continue the title bar across its top.
@@ -1712,7 +1712,7 @@ export class MuxApp extends LitElement {
                 ></mux-dock>
                 ${this._terminalUtilityOpen && !this._sdkChatId ? html`
                   <aside class="terminal-utility" aria-label="File explorer">
-                    <mux-terminal-files @close="${() => { this._terminalUtilityOpen = false; }}"></mux-terminal-files>
+                    <mux-sdk-utility terminal-mode .sessionId=${'terminal'} @close="${() => { this._terminalUtilityOpen = false; }}"></mux-sdk-utility>
                   </aside>
                 ` : ''}
               </div>
