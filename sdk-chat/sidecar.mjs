@@ -103,6 +103,7 @@ async function runClaude(s) {
   const agentTools = new Set();
   const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, additionalDirectories: s.sourceFolders, resume: s.nativeId || undefined,
     model: s.model || undefined,
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Before your first tool call for a user request, give the user one brief, concrete progress update describing your next action. During longer work, give further updates at meaningful milestones. Keep private reasoning private.' },
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: { ...muxtermMcpEnv, MUXTERM_CHAT_ORIGIN_FILE: s.originFile } },
       ...(existsSync(githubMarker) ? { github: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'github'], env: githubMcpEnv } } : {}),
       ...(existsSync(join(microsoftRoot, 'personal', 'enabled')) ? { microsoft_personal: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['connection-mcp', 'microsoft-personal'], env: microsoftMcpEnv } } : {}),
