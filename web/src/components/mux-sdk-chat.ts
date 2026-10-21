@@ -63,7 +63,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { BookOpen, Bot, Check, ChevronDown, ChevronRight, CircleX, Copy, FilePenLine, Folder, GitFork, Globe, MessageCircle, Mic, Network, NotebookTabs, PanelRight, Pause, Pencil, Play, Search, Target, Terminal, Wrench, X, type IconNode } from 'lucide';
+import { BookOpen, Bot, Check, ChevronDown, ChevronRight, CircleX, Copy, FilePenLine, Folder, GitFork, Globe, Mic, Network, NotebookTabs, PanelRight, Pause, Pencil, Play, Search, Target, Terminal, Wrench, X, type IconNode } from 'lucide';
 
 type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
@@ -260,9 +260,9 @@ export class MuxSDKChat extends LitElement {
     .virtual-spacer { width:1px; flex:none; pointer-events:none; }
     .block { max-width:760px; width:100%; align-self:center; margin-bottom:28px; box-sizing:border-box; }
     .block.work { margin-top:-12px; margin-bottom:20px; }
-    .work-stream { display:flex; align-items:center; gap:7px; min-height:25px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); }
+    .work-stream { display:flex; align-items:center; gap:7px; min-height:25px; color:var(--chrome-text-dim,#9aa3b8); font-size:14px; }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; animation:thinking-pulse 1.6s ease-in-out infinite; }
-    .work-disclosure > summary { display:flex; align-items:center; gap:7px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); list-style:none; cursor:pointer; }
+    .work-disclosure > summary { display:flex; align-items:center; gap:7px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:14px; list-style:none; cursor:pointer; }
     .work-disclosure .activity-label { flex:none; }
     .work-disclosure .pulse { width:7px; height:7px; flex:none; border-radius:50%; background:var(--chrome-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--chrome-accent) 14%,transparent); animation:activity-pulse 1.35s ease-in-out infinite; }
     @keyframes activity-pulse { 50% { opacity:.35; transform:scale(.7); } }
@@ -275,19 +275,19 @@ export class MuxSDKChat extends LitElement {
     .work-items { padding:12px 0 2px; }
     .interjection-entry { margin:8px 0 10px; }
     .work-item { margin-bottom:5px; }
-    .work-passage { margin:0 0 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); line-height:1.55; overflow-wrap:anywhere; }
+    .work-passage { margin:0 0 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:14px; line-height:1.55; overflow-wrap:anywhere; }
     .work-passage > :first-child { margin-top:0; }
     .work-passage > :last-child { margin-bottom:0; }
     .work-passage .md-p { margin:0 0 7px; }
-    .work-passage .md-h { margin:8px 0 5px; font-size:var(--mux-font-size,16px); line-height:1.45; color:var(--chrome-text-bright,#d9def0); }
+    .work-passage .md-h { margin:8px 0 5px; font-size:14px; line-height:1.45; color:var(--chrome-text-bright,#d9def0); }
     .work-passage .md-ul,.work-passage .md-ol { margin:5px 0; padding-left:19px; }
     .work-passage .md-pre { max-width:100%; overflow:auto; padding:7px 9px; border-radius:6px; background:var(--chrome-bar); }
-    .work-passage .md-code { font:var(--mux-font-size,16px) ui-monospace,monospace; }
-    .work-current-tool { display:flex; align-items:center; gap:8px; min-height:27px; overflow:hidden; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); }
+    .work-passage .md-code { font:14px ui-monospace,monospace; }
+    .work-current-tool { display:flex; align-items:center; gap:8px; min-height:27px; overflow:hidden; color:var(--chrome-text-dim,#9aa3b8); font-size:14px; }
     .work-current-tool .work-line { flex:1; }
     .work-current-tool.failed { color:var(--chrome-danger); }
     .user { display:flex; flex-direction:column; align-items:flex-end; }
-    .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:var(--mux-font-size,16px); line-height:1.55; }
+    .bubble { max-width:min(82%,660px); padding:10px 15px; border-radius:17px; background:color-mix(in srgb,var(--chrome-accent) 14%,var(--chrome-body)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:9px; margin-top:8px; object-fit:contain; }
     .bubble a { display:block; margin-top:7px; color:var(--chrome-accent); }
     .lane-report-table { box-sizing:border-box; width:100%; max-width:720px; min-width:0; overflow:hidden; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
@@ -351,7 +351,7 @@ export class MuxSDKChat extends LitElement {
     .message-actions button:focus-visible { color:var(--chrome-accent); }
     .message-actions button:disabled { opacity:.45; cursor:default; }
     .message-actions .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
-    .message-time { margin-left:5px; color:var(--chrome-text-dim); font-size:var(--mux-font-size,16px); font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .message-time { margin-left:5px; color:var(--chrome-text-dim); font-size:14px; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .user .message-time { order:-1; margin:0 5px 0 0; }
     .message-edit { box-sizing:border-box; width:min(82%,660px); padding:10px; border:1px solid var(--chrome-border); border-radius:12px; background:var(--chrome-bar); }
     .message-edit .textarea-sizing { width:100%; min-height:96px; max-height:320px; }
@@ -361,8 +361,8 @@ export class MuxSDKChat extends LitElement {
     .message-edit-controls button:last-child { border-color:var(--chrome-accent); color:var(--chrome-accent); }
     @media (hover:none) { .message-actions { opacity:1; } .message-actions button { width:32px; height:32px; } }
     @media (prefers-reduced-motion:reduce) { .message-actions { transition:none; } }
-    .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); font-weight:600; margin-bottom:10px; text-transform:capitalize; }
-    .text { color:var(--chrome-text-bright,#d9def0); font-size:var(--mux-font-size,16px); line-height:1.68; overflow-wrap:anywhere; }
+    .speaker { color:var(--chrome-text-dim,#9aa3b8); font-size:14px; font-weight:600; margin-bottom:10px; text-transform:capitalize; }
+    .text { color:var(--chrome-text-bright,#d9def0); font-size:14px; line-height:1.68; overflow-wrap:anywhere; }
     .text > :first-child { margin-top:0; }
     .text > :last-child { margin-bottom:0; }
     .text .md-p { margin:0 0 15px; }
@@ -374,8 +374,8 @@ export class MuxSDKChat extends LitElement {
     .text strong { color:var(--chrome-text-bright,#d9def0); font-weight:700; }
     .text .md-code { padding:.13em .38em; border:1px solid var(--chrome-border,#41485f); border-radius:5px; background:var(--chrome-bar,#202632); font:1em/1.4 ui-monospace,monospace; }
     .text .md-pre { box-sizing:border-box; max-width:100%; overflow:auto; margin:0 0 18px; padding:16px 18px; border:1px solid var(--chrome-border,#41485f); border-radius:12px; background:var(--chrome-bar,#202632); }
-    .text .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:-4px 0 12px; color:var(--chrome-text-dim,#9aa3b8); font:var(--mux-font-size,16px)/1.4 var(--mux-font-family,system-ui,sans-serif); text-transform:uppercase; letter-spacing:.04em; }
-    .text .md-pre code { color:inherit; font:var(--mux-font-size,16px)/1.6 ui-monospace,monospace; white-space:pre; }
+    .text .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:-4px 0 12px; color:var(--chrome-text-dim,#9aa3b8); font:14px/1.4 var(--mux-font-family,system-ui,sans-serif); text-transform:uppercase; letter-spacing:.04em; }
+    .text .md-pre code { color:inherit; font:14px/1.6 ui-monospace,monospace; white-space:pre; }
     .text .md-pre[data-streaming] { border-bottom-color:var(--chrome-accent,#9bb8f7); }
     .text .md-link { color:var(--chrome-accent,#9bb8f7); text-decoration:underline; text-underline-offset:3px; }
     .text .md-chat-link { display:inline-flex; align-items:baseline; gap:4px; max-width:100%; padding:1px 6px; border:1px solid color-mix(in srgb,var(--chrome-accent,#9bb8f7) 48%,transparent); border-radius:6px; background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 12%,transparent); font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
@@ -394,11 +394,8 @@ export class MuxSDKChat extends LitElement {
     .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--chrome-border,#41485f); text-align:left; vertical-align:top; overflow-wrap:break-word; word-break:normal; }
     .text .md-table .md-link, .text .md-table .md-code { overflow-wrap:break-word; }
     .text .md-th { background:var(--chrome-bar,#202632); }
-    .progress-entry, .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:12px; }
-    .progress-entry { display:flex; align-items:baseline; gap:8px; margin:5px 0 9px; line-height:1.5; }
-    .progress-text { min-width:0; overflow-wrap:anywhere; }
-    .progress-text > :first-child { margin-top:0; }
-    .progress-text > :last-child { margin-bottom:0; }
+    .work-assistant { margin:12px 0 18px; }
+    .tool-activity, .tool-entry { color:var(--chrome-text-dim,#9aa3b8); font-size:14px; }
     .tool-activity > summary, .tool-entry > summary { display:flex; align-items:center; gap:8px; min-height:27px; list-style:none; cursor:pointer; }
     .tool-activity > summary::-webkit-details-marker, .tool-entry > summary::-webkit-details-marker { display:none; }
     .tool-activity > summary:focus-visible, .tool-entry > summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
@@ -413,9 +410,9 @@ export class MuxSDKChat extends LitElement {
     .tool-entry > summary { padding-left:22px; }
     .tool-entry.failed > summary { color:var(--chrome-danger); }
     .tool-entry .detail { box-sizing:border-box; max-width:min(100%,650px); margin:5px 0 11px 23px; padding:10px 12px 12px; border:1px solid var(--chrome-border,#41485f); border-radius:9px; background:color-mix(in srgb,var(--chrome-accent) 5%,var(--chrome-body)); }
-    .tool-detail-title { color:var(--chrome-text-bright,#d9def0); font-size:var(--mux-font-size,16px); font-weight:600; }
+    .tool-detail-title { color:var(--chrome-text-bright,#d9def0); font-size:14px; font-weight:600; }
     .detail-label { color:var(--chrome-accent); font-weight:600; margin:9px 0 4px; }
-    .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:var(--chrome-bar); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:var(--mux-font-size,16px)/1.5 ui-monospace,monospace; }
+    .detail pre { margin:0; padding:8px 10px; border-radius:6px; background:var(--chrome-bar); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--chrome-text-bright,#d9def0); font:14px/1.5 ui-monospace,monospace; }
     .error { color:var(--chrome-danger); }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { position:relative; padding:0 19px 18px; }
@@ -467,7 +464,7 @@ export class MuxSDKChat extends LitElement {
     .goal-utility button:disabled { opacity:.5; cursor:not-allowed; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; min-height:34px; }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
-    .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:220px; font:var(--mux-font-size,16px)/1.55 var(--mux-font-family,system-ui,sans-serif); }
+    .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:220px; font:14px/1.55 var(--mux-font-family,system-ui,sans-serif); }
     textarea { display:block; width:100%; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; min-height:50px; max-height:220px; padding:3px 0; box-sizing:border-box; overflow-y:auto; }
     .native-textarea-sizing textarea { field-sizing:content; height:auto; }
     .legacy-textarea-sizing textarea { position:absolute; inset:0; height:100%; min-height:0; max-height:none; }
@@ -1807,7 +1804,7 @@ export class MuxSDKChat extends LitElement {
     }).join(', ').replace(/^./, first => first.toUpperCase());
   }
   private commentaryEntry(block: Block) {
-    return html`<div class="progress-entry" aria-label="Progress update"><span class="work-icon">${icon(MessageCircle, { size: 14 })}</span><div class="progress-text">${this.markdown(block, block.key)}</div></div>`;
+    return html`<div class="text work-assistant" aria-label="Progress update">${this.markdown(block, block.key)}</div>`;
   }
   private interjectionEntry(block: Block) {
     return html`<div class="interjection-entry user" aria-label="Your interjection">${this.userBubble(block)}</div>`;
