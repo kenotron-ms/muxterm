@@ -894,9 +894,10 @@ export class MuxSDKChat extends LitElement {
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      const value = (this.pendingDraft ?? this.draft).trim();
+      const rawValue = this.pendingDraft ?? this.draft;
+      const value = rawValue.trim();
       const exactCommand = parseChatCommand(value);
-      if (suggestions.length && value !== (exactCommand ? `/${exactCommand.name}` : '') && value !== suggestions[this.slashSelection]?.label) {
+      if (suggestions.length && rawValue !== (exactCommand ? `/${exactCommand.name}` : '') && value !== suggestions[this.slashSelection]?.label) {
         this.selectSlashSuggestion(suggestions[this.slashSelection % suggestions.length].insert);
       } else void this.send();
     }
@@ -2362,7 +2363,7 @@ export class MuxSDKChat extends LitElement {
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
     </div>${this.goalSurfaces()}${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap">
-      ${slashSuggestions.length ? html`<div class="slash-menu" id="chat-slash-menu" role="listbox" aria-label="Chat commands">${slashSuggestions.map((suggestion,index) => html`<button role="option" aria-selected=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}><code>${suggestion.label}</code><span>${suggestion.description}</span></button>`)}</div>` : nothing}
+      ${slashSuggestions.length ? html`<div class="slash-menu" id="chat-slash-menu" role="listbox" aria-label="Chat commands">${slashSuggestions.map((suggestion,index) => html`<button id=${`chat-slash-option-${index}`} role="option" aria-selected=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}><code>${suggestion.label}</code><span>${suggestion.description}</span></button>`)}</div>` : nothing}
       ${this.commandNotice ? html`<div class="command-notice ${this.commandFailed ? 'error' : ''}" role=${this.commandFailed ? 'alert' : 'status'}>${this.commandNotice}</div>` : nothing}
       <div class="composer" @paste=${this.onPaste}>
       ${this.goalBanner()}
@@ -2373,7 +2374,7 @@ export class MuxSDKChat extends LitElement {
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
         <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
       </div>`)}</div>` : nothing}
-      <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}" role="combobox" aria-label="Message commands" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-haspopup="listbox"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
+      <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
