@@ -24,7 +24,7 @@ type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; pare
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type Block = { key: number; turn: number; kind: 'user' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
+type Block = { key: number; turn: number; kind: 'user' | 'interjection' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
@@ -273,6 +273,9 @@ export class MuxSDKChat extends LitElement {
     .work-disclosure > summary svg { opacity:.7; transition:transform .15s ease; }
     .work-disclosure[open] > summary svg { transform:rotate(180deg); }
     .work-items { padding:12px 0 2px; }
+    .interjection-entry { display:flex; align-items:baseline; gap:8px; margin:8px 0 10px; color:var(--chrome-text-bright,#d9def0); font-size:12px; line-height:1.5; }
+    .interjection-entry .work-icon, .interjection-entry strong { color:var(--chrome-accent,#9bb8f7); }
+    .interjection-entry .interjection-text { min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; }
     .work-item { margin-bottom:5px; }
     .work-passage { margin:0 0 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); line-height:1.55; overflow-wrap:anywhere; }
     .work-passage > :first-child { margin-top:0; }
@@ -1347,13 +1350,13 @@ export class MuxSDKChat extends LitElement {
       if (event.inputId) this.pendingInputs.delete(event.inputId);
       const pendingIndex = pendingKey === undefined ? -1 : blocks.findIndex(block => block.key === pendingKey);
       if (pendingIndex >= 0) {
-        blocks[pendingIndex] = { ...blocks[pendingIndex], text:event.text || blocks[pendingIndex].text, id:event.kind === 'user' ? event.inputId : undefined, at:event.at, attachments:event.attachments || blocks[pendingIndex].attachments };
+        blocks[pendingIndex] = { ...blocks[pendingIndex], kind:event.kind === 'steer' ? 'interjection' : 'user', text:event.text || blocks[pendingIndex].text, id:event.kind === 'user' ? event.inputId : undefined, at:event.at, attachments:event.attachments || blocks[pendingIndex].attachments };
       } else
       if (event.kind === 'steer') {
         const last = blocks[blocks.length - 1];
         if (last?.kind === 'assistant') blocks[blocks.length - 1] = { ...last, done:true };
         markStart(this.currentTurn);
-        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'user', at:event.at, text:event.text || '' });
+        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'interjection', at:event.at, text:event.text || '' });
       } else {
         // The harness can stream a fast reply before its send receipt arrives.
         const anchor = event.inputId ? this.completedInputAnchors.get(event.inputId) : undefined;
@@ -1808,6 +1811,9 @@ export class MuxSDKChat extends LitElement {
   private commentaryEntry(block: Block) {
     return html`<div class="progress-entry" aria-label="Progress update"><span class="work-icon">${icon(MessageCircle, { size: 14 })}</span><div class="progress-text">${this.markdown(block, block.key)}</div></div>`;
   }
+  private interjectionEntry(block: Block) {
+    return html`<div class="interjection-entry" aria-label="Your interjection"><span class="work-icon">${icon(MessageCircle, { size: 14 })}</span><strong>You</strong><span class="interjection-text">${block.text}</span></div>`;
+  }
   private toolEntry(block: Block, key: string) {
     const kind = this.toolKind(block);
     const label = this.toolLine(block);
@@ -1843,6 +1849,7 @@ export class MuxSDKChat extends LitElement {
       else {
         flush();
         if (item.kind === 'commentary') steps.push(this.commentaryEntry(item));
+        else if (item.kind === 'interjection') steps.push(this.interjectionEntry(item));
       }
     }
     flush();
@@ -1879,7 +1886,7 @@ export class MuxSDKChat extends LitElement {
     const latestInput = new Map<number, number>();
     for (const block of this.blocks) {
       if (block.kind === 'user' || block.kind === 'chat-message') latestInput.set(block.turn, block.key);
-      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress') {
+      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection') {
         const items = work.get(block.turn) || [];
         items.push(block);
         work.set(block.turn, items);
@@ -1888,7 +1895,7 @@ export class MuxSDKChat extends LitElement {
     const shown = new Set<number>();
     const rows: TranscriptRow[] = [];
     for (const block of this.blocks) {
-      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress') {
+      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection') {
         if (shown.has(block.turn) || latestInput.has(block.turn)) continue;
         shown.add(block.turn);
         rows.push({ key:`work-${block.turn}`, block, work:work.get(block.turn) });
@@ -2122,8 +2129,9 @@ export class MuxSDKChat extends LitElement {
     const wasBusy = this.busy;
     const key = ++this.nextBlockKey;
     this.pendingInputs.set(id, key);
-    this.blocks = [...this.blocks, { key, turn:this.currentTurn, kind:'user', text:content, attachments:sent.filter(item => item.id).map(item => ({ id:item.id!, name:item.file.name, kind:item.kind || '' })) },
+    this.blocks = [...this.blocks, { key, turn:this.currentTurn, kind:wasBusy ? 'interjection' : 'user', text:content, attachments:sent.filter(item => item.id).map(item => ({ id:item.id!, name:item.file.name, kind:item.kind || '' })) },
       ...(!wasBusy ? [{ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress' as const, text:'Message received' }] : [])];
+    if (wasBusy) this.workExpanded.add(this.currentTurn);
     if (!wasBusy) { this.busy = true; this.turnStarted.set(this.currentTurn, Date.now()); }
     // Keep the saved copy until the server accepts the message. A reload during
     // an in-flight request must still recover what the user typed.
