@@ -149,6 +149,10 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown goal action", 400)
 		return
 	}
+	if !supportsNativeGoalControl(chat.Harness) && slices.Contains([]string{"set", "approve", "authorize", "start", "pause", "resume", "clear"}, req.Action) {
+		http.Error(w, goalCapabilityGap(chat.Harness), http.StatusUnprocessableEntity)
+		return
+	}
 	if req.StartBy != "" && req.StartBy != "human" && req.StartBy != "operator" {
 		http.Error(w, "startBy must be human or operator", 400)
 		return
@@ -251,7 +255,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		document.ControlVersion++
 		document.Gap = goalCapabilityGap(chat.Harness)
 		status := "dispatching"
-		if chat.Harness != "codex" && chat.Harness != "amplifier" && chat.Harness != "claude" {
+		if !supportsNativeGoalControl(chat.Harness) {
 			status = "unsupported"
 		}
 		if req.Action == "evidence" || req.Action == "propose" || req.Action == "authorize" || req.Action == "revoke" || (req.Action == "approve" && req.StartBy != "human") {
