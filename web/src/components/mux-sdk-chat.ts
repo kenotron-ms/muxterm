@@ -273,9 +273,7 @@ export class MuxSDKChat extends LitElement {
     .work-disclosure > summary svg { opacity:.7; transition:transform .15s ease; }
     .work-disclosure[open] > summary svg { transform:rotate(180deg); }
     .work-items { padding:12px 0 2px; }
-    .interjection-entry { display:flex; align-items:baseline; gap:8px; margin:8px 0 10px; color:var(--chrome-text-bright,#d9def0); font-size:12px; line-height:1.5; }
-    .interjection-entry .work-icon, .interjection-entry strong { color:var(--chrome-accent,#9bb8f7); }
-    .interjection-entry .interjection-text { min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .interjection-entry { margin:8px 0 10px; }
     .work-item { margin-bottom:5px; }
     .work-passage { margin:0 0 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:var(--mux-font-size,16px); line-height:1.55; overflow-wrap:anywhere; }
     .work-passage > :first-child { margin-top:0; }
@@ -1812,7 +1810,7 @@ export class MuxSDKChat extends LitElement {
     return html`<div class="progress-entry" aria-label="Progress update"><span class="work-icon">${icon(MessageCircle, { size: 14 })}</span><div class="progress-text">${this.markdown(block, block.key)}</div></div>`;
   }
   private interjectionEntry(block: Block) {
-    return html`<div class="interjection-entry" aria-label="Your interjection"><span class="work-icon">${icon(MessageCircle, { size: 14 })}</span><strong>You</strong><span class="interjection-text">${block.text}</span></div>`;
+    return html`<div class="interjection-entry user" aria-label="Your interjection">${this.userBubble(block)}</div>`;
   }
   private toolEntry(block: Block, key: string) {
     const kind = this.toolKind(block);
