@@ -300,21 +300,6 @@ class HeaderButton {
   dispose(): void { this.element.remove(); }
 }
 
-class WorkspacePrefix {
-  readonly element: HTMLElement;
-
-  constructor(name: string) {
-    const label = document.createElement('div');
-    label.className = 'mux-workspace-prefix';
-    label.innerHTML = '<span class="mux-workspace-prefix-label"></span><span aria-hidden="true">›</span>';
-    label.querySelector<HTMLElement>('.mux-workspace-prefix-label')!.textContent = name;
-    this.element = label;
-  }
-
-  init(): void { /* label is ready when dockview inserts it */ }
-  dispose(): void { this.element.remove(); }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // MuxDock
 // ─────────────────────────────────────────────────────────────────────────────
@@ -332,7 +317,6 @@ export class MuxDock extends LitElement {
   @property({ attribute: false }) panes: SessiondPaneInfo[] = [];
   @property({ attribute: false }) activePaneId = -1;
   @property({ attribute: false }) workspaceKey = '';
-  @property({ attribute: false }) workspaceName = '';
   @property({ type: Boolean, reflect: true }) terminalUtilityOpen = false;
   /**
    * "After you restore this workspace, activate THIS pane" -- the home view's
@@ -944,21 +928,6 @@ export class MuxDock extends LitElement {
         mux-dock .dv-tabs-container > .dv-tab:first-child {
           padding-inline-start: 8px !important;
         }
-        mux-dock .mux-workspace-prefix {
-          box-sizing: border-box;
-          height: var(--mux-titlebar-height, 44px);
-          max-width: 220px;
-          min-width: 95px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 0 14px 0 16px;
-          border-right: 1px solid var(--chrome-border);
-          color: var(--chrome-text-dim);
-          font: 500 12px Inter, system-ui, sans-serif;
-          white-space: nowrap;
-        }
-        mux-dock .mux-workspace-prefix-label { overflow:hidden; text-overflow:ellipsis; }
         mux-dock:not([workspace-actions-visible]) .mux-workspace-actions {
           visibility: hidden;
           pointer-events: none;
@@ -1249,7 +1218,6 @@ export class MuxDock extends LitElement {
           (target) => this._emitPaneCloseTarget(target),
         );
       },
-      createPrefixHeaderActionComponent: () => new WorkspacePrefix(this.workspaceName || 'Workspace'),
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
       // The "left" slot therefore renders immediately after the tabs (before
       // the grow-to-fill void), and the "right" slot renders far right.
@@ -1367,9 +1335,6 @@ export class MuxDock extends LitElement {
   override updated(changed: Map<string, unknown>): void {
     super.updated(changed);
     if (changed.has('terminalUtilityOpen')) this.querySelector('.mux-utility-toggle')?.setAttribute('aria-pressed', String(this.terminalUtilityOpen));
-    if (changed.has('workspaceName')) {
-      for (const label of this.querySelectorAll<HTMLElement>('.mux-workspace-prefix-label')) label.textContent = this.workspaceName || 'Workspace';
-    }
     if (changed.has('workspaceActionsVisible')) this._syncWorkspaceActionVisibility();
     if (!this._dv) return;
 

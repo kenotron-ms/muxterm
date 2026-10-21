@@ -260,10 +260,10 @@ export class MuxTitleBar extends LitElement {
         : html`<button
             class="drawer-btn"
             type="button"
-            title="Workspaces"
+            title="Navigation"
             aria-label="${needs
-              ? 'Sessions need input. Open workspaces.'
-              : 'Open workspaces'}"
+              ? 'Sessions need input. Open navigation.'
+              : 'Open navigation'}"
             aria-expanded="${this.drawerOpen ? 'true' : 'false'}"
             @click="${this._toggleDrawer}"
           >

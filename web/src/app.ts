@@ -4,7 +4,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { Folder, MonitorX, SquareTerminal, X } from 'lucide';
+import { MonitorX, SquareTerminal, X } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { previewStore } from './lib/preview-store.js';
@@ -53,7 +53,6 @@ import { WorkspaceController } from './lib/workspace-controller.js';
 import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
 import { sdkChats } from './lib/sdk-chats.js';
-import { workspaceLabel } from './lib/workspace-label.js';
 import {
   SessiondType,
   SessiondErrorCode,
@@ -609,19 +608,14 @@ export class MuxApp extends LitElement {
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
     .terminal-utility { box-sizing:border-box; width:min(360px,42%); min-width:270px; flex:none; display:flex; flex-direction:column; border-left:1px solid var(--chrome-border); background:var(--chrome-body); color:var(--chrome-text-bright); }
     .terminal-utility-tabs { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:4px; padding:0 max(8px,var(--wco-right-inset,0px)) 0 8px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); }
-    .terminal-utility-tablist { display:flex; align-items:center; gap:4px; }
+    .terminal-utility-tabs strong { padding-left:8px; font:650 12px Inter,system-ui,sans-serif; }
     .terminal-utility-tabs button { height:29px; border:0; border-radius:6px; padding:0 9px; background:transparent; color:var(--chrome-text-dim); font:500 11px Inter,system-ui,sans-serif; cursor:pointer; }
-    .terminal-utility-tabs button:hover,.terminal-utility-tabs button[aria-selected="true"] { background:var(--chrome-hover); color:var(--chrome-text-bright); }
+    .terminal-utility-tabs button:hover { background:var(--chrome-hover); color:var(--chrome-text-bright); }
     .terminal-utility-tabs .close-utility { width:28px; padding:0; margin-left:auto; display:grid; place-items:center; }
     .terminal-utility-body { padding:16px; overflow:auto; font:12px/1.5 Inter,system-ui,sans-serif; }
-    .terminal-utility-body h2 { margin:0 0 12px; font-size:13px; font-weight:650; }
-    .terminal-utility-body p { margin:0 0 14px; color:var(--chrome-text-dim); overflow-wrap:anywhere; }
     .terminal-utility-body .utility-pane-row { width:100%; min-height:36px; display:flex; align-items:center; gap:9px; padding:0 9px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-bright); text-align:left; font:inherit; cursor:pointer; }
     .terminal-utility-body .utility-pane-row:hover,.terminal-utility-body .utility-pane-row[aria-current="true"] { background:var(--chrome-hover); }
     .terminal-utility-body .utility-pane-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .terminal-utility-body .utility-detail { display:flex; align-items:center; gap:9px; min-height:36px; border-bottom:1px solid var(--chrome-border); }
-    .terminal-utility-body .utility-detail span { color:var(--chrome-text-dim); }
-    .terminal-utility-body .utility-detail strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:550; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:6; top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:-10px 0 25px #0005; } }
 
     /* Keep the 4px resize target, but continue the title bar across its top.
@@ -821,7 +815,6 @@ export class MuxApp extends LitElement {
 
   @state() private _sdkChatId: string | null = null;
   @state() private _terminalUtilityOpen = false;
-  @state() private _terminalUtilityTab: 'panes' | 'workspace' = 'panes';
   @state() private _connectionSelection = 'github';
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
@@ -1633,7 +1626,6 @@ export class MuxApp extends LitElement {
     const chatTitle = this._sdkChatId
       ? UTILITY_TITLES.get(this._sdkChatId) || sdkChats.chats.find(chat => chat.id === this._sdkChatId)?.title || 'Chat'
       : '';
-    const attachedWorkspace = store.workspaces.find(workspace => workspace.workspaceId === store.attached);
 
     return html`
       <div class="window-chrome ${isWide && (this._sdkChatId === 'new' || selectedSDKChat || (!this._sdkChatId && panes.length > 0)) ? 'integrated' : ''}">
@@ -1710,7 +1702,6 @@ export class MuxApp extends LitElement {
                   .panes="${panes}"
                   .activePaneId="${store.activePaneId}"
                   .workspaceKey="${store.attached ?? ''}"
-                  .workspaceName="${attachedWorkspace ? workspaceLabel(attachedWorkspace) : 'Workspace'}"
                   .terminalUtilityOpen="${this._terminalUtilityOpen && !this._sdkChatId}"
                   .requestedPaneId="${this._requestedPaneId}"
                   .layout="${store.layout}"
@@ -1723,7 +1714,17 @@ export class MuxApp extends LitElement {
                   @terminal-utility-toggle="${() => { this._terminalUtilityOpen = !this._terminalUtilityOpen; }}"
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
-                ${this._terminalUtilityOpen && !this._sdkChatId ? html`<aside class="terminal-utility" aria-label="Terminal utility pane"><div class="terminal-utility-tabs"><div class="terminal-utility-tablist" role="tablist" aria-label="Terminal tools"><button role="tab" aria-selected="${this._terminalUtilityTab === 'panes'}" @click="${() => { this._terminalUtilityTab = 'panes'; }}">Panes</button><button role="tab" aria-selected="${this._terminalUtilityTab === 'workspace'}" @click="${() => { this._terminalUtilityTab = 'workspace'; }}">Workspace</button></div><button class="close-utility" aria-label="Close terminal utility pane" @click="${() => { this._terminalUtilityOpen = false; }}">${icon(X,{size:16})}</button></div><div class="terminal-utility-body" role="tabpanel">${this._terminalUtilityTab === 'panes' ? html`<h2>Panes</h2>${panes.map(pane => html`<button class="utility-pane-row" aria-current="${store.activePaneId === pane.paneId}" @click="${() => this._onActivePane(new CustomEvent('pane-select',{detail:{paneId:pane.paneId}}))}">${icon(SquareTerminal,{size:16})}<span>${pane.title || `Pane ${pane.paneId}`}</span></button>`)}` : html`<h2>Workspace</h2><div class="utility-detail"><span>Name</span><strong>${attachedWorkspace ? workspaceLabel(attachedWorkspace) : 'Workspace'}</strong></div><div class="utility-detail"><span>Folder</span>${icon(Folder,{size:15})}<strong title="${attachedWorkspace?.projectPath || ''}">${attachedWorkspace?.projectPath || 'No project folder'}</strong></div><div class="utility-detail"><span>Panes</span><strong>${panes.length}</strong></div>`}</div></aside>` : ''}
+                ${this._terminalUtilityOpen && !this._sdkChatId ? html`
+                  <aside class="terminal-utility" aria-label="Panes">
+                    <div class="terminal-utility-tabs">
+                      <strong>Panes</strong>
+                      <button class="close-utility" aria-label="Close terminal utility pane" @click="${() => { this._terminalUtilityOpen = false; }}">${icon(X,{size:16})}</button>
+                    </div>
+                    <div class="terminal-utility-body">
+                      ${panes.map(pane => html`<button class="utility-pane-row" aria-current="${store.activePaneId === pane.paneId}" @click="${() => this._onActivePane(new CustomEvent('pane-select',{detail:{paneId:pane.paneId}}))}">${icon(SquareTerminal,{size:16})}<span>${pane.title || `Pane ${pane.paneId}`}</span></button>`)}
+                    </div>
+                  </aside>
+                ` : ''}
               </div>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
@@ -1742,7 +1743,7 @@ export class MuxApp extends LitElement {
             <div
               class="drawer"
               popover="auto"
-              aria-label="Workspaces"
+              aria-label="Navigation"
               @toggle="${this._onDrawerPopoverToggle}"
             >
               <mux-sidebar

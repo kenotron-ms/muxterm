@@ -1086,13 +1086,7 @@ export class MuxSidebar extends LitElement {
       color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright));
       font-size: 16px;
     }
-    .terminal-nav { position:relative; flex:0 0 36px; }
-    .terminal-nav > .new-chat-action { width:calc(100% - 14px); }
-    .terminal-picker { position:absolute; top:4px; right:13px; width:28px; height:28px; display:grid; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--chrome-text-dim); cursor:pointer; }
-    .terminal-picker:hover,.terminal-picker:focus-visible { background:var(--chrome-hover); color:var(--chrome-text-bright); }
-    .terminal-menu { position:absolute; z-index:30; top:36px; left:7px; right:7px; max-height:min(320px,50vh); overflow:auto; padding:5px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); box-shadow:0 12px 28px #0008; }
-    .terminal-menu button { display:block; width:100%; min-height:32px; padding:5px 8px; overflow:hidden; border:0; border-radius:5px; background:transparent; color:var(--chrome-text-bright); text-align:left; text-overflow:ellipsis; white-space:nowrap; font:500 12px Inter,system-ui,sans-serif; cursor:pointer; }
-    .terminal-menu button:hover,.terminal-menu button[aria-current="true"] { background:var(--chrome-hover); }
+    .terminal-nav { flex:0 0 36px; }
 
     .terminal-heading {
       margin-top: 13px;
@@ -1363,13 +1357,7 @@ export class MuxSidebar extends LitElement {
   @property({ type: Boolean }) showLauncher = true;
 
   @state() private _version = 0;
-  @state() private _terminalMenuOpen = false;
   @state() private _renaming: string | null = null;
-
-  private _onOutsideTerminalClick = (event: PointerEvent): void => {
-    const nav = this.renderRoot.querySelector('.terminal-nav');
-    if (this._terminalMenuOpen && nav && !event.composedPath().includes(nav)) this._terminalMenuOpen = false;
-  };
 
   /**
    * Tile width in columns, derived from the measured card. 0 = not measured
@@ -1449,7 +1437,6 @@ export class MuxSidebar extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener('muxterm-update-checked', this._onUpdateChecked);
-    document.addEventListener('pointerdown', this._onOutsideTerminalClick);
 
     // Subscribe to store changes and trigger re-render by bumping _version.
     this._unsub = store.subscribe(() => {
@@ -1490,7 +1477,6 @@ export class MuxSidebar extends LitElement {
 
   override disconnectedCallback(): void {
     window.removeEventListener('muxterm-update-checked', this._onUpdateChecked);
-    document.removeEventListener('pointerdown', this._onOutsideTerminalClick);
     super.disconnectedCallback();
     this._unsub?.();
     this._unsub = null;
@@ -2516,11 +2502,9 @@ export class MuxSidebar extends LitElement {
         <span class="new-chat-action-mark">${icon(Plus, { size: 17 })}</span><span>New Chat</span>
       </button>
       <div class="terminal-nav">
-        <button class="new-chat-action ${this.terminalActive ? 'active' : ''}" title="Open terminal" aria-current="${this.terminalActive ? 'page' : 'false'}" @click="${() => { this._terminalMenuOpen = false; this.dispatchEvent(new CustomEvent('terminal-open', { bubbles: true, composed: true })); }}">
+        <button class="new-chat-action ${this.terminalActive ? 'active' : ''}" title="Open terminal" aria-current="${this.terminalActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('terminal-open', { bubbles: true, composed: true }))}">
           <span class="new-chat-action-mark">${icon(SquareTerminal, { size: 16 })}</span><span>Terminal</span>
         </button>
-        ${store.workspaces.length > 1 ? html`<button class="terminal-picker" aria-label="Choose terminal workspace" aria-expanded=${this._terminalMenuOpen} @click=${() => { this._terminalMenuOpen = !this._terminalMenuOpen; }}>${icon(ChevronDown,{size:14})}</button>` : ''}
-        ${this._terminalMenuOpen ? html`<div class="terminal-menu" role="menu" aria-label="Terminal workspaces" @keydown=${(event:KeyboardEvent) => { if (event.key === 'Escape') this._terminalMenuOpen = false; }}>${store.workspaces.map(workspace => html`<button role="menuitem" aria-current=${workspace.workspaceId === store.attached} title=${workspaceLabel(workspace)} @click=${() => { this._terminalMenuOpen = false; this.dispatchEvent(new CustomEvent('workspace-switch', { detail:{workspaceId:workspace.workspaceId}, bubbles:true, composed:true })); }}>${workspaceLabel(workspace)}</button>`)}</div>` : ''}
       </div>
       <button class="new-chat-action ${this.jobsActive ? 'active' : ''}" title="Scheduled jobs" aria-current="${this.jobsActive ? 'page' : 'false'}" @click="${() => this.dispatchEvent(new CustomEvent('jobs-open', { bubbles: true, composed: true }))}">
         <span class="new-chat-action-mark">${icon(CalendarClock, { size: 14 })}</span><span>Scheduled jobs</span>
