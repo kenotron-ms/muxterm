@@ -2079,6 +2079,7 @@ export class MuxSDKChat extends LitElement {
       if (generation !== this.commandGeneration || sessionId !== this.activeSession) return;
       this.goalDocument = current;
       if (command.action === 'inspect') {
+        this.commandFailed = false;
         this.commandNotice = current.revisions.at(-1)?.condition || 'No goal is set for this chat. Type /goal followed by a condition.';
       } else {
         const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/goal`), {
@@ -2089,6 +2090,7 @@ export class MuxSDKChat extends LitElement {
         const record = await response.json() as GoalDocument;
         if (generation !== this.commandGeneration || sessionId !== this.activeSession) return;
         this.goalDocument = record;
+        this.commandFailed = false;
         this.commandNotice = command.action === 'set' ? 'Goal condition saved. Waiting for the harness to acknowledge it.' :
           command.action === 'pause' ? 'Pause requested.' : command.action === 'resume' ? 'Resume requested.' : 'Goal cleared.';
       }
