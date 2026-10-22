@@ -56,7 +56,7 @@
   "components/mux-connections.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 16,
+    "literalScale": 0,
     "nativeControls": 2
   },
   "components/mux-dock.ts": {

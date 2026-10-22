@@ -10,6 +10,7 @@ import '../ui/page-intro.js';
 import '../ui/status-badge.js';
 import '../ui/text-field.js';
 import '../ui/select.js';
+import '../ui/confirmation.js';
 import type { StatusTone } from '../ui/status-badge.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import type { MuxUISelect } from '../ui/select.js';
@@ -23,6 +24,7 @@ type RemoteResponse = { items:RemoteConnection[]; callbackUrl:string };
 type MicrosoftProfile = { state:'disconnected'|'pending'|'ready'|'needs-attention'; loginState:string; userCode:string; verificationUrl:string; error:string; toolCount:number; checkedAt?:string };
 type MicrosoftState = { personal:MicrosoftProfile };
 type LegacyWorkIQ = { savedAuthorization:boolean };
+type PendingConfirmation = { heading:string; description:string; confirmLabel:string; busyKey:string; action:()=>Promise<unknown> };
 
 @customElement('mux-connections')
 export class MuxConnections extends LitElement {
@@ -47,12 +49,13 @@ export class MuxConnections extends LitElement {
   @state() private remoteScopes='';
   @state() private googleClientID='';
   @state() private googleClientSecret='';
+  @state() private confirmation?:PendingConfirmation;
 
   static override styles=css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
     * { box-sizing:border-box; } button,input { font:inherit; } button { cursor:pointer; }
-    .titlebar { height:var(--ui-nav-height,44px); flex:none; display:flex; align-items:center; gap:7px; min-width:0; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav,var(--ui-surface-raised)); font-size:13px; }
+    .titlebar { height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); font-size:var(--ui-text-md); }
     .titlebar .section-name,.titlebar .divider { color:var(--ui-text-muted); }
     .titlebar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
     mux-ui-page-intro { flex:none; }
@@ -61,25 +64,26 @@ export class MuxConnections extends LitElement {
     .layout { min-height:0; display:flex; flex-direction:column; flex:1; }
     .catalog { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--ui-space-3); flex:none; padding:var(--ui-space-5) var(--ui-space-7); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
     .catalog mux-ui-nav-item { min-width:0; }
-    main { min-width:0; overflow:auto; padding:var(--ui-space-8) var(--ui-space-7) var(--ui-space-12); } .detail { max-width:760px; margin:auto; }
-    .head { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    main { min-width:0; overflow:auto; padding:var(--ui-space-8) var(--ui-space-7) var(--ui-space-12); } .detail { max-width:var(--ui-connection-content-width); margin:auto; }
+    .head { display:flex; justify-content:space-between; align-items:center; gap:var(--ui-space-5); }
     h2 { margin:0; font-size:var(--ui-text-xl); } h3 { margin:var(--ui-space-8) 0 var(--ui-space-3); font-size:var(--ui-text-md); }
-    .lead { margin-top:9px; } .box { margin-top:19px; padding:17px; border:1px solid var(--ui-border); border-radius:10px; background:var(--ui-surface-raised); }
-    details.box summary { cursor:pointer; font-weight:650; } details.box summary:focus-visible { outline:2px solid var(--ui-accent); outline-offset:3px; }
+    .lead { margin-top:var(--ui-space-4); } .box { margin-top:var(--ui-space-7); padding:var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
+    details.box summary { cursor:pointer; font-weight:650; } details.box summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:var(--ui-space-1); }
     label { display:block; margin:var(--ui-space-5) 0; font-size:var(--ui-text-sm); font-weight:650; }
     mux-ui-text-field { margin:var(--ui-space-5) 0; --ui-surface-raised:var(--ui-surface-base); }
     input[type=checkbox] { display:inline; width:auto; margin:0 var(--ui-space-3) 0 0; }
-    .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
-    a.action { display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); padding:7px 12px; color:var(--ui-text); background:var(--ui-surface-hover); text-decoration:none; }
-    a.action.primary { background:var(--ui-accent); border-color:var(--ui-accent); color:var(--ui-surface-base); font-weight:700; }
+    .actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); margin-top:var(--ui-space-6); }
+    a.action { display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); padding:var(--ui-space-4) var(--ui-space-5); color:var(--ui-text); background:var(--ui-surface-hover); text-decoration:none; }
+    a.action.primary { background:var(--ui-accent); border-color:var(--ui-accent); color:var(--ui-on-accent); font-weight:700; }
     a.action:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; } a { color:var(--ui-accent); }
     .detail > mux-ui-feedback { margin:var(--ui-space-5) 0; }
-    .note { margin-top:11px; font-size:11px; } code { overflow-wrap:anywhere; }
-    .device-code { display:inline-block; margin-top:10px; padding:7px 12px; border:1px solid var(--ui-border); border-radius:7px; background:var(--ui-surface-base); color:var(--ui-text); font:700 22px ui-monospace,monospace; letter-spacing:.12em; user-select:all; }
+    .note { margin-top:var(--ui-space-5); font-size:var(--ui-text-xs); } code { overflow-wrap:anywhere; }
+    .device-code { display:inline-block; margin-top:var(--ui-space-5); padding:var(--ui-space-4) var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); color:var(--ui-text); font:700 var(--ui-text-2xl) var(--ui-font-mono); letter-spacing:.12em; user-select:all; }
     .provider-intro { margin:0 0 var(--ui-space-7); padding-bottom:var(--ui-space-6); border-bottom:1px solid var(--ui-border); }
     .provider-intro h2 { font-size:var(--ui-text-2xl); }
     .provider-intro p { margin-top:var(--ui-space-2); }
-    .service-picker { max-width:400px; margin:var(--ui-space-7) 0; }
+    .service-picker { max-width:var(--ui-connection-service-picker-width); margin:var(--ui-space-7) 0; }
+    .setup-section { margin-top:var(--ui-space-6); padding-top:var(--ui-space-6); border-top:1px solid var(--ui-border); }
     @media(max-width:767.98px) { .titlebar { display:none; } }
     @media(max-width:700px) { .catalog { gap:var(--ui-space-1); padding:var(--ui-space-2); } .catalog mux-ui-nav-item { min-width:0; } main { padding:var(--ui-space-6) var(--ui-space-5) var(--ui-space-10); } .provider-intro { margin-bottom:var(--ui-space-5); } }
   `;
@@ -169,6 +173,15 @@ export class MuxConnections extends LitElement {
     try { await action(); } catch(error) { this.error=error instanceof Error?error.message:String(error); }
     finally { await this.refresh(); this.busy=''; }
   }
+  private askConfirmation(confirmation:PendingConfirmation):void { this.confirmation=confirmation; }
+  private cancelConfirmation():void { if (!this.busy) this.confirmation=undefined; }
+  private confirmConfirmation():void {
+    const confirmation=this.confirmation;
+    if (!confirmation || this.busy) return;
+    void this.run(confirmation.busyKey,confirmation.action).then(()=>{
+      if (this.confirmation===confirmation) this.confirmation=undefined;
+    });
+  }
   private check() { void this.run('check',async()=>{
     await this.request('/api/connections/github/install',{method:'POST'});
     await this.request('/api/connections/github/check',{method:'POST'});
@@ -185,19 +198,16 @@ export class MuxConnections extends LitElement {
   }); }
   private cancelGitHubLogin() { this.autoCheckAfterLogin=false; void this.run('github-cancel',()=>this.request('/api/connections/github/login',{method:'DELETE'})); }
   private disconnect() {
-    if (!window.confirm('Disable GitHub tools for new chats? Your GitHub CLI login stays signed in.')) return;
-    void this.run('disconnect',()=>this.request('/api/connections/github',{method:'DELETE'}));
+    this.askConfirmation({heading:'Disable GitHub?',description:'New chats will lose access to GitHub tools. Your GitHub CLI login stays signed in.',confirmLabel:'Disable GitHub',busyKey:'disconnect',action:()=>this.request('/api/connections/github',{method:'DELETE'})});
   }
   private connectMicrosoft() { void this.run('microsoft-personal',()=>this.request('/api/connections/microsoft/personal/connect',{method:'POST'})); }
   private cancelMicrosoft() { void this.run('microsoft-personal-cancel',()=>this.request('/api/connections/microsoft/personal/connect',{method:'DELETE'})); }
   private checkMicrosoft() { void this.run('microsoft-personal-check',()=>this.request('/api/connections/microsoft/personal/check',{method:'POST'})); }
   private disconnectMicrosoft() {
-    if (!window.confirm('Disconnect your personal Microsoft account and remove its saved authorization?')) return;
-    void this.run('microsoft-personal-disconnect',()=>this.request('/api/connections/microsoft/personal',{method:'DELETE'}));
+    this.askConfirmation({heading:'Disconnect Microsoft?',description:'This removes the saved account authorization. New chats will lose access to Microsoft mail, calendar and files.',confirmLabel:'Disconnect account',busyKey:'microsoft-personal-disconnect',action:()=>this.request('/api/connections/microsoft/personal',{method:'DELETE'})});
   }
   private removeLegacyWorkIQ() {
-    if (!window.confirm('Remove the old Work IQ authorization saved on this machine?')) return;
-    void this.run('workiq-remove',()=>this.request('/api/connections/workiq',{method:'DELETE'}));
+    this.askConfirmation({heading:'Remove old authorization?',description:'The previous Work IQ authorization will be removed from this machine. It no longer supplies tools to new chats.',confirmLabel:'Remove authorization',busyKey:'workiq-remove',action:()=>this.request('/api/connections/workiq',{method:'DELETE'})});
   }
   private createRemote() { void this.run('remote-create',async()=>{
     await this.request('/api/connections/remote',{method:'POST',body:JSON.stringify({name:this.remoteName,endpoint:this.remoteEndpoint,issuerURL:this.remoteIssuer,clientID:this.remoteClientID,clientSecret:this.remoteClientSecret,scopes:this.remoteScopes})});
@@ -226,11 +236,13 @@ If I already have a connection, check its status first. Do not remove or replace
     window.location.assign(result.url);
   }); }
   private checkRemote(id:string) { void this.run('remote-check',()=>this.request(`/api/connections/remote/${encodeURIComponent(id)}/check`,{method:'POST'})); }
-  private removeRemote(id:string) { if (!window.confirm('Remove this connection and its saved authorization?')) return;
-    void this.run('remote-remove',async()=>{
+  private removeRemote(id:string) {
+    const name=this.remotes?.items.find(item=>item.id===id)?.name || 'this connection';
+    this.askConfirmation({heading:`Remove ${name}?`,description:'This removes the connection and its saved authorization. New chats will lose access to its tools.',confirmLabel:'Remove connection',busyKey:'remote-remove',action:async()=>{
       await this.request(`/api/connections/remote/${encodeURIComponent(id)}`,{method:'DELETE'});
       const next={...this.allowedDraft};delete next[id];this.allowedDraft=next;
-    }); }
+    }});
+  }
   private toggleRemoteTool(item:RemoteConnection,name:string,enabled:boolean) {
     const current=this.allowedDraft[item.id]??item.allowedTools;
     this.allowedDraft={...this.allowedDraft,[item.id]:enabled?[...current,name]:current.filter(tool=>tool!==name)};
@@ -262,23 +274,23 @@ If I already have a connection, check its status first. Do not remove or replace
   private googleDetail(service:Service) {
     const items=this.remotes?.items.filter(item=>item.provider===service.id)??[];
     const ready=items.some(item=>item.state==='ready'&&item.allowedTools.length>0);
-    return html`<div class="head"><h2>${service.name}</h2><mux-ui-status-badge tone=${ready?'success':'neutral'}>${ready?'Ready':'Developer preview · setup required'}</mux-ui-status-badge></div>
+    return html`<div class="head"><h2>${service.name}</h2><mux-ui-status-badge tone=${ready?'success':'neutral'}>${ready?'Ready':'Preview · setup required'}</mux-ui-status-badge></div>
       <p class="lead">${service.description}. Connect through Google's official service using a Web OAuth client from your Google Cloud project.</p>
       <div class="box"><strong>${items.length?'Need to set up again?':'Set up with an agent'}</strong><p class="note">An agent can guide the Cloud registration in your paired browser. You enter credentials privately and choose when to authorize access.</p>
         <div class="actions"><mux-ui-button variant="primary" @click=${()=>this.startGoogleSetup(service)}>${items.length?'Open setup chat again':'Open setup chat'}</mux-ui-button></div></div>
       <details class="box"><summary>Setup requirements and manual entry</summary>
-      <div class="box"><strong>Google Workspace Developer Preview</strong><p class="note">These official Google services require an enrolled Google Workspace account and Cloud project. This setup is not a supported route for a personal @gmail.com account. Google does not allow preview services in public apps before general availability. <a href="https://developers.google.com/workspace/preview" target="_blank" rel="noopener noreferrer">Preview requirements ↗</a></p></div>
-      <div class="box"><strong>Before connecting</strong><p class="note">For permitted preview testing, enable the product and connector APIs in your enrolled Cloud project, configure the OAuth consent screen, and register this exact callback URL on a Web OAuth client. External apps may need test users and scope verification.</p>
+      <section class="setup-section"><strong>Preview requirements</strong><p class="note">These official Google services require an enrolled Google Workspace account and Cloud project. This setup is not a supported route for a personal @gmail.com account. Google does not allow preview services in public apps before general availability. <a href="https://developers.google.com/workspace/preview" target="_blank" rel="noopener noreferrer">Read the requirements</a></p></section>
+      <section class="setup-section"><strong>Before connecting</strong><p class="note">For permitted preview testing, enable the product and connector APIs in your enrolled Cloud project, configure the OAuth consent screen, and register this exact callback URL on a Web OAuth client. External apps may need test users and scope verification.</p>
         <mux-ui-text-field label="Callback URL" aria-label="Google callback URL" readonly .value=${this.remotes?.callbackUrl||''}></mux-ui-text-field>
         <mux-ui-text-field label="Service endpoint" aria-label="Google service endpoint" readonly .value=${service.endpoint||''}></mux-ui-text-field>
         <p class="note">Muxterm requests these read-only scopes. Google may classify access to mail or files as sensitive or restricted, requiring additional review:</p>
         <ul>${service.scopes?.map(scope=>html`<li><code>${scope}</code></li>`)}</ul>
         <p class="note">Only these read tools can be enabled after a successful check: ${service.readTools?.join(', ')}. Newly discovered tools stay off. Google still controls the account grant, and data returned by tools can contain untrusted instructions.</p>
-        <div class="actions"><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Google setup guide ↗</a></div></div>
-      <div class="box"><strong>Add ${service.name} manually</strong><p class="note">Enter the client ID and secret from the Web OAuth client registered with the callback URL above. Authorization and a live tool check are required before this connection is ready.</p>
+        <div class="actions"><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Google setup guide</a></div></section>
+      <section class="setup-section"><strong>Add ${service.name} manually</strong><p class="note">Enter the client ID and secret from the Web OAuth client registered with the callback URL above. Authorization and a live tool check are required before this connection is ready.</p>
         <mux-ui-text-field label="Client ID" aria-label="Google client ID" autocomplete="off" .value=${this.googleClientID} @input=${(e:Event)=>this.googleClientID=(e.target as MuxUITextField).value}></mux-ui-text-field>
         <mux-ui-text-field label="Client secret" aria-label="Google client secret" type="password" autocomplete="off" .value=${this.googleClientSecret} @input=${(e:Event)=>this.googleClientSecret=(e.target as MuxUITextField).value}></mux-ui-text-field>
-        <div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy||!this.googleClientID.trim()||!this.googleClientSecret.trim()} @click=${()=>this.createGoogle(service)}>Save app details</mux-ui-button></div></div></details>
+        <div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy||!this.googleClientID.trim()||!this.googleClientSecret.trim()} @click=${()=>this.createGoogle(service)}>Save app details</mux-ui-button></div></section></details>
       ${items.map(item=>html`<div class="box"><div class="head"><strong>${item.name} connection</strong><mux-ui-status-badge tone=${item.state==='ready'&&!item.allowedTools.length?'warning':this.statusTone(item.state)}>${item.state==='ready'?(item.allowedTools.length?'Ready':'Choose tools'):item.state==='authorized'?'Authorized · check tools':item.state==='needs-attention'?'Needs attention':'Sign in required'}</mux-ui-status-badge></div>
         <p class="note">${item.error||(item.state==='ready'?`${item.toolCount} approved read tools found; ${item.allowedTools.length} enabled for chats.`:item.state==='authorized'?'Check service access to discover read tools.':'Sign in, then check service access to discover read tools.')}</p>
         <div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy} @click=${()=>this.authorizeRemote(item.id)}>${item.state==='authorization-required'?'Sign in with Google':'Reauthorize'}</mux-ui-button><mux-ui-button variant="secondary" ?disabled=${!!this.busy||item.state==='authorization-required'} @click=${()=>this.checkRemote(item.id)}>Check tools</mux-ui-button><mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${()=>this.removeRemote(item.id)}>Remove</mux-ui-button></div>
@@ -326,7 +338,7 @@ If I already have a connection, check its status first. Do not remove or replace
     </div>`;
   }
   private microsoftDetail() {
-    return html`<div class="head"><h2>Microsoft</h2><mux-ui-status-badge>Personal account</mux-ui-status-badge></div>
+    return html`<div class="head"><h2>Microsoft</h2></div>
       <p class="lead">Connect one account for Outlook mail and calendar, plus OneDrive files. Muxterm offers a one-time code that works on a headless machine.</p>
       ${this.microsoftProfile()}
       ${this.legacyWorkIQ?.savedAuthorization?html`<div class="box"><strong>Previous Work IQ authorization</strong><p class="note">The old Work IQ connection no longer supplies tools to new chats. Its saved authorization remains on this machine until you remove it.</p><div class="actions"><mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${this.removeLegacyWorkIQ}>Remove old authorization</mux-ui-button></div></div>`:nothing}
@@ -335,7 +347,7 @@ If I already have a connection, check its status first. Do not remove or replace
   private googleProviderDetail() {
     const services=this.data?.catalog.filter(service=>service.group==='Google Workspace')??[];
     const selected=services.find(service=>service.id===this.googleService)??services[0];
-    return html`<div class="provider-intro"><h2>Google Workspace</h2><p>Connect a preview service using your enrolled Workspace account and Google Cloud project.</p></div>
+    return html`<div class="provider-intro"><h2>Google</h2><p>Choose a Workspace service to connect with an enrolled account and Cloud project.</p></div>
       ${services.length?html`<mux-ui-select class="service-picker" label="Choose a Google service" .value=${selected.id} .options=${services.map(service=>({value:service.id,label:service.name}))} @change=${(event:Event)=>{this.googleService=(event.target as MuxUISelect).value;this.googleClientID='';this.googleClientSecret='';}}></mux-ui-select>${this.googleDetail(selected)}`:html`<mux-ui-feedback kind="empty">No Google services are available.</mux-ui-feedback>`}`;
   }
   override render() {
@@ -346,7 +358,10 @@ If I already have a connection, check its status first. Do not remove or replace
         <mux-ui-nav-item label="Microsoft" status-tone=${this.providerStatusTone('microsoft')} ?active=${this.selected==='microsoft'} @click=${()=>this.selectService('microsoft')}></mux-ui-nav-item>
         <mux-ui-nav-item label="GitHub" status-tone=${this.providerStatusTone('github')} ?active=${this.selected==='github'} @click=${()=>this.selectService('github')}></mux-ui-nav-item></nav>
         <main><div class="detail">${this.error?html`<mux-ui-feedback kind="error" appearance="panel">${this.error}<mux-ui-button slot="action" variant="secondary" @click=${this.retry}>Try again</mux-ui-button></mux-ui-feedback>`:nothing}
-          ${this.selected==='browser-assistant'?html`<mux-browser-assistant></mux-browser-assistant>`:!this.data||!this.remotes||!this.microsoft?this.error?nothing:html`<mux-ui-feedback kind="loading">Loading connections…</mux-ui-feedback>`:this.selected==='remote'?this.remoteDetail():this.selected==='github'?this.githubDetail(this.data.github):this.selected==='microsoft'?this.microsoftDetail():this.googleProviderDetail()}</div></main></div>`;
+          ${this.selected==='browser-assistant'?html`<mux-browser-assistant></mux-browser-assistant>`:!this.data||!this.remotes||!this.microsoft?this.error?nothing:html`<mux-ui-feedback kind="loading">Loading connections…</mux-ui-feedback>`:this.selected==='remote'?this.remoteDetail():this.selected==='github'?this.githubDetail(this.data.github):this.selected==='microsoft'?this.microsoftDetail():this.googleProviderDetail()}</div></main></div>
+      ${this.confirmation?html`<mux-ui-confirmation open .heading=${this.confirmation.heading} .description=${this.confirmation.description}
+        .confirmLabel=${this.confirmation.confirmLabel} .busy=${!!this.busy}
+        @confirmation-cancel=${this.cancelConfirmation} @confirmation-confirm=${this.confirmConfirmation}></mux-ui-confirmation>`:nothing}`;
   }
 }
 

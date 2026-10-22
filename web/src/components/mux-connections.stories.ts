@@ -21,13 +21,14 @@ const catalog = [
 
 const githubSetup = { state:'setup-required', enabled:false, ghInstalled:false, serverInstalled:false, signedIn:false, toolCount:0, error:'', installing:false, loginState:'', loginCode:'', loginError:'' };
 const microsoftDisconnected = { state:'disconnected', loginState:'', userCode:'', verificationUrl:'', error:'', toolCount:0 };
-type Scenario = { github?:Record<string,unknown>; microsoft?:Record<string,unknown>; error?:boolean; legacyAuthorization?:boolean };
+const googleAccount = { id:'storybook-gmail', provider:'gmail', name:'Gmail', endpoint:'https://example.test/mcp', state:'ready', toolCount:1, error:'', discoveredTools:[], allowedTools:['search_mail'] };
+type Scenario = { github?:Record<string,unknown>; microsoft?:Record<string,unknown>; remoteItems?:Record<string,unknown>[]; error?:boolean; legacyAuthorization?:boolean };
 function fixtureFor(scenario:Scenario = {}):ApiFixture {
   return ({url,method}) => {
     if (method!=='GET') return fixtureJSON({error:'Use dev-local to exercise account actions.'},501);
     if (scenario.error && url.pathname.endsWith('/api/connections')) return fixtureJSON({error:'Connection status could not be loaded.'},503);
     if (url.pathname.endsWith('/api/connections')) return fixtureJSON({catalog,github:{...githubSetup,...scenario.github}});
-    if (url.pathname.endsWith('/api/connections/remote')) return fixtureJSON({callbackUrl:'https://muxterm.example.test/api/connections/remote/callback',items:[]});
+    if (url.pathname.endsWith('/api/connections/remote')) return fixtureJSON({callbackUrl:'https://muxterm.example.test/api/connections/remote/callback',items:scenario.remoteItems??[]});
     if (url.pathname.endsWith('/api/connections/microsoft')) return fixtureJSON({personal:{...microsoftDisconnected,...scenario.microsoft}});
     if (url.pathname.endsWith('/api/connections/workiq')) return fixtureJSON({savedAuthorization:scenario.legacyAuthorization??false});
     return fixtureJSON({error:`No story fixture for ${url.pathname}`},404);
@@ -44,14 +45,34 @@ const meta = {
 export default meta;
 type Story = StoryObj<{selection:string}>;
 
+const openConfirmation = (label:string):NonNullable<Story['play']> => async ({canvasElement}) => {
+  const screen=canvasElement.querySelector<MuxConnections>('mux-connections');
+  for(let attempt=0;attempt<80;attempt++){
+    await screen?.updateComplete;
+    const button=[...(screen?.shadowRoot?.querySelectorAll('mux-ui-button')??[])].find(item=>item.textContent?.trim()===label);
+    if(button){
+      button.click();
+      await screen?.updateComplete;
+      if(!screen?.shadowRoot?.querySelector('mux-ui-confirmation')) throw new Error(`${label} did not open a confirmation`);
+      return;
+    }
+    await new Promise(resolve=>setTimeout(resolve,25));
+  }
+  throw new Error(`${label} is missing`);
+};
+
 export const GitHubSetup:Story = {};
 export const GitHubReady:Story = {parameters:{apiFixture:fixtureFor({github:{state:'ready',enabled:true,ghInstalled:true,serverInstalled:true,signedIn:true,toolCount:14}})}};
+export const GitHubDisableConfirmation:Story = {parameters:GitHubReady.parameters,play:openConfirmation('Disable for new chats')};
 export const GitHubDeviceCode:Story = {parameters:{apiFixture:fixtureFor({github:{state:'setup-required',loginState:'pending',loginCode:'ABCD-EFGH'}})}};
 export const MicrosoftDisconnected:Story = {args:{selection:'microsoft'}};
 export const MicrosoftPending:Story = {args:{selection:'microsoft'},parameters:{apiFixture:fixtureFor({microsoft:{state:'pending',loginState:'pending',userCode:'WXYZ-1234',verificationUrl:'https://microsoft.com/devicelogin'}})}};
 export const MicrosoftReady:Story = {args:{selection:'microsoft'},parameters:{apiFixture:fixtureFor({microsoft:{state:'ready',toolCount:12}})}};
+export const MicrosoftDisconnectConfirmation:Story = {args:{selection:'microsoft'},parameters:MicrosoftReady.parameters,play:openConfirmation('Disconnect')};
+export const PhoneMicrosoftDisconnectConfirmation:Story = {args:{selection:'microsoft'},globals:{viewport:{value:'phone390',isRotated:false}},parameters:MicrosoftReady.parameters,play:openConfirmation('Disconnect')};
 export const MicrosoftNeedsAttention:Story = {args:{selection:'microsoft'},parameters:{apiFixture:fixtureFor({microsoft:{state:'needs-attention',error:'Sign in again to refresh access.'}})}};
 export const GooglePreview:Story = {args:{selection:'google'}};
+export const GoogleRemoveConfirmation:Story = {args:{selection:'google'},parameters:{apiFixture:fixtureFor({remoteItems:[googleAccount]})},play:openConfirmation('Remove')};
 export const GoogleManualEntry:Story = {args:{selection:'google'},play:async ({canvasElement})=>{
   const screen=canvasElement.querySelector<MuxConnections>('mux-connections');
   for(let attempt=0;attempt<80;attempt++){
@@ -65,3 +86,4 @@ export const GoogleManualEntry:Story = {args:{selection:'google'},play:async ({c
 export const LoadError:Story = {parameters:{apiFixture:fixtureFor({error:true})}};
 export const PhoneGoogle:Story = {args:{selection:'google'},globals:{viewport:{value:'phone390',isRotated:false}}};
 export const PhoneMicrosoftReady:Story = {args:{selection:'microsoft'},globals:{viewport:{value:'phone390',isRotated:false}},parameters:{apiFixture:fixtureFor({microsoft:{state:'ready',toolCount:12}})}};
+export const LegacyWorkIQRemoveConfirmation:Story = {args:{selection:'microsoft'},parameters:{apiFixture:fixtureFor({legacyAuthorization:true})},play:openConfirmation('Remove old authorization')};
