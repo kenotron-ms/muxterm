@@ -1457,7 +1457,7 @@ export class MuxApp extends LitElement {
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .sessionId=${this._sdkChatId} .compact=${this._layoutMode === 'narrow'} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
 
       </div>

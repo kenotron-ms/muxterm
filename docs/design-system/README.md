@@ -166,9 +166,21 @@ and message copy/edit/fork actions plus the edit footer use shared Buttons.
 The Message Edit story shows the editor at desktop and phone widths; Chromium
 confirmed Cancel closes it without horizontal overflow. A light palette story
 confirmed the semantic surfaces resolve to the selected theme.
+The chat header and composer now use shared Buttons for goal and utility
+controls, attachment, send or stop, steering, retry and scroll-to-bottom. The
+goal and utility controls expose expanded and pressed state through their
+inner buttons. Storybook catalogs desktop drafts, phone drafts, running turns,
+attachments, voice speaking and the chat embedded under the phone shell.
+Touch-enabled Chromium measured send, stop, attachment removal and voice stop
+controls at 44 px without horizontal overflow. In a fresh dev-local workspace,
+Chromium opened the real chat's goal ledger and utility pane, attached and
+removed a file without sending a message, and checked the phone composer.
+The narrow shell supplies the chat title once; the inner chat row keeps its
+actions.
 These stories use synthetic read-only goal data and do not exercise live goal
-control. Work disclosures, lane report toggles and the auto-sizing composer
-still need shared-pattern review, as recorded in the inventory.
+control. Agent lineage and cards, lane report controls, the auto-sizing
+composer and hidden file input still need shared-pattern review, as recorded
+in the inventory.
 
 Utility's Open file actions use the same Action Menu, including its separator,
 keyboard path and phone sheet. Storybook's actual Utility screen showed the

@@ -72,7 +72,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { BookOpen, Bot, Check, ChevronDown, ChevronRight, CircleX, Copy, FilePenLine, Folder, GitFork, Globe, Mic, Network, NotebookTabs, PanelRight, Pause, Pencil, Play, Search, Target, Terminal, Wrench, X, type IconNode } from 'lucide';
+import { ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, CircleX, Copy, FilePenLine, Folder, GitFork, Globe, Mic, Network, NotebookTabs, PanelRight, Paperclip, Pause, Pencil, Play, Search, Square, Target, Terminal, Wrench, X, type IconNode } from 'lucide';
 
 type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
@@ -211,17 +211,15 @@ export class MuxSDKChat extends LitElement {
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-content-font-size)/1.55 var(--ui-content-font-family); }
     .topbar { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:var(--ui-space-4); padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
     .topbar.with-utility { width:calc(100% - var(--utility-width)); padding-right:var(--ui-space-5); }
-    .workspace-crumb { display:inline-flex; align-items:center; gap:var(--ui-space-4); min-width:0; max-width:38%; color:var(--ui-text-muted); font:500 12px Inter,system-ui,sans-serif; white-space:nowrap; }
+    .workspace-crumb { display:inline-flex; align-items:center; gap:var(--ui-space-4); min-width:0; max-width:38%; color:var(--ui-text-muted); font:500 var(--ui-text-sm) var(--ui-font-sans); white-space:nowrap; }
     .workspace-crumb span { overflow:hidden; text-overflow:ellipsis; }
     .workspace-crumb .lucide-icon { flex:none; }
     .workspace-divider { flex:none; color:var(--ui-text-muted); }
-    @media (display-mode: window-controls-overlay) { .topbar { -webkit-app-region:drag; } .topbar button { -webkit-app-region:no-drag; } }
+    @media (display-mode: window-controls-overlay) { .topbar { -webkit-app-region:drag; } .topbar button,.topbar mux-ui-button { -webkit-app-region:no-drag; } }
     .breadcrumbs { display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; }
     .breadcrumbs button { border:0; padding:var(--ui-space-2); border-radius:var(--ui-radius-sm); background:transparent; color:var(--ui-accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
     .breadcrumbs button:hover { background:var(--ui-surface-hover); }
     .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:var(--ui-space-4) 0; color:var(--ui-danger); font-size:var(--ui-content-font-size); }
-    .agent-history-error button { border:0; padding:var(--ui-space-1) var(--ui-space-2); background:transparent; color:var(--ui-accent); }
-    .agent-history-error button:hover { text-decoration:underline; }
     .delegate-card { box-sizing:border-box; display:grid; grid-template-columns:18px minmax(0,1fr) auto; align-items:center; gap:var(--ui-space-4); width:100%; max-width:560px; min-height:54px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); padding:var(--ui-space-4) var(--ui-space-5); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; }
     .delegate-card:hover { border-color:color-mix(in srgb,var(--ui-accent) 45%,var(--ui-border)); background:color-mix(in srgb,var(--ui-surface-raised) 90%,var(--ui-accent)); }
     .delegate-card:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
@@ -244,19 +242,12 @@ export class MuxSDKChat extends LitElement {
     .recovery { max-width:760px; width:calc(100% - 48px); box-sizing:border-box; align-self:center; margin:var(--ui-space-5) auto 0; padding:var(--ui-space-5) var(--ui-space-6); border:1px solid color-mix(in srgb,var(--ui-warning) 55%,var(--ui-border)); border-radius:var(--ui-radius-lg); background:color-mix(in srgb,var(--ui-warning) 10%,var(--ui-surface-base)); color:var(--ui-text); }
     .recovery strong { display:block; margin-bottom:var(--ui-space-2); }
     .recovery p { margin:0 0 var(--ui-space-4); }
-    .recovery button { border:1px solid var(--ui-warning); border-radius:var(--ui-radius-md); padding:var(--ui-space-3) var(--ui-space-4); background:color-mix(in srgb,var(--ui-warning) 15%,var(--ui-surface-raised)); color:var(--ui-text); }
-    .recovery button:hover { background:color-mix(in srgb,var(--ui-warning) 25%,var(--ui-surface-raised)); }
     h1 { font-size:var(--ui-content-font-size); margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     button { font:inherit; cursor:pointer; }
     .pane-controls { display:inline-flex; align-items:center; flex:none; }
-    .pane-controls button { display:grid; place-items:center; width:29px; height:29px; border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text-muted); padding:0; cursor:pointer; }
-    .pane-controls button:hover,.pane-controls button:focus-visible { color:var(--ui-text); background:var(--ui-surface-hover); outline:2px solid var(--ui-accent); outline-offset:-2px; }
-    .pane-controls button.active { color:var(--ui-accent); background:var(--ui-surface-hover); }
     .chat-title { display:flex; align-items:center; gap:var(--ui-space-3); min-width:0; overflow:hidden; }
     .chat-title h1 { min-width:0; }
-    .operator-parent { display:grid; place-items:center; flex:none; width:24px; height:24px; border:0; border-radius:var(--ui-radius-sm); padding:0; background:none; color:var(--ui-accent); }
-    .operator-parent:hover,.operator-parent:focus-visible { background:var(--ui-surface-hover); outline:none; }
-    .operator-parent:focus-visible { box-shadow:0 0 0 2px var(--ui-accent); }
+    :host([compact]) .chat-title { position:absolute; width:var(--ui-space-px); height:var(--ui-space-px); overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
     .operator-crumb { display:inline-flex; flex:none; color:var(--ui-text-muted); }
     .chat-title small { display:block; color:var(--ui-text-muted); font-size:var(--ui-content-font-size); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .layout { display:flex; flex:1; min-height:0; position:relative; }
@@ -428,16 +419,12 @@ export class MuxSDKChat extends LitElement {
     .command-notice { box-sizing:border-box; width:min(var(--ui-chat-content-width),100%); margin:0 auto var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-sm); white-space:pre-wrap; overflow-wrap:anywhere; }
     .command-notice.error { color:var(--ui-danger); }
     .attachments { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); padding:0 0 var(--ui-space-5); }
-    .attachment { position:relative; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; max-width:min(100%,230px); padding:var(--ui-space-3) var(--ui-space-9) var(--ui-space-3) var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
+    .attachment { position:relative; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; max-width:min(100%,230px); padding:var(--ui-space-3) var(--ui-space-11) var(--ui-space-3) var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
     .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:var(--ui-radius-md); background:var(--ui-surface-base); }
     .attachment .filename { min-width:0; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ui-content-font-size); }
     .attachment .status { color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
     .attachment .status.failed { color:var(--ui-danger); }
-    .attachment button { position:absolute; top:4px; right:4px; width:22px; height:22px; padding:0; border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text-muted); font-size:var(--ui-text-2xl); line-height:20px; }
-    .attachment button:hover { background:var(--ui-surface-hover); color:inherit; }
-    .attach-button { flex:none; width:34px; height:34px; display:grid; place-items:center; border:0; border-radius:var(--ui-radius-lg); padding:0; background:transparent; color:var(--ui-text); }
-    .attach-button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-    .attach-button:hover, .attach-button:focus-visible { background:var(--ui-surface-raised); outline:none; }
+    .attachment-remove { position:absolute; top:var(--ui-space-2); right:var(--ui-space-2); }
     .file-input { display:none; }
     .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb,var(--ui-surface-base) 92%,transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
     /* The border extends 15px beyond each 760px transcript edge so typed text aligns with replies. */
@@ -464,23 +451,19 @@ export class MuxSDKChat extends LitElement {
     .goal-proposal h3 { margin:0 0 var(--ui-space-4); font-size:var(--ui-text-md); }
     .goal-proposal p { margin:0; }
     .goal-notice { font-size:var(--ui-text-sm); color:var(--ui-text-muted); padding:var(--ui-space-2) 0; }
-    .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-4); min-height:34px; }
+    .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-4); min-height:var(--ui-control-md); }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
-    .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:220px; font:14px/1.55 var(--ui-content-font-family); }
+    .textarea-sizing { position:relative; flex:1; min-width:0; min-height:50px; max-height:220px; font:var(--ui-text-lg)/1.55 var(--ui-content-font-family); }
     textarea { display:block; width:100%; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; min-height:50px; max-height:220px; padding:var(--ui-space-2) 0; box-sizing:border-box; overflow-y:auto; }
     .native-textarea-sizing textarea { field-sizing:content; height:auto; }
     .legacy-textarea-sizing textarea { position:absolute; inset:0; height:100%; min-height:0; max-height:none; }
     .textarea-mirror { box-sizing:border-box; width:100%; min-height:50px; max-height:220px; padding:var(--ui-space-2) 0; visibility:hidden; white-space:pre-wrap; overflow-wrap:break-word; overflow-y:auto; }
     .native-textarea-sizing .textarea-mirror { display:none; }
     textarea::placeholder { color:var(--ui-text-muted); opacity:.8; }
-    .send, .stop { flex:none; width:34px; height:34px; display:grid; place-items:center; border-radius:var(--ui-radius-lg); }
-    .send { border:0; background:var(--ui-accent); color:var(--ui-surface-base); font-size:var(--ui-text-2xl); line-height:1; }
-    .send:hover:not(:disabled) { filter:brightness(1.1); }
-    .send:disabled { opacity:.38; cursor:default; }
     .voice-text { white-space:pre-wrap; overflow-wrap:anywhere; }
     .send-icon { display:grid; place-items:center; animation:send-icon-in .18s ease-out both; }
     @keyframes send-icon-in { from { opacity:0; } to { opacity:1; } }
-    .send.voice-active { width:78px; font-size:var(--ui-content-font-size); font-weight:650; }
+    .send.voice-active { min-width:var(--ui-space-15); }
     .send.voice-active .send-icon { display:flex; align-items:center; gap:var(--ui-space-3); }
     .voice-bars { display:inline-flex; align-items:center; justify-content:center; gap:var(--ui-space-1); height:16px; }
     .voice-bars i { display:block; width:2px; border-radius:var(--ui-radius-pill); background:currentColor; transition:height .075s ease-out; }
@@ -489,23 +472,17 @@ export class MuxSDKChat extends LitElement {
     .voice-bars i:nth-child(3) { height:8px; }
     .voice-bars i:nth-child(4) { height:16px; }
     .voice-bars i:nth-child(5) { height:10px; }
-    .voice-compose-row { min-height:34px; display:flex; align-items:center; gap:var(--ui-space-4); color:var(--ui-text-muted); }
+    .voice-compose-row { min-height:var(--ui-control-md); display:flex; align-items:center; gap:var(--ui-space-4); color:var(--ui-text-muted); }
     .voice-compose-row .voice-label { flex:1; font-size:var(--ui-content-font-size); }
     .voice-compose-row .voice-mic { font-size:var(--ui-text-2xl); line-height:1; }
-    .voice-compose-row .voice-attach { flex:none; width:30px; height:30px; border:0; background:transparent; color:inherit; font-size:var(--ui-text-2xl); line-height:1; }
     @media (prefers-reduced-motion:reduce) { .voice-bars i { transition:none; } .send-icon { animation:none; } }
-    .stop { border:1px solid var(--ui-danger); background:var(--ui-danger); color:var(--ui-surface-base); font-size:var(--ui-content-font-size); }
-    .stop:hover:not(:disabled) { background:color-mix(in srgb,var(--ui-danger) 85%,var(--ui-text)); }
-    .stop:disabled { opacity:.6; }
-    .steer { margin-left:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:transparent; color:var(--ui-text); padding:var(--ui-space-3) var(--ui-space-5); }
-    .steer + .stop { margin-left:0; }
-    .composer button:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
+    .steer { margin-left:auto; }
     .status { color:color-mix(in srgb,var(--ui-warning) 70%,var(--ui-text)); font-size:var(--ui-content-font-size); }
     .drawer { position:relative; z-index:5; flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); border-left:1px solid var(--ui-border); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
     .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--ui-accent) 25%,transparent); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
-    @media(max-width:700px) { .body { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-9); } .composer-wrap { padding:0 var(--ui-space-5) var(--ui-space-5); } .drawer { box-sizing:border-box; position:absolute; right:0; top:0; bottom:0; width:100%; height:100%; margin-top:0; box-shadow:var(--ui-shadow-side-strong); } .drawer-resizer { display:none; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar,.topbar.with-utility { width:100%; padding-left:var(--ui-space-5); padding-right:var(--ui-space-5); gap:var(--ui-space-3); } }
+    @media(max-width:700px) { .body { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-9); } .composer-wrap { padding:0 var(--ui-space-5) var(--ui-space-5); } .drawer { box-sizing:border-box; position:absolute; right:0; top:0; bottom:0; width:100%; height:100%; margin-top:0; box-shadow:var(--ui-shadow-side-strong); } .drawer-resizer { display:none; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar,.topbar.with-utility { width:100%; padding-left:var(--ui-space-5); padding-right:var(--ui-space-5); gap:var(--ui-space-3); } .workspace-crumb,.workspace-divider { display:none; } .chat-title,.breadcrumbs { flex:1; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -2217,8 +2194,8 @@ export class MuxSDKChat extends LitElement {
       : false;
     const bars = html`<span class="voice-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>`;
     const glyph = mode === 'voice-start' ? bars : mode === 'voice-stop' ? html`${bars}<span aria-hidden="true">Stop</span>`
-      : mode === 'send' ? html`<span aria-hidden="true">↑</span>` : html`<span aria-hidden="true">■</span>`;
-    return html`<button class="send ${mode === 'voice-stop' ? 'voice-active' : ''}" aria-label=${label} title=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</button>`;
+      : icon(mode === 'send' ? ArrowUp : Square,{size:18});
+    return html`<mux-ui-button class="send ${mode === 'voice-stop' ? 'voice-active' : ''}" variant=${mode === 'task-stop' ? 'danger' : 'primary'} ?icon-only=${mode !== 'voice-stop'} accessible-label=${label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</mux-ui-button>`;
   }
   private readonly onGoalChanged = (event: Event) => {
     if ((event as CustomEvent<string>).detail === this.activeSession || this.goalLedgerOpen) void this.refreshGoal();
@@ -2361,21 +2338,21 @@ export class MuxSDKChat extends LitElement {
     const parentOperator = sdkChats.chats.find(chat => chat.operator && chat.operatorLanes?.includes(this.sessionId));
     const workspaceName = sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped';
     return html`
-    <div class="topbar ${this.drawerOpen ? 'with-utility' : ''}" style=${this.drawerOpen ? `--utility-width:${this.drawerWidth}px` : ''}><div class="workspace-crumb" title=${workspaceName}>${icon(Folder,{size:14})}<span>${workspaceName}</span></div><span class="workspace-divider" aria-hidden="true">›</span>${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div class="chat-title">${parentOperator ? html`<button class="operator-parent" aria-label=${`Open operator chat: ${parentOperator.title}`} title=${`Open operator chat: ${parentOperator.title}`} @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:parentOperator.id},bubbles:true,composed:true}))}>${icon(Network,{size:15})}</button><span class="operator-crumb" aria-hidden="true">${icon(ChevronRight,{size:13})}</span>` : nothing}<h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}
-      <mux-ui-button class="goal-icon" variant="quiet" size="small" icon-only accessible-label="Open goal ledger" tooltip="Open goal ledger" aria-expanded=${this.goalLedgerOpen} @click=${() => { this.goalLedgerOpen = !this.goalLedgerOpen; void this.refreshGoal(); }}>${icon(NotebookTabs,{size:16})}</mux-ui-button>
-      <div class="pane-controls"><button class=${this.drawerOpen ? 'active' : ''} aria-label=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} title=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} aria-pressed=${this.drawerOpen} @click=${() => this.setPaneMode(this.drawerOpen ? 'chat' : 'split')}>${icon(PanelRight,{size:17})}</button></div></div>
+    <div class="topbar ${this.drawerOpen ? 'with-utility' : ''}" style=${this.drawerOpen ? `--utility-width:${this.drawerWidth}px` : ''}><div class="workspace-crumb" title=${workspaceName}>${icon(Folder,{size:14})}<span>${workspaceName}</span></div><span class="workspace-divider" aria-hidden="true">›</span>${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div class="chat-title">${parentOperator && !this.compact ? html`<mux-ui-button class="operator-parent" variant="quiet" size="small" icon-only accessible-label=${`Open operator chat: ${parentOperator.title}`} tooltip=${`Open operator chat: ${parentOperator.title}`} @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:parentOperator.id},bubbles:true,composed:true}))}>${icon(Network,{size:15})}</mux-ui-button><span class="operator-crumb" aria-hidden="true">${icon(ChevronRight,{size:13})}</span>` : nothing}<h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}
+      <mux-ui-button class="goal-icon" variant="quiet" size="small" icon-only expandable .expanded=${this.goalLedgerOpen} accessible-label="Open goal ledger" tooltip="Open goal ledger" @click=${() => { this.goalLedgerOpen = !this.goalLedgerOpen; void this.refreshGoal(); }}>${icon(NotebookTabs,{size:16})}</mux-ui-button>
+      <div class="pane-controls"><mux-ui-button variant="quiet" size="small" icon-only toggle .pressed=${this.drawerOpen} accessible-label=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} tooltip=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} @click=${() => this.setPaneMode(this.drawerOpen ? 'chat' : 'split')}>${icon(PanelRight,{size:17})}</mux-ui-button></div></div>
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.recoveryRequired ? html`<mux-ui-feedback class="recovery" kind="warning" appearance="panel"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><mux-ui-button slot="action" variant="secondary" size="small" @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</mux-ui-button></mux-ui-feedback>` : nothing}
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
-      ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
-    </div>${this.goalSurfaces()}${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap">
+      ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <mux-ui-button variant="quiet" tone="danger" size="small" @click=${this.retryConnection}>Retry now</mux-ui-button>` : nothing}</div>` : nothing}
+    </div>${this.goalSurfaces()}${this.showScrollBottom ? html`<div class="scroll-bottom-row"><mux-ui-button class="scroll-bottom" variant="secondary" size="small" accessible-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</mux-ui-button></div>` : nothing}<div class="composer-wrap">
       ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions">${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
       ${this.commandNotice ? html`<div class="command-notice ${this.commandFailed ? 'error' : ''}" role=${this.commandFailed ? 'alert' : 'status'}>${this.commandNotice}</div>` : nothing}
       <div class="composer" @paste=${this.onPaste}>
       ${this.goalBanner()}
-      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="voice-attach" aria-label="Attach files for later" title="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>＋</button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<button class="stop" aria-label="Stop root turn and delegated agent" title="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>■</button>` : nothing}<button class="steer" @click=${() => void this.steerAgent()} ?disabled=${!this.agentDraftHasContent}>Send to root ↗</button></div>` : html`
+      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><mux-ui-button variant="quiet" icon-only accessible-label="Attach files for later" tooltip="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:18})}</mux-ui-button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<mux-ui-button class="stop" variant="danger" icon-only accessible-label="Stop root turn and delegated agent" tooltip="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>${icon(Square,{size:16})}</mux-ui-button>` : nothing}<mux-ui-button class="steer" variant="secondary" ?disabled=${!this.agentDraftHasContent} @click=${() => void this.steerAgent()}>Send to root ↗</mux-ui-button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">
         ${a.preview ? html`<img src=${a.preview} alt=${a.file.name}>` : nothing}
         <span class="filename" title=${a.file.name}>${a.file.name}</span>
@@ -2383,7 +2360,7 @@ export class MuxSDKChat extends LitElement {
         <mux-ui-button class="attachment-remove" icon-only size="small" variant="quiet" accessible-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>${icon(X,{size:14})}</mux-ui-button>
       </div>`)}</div>` : nothing}
       <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-haspopup="listbox" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
-      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
+      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><mux-ui-button variant="quiet" icon-only accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:18})}</mux-ui-button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}

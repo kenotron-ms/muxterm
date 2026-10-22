@@ -4,6 +4,7 @@ import { fixtureJSON, type ApiFixture } from '../stories/api-fixture.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import type { MuxSDKChat } from './mux-sdk-chat.js';
 import './mux-sdk-chat.js';
+import './title-bar.js';
 
 type ChatEvent = {
   at:string; type:string; text?:string; kind?:string; source?:string;
@@ -136,9 +137,22 @@ export const WorkDetails: Story = {
     disclosures?.item(1)?.querySelector('summary')?.click();
   },
 };
+const showRunningTurn = async ({canvasElement}: {canvasElement:HTMLElement}) => {
+  await sdkChats.refresh();
+  const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+  await chat?.updateComplete;
+  if (chat) (chat as unknown as {busy:boolean}).busy = true;
+};
 export const RunningTurn: Story = {
   args:{sessionId:'storybook-chat-running'},
   parameters:{apiFixture:chatFixture('storybook-chat-running','working')},
+  play:showRunningTurn,
+};
+export const PhoneRunningTurn: Story = {
+  args:{sessionId:'storybook-chat-phone-running'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-running','working')},
+  play:showRunningTurn,
 };
 export const DraftMessage: Story = {
   args:{sessionId:'storybook-chat-draft'},
@@ -153,6 +167,12 @@ export const DraftMessage: Story = {
       field.dispatchEvent(new InputEvent('input',{bubbles:true,composed:true}));
     }
   },
+};
+export const PhoneDraftMessage: Story = {
+  args:{sessionId:'storybook-chat-phone-draft'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-draft')},
+  play:DraftMessage.play,
 };
 const showCommandSuggestions = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   await sdkChats.refresh();
@@ -192,6 +212,29 @@ export const FileAttached: Story = {
     }
   },
 };
+export const PhoneFileAttached: Story = {
+  args:{sessionId:'storybook-chat-phone-attachment'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-attachment')},
+  play:FileAttached.play,
+};
+const showVoiceSpeaking = async ({canvasElement}: {canvasElement:HTMLElement}) => {
+  await sdkChats.refresh();
+  const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+  await chat?.updateComplete;
+  if (chat) (chat as unknown as {voiceState:'speaking'}).voiceState = 'speaking';
+};
+export const VoiceSpeaking: Story = {
+  args:{sessionId:'storybook-chat-speaking'},
+  parameters:{apiFixture:chatFixture('storybook-chat-speaking')},
+  play:showVoiceSpeaking,
+};
+export const PhoneVoiceSpeaking: Story = {
+  args:{sessionId:'storybook-chat-phone-speaking'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-speaking')},
+  play:showVoiceSpeaking,
+};
 export const RecoveryRequired: Story = {
   args:{sessionId:'storybook-chat-recovery'},
   parameters:{apiFixture:chatFixture('storybook-chat-recovery','uncertain')},
@@ -200,6 +243,15 @@ export const PhoneConversation: Story = {
   args:{sessionId:'storybook-chat-phone'},
   globals:{viewport:{value:'phone390',isRotated:false}},
   parameters:{apiFixture:chatFixture('storybook-chat-phone')},
+};
+export const EmbeddedPhoneChat: Story = {
+  args:{sessionId:'storybook-chat-embedded-phone',compact:true},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-embedded-phone')},
+  render:(args:ChatArgs) => html`<div style="display:flex;flex-direction:column;height:100dvh;background:var(--ui-surface-base)">
+    <mux-title-bar .chatTitle=${'Component library review'}></mux-title-bar>
+    <div style="position:relative;flex:1;min-height:0"><mux-sdk-chat .sessionId=${args.sessionId} .compact=${args.compact}></mux-sdk-chat></div>
+  </div>`,
 };
 const openLedger = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   await sdkChats.refresh();
