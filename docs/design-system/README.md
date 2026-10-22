@@ -66,6 +66,8 @@ Destructive pane and workspace close uses the same adaptive Dialog and semantic 
 
 Connections uses the shared Confirmation composite for GitHub disable, Microsoft disconnect, old Work IQ authorization removal, and Google connection removal. Its three provider destinations stay visible while each provider owns its setup details. Google's manual setup is a sequence of divided sections instead of nested cards, and Connections spacing uses semantic scales. Storybook shows account and confirmation states at desktop and phone widths. The isolated live app rendered all three providers at both widths without horizontal overflow; authentication and destructive API calls were not exercised there.
 
+Skills uses semantic page, surface, border, type and spacing tokens throughout. Storybook records search results, install success, empty results, load errors, recovery, phone and light states. A failed installed-list request now shows a readable error with Retry instead of a misleading empty-library message; the fixture's Retry action reloads the installed list.
+
 ## Main-based browser evidence
 
 Chromium verification uses Storybook for populated UI fixtures and isolated
