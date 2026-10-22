@@ -29,8 +29,21 @@ jobs:
         working-directory: web
       - run: npm run build:storybook
         working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: Capture Storybook review screenshots
+        run: |
+          python3 -m http.server 6006 --directory storybook-static > "$RUNNER_TEMP/storybook-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:6006/index.json > /dev/null; then break; fi
+            sleep 1
+          done
+          npm run capture:storybook-review
+        working-directory: web
       - uses: actions/upload-artifact@v4
         with:
           name: muxterm-component-library
           path: web/storybook-static
-          retention-days: 14
+          retention-days: 30

@@ -17,8 +17,9 @@ review phone width. `npm run build:storybook` creates a static catalog in
 The Theme Lab stories show how app chrome, controls, menus, and document surfaces
 respond to scoped semantic color and backdrop overrides. Change the scheme and
 backdrop controls to check a proposed theme at desktop and phone widths. The
-component-library pull request workflow uploads the built catalog as the
-`muxterm-component-library` artifact for reviewers.
+component-library pull request workflow uploads the built catalog and a curated
+`review-screenshots/index.html` as the `muxterm-component-library` artifact for
+reviewers. Those PNGs are generated in CI and stay outside git.
 
 The `Screens/` and `Composites/` stories render production Lit components.
 `web/src/stories/api-fixture.ts` replaces their API responses inside the
