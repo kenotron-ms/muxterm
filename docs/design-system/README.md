@@ -60,6 +60,14 @@ remain native or keyboard-operable buttons, while BlockNote owns editing.
 
 ## Rules for new interface work
 
+Use [shadcn/ui](https://ui.shadcn.com/docs/components) as the visual and
+interaction reference when refining shared controls. Check its current
+[Button](https://ui.shadcn.com/docs/components/radix/button),
+[Select](https://ui.shadcn.com/docs/components/radix/select), and
+[theming](https://ui.shadcn.com/docs/theming) patterns for consistent shape,
+icon treatment, states, and semantic surfaces. Implement the resulting pattern
+in Muxterm's Lit components and `--ui-*` tokens, then record it in Storybook.
+
 1. Start with a pattern in Storybook. Add missing states to the shared
    component and its stories before adding a screen-specific treatment.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
