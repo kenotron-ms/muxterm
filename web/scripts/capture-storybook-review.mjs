@@ -7,12 +7,12 @@ const outputDir = process.env.STORYBOOK_REVIEW_DIR || new URL('../storybook-stat
 const chromePath = process.env.CHROME_PATH;
 const captures = [
   { file: 'theme-lab-desktop.png', id: 'foundations-theme-lab--custom-palette', width: 1200, height: 800, ready: 'mux-ui-page-intro' },
-  { file: 'connections-google-desktop.png', id: 'screens-connections--google-tool-selection', width: 1200, height: 800, ready: 'mux-connections' },
-  { file: 'connections-microsoft-phone.png', id: 'screens-connections--phone-microsoft-ready', width: 390, height: 844, ready: 'mux-connections' },
-  { file: 'settings-appearance-phone.png', id: 'screens-settings--phone-appearance', width: 390, height: 844, ready: 'mux-settings-surface' },
-  { file: 'project-editor-phone.png', id: 'composites-chat-list--phone-edit-project', width: 390, height: 844, ready: 'mux-ui-dialog' },
+  { file: 'connections-google-desktop.png', id: 'screens-connections--google-tool-selection', width: 1200, height: 800, ready: 'mux-connections', readyText: 'Choose a Google service' },
+  { file: 'connections-microsoft-phone.png', id: 'screens-connections--phone-microsoft-ready', width: 390, height: 844, ready: 'mux-connections', readyText: 'Personal Microsoft account' },
+  { file: 'settings-appearance-phone.png', id: 'screens-settings--phone-appearance', width: 390, height: 844, ready: 'mux-settings-surface', readyText: 'Appearance' },
+  { file: 'project-editor-phone.png', id: 'composites-chat-list--phone-edit-project', width: 390, height: 844, ready: 'mux-ui-dialog[open]' },
   { file: 'operator-lane-phone.png', id: 'composites-operator-status--phone-expanded-lane', width: 390, height: 844, ready: 'mux-operator-status .detail' },
-  { file: 'pane-picker-phone.png', id: 'composites-mobile-pane-picker--many-panes', width: 390, height: 844, ready: 'mux-pane-picker' },
+  { file: 'pane-picker-phone.png', id: 'composites-mobile-pane-picker--many-panes', width: 390, height: 844, ready: 'mux-pane-picker .sheet:popover-open' },
 ];
 
 await mkdir(outputDir, { recursive: true });
@@ -24,6 +24,7 @@ try {
       const url = `${baseURL}/iframe.html?id=${capture.id}&viewMode=story`;
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.locator(capture.ready).first().waitFor({ state: 'visible', timeout: 30000 });
+      if (capture.readyText) await page.getByText(capture.readyText, { exact: true }).first().waitFor({ state: 'visible', timeout: 30000 });
       await page.evaluate(() => document.fonts.ready);
       await page.waitForTimeout(400);
       await page.screenshot({ path: join(outputDir, capture.file), fullPage: true });
