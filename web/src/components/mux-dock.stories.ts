@@ -78,6 +78,12 @@ export const Tabs: Story = {
   render:() => view(511),
   play:async ({canvasElement}) => { await create(canvasElement,'New pane'); },
 };
+export const ManyTabs: Story = {
+  render:() => view(516),
+  play:async ({canvasElement}) => {
+    for (let index = 0; index < 7; index++) await create(canvasElement,'New pane');
+  },
+};
 export const SplitPane: Story = {
   render:() => view(521),
   play:async ({canvasElement}) => { await create(canvasElement,'Split pane'); },

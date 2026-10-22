@@ -71,8 +71,6 @@ function dropLabel(state: HostConnState): string {
 interface DockHost {
   /** HostRef.ID -- what POST /api/remotes/{id}/connect takes. */
   id: string;
-  /** Display label. Never the raw "ssh:" id. */
-  name: string;
   state: HostConnState;
   /** ms epoch of the next dial, when the store knows of one. */
   retryAt?: number;
@@ -93,7 +91,7 @@ class TerminalRenderer implements IContentRenderer {
     this._paneId = parseInt(id, 10);
     this._isActivePane = isActivePane;
     const el = document.createElement('div');
-    el.style.cssText = 'box-sizing:border-box;width:100%;height:100%;overflow:hidden;padding:12px 14px;background:var(--mux-bg);';
+    el.style.cssText = 'box-sizing:border-box;width:100%;height:100%;overflow:hidden;padding:var(--ui-space-5) var(--ui-dock-terminal-padding-inline);background:var(--ui-terminal-surface);';
 
     // Isolate xterm's pointer events from dockview's panel drag-and-drop.
     //
@@ -493,19 +491,7 @@ export class MuxDock extends LitElement {
     );
   }
 
-  /**
-   * The machine the attached workspace lives on, or null when there is nothing
-   * to mark.
-   *
-   * THE ZERO-REMOTE GATE for this component. `remotesStore.any` is false until
-   * the first host-state frame arrives, and a browser with no remotes never
-   * receives one -- so on that machine this returns null, no pin is created, no
-   * dropbar is mounted and no class lands on the host element. The tab strip is
-   * the one main renders, node for node.
-   *
-   * A LOCAL workspace returns null too, and that is ux D2 rather than an
-   * optimisation: local is the norm, and the norm is unmarked.
-   */
+  /** The host connection, when the active workspace depends on one. */
   private _remoteHost(): DockHost | null {
     if (!remotesStore.any) return null;
     const { host } = parseHostRef(this.workspaceKey);
@@ -516,13 +502,12 @@ export class MuxDock extends LitElement {
     // still live must fail closed -- the same rule stateOf() follows.
     return {
       id: host,
-      name: entry?.name || host,
       state: entry?.state ?? 'never-connected',
       retryAt: entry?.retryAt,
     };
   }
 
-  /** Repaint one tab: [bell dot] [host pin] title [session state mark]. */
+  /** Repaint one tab: [bell dot] title [session state mark]. */
   private _paintTab(tabEl: HTMLElement, paneId: number, title: string): void {
     tabEl.textContent = '';
     if (store.paneBellActive(paneId)) {
@@ -530,19 +515,6 @@ export class MuxDock extends LitElement {
       bell.className = 'mux-bell-prefix';
       bell.textContent = '● ';
       tabEl.appendChild(bell);
-    }
-    // WHICH MACHINE this pane is on, before its name -- the tab strip's answer
-    // to the question the sidebar's host groups answer spatially. Dropped, the
-    // pin takes the spinner and the warn colour, so one look at the strip is
-    // enough to know which panes are still being served.
-    const host = this._remoteHost();
-    if (host) {
-      const pin = document.createElement('span');
-      const dropped = host.state !== 'connected';
-      pin.className = dropped ? 'hostpin warn' : 'hostpin';
-      pin.textContent = dropped ? `${DROP_GLYPH} ${host.name}` : host.name;
-      pin.title = dropped ? `${host.name} — ${dropLabel(host.state)}` : host.name;
-      tabEl.appendChild(pin);
     }
     tabEl.appendChild(document.createTextNode(title));
     // Bell and session mark are different questions -- "something happened here
@@ -596,9 +568,6 @@ export class MuxDock extends LitElement {
   private _syncDropState(): void {
     const host = this._remoteHost();
     const dropped = host !== null && host.state !== 'connected';
-    // toggle(x, false) on an absent class does not touch the attribute, so a
-    // local or zero-remote dock keeps exactly the class list it has on main.
-    this.classList.toggle('remote', host !== null);
     this.classList.toggle('dropped', dropped);
 
     if (!dropped || !host) {
@@ -830,15 +799,8 @@ export class MuxDock extends LitElement {
       target.appendChild(base);
     }
 
-    // Base = dockview's built-in "abyss" theme (for its flat STRUCTURE only:
-    // zero tab radius/margin, transparent sashes). We re-skin all of its COLORS
-    // to Tokyo Night below so the tab bar matches muxterm's title bar and
-    // follows VS Code's tab hierarchy:
-    //   • active tab background == terminal body (#1a1b26) → tab "merges" into
-    //     the content, the VS Code selected-tab look,
-    //   • tab bar + inactive tabs share the title bar surface (#16161e) with
-    //     dimmer text, so unselected tabs recede,
-    //   • the active tab carries a blue top accent border as the selection cue.
+    // Dockview's abyss theme supplies the flat structure. Semantic tokens supply
+    // the colors for the active tab, muted tabs, controls and resize sash.
     if (!target.querySelector(`#${STYLE_ID}`)) {
       const style = document.createElement('style');
       style.id = STYLE_ID;
@@ -863,15 +825,12 @@ export class MuxDock extends LitElement {
           --dv-tabs-and-actions-container-height: 44px;
           --dv-background-color: var(--ui-surface-base);
 
-          /* Panel CONTENT background. Must equal the terminal background so the
-             few sub-character pixels left when xterm can't fill the pane to an
-             exact row height don't bleed a contrasting color. --mux-bg is set
-             by applyThemeTokens() to the palette's background colour. */
+          /* Match xterm's surface at the edges of its character grid. */
           --dv-group-view-background-color: var(--ui-terminal-surface);
 
           /* Tab bar surface — same as the title bar so the chrome reads as one
              continuous band. */
-          --dv-tabs-and-actions-container-background-color: var(--mux-titlebar-bg, var(--chrome-bar));
+          --dv-tabs-and-actions-container-background-color: var(--ui-surface-nav);
 
           /* Active group: selected tab merges into the body, others into the bar. */
           --dv-activegroup-visiblepanel-tab-background-color: var(--ui-surface-base);
@@ -898,19 +857,7 @@ export class MuxDock extends LitElement {
         @media (display-mode: window-controls-overlay) {
           mux-dock .dv-tabs-and-actions-container:not(.dv-groupview-header-vertical) {
             box-sizing: border-box;
-            padding-right: var(--wco-right-inset, 0px);
-          }
-          mux-dock[terminalutilityopen] .dv-tabs-and-actions-container:not(.dv-groupview-header-vertical) { padding-right:0; }
-          mux-dock .dv-void-container { -webkit-app-region: drag; }
-          mux-dock .dv-tab, mux-dock button, mux-dock input {
-            -webkit-app-region: no-drag;
-          }
-        }
-
-        @media (display-mode: window-controls-overlay) {
-          mux-dock .dv-tabs-and-actions-container:not(.dv-groupview-header-vertical) {
-            box-sizing: border-box;
-            padding-right: var(--wco-right-inset, 0px);
+            padding-right: var(--wco-right-inset, 0);
           }
           mux-dock[terminalutilityopen] .dv-tabs-and-actions-container:not(.dv-groupview-header-vertical) { padding-right:0; }
           mux-dock .dv-void-container { -webkit-app-region: drag; }
@@ -941,7 +888,7 @@ export class MuxDock extends LitElement {
           white-space: nowrap;
         }
         mux-dock .dv-tabs-container > .dv-tab:first-child {
-          padding-inline-start: 8px !important;
+          padding-inline-start: var(--ui-space-4) !important;
         }
         mux-dock .mux-workspace-prefix-label { overflow:hidden; text-overflow:ellipsis; }
         mux-dock:not([workspace-actions-visible]) .mux-workspace-actions {
@@ -1061,7 +1008,7 @@ export class MuxDock extends LitElement {
           outline-offset: -2px;
           background: var(--ui-surface-hover);
         }
-        mux-dock .mux-utility-toggle[aria-pressed="true"] { color:var(--chrome-accent); background:var(--chrome-hover); }
+        mux-dock .mux-utility-toggle[aria-pressed="true"] { color:var(--ui-accent); background:var(--ui-surface-hover); }
 
         /* dockview's action containers shrink-wrap their button and sit at the
            header's top edge, so the 28px button is top-pinned in the 35px bar.
@@ -1107,44 +1054,7 @@ export class MuxDock extends LitElement {
         mux-dock .mux-session-mark.fail { color: var(--ui-danger); }
         mux-dock .mux-session-mark.idle { color: var(--ui-text-muted); }
 
-        /* ── Remote hosts ─────────────────────────────────────────────────
-           Nothing below this line can match on a machine with no remotes:
-           .hostpin and .dropbar are never created, and .remote/.dropped never
-           land on the host element. The rules are here, inert, rather than
-           injected on demand -- a stylesheet that appears halfway through a
-           session is a repaint nobody asked for. */
-
-        /* The pin: WHICH MACHINE, in the tab, before the name. --remote is
-           the one token the fleet added (ux D3); it plays the same "this one
-           is different" role .badge.autonomous plays in the home view. */
-        mux-dock .hostpin {
-          display: inline-block;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-          font-size: var(--ui-text-xs);
-          font-style: normal;
-          line-height: 1.4;
-          padding: 0 var(--ui-space-2);
-          margin-right: var(--ui-space-3);
-          border-radius: var(--ui-radius-sm);
-          color: var(--ui-remote);
-          background: color-mix(in srgb, var(--ui-remote) 15%, transparent);
-          border: 1px solid color-mix(in srgb, var(--ui-remote) 40%, transparent);
-          vertical-align: baseline;
-        }
-        /* Dropped, the pin stops saying "elsewhere" and starts saying
-           "unreachable", so it moves to the warn colour the whole app uses
-           for that. The wireframe did this with an inline style; a class is
-           the same picture without a style attribute per tab. */
-        mux-dock .hostpin.warn {
-          color: var(--ui-warning);
-          background: color-mix(in srgb, var(--ui-warning) 12%, transparent);
-          border-color: color-mix(in srgb, var(--ui-warning) 40%, transparent);
-        }
-
-        /* The active tab's top accent follows the same vocabulary. */
-        mux-dock.remote .dv-tab.dv-active-tab {
-          border-top-color: var(--ui-remote) !important;
-        }
+        /* Connection loss remains visible because the pane cannot accept input. */
         mux-dock.dropped .dv-tab.dv-active-tab {
           border-top-color: var(--ui-warning) !important;
         }

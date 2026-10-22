@@ -60,9 +60,9 @@
     "nativeControls": 2
   },
   "components/mux-dock.ts": {
-    "legacyTokens": 4,
+    "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 2,
+    "literalScale": 0,
     "nativeControls": 0
   },
   "components/mux-monaco-diff.ts": {

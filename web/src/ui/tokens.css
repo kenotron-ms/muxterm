@@ -59,6 +59,7 @@
   --ui-dock-tab-width: 180px;
   --ui-dock-tab-min-width: 80px;
   --ui-dock-action-rail-width: 140px;
+  --ui-dock-terminal-padding-inline: 14px;
   --ui-media-preview-max-height: 420px;
   --ui-nav-height: var(--mux-titlebar-height, var(--mux-dock-height, 44px));
   --ui-motion-fast: 120ms;
