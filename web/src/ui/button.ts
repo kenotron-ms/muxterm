@@ -67,7 +67,7 @@ export class MuxUIButton extends LitElement {
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (pointer: coarse) {
       button { min-height: var(--ui-control-lg); }
-      :host([icon-only]) { width: var(--ui-control-lg); height: var(--ui-control-lg); }
+      :host([icon-only]),:host([icon-only][size='small']) { width: var(--ui-control-lg); height: var(--ui-control-lg); }
     }
     @media (prefers-reduced-motion: reduce) { button { transition: none; } .spinner { animation-duration: 1.5s; } }
   `;

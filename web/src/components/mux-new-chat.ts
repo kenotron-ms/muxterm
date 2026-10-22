@@ -91,72 +91,71 @@ export class MuxNewChat extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:13px/1.5 system-ui,sans-serif; }
-    .topbar { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:9px; min-width:0; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
-    .topbar .project { display:inline-flex; align-items:center; gap:7px; min-width:0; max-width:38%; color:var(--ui-text-muted); font:500 12px Inter,system-ui,sans-serif; white-space:nowrap; }
+    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
+    .topbar { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
+    .topbar .project { display:inline-flex; align-items:center; gap:var(--ui-space-3); min-width:0; max-width:38%; color:var(--ui-text-muted); font:500 var(--ui-text-sm) var(--ui-font-sans); white-space:nowrap; }
     .topbar .project span { overflow:hidden; text-overflow:ellipsis; }
     .topbar .divider { flex:none; color:var(--ui-text-muted); }
     .topbar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
     @media (max-width:767.98px) { .topbar { display:none; } }
     @media (display-mode: window-controls-overlay) { .topbar { -webkit-app-region:drag; } }
-    .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:24px; overflow:auto; }
+    .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:var(--ui-space-8); overflow:auto; }
     .main.setup { justify-content:flex-start; }
-    .content { width:min(100%,780px); }
-    h1 { font-size:28px; font-weight:600; margin:0 0 20px; }
-    .controls { display:flex; align-items:center; flex-wrap:wrap; gap:7px; padding-bottom:9px; border-bottom:1px solid var(--ui-border); }
-    label { display:flex; flex-direction:column; gap:5px; color:var(--ui-text-muted); font-size:11px; }
+    .content { width:min(100%,var(--ui-chat-content-width)); }
+    h1 { font-size:var(--ui-text-4xl); font-weight:600; margin:0 0 var(--ui-space-7); }
+    .controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); padding-bottom:var(--ui-space-4); border-bottom:1px solid var(--ui-border); }
+    label { display:flex; flex-direction:column; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .controls label { display:block; }
     .controls .project { min-width:0; }
     .controls .harness { min-width:0; }
-    .chat-picker .model-list { max-height:180px; overflow-y:auto; }
-    .chat-picker .custom-model { width:calc(100% - 20px); margin:6px 10px; }
-    .catalog-status { color:var(--ui-text-muted); font-size:11px; }
+    .chat-picker .model-list { max-height:var(--ui-choice-list-max-height); overflow-y:auto; }
+    .chat-picker .custom-model { width:calc(100% - var(--ui-space-8)); margin:var(--ui-space-3) var(--ui-space-5); }
+    .catalog-status { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .controls mux-ui-switch { margin-left:auto; }
-    .composer-actions { display:flex; align-items:center; gap:7px; padding-top:8px; border-top:1px solid var(--ui-border); }
+    .composer-actions { display:flex; align-items:center; gap:var(--ui-space-3); padding-top:var(--ui-space-4); border-top:1px solid var(--ui-border); }
     .composer-actions .send { margin-left:auto; }
-    .controls mux-ui-select { max-width:150px; }
+    .controls mux-ui-select { max-width:var(--ui-new-chat-harness-width); }
     .project mux-ui-select-combobox { max-width:var(--ui-picker-trigger-compact-width); }
     .folder { display:grid; gap:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .folder-line { display:flex; align-items:center; gap:var(--ui-space-3); }
     .folder-line mux-ui-text-field { flex:1; min-width:0; }
     button { cursor:pointer; font:inherit; }
     mux-ui-folder-browser { margin-bottom:var(--ui-space-4); }
-    .composer { position:relative; display:flex; flex-direction:column; gap:9px; border:1px solid var(--ui-border); border-radius:18px; background:var(--ui-surface-raised); padding:15px 14px 10px; transition:border-color .15s,box-shadow .15s; }
+    .composer { position:relative; display:flex; flex-direction:column; gap:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-2xl); background:var(--ui-surface-raised); padding:var(--ui-space-6) var(--ui-space-6) var(--ui-space-5); transition:border-color var(--ui-motion-fast),box-shadow var(--ui-motion-fast); }
     .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
-    .textarea-sizing { position:relative; width:100%; min-width:0; min-height:56px; max-height:220px; font:16px/1.55 system-ui,sans-serif; }
-    textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:56px; max-height:220px; resize:none; border:0; outline:0; padding:3px 0; color:inherit; background:transparent; font:inherit; overflow-y:auto; }
+    .textarea-sizing { position:relative; width:100%; min-width:0; min-height:var(--ui-composer-input-min-height); max-height:var(--ui-composer-input-max-height); font:var(--ui-text-xl)/1.55 var(--ui-font-sans); }
+    textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:var(--ui-composer-input-min-height); max-height:var(--ui-composer-input-max-height); resize:none; border:0; outline:0; padding:var(--ui-space-1) 0; color:inherit; background:transparent; font:inherit; overflow-y:auto; }
     .native-textarea-sizing textarea { field-sizing:content; height:auto; }
     .legacy-textarea-sizing textarea { position:absolute; inset:0; height:100%; min-height:0; max-height:none; }
-    .textarea-mirror { box-sizing:border-box; width:100%; min-height:56px; max-height:220px; padding:3px 0; visibility:hidden; white-space:pre-wrap; overflow-wrap:break-word; overflow-y:auto; }
+    .textarea-mirror { box-sizing:border-box; width:100%; min-height:var(--ui-composer-input-min-height); max-height:var(--ui-composer-input-max-height); padding:var(--ui-space-1) 0; visibility:hidden; white-space:pre-wrap; overflow-wrap:break-word; overflow-y:auto; }
     .native-textarea-sizing .textarea-mirror { display:none; }
     textarea::placeholder { color:var(--ui-text-muted); opacity:.8; }
-    .attachments { display:flex; flex-wrap:wrap; gap:8px; }
-    .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--ui-border); border-radius:10px; background:var(--ui-surface-raised); }
-    .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:6px; background:var(--ui-surface-base); }
-    .attachment .filename { min-width:0; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
-    .attachment .status { color:var(--ui-text-muted); font-size:11px; }
+    .attachments { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); }
+    .attachment { position:relative; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; max-width:min(100%,var(--ui-attachment-card-width)); padding:var(--ui-space-2) var(--ui-control-lg) var(--ui-space-2) var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
+    .attachment img { flex:none; width:var(--ui-attachment-preview-size); height:var(--ui-attachment-preview-size); object-fit:cover; border-radius:var(--ui-radius-md); background:var(--ui-surface-base); }
+    .attachment .filename { min-width:0; max-width:var(--ui-attachment-name-width); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ui-text-sm); }
+    .attachment .status { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .attachment .status.failed { color:var(--ui-danger-text); }
-    .attachment button { position:absolute; top:4px; right:4px; width:22px; height:22px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--ui-text-muted); font-size:18px; line-height:20px; }
-    .attachment button:hover { background:var(--ui-surface-hover); color:inherit; }
+    .attachment mux-ui-button { position:absolute; top:var(--ui-space-2); right:var(--ui-space-2); }
     .file-input { display:none; }
-    .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:16px; background:color-mix(in srgb, var(--ui-surface-base) 92%, transparent); color:var(--ui-text); font-size:22px; pointer-events:none; }
+    .drop-overlay { position:absolute; inset:var(--ui-space-4); z-index:10; display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb, var(--ui-surface-base) 92%, transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
     .main > .content > mux-ui-feedback { margin:var(--ui-space-5) 0; }
-    .setup-intro { margin:0 0 18px; color:var(--ui-text-muted); font-size:14px; }
-    .setup-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:10px; }
-    .setup-card { padding:15px; border:1px solid var(--ui-border); border-radius:13px; background:var(--ui-surface-raised); }
-    .setup-card h2 { margin:0 0 8px; font-size:15px; }
-    .setup-card code { display:block; min-height:42px; padding:8px; border-radius:7px; overflow-wrap:anywhere; background:var(--ui-surface-base); color:var(--ui-text); font:12px/1.45 ui-monospace,SFMono-Regular,monospace; }
-    .setup-card p { margin:9px 0; color:var(--ui-text-muted); font-size:12px; }
-    .setup-actions { display:flex; align-items:center; gap:12px; margin-top:10px; }
+    .setup-intro { margin:0 0 var(--ui-space-7); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
+    .setup-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(var(--ui-new-chat-setup-card-width),1fr)); gap:var(--ui-space-5); }
+    .setup-card { padding:var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background:var(--ui-surface-raised); }
+    .setup-card h2 { margin:0 0 var(--ui-space-4); font-size:var(--ui-text-xl); }
+    .setup-card code { display:block; min-height:var(--ui-control-lg); padding:var(--ui-space-4); border-radius:var(--ui-radius-md); overflow-wrap:anywhere; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-sm)/1.45 var(--ui-font-mono); }
+    .setup-card p { margin:var(--ui-space-4) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .setup-actions { display:flex; align-items:center; gap:var(--ui-space-5); margin-top:var(--ui-space-5); }
     .setup-actions a { color:var(--ui-accent); text-decoration:none; }
     .setup-refresh { margin-top:var(--ui-space-6); }
     .setup-terminal { margin-bottom:var(--ui-space-6); }
-    .receipt { display:flex; align-items:center; gap:8px; margin:12px 2px 0; color:var(--ui-text-muted); font-size:12px; }
-    .receipt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--ui-accent); animation:receipt-pulse 1.35s ease-in-out infinite; }
+    .receipt { display:flex; align-items:center; gap:var(--ui-space-4); margin:var(--ui-space-5) var(--ui-space-1) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .receipt::before { content:''; width:var(--ui-attention-mark-size); height:var(--ui-attention-mark-size); border-radius:50%; background:var(--ui-accent); animation:receipt-pulse var(--ui-motion-pulse) ease-in-out infinite; }
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
     @media (prefers-reduced-motion:reduce) { .receipt::before { animation:none; } }
     .location-settings { min-width:0; }
-    .location-trigger { display:flex; align-items:center; gap:6px; box-sizing:border-box; max-width:230px; height:31px; padding:0 9px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); font-size:var(--ui-text-sm); white-space:nowrap; }
+    .location-trigger { display:flex; align-items:center; gap:var(--ui-space-3); box-sizing:border-box; max-width:var(--ui-new-chat-location-width); min-height:var(--ui-control-md); padding:0 var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); font-size:var(--ui-text-sm); white-space:nowrap; }
     .location-settings .folder-symbol { display:flex; flex:none; color:var(--ui-accent); }
     .location-settings .folder-label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
     .location-trigger:hover,.location-trigger[aria-expanded="true"] { border-color:var(--ui-accent); }
@@ -165,12 +164,13 @@ export class MuxNewChat extends LitElement {
     .location-head { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); }
     .location-head h2 { margin:0; color:var(--ui-text); font-size:var(--ui-text-xl); }
     .location-actions { display:flex; justify-content:flex-end; border-top:1px solid var(--ui-border); padding-top:var(--ui-space-5); }
-    .location-note { margin:0; color:var(--ui-text-muted); font-size:11px; }
+    .location-note { margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     @media(max-width:550px) {
-      .main { padding:16px; }
-      h1 { font-size:24px; }
-      .controls { position:relative; gap:6px; }
-      .controls mux-ui-select { max-width:125px; }
+      .main { padding:var(--ui-space-6); }
+      h1 { font-size:var(--ui-text-3xl); }
+      .controls { position:relative; gap:var(--ui-space-3); }
+      .controls mux-ui-select { max-width:var(--ui-new-chat-harness-phone-width); }
+      .location-trigger { min-height:var(--ui-control-lg); }
       .location-fields { padding-bottom:max(var(--ui-space-6),env(safe-area-inset-bottom)); }
     }
   `;
@@ -486,7 +486,7 @@ export class MuxNewChat extends LitElement {
         ${this.catalogLoading ? html`<span class="catalog-status" role="status">Loading models…</span>` : nothing}
         <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
         </div>
-        ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button></div>`)}</div>` : nothing}
+        ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><mux-ui-button icon-only size="small" variant="quiet" accessible-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>${icon(X,{size:14})}</mux-ui-button></div>`)}</div>` : nothing}
         <div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${this.onPromptInput} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div>
         <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><mux-ui-button icon-only variant="quiet" accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:18})}</mux-ui-button><mux-ui-button class="send" icon-only variant="primary" accessible-label="Send message" ?disabled=${(!this.promptHasContent && !this.attachments.length) || this.busy || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>${icon(ArrowUp,{size:18})}</mux-ui-button></div>
 

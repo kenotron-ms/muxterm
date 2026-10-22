@@ -78,6 +78,16 @@
   --ui-picker-trigger-width: 290px;
   --ui-picker-trigger-compact-width: 170px;
   --ui-chat-content-width: 790px;
+  --ui-choice-list-max-height: 180px;
+  --ui-composer-input-min-height: 56px;
+  --ui-composer-input-max-height: 220px;
+  --ui-attachment-card-width: 230px;
+  --ui-attachment-preview-size: 52px;
+  --ui-attachment-name-width: 150px;
+  --ui-new-chat-harness-width: 150px;
+  --ui-new-chat-harness-phone-width: 125px;
+  --ui-new-chat-setup-card-width: 280px;
+  --ui-new-chat-location-width: 230px;
   --ui-page-content-width: 900px;
   --ui-connection-content-width: 760px;
   --ui-connection-service-picker-width: 400px;

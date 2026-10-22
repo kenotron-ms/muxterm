@@ -35,7 +35,7 @@ export const Danger: Story = { args: { variant: 'danger', label: 'Close pane' } 
 export const Busy: Story = { args: { variant: 'primary', label: 'Saving changes', busy: true } };
 export const Disabled: Story = { args: { label: 'Unavailable', disabled: true } };
 export const Sizes: Story = {
-  render: () => html`<div style="display:flex;align-items:center;gap:16px">
+  render: () => html`<div style="display:flex;align-items:center;gap:var(--ui-space-6)">
     <mux-ui-button size="small">Small</mux-ui-button>
     <mux-ui-button size="medium">Medium</mux-ui-button>
     <mux-ui-button size="large">Large</mux-ui-button>
@@ -48,4 +48,8 @@ export const IconOnly: Story = {
     <mux-ui-button icon-only size="large" variant="danger" accessible-label="Delete item">${icon(Trash2,{size:20})}</mux-ui-button>
     <mux-ui-button icon-only variant="primary" accessible-label="Send message" disabled>${icon(ArrowUp,{size:18})}</mux-ui-button>
   </div>`,
+};
+export const PhoneIconOnly: Story = {
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  render:IconOnly.render,
 };

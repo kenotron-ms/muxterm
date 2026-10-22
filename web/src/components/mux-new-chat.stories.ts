@@ -41,7 +41,8 @@ const fixture: ApiFixture = ({ url, method, init }) => {
     return fixtureJSON({ id:'new-project', name:request.name || request.path?.split('/').at(-1) || 'New project', path:request.path, sourceFolders:[] });
   }
   if (method === 'POST' && url.pathname.endsWith('/api/sdk-chat-attachments')) {
-    return fixtureJSON({ id:'story-attachment', kind:'image' });
+    const file = init?.body instanceof FormData ? init.body.get('file') : null;
+    return fixtureJSON({ id:'story-attachment', kind:file instanceof File && file.type.startsWith('image/') ? 'image' : 'file' });
   }
   if (method === 'POST' && url.pathname.endsWith('/api/sdk-chats')) {
     const request = JSON.parse(String(init?.body || '{}')) as { prompt?: string; projectPath?: string };
@@ -101,6 +102,28 @@ export const WorktreeSelected: Story = {
 };
 export const PhoneWorktree: Story = { args:{project:'atlas'}, globals:{viewport:{value:'phone390',isRotated:false}}, play:WorktreeSelected.play };
 export const DraftMessage: Story = { args: { project:'atlas', prompt:'Summarize the open tasks in this project.' } };
+const attachFile = async ({canvasElement}:{canvasElement:HTMLElement}) => {
+  const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
+  if (!screen) throw new Error('New Chat did not mount');
+  let input:HTMLInputElement | null | undefined;
+  for (let attempt=0; !input && attempt<20; attempt++) {
+    input = screen.shadowRoot?.querySelector<HTMLInputElement>('.file-input');
+    if (!input) await new Promise(resolve => setTimeout(resolve,50));
+  }
+  if (!input) throw new Error('Attachment input did not mount');
+  const files = new DataTransfer();
+  files.items.add(new File(['Review the project notes.'], 'project-notes.txt', {type:'text/plain'}));
+  input.files = files.files;
+  input.dispatchEvent(new Event('change', {bubbles:true,composed:true}));
+  for (let attempt=0; attempt<30; attempt++) {
+    await screen.updateComplete;
+    if (screen.shadowRoot?.querySelector('.attachment .status')?.textContent === 'Ready') return;
+    await new Promise(resolve => setTimeout(resolve,50));
+  }
+  throw new Error('Attachment did not become ready');
+};
+export const AttachmentReady: Story = { args:{project:'atlas'},play:attachFile };
+export const PhoneAttachment: Story = { args:{project:'atlas'},globals:{viewport:{value:'phone390',isRotated:false}},play:attachFile };
 export const Compact: Story = { args: { compact:true } };
 export const NewProject: Story = {
   play: async ({ canvasElement }) => {

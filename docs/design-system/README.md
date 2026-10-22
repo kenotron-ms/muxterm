@@ -87,6 +87,12 @@ A live New project editor opened with name and folder fields. Clicking the
 shared attachment button opened the browser file chooser. The isolated app had
 no project and rejected automated fixture creation under its human-browser
 authority boundary, so live project save awaits an authorized fixture.
+New Chat now uses semantic scale tokens throughout its checked stylesheet. Its
+attachment removal action uses the shared Button; on coarse pointers, the small
+icon action has a 44 px target. Storybook catalogs ready attachments at desktop
+and phone widths. In isolated Chromium, a text file reached Ready and was
+removed, the phone location dialog opened, and the 390 px page had no horizontal
+overflow. Screenshots for these checks remain outside git.
 
 The chat project editor uses shared Text Field, Button and Dialog controls with
 semantic colors. Project renaming opens the same editor as folder changes;
