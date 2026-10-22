@@ -3,6 +3,7 @@ import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
 import '../ui/button.js';
+import '../ui/color-picker.js';
 import '../ui/nav-item.js';
 import '../ui/radio-group.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
@@ -11,6 +12,7 @@ import '../ui/select.js';
 import type { MuxUISelect } from '../ui/select.js';
 import '../ui/switch.js';
 import '../ui/text-field.js';
+import '../ui/theme-choice.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
 import {
@@ -318,95 +320,7 @@ export class MuxSettingsSurface extends LitElement {
       gap: var(--ui-space-5);
       margin-bottom: var(--ui-space-2);
     }
-
-    .theme-card {
-      position: relative;
-      display: block;
-      width: 100%;
-      padding: 0;
-      background: transparent;
-      color: inherit;
-      text-align: left;
-      font: inherit;
-      cursor: pointer;
-      display: block;
-      width: 100%;
-      padding: 0;
-      background: transparent;
-      font: inherit;
-      text-align: left;
-      border-radius: var(--ui-radius-md);
-      border: 2px solid transparent;
-      overflow: hidden;
-      transition: border-color 0.15s, transform 0.1s;
-      user-select: none;
-    }
-    .theme-card:hover {
-      transform: translateY(-1px);
-    }
-    .theme-card:focus-visible {
-      outline: 2px solid var(--ui-focus);
-      outline-offset: 2px;
-    }
-    .theme-card.active {
-      border-color: var(--ui-accent);
-    }
-    .theme-card:focus-visible {
-      outline: 2px solid var(--ui-accent);
-      outline-offset: 2px;
-    }
-
-    .card-inner {
-      padding: var(--ui-space-4) var(--ui-space-4) var(--ui-space-3);
-      font-size: var(--ui-text-xs);
-      font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
-      line-height: 1.6;
-    }
-
-    .card-topbar {
-      display: flex;
-      gap: var(--ui-space-2);
-      margin-bottom: var(--ui-space-3);
-    }
-    .card-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-    }
-    .dot-r { background: var(--ui-danger); }
-    .dot-y { background: var(--ui-warning); }
-    .dot-g { background: var(--ui-success); }
-
-    .card-prompt { margin-bottom: var(--ui-space-1); }
-    .card-files  { margin-top: var(--ui-space-1); }
-
-    .card-cursor {
-      display: inline-block;
-      width: 6px;
-      height: 10px;
-      vertical-align: text-bottom;
-      margin-top: var(--ui-space-1);
-    }
-
-    .card-label {
-      font-size: var(--ui-text-xs);
-      text-align: center;
-      padding: var(--ui-space-3) var(--ui-space-3) var(--ui-space-3);
-      color: var(--ui-text-muted);
-      background: var(--ui-surface-raised);
-    }
-    .theme-card.active .card-label {
-      color: var(--ui-text);
-    }
-
-    .card-check {
-      position: absolute;
-      top: 5px;
-      right: 7px;
-      font-size: var(--ui-text-xs);
-      color: var(--ui-accent);
-      font-weight: 700;
-    }
+    .theme-light-heading { margin-top:var(--ui-space-6); }
 
     /* ── Font size slider ── */
     mux-ui-range-field.font-size { margin-top:var(--ui-space-2); }
@@ -484,83 +398,10 @@ export class MuxSettingsSurface extends LitElement {
       margin: var(--ui-space-8) 0;
     }
 
-    /* ── Title bar color picker ── */
-
-    /* Crayon grid — curated presets, same idea as macOS's classic Crayons
-       color-picker tab. */
-    .crayon-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--ui-space-5);
-      margin-bottom: var(--ui-space-5);
-    }
-
-    .crayon {
-      position: relative;
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      border: 1px solid rgba(0, 0, 0, 0.12);
-      padding: 0;
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: transform 0.08s;
-    }
-    .crayon:hover {
-      transform: scale(1.12);
-    }
-    .crayon.active {
-      box-shadow: 0 0 0 2px var(--ui-surface-base), 0 0 0 4px var(--ui-accent);
-    }
-    .crayon-check {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: var(--ui-text-md);
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-    }
-
-    .titlebar-row {
-      display: flex;
-      align-items: center;
-      gap: var(--ui-space-5);
-    }
-
-    .titlebar-swatch {
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      border: 1px solid var(--ui-border);
-      padding: 0;
-      cursor: pointer;
-      flex-shrink: 0;
-      /* Native color input chrome varies a lot by browser — strip it down
-         to just the swatch so it matches the crayon grid above it. */
-      -webkit-appearance: none;
-      appearance: none;
-      background: none;
-    }
-    .titlebar-swatch::-webkit-color-swatch-wrapper {
-      padding: 0;
-    }
-    .titlebar-swatch::-webkit-color-swatch {
-      border: none;
-      border-radius: 50%;
-    }
-
-    .titlebar-custom-label {
-      font-size: var(--ui-text-sm);
-      color: var(--ui-text-muted);
-    }
-
-    .titlebar-row mux-ui-button { margin-left: auto; }
-
     .titlebar-hint {
       font-size: var(--ui-text-sm);
       color: var(--ui-text-muted);
-      margin: 0;
+      margin: var(--ui-space-4) 0 0;
     }
 
     /* ── AI section ── */
@@ -784,7 +625,6 @@ export class MuxSettingsSurface extends LitElement {
       }
       .content { min-width: 0; padding: var(--ui-space-7) var(--ui-space-6) var(--ui-space-9); }
       .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 520px; }
-      .card-label { font-size: var(--ui-text-sm); }
       .r-row { flex-wrap: wrap; }
       .r-main { flex: 1 1 calc(100% - var(--ui-space-7)); }
       .r-actions { flex: 1 1 100%; justify-content: flex-end; }
@@ -1068,40 +908,10 @@ export class MuxSettingsSurface extends LitElement {
 
   private _renderThemeGroup(cards: ThemeCard[], current: string) {
     return cards.map(card => {
-          const palette = PALETTES[card.id];
-          if (!palette) return html``;
-          const isActive = current === card.id;
-          const previewInk = isLightTheme(card.id) ? '#1f2328' : '#f8f8f2';
-          const previewText = (color: string) => `color:color-mix(in srgb, ${color} 50%, ${previewInk})`;
-          return html`
-            <button
-              type="button"
-              class="theme-card ${isActive ? 'active' : ''}"
-              title="${card.label}"
-              aria-pressed="${isActive}"
-              @click="${() => this._setTheme(card.id)}"
-            >
-              <div class="card-inner" aria-hidden="true" style="background:${palette.background}">
-                <div class="card-topbar">
-                  <span class="card-dot dot-r"></span>
-                  <span class="card-dot dot-y"></span>
-                  <span class="card-dot dot-g"></span>
-                </div>
-                <div class="card-prompt">
-                  <span style="${previewText(palette.blue)}">~/proj</span>
-                  <span style="${previewText(palette.green)}"> main</span>
-                </div>
-                <div class="card-files">
-                  <span style="${previewText(palette.blue)}">src/ </span><span style="${previewText(palette.green)}">run.sh</span>
-                </div>
-                <div class="card-prompt" style="${previewText(palette.foreground)}">$ ls</div>
-                <span class="card-cursor" style="background:${palette.cursor}"></span>
-              </div>
-              <div class="card-label">${card.label}</div>
-              ${isActive ? html`<div class="card-check">✓</div>` : ''}
-            </button>
-          `;
-        });
+      const palette = PALETTES[card.id];
+      return palette ? html`<mux-ui-theme-choice label=${card.label} .preview=${palette}
+        ?selected=${current === card.id} @click=${() => this._setTheme(card.id)}></mux-ui-theme-choice>` : html``;
+    });
   }
 
   private _renderThemeCards() {
@@ -1110,7 +920,7 @@ export class MuxSettingsSurface extends LitElement {
       <div class="theme-grid">
         ${this._renderThemeGroup(DARK_THEMES, current)}
       </div>
-      <p class="section-title" style="margin-top:16px">Light</p>
+      <p class="section-title theme-light-heading">Light</p>
       <div class="theme-grid">
         ${this._renderThemeGroup(LIGHT_THEMES, current)}
       </div>
@@ -1236,30 +1046,13 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _renderTitlebarColorPicker() {
-    const color = this._titlebarColor?.toLowerCase() ?? null;
     return html`
-      <div class="crayon-grid">
-        ${this._crayons.map(crayon => html`
-          <button
-            class="crayon ${color === crayon.hex ? 'active' : ''}"
-            style="background:${crayon.hex}"
-            title="${crayon.name}"
-            @click="${() => this._setTitlebarColor(crayon.hex)}"
-          >${color === crayon.hex ? html`<span class="crayon-check">✓</span>` : ''}</button>
-        `)}
-      </div>
-      <div class="titlebar-row">
-        <input
-          class="titlebar-swatch"
-          type="color"
-          title="Pick a custom title bar color"
-          .value="${color ?? this._currentChromeBarHex}"
-          @input="${(e: Event) => this._setTitlebarColor((e.target as HTMLInputElement).value)}"
-        />
-        <span class="titlebar-custom-label">Custom…</span>
-        <mux-ui-button size="small" variant="secondary" @click="${() => this._resetTitlebarColor()}">Use theme default</mux-ui-button>
-      </div>
-      <p class="titlebar-hint" style="margin-top:8px">
+      <mux-ui-color-picker .options=${this._crayons.map(crayon => ({label:crayon.name,color:crayon.hex}))}
+        .value=${this._titlebarColor?.toLowerCase() || ''} .fallbackColor=${this._currentChromeBarHex}
+        inputLabel="Pick a custom title bar color"
+        @color-change=${(event: CustomEvent<{color:string}>) => this._setTitlebarColor(event.detail.color)}
+        @color-reset=${() => this._resetTitlebarColor()}></mux-ui-color-picker>
+      <p class="titlebar-hint">
         Only affects this browser on <strong>${instanceLabel()}</strong> — handy for
         telling multiple muxterm instances apart at a glance.
       </p>

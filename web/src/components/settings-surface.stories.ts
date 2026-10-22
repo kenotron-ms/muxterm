@@ -135,6 +135,19 @@ export default meta;
 type Story = StoryObj<SettingsArgs>;
 export const Appearance: Story = {};
 export const PhoneAppearance: Story = { globals:{viewport:{value:'phone390',isRotated:false}} };
+export const LightAppearance: Story = {
+  globals:{palette:'github-light'},
+  play:async ({canvasElement}) => {
+    const settings = canvasElement.querySelector<MuxSettingsSurface>('mux-settings-surface');
+    await settings?.updateComplete;
+    settings?.shadowRoot?.querySelector<HTMLElement>('mux-ui-theme-choice[label="GitHub"]')?.click();
+    await settings?.updateComplete;
+  },
+};
+export const PhoneLightAppearance: Story = {
+  globals:{palette:'github-light',viewport:{value:'phone390',isRotated:false}},
+  play:LightAppearance.play,
+};
 export const Notifications: Story = { args: { section:'notifications' } };
 export const PhoneNotifications: Story = { args:{section:'notifications'}, globals:{viewport:{value:'phone390',isRotated:false}} };
 export const AIOff: Story = { args: { section:'ai' } };

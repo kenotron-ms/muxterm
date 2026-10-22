@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
+3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -124,15 +124,19 @@ primary destinations, provider navigation at desktop and phone widths, and no
 horizontal overflow.
 
 Settings uses shared section Navigation Item, Button, Text Field, Range Field,
-Radio Group, Switch and Select controls with semantic tokens. One native Radio
+Radio Group, Switch, Select, Theme Choice and Color Picker controls with semantic tokens. One native Radio
 Group now owns font family, terminal bell and voice sign-in choices; the voice
 enable control uses Switch and the Entra scope uses Select. Storybook and live
 dev-local Chromium verified selection, keyboard navigation, the font preview,
-phone layout and scope changes. The Settings native-control baseline fell from
-10 to 3. Dev-local also verified all eight destinations, phone navigation
-visibility, Workspaces and About controls, without starting an update. Theme
-preview cards, title-bar crayons and the native color picker remain specialized
-for visual theme selection.
+phone layout and scope changes. Theme Choice receives the actual terminal
+palette colors as data and can preview an optional backdrop; Color Picker owns
+named presets, accessible 44 px swatches, the native custom-color input and
+reset. Settings keeps theme persistence and picks dark or light presets from
+the current palette. Storybook verified both palette families, custom color
+selection, reset and a 390 px light theme. The Settings native-control baseline
+fell from 10 to 0. Dev-local also verified all eight destinations, phone
+navigation visibility, Workspaces and About controls, without starting an
+update.
 
 Scheduled Jobs uses shared form fields, Dialog, Button, Navigation Item, Page
 Intro, Status Badge and Feedback. Storybook covers populated rows, failed run
