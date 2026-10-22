@@ -329,7 +329,7 @@ If I already have a connection, check its status first. Do not remove or replace
   }
   override render() {
     return html`<header class="titlebar"><span class="section-name">Services</span><span class="divider" aria-hidden="true">›</span><strong>Connections</strong></header>
-      <mux-ui-page-intro eyebrow="Services" heading="Connections" description="Choose an account to make its tools available in new chats."></mux-ui-page-intro>
+      <mux-ui-page-intro heading="Connections" description="Choose an account to make its tools available in new chats."></mux-ui-page-intro>
       <div class="layout"><nav class="catalog" aria-label="Providers">
         <mux-ui-nav-item label="Google" status-tone=${this.providerStatusTone('google')} ?active=${this.selected==='google'} @click=${()=>this.selectService('google')}></mux-ui-nav-item>
         <mux-ui-nav-item label="Microsoft" status-tone=${this.providerStatusTone('microsoft')} ?active=${this.selected==='microsoft'} @click=${()=>this.selectService('microsoft')}></mux-ui-nav-item>

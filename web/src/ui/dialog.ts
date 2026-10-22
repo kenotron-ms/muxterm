@@ -60,10 +60,10 @@ export class MuxUIDialog extends LitElement {
       :host([presentation='adaptive']) dialog::before {
         content: '';
         display: block;
-        width: 36px;
-        height: 4px;
+        width: var(--ui-control-md);
+        height: var(--ui-space-2);
         margin: var(--ui-space-3) auto 0;
-        border-radius: 999px;
+        border-radius: var(--ui-radius-pill);
         background: var(--ui-border);
       }
       :host([presentation='adaptive'][size='compact']) dialog {

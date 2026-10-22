@@ -16,7 +16,7 @@ export class MuxUIPageIntro extends LitElement {
       justify-content: space-between;
       gap: var(--ui-space-7);
       min-width: 0;
-      padding: var(--ui-space-7) 28px;
+      padding: var(--ui-space-7) var(--ui-space-8);
       border-bottom: 1px solid var(--ui-border);
       background: var(--ui-surface-base);
       color: var(--ui-text);

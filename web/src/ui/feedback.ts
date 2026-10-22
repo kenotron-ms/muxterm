@@ -44,7 +44,7 @@ export class MuxUIFeedback extends LitElement {
       flex: none;
       width: 1em;
       height: 1em;
-      margin-top: .2em;
+      margin-top: var(--ui-space-1);
       border: 2px solid var(--feedback-tone);
       border-right-color: transparent;
       border-radius: 50%;

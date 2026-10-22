@@ -5,9 +5,28 @@ const directory = new URL('../src/ui/', import.meta.url);
 const files = await readdir(directory);
 let failed = false;
 
+function styleSource(source) {
+  return [
+    ...source.matchAll(/\bcss`([\s\S]*?)`/g),
+    ...source.matchAll(/\bsurfaceCSS\s*=\s*`([\s\S]*?)`/g),
+    ...source.matchAll(/\bstyle\.textContent\s*=\s*`([\s\S]*?)`/g),
+  ].map(match => match[1]).join('\n');
+}
+
+function literalScaleCount(styles) {
+  // Keep the declaration separator available for the next match.
+  return [...styles.matchAll(/(?:(?<=;)|(?<=\{)|^)\s*(?:padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?|gap|row-gap|column-gap|border-radius|font-size)\s*:\s*([^;{}]+);/gm)]
+    .filter(match => /\b\d+(?:\.\d+)?(?:px|rem|em)\b/.test(match[1])).length;
+}
+
+function literalColorCount(styles) {
+  return [...styles.matchAll(/#[\da-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\s*\(/gi)].length;
+}
+
 for (const file of files.filter(name => name.endsWith('.ts') && !name.endsWith('.stories.ts'))) {
   const source = await readFile(new URL(file, directory), 'utf8');
   if (!source.includes('@customElement(')) continue;
+  const styles = styleSource(source);
 
   const story = file.replace(/\.ts$/, '.stories.ts');
   if (!files.includes(story)) {
@@ -20,6 +39,10 @@ for (const file of files.filter(name => name.endsWith('.ts') && !name.endsWith('
   }
   if (/z-index\s*:\s*-?\d/.test(source)) {
     console.error(`${join('src/ui', file)}: use the shared --ui-z-* layer tokens instead of a literal z-index`);
+    failed = true;
+  }
+  if (literalColorCount(styles) || literalScaleCount(styles)) {
+    console.error(`${join('src/ui', file)}: shared control styles must use --ui-* color and scale tokens`);
     failed = true;
   }
 }
@@ -50,21 +73,15 @@ for (const [name, url] of featureFiles) {
     console.error(`src/${name}: Lit custom elements need a matching Storybook story`);
     failed = true;
   }
-  const styles = [
-    ...source.matchAll(/\bcss`([\s\S]*?)`/g),
-    ...source.matchAll(/\bsurfaceCSS\s*=\s*`([\s\S]*?)`/g),
-    ...source.matchAll(/\bstyle\.textContent\s*=\s*`([\s\S]*?)`/g),
-  ].map(match => match[1]).join('\n');
+  const styles = styleSource(source);
   if (/z-index\s*:\s*-?\d/.test(styles)) {
     console.error(`src/${name}: use the shared --ui-z-* layer tokens instead of a literal z-index`);
     failed = true;
   }
   const counts = {
     legacyTokens: [...styles.matchAll(/var\(--(?:chrome|mux)-[\w-]+/g)].length,
-    literalColors: [...styles.matchAll(/#[\da-fA-F]{3,8}\b/g)].length,
-    // Keep the declaration separator available for the next match.
-    literalScale: [...styles.matchAll(/(?:(?<=;)|(?<=\{)|^)\s*(?:padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?|gap|row-gap|column-gap|border-radius|font-size)\s*:\s*([^;{}]+);/gm)]
-      .filter(match => /\b\d+(?:\.\d+)?(?:px|rem|em)\b/.test(match[1])).length,
+    literalColors: literalColorCount(styles),
+    literalScale: literalScaleCount(styles),
     nativeControls: [...source.matchAll(/<(?:button|input|select|textarea)\b/g)].length,
   };
   const allowed = baseline[name] ?? { legacyTokens: 0, literalColors: 0, literalScale: 0, nativeControls: 0 };

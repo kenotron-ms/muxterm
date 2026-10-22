@@ -28,6 +28,9 @@ toasts, connection and reconnect overlays, alerts, and Settings. The Tokens
 story shows each name and value. Native modal dialogs use the browser top layer.
 `check:ui` rejects literal `z-index` values in both shared controls and feature
 styles so a new surface cannot silently invent its own layer.
+The same gate rejects literal palette colors and spacing, radius, or type-scale
+declarations in shared control styles. Color Picker's color-value defaults remain
+ordinary input data, not presentation styles.
 
 The `Screens/` and `Composites/` stories render production Lit components.
 `web/src/stories/api-fixture.ts` replaces their API responses inside the

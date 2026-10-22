@@ -362,7 +362,7 @@ export class MuxScheduledJobs extends LitElement {
     ];
     return html`
       <header class="titlebar"><span class="section-name">Automation</span><span class="divider" aria-hidden="true">›</span><strong>Scheduled jobs</strong></header>
-      <mux-ui-page-intro eyebrow="Automation" heading="Scheduled jobs" description="Repeatable work in persistent conversations">
+      <mux-ui-page-intro heading="Scheduled jobs" description="Repeatable work in persistent conversations">
         <mux-ui-button slot="action" variant="primary" @click=${() => void this.openEditorForChat()}>＋ New job</mux-ui-button>
       </mux-ui-page-intro>
       <main class="content">
