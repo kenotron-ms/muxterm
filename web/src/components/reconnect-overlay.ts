@@ -1,6 +1,7 @@
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import '../ui/button.js';
 
 /**
  * What the user stares at while the socket is down.
@@ -18,9 +19,9 @@ import { customElement, property, state } from 'lit/decorators.js';
  * and there is one control, Retry now, which really does force an attempt.
  *
  * Deliberately not a dashboard: one state line, one countdown, one button. No
- * attempt counter, no history, no log. Colours come from the --chrome-* theme
- * tokens (applyChromeTokens in lib/theme.ts) so it is legible in light and
- * dark, and it lays out in a narrow column so it survives a phone-width window.
+ * attempt counter, no history, no log. Colours come from the semantic --ui-*
+ * tokens so it is legible in light and dark, and it lays out in a narrow
+ * column so it survives a phone-width window.
  */
 @customElement('mux-reconnect-overlay')
 export class MuxReconnectOverlay extends LitElement {
@@ -31,12 +32,13 @@ export class MuxReconnectOverlay extends LitElement {
       inset: 0;
       /* Dimmer over the app, not a fixed black: on a light palette a solid
          black wash makes the dialog text below it unreadable. */
-      background: color-mix(in srgb, var(--chrome-body, #1a1b26) 82%, transparent);
+      background: color-mix(in srgb, var(--ui-surface-base) 82%, transparent);
+      background-image: var(--ui-overlay-backdrop-image);
       z-index: 2000;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 16px;
+      padding: var(--ui-space-6);
       box-sizing: border-box;
     }
 
@@ -44,17 +46,23 @@ export class MuxReconnectOverlay extends LitElement {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 12px;
+      gap: var(--ui-space-5);
       max-width: 320px;
       width: 100%;
+      box-sizing: border-box;
+      padding: var(--ui-space-8);
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-xl);
+      background: var(--ui-surface-overlay);
+      box-shadow: var(--ui-shadow-overlay);
       text-align: center;
     }
 
     .spinner {
       width: 24px;
       height: 24px;
-      border: 3px solid var(--chrome-border, #414868);
-      border-top-color: var(--chrome-accent, #7aa2f7);
+      border: 3px solid var(--ui-border);
+      border-top-color: var(--ui-accent);
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
@@ -65,7 +73,7 @@ export class MuxReconnectOverlay extends LitElement {
       width: 24px;
       height: 24px;
       border-radius: 50%;
-      background: var(--chrome-border, #414868);
+      background: var(--ui-border);
     }
 
     @keyframes spin {
@@ -75,36 +83,15 @@ export class MuxReconnectOverlay extends LitElement {
     }
 
     .message {
-      font-size: 16px;
-      color: var(--chrome-text-bright, #c0caf5);
+      font-size: var(--ui-text-xl);
+      color: var(--ui-text);
       overflow-wrap: anywhere;
     }
 
     .detail {
-      font-size: 13px;
-      color: var(--chrome-text-dim, #565f89);
+      font-size: var(--ui-text-md);
+      color: var(--ui-text-muted);
       overflow-wrap: anywhere;
-    }
-
-    button {
-      font: inherit;
-      font-size: 13px;
-      padding: 6px 14px;
-      border-radius: 6px;
-      border: 1px solid var(--chrome-border, #414868);
-      background: transparent;
-      color: var(--chrome-text-bright, #c0caf5);
-      cursor: pointer;
-    }
-
-    button:hover:not(:disabled) {
-      border-color: var(--chrome-accent, #7aa2f7);
-      color: var(--chrome-accent, #7aa2f7);
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: default;
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -122,26 +109,26 @@ export class MuxReconnectOverlay extends LitElement {
     .mark {
       font-size: 28px;
       line-height: 1;
-      color: #f7768e;
+      color: var(--ui-danger);
     }
 
     .message.fatal {
-      color: #f7768e;
+      color: var(--ui-danger);
     }
 
     .detail.fatal {
-      color: #a9b1d6;
+      color: var(--ui-text);
       white-space: pre-wrap;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 12px;
+      font-family: var(--ui-font-mono);
+      font-size: var(--ui-text-sm);
       text-align: left;
       max-width: min(78ch, 90vw);
       max-height: 60vh;
       overflow: auto;
-      background: rgba(0, 0, 0, 0.35);
-      border: 1px solid #414868;
-      border-radius: 6px;
-      padding: 12px 14px;
+      background: var(--ui-surface-overlay);
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-md);
+      padding: var(--ui-space-5) var(--ui-space-6);
       user-select: text;
     }
   `;
@@ -251,11 +238,11 @@ export class MuxReconnectOverlay extends LitElement {
           <div class="detail">${this._detail()}</div>
           ${this.phase === 'offline'
             ? nothing
-            : html`<button
+            : html`<mux-ui-button
                 id="retry-now"
                 ?disabled=${busy}
                 @click=${this._retryNow}
-              >Retry now</button>`}
+              >Retry now</mux-ui-button>`}
         </div>
       </div>
     `;

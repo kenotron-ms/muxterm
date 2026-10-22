@@ -10,6 +10,7 @@ import type { SessionRunState } from '../lib/session-state.js';
 import { needsInputByWorkspace } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
 import { CalendarClock, ChevronDown, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
+import '../ui/nav-item.js';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { previewStore, type PreviewEntry, type PreviewMode } from '../lib/preview-store.js';
@@ -1061,37 +1062,6 @@ export class MuxSidebar extends LitElement {
       padding: 12px 7px 0;
     }
 
-    .nav-action {
-      flex: 0 0 36px;
-      height: 36px;
-      padding: 0 10px;
-      border: 0;
-      border-radius: 6px;
-      background: transparent;
-      color: color-mix(in srgb, var(--chrome-text-bright) 72%, var(--chrome-text-dim));
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      text-align: left;
-      font: 500 var(--sidebar-item-font-size)/1 Inter, ui-sans-serif, system-ui, sans-serif;
-      letter-spacing: 0;
-      text-transform: none;
-      cursor: pointer;
-    }
-
-    .nav-action.active,
-    .nav-action:hover { color: var(--sidebar-text); background: var(--sidebar-hover); }
-    .nav-action:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: -2px; }
-    .nav-action-icon {
-      width: 17px;
-      height: 17px;
-      flex: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      color: color-mix(in srgb, var(--chrome-text-dim) 72%, var(--chrome-text-bright));
-      font-size: 16px;
-    }
     .terminal-heading {
       margin-top: 13px;
       padding: 12px 5px 2px;
@@ -2113,16 +2083,6 @@ export class MuxSidebar extends LitElement {
     );
   }
 
-  /** "+ Connect machine" — opens the connect dialog, which lives in app.ts. */
-  private _onConnectMachine(): void {
-    this.dispatchEvent(
-      new CustomEvent('connect-machine', {
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
   /**
    * Retry a dropped host now instead of waiting out the backoff.
    *
@@ -2499,11 +2459,11 @@ export class MuxSidebar extends LitElement {
     void this._version; // suppress unused-variable lint; triggers re-render on store change
 
     const navActions = [
-      { label: 'New Chat', title: 'New chat', icon: Plus, active: this.newChatActive, event: 'chat-new' },
-      { label: 'Terminal', title: 'Open terminal', icon: SquareTerminal, active: this.terminalActive, event: 'terminal-open' },
-      { label: 'Scheduled jobs', title: 'Scheduled jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
-      { label: 'Connections', title: 'Connections', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
-      { label: 'Skills', title: 'Skills', icon: Puzzle, active: this.skillsActive, event: 'skills-open' },
+      { label: 'New Chat', icon: Plus, active: this.newChatActive, event: 'chat-new' },
+      { label: 'Terminal', icon: SquareTerminal, active: this.terminalActive, event: 'terminal-open' },
+      { label: 'Scheduled jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
+      { label: 'Connections', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
+      { label: 'Skills', icon: Puzzle, active: this.skillsActive, event: 'skills-open' },
     ];
 
     return html`
@@ -2512,9 +2472,9 @@ export class MuxSidebar extends LitElement {
       </div>
       <nav class="nav-actions" aria-label="Sidebar actions">
         ${navActions.map(action => html`
-          <button class="nav-action ${action.active ? 'active' : ''}" title=${action.title} aria-current=${action.active ? 'page' : 'false'} @click=${() => this.dispatchEvent(new CustomEvent(action.event, { bubbles: true, composed: true }))}>
-            <span class="nav-action-icon">${icon(action.icon, { size: 16 })}</span><span>${action.label}</span>
-          </button>
+          <mux-ui-nav-item label=${action.label} ?active=${action.active} @click=${() => this.dispatchEvent(new CustomEvent(action.event, { bubbles: true, composed: true }))}>
+            <span slot="icon">${icon(action.icon, { size: 16 })}</span>
+          </mux-ui-nav-item>
         `)}
       </nav>
       <div class="tab-content">

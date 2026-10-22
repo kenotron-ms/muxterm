@@ -1,0 +1,75 @@
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+const directory = new URL('../src/ui/', import.meta.url);
+const files = await readdir(directory);
+let failed = false;
+
+for (const file of files.filter(name => name.endsWith('.ts') && !name.endsWith('.stories.ts'))) {
+  const source = await readFile(new URL(file, directory), 'utf8');
+  if (!source.includes('@customElement(')) continue;
+
+  const story = file.replace(/\.ts$/, '.stories.ts');
+  if (!files.includes(story)) {
+    console.error(`${join('src/ui', file)}: shared custom elements need a matching Storybook story`);
+    failed = true;
+  }
+  if (/var\(--(?:chrome|mux)-/.test(source)) {
+    console.error(`${join('src/ui', file)}: use --ui-* semantic tokens instead of legacy theme variables`);
+    failed = true;
+  }
+}
+
+// Existing feature styles and native controls are being migrated screen by
+// screen. Keep current usage as a ceiling so new work cannot add more of it
+// without a reviewed baseline change and an inventory explanation.
+const componentDirectory = new URL('../src/components/', import.meta.url);
+const componentFiles = await readdir(componentDirectory);
+const baseline = JSON.parse(await readFile(new URL('./ui-legacy-baseline.json', import.meta.url), 'utf8'));
+const featureFiles = [
+  ['app.ts', new URL('../src/app.ts', import.meta.url)],
+  ...componentFiles
+    .filter(name => name.endsWith('.ts') && !name.endsWith('.stories.ts'))
+    .map(name => [`components/${name}`, new URL(name, componentDirectory)]),
+];
+
+for (const name of Object.keys(baseline)) {
+  if (featureFiles.some(([file]) => file === name)) continue;
+  console.error(`src/${name}: remove the stale legacy baseline entry`);
+  failed = true;
+}
+
+for (const [name, url] of featureFiles) {
+  const source = await readFile(url, 'utf8');
+  if (name !== 'app.ts' && source.includes('@customElement(') &&
+      !componentFiles.includes(name.split('/').at(-1).replace(/\.ts$/, '.stories.ts'))) {
+    console.error(`src/${name}: Lit custom elements need a matching Storybook story`);
+    failed = true;
+  }
+  const styles = [
+    ...source.matchAll(/\bcss`([\s\S]*?)`/g),
+    ...source.matchAll(/\bsurfaceCSS\s*=\s*`([\s\S]*?)`/g),
+    ...source.matchAll(/\bstyle\.textContent\s*=\s*`([\s\S]*?)`/g),
+  ].map(match => match[1]).join('\n');
+  const counts = {
+    legacyTokens: [...styles.matchAll(/var\(--(?:chrome|mux)-[\w-]+/g)].length,
+    literalColors: [...styles.matchAll(/#[\da-fA-F]{3,8}\b/g)].length,
+    literalScale: [...styles.matchAll(/(?:^|[;{])\s*(?:padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?|gap|row-gap|column-gap|border-radius|font-size)\s*:\s*([^;{}]+);/gm)]
+      .filter(match => /\b\d+(?:\.\d+)?(?:px|rem|em)\b/.test(match[1])).length,
+    nativeControls: [...source.matchAll(/<(?:button|input|select|textarea)\b/g)].length,
+  };
+  const allowed = baseline[name] ?? { legacyTokens: 0, literalColors: 0, literalScale: 0, nativeControls: 0 };
+  for (const key of Object.keys(counts)) {
+    const ceiling = allowed[key] ?? 0;
+    if (counts[key] === ceiling) continue;
+    if (counts[key] < ceiling) {
+      console.error(`src/${name}: ${key} fell from ${ceiling} to ${counts[key]}; lower the checked-in baseline to lock in the migration`);
+    } else {
+      console.error(`src/${name}: ${key} increased from ${ceiling} to ${counts[key]}; use shared UI components or --ui-* tokens, or document a necessary native control in the inventory`);
+    }
+    failed = true;
+  }
+}
+
+if (failed) process.exitCode = 1;
+else console.log('UI library stories and token boundaries are in place; feature legacy styles and native controls match the reviewed baseline.');

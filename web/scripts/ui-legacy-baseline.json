@@ -1,0 +1,164 @@
+{
+  "app.ts": {
+    "legacyTokens": 73,
+    "literalColors": 1,
+    "literalScale": 48,
+    "nativeControls": 6
+  },
+  "components/close-confirmation-modal.ts": {
+    "legacyTokens": 5,
+    "literalColors": 0,
+    "literalScale": 14,
+    "nativeControls": 0
+  },
+  "components/launcher-menu.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 4,
+    "nativeControls": 5
+  },
+  "components/mic-button.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 0
+  },
+  "components/mux-blocknote-page.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 0
+  },
+  "components/mux-browser-assistant.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 0
+  },
+  "components/mux-chat-list.ts": {
+    "legacyTokens": 0,
+    "literalColors": 12,
+    "literalScale": 27,
+    "nativeControls": 27
+  },
+  "components/mux-chat-remote-image.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 0
+  },
+  "components/mux-connect-dialog.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 0
+  },
+  "components/mux-connections.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 11,
+    "nativeControls": 2
+  },
+  "components/mux-dock.ts": {
+    "legacyTokens": 4,
+    "literalColors": 0,
+    "literalScale": 2,
+    "nativeControls": 0
+  },
+  "components/mux-monaco-diff.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 0
+  },
+  "components/mux-monaco-source.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 0
+  },
+  "components/mux-new-chat.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 80,
+    "nativeControls": 14
+  },
+  "components/mux-operator-status.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 1
+  },
+  "components/mux-pane-picker.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 3,
+    "nativeControls": 4
+  },
+  "components/mux-scheduled-jobs.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 1
+  },
+  "components/mux-sdk-chat-settings.ts": {
+    "legacyTokens": 6,
+    "literalColors": 5,
+    "literalScale": 16,
+    "nativeControls": 3
+  },
+  "components/mux-sdk-chat.ts": {
+    "legacyTokens": 220,
+    "literalColors": 83,
+    "literalScale": 195,
+    "nativeControls": 40
+  },
+  "components/mux-sdk-pdf-preview.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 0
+  },
+  "components/mux-sdk-utility.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 39
+  },
+  "components/mux-sidebar.ts": {
+    "legacyTokens": 135,
+    "literalColors": 1,
+    "literalScale": 93,
+    "nativeControls": 6
+  },
+  "components/mux-skills.ts": {
+    "legacyTokens": 11,
+    "literalColors": 0,
+    "literalScale": 16,
+    "nativeControls": 0
+  },
+  "components/page-visualization.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 0
+  },
+  "components/reconnect-overlay.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 1,
+    "nativeControls": 0
+  },
+  "components/settings-surface.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 11
+  },
+  "components/title-bar.ts": {
+    "legacyTokens": 1,
+    "literalColors": 0,
+    "literalScale": 5,
+    "nativeControls": 3
+  }
+}

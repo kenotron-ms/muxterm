@@ -9,22 +9,24 @@ import { Folder, FolderOpen, Menu, Settings } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
+import { store, type MuxStore } from '../state.js';
+import { voiceInputController } from '../lib/voice-input-controller.js';
+import type { VoiceInputPort } from './mic-button.js';
 
 @customElement('mux-title-bar')
 export class MuxTitleBar extends LitElement {
+  @property({ attribute: false }) paneStore: MuxStore = store;
+  @property({ attribute: false }) voiceController: VoiceInputPort = voiceInputController;
   static styles = css`
     :host {
-      --scrim: color-mix(in srgb, var(--chrome-body) 62%, transparent);
       /* D3. The ONE top-chrome height token, shared with <mux-sidebar>'s
-         .header. Change it in theme.ts and both surfaces move together; there
-         is no second place to forget. */
-      --nav-h: var(--mux-titlebar-height, var(--mux-dock-height, 44px));
+         .header. The semantic alias preserves that shared source. */
 
       display: flex;
       align-items: center;
-      gap: 2px;
-      background: var(--mux-titlebar-bg, var(--chrome-bar));
-      border-bottom: 1px solid var(--chrome-border);
+      gap: var(--ui-space-1);
+      background: var(--ui-surface-nav);
+      border-bottom: 1px solid var(--ui-border);
       /* D9. viewport-fit=cover has been set for as long as index.html has had
          a viewport meta and env(safe-area-inset-*) appeared in zero files; on
          a notched phone in landscape this bar started under the notch. The
@@ -70,18 +72,25 @@ export class MuxTitleBar extends LitElement {
       }
     }
 
+    @media (display-mode: window-controls-overlay) {
+      :host { -webkit-app-region: drag; }
+      button, mux-pane-picker, mux-mic-button, mux-launcher-menu {
+        -webkit-app-region: no-drag;
+      }
+    }
+
     .brand {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: var(--ui-space-3);
       min-width: 0;
       /* Yields to the breadcrumb: on a 360px screen the pane name is the
          thing you navigate with and the host name is the thing you already
          know. */
       flex: 0 1 auto;
       overflow: hidden;
-      color: var(--chrome-text-bright);
-      font-size: 13px;
+      color: var(--ui-text);
+      font-size: var(--ui-text-md);
       font-weight: 600;
       white-space: nowrap;
     }
@@ -99,10 +108,10 @@ export class MuxTitleBar extends LitElement {
     }
 
     .brand-sha {
-      font-size: 10px;
+      font-size: var(--ui-text-xs);
       font-weight: 400;
-      font-family: monospace;
-      color: var(--chrome-text-dim);
+      font-family: var(--ui-font-mono);
+      color: var(--ui-text-muted);
       letter-spacing: 0;
     }
 
@@ -137,21 +146,22 @@ export class MuxTitleBar extends LitElement {
     .right {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: var(--ui-space-2);
       flex: none;
       position: relative;
     }
 
     .launcher-btn,
+    .side-chat-btn,
     .drawer-btn {
       position: relative;
-      width: var(--nav-h);
-      height: var(--nav-h);
+      width: var(--ui-nav-height);
+      height: var(--ui-nav-height);
       flex: none;
       background: transparent;
       border: none;
-      border-radius: 4px;
-      color: var(--chrome-text-bright);
+      border-radius: var(--ui-radius-sm);
+      color: var(--ui-text);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -161,19 +171,27 @@ export class MuxTitleBar extends LitElement {
     }
 
     .launcher-btn:hover,
+    .side-chat-btn:hover,
     .drawer-btn:hover {
-      background: var(--chrome-hover);
+      background: var(--ui-surface-hover);
+    }
+    .side-chat-btn[aria-pressed="true"] { color:var(--ui-accent); background:var(--ui-surface-hover); }
+    .launcher-btn:focus-visible,
+    .side-chat-btn:focus-visible,
+    .drawer-btn:focus-visible {
+      outline: 2px solid var(--ui-focus);
+      outline-offset: -2px;
     }
 
     /* Show an attention dot only when a session needs input. */
     .needs-dot {
       position: absolute;
-      top: 6px;
-      right: 6px;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--mux-warn);
+      top: var(--ui-space-3);
+      right: var(--ui-space-3);
+      width: var(--ui-space-3);
+      height: var(--ui-space-3);
+      border-radius: var(--ui-radius-pill);
+      background: var(--ui-attention);
       pointer-events: none;
     }
 
@@ -181,7 +199,7 @@ export class MuxTitleBar extends LitElement {
        which lives in THIS root, so the rule does too. A tint rather than a
        blackout, matching the pane sheet. */
     mux-launcher-menu::backdrop {
-      background: var(--scrim);
+      background: var(--ui-backdrop-sheet);
     }
 
     .lucide-icon {
@@ -270,7 +288,7 @@ export class MuxTitleBar extends LitElement {
             @click="${this._toggleDrawer}"
           >
             ${icon(Menu, { size: 20 })}
-            ${needs ? html`<span class="needs-dot"></span>` : ''}
+            ${needs ? html`<span class="needs-dot" aria-hidden="true"></span>` : ''}
           </button>`}
       ${this.chatTitle
         ? html`<span class="chat-title">${this.chatTitle}</span>`
@@ -278,7 +296,7 @@ export class MuxTitleBar extends LitElement {
             <img class="brand-logo" src="${apiPath('/icons/icon.svg')}" alt="">
             <span>Muxterm</span>
             <span class="brand-sha">${__GIT_SHA__}</span>
-          </div><mux-pane-picker></mux-pane-picker>`}
+          </div><mux-pane-picker .paneStore=${this.paneStore}></mux-pane-picker>`}
       <div class="right">
         ${!this.desktop && !this.chatTitle && this.terminalActive ? html`<button
           class="launcher-btn"
@@ -288,7 +306,7 @@ export class MuxTitleBar extends LitElement {
           aria-pressed="${this.filesOpen}"
           @click=${() => this.dispatchEvent(new CustomEvent('file-explorer-toggle', { bubbles:true, composed:true }))}
         >${icon(this.filesOpen ? FolderOpen : Folder, { size:17 })}</button>` : ''}
-        ${this.desktop || this.chatTitle ? '' : html`<mux-mic-button></mux-mic-button>`}
+        ${this.desktop || this.chatTitle ? '' : html`<mux-mic-button .paneStore=${this.paneStore} .voiceController=${this.voiceController}></mux-mic-button>`}
         ${!this.showLauncher || (this.desktop && this.dockActionsVisible)
           ? ''
           : html`<button

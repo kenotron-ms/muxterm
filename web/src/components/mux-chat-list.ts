@@ -6,6 +6,11 @@ import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlu
 import { icon } from '../lib/icons.js';
 import { laneIcon } from '../lib/lane-icon.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
+import type { MuxUITextField } from '../ui/text-field.js';
+import type { MuxUIDialog } from '../ui/dialog.js';
+import '../ui/text-field.js';
+import '../ui/button.js';
+import '../ui/dialog.js';
 import codexMark from '../assets/harness/codex.svg?url';
 import claudeMark from '../assets/harness/claude.svg?url';
 import amplifierMark from '../assets/harness/amplifier.png?url';
@@ -92,65 +97,68 @@ export class MuxChatWorkspace extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; margin:0 0 12px; font:var(--sidebar-item-font-size,12.5px)/1.35 Inter,system-ui,sans-serif; color:var(--chrome-text-bright,#d8dce5); }
+    :host { display:block; margin:0 0 12px; font:var(--sidebar-item-font-size,12.5px)/1.35 Inter,system-ui,sans-serif; color:var(--ui-text,#d8dce5); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
     .row,.chat-row { display:flex; align-items:center; min-height:34px; border-radius:6px; position:relative; }
-    .row:hover,.chat-row:hover { background:var(--chrome-hover); }
+    .row:hover,.chat-row:hover { background:var(--ui-surface-hover); }
     .group { display:flex; align-items:center; gap:7px; flex:1; min-width:0; min-height:34px; padding:0 6px; text-align:left; }
     .folder { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
-    .folder { width:17px; color:var(--chrome-text-dim); }
+    .folder { width:17px; color:var(--ui-text-muted); }
     .name,.title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .name { font-weight:500; }
-    .archived .name { color:var(--chrome-text-dim,#aab2c1); }
-    .action { display:inline-flex; align-items:center; justify-content:center; width:25px; height:25px; flex:none; border-radius:5px; color:var(--chrome-text-dim,#aab2c1); opacity:0; }
+    .archived .name { color:var(--ui-text-muted,#aab2c1); }
+    .action { display:inline-flex; align-items:center; justify-content:center; width:25px; height:25px; flex:none; border-radius:5px; color:var(--ui-text-muted,#aab2c1); opacity:0; }
     .row:hover .action,.row:focus-within .action { opacity:1; }
     .chat-row .action { display:none; opacity:1; }
     .chat-row .action.more { display:none; }
     .chat-row:hover .action,.chat-row:has(.chat:focus-visible) .action { display:inline-flex; }
-    .action:hover { background:var(--chrome-hover); color:inherit; }
+    .action:hover { background:var(--ui-surface-hover); color:inherit; }
     .row:has(.menu) .action.more,.chat-row:has(.menu) .action.more { display:inline-flex; opacity:1; }
-    .menu { position:absolute; z-index:30; top:28px; right:4px; min-width:180px; max-height:280px; overflow:auto; padding:5px; background:var(--chrome-bar,#252b38); border:1px solid var(--chrome-border,#3b4355); border-radius:9px; box-shadow:0 12px 28px #0008; }
+    .menu { position:absolute; z-index:30; top:28px; right:4px; min-width:180px; max-height:280px; overflow:auto; padding:5px; background:var(--ui-surface-raised,#252b38); border:1px solid var(--ui-border,#3b4355); border-radius:9px; box-shadow:0 12px 28px #0008; }
     .menu.context { top:20px; right:12px; }
     .menu button { display:flex; align-items:center; gap:9px; width:100%; padding:8px; text-align:left; border-radius:5px; }
-    .menu button:hover { background:var(--chrome-hover); }
-    .menu .danger { color:var(--chrome-danger); }
+    .menu button:hover { background:var(--ui-surface-hover); }
+    .menu .danger { color:var(--ui-danger); }
     .chats { margin:0 0 5px; padding-left:25px; }
     button.chat { flex:1; min-width:0; min-height:28px; padding:3px 5px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:7px; }
-    .chat-row[selected] { background:color-mix(in srgb,var(--chrome-accent) 18%,var(--chrome-bar)); }
-    .chat-icon { width:17px; height:17px; display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--chrome-text-dim); }
+    .chat-row[selected] { background:color-mix(in srgb,var(--ui-accent) 18%,var(--ui-surface-raised)); }
+    .chat-icon { width:17px; height:17px; display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
     .harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
-    .harness-mark.working { color:var(--mux-ok); }
-    .harness-mark.blocked,.harness-mark.failed { color:var(--chrome-danger); }
-    .row:focus-within,.chat-row:focus-within { outline:2px solid var(--chrome-accent); outline-offset:-2px; }
-    .status { width:6px; height:6px; border-radius:50%; background:var(--chrome-text-dim); flex:none; }
-    .status.working { background:var(--mux-ok); }
-    .status.operator { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--chrome-accent); }
-    .status.operator.working { background:none; color:var(--mux-ok); }
-    .status.operator.failed,.status.operator.uncertain { color:var(--chrome-danger); }
-    .status.lane { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--chrome-text-dim); }
-    .status.lane.starting,.status.lane.working { background:none; color:var(--chrome-accent); }
-    .status.lane.ready { color:var(--mux-ok,#55b981); }
-    .status.lane.failed,.status.lane.uncertain { color:var(--chrome-danger); }
-    .status.chat { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--chrome-text-dim); }
-    .status.chat.working { color:var(--mux-ok); }
-    .status.chat.failed,.status.chat.uncertain { color:var(--chrome-danger); }
+    .harness-mark.working { color:var(--ui-success); }
+    .harness-mark.blocked,.harness-mark.failed { color:var(--ui-danger); }
+    .row:focus-within,.chat-row:focus-within { outline:2px solid var(--ui-accent); outline-offset:-2px; }
+    .row:has(.rename-input):focus-within,.chat-row:has(.rename-input):focus-within { outline:none; }
+    .status { width:6px; height:6px; border-radius:50%; background:var(--ui-text-muted); flex:none; }
+    .status.working { background:var(--ui-success); }
+    .status.operator { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-accent); }
+    .status.operator.working { background:none; color:var(--ui-success); }
+    .status.operator.failed,.status.operator.uncertain { color:var(--ui-danger); }
+    .status.lane { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-text-muted); }
+    .status.lane.starting,.status.lane.working { background:none; color:var(--ui-accent); }
+    .status.lane.ready { color:var(--ui-success,#55b981); }
+    .status.lane.failed,.status.lane.uncertain { color:var(--ui-danger); }
+    .status.chat { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-text-muted); }
+    .status.chat.working { color:var(--ui-success); }
+    .status.chat.failed,.status.chat.uncertain { color:var(--ui-danger); }
     .title { font-weight:550; }
-    .rename-input,.editor input { min-width:0; border:1px solid var(--chrome-border); border-radius:5px; padding:6px 7px; background:var(--chrome-bar); color:inherit; font:inherit; }
-    .rename-input { flex:1; margin:3px 5px; }
-    .editor { margin:4px 5px 10px 20px; padding:12px; border:1px solid var(--chrome-border,#3b4355); border-radius:9px; background:var(--chrome-bar,#252b38); display:grid; gap:9px; }
-    .editor label { display:grid; gap:4px; color:var(--chrome-text-dim,#aab2c1); font-size:var(--mux-font-size,16px); }
-    .editor input { width:100%; box-sizing:border-box; color:var(--chrome-text-bright,#d8dce5); }
+    .rename-input { flex:1; min-width:0; margin:3px 5px; }
+    .rename-save { flex:none; margin-right:var(--ui-space-2); }
+    .editor { box-sizing:border-box; width:100%; max-height:calc(80dvh - 24px); overflow:auto; padding:var(--ui-space-6); display:grid; gap:var(--ui-space-4); background:var(--ui-surface-overlay); }
+    .editor-head { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); }
+    .editor-head h2 { margin:0; font-size:var(--ui-text-xl); line-height:1.25; }
+    .editor-intro { margin:0 0 var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .editor mux-ui-text-field { width:100%; }
+    .field-label { color:var(--ui-text-muted); font-size:var(--ui-text-md); font-weight:600; }
     .source { display:flex; align-items:center; gap:4px; }
-    .source input { flex:1; }
-    .editor-actions { display:flex; justify-content:flex-end; gap:6px; }
-    .editor-actions button,.add-source { padding:5px 7px; border-radius:5px; }
-    .editor-actions button:hover,.add-source:hover { background:var(--chrome-hover); }
-    .browser { display:grid; max-height:200px; overflow:auto; border:1px solid var(--chrome-border,#3b4355); border-radius:6px; padding:4px; }
+    .source mux-ui-text-field { flex:1; }
+    .editor-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-2); margin-top:var(--ui-space-3); }
+    .browser { display:grid; max-height:200px; overflow:auto; border:1px solid var(--ui-border,#3b4355); border-radius:6px; padding:4px; }
     .browser button { padding:5px 7px; border-radius:4px; text-align:left; }
-    .browser button:hover { background:var(--chrome-hover); }
+    .browser button:hover { background:var(--ui-surface-hover); }
     .browser-head { display:flex; align-items:center; gap:4px; }
     .browser-head span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .error { color:var(--chrome-danger); padding:5px; }
+    .error { color:var(--ui-danger); padding:5px; }
+    @media(max-width:700px) { .editor { max-height:calc(100dvh - env(safe-area-inset-top) - var(--ui-space-8)); padding:var(--ui-space-5) var(--ui-space-5) calc(var(--ui-space-5) + env(safe-area-inset-bottom)); } }
   `;
 
   private closeMenu() { this.menuFor = ''; this.contextMenu = false; this.movingChatId = ''; }
@@ -164,15 +172,14 @@ export class MuxChatWorkspace extends LitElement {
     this.closeMenu();
     this.renamingId = id;
     this.renameDraft = title;
-    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLInputElement>('.rename-input')?.focus());
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxUITextField>('.rename-input')?.focus());
   }
   private async saveRename() {
     const id = this.renamingId;
     const title = this.renameDraft.trim();
     if (!id || !title) return;
     try {
-      if (id === 'project') await sdkChats.updateProject(this.model.id, { name: title });
-      else await sdkChats.rename(id, title);
+      await sdkChats.rename(id, title);
       this.renamingId = ''; this.error = '';
     } catch (error) { this.error = String(error); }
   }
@@ -185,7 +192,12 @@ export class MuxChatWorkspace extends LitElement {
     this.editFolders = [...(project.sourceFolders ?? [])];
     this.newSource = '';
     this.editListing = undefined;
+    this.error = '';
     this.editing = true;
+    void this.updateComplete.then(async () => {
+      await this.renderRoot.querySelector<MuxUIDialog>('mux-ui-dialog')?.updateComplete;
+      this.renderRoot.querySelector<MuxUITextField>('.editor mux-ui-text-field')?.focus();
+    });
   }
   private async browseFolder(target: 'primary' | 'source', path: string) {
     try { this.editListing = await sdkChats.folders(path); this.browseTarget = target; this.error = ''; }
@@ -252,7 +264,7 @@ export class MuxChatWorkspace extends LitElement {
     return html`<div class="menu ${this.contextMenu ? 'context' : ''}" role="menu">
       <button role="menuitem" @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</button>
       <button role="menuitem" @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit project and folders</button>
-      <button role="menuitem" @click=${() => this.startRename('project',p.name)}>${icon(Pencil,{size:14})} Rename project</button>
+      <button role="menuitem" @click=${() => this.startEdit()}>${icon(Pencil,{size:14})} Rename project</button>
       <button role="menuitem" @click=${() => void this.pinProject()}>${icon(p.pinned ? PinOff : Pin,{size:14})} ${p.pinned ? 'Unpin project' : 'Pin project'}</button>
       <button class="danger" role="menuitem" @click=${() => void this.removeProject()}>${icon(Trash2,{size:14})} Remove project</button>
     </div>`;
@@ -275,31 +287,33 @@ export class MuxChatWorkspace extends LitElement {
     const group = this.model;
     return html`
       <div class="row ${group.archived ? 'archived' : ''}" @contextmenu=${(e:MouseEvent) => { if (group.project) this.showContext(e, 'project'); }}>
-        ${this.renamingId === 'project' ? html`<input class="rename-input" aria-label="Project name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="action more" aria-label="Save project name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</button>` : html`
-          <button class="group" title=${group.project?.path || group.name} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.closeMenu(); }}>
+        <button class="group" title=${group.project?.path || group.name} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.closeMenu(); }}>
             <span class="folder">${icon(this.open ? FolderOpen : Folder, { size: 16 })}</span>
             <span class="name">${group.name}</span>
           </button>
           ${!group.archived ? html`<button class="action" aria-label=${`New chat in ${group.name}`} title=${`New chat in ${group.name}`} @click=${() => this.newProjectChat()}>${icon(Plus,{size:15})}</button>` : nothing}
           ${group.project ? html`
             <button class="action" aria-label=${`${group.project.pinned ? 'Unpin' : 'Pin'} ${group.name}`} title=${group.project.pinned ? 'Unpin project' : 'Pin project'} @click=${() => void this.pinProject()}>${icon(group.project.pinned ? PinOff : Pin,{size:14})}</button>
-            <button class="action" aria-label=${`Rename ${group.name}`} title="Rename project" @click=${() => this.startRename('project',group.name)}>${icon(Pencil,{size:14})}</button>
-            <button class="action more" aria-label=${`Project options for ${group.name}`} aria-expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>` : nothing}`}
+            <button class="action" aria-label=${`Edit ${group.name}`} title="Edit project" @click=${() => this.startEdit()}>${icon(Pencil,{size:14})}</button>
+            <button class="action more" aria-label=${`Project options for ${group.name}`} aria-expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>` : nothing}
         ${this.menuFor === 'project' && group.project ? this.projectMenu() : nothing}
       </div>
-      ${this.editing && group.project ? html`<div class="editor" aria-label="Edit project">
-        <label>Project name<input aria-label="Edit project name" .value=${this.editName} @input=${(e:Event) => { this.editName = (e.target as HTMLInputElement).value; }}></label>
-        <label>Primary folder<div class="source"><input aria-label="Primary source folder" .value=${this.editPath} @input=${(e:Event) => { this.editPath = (e.target as HTMLInputElement).value; }}><button aria-label="Browse primary folders" title="Browse folders" @click=${() => void this.browseFolder('primary',this.editPath)}>${icon(Folder,{size:15})}</button></div></label>
-        <label>Additional source folders</label>
-        ${this.editFolders.map((folder,index) => html`<div class="source"><input aria-label=${`Source folder ${index+1}`} .value=${folder} @input=${(e:Event) => { const next=[...this.editFolders]; next[index]=(e.target as HTMLInputElement).value; this.editFolders=next; }}><button aria-label=${`Remove source folder ${index+1}`} @click=${() => { this.editFolders=this.editFolders.filter((_,i)=>i!==index); }}>${icon(X,{size:14})}</button></div>`)}
-        <div class="source"><input aria-label="Add source folder path" placeholder="/absolute/path/to/source" .value=${this.newSource} @input=${(e:Event) => { this.newSource=(e.target as HTMLInputElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') this.addSource(); }}><button aria-label="Browse source folders" title="Browse folders" @click=${() => void this.browseFolder('source',this.newSource || this.editPath)}>${icon(Folder,{size:15})}</button><button class="add-source" aria-label="Add source folder" title="Add source folder" @click=${() => this.addSource()}>${icon(FolderPlus,{size:15})}</button></div>
+      ${this.editing && group.project ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Edit project" open @dismiss=${() => { this.editing=false; this.error=''; this.editListing=undefined; }}><div class="editor">
+        <div class="editor-head"><h2>Edit project</h2><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Close project editor" @click=${() => { this.editing=false; this.error=''; }}>${icon(X,{size:18})}</mux-ui-button></div>
+        <p class="editor-intro">Set the name and folders used by chats in this project.</p>
+        <mux-ui-text-field label="Project name" aria-label="Edit project name" .value=${this.editName} @input=${(e:Event) => { this.editName = (e.target as MuxUITextField).value; }}></mux-ui-text-field>
+        <span class="field-label">Primary folder</span><div class="source"><mux-ui-text-field aria-label="Primary source folder" .value=${this.editPath} @input=${(e:Event) => { this.editPath = (e.target as MuxUITextField).value; }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Browse primary folders" tooltip="Browse folders" @click=${() => void this.browseFolder('primary',this.editPath)}>${icon(Folder,{size:15})}</mux-ui-button></div>
+        <span class="field-label">Additional source folders</span>
+        ${this.editFolders.map((folder,index) => html`<div class="source"><mux-ui-text-field aria-label=${`Source folder ${index+1}`} .value=${folder} @input=${(e:Event) => { const next=[...this.editFolders]; next[index]=(e.target as MuxUITextField).value; this.editFolders=next; }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label=${`Remove source folder ${index+1}`} @click=${() => { this.editFolders=this.editFolders.filter((_,i)=>i!==index); }}>${icon(X,{size:14})}</mux-ui-button></div>`)}
+        <div class="source"><mux-ui-text-field aria-label="Add source folder path" placeholder="/absolute/path/to/source" .value=${this.newSource} @input=${(e:Event) => { this.newSource=(e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') this.addSource(); }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Browse source folders" tooltip="Browse folders" @click=${() => void this.browseFolder('source',this.newSource || this.editPath)}>${icon(Folder,{size:15})}</mux-ui-button><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Add source folder" tooltip="Add source folder" @click=${() => this.addSource()}>${icon(FolderPlus,{size:15})}</mux-ui-button></div>
         ${this.editListing ? html`<div class="browser" aria-label="Folder browser"><div class="browser-head"><button aria-label="Parent folder" @click=${() => void this.browseFolder(this.browseTarget,this.editListing!.parent)}>↑</button><span title=${this.editListing.path}>${this.editListing.path}</span><button @click=${() => this.selectFolder()}>Choose</button></div>${this.editListing.folders.map(folder => html`<button @click=${() => void this.browseFolder(this.browseTarget,`${this.editListing!.path.replace(/\/$/,'')}/${folder}`)}>▸ ${folder}</button>`)}</div>` : nothing}
-        <div class="editor-actions"><button @click=${() => { this.editing=false; this.error=''; }}>Cancel</button><button @click=${() => void this.saveProject()}>Save project</button></div>
-      </div>` : nothing}
-      ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+        <div class="editor-actions"><mux-ui-button size="small" variant="quiet" @click=${() => { this.editing=false; this.error=''; }}>Cancel</mux-ui-button><mux-ui-button size="small" variant="primary" ?disabled=${!this.editName.trim() || !this.editPath.trim()} @click=${() => void this.saveProject()}>Save project</mux-ui-button></div>
+      </div></mux-ui-dialog>` : nothing}
+      ${this.error && !this.editing ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       ${this.open ? html`<div class="chats">${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
-          ${this.renamingId === chat.id ? html`<input class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as HTMLInputElement).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}><button class="action more" aria-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</button>` : html`
+          ${this.renamingId === chat.id ? html`<mux-ui-text-field class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}></mux-ui-text-field><mux-ui-button class="rename-save" variant="quiet" size="small" icon-only accessible-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</mux-ui-button>` : html`
             <button class="chat" title=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
               ${chat.operator || group.laneIds.has(chat.id) ? html`<span class="status ${chat.operator ? 'operator' : 'lane'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : `Lane · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : laneIcon(14)}</span>` : harnessMark(chat)}<span class="title">${chat.title}</span>
             </button>
@@ -325,26 +339,26 @@ export class MuxChatList extends LitElement {
   };
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; color:var(--chrome-text-dim,#9299a5); font:var(--sidebar-item-font-size,12.5px)/1.35 Inter,system-ui,sans-serif; }
+    :host { display:block; color:var(--ui-text-muted,#9299a5); font:var(--sidebar-item-font-size,12.5px)/1.35 Inter,system-ui,sans-serif; }
     .heading { padding:9px 5px 3px; font-size:inherit; font-weight:600; letter-spacing:0; text-transform:none; }
-    .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--chrome-border,#3b4355); }
-    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:34px; padding:2px 4px; border-radius:6px; color:var(--chrome-text-bright,#d8dce5); }
-    .pin-row:hover,.pin-row:focus-within { background:var(--chrome-hover); }
-    .pin-row[selected] { background:color-mix(in srgb,var(--chrome-accent) 18%,var(--chrome-bar)); }
+    .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--ui-border,#3b4355); }
+    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:34px; padding:2px 4px; border-radius:6px; color:var(--ui-text,#d8dce5); }
+    .pin-row:hover,.pin-row:focus-within { background:var(--ui-surface-hover); }
+    .pin-row[selected] { background:color-mix(in srgb,var(--ui-accent) 18%,var(--ui-surface-raised)); }
     .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:30px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:inherit; cursor:pointer; }
     .pin-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .pin-icon { display:flex; flex:none; width:17px; height:17px; align-items:center; justify-content:center; color:var(--chrome-text-dim); }
+    .pin-icon { display:flex; flex:none; width:17px; height:17px; align-items:center; justify-content:center; color:var(--ui-text-muted); }
     .pin-icon.harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
-    .pin-icon.harness-mark.working { color:var(--mux-ok); }
-    .pin-icon.harness-mark.blocked,.pin-icon.harness-mark.failed { color:var(--chrome-danger); }
-    .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--chrome-accent); }
-    .pin-icon.lane.ready { color:var(--mux-ok,#55b981); }
-    .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--chrome-danger); }
-    .pin-unpin { display:grid; place-items:center; flex:none; width:26px; height:26px; border:0; border-radius:5px; padding:4px; background:transparent; color:var(--chrome-text-dim); opacity:0; cursor:pointer; }
+    .pin-icon.harness-mark.working { color:var(--ui-success); }
+    .pin-icon.harness-mark.blocked,.pin-icon.harness-mark.failed { color:var(--ui-danger); }
+    .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--ui-accent); }
+    .pin-icon.lane.ready { color:var(--ui-success,#55b981); }
+    .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--ui-danger); }
+    .pin-unpin { display:grid; place-items:center; flex:none; width:26px; height:26px; border:0; border-radius:5px; padding:4px; background:transparent; color:var(--ui-text-muted); opacity:0; cursor:pointer; }
     .pin-row:hover .pin-unpin,.pin-row:focus-within .pin-unpin { opacity:1; }
-    .pin-unpin:hover { background:color-mix(in srgb,var(--chrome-border) 45%,transparent); color:var(--chrome-text-bright); }
-    .pin-link:focus-visible,.pin-unpin:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:1px; }
-    .pin-error { margin:3px 5px 8px; color:var(--chrome-danger); }
+    .pin-unpin:hover { background:color-mix(in srgb,var(--ui-border) 45%,transparent); color:var(--ui-text); }
+    .pin-link:focus-visible,.pin-unpin:focus-visible { outline:2px solid var(--ui-accent); outline-offset:1px; }
+    .pin-error { margin:3px 5px 8px; color:var(--ui-danger); }
     @media(hover:none) { .pin-unpin { opacity:1; } }
   `;
   override connectedCallback() {

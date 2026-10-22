@@ -14,6 +14,9 @@
     "typecheck:fast": "npx @typescript/native-preview --noEmit",
     "lint:fast": "oxlint src",
     "check:fast": "npm run typecheck:fast && npm run lint:fast",
+    "check:ui": "node scripts/check-ui-library.mjs",
+    "storybook": "storybook dev -p 6006 --no-open",
+    "build:storybook": "storybook build -o storybook-static",
     "test:file": "vitest run"
   },
   "dependencies": {
@@ -40,6 +43,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@storybook/addon-a11y": "10.6.3",
+    "@storybook/addon-docs": "10.6.3",
+    "@storybook/web-components-vite": "10.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@typescript-eslint/eslint-plugin": "^8.60.0",
@@ -50,6 +56,7 @@
     "globals": "^17.6.0",
     "happy-dom": "^20.9.0",
     "oxlint": "^1.68.0",
+    "storybook": "10.6.3",
     "typescript": "^5.5.0",
     "vite": "^6.0.0",
     "vite-plugin-pwa": "^1.3.0",

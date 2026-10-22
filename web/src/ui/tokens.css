@@ -1,0 +1,97 @@
+/* Muxterm UI contract. App themes override these semantic properties on :root.
+   --chrome-* and --mux-* remain the compatibility inputs during migration. */
+:root {
+  --ui-font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ui-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --ui-text-xs: 11px;
+  --ui-text-sm: 12px;
+  --ui-text-md: 13px;
+  --ui-text-lg: 14px;
+  --ui-text-xl: 16px;
+  --ui-text-2xl: 20px;
+  --ui-text-3xl: 24px;
+  --ui-text-4xl: 30px;
+  --ui-text-5xl: 36px;
+
+  --ui-space-1: 2px;
+  --ui-space-2: 4px;
+  --ui-space-3: 6px;
+  --ui-space-4: 8px;
+  --ui-space-5: 12px;
+  --ui-space-6: 16px;
+  --ui-space-7: 20px;
+  --ui-space-8: 24px;
+  --ui-space-9: 32px;
+  --ui-space-10: 40px;
+  --ui-space-11: 48px;
+  --ui-space-12: 56px;
+  --ui-space-13: 64px;
+  --ui-space-14: 72px;
+  --ui-space-15: 80px;
+  --ui-space-16: 96px;
+
+  --ui-radius-sm: 4px;
+  --ui-radius-md: 7px;
+  --ui-radius-lg: 10px;
+  --ui-radius-xl: 14px;
+  --ui-radius-pill: 999px;
+
+  --ui-control-sm: 28px;
+  --ui-control-md: 36px;
+  --ui-control-lg: 44px;
+  --ui-row-touch: 56px;
+  --ui-dock-tab-width: 180px;
+  --ui-dock-tab-min-width: 80px;
+  --ui-dock-action-rail-width: 140px;
+  --ui-media-preview-max-height: 420px;
+  --ui-nav-height: var(--mux-titlebar-height, var(--mux-dock-height, 44px));
+  --ui-motion-fast: 120ms;
+  --ui-motion-pulse: 1.5s;
+  --ui-toast-offset: var(--ui-space-9);
+  --ui-toast-min-width: 240px;
+  --ui-dialog-width: 600px;
+  --ui-dialog-compact-width: 520px;
+  --ui-dialog-height: 640px;
+  --ui-dialog-compact-max-height: 600px;
+
+  --ui-surface-base: var(--chrome-body);
+  --ui-surface-raised: var(--chrome-bar);
+  --ui-surface-nav: var(--mux-titlebar-bg, var(--chrome-bar));
+  --ui-surface-hover: var(--chrome-hover);
+  --ui-nav-selected: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface-raised));
+  --ui-surface-overlay: var(--chrome-body);
+  --ui-border: var(--chrome-border);
+  --ui-border-strong: color-mix(in srgb, var(--ui-border) 40%, var(--ui-text-muted));
+  --ui-text: var(--chrome-text-bright);
+  --ui-text-muted: color-mix(in srgb, var(--chrome-text-bright) 70%, var(--chrome-body));
+  --ui-accent: var(--chrome-accent);
+  --ui-on-accent: var(--chrome-body);
+  --ui-danger: var(--chrome-danger);
+  --ui-danger-text: color-mix(in srgb, var(--ui-danger) 88%, var(--ui-text));
+  --ui-on-danger: var(--chrome-body);
+  --ui-success: var(--mux-ok);
+  --ui-warning: var(--mux-warn);
+  --ui-attention: var(--mux-bell);
+  --ui-info: var(--mux-ansi-6);
+  --ui-remote: var(--remote, #bb9af7);
+  --ui-terminal-surface: var(--mux-bg);
+  --ui-focus: var(--chrome-accent);
+  --ui-backdrop: color-mix(in srgb, black 65%, transparent);
+  --ui-backdrop-sheet: color-mix(in srgb, var(--ui-surface-base) 62%, transparent);
+  --ui-shadow-overlay: 0 24px 64px color-mix(in srgb, black 55%, transparent);
+  --ui-shadow-menu: 0 4px 12px color-mix(in srgb, black 50%, transparent);
+  --ui-shadow-sheet: 0 -8px 24px color-mix(in srgb, black 40%, transparent);
+
+  /* Editable documents can keep a paper-like surface while a theme overrides
+     every document color independently of the surrounding app chrome. */
+  --ui-document-surface: #fff;
+  --ui-document-text: #202124;
+  --ui-document-muted: #646b70;
+  --ui-document-border: #e4e6e8;
+  --ui-document-hover: #f2f3f5;
+
+  /* Future themes may provide images or gradients without changing components. */
+  --ui-app-backdrop-image: none;
+  --ui-overlay-backdrop-image: none;
+}

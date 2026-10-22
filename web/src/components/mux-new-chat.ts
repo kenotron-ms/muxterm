@@ -3,8 +3,15 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
-import { ChevronDown, Folder, Plus } from 'lucide';
+import { ArrowUp, ChevronDown, Folder, Paperclip, Plus, X } from 'lucide';
 import { icon } from '../lib/icons.js';
+import '../ui/button.js';
+import '../ui/dialog.js';
+import '../ui/feedback.js';
+import '../ui/select.js';
+import '../ui/text-field.js';
+import type { MuxUISelect } from '../ui/select.js';
+import type { MuxUITextField } from '../ui/text-field.js';
 import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
@@ -24,6 +31,7 @@ type Attachment = { localId: string; file: File; id?: string; kind?: string; pre
 
 @customElement('mux-new-chat')
 export class MuxNewChat extends LitElement {
+  @property({ type: Boolean, reflect: true }) compact = false;
   @property() initialHarness: SDKHarnessName = 'codex';
   @property() initialFolder = '';
   @property() initialProject = '';
@@ -72,8 +80,7 @@ export class MuxNewChat extends LitElement {
       return element !== null && path.includes(element);
     };
     if (this.projectPickerOpen && !inside('.project-picker')) this.projectPickerOpen = false;
-    if (this.pickerOpen && !inside('.picker') && !inside('.browse')) this.pickerOpen = false;
-    if (this.locationOpen && !inside('.location-settings')) this.locationOpen = false;
+    if (this.pickerOpen && !inside('.location-settings')) this.pickerOpen = false;
     this.renderRoot.querySelectorAll<HTMLDetailsElement>('.chat-picker[open]').forEach(picker => {
       if (!path.includes(picker)) picker.open = false;
     });
@@ -81,11 +88,11 @@ export class MuxNewChat extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
-    .topbar { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:9px; min-width:0; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); }
-    .topbar .project { display:inline-flex; align-items:center; gap:7px; min-width:0; max-width:38%; color:var(--chrome-text-dim); font:500 12px Inter,system-ui,sans-serif; white-space:nowrap; }
+    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:13px/1.5 system-ui,sans-serif; }
+    .topbar { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:9px; min-width:0; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
+    .topbar .project { display:inline-flex; align-items:center; gap:7px; min-width:0; max-width:38%; color:var(--ui-text-muted); font:500 12px Inter,system-ui,sans-serif; white-space:nowrap; }
     .topbar .project span { overflow:hidden; text-overflow:ellipsis; }
-    .topbar .divider { flex:none; color:var(--chrome-text-dim); }
+    .topbar .divider { flex:none; color:var(--ui-text-muted); }
     .topbar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
     @media (max-width:767.98px) { .topbar { display:none; } }
     @media (display-mode: window-controls-overlay) { .topbar { -webkit-app-region:drag; } }
@@ -93,130 +100,128 @@ export class MuxNewChat extends LitElement {
     .main.setup { justify-content:flex-start; }
     .content { width:min(100%,780px); }
     h1 { font-size:28px; font-weight:600; margin:0 0 20px; }
-    .controls { display:flex; align-items:center; flex-wrap:wrap; gap:7px; padding-bottom:9px; border-bottom:1px solid var(--chrome-border,#475067); }
-    label { display:flex; flex-direction:column; gap:5px; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
+    .controls { display:flex; align-items:center; flex-wrap:wrap; gap:7px; padding-bottom:9px; border-bottom:1px solid var(--ui-border); }
+    label { display:flex; flex-direction:column; gap:5px; color:var(--ui-text-muted); font-size:11px; }
     .controls label { display:block; }
     .controls .project { min-width:0; }
     .controls .harness { min-width:0; }
     .chat-picker { position:relative; min-width:0; }
-    .chat-picker summary { display:flex; align-items:center; box-sizing:border-box; height:31px; max-width:170px; padding:0 29px 0 9px; border:1px solid var(--chrome-border,#475067); border-radius:8px; background:var(--chrome-bar,#252a39); color:var(--chrome-text-bright,#e2e6f1); cursor:pointer; font-size:12px; list-style:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .chat-picker summary { display:flex; align-items:center; box-sizing:border-box; height:31px; max-width:170px; padding:0 29px 0 9px; border:1px solid var(--ui-border); border-radius:8px; background:var(--ui-surface-raised); color:var(--ui-text); cursor:pointer; font-size:12px; list-style:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .chat-picker summary::-webkit-details-marker { display:none; }
-    .chat-picker summary::after { content:'⌄'; position:absolute; right:10px; color:var(--chrome-text-dim,#a9b0c0); }
-    .chat-picker summary:hover,.chat-picker[open] summary { border-color:var(--chrome-accent,#9bb8f7); }
-    .chat-picker .panel { position:absolute; z-index:30; top:37px; width:min(350px,calc(100vw - 44px)); max-height:min(48vh,340px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:14px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px #0007; }
+    .chat-picker summary::after { content:'⌄'; position:absolute; right:10px; color:var(--ui-text-muted); }
+    .chat-picker summary:hover,.chat-picker[open] summary { border-color:var(--ui-accent); }
+    .chat-picker .panel { position:absolute; z-index:30; top:37px; width:min(350px,calc(100vw - 44px)); max-height:min(48vh,340px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--ui-border); border-radius:14px; background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-overlay); }
     .bundle-picker .panel { left:0; }
     .settings-picker .panel { right:0; }
-    .chat-picker .heading { padding:8px 10px 5px; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
-    .chat-picker .divider { height:1px; margin:7px 5px; background:var(--chrome-border,#41485f); }
-    .chat-picker .choice { display:flex; align-items:center; gap:9px; width:100%; min-height:36px; padding:7px 10px; border:0; border-radius:9px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:12px/1.4 system-ui,sans-serif; text-align:left; cursor:pointer; }
-    .chat-picker .choice:hover:not(:disabled),.chat-picker .choice:focus-visible { background:var(--chrome-hover); outline:none; }
-    .chat-picker .choice.selected { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 15%,transparent); }
+    .chat-picker .heading { padding:8px 10px 5px; color:var(--ui-text-muted); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
+    .chat-picker .divider { height:1px; margin:7px 5px; background:var(--ui-border); }
+    .chat-picker .choice { display:flex; align-items:center; gap:9px; width:100%; min-height:36px; padding:7px 10px; border:0; border-radius:9px; background:transparent; color:var(--ui-text); font:12px/1.4 system-ui,sans-serif; text-align:left; cursor:pointer; }
+    .chat-picker .choice:hover:not(:disabled),.chat-picker .choice:focus-visible { background:var(--ui-surface-hover); outline:none; }
+    .chat-picker .choice.selected { background:color-mix(in srgb,var(--ui-accent) 15%,transparent); }
     .chat-picker .choice:disabled { opacity:.5; cursor:default; }
     .chat-picker .choice-main { display:grid; gap:2px; min-width:0; flex:1; }
     .chat-picker .choice-name { font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-    .chat-picker .hint { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .chat-picker .check { color:var(--chrome-accent,#9bb8f7); font-weight:700; }
+    .chat-picker .hint { color:var(--ui-text-muted); font-size:11px; }
+    .chat-picker .check { color:var(--ui-accent); font-weight:700; }
     .chat-picker .model-list { max-height:180px; overflow-y:auto; }
     .chat-picker .slider { padding:4px 10px 12px; }
     .chat-picker .slider-header,.chat-picker .slider-ends { display:flex; justify-content:space-between; gap:8px; }
     .chat-picker .slider-header { font-weight:600; }
-    .chat-picker .slider-ends { color:var(--chrome-text-dim,#9aa3b8); font-size:10px; }
-    .chat-picker input[type=range] { width:100%; height:auto; margin:12px 0 4px; padding:0; border:0; accent-color:var(--chrome-accent,#9bb8f7); cursor:pointer; }
+    .chat-picker .slider-ends { color:var(--ui-text-muted); font-size:10px; }
+    .chat-picker input[type=range] { width:100%; height:auto; margin:12px 0 4px; padding:0; border:0; accent-color:var(--ui-accent); cursor:pointer; }
     .chat-picker .custom-model { width:calc(100% - 20px); margin:6px 10px; }
-    .catalog-status { color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
-    .catalog-status.error { color:var(--chrome-danger); }
-    .worktree-toggle { display:inline-flex; align-items:center; gap:7px; height:31px; margin-left:auto; padding:0 3px 0 8px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; white-space:nowrap; }
-    .worktree-toggle:hover:not(:disabled),.worktree-toggle:focus-visible { background:var(--chrome-hover); color:var(--chrome-text-bright,#e2e6f1); outline:none; }
+    .catalog-status { color:var(--ui-text-muted); font-size:11px; }
+    .worktree-toggle { display:inline-flex; align-items:center; gap:7px; height:31px; margin-left:auto; padding:0 3px 0 8px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--ui-text-muted); font-size:12px; white-space:nowrap; }
+    .worktree-toggle:hover:not(:disabled),.worktree-toggle:focus-visible { background:var(--ui-surface-hover); color:var(--ui-text); outline:none; }
     .worktree-toggle:disabled { opacity:.45; cursor:default; }
-    .worktree-toggle .track { display:flex; align-items:center; box-sizing:border-box; width:29px; height:17px; padding:2px; border:1px solid var(--chrome-border,#475067); border-radius:999px; background:var(--chrome-body); transition:background .15s; }
-    .worktree-toggle .thumb { width:11px; height:11px; border-radius:50%; background:var(--chrome-text-dim,#a9b0c0); transition:transform .15s; }
-    .worktree-toggle[aria-checked="true"] { color:var(--chrome-text-bright,#e2e6f1); }
-    .worktree-toggle[aria-checked="true"] .track { border-color:var(--chrome-accent,#9bb8f7); background:var(--chrome-accent,#9bb8f7); }
-    .worktree-toggle[aria-checked="true"] .thumb { background:var(--chrome-body); transform:translateX(12px); }
-    .composer-actions { display:flex; align-items:center; gap:7px; padding-top:8px; border-top:1px solid var(--chrome-border,#475067); }
+    .worktree-toggle .track { display:flex; align-items:center; box-sizing:border-box; width:29px; height:17px; padding:2px; border:1px solid var(--ui-border); border-radius:999px; background:var(--ui-surface-base); transition:background .15s; }
+    .worktree-toggle .thumb { width:11px; height:11px; border-radius:50%; background:var(--ui-text-muted); transition:transform .15s; }
+    .worktree-toggle[aria-checked="true"] { color:var(--ui-text); }
+    .worktree-toggle[aria-checked="true"] .track { border-color:var(--ui-accent); background:var(--ui-accent); }
+    .worktree-toggle[aria-checked="true"] .thumb { background:var(--ui-surface-base); transform:translateX(12px); }
+    .composer-actions { display:flex; align-items:center; gap:7px; padding-top:8px; border-top:1px solid var(--ui-border); }
     .composer-actions .send { margin-left:auto; }
-    select,input { box-sizing:border-box; width:100%; height:37px; border:1px solid var(--chrome-border,#475067); border-radius:8px; background:var(--chrome-bar,#252a39); color:var(--chrome-text-bright,#e2e6f1); padding:7px 9px; font:13px system-ui,sans-serif; }
-    select { appearance:none; padding-right:29px; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a9b9d6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 8px center; }
-    .controls select { height:31px; max-width:130px; padding:3px 29px 3px 9px; font-size:12px; }
-    select:hover,.browse:hover { border-color:var(--chrome-accent,#9bb8f7); }
-    select:focus-visible,input:focus-visible,.browse:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
+    .controls mux-ui-select { max-width:150px; }
     .project-picker { position:relative; }
-    .project-trigger { box-sizing:border-box; width:auto; max-width:150px; height:31px; display:flex; align-items:center; gap:6px; padding:0 9px; border:1px solid var(--chrome-border,#475067); border-radius:8px; background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 9%,var(--chrome-bar,#252a39)); color:var(--chrome-text-bright,#e2e6f1); font-size:12px; font-weight:600; text-align:left; }
-    .project-trigger:hover,.project-trigger[aria-expanded="true"] { border-color:var(--chrome-accent,#9bb8f7); }
-    .project-trigger:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
+    .project-trigger { box-sizing:border-box; width:auto; max-width:150px; height:31px; display:flex; align-items:center; gap:6px; padding:0 9px; border:1px solid var(--ui-border); border-radius:8px; background:color-mix(in srgb,var(--ui-accent) 9%,var(--ui-surface-raised)); color:var(--ui-text); font-size:12px; font-weight:600; text-align:left; }
+    .project-trigger:hover,.project-trigger[aria-expanded="true"] { border-color:var(--ui-accent); }
+    .project-trigger:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
     .project-trigger .project-name { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-    .project-trigger .project-symbol { display:flex; color:var(--chrome-accent,#9bb8f7); }
-    .project-trigger .down { display:flex; margin-left:auto; color:var(--chrome-text-dim,#a9b0c0); }
-    .project-options { position:absolute; z-index:20; top:36px; left:0; width:270px; max-width:min(270px,calc(100vw - 72px)); max-height:280px; overflow:auto; padding:5px; border:1px solid var(--chrome-border,#475067); border-radius:10px; background:var(--chrome-bar,#252a39); box-shadow:0 12px 30px #0009; }
-    .project-option { width:100%; display:flex; align-items:center; gap:9px; padding:8px; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-bright,#e2e6f1); text-align:left; }
-    .project-option:hover,.project-option[selected] { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 15%,transparent); }
+    .project-trigger .project-symbol { display:flex; color:var(--ui-accent); }
+    .project-trigger .down { display:flex; margin-left:auto; color:var(--ui-text-muted); }
+    .project-options { position:absolute; z-index:20; top:36px; left:0; width:270px; max-width:min(270px,calc(100vw - 72px)); max-height:280px; overflow:auto; padding:5px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-menu); }
+    .project-option { width:100%; display:flex; align-items:center; gap:9px; padding:8px; border:0; border-radius:6px; background:transparent; color:var(--ui-text); text-align:left; }
+    .project-option:hover,.project-option[selected] { background:color-mix(in srgb,var(--ui-accent) 15%,transparent); }
     .project-option .option-copy { flex:1; min-width:0; display:grid; gap:1px; }
     .project-option .option-copy strong,.project-option .option-copy small { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-    .project-option .option-copy small { color:var(--chrome-text-dim,#a9b0c0); font-size:10px; }
-    .project-option svg { flex:none; color:var(--chrome-accent,#9bb8f7); }
-    .project-divider { height:1px; margin:4px 6px; background:var(--chrome-border,#475067); }
-    .folder-line { display:flex; gap:6px; }
-    .folder-line input { flex:1; min-width:0; }
+    .project-option .option-copy small { color:var(--ui-text-muted); font-size:10px; }
+    .project-option svg { flex:none; color:var(--ui-accent); }
+    .project-divider { height:1px; margin:4px 6px; background:var(--ui-border); }
+    .folder { display:grid; gap:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .folder-line { display:flex; align-items:center; gap:var(--ui-space-3); }
+    .folder-line mux-ui-text-field { flex:1; min-width:0; }
     button { cursor:pointer; font:inherit; }
-    .browse { border:1px solid var(--chrome-border,#475067); border-radius:8px; color:inherit; background:var(--chrome-bar,#252a39); padding:0 10px; }
-    .picker { max-height:240px; overflow:auto; border:1px solid var(--chrome-border,#475067); border-radius:9px; margin:0 0 14px; background:var(--chrome-bar,#252a39); }
-    .picker-head { display:flex; align-items:center; gap:8px; padding:8px; border-bottom:1px solid var(--chrome-border,#475067); }
+    .picker { max-height:240px; overflow:auto; border:1px solid var(--ui-border); border-radius:9px; margin:0 0 14px; background:var(--ui-surface-raised); }
+    .picker-head { display:flex; align-items:center; gap:8px; padding:8px; border-bottom:1px solid var(--ui-border); }
     .picker-head span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .picker button { border:0; color:inherit; background:transparent; padding:6px 10px; border-radius:5px; }
-    .picker button:hover { background:var(--chrome-hover); }
-    .picker-create { display:flex; gap:6px; padding:8px; border-bottom:1px solid var(--chrome-border,#475067); }
-    .picker-create input { flex:1; }
+    .picker button:hover { background:var(--ui-surface-hover); }
+    .picker-create { display:flex; align-items:center; gap:var(--ui-space-3); padding:var(--ui-space-4); border-bottom:1px solid var(--ui-border); }
+    .picker-create mux-ui-text-field { flex:1; }
     .folder-entry { display:block; width:100%; text-align:left; }
-    .composer { position:relative; display:flex; flex-direction:column; gap:9px; border:1px solid var(--chrome-border,#475067); border-radius:18px; background:var(--chrome-bar,#202632); padding:15px 14px 10px; transition:border-color .15s,box-shadow .15s; }
-    .composer:focus-within { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 58%,var(--chrome-border,#475067)); box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent,#9bb8f7) 14%,transparent); }
+    .composer { position:relative; display:flex; flex-direction:column; gap:9px; border:1px solid var(--ui-border); border-radius:18px; background:var(--ui-surface-raised); padding:15px 14px 10px; transition:border-color .15s,box-shadow .15s; }
+    .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
     .textarea-sizing { position:relative; width:100%; min-width:0; min-height:56px; max-height:220px; font:16px/1.55 system-ui,sans-serif; }
     textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:56px; max-height:220px; resize:none; border:0; outline:0; padding:3px 0; color:inherit; background:transparent; font:inherit; overflow-y:auto; }
     .native-textarea-sizing textarea { field-sizing:content; height:auto; }
     .legacy-textarea-sizing textarea { position:absolute; inset:0; height:100%; min-height:0; max-height:none; }
     .textarea-mirror { box-sizing:border-box; width:100%; min-height:56px; max-height:220px; padding:3px 0; visibility:hidden; white-space:pre-wrap; overflow-wrap:break-word; overflow-y:auto; }
     .native-textarea-sizing .textarea-mirror { display:none; }
-    textarea::placeholder { color:var(--chrome-text-dim,#a9b0c0); opacity:.8; }
+    textarea::placeholder { color:var(--ui-text-muted); opacity:.8; }
     .attachments { display:flex; flex-wrap:wrap; gap:8px; }
-    .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--chrome-border,#41485f); border-radius:10px; background:var(--chrome-bar,#202632); }
-    .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:6px; background:var(--chrome-body); }
+    .attachment { position:relative; display:flex; align-items:center; gap:9px; min-width:0; max-width:min(100%,230px); padding:5px 28px 5px 5px; border:1px solid var(--ui-border); border-radius:10px; background:var(--ui-surface-raised); }
+    .attachment img { flex:none; width:52px; height:52px; object-fit:cover; border-radius:6px; background:var(--ui-surface-base); }
     .attachment .filename { min-width:0; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
-    .attachment .status { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .attachment .status.failed { color:var(--chrome-danger); }
-    .attachment button { position:absolute; top:4px; right:4px; width:22px; height:22px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--chrome-text-dim,#9aa3b8); font-size:18px; line-height:20px; }
-    .attachment button:hover { background:var(--chrome-hover); color:inherit; }
-    .attach-button { flex:none; width:34px; height:34px; display:grid; place-items:center; border:0; border-radius:9px; padding:0; background:transparent; color:var(--chrome-text-bright,#d9def0); }
-    .attach-button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-    .attach-button:hover,.attach-button:focus-visible { background:var(--chrome-hover); outline:none; }
+    .attachment .status { color:var(--ui-text-muted); font-size:11px; }
+    .attachment .status.failed { color:var(--ui-danger-text); }
+    .attachment button { position:absolute; top:4px; right:4px; width:22px; height:22px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--ui-text-muted); font-size:18px; line-height:20px; }
+    .attachment button:hover { background:var(--ui-surface-hover); color:inherit; }
     .file-input { display:none; }
-    .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed var(--chrome-accent); border-radius:16px; background:color-mix(in srgb, var(--chrome-body) 92%, transparent); color:var(--chrome-text-bright); font-size:22px; pointer-events:none; }
-    .send { flex:none; width:34px; height:34px; border:0; border-radius:10px; background:var(--chrome-accent); color:var(--chrome-body); font-size:20px; line-height:1; }
-    .send:hover:not(:disabled) { filter:brightness(1.1); }
-    .send:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; }
-    .send:disabled { opacity:.4; cursor:default; }
-    .error { margin:10px 0; color:var(--chrome-danger); }
-    .setup-intro { margin:0 0 18px; color:var(--chrome-text-dim); font-size:14px; }
+    .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:16px; background:color-mix(in srgb, var(--ui-surface-base) 92%, transparent); color:var(--ui-text); font-size:22px; pointer-events:none; }
+    .main > .content > mux-ui-feedback { margin:var(--ui-space-5) 0; }
+    .setup-intro { margin:0 0 18px; color:var(--ui-text-muted); font-size:14px; }
     .setup-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:10px; }
-    .setup-card { padding:15px; border:1px solid var(--chrome-border); border-radius:13px; background:var(--chrome-bar); }
+    .setup-card { padding:15px; border:1px solid var(--ui-border); border-radius:13px; background:var(--ui-surface-raised); }
     .setup-card h2 { margin:0 0 8px; font-size:15px; }
-    .setup-card code { display:block; min-height:42px; padding:8px; border-radius:7px; overflow-wrap:anywhere; background:var(--chrome-body); color:var(--chrome-text-bright); font:12px/1.45 ui-monospace,SFMono-Regular,monospace; }
-    .setup-card p { margin:9px 0; color:var(--chrome-text-dim); font-size:12px; }
+    .setup-card code { display:block; min-height:42px; padding:8px; border-radius:7px; overflow-wrap:anywhere; background:var(--ui-surface-base); color:var(--ui-text); font:12px/1.45 ui-monospace,SFMono-Regular,monospace; }
+    .setup-card p { margin:9px 0; color:var(--ui-text-muted); font-size:12px; }
     .setup-actions { display:flex; align-items:center; gap:12px; margin-top:10px; }
-    .setup-actions button,.setup-refresh { padding:7px 11px; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-hover); color:var(--chrome-text-bright); }
-    .setup-actions a { color:var(--chrome-accent); text-decoration:none; }
-    .setup-refresh { margin-top:16px; }
-    .receipt { display:flex; align-items:center; gap:8px; margin:12px 2px 0; color:var(--chrome-text-dim,#a9b0c0); font-size:12px; }
-    .receipt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--chrome-accent,#9bb8f7); animation:receipt-pulse 1.35s ease-in-out infinite; }
+    .setup-actions a { color:var(--ui-accent); text-decoration:none; }
+    .setup-refresh { margin-top:var(--ui-space-6); }
+    .setup-terminal { margin-bottom:var(--ui-space-6); }
+    .receipt { display:flex; align-items:center; gap:8px; margin:12px 2px 0; color:var(--ui-text-muted); font-size:12px; }
+    .receipt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--ui-accent); animation:receipt-pulse 1.35s ease-in-out infinite; }
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
     @media (prefers-reduced-motion:reduce) { .receipt::before { animation:none; } }
-    .location-settings { position:relative; min-width:0; }
-    .location-settings summary { display:flex; align-items:center; gap:6px; box-sizing:border-box; max-width:230px; height:31px; padding:0 9px; border:1px solid var(--chrome-border,#475067); border-radius:8px; cursor:pointer; color:var(--chrome-text-bright,#e2e6f1); font-size:12px; white-space:nowrap; list-style:none; }
-    .location-settings .folder-symbol { display:flex; flex:none; color:var(--chrome-accent,#9bb8f7); }
+    .location-settings { min-width:0; }
+    .location-trigger { display:flex; align-items:center; gap:6px; box-sizing:border-box; max-width:230px; height:31px; padding:0 9px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); font-size:var(--ui-text-sm); white-space:nowrap; }
+    .location-settings .folder-symbol { display:flex; flex:none; color:var(--ui-accent); }
     .location-settings .folder-label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-    .location-settings summary::-webkit-details-marker { display:none; }
-    .location-settings summary:hover,.location-settings[open] summary { border-color:var(--chrome-accent,#9bb8f7); }
-    .location-fields { position:absolute; z-index:20; top:37px; left:0; display:grid; gap:9px; box-sizing:border-box; width:min(400px,calc(100vw - 72px)); max-height:300px; overflow:auto; padding:11px; border:1px solid var(--chrome-border,#475067); border-radius:10px; background:var(--chrome-bar,#252a39); box-shadow:0 12px 30px #0009; }
-    .location-note { margin:0; color:var(--chrome-text-dim,#a9b0c0); font-size:11px; }
-    @media(max-width:550px) { .main { padding:16px; } h1 { font-size:24px; } .controls { gap:6px; } .controls select { max-width:125px; } .project-trigger { max-width:135px; } }
+    .location-trigger:hover,.location-trigger[aria-expanded="true"] { border-color:var(--ui-accent); }
+    .location-trigger:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .location-fields { display:grid; gap:var(--ui-space-5); box-sizing:border-box; max-height:min(80dvh,var(--ui-dialog-compact-max-height)); overflow:auto; padding:var(--ui-space-6); }
+    .location-head { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); }
+    .location-head h2 { margin:0; color:var(--ui-text); font-size:var(--ui-text-xl); }
+    .location-actions { display:flex; justify-content:flex-end; border-top:1px solid var(--ui-border); padding-top:var(--ui-space-5); }
+    .location-note { margin:0; color:var(--ui-text-muted); font-size:11px; }
+    @media(max-width:550px) {
+      .main { padding:16px; }
+      h1 { font-size:24px; }
+      .controls { position:relative; gap:6px; }
+      .controls mux-ui-select { max-width:125px; }
+      .project-trigger { max-width:135px; }
+      .location-fields { padding-bottom:max(var(--ui-space-6),env(safe-area-inset-bottom)); }
+    }
   `;
 
   override connectedCallback() {
@@ -385,7 +390,7 @@ export class MuxNewChat extends LitElement {
         ${models.map(item => this.pickerChoice(item.label, item.id, !this.customModel && this.model === item.id, () => this.onModelChange(item.id)))}
         ${this.pickerChoice('Other model ID…', '', this.customModel, () => this.onModelChange('__custom__'))}
       </div>
-      ${this.customModel ? html`<input class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(event:Event) => { this.model = (event.target as HTMLInputElement).value; }}>` : nothing}
+      ${this.customModel ? html`<mux-ui-text-field class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(event:Event) => { this.model = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
       ${efforts.length > 1 ? html`<div class="divider"></div><div class="slider"><div class="slider-header"><span>Thinking</span><span>${efforts[effortIndex]}</span></div><input type="range" aria-label="Thinking effort" min="0" max=${efforts.length - 1} step="1" .value=${String(effortIndex)} @input=${(event:Event) => { this.effort = efforts[Number((event.target as HTMLInputElement).value)]; }}><div class="slider-ends"><span>${efforts[0]}</span><span>${efforts[efforts.length - 1]}</span></div></div>` : nothing}
       ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
     </div></details>`;
@@ -485,15 +490,15 @@ export class MuxNewChat extends LitElement {
       <div class="main setup"><div class="content">
         <h1>Choose your coding agent</h1>
         <p class="setup-intro">Install an agent in a terminal, sign in to its provider, then refresh this list. Muxterm will use the agent already on your computer.</p>
-        <button class="setup-refresh" style="margin:0 0 16px" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open a terminal in muxterm</button>
+        <mux-ui-button class="setup-terminal" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open a terminal in muxterm</mux-ui-button>
         <div class="setup-list">${SETUP_AGENTS.map(agent => html`
           <section class="setup-card"><h2>${agent.name}</h2>
             <code>${agent.command}</code>
             <p>After installing, run <strong>${agent.login}</strong> to connect your account.</p>
-            <div class="setup-actions"><button @click=${() => void this.copySetup(agent.command, agent.name)}>${this.copiedSetup === agent.name ? 'Copied' : 'Copy install command'}</button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
+            <div class="setup-actions"><mux-ui-button size="small" variant="secondary" @click=${() => void this.copySetup(agent.command, agent.name)}>${this.copiedSetup === agent.name ? 'Copied' : 'Copy install command'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
           </section>`)}</div>
-        <button class="setup-refresh" @click=${() => void this.loadStartOptions()}>Refresh installed agents</button>
-        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+        <mux-ui-button class="setup-refresh" variant="secondary" @click=${() => void this.loadStartOptions()}>Refresh installed agents</mux-ui-button>
+        ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
       </div></div>`;
     return html`
     ${this.renderTopbar(projectName)}
@@ -508,15 +513,19 @@ export class MuxNewChat extends LitElement {
             <div class="project-divider"></div><button class="project-option" role="option" aria-selected=${this.projectId === 'new'} ?selected=${this.projectId === 'new'} @click=${() => this.onProjectChange('new')}>${icon(Plus,{size:16})}<span class="option-copy"><strong>New project</strong><small>Choose its primary folder</small></span></button>
           </div>` : nothing}
         </div></div>
-        <details class="location-settings" ?open=${this.locationOpen} @toggle=${(e: Event) => { this.locationOpen = (e.target as HTMLDetailsElement).open; }}><summary title=${this.folder}><span class="folder-symbol">${icon(Folder,{size:14})}</span><span class="folder-label">${this.locationLabel()}</span></summary>
+        <div class="location-settings"><button class="location-trigger" type="button" aria-haspopup="dialog" aria-expanded=${this.locationOpen} aria-label="Chat location" title=${this.folder} @click=${() => { this.locationOpen = true; }}><span class="folder-symbol">${icon(Folder,{size:14})}</span><span class="folder-label">${this.locationLabel()}</span></button>
+          ${this.locationOpen ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Chat location" open @dismiss=${() => { this.locationOpen = false; this.pickerOpen = false; }}>
           <div class="location-fields">
-            <label class="folder">${this.projectId === 'ungrouped' ? 'Folder' : 'Primary folder'}<div class="folder-line"><input aria-label="Primary folder" .value=${this.folder} ?readonly=${this.projectId !== 'ungrouped' && this.projectId !== 'new'} @input=${(e:Event) => { this.folder = (e.target as HTMLInputElement).value; this.onFolderChanged(); }}>${this.projectId === 'ungrouped' || this.projectId === 'new' ? html`<button class="browse" aria-label="Browse server folders" @click=${() => void this.browse()}>Browse</button>` : nothing}</div></label>
-            ${this.projectId === 'new' ? html`<label>Project name <input aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as HTMLInputElement).value; }}></label>` : nothing}
-            ${this.pickerOpen && this.listing ? html`<div class="picker" aria-label="Server folder picker"><div class="picker-head"><button aria-label="Parent folder" @click=${() => void this.browse(this.listing!.parent)}>↑</button><span>${this.listing.path}</span><button @click=${() => { this.pickerOpen = false; }}>Choose this folder</button></div><div class="picker-create"><input aria-label="New folder name" placeholder="New folder name" .value=${this.newFolderName} @input=${(e:Event) => { this.newFolderName = (e.target as HTMLInputElement).value; }}><button @click=${() => { if (!this.newFolderName.trim() || this.newFolderName.includes('/')) return; this.folder = `${this.listing!.path.replace(/\/$/,'')}/${this.newFolderName.trim()}`; this.onFolderChanged(); this.pickerOpen = false; }}>Use new folder</button></div>${this.listing.folders.map(name => html`<button class="folder-entry" @click=${() => void this.browse(`${this.listing!.path.replace(/\/$/,'')}/${name}`)}>▸ ${name}</button>`)}</div>` : nothing}
+            <div class="location-head"><h2>Chat location</h2><mux-ui-button icon-only variant="quiet" size="small" accessible-label="Close chat location" @click=${() => { this.locationOpen = false; this.pickerOpen = false; }}>${icon(X,{size:17})}</mux-ui-button></div>
+            <div class="folder"><span>${this.projectId === 'ungrouped' ? 'Folder' : 'Primary folder'}</span><div class="folder-line"><mux-ui-text-field aria-label="Primary folder" .value=${this.folder} ?readonly=${this.projectId !== 'ungrouped' && this.projectId !== 'new'} @input=${(e:Event) => { this.folder = (e.target as MuxUITextField).value; this.onFolderChanged(); }}></mux-ui-text-field>${this.projectId === 'ungrouped' || this.projectId === 'new' ? html`<mux-ui-button size="small" accessible-label="Browse server folders" @click=${() => void this.browse()}>Browse</mux-ui-button>` : nothing}</div></div>
+            ${this.projectId === 'new' ? html`<mux-ui-text-field label="Project name" aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
+            ${this.pickerOpen && this.listing ? html`<div class="picker" aria-label="Server folder picker"><div class="picker-head"><button aria-label="Parent folder" @click=${() => void this.browse(this.listing!.parent)}>↑</button><span>${this.listing.path}</span><button @click=${() => { this.pickerOpen = false; }}>Choose this folder</button></div><div class="picker-create"><mux-ui-text-field aria-label="New folder name" placeholder="New folder name" .value=${this.newFolderName} @input=${(e:Event) => { this.newFolderName = (e.target as MuxUITextField).value; }}></mux-ui-text-field><mux-ui-button size="small" @click=${() => { if (!this.newFolderName.trim() || this.newFolderName.includes('/')) return; this.folder = `${this.listing!.path.replace(/\/$/,'')}/${this.newFolderName.trim()}`; this.onFolderChanged(); this.pickerOpen = false; }}>Use new folder</mux-ui-button></div>${this.listing.folders.map(name => html`<button class="folder-entry" @click=${() => void this.browse(`${this.listing!.path.replace(/\/$/,'')}/${name}`)}>▸ ${name}</button>`)}</div>` : nothing}
             <p class="location-note">${this.workMode === 'worktree' ? 'A separate Git worktree will be created from this project’s primary folder.' : this.projectId === 'ungrouped' ? 'This chat will use the chosen folder.' : 'This chat will use the project’s primary folder.'}${selectedProject?.sourceFolders?.length ? ` ${selectedProject.sourceFolders.length} additional source ${selectedProject.sourceFolders.length === 1 ? 'folder is' : 'folders are'} available at their existing paths.` : ''}</p>
+            <div class="location-actions"><mux-ui-button variant="primary" @click=${() => { this.locationOpen = false; this.pickerOpen = false; }}>Done</mux-ui-button></div>
           </div>
-        </details>
-        ${this.startOptions?.length ? html`<label class="harness"><select aria-label="Harness" .value=${this.harness} @change=${(e:Event) => this.onHarnessChange((e.target as HTMLSelectElement).value as SDKHarnessName)}>${this.startOptions.map(option => html`<option value=${option.harness} ?selected=${this.harness === option.harness}>${sdkHarnessLabel(option.harness)}</option>`)}</select></label>` : nothing}
+          </mux-ui-dialog>` : nothing}
+        </div>
+        ${this.startOptions?.length ? html`<mux-ui-select class="harness" aria-label="Harness" .value=${this.harness} .options=${this.startOptions.map(option => ({ value:option.harness, label:sdkHarnessLabel(option.harness) }))} @change=${(e:Event) => this.onHarnessChange((e.target as MuxUISelect).value as SDKHarnessName)}></mux-ui-select>` : nothing}
         ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
         ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
         ${this.catalogLoading ? html`<span class="catalog-status" role="status">Loading models…</span>` : nothing}
@@ -524,13 +533,13 @@ export class MuxNewChat extends LitElement {
         </div>
         ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button></div>`)}</div>` : nothing}
         <div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${this.onPromptInput} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div>
-        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><button class="send" aria-label="Send message" ?disabled=${(!this.promptHasContent && !this.attachments.length) || this.busy || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>↑</button></div>
+        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><mux-ui-button icon-only variant="quiet" accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:18})}</mux-ui-button><mux-ui-button class="send" icon-only variant="primary" accessible-label="Send message" ?disabled=${(!this.promptHasContent && !this.attachments.length) || this.busy || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>${icon(ArrowUp,{size:18})}</mux-ui-button></div>
 
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
-      ${this.catalogError ? html`<div class="catalog-status error" role="alert">Could not load models: ${this.catalogError} <button @click=${() => void this.loadCatalog()}>Retry</button></div>` : nothing}
-      ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+      ${this.catalogError ? html`<mux-ui-feedback kind="error" appearance="panel">Could not load models: ${this.catalogError}<mux-ui-button slot="action" size="small" @click=${() => void this.loadCatalog()}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
+      ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
     </div></div>
   `; }
 }

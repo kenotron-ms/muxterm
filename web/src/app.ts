@@ -1,4 +1,6 @@
 import { subtleScrollbars } from './lib/subtle-scrollbars.js';
+import './ui/tokens.css';
+import './ui/dialog.js';
 import { LitElement, html, css } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
@@ -365,51 +367,7 @@ export class MuxApp extends LitElement {
     .ws-create-cancel:disabled { opacity: 0.45; cursor: not-allowed; }
     .ws-create-cancel:not(:disabled):hover { background: var(--chrome-hover); color: var(--chrome-text-bright); }
 
-    /* ── Overlay panel (settings / shortcuts / about) ── */
-    .overlay-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.6);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 3000;
-    }
-
-    .overlay-dialog {
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border);
-      border-radius: 10px;
-      width: min(600px, calc(100vw - 32px));
-      height: min(80vh, 640px);
-      display: flex;
-      flex-direction: column;
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
-      overflow: hidden;
-    }
-
-    /* The connect dialog is the one overlay that is content-sized: it holds a
-       list whose length is the user's ssh config, and a fixed 640px box would
-       be mostly empty for the common case of two or three machines. Same
-       backdrop, same chrome, different box — the wireframe's .cdialog. */
-    .overlay-dialog.cdialog {
-      width: min(520px, calc(100vw - 32px));
-      height: auto;
-      max-height: min(80vh, 600px);
-    }
-
-    @media (max-width: 767.98px) {
-      .overlay-dialog.settings-dialog {
-        box-sizing: border-box;
-        width: 100vw;
-        height: 100dvh;
-        padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
-        border: 0;
-        border-radius: 0;
-        box-shadow: none;
-      }
-    }
-
+    /* The shared native dialog owns overlay geometry and focus. */
     .overlay-body {
       flex: 1;
       overflow: hidden;
@@ -1832,11 +1790,9 @@ export class MuxApp extends LitElement {
         </div>
       ` : ''}
       ${settingsPage ? html`<section class="settings-page" aria-label="Settings">${this._renderSettings(true)}</section>` : this._overlayPanel ? html`
-        <div class="overlay-backdrop" @click="${this._closeOverlayPanel}">
-          <div
-            class="overlay-dialog${this._overlayPanel === 'connect' ? ' cdialog' : this._overlayPanel === 'settings' ? ' settings-dialog' : ''}"
-            @click="${(e: Event) => e.stopPropagation()}"
-          >
+        <mux-ui-dialog open size=${this._overlayPanel === 'connect' ? 'compact' : 'standard'}
+          label=${this._overlayPanel === 'connect' ? 'Connect machine' : 'Settings'}
+          @dismiss=${this._closeOverlayPanel}>
             <div class="overlay-body">
               ${this._overlayPanel === 'connect' ? html`
                 <mux-connect-dialog
@@ -1844,8 +1800,7 @@ export class MuxApp extends LitElement {
                 ></mux-connect-dialog>
               ` : this._overlayPanel === 'settings' ? this._renderSettings() : ''}
             </div>
-          </div>
-        </div>
+        </mux-ui-dialog>
       ` : ''}
       ${this._showReconnectOverlay
         ? html`<mux-reconnect-overlay
@@ -2547,6 +2502,9 @@ export class MuxApp extends LitElement {
       case 'settings':
         this._settingsOpenSection = detail?.section ?? null;
         this._overlayPanel = action;
+        break;
+      case 'connect-machine':
+        this._onConnectMachine();
         break;
       case 'shortcuts':
       case 'about':

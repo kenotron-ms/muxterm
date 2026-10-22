@@ -54,6 +54,7 @@ export class MuxBlockNotePage extends HTMLElement {
   private currentPageId = '';
   private currentContent: PageContent = [];
   private currentEpoch = 0;
+  private editorObserver?: MutationObserver;
 
   set pageId(value: string) {
     if (value === this.currentPageId) return;
@@ -68,9 +69,16 @@ export class MuxBlockNotePage extends HTMLElement {
     const shadow = this.shadowRoot || this.attachShadow({ mode: 'open' });
     if (!this.shadowRoot?.querySelector('style')) {
       const style = document.createElement('style');
-      style.textContent = `${blockNoteCSS}\n${mantineCSS}\n${visualizationCSS}\n:host{display:block;min-height:100px}.bn-container{background:transparent!important;color:#202124!important}.bn-editor{padding-inline:0!important}`;
+      style.textContent = `${blockNoteCSS}\n${mantineCSS}\n${visualizationCSS}\n:host{display:block;min-height:100px}.bn-container{background:transparent!important;color:var(--ui-document-text)!important}.bn-editor{padding-inline:0!important}`;
       shadow.append(style);
     }
+    // BlockNote owns the inner textbox and replaces it when a page changes.
+    // Name each new editor as it appears in this island's shadow root.
+    this.editorObserver = new MutationObserver(() => {
+      const editor = shadow.querySelector<HTMLElement>('.tiptap[role="textbox"]');
+      if (editor && !editor.hasAttribute('aria-label')) editor.setAttribute('aria-label', 'Page content');
+    });
+    this.editorObserver.observe(shadow, {childList:true, subtree:true});
     const mount = document.createElement('div');
     shadow.append(mount);
     this.mount = mount;
@@ -79,6 +87,8 @@ export class MuxBlockNotePage extends HTMLElement {
   }
 
   disconnectedCallback(): void {
+    this.editorObserver?.disconnect();
+    this.editorObserver = undefined;
     const root = this.root;
     const mount = this.mount;
     this.root = null;

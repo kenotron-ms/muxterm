@@ -1,6 +1,7 @@
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { MuxUIButton } from '../ui/button.js';
 import type {
   CloseConfirmationRequiredOutcome,
   CloseRiskReason,
@@ -31,14 +32,16 @@ export class CloseConfirmationModal extends LitElement {
       margin: auto;
       padding: 24px;
       border: 1px solid var(--chrome-border);
-      border-radius: 10px;
-      background: var(--chrome-body);
-      color: var(--chrome-text-bright);
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+      border-radius: var(--ui-radius-lg);
+      background: var(--ui-surface-overlay);
+      background-image: var(--ui-overlay-backdrop-image);
+      color: var(--ui-text);
+      box-shadow: var(--ui-shadow-overlay);
     }
 
     dialog::backdrop {
-      background: rgba(0, 0, 0, 0.62);
+      background: var(--ui-backdrop);
+      background-image: var(--ui-app-backdrop-image);
     }
 
     h2 {
@@ -48,7 +51,7 @@ export class CloseConfirmationModal extends LitElement {
     }
 
     .description {
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
       font-size: 14px;
       line-height: 1.5;
     }
@@ -89,7 +92,7 @@ export class CloseConfirmationModal extends LitElement {
 
     .risk-reason,
     .omitted {
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
       font-size: 12px;
       line-height: 1.4;
     }
@@ -110,51 +113,7 @@ export class CloseConfirmationModal extends LitElement {
       margin-top: 22px;
     }
 
-    button {
-      min-width: 96px;
-      min-height: 38px;
-      padding: 8px 16px;
-      border: 1px solid var(--chrome-border);
-      border-radius: 7px;
-      background: transparent;
-      color: var(--chrome-text-bright);
-      font: inherit;
-      font-size: 14px;
-      cursor: pointer;
-    }
-
-    button:hover {
-      background: var(--chrome-hover);
-    }
-
-    button:focus-visible {
-      outline: 2px solid var(--chrome-accent);
-      outline-offset: 2px;
-    }
-
-    .destructive {
-      border-color: var(--chrome-danger);
-      background: var(--chrome-danger);
-      color: var(--chrome-body);
-      font-weight: 700;
-    }
-
-    .destructive:hover {
-      filter: brightness(1.08);
-    }
-
-    button:disabled {
-      cursor: wait;
-      filter: none;
-      opacity: 0.55;
-    }
-
-    @media (pointer: coarse) {
-      button {
-        min-width: 44px;
-        min-height: 44px;
-      }
-    }
+    mux-ui-button { min-width: 96px; }
   `;
 
   @property({ attribute: false })
@@ -176,7 +135,7 @@ export class CloseConfirmationModal extends LitElement {
   focusCancel(): void {
     if (this.confirming) return;
     this.shadowRoot
-      ?.querySelector<HTMLButtonElement>('.cancel')
+      ?.querySelector<MuxUIButton>('.cancel')
       ?.focus({ preventScroll: true });
   }
 
@@ -207,7 +166,7 @@ export class CloseConfirmationModal extends LitElement {
   private _onKeyDown(e: KeyboardEvent): void {
     if (e.key !== 'Enter') return;
     const focused = this.shadowRoot?.activeElement;
-    if (!(focused instanceof HTMLButtonElement)) {
+    if (!(focused instanceof HTMLButtonElement) && !(focused instanceof MuxUIButton)) {
       e.preventDefault();
       e.stopPropagation();
     }
@@ -282,23 +241,21 @@ export class CloseConfirmationModal extends LitElement {
           : ''}
 
         <div class="actions">
-          <button
-            type="button"
+          <mux-ui-button
             class="cancel"
-            autofocus
             ?disabled="${this.confirming}"
             @click="${this._emitCancel}"
           >
             Cancel
-          </button>
-          <button
-            type="button"
+          </mux-ui-button>
+          <mux-ui-button
             class="destructive"
+            variant="danger"
             ?disabled="${this.confirming}"
             @click="${this._onConfirm}"
           >
             ${confirmLabel}
-          </button>
+          </mux-ui-button>
         </div>
       </dialog>
     `;

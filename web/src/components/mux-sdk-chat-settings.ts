@@ -30,6 +30,15 @@ export class MuxSDKChatSettings extends LitElement {
       if (!path.includes(picker)) picker.open = false;
     });
   };
+  private readonly closePickerOnEscape = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return;
+    const picker = event.currentTarget as HTMLDetailsElement;
+    if (!picker.open) return;
+    event.preventDefault();
+    event.stopPropagation();
+    picker.open = false;
+    picker.querySelector('summary')?.focus();
+  };
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener('pointerdown', this.closePickersOnOutsidePointer);
@@ -40,34 +49,36 @@ export class MuxSDKChatSettings extends LitElement {
   }
   static styles = css`
     ${subtleScrollbars}
-    :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:8px; font:12px/1.4 system-ui,sans-serif; }
+    :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:var(--ui-space-4); font:var(--ui-text-sm)/1.4 var(--ui-font-sans); }
     .picker { position:relative; min-width:0; }
     .model-picker { margin-left:auto; }
-    summary { display:flex; align-items:center; height:32px; max-width:min(290px,40vw); box-sizing:border-box; padding:0 10px; border:1px solid transparent; border-radius:10px; color:var(--chrome-text-bright,#d9def0); cursor:pointer; list-style:none; white-space:nowrap; }
+    summary { display:flex; align-items:center; min-height:var(--ui-control-md); max-width:min(290px,40vw); box-sizing:border-box; padding:0 var(--ui-space-5); border:1px solid transparent; border-radius:var(--ui-radius-lg); color:var(--ui-text); cursor:pointer; list-style:none; white-space:nowrap; }
     summary::-webkit-details-marker { display:none; }
-    summary:hover, summary:focus-visible, details[open] summary { background:var(--chrome-hover); border-color:var(--chrome-border,#41485f); outline:none; }
+    summary:hover, details[open] summary { background:var(--ui-surface-hover); border-color:var(--ui-border); }
+    summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
     .summary-text { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-    .panel { position:absolute; z-index:30; bottom:40px; width:min(350px,calc(100vw - 44px)); max-height:min(72vh,640px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px rgba(0,0,0,.45); }
+    .panel { position:absolute; z-index:30; bottom:calc(var(--ui-control-md) + var(--ui-space-2)); width:min(350px,calc(100vw - 44px)); max-height:min(72dvh,640px); overflow:auto; box-sizing:border-box; padding:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-overlay); }
     .permission-picker .panel { left:0; }
     .model-picker .panel { right:0; }
-    .heading { padding:9px 10px 5px; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
-    .divider { height:1px; margin:7px 5px; background:var(--chrome-border,#41485f); }
-    .choice { display:flex; align-items:center; gap:9px; width:100%; min-height:37px; border:0; border-radius:9px; padding:7px 10px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:inherit; text-align:left; cursor:pointer; }
-    .choice:hover:not(:disabled), .choice:focus-visible { background:var(--chrome-hover); outline:none; }
-    .choice.selected { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 15%,transparent); }
+    .heading { padding:9px 10px 5px; color:var(--ui-text-muted); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
+    .divider { height:1px; margin:7px 5px; background:var(--ui-border); }
+    .choice { display:flex; align-items:center; gap:var(--ui-space-4); width:100%; min-height:var(--ui-control-md); border:0; border-radius:var(--ui-radius-md); padding:var(--ui-space-3) var(--ui-space-5); background:transparent; color:var(--ui-text); font:inherit; text-align:left; cursor:pointer; }
+    .choice:hover:not(:disabled) { background:var(--ui-surface-hover); }
+    .choice:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
+    .choice.selected { background:color-mix(in srgb,var(--ui-accent) 15%,transparent); }
     .choice:disabled { opacity:.46; cursor:default; }
     .choice-main { display:grid; gap:2px; min-width:0; flex:1; }
     .choice-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .hint { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .check { color:var(--chrome-accent,#9bb8f7); font-weight:700; }
+    .hint { color:var(--ui-text-muted); font-size:11px; }
+    .check { color:var(--ui-accent); font-weight:700; }
     .group { margin:2px 4px 8px; }
     .model-list { max-height:190px; overflow-y:auto; }
     .slider { padding:4px 10px 13px; }
     .slider-header { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
-    input[type=range] { width:100%; margin:12px 0 4px; accent-color:var(--chrome-accent,#9bb8f7); cursor:pointer; }
-    .slider-ends { display:flex; justify-content:space-between; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; }
-    .notice { padding:9px 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .error { color:var(--chrome-danger); padding:7px 10px; overflow-wrap:anywhere; }
+    input[type=range] { width:100%; margin:12px 0 4px; accent-color:var(--ui-accent); cursor:pointer; }
+    .slider-ends { display:flex; justify-content:space-between; color:var(--ui-text-muted); font-size:10px; }
+    .notice { padding:9px 10px; color:var(--ui-text-muted); font-size:11px; }
+    .error { color:var(--ui-danger-text); padding:7px 10px; overflow-wrap:anywhere; }
     .busy { opacity:.55; }
     .operator-choice { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; border:0; border-radius:9px; padding:10px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:inherit; text-align:left; cursor:pointer; }
     .operator-choice:hover,.operator-choice:focus-visible { background:var(--chrome-hover); outline:none; }
@@ -89,7 +100,7 @@ export class MuxSDKChatSettings extends LitElement {
       if (!response.ok) throw new Error(await response.text());
       const settings = await response.json() as Settings;
       if (this.sessionId === sessionId && this.requestVersion === version) this.settings = settings;
-    } catch (error) { if (this.sessionId === sessionId && this.requestVersion === version) this.error = String(error); }
+    } catch (error) { if (this.sessionId === sessionId && this.requestVersion === version) this.error = error instanceof Error ? error.message : String(error); }
     finally { if (this.requestVersion === version) this.loading = false; }
   }
   private async select(change: Record<string, string>) {
@@ -100,7 +111,7 @@ export class MuxSDKChatSettings extends LitElement {
       if (!response.ok) throw new Error(await response.text());
       this.settings = await response.json() as Settings;
       this.dispatchEvent(new CustomEvent('settings-changed', { detail:this.settings, bubbles:true, composed:true }));
-    } catch (error) { this.error = String(error); }
+    } catch (error) { this.error = error instanceof Error ? error.message : String(error); }
     finally { this.loading = false; this.pending(false); }
   }
   private async toggleOperator() {
@@ -132,11 +143,11 @@ export class MuxSDKChatSettings extends LitElement {
       </div></details>`;
   }
   private choice(name: string, hint: string, selected: boolean, available: boolean, action: () => void) {
-    return html`<button class="choice ${selected ? 'selected' : ''}" ?disabled=${!available || this.loading || this.turnBusy} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span><span class="hint">${available ? hint : 'Unavailable for this harness'}</span></span>${selected ? html`<span class="check">✓</span>` : nothing}</button>`;
+    return html`<button class="choice ${selected ? 'selected' : ''}" aria-pressed=${selected} ?disabled=${!available || this.loading || this.turnBusy} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span><span class="hint">${available ? hint : 'Unavailable for this harness'}</span></span>${selected ? html`<span class="check" aria-hidden="true">✓</span>` : nothing}</button>`;
   }
   override render() {
     const s = this.settings;
-    if (!s) return html`<span class="notice ${this.error ? 'error' : ''}">${this.error || 'Loading controls…'}</span>`;
+    if (!s) return html`<span class="notice ${this.error ? 'error' : ''}" role=${this.error ? 'alert' : 'status'}>${this.error || 'Loading controls…'}</span>`;
     const model = s.models.find(item => item.id === s.model);
     const models = model ? s.models : s.model ? [{ id:s.model, label:s.model, efforts:[] }, ...s.models] : s.models;
     const efforts = model?.efforts || [];
@@ -154,7 +165,7 @@ export class MuxSDKChatSettings extends LitElement {
         ${this.operatorControl()}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></details>`}
-      <details class="picker model-picker" aria-label="Provider, model and thinking"><summary><span class="summary-text">${model?.label || s.model || this.harness}</span></summary><div class="panel">
+      <details class="picker model-picker" aria-label="Provider, model and thinking" @keydown=${this.closePickerOnEscape}><summary><span class="summary-text">${model?.label || s.model || this.harness}</span></summary><div class="panel">
         ${this.harness === 'amplifier' ? html`<div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${this.harness}</div>`}
         <div class="divider"></div><div class="heading">Model</div>
         <div class="model-list">${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}</div>

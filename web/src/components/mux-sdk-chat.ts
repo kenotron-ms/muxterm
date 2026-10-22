@@ -17,6 +17,8 @@ import { chatCommandSuggestions, parseChatCommand, type ChatCommandInvocation } 
 import { laneIcon } from '../lib/lane-icon.js';
 import './mux-sdk-utility.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
+import '../ui/button.js';
+import '../ui/feedback.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
 type LaneOrigin = { type: 'operator-lane' | 'chat-message' | 'external-tool'; chatId: string; targetChatId?: string; relation?: 'operator-to-lane' | 'lane-to-lane' | 'lane-to-operator' | 'chat-to-chat'; name: string; harness: string; status: string };
@@ -71,6 +73,7 @@ type Attachment = { localId: string; file: File; id?: string; kind?: string; pre
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
+  @property({ type: Boolean, reflect: true }) compact = false;
   @state() private chat?: SDKChat;
   @state() private goalDocument?: GoalDocument;
   @state() private goalEditor = false;
@@ -225,8 +228,8 @@ export class MuxSDKChat extends LitElement {
     .delegate-status-dot.failed { background:var(--chrome-danger); }
     .delegate-chevron { display:inline-flex; opacity:.75; }
     .agent-chat { max-width:760px; width:100%; align-self:center; }
-    .agent-chat .instruction { padding:13px 16px; border-radius:15px; background:color-mix(in srgb,var(--chrome-accent) 16%,var(--chrome-body)); margin:10px 0 24px auto; max-width:82%; white-space:pre-wrap; }
-    .agent-chat .reply { padding:13px 16px; border-radius:12px; background:var(--chrome-bar); white-space:pre-wrap; }
+    .agent-chat .instruction { padding:13px 16px; border-radius:15px; background:color-mix(in srgb,var(--ui-accent) 16%,var(--ui-surface-base)); margin:10px 0 24px auto; max-width:82%; white-space:pre-wrap; }
+    .agent-chat .reply { padding:13px 16px; border-radius:12px; background:var(--ui-surface-raised); white-space:pre-wrap; }
     .agent-chat .reply pre { white-space:pre-wrap; overflow-wrap:anywhere; }
     .agent-step { margin:12px 0; padding:10px 12px; border:1px solid var(--chrome-border); border-radius:9px; background:var(--chrome-bar); }
     .agent-step pre { margin:6px 0 0; max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:var(--mux-font-size,16px)/1.5 ui-monospace,monospace; }
@@ -256,7 +259,8 @@ export class MuxSDKChat extends LitElement {
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
     .body { flex:1; min-height:0; overflow:auto; padding:36px 24px 48px; display:flex; flex-direction:column; scrollbar-gutter:stable both-edges; overflow-anchor:none; }
     .scroll-bottom-row { position:relative; z-index:2; height:0; }
-    .scroll-bottom { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); border:1px solid var(--chrome-border,#41485f); border-radius:999px; padding:7px 13px; background:var(--chrome-bar,#202632); color:var(--chrome-text-bright,#d9def0); box-shadow:0 4px 16px #0006; white-space:nowrap; }
+    .scroll-bottom { position:absolute; left:50%; bottom:var(--ui-space-5); transform:translateX(-50%); }
+    .scroll-bottom::part(button) { border-radius:var(--ui-radius-pill); box-shadow:var(--ui-shadow-menu); }
     .virtual-spacer { width:1px; flex:none; pointer-events:none; }
     .block { max-width:760px; width:100%; align-self:center; margin-bottom:28px; box-sizing:border-box; }
     .block.work { margin-top:-12px; margin-bottom:20px; }
@@ -264,12 +268,14 @@ export class MuxSDKChat extends LitElement {
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; animation:thinking-pulse 1.6s ease-in-out infinite; }
     .work-disclosure > summary { display:flex; align-items:center; gap:7px; min-height:25px; padding:0 0 7px; border-bottom:1px solid color-mix(in srgb,var(--chrome-border,#41485f) 58%,transparent); color:var(--chrome-text-dim,#9aa3b8); font-size:14px; list-style:none; cursor:pointer; }
     .work-disclosure .activity-label { flex:none; }
-    .work-disclosure .pulse { width:7px; height:7px; flex:none; border-radius:50%; background:var(--chrome-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--chrome-accent) 14%,transparent); animation:activity-pulse 1.35s ease-in-out infinite; }
+    .work-disclosure .activity-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .work-disclosure > summary > svg { flex:none; }
+    .work-disclosure .pulse { width:7px; height:7px; flex:none; border-radius:50%; background:var(--ui-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 14%,transparent); animation:activity-pulse 1.35s ease-in-out infinite; }
     @keyframes activity-pulse { 50% { opacity:.35; transform:scale(.7); } }
     @keyframes thinking-pulse { 50% { opacity:.4; } }
     @media (prefers-reduced-motion:reduce) { .work-disclosure .pulse,.work-stream .activity-label { animation:none; } }
     .work-disclosure > summary::-webkit-details-marker { display:none; }
-    .work-disclosure > summary:focus-visible { outline:2px solid var(--chrome-accent,#9bb8f7); outline-offset:2px; border-radius:4px; }
+    .work-disclosure > summary:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; border-radius:4px; }
     .work-disclosure > summary svg { opacity:.7; transition:transform .15s ease; }
     .work-disclosure[open] > summary svg { transform:rotate(180deg); }
     .work-items { padding:12px 0 2px; }
@@ -366,7 +372,7 @@ export class MuxSDKChat extends LitElement {
     .text > :first-child { margin-top:0; }
     .text > :last-child { margin-bottom:0; }
     .text .md-p { margin:0 0 15px; }
-    .text .md-h { line-height:1.32; margin:25px 0 11px; font-weight:650; color:var(--chrome-text-bright,#d9def0); }
+    .text .md-h { line-height:1.32; margin:25px 0 11px; font-weight:650; color:var(--ui-text); }
     .text h1.md-h { font-size:1.45em; }
     .text h2.md-h { font-size:1.25em; }
     .text h3.md-h { font-size:1.12em; }
@@ -381,7 +387,7 @@ export class MuxSDKChat extends LitElement {
     .text .md-chat-link { display:inline-flex; align-items:baseline; gap:4px; max-width:100%; padding:1px 6px; border:1px solid color-mix(in srgb,var(--chrome-accent,#9bb8f7) 48%,transparent); border-radius:6px; background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 12%,transparent); font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
     .text .md-chat-link:hover { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 22%,transparent); text-decoration:underline; }
     .text .md-image-link { display:inline-block; max-width:100%; }
-    .text .md-img { display:block; max-width:100%; max-height:min(420px,55vh); width:auto; height:auto; object-fit:contain; border:1px solid var(--chrome-border,#41485f); border-radius:8px; }
+    .text .md-img { display:block; max-width:100%; max-height:min(420px,55vh); width:auto; height:auto; object-fit:contain; border:1px solid var(--ui-border); border-radius:8px; }
     .text .md-ul, .text .md-ol { margin:0 0 16px; padding-left:25px; }
     .text .md-li { margin:5px 0; }
     .text .md-li .md-p { margin:0; }
@@ -391,7 +397,7 @@ export class MuxSDKChat extends LitElement {
     .text .md-hr { margin:24px 0; border:0; border-top:1px solid var(--chrome-border,#41485f); }
     .text .md-tablewrap { max-width:100%; min-width:0; overflow-x:auto; margin:0 0 18px; }
     .text .md-table { border-collapse:collapse; min-width:max(100%, 40rem); }
-    .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--chrome-border,#41485f); text-align:left; vertical-align:top; overflow-wrap:break-word; word-break:normal; }
+    .text .md-th, .text .md-td { padding:8px 12px; border:1px solid var(--ui-border); text-align:left; vertical-align:top; overflow-wrap:break-word; word-break:normal; }
     .text .md-table .md-link, .text .md-table .md-code { overflow-wrap:break-word; }
     .text .md-th { background:var(--chrome-bar,#202632); }
     .work-assistant { margin:12px 0 18px; }
@@ -436,10 +442,10 @@ export class MuxSDKChat extends LitElement {
     .attach-button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
     .attach-button:hover, .attach-button:focus-visible { background:var(--chrome-bar,#202632); outline:none; }
     .file-input { display:none; }
-    .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed var(--chrome-accent); border-radius:16px; background:color-mix(in srgb,var(--chrome-body) 92%,transparent); color:var(--chrome-text-bright); font-size:22px; pointer-events:none; }
+    .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:16px; background:color-mix(in srgb,var(--ui-surface-base) 92%,transparent); color:var(--ui-text); font-size:22px; pointer-events:none; }
     /* The border extends 15px beyond each 760px transcript edge so typed text aligns with replies. */
-    .composer { box-sizing:border-box; max-width:790px; margin:auto; border:1px solid var(--chrome-border,#41485f); border-radius:18px; background:var(--chrome-bar,#202632); padding:13px 14px 9px; box-shadow:0 8px 28px rgba(0,0,0,.08); transition:border-color .15s,box-shadow .15s; }
-    .composer:focus-within { border-color:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 58%,var(--chrome-border,#41485f)); box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent,#9bb8f7) 14%,transparent); }
+    .composer { box-sizing:border-box; max-width:790px; margin:auto; border:1px solid var(--ui-border); border-radius:18px; background:var(--ui-surface-raised); padding:13px 14px 9px; box-shadow:0 8px 28px rgba(0,0,0,.08); transition:border-color .15s,box-shadow .15s; }
+    .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
     .composer-row { display:flex; }
     .goal-banner { display:flex; align-items:center; gap:8px; min-width:0; height:29px; margin-bottom:7px; border-bottom:1px solid var(--chrome-border,#41485f); padding-bottom:6px; font-size:12px; }
     .goal-condition { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:0; }
@@ -501,7 +507,7 @@ export class MuxSDKChat extends LitElement {
     .status { color:color-mix(in srgb,var(--mux-warn) 70%,var(--chrome-text-bright)); font-size:var(--mux-font-size,16px); }
     .drawer { position:relative; z-index:5; flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--mux-titlebar-height,44px)); margin-top:calc(-1 * var(--mux-titlebar-height,44px)); border-left:1px solid var(--chrome-border,#343a4c); background:var(--chrome-bar,#202632); animation:drawer-in .16s ease-out; }
     .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
-    .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--chrome-accent) 25%,transparent); outline:none; }
+    .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--ui-accent) 25%,transparent); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
     @media(max-width:700px) { .body { padding:24px 16px 32px; } .composer-wrap { padding:0 11px 12px; } .drawer { box-sizing:border-box; position:absolute; right:0; top:0; bottom:0; width:100%; height:100%; margin-top:0; box-shadow:-10px 0 30px #0008; } .drawer-resizer { display:none; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar,.topbar.with-utility { width:100%; padding-left:10px; padding-right:10px; gap:6px; } }
   `;
@@ -511,6 +517,7 @@ export class MuxSDKChat extends LitElement {
     window.addEventListener('focus', this.resumeConnection);
     window.addEventListener('online', this.onOnline);
     window.addEventListener('pageshow', this.resumeConnection);
+    window.addEventListener('resize', this.onWindowResize);
     window.addEventListener('keydown', this.stopVoiceOnEscape);
     window.addEventListener('dragover', this.preventFileNavigation);
     window.addEventListener('drop', this.preventFileNavigation);
@@ -540,6 +547,7 @@ export class MuxSDKChat extends LitElement {
     window.removeEventListener('focus', this.resumeConnection);
     window.removeEventListener('online', this.onOnline);
     window.removeEventListener('pageshow', this.resumeConnection);
+    window.removeEventListener('resize', this.onWindowResize);
     window.removeEventListener('keydown', this.stopVoiceOnEscape);
     this.persistTranscriptCache();
     window.removeEventListener('pagehide', this.onPageHide);
@@ -638,12 +646,17 @@ export class MuxSDKChat extends LitElement {
     const available = this.shadowRoot?.querySelector<HTMLElement>('.layout')?.clientWidth || this.clientWidth || window.innerWidth;
     return { min: Math.min(280, available * .6), max: available <= 700 ? available * .9 : Math.max(280, available - 480), available };
   }
+  private readonly onWindowResize = () => {
+    if (!this.drawerOpen) return;
+    const { min, max } = this.widthLimits();
+    this.drawerWidth = Math.round(Math.max(min, Math.min(max, this.drawerWidth)));
+  };
   private openDrawer() {
     if (this.drawerOpen) { this.drawerOpen = false; this.previewFocused = false; return; }
     const { min, max, available } = this.widthLimits();
     let stored = 0;
     try { stored = Number(localStorage.getItem(this.drawerKey())) || 0; } catch { /* private browsing */ }
-    this.drawerWidth = Math.round(Math.max(min, Math.min(max, stored || available / 2)));
+    this.drawerWidth = Math.round(Math.max(min, Math.min(max, stored || (available <= 700 ? available * .9 : available / 2))));
     this.drawerOpen = true;
   }
   private setPaneMode(mode: 'chat' | 'split' | 'preview') {
@@ -2366,8 +2379,8 @@ export class MuxSDKChat extends LitElement {
       <button class="goal-icon" aria-label="Open goal ledger" title="Open goal ledger" aria-expanded=${this.goalLedgerOpen} @click=${() => { this.goalLedgerOpen = !this.goalLedgerOpen; void this.refreshGoal(); }}>${icon(NotebookTabs,{size:16})}</button>
       <div class="pane-controls"><button class=${this.drawerOpen ? 'active' : ''} aria-label=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} title=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} aria-pressed=${this.drawerOpen} @click=${() => this.setPaneMode(this.drawerOpen ? 'chat' : 'split')}>${icon(PanelRight,{size:17})}</button></div></div>
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
-      ${this.agentHistoryError ? html`<div class="agent-history-error" role="alert">Saved agent work could not be loaded. <button @click=${this.retryAgentHistory}>Retry</button></div>` : nothing}
-      ${this.recoveryRequired ? html`<div class="recovery" role="alert"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><button @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</button></div>` : nothing}
+      ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
+      ${this.recoveryRequired ? html`<mux-ui-feedback class="recovery" kind="warning" appearance="panel"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><mux-ui-button slot="action" variant="secondary" size="small" @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</mux-ui-button></mux-ui-feedback>` : nothing}
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
@@ -2381,7 +2394,7 @@ export class MuxSDKChat extends LitElement {
         ${a.preview ? html`<img src=${a.preview} alt=${a.file.name}>` : nothing}
         <span class="filename" title=${a.file.name}>${a.file.name}</span>
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
-        <button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button>
+        <mux-ui-button class="attachment-remove" icon-only size="small" variant="quiet" accessible-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>${icon(X,{size:14})}</mux-ui-button>
       </div>`)}</div>` : nothing}
       <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}

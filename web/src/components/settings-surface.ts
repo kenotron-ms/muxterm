@@ -2,6 +2,9 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
+import '../ui/button.js';
+import '../ui/nav-item.js';
+import '../ui/text-field.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
 import {
@@ -36,6 +39,17 @@ import {
 } from '../lib/voice-settings.js';
 
 export type SettingsSection = 'appearance' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
+
+const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> = [
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'notifications', label: 'Notifications' },
+  { id: 'workspaces', label: 'Workspaces' },
+  { id: 'ai', label: 'AI' },
+  { id: 'voice', label: 'Voice' },
+  { id: 'remotes', label: 'Remotes' },
+  { id: 'shortcuts', label: 'Keyboard Shortcuts' },
+  { id: 'about', label: 'About' },
+];
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -214,10 +228,10 @@ export class MuxSettingsSurface extends LitElement {
       flex-direction: column;
       width: 100%;
       height: 100%;
-      background: var(--chrome-body);
-      color: var(--chrome-text-bright);
+      background: var(--ui-surface-base);
+      color: var(--ui-text);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 13px;
+      font-size: var(--ui-text-md);
       box-sizing: border-box;
       overflow: hidden;
     }
@@ -227,54 +241,24 @@ export class MuxSettingsSurface extends LitElement {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 16px 20px 14px;
-      border-bottom: 1px solid var(--chrome-border);
+      padding: var(--ui-space-6) var(--ui-space-7) var(--ui-space-6);
+      border-bottom: 1px solid var(--ui-border);
       flex-shrink: 0;
     }
 
     .header h2 {
       margin: 0;
-      font-size: 15px;
+      font-size: var(--ui-text-xl);
       font-weight: 600;
-      color: var(--chrome-text-bright);
-    }
-
-    .close-btn {
-      background: transparent;
-      border: none;
-      color: var(--chrome-text-dim);
-      cursor: pointer;
-      font-size: 18px;
-      line-height: 1;
-      padding: 3px 7px;
-      border-radius: 4px;
-      transition: color 0.1s, background 0.1s;
-    }
-    .close-btn:hover {
-      color: var(--chrome-text-bright);
-      background: var(--chrome-hover);
+      color: var(--ui-text);
     }
 
     :host([page-mode]) .header {
       justify-content: flex-start;
-      gap: 8px;
-      padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px;
+      gap: var(--ui-space-4);
+      padding: calc(var(--ui-space-4) + env(safe-area-inset-top, 0)) var(--ui-space-6) var(--ui-space-4);
     }
-    .back-btn {
-      display: grid;
-      place-items: center;
-      width: 44px;
-      height: 44px;
-      padding: 0;
-      border: 0;
-      border-radius: 6px;
-      background: transparent;
-      color: inherit;
-      cursor: pointer;
-    }
-    .back-btn:hover { background: var(--chrome-hover); }
-    .back-btn:focus-visible { outline: 2px solid var(--chrome-accent); }
-    :host([page-mode]) .content { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
+    :host([page-mode]) .content { padding-bottom: calc(var(--ui-space-10) + env(safe-area-inset-bottom, 0)); }
 
     /* ── Body: sidebar + content ── */
     .body {
@@ -287,33 +271,9 @@ export class MuxSettingsSurface extends LitElement {
     .sidebar {
       width: 156px;
       flex-shrink: 0;
-      border-right: 1px solid var(--chrome-border);
-      padding: 12px 0;
+      border-right: 1px solid var(--ui-border);
+      padding: var(--ui-space-5) 0;
       overflow-y: auto;
-    }
-
-    .sidebar-item {
-      display: block;
-      width: 100%;
-      padding: 9px 18px;
-      background: transparent;
-      border: none;
-      cursor: pointer;
-      font-size: 13px;
-      font-family: inherit;
-      color: var(--chrome-text-dim);
-      text-align: left;
-      border-radius: 0;
-      transition: color 0.1s, background 0.1s;
-    }
-    .sidebar-item:hover {
-      color: var(--chrome-text-bright);
-      background: var(--chrome-hover);
-    }
-    .sidebar-item.active {
-      color: var(--chrome-text-bright);
-      background: var(--chrome-hover);
-      font-weight: 500;
     }
 
     /* ── Content area ── */
@@ -322,36 +282,35 @@ export class MuxSettingsSurface extends LitElement {
       min-width: 0;
       overflow-y: auto;
       overflow-wrap: anywhere;
-      padding: 24px 28px 40px;
+      padding: var(--ui-space-8) var(--ui-space-9) var(--ui-space-10);
     }
 
     @media (max-width: 600px) {
       .body { flex-direction: column; }
-      .sidebar { display:flex; width:auto; padding:8px; border-right:0; border-bottom:1px solid var(--chrome-border); overflow-x:auto; }
-      .sidebar-item { width:auto; padding:8px 10px; white-space:nowrap; }
-      .content { padding:20px; }
+      .sidebar { display:flex; width:auto; padding:var(--ui-space-4); border-right:0; border-bottom:1px solid var(--ui-border); overflow-x:auto; }
+      .content { padding:var(--ui-space-7); }
     }
 
     /* ── Section headings ── */
     .section-title {
-      margin: 0 0 16px 0;
-      font-size: 11px;
+      margin: 0 0 var(--ui-space-6) 0;
+      font-size: var(--ui-text-xs);
       font-weight: 600;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     .section-gap {
-      margin-top: 32px;
+      margin-top: var(--ui-space-9);
     }
 
     /* ── Theme card grid ── */
     .theme-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-      margin-bottom: 4px;
+      gap: var(--ui-space-5);
+      margin-bottom: var(--ui-space-2);
     }
 
     .theme-card {
@@ -364,7 +323,13 @@ export class MuxSettingsSurface extends LitElement {
       text-align: left;
       font: inherit;
       cursor: pointer;
-      border-radius: 8px;
+      display: block;
+      width: 100%;
+      padding: 0;
+      background: transparent;
+      font: inherit;
+      text-align: left;
+      border-radius: var(--ui-radius-md);
       border: 2px solid transparent;
       overflow: hidden;
       transition: border-color 0.15s, transform 0.1s;
@@ -373,63 +338,67 @@ export class MuxSettingsSurface extends LitElement {
     .theme-card:hover {
       transform: translateY(-1px);
     }
+    .theme-card:focus-visible {
+      outline: 2px solid var(--ui-focus);
+      outline-offset: 2px;
+    }
     .theme-card.active {
-      border-color: var(--chrome-accent);
+      border-color: var(--ui-accent);
     }
     .theme-card:focus-visible {
-      outline: 2px solid var(--chrome-accent);
+      outline: 2px solid var(--ui-accent);
       outline-offset: 2px;
     }
 
     .card-inner {
-      padding: 8px 9px 6px;
-      font-size: 9px;
+      padding: var(--ui-space-4) var(--ui-space-4) var(--ui-space-3);
+      font-size: var(--ui-text-xs);
       font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
       line-height: 1.6;
     }
 
     .card-topbar {
       display: flex;
-      gap: 4px;
-      margin-bottom: 6px;
+      gap: var(--ui-space-2);
+      margin-bottom: var(--ui-space-3);
     }
     .card-dot {
       width: 7px;
       height: 7px;
       border-radius: 50%;
     }
-    .dot-r { background: #ff5f57; }
-    .dot-y { background: #febc2e; }
-    .dot-g { background: #28c840; }
+    .dot-r { background: var(--ui-danger); }
+    .dot-y { background: var(--ui-warning); }
+    .dot-g { background: var(--ui-success); }
 
-    .card-prompt { margin-bottom: 1px; }
-    .card-files  { margin-top: 1px; }
+    .card-prompt { margin-bottom: var(--ui-space-1); }
+    .card-files  { margin-top: var(--ui-space-1); }
 
     .card-cursor {
       display: inline-block;
       width: 6px;
       height: 10px;
       vertical-align: text-bottom;
-      margin-top: 1px;
+      margin-top: var(--ui-space-1);
     }
 
     .card-label {
-      font-size: 10px;
+      font-size: var(--ui-text-xs);
       text-align: center;
-      padding: 5px 6px 6px;
-      color: var(--chrome-text-dim);
-      background: var(--chrome-bar);
+      padding: var(--ui-space-3) var(--ui-space-3) var(--ui-space-3);
+      color: var(--ui-text-muted);
+      background: var(--ui-surface-raised);
     }
     .theme-card.active .card-label {
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
     }
 
     .card-check {
       position: absolute;
       top: 5px;
       right: 7px;
-      font-size: 10px;
-      color: var(--chrome-accent);
+      font-size: var(--ui-text-xs);
+      color: var(--ui-accent);
       font-weight: 700;
     }
 
@@ -437,24 +406,24 @@ export class MuxSettingsSurface extends LitElement {
     .font-radios {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: var(--ui-space-2);
     }
 
     .font-radio-label {
       display: flex;
       align-items: center;
-      gap: 9px;
-      padding: 6px 10px;
-      border-radius: 6px;
+      gap: var(--ui-space-4);
+      padding: var(--ui-space-3) var(--ui-space-5);
+      border-radius: var(--ui-radius-md);
       cursor: pointer;
       transition: background 0.1s;
     }
     .font-radio-label:hover {
-      background: var(--chrome-hover);
+      background: var(--ui-surface-hover);
     }
 
     .font-radio-label input[type="radio"] {
-      accent-color: var(--chrome-accent);
+      accent-color: var(--ui-accent);
       width: 14px;
       height: 14px;
       cursor: pointer;
@@ -463,27 +432,27 @@ export class MuxSettingsSurface extends LitElement {
 
     .font-radio-name {
       flex: 1;
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
     }
 
     /* ── Font size slider ── */
     .size-row {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 6px 10px;
-      margin-top: 4px;
+      gap: var(--ui-space-5);
+      padding: var(--ui-space-3) var(--ui-space-5);
+      margin-top: var(--ui-space-2);
     }
 
     .size-label {
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
       width: 64px;
       flex-shrink: 0;
     }
 
     input[type="range"] {
       flex: 1;
-      accent-color: var(--chrome-accent);
+      accent-color: var(--ui-accent);
       height: 4px;
       cursor: pointer;
     }
@@ -491,19 +460,19 @@ export class MuxSettingsSurface extends LitElement {
     .size-value {
       width: 28px;
       text-align: right;
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
       font-feature-settings: 'tnum';
     }
 
     /* ── Font preview line ── */
     .font-preview {
-      margin: 10px 0 0 10px;
-      padding: 8px 12px;
-      background: var(--chrome-bar);
-      border: 1px solid var(--chrome-border);
-      border-radius: 6px;
-      font-size: 12px;
-      color: var(--chrome-text-bright);
+      margin: var(--ui-space-5) 0 0 var(--ui-space-5);
+      padding: var(--ui-space-4) var(--ui-space-5);
+      background: var(--ui-surface-raised);
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-md);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-text);
       overflow: hidden;
       white-space: nowrap;
     }
@@ -514,49 +483,30 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .notif-description {
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
       line-height: 1.55;
-      margin: 0 0 14px 0;
-    }
-
-    .notif-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      padding: 7px 14px;
-      border-radius: 6px;
-      border: 1px solid var(--chrome-accent);
-      background: transparent;
-      color: var(--chrome-accent);
-      font: inherit;
-      font-size: 13px;
-      cursor: pointer;
-      transition: background 0.12s, color 0.12s;
-    }
-    .notif-btn:hover {
-      background: var(--chrome-accent);
-      color: var(--chrome-body);
+      margin: 0 0 var(--ui-space-6) 0;
     }
 
     .notif-status {
       display: inline-flex;
       align-items: center;
-      gap: 7px;
-      color: var(--chrome-text-dim);
-      font-size: 13px;
+      gap: var(--ui-space-3);
+      color: var(--ui-text-muted);
+      font-size: var(--ui-text-md);
     }
     .notif-status.granted {
-      color: #9ece6a; /* tokyo-night green */
+      color: var(--ui-text);
     }
     .notif-status.denied {
-      color: var(--chrome-danger);
+      color: var(--ui-danger-text);
     }
 
     .notif-help-link {
       display: inline-block;
-      margin-top: 6px;
-      font-size: 11px;
-      color: var(--chrome-accent);
+      margin-top: var(--ui-space-3);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-accent);
       text-decoration: none;
     }
     .notif-help-link:hover {
@@ -564,46 +514,27 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .notif-hint {
-      margin-top: 8px;
-      font-size: 11px;
-      color: var(--chrome-text-dim);
+      margin-top: var(--ui-space-4);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-text-muted);
       line-height: 1.5;
-    }
-
-    .notif-test-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 11px;
-      border-radius: 6px;
-      border: 1px solid var(--chrome-border);
-      background: transparent;
-      color: var(--chrome-text-dim);
-      font: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      transition: border-color 0.12s, color 0.12s;
-    }
-    .notif-test-btn:hover {
-      border-color: var(--chrome-accent);
-      color: var(--chrome-text-bright);
     }
 
     /* ── Theme section label ── */
     .theme-section-label {
       grid-column: 1 / -1;
-      font-size: 10px;
+      font-size: var(--ui-text-xs);
       font-weight: 600;
       letter-spacing: 0.07em;
       text-transform: uppercase;
-      color: var(--chrome-text-dim);
-      padding-top: 8px;
+      color: var(--ui-text-muted);
+      padding-top: var(--ui-space-4);
     }
 
     .divider {
       height: 1px;
-      background: var(--chrome-border);
-      margin: 22px 0;
+      background: var(--ui-border);
+      margin: var(--ui-space-8) 0;
     }
 
     /* ── Title bar color picker ── */
@@ -613,8 +544,8 @@ export class MuxSettingsSurface extends LitElement {
     .crayon-grid {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
-      margin-bottom: 12px;
+      gap: var(--ui-space-5);
+      margin-bottom: var(--ui-space-5);
     }
 
     .crayon {
@@ -632,7 +563,7 @@ export class MuxSettingsSurface extends LitElement {
       transform: scale(1.12);
     }
     .crayon.active {
-      box-shadow: 0 0 0 2px var(--chrome-body), 0 0 0 4px var(--chrome-accent);
+      box-shadow: 0 0 0 2px var(--ui-surface-base), 0 0 0 4px var(--ui-accent);
     }
     .crayon-check {
       position: absolute;
@@ -640,21 +571,21 @@ export class MuxSettingsSurface extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 13px;
+      font-size: var(--ui-text-md);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
     }
 
     .titlebar-row {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: var(--ui-space-5);
     }
 
     .titlebar-swatch {
       width: 30px;
       height: 30px;
       border-radius: 50%;
-      border: 1px solid var(--chrome-border);
+      border: 1px solid var(--ui-border);
       padding: 0;
       cursor: pointer;
       flex-shrink: 0;
@@ -673,29 +604,15 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .titlebar-custom-label {
-      font-size: 12px;
-      color: var(--chrome-text-dim);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-text-muted);
     }
 
-    .titlebar-reset-btn {
-      background: transparent;
-      border: 1px solid var(--chrome-border);
-      color: var(--chrome-text-dim);
-      border-radius: 6px;
-      padding: 7px 12px;
-      font-size: 12px;
-      cursor: pointer;
-      transition: border-color 0.1s, color 0.1s;
-      margin-left: auto;
-    }
-    .titlebar-reset-btn:hover {
-      border-color: var(--chrome-accent);
-      color: var(--chrome-text-bright);
-    }
+    .titlebar-row mux-ui-button { margin-left: auto; }
 
     .titlebar-hint {
-      font-size: 12px;
-      color: var(--chrome-text-dim);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-text-muted);
       margin: 0;
     }
 
@@ -703,27 +620,27 @@ export class MuxSettingsSurface extends LitElement {
     .bell-radios {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: var(--ui-space-1);
     }
 
     .bell-radio-label {
       display: flex;
       align-items: flex-start;
-      gap: 9px;
-      padding: 7px 10px;
-      border-radius: 6px;
+      gap: var(--ui-space-4);
+      padding: var(--ui-space-3) var(--ui-space-5);
+      border-radius: var(--ui-radius-md);
       cursor: pointer;
       transition: background 0.1s;
     }
     .bell-radio-label:hover {
-      background: var(--chrome-hover);
+      background: var(--ui-surface-hover);
     }
 
     .bell-radio-label input[type="radio"] {
-      accent-color: var(--chrome-accent);
+      accent-color: var(--ui-accent);
       width: 14px;
       height: 14px;
-      margin-top: 1px;
+      margin-top: var(--ui-space-1);
       cursor: pointer;
       flex-shrink: 0;
     }
@@ -731,69 +648,56 @@ export class MuxSettingsSurface extends LitElement {
     .bell-radio-text {
       display: flex;
       flex-direction: column;
-      gap: 1px;
+      gap: var(--ui-space-1);
     }
 
     .bell-radio-name {
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
     }
 
     .bell-radio-desc {
-      font-size: 11px;
-      color: var(--chrome-text-dim);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-text-muted);
     }
 
     /* ── AI section ── */
     .ai-status {
-      margin: 0 0 12px;
-      color: var(--chrome-text-bright);
+      margin: 0 0 var(--ui-space-5);
+      color: var(--ui-text);
     }
 
     .ai-input {
       width: 100%;
       box-sizing: border-box;
-      padding: 6px 8px;
+      min-height: var(--ui-control-md);
+      padding: 0 var(--ui-space-5);
       font-family: inherit;
-      font-size: 13px;
-      color: var(--chrome-text-bright);
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border, #444);
-      border-radius: 4px;
+      font-size: var(--ui-text-md);
+      color: var(--ui-text);
+      background: var(--ui-surface-raised);
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-md);
     }
+    .ai-input:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
 
     .ai-actions {
       display: flex;
-      gap: 8px;
-      margin-top: 10px;
-    }
-
-    .ai-actions button {
-      padding: 5px 12px;
-      font-family: inherit;
-      font-size: 12px;
-      color: var(--chrome-text-bright);
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border, #444);
-      border-radius: 4px;
-      cursor: pointer;
-    }
-
-    .ai-actions button[disabled] {
-      opacity: 0.5;
-      cursor: default;
+      flex-wrap: wrap;
+      gap: var(--ui-space-4);
+      margin-top: var(--ui-space-5);
     }
 
     .ai-message {
-      margin-top: 10px;
-      font-size: 12px;
-      color: var(--chrome-text-dim);
+      margin-top: var(--ui-space-5);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-text-muted);
     }
 
     .ai-note {
-      margin-top: 16px;
-      font-size: 11px;
+      margin-top: var(--ui-space-6);
+      font-size: var(--ui-text-sm);
       line-height: 1.5;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     /* ── Voice section ──────────────────────────────────────────────────
@@ -810,11 +714,11 @@ export class MuxSettingsSurface extends LitElement {
     .v-line {
       display: flex;
       align-items: baseline;
-      gap: 8px;
-      margin: 0 0 10px;
-      font-size: 12px;
+      gap: var(--ui-space-4);
+      margin: 0 0 var(--ui-space-5);
+      font-size: var(--ui-text-sm);
       line-height: 1.5;
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
     }
 
     /* The fixed gutter. Fixed width so every marker aligns down the column
@@ -828,45 +732,45 @@ export class MuxSettingsSurface extends LitElement {
       font-variant-numeric: tabular-nums;
     }
 
-    .v-mark.ok   { color: var(--mux-success, #3d9970); }
-    .v-mark.bad  { color: var(--mux-error); }
-    .v-mark.none { color: var(--chrome-text-dim); }
+    .v-mark.ok   { color: var(--ui-success); }
+    .v-mark.bad  { color: var(--ui-danger-text); }
+    .v-mark.none { color: var(--ui-text-muted); }
 
     .v-field {
-      margin-top: 14px;
+      margin-top: var(--ui-space-6);
     }
 
     .v-label {
       display: block;
-      margin-bottom: 4px;
-      font-size: 11px;
+      margin-bottom: var(--ui-space-2);
+      font-size: var(--ui-text-xs);
       font-weight: 600;
       letter-spacing: 0.04em;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     .v-hint {
-      margin: 4px 0 0;
-      font-size: 11px;
+      margin: var(--ui-space-2) 0 0;
+      font-size: var(--ui-text-sm);
       line-height: 1.5;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     /* Mode chooser: stacked rows, each a whole tap target. No cards. */
     .v-modes {
       display: flex;
       flex-direction: column;
-      gap: 2px;
-      margin-bottom: 4px;
+      gap: var(--ui-space-1);
+      margin-bottom: var(--ui-space-2);
     }
 
     .v-mode {
       display: flex;
       align-items: baseline;
-      gap: 8px;
-      padding: 7px 4px;
-      font-size: 13px;
-      color: var(--chrome-text-bright);
+      gap: var(--ui-space-4);
+      padding: var(--ui-space-3) var(--ui-space-2);
+      font-size: var(--ui-text-md);
+      color: var(--ui-text);
       background: none;
       border: none;
       border-radius: 0;
@@ -881,49 +785,33 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .v-mode:focus-visible {
-      outline: 2px solid var(--chrome-text-bright);
+      outline: 2px solid var(--ui-text);
       outline-offset: -2px;
     }
 
     .v-mode-sub {
       display: block;
-      margin-top: 2px;
-      font-size: 11px;
+      margin-top: var(--ui-space-1);
+      font-size: var(--ui-text-sm);
       font-weight: 400;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     .v-actions {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 16px;
-    }
-
-    .v-actions button {
-      padding: 6px 12px;
-      font-family: inherit;
-      font-size: 12px;
-      color: var(--chrome-text-bright);
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border, #444);
-      border-radius: 4px;
-      cursor: pointer;
-    }
-
-    .v-actions button[disabled] {
-      opacity: 0.5;
-      cursor: default;
+      gap: var(--ui-space-4);
+      margin-top: var(--ui-space-6);
     }
 
     /* The enable toggle reads as a sentence, not a switch in a box. */
     .v-toggle {
       display: flex;
       align-items: baseline;
-      gap: 8px;
-      margin: 0 0 18px;
-      font-size: 13px;
-      color: var(--chrome-text-bright);
+      gap: var(--ui-space-4);
+      margin: 0 0 var(--ui-space-7);
+      font-size: var(--ui-text-md);
+      color: var(--ui-text);
       cursor: pointer;
     }
 
@@ -933,14 +821,14 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .v-note {
-      margin-top: 18px;
-      font-size: 11px;
+      margin-top: var(--ui-space-7);
+      font-size: var(--ui-text-sm);
       line-height: 1.55;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     .v-note code {
-      font-size: 10.5px;
+      font-size: var(--ui-text-xs);
       word-break: break-all;
     }
 
@@ -949,35 +837,35 @@ export class MuxSettingsSurface extends LitElement {
     .v-message {
       display: flex;
       align-items: baseline;
-      gap: 8px;
-      margin-top: 14px;
-      font-size: 12px;
+      gap: var(--ui-space-4);
+      margin-top: var(--ui-space-6);
+      font-size: var(--ui-text-sm);
       line-height: 1.5;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
     }
 
     /* ── Remotes ── */
     .r-row {
       display: flex;
       align-items: center;
-      gap: 11px;
-      padding: 10px 12px;
-      border: 1px solid var(--chrome-border);
-      border-radius: 6px;
-      margin-bottom: 8px;
-      background: var(--chrome-bar);
+      gap: var(--ui-space-5);
+      padding: var(--ui-space-5) var(--ui-space-5);
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-md);
+      margin-bottom: var(--ui-space-4);
+      background: var(--ui-surface-raised);
     }
     .r-row.connected {
-      border-color: color-mix(in srgb, var(--mux-ok) 35%, var(--chrome-border));
+      border-color: color-mix(in srgb, var(--ui-success) 35%, var(--ui-border));
     }
     .r-row.degraded {
-      border-color: color-mix(in srgb, var(--mux-warn) 45%, var(--chrome-border));
-      background: color-mix(in srgb, var(--mux-warn) 6%, var(--chrome-bar));
+      border-color: color-mix(in srgb, var(--ui-warning) 45%, var(--ui-border));
+      background: color-mix(in srgb, var(--ui-warning) 6%, var(--ui-surface-raised));
     }
     .r-row.err {
-      border-color: color-mix(in srgb, var(--mux-error) 40%, var(--chrome-border));
+      border-color: color-mix(in srgb, var(--ui-danger-text) 40%, var(--ui-border));
     }
 
     .r-dot {
@@ -986,12 +874,12 @@ export class MuxSettingsSurface extends LitElement {
       border-radius: 50%;
       flex-shrink: 0;
     }
-    .r-dot.ok { background: var(--mux-ok); }
-    .r-dot.warn { background: var(--mux-warn); }
-    .r-dot.err { background: var(--mux-error); }
+    .r-dot.ok { background: var(--ui-success); }
+    .r-dot.warn { background: var(--ui-warning); }
+    .r-dot.err { background: var(--ui-danger-text); }
     .r-dot.off {
       background: transparent;
-      border: 1px solid var(--chrome-text-dim);
+      border: 1px solid var(--ui-text-muted);
     }
 
     .r-main {
@@ -1000,86 +888,51 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .r-name {
-      font-size: 13px;
+      font-size: var(--ui-text-md);
       font-weight: 500;
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
     }
 
     .r-sub {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 10.5px;
-      color: var(--chrome-text-dim);
-      margin-top: 2px;
+      font-size: var(--ui-text-xs);
+      color: var(--ui-text-muted);
+      margin-top: var(--ui-space-1);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .r-sub.err {
-      color: var(--mux-error);
+      color: var(--ui-danger-text);
     }
 
     .r-state {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 10px;
+      font-size: var(--ui-text-xs);
       flex-shrink: 0;
-      color: var(--mux-warn);
+      color: var(--ui-warning);
     }
 
-    .application-version { margin:20px 0 14px; font-size:24px; font-weight:600; color:var(--chrome-text-bright); }
-    .application-actions { display:flex; flex-wrap:wrap; gap:10px; margin:14px 0; }
-    .application-shortcuts { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; }
+    .application-version { margin:var(--ui-space-7) 0 var(--ui-space-6); font-size:var(--ui-text-3xl); font-weight:600; color:var(--ui-text); }
+    .application-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-5); margin:var(--ui-space-6) 0; }
+    .application-shortcuts { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--ui-space-6); align-items:baseline; }
     .application-shortcuts dd { margin:0; text-align:right; }
-    .application-shortcuts kbd { font:inherit; color:var(--chrome-text-bright); }
-    .application-button { padding:8px 14px; border:1px solid var(--chrome-border); border-radius:6px; background:transparent; color:var(--chrome-text-bright); font:inherit; cursor:pointer; }
-    .application-button:hover:enabled { background:var(--chrome-hover); }
-    .application-button.primary { border-color:var(--chrome-accent); background:var(--chrome-accent); color:var(--chrome-body); }
-    .application-button:disabled { opacity:.45; cursor:default; }
-    .application-button:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:3px; }
-    .r-btn {
-      padding: 5px 11px;
-      border: 1px solid var(--chrome-border);
-      border-radius: 6px;
-      background: transparent;
-      color: var(--chrome-text-dim);
-      font: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-    .r-btn:hover {
-      border-color: var(--chrome-accent);
-      color: var(--chrome-text-bright);
-    }
-    .r-btn.pri {
-      border-color: var(--chrome-accent);
-      color: var(--chrome-accent);
-    }
-    .r-btn.pri:hover {
-      background: var(--chrome-accent);
-      color: var(--chrome-body);
-    }
-    .r-btn.danger:hover {
-      border-color: var(--chrome-danger);
-      color: var(--chrome-danger);
-    }
-    .r-btn[disabled] {
-      opacity: 0.5;
-      cursor: default;
-    }
+    .application-shortcuts kbd { font:inherit; color:var(--ui-text); }
+    .r-row mux-ui-button { flex-shrink: 0; }
+    .r-actions { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: var(--ui-space-4); }
 
     /* The server's verbatim message for a request that failed outside a row:
        a list that could not be read, or an address it refused to add. */
     .r-error {
-      margin-top: 10px;
-      font-size: 12px;
+      margin-top: var(--ui-space-5);
+      font-size: var(--ui-text-sm);
       line-height: 1.5;
       white-space: pre-wrap;
-      color: var(--mux-error);
+      color: var(--ui-danger-text);
     }
 
     @media (max-width: 767.98px) {
-      .header { min-height: 56px; box-sizing: border-box; padding: 10px 16px; }
-      .close-btn { min-width: 44px; min-height: 44px; }
+      .header { min-height: 56px; box-sizing: border-box; padding: var(--ui-space-5) var(--ui-space-6); }
       .body { min-height: 0; flex-direction: column; }
       .sidebar {
         box-sizing: border-box;
@@ -1087,18 +940,19 @@ export class MuxSettingsSurface extends LitElement {
         flex: none;
         width: 100%;
         min-height: 48px;
-        padding: 0 8px;
+        padding: 0 var(--ui-space-4);
         overflow-x: auto;
         overflow-y: hidden;
         border-right: 0;
-        border-bottom: 1px solid var(--chrome-border);
+        border-bottom: 1px solid var(--ui-border);
         -webkit-overflow-scrolling: touch;
       }
-      .sidebar-item { flex: none; width: auto; min-height: 48px; padding: 0 12px; white-space: nowrap; border-bottom: 2px solid transparent; }
-      .sidebar-item.active { background: transparent; border-bottom-color: var(--chrome-accent); }
-      .content { min-width: 0; padding: 20px 16px 32px; }
+      .content { min-width: 0; padding: var(--ui-space-7) var(--ui-space-6) var(--ui-space-9); }
       .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 520px; }
-      .card-label { font-size: 12px; }
+      .card-label { font-size: var(--ui-text-sm); }
+      .r-row { flex-wrap: wrap; }
+      .r-main { flex: 1 1 calc(100% - var(--ui-space-7)); }
+      .r-actions { flex: 1 1 100%; justify-content: flex-end; }
     }
 
   `;
@@ -1110,6 +964,7 @@ export class MuxSettingsSurface extends LitElement {
   @property({ type: Boolean, attribute: 'page-mode', reflect: true }) pageMode = false;
 
   @state() private _section: SettingsSection = 'appearance';
+  private _lastScrolledSection: SettingsSection | null = null;
   @state() private _updateStatus: UpdateStatus | null = null;
   @state() private _checkingVersion = false;
   @state() private _installingUpdate = false;
@@ -1184,7 +1039,28 @@ export class MuxSettingsSurface extends LitElement {
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
     if (changed.has('openSection') && this.openSection !== null) {
-      this._setSection(this.openSection);
+      const changedSection = this._setSection(this.openSection);
+      if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
+      if (changedSection && this.openSection === 'voice') void this._loadVoice();
+    }
+  }
+
+  protected override updated(changed: PropertyValues<this>): void {
+    super.updated(changed);
+    if (this._lastScrolledSection === this._section) return;
+    void this._scrollActiveSection();
+  }
+
+  private async _scrollActiveSection(): Promise<void> {
+    const nav = this.renderRoot.querySelector<HTMLElement>('.sidebar');
+    if (!nav) return;
+    await Promise.all(Array.from(nav.querySelectorAll('mux-ui-nav-item'), item => item.updateComplete));
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    if (this._lastScrolledSection === this._section) return;
+    this._lastScrolledSection = this._section;
+    if (nav.scrollWidth > nav.clientWidth) {
+      nav.querySelector<HTMLElement>('mux-ui-nav-item[active]')
+        ?.scrollIntoView({ block: 'nearest', inline: 'center' });
     }
   }
 
@@ -1193,6 +1069,12 @@ export class MuxSettingsSurface extends LitElement {
     this._section = section;
     if (section === 'about') void this._checkVersion();
     return true;
+  }
+
+  private _selectSection(section: SettingsSection): void {
+    if (!this._setSection(section)) return;
+    if (section === 'voice') void this._loadVoice();
+    if (section === 'remotes') void this._loadRemotes();
   }
 
   private async _checkVersion(): Promise<void> {
@@ -1238,8 +1120,8 @@ export class MuxSettingsSurface extends LitElement {
       <p>muxterm brings your terminals and agent chats into one workspace.</p>
       <div class="application-version">${status?.currentVersion ? `v${status.currentVersion.startsWith('v') ? status.currentVersion.slice(1) : status.currentVersion}` : 'Version unavailable'}</div>
       <div class="application-actions">
-        <button class="application-button" ?disabled=${this._checkingVersion || this._installingUpdate} @click=${() => void this._checkVersion()}>${this._checkingVersion ? 'Checking…' : 'Check version'}</button>
-        <button class="application-button primary" ?disabled=${!status?.canUpdate || this._checkingVersion || this._installingUpdate} @click=${() => void this._installUpdate()}>${this._installingUpdate ? 'Updating…' : 'Update'}</button>
+        <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
+        <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>
       </div>
       <p role="status" class=${this._updateError ? 'r-error' : ''}>${message}</p>
       <p>Build <code>${__GIT_SHA__}</code></p>
@@ -1251,8 +1133,8 @@ export class MuxSettingsSurface extends LitElement {
       <h3>Workspaces</h3>
       <p>Create a workspace for your terminals or reconnect to this Muxterm instance.</p>
       <div class="application-actions">
-        <button class="application-button" @click=${() => this._applicationAction('new-workspace')}>New workspace</button>
-        <button class="application-button" @click=${() => this._applicationAction('reconnect')}>Reconnect</button>
+        <mux-ui-button variant="secondary" @click=${() => this._applicationAction('new-workspace')}>New workspace</mux-ui-button>
+        <mux-ui-button variant="secondary" @click=${() => this._applicationAction('reconnect')}>Reconnect</mux-ui-button>
       </div>`;
   }
 
@@ -1354,6 +1236,8 @@ export class MuxSettingsSurface extends LitElement {
           const palette = PALETTES[card.id];
           if (!palette) return html``;
           const isActive = current === card.id;
+          const previewInk = isLightTheme(card.id) ? '#1f2328' : '#f8f8f2';
+          const previewText = (color: string) => `color:color-mix(in srgb, ${color} 50%, ${previewInk})`;
           return html`
             <button
               type="button"
@@ -1362,20 +1246,20 @@ export class MuxSettingsSurface extends LitElement {
               aria-pressed="${isActive}"
               @click="${() => this._setTheme(card.id)}"
             >
-              <div class="card-inner" style="background:${palette.background}">
+              <div class="card-inner" aria-hidden="true" style="background:${palette.background}">
                 <div class="card-topbar">
                   <span class="card-dot dot-r"></span>
                   <span class="card-dot dot-y"></span>
                   <span class="card-dot dot-g"></span>
                 </div>
                 <div class="card-prompt">
-                  <span style="color:${palette.blue}">~/proj</span>
-                  <span style="color:${palette.green}"> main</span>
+                  <span style="${previewText(palette.blue)}">~/proj</span>
+                  <span style="${previewText(palette.green)}"> main</span>
                 </div>
                 <div class="card-files">
-                  <span style="color:${palette.blue}">src/ </span><span style="color:${palette.green}">run.sh</span>
+                  <span style="${previewText(palette.blue)}">src/ </span><span style="${previewText(palette.green)}">run.sh</span>
                 </div>
-                <div class="card-prompt" style="color:${palette.foreground}">$ ls</div>
+                <div class="card-prompt" style="${previewText(palette.foreground)}">$ ls</div>
                 <span class="card-cursor" style="background:${palette.cursor}"></span>
               </div>
               <div class="card-label">${card.label}</div>
@@ -1422,6 +1306,7 @@ export class MuxSettingsSurface extends LitElement {
         <span class="size-label">Size</span>
         <input
           type="range"
+          aria-label="Terminal font size"
           min="8" max="24" step="1"
           .value="${String(size)}"
           @input="${(e: Event) => {
@@ -1453,9 +1338,9 @@ export class MuxSettingsSurface extends LitElement {
       return html`
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <span class="notif-status granted">✓ Desktop Notifications: Enabled</span>
-          <button class="notif-test-btn" @click="${() => this._sendTestNotification()}">
+          <mux-ui-button size="small" @click="${() => this._sendTestNotification()}">
             Send test notification
-          </button>
+          </mux-ui-button>
         </div>
         <p class="notif-hint" style="margin-top:8px">
           Notifications appear when a bell fires in a background pane.
@@ -1484,11 +1369,12 @@ export class MuxSettingsSurface extends LitElement {
 
     // default: not yet requested (or dismissed without choosing)
     return html`
-      <button
-        class="notif-btn"
+      <mux-ui-button
+        variant="primary"
+        size="small"
         ?disabled="${this._notifRequesting}"
         @click="${() => this._requestNotificationPermission()}"
-      >${this._notifRequesting ? 'Waiting for browser…' : 'Enable Desktop Notifications'}</button>
+      >${this._notifRequesting ? 'Waiting for browser…' : 'Enable Desktop Notifications'}</mux-ui-button>
       ${this._notifRequesting ? html`
         <p class="notif-hint">
           Look for a permission prompt in your browser's address bar or toolbar.
@@ -1518,7 +1404,7 @@ export class MuxSettingsSurface extends LitElement {
 
   /** Live --chrome-bar value (theme's current default), as a fallback swatch
    *  seed when no custom title-bar color has been picked yet. Native
-   *  <input type="color"> requires an exact 6-digit hex, which is what every
+   *  The native color picker requires an exact 6-digit hex, which is what every
    *  built-in theme's `bar` token already is (see theme.ts CHROME_DARK/LIGHT). */
   private get _currentChromeBarHex(): string {
     const v = getComputedStyle(document.documentElement).getPropertyValue('--chrome-bar').trim();
@@ -1557,9 +1443,7 @@ export class MuxSettingsSurface extends LitElement {
           @input="${(e: Event) => this._setTitlebarColor((e.target as HTMLInputElement).value)}"
         />
         <span class="titlebar-custom-label">Custom…</span>
-        <button class="titlebar-reset-btn" @click="${() => this._resetTitlebarColor()}">
-          Use theme default
-        </button>
+        <mux-ui-button size="small" variant="secondary" @click="${() => this._resetTitlebarColor()}">Use theme default</mux-ui-button>
       </div>
       <p class="titlebar-hint" style="margin-top:8px">
         Only affects this browser on <strong>${instanceLabel()}</strong> — handy for
@@ -1689,31 +1573,31 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAI() {
     const st = this.aiStatus;
     return html`
-      <p class="section-title">Anthropic API Key</p>
+      <p class="section-title">Anthropic</p>
       <p class="ai-status">
         ${st.enabled
           ? `AI enabled -- key ending ${st.keyHint} (from ${st.source}).`
           : 'AI features are off -- add an Anthropic API key to enable.'}
       </p>
-      <input
-        class="ai-input"
+      <mux-ui-text-field
+        label="API key"
         type="password"
         autocomplete="off"
         placeholder="sk-ant-..."
         .value="${this._aiKeyInput}"
         @input="${(e: Event) => { this._aiKeyInput = (e.target as HTMLInputElement).value; }}"
-      />
+      ></mux-ui-text-field>
       <div class="ai-actions">
-        <button
+        <mux-ui-button size="small" variant="primary"
           ?disabled="${this._aiBusy || this._aiKeyInput.trim() === ''}"
           @click="${this._saveAIKey}"
-        >Save</button>
+        >Save</mux-ui-button>
         ${st.source === 'settings'
-          ? html`<button ?disabled="${this._aiBusy}" @click="${this._removeAIKey}">Remove</button>`
+          ? html`<mux-ui-button size="small" variant="danger" ?disabled="${this._aiBusy}" @click="${this._removeAIKey}">Remove</mux-ui-button>`
           : ''}
-        <button ?disabled="${this._aiBusy}" @click="${this._testAI}">Test connection</button>
+        <mux-ui-button size="small" ?disabled="${this._aiBusy}" @click="${this._testAI}">Test connection</mux-ui-button>
       </div>
-      ${this._aiMessage ? html`<p class="ai-message">${this._aiMessage}</p>` : ''}
+      ${this._aiMessage ? html`<p class="ai-message" role="status">${this._aiMessage}</p>` : ''}
       <p class="ai-note">
         The key is stored locally at <code>$XDG_CONFIG_HOME/muxterm/anthropic_key</code>
         (defaults to <code>~/.config/muxterm/anthropic_key</code> when
@@ -1923,40 +1807,32 @@ export class MuxSettingsSurface extends LitElement {
       ${isOpenAI
         ? html`
             <div class="v-field">
-              <span class="v-label">Endpoint</span>
-              <input class="ai-input" type="text" readonly .value="${OPENAI_ENDPOINT}" />
+              <mux-ui-text-field label="Endpoint" type="url" readonly .value="${OPENAI_ENDPOINT}"></mux-ui-text-field>
               <p class="v-hint">OpenAI has one endpoint, so it is fixed.</p>
             </div>
           `
         : html`
             <div class="v-field">
-              <label class="v-label" for="v-endpoint">Endpoint</label>
-              <input
-                id="v-endpoint"
-                class="ai-input"
+              <mux-ui-text-field
+                label="Endpoint"
                 type="url"
-                inputmode="url"
                 autocomplete="off"
-                spellcheck="false"
                 placeholder="https://NAME.openai.azure.com/openai/v1"
                 .value="${this._vEndpoint}"
                 @input="${(e: Event) => { this._vEndpoint = (e.target as HTMLInputElement).value; }}"
-              />
+              ></mux-ui-text-field>
             </div>
           `}
 
       <div class="v-field">
-        <label class="v-label" for="v-model">Model</label>
-        <input
-          id="v-model"
-          class="ai-input"
+        <mux-ui-text-field
+          label="Model"
           type="text"
           autocomplete="off"
-          spellcheck="false"
           placeholder="gpt-realtime-2.1-mini"
           .value="${this._vModel}"
           @input="${(e: Event) => { this._vModel = (e.target as HTMLInputElement).value; }}"
-        />
+        ></mux-ui-text-field>
       </div>
 
       ${isEntra
@@ -1980,17 +1856,14 @@ export class MuxSettingsSurface extends LitElement {
           `
         : html`
             <div class="v-field">
-              <label class="v-label" for="v-key">${savedKeyApplies ? 'Replace key' : 'Key'}</label>
-              <input
-                id="v-key"
-                class="ai-input"
+              <mux-ui-text-field
+                label="${savedKeyApplies ? 'Replace key' : 'Key'}"
                 type="password"
                 autocomplete="off"
-                spellcheck="false"
                 placeholder="${savedKeyApplies ? 'Leave blank to keep the saved key' : 'Paste the key'}"
                 .value="${this._vKeyInput}"
                 @input="${(e: Event) => { this._vKeyInput = (e.target as HTMLInputElement).value; }}"
-              />
+              ></mux-ui-text-field>
               <p class="v-hint">
                 Write-only. Once saved it is never sent back to this page, so it can
                 be replaced or removed but not read.
@@ -1999,16 +1872,16 @@ export class MuxSettingsSurface extends LitElement {
           `}
 
       <div class="v-actions">
-        <button ?disabled="${this._voiceBusy}" @click="${this._saveVoice}">Save</button>
-        <button ?disabled="${this._voiceBusy}" @click="${this._checkVoice}">Check sign-in</button>
-        ${st.keySource === 'stored' && st.keyConfigured
-          ? html`<button ?disabled="${this._voiceBusy}" @click="${this._clearVoiceKey}">Remove key</button>`
+        <mux-ui-button size="small" variant="primary" ?disabled="${this._voiceBusy}" @click="${this._saveVoice}">Save</mux-ui-button>
+        <mux-ui-button size="small" ?disabled="${this._voiceBusy}" @click="${this._checkVoice}">Check sign-in</mux-ui-button>
+        ${savedKeyApplies && st.keySource === 'stored'
+          ? html`<mux-ui-button size="small" variant="danger" ?disabled="${this._voiceBusy}" @click="${this._clearVoiceKey}">Remove key</mux-ui-button>`
           : ''}
       </div>
 
       ${this._voiceMessage
         ? html`
-            <p class="v-message">
+            <p class="v-message" role="status">
               <span class="v-mark ${this._voiceMessageKind || 'none'}" aria-hidden="true"
                 >${VOICE_GLYPH[this._voiceMessageKind || 'none']}</span
               >
@@ -2021,9 +1894,12 @@ export class MuxSettingsSurface extends LitElement {
         “Check sign-in” authenticates for real against the saved settings and lists
         the models — it never starts a session, so it costs nothing.
         <br /><br />
-        A key is stored at
-        <code>${st.keyPath || '$XDG_CONFIG_HOME/muxterm/voice_api_key'}</code> with
-        owner-only permissions, never in the config file. Saving rewrites only the
+        ${isEntra
+          ? html`Entra sign-in stores no key.`
+          : html`A key ${savedKeyApplies ? 'is' : 'will be'} stored at
+            <code>${st.keyPath || '$XDG_CONFIG_HOME/muxterm/voice_api_key'}</code> with
+            owner-only permissions, never in the config file.`}
+        Saving rewrites only the
         <code>[voice]</code> section of
         <code>${st.configPath || '~/.config/muxterm/config.toml'}</code>; the rest of
         that file, including your comments, is left exactly as it is. Comments inside
@@ -2175,11 +2051,11 @@ export class MuxSettingsSurface extends LitElement {
   private _renderRemoveBtn(row: RemoteRow) {
     if (!row.managed) return '';
     return html`
-      <button
-        class="r-btn danger"
+      <mux-ui-button
+        size="small" variant="danger"
         ?disabled="${this._pending.has(row.id)}"
         @click="${() => this._remove(row)}"
-      >Remove</button>
+      >Remove</mux-ui-button>
     `;
   }
 
@@ -2193,19 +2069,13 @@ export class MuxSettingsSurface extends LitElement {
           <div class="r-name">${row.name}</div>
           <div class="r-sub">${row.target}</div>
         </div>
-        ${dropped ? html`<span class="r-state">reconnecting</span>` : ''}
-        ${dropped
-          ? html`<button
-              class="r-btn"
-              ?disabled="${busy}"
-              @click="${() => this._retry(row)}"
-            >Retry</button>`
-          : html`<button
-              class="r-btn danger"
-              ?disabled="${busy}"
-              @click="${() => this._disconnect(row)}"
-            >Disconnect</button>`}
-        ${this._renderRemoveBtn(row)}
+        <div class="r-actions">
+          ${dropped ? html`<span class="r-state">reconnecting</span>` : ''}
+          ${dropped
+            ? html`<mux-ui-button size="small" variant="secondary" ?disabled="${busy}" @click="${() => this._retry(row)}">Retry</mux-ui-button>`
+            : html`<mux-ui-button size="small" variant="danger" ?disabled="${busy}" @click="${() => this._disconnect(row)}">Disconnect</mux-ui-button>`}
+          ${this._renderRemoveBtn(row)}
+        </div>
       </div>
     `;
   }
@@ -2225,12 +2095,10 @@ export class MuxSettingsSurface extends LitElement {
             <div class="r-name">${row.name}</div>
             <div class="r-sub err">${error}</div>
           </div>
-          <button
-            class="r-btn"
-            ?disabled="${busy}"
-            @click="${() => this._retry(row)}"
-          >Retry</button>
-          ${this._renderRemoveBtn(row)}
+          <div class="r-actions">
+            <mux-ui-button size="small" variant="secondary" ?disabled="${busy}" @click="${() => this._retry(row)}">Retry</mux-ui-button>
+            ${this._renderRemoveBtn(row)}
+          </div>
         </div>
       `;
     }
@@ -2245,18 +2113,12 @@ export class MuxSettingsSurface extends LitElement {
           <div class="r-name">${row.name}</div>
           <div class="r-sub">${row.target}</div>
         </div>
-        ${install
-          ? html`<button
-              class="r-btn"
-              ?disabled="${busy}"
-              @click="${() => this._provision(row)}"
-            >Install &amp; connect</button>`
-          : html`<button
-              class="r-btn pri"
-              ?disabled="${busy}"
-              @click="${() => this._connect(row)}"
-            >Connect</button>`}
-        ${this._renderRemoveBtn(row)}
+        <div class="r-actions">
+          ${install
+            ? html`<mux-ui-button size="small" variant="secondary" ?disabled="${busy}" @click="${() => this._provision(row)}">Install &amp; connect</mux-ui-button>`
+            : html`<mux-ui-button size="small" variant="primary" ?disabled="${busy}" @click="${() => this._connect(row)}">Connect</mux-ui-button>`}
+          ${this._renderRemoveBtn(row)}
+        </div>
       </div>
     `;
   }
@@ -2292,16 +2154,16 @@ export class MuxSettingsSurface extends LitElement {
       })}
       <div class="divider"></div>
       <div class="section-title">Add a host</div>
-      <input
-        class="ai-input"
+      <mux-ui-text-field
         type="text"
+        aria-label="Host address"
         autocomplete="off"
-        spellcheck="false"
         placeholder="user@host"
         .value="${this._addTarget}"
-        @input="${(e: Event) => { this._addTarget = (e.target as HTMLInputElement).value; }}"
+        @input="${(e: Event) => { this._addTarget = (e.target as HTMLInputElement).value; this.requestUpdate(); }}"
         @keydown="${(e: KeyboardEvent) => { if (e.key === 'Enter') void this._addHost(); }}"
-      />
+      ></mux-ui-text-field>
+      <div class="ai-actions"><mux-ui-button variant="primary" ?disabled=${!this._addTarget.trim() || this._pending.has(ADD_HOST_KEY)} @click=${() => void this._addHost()}>Add host</mux-ui-button></div>
       ${this._addError ? html`<div class="r-error">${this._addError}</div>` : ''}
     `;
   }
@@ -2311,35 +2173,13 @@ export class MuxSettingsSurface extends LitElement {
 
     return html`
       <div class="header">
-        ${this.pageMode ? html`<button class="back-btn" aria-label="Back" title="Back" @click=${this._close}>${icon(ArrowLeft, { size: 20 })}</button>` : ''}
+        ${this.pageMode ? html`<mux-ui-button variant="quiet" size="large" icon-only accessible-label="Back" tooltip="Back" @click=${this._close}>${icon(ArrowLeft, { size: 20 })}</mux-ui-button>` : ''}
         <h2>Settings</h2>
-        ${this.pageMode ? '' : html`<button class="close-btn" title="Close" aria-label="Close settings" @click="${this._close}">×</button>`}
+        ${this.pageMode ? '' : html`<mux-ui-button variant="quiet" icon-only accessible-label="Close settings" tooltip="Close" @click="${this._close}">×</mux-ui-button>`}
       </div>
       <div class="body">
-        <nav class="sidebar">
-          <button
-            class="sidebar-item ${this._section === 'appearance' ? 'active' : ''}"
-            @click="${() => { this._setSection('appearance'); }}"
-          >Appearance</button>
-          <button
-            class="sidebar-item ${this._section === 'notifications' ? 'active' : ''}"
-            @click="${() => { this._setSection('notifications'); }}"
-          >Notifications</button>
-          <button class="sidebar-item ${this._section === 'workspaces' ? 'active' : ''}" @click=${() => this._setSection('workspaces')}>Workspaces</button>
-          <button
-            class="sidebar-item ${this._section === 'ai' ? 'active' : ''}"
-            @click="${() => { this._setSection('ai'); }}"
-          >AI</button>
-          <button
-            class="sidebar-item ${this._section === 'voice' ? 'active' : ''}"
-            @click="${() => { this._setSection('voice'); void this._loadVoice(); }}"
-          >Voice</button>
-          <button
-            class="sidebar-item ${this._section === 'remotes' ? 'active' : ''}"
-            @click="${() => { this._setSection('remotes'); void this._loadRemotes(); }}"
-          >Remotes</button>
-          <button class="sidebar-item ${this._section === 'shortcuts' ? 'active' : ''}" @click=${() => this._setSection('shortcuts')}>Keyboard Shortcuts</button>
-          <button class="sidebar-item ${this._section === 'about' ? 'active' : ''}" @click=${() => this._setSection('about')}>About</button>
+        <nav class="sidebar" aria-label="Settings sections">
+          ${SETTINGS_SECTIONS.map(section => html`<mux-ui-nav-item variant="section" label=${section.label} ?active=${this._section === section.id} @click=${() => this._selectSection(section.id)}></mux-ui-nav-item>`)}
         </nav>
         <div class="content">
           ${this._section === 'appearance'

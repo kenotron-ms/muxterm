@@ -2,13 +2,14 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
-import { Info, Keyboard, Plus, RefreshCw } from 'lucide';
+import { Info, Keyboard, Monitor, Plus, RefreshCw } from 'lucide';
 
 export type LauncherAction =
   | 'settings'
   | 'shortcuts'
   | 'reconnect'
   | 'about'
+  | 'connect-machine'
   | 'new-workspace';
 
 @customElement('mux-launcher-menu')
@@ -16,36 +17,36 @@ export class MuxLauncherMenu extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host {
-      --edge: color-mix(in srgb, var(--chrome-border) 40%, var(--chrome-text-dim));
-      --row-h: 56px;
+      --edge: color-mix(in srgb, var(--ui-border) 40%, var(--ui-text-muted));
+      --row-h: var(--ui-row-touch);
       --sheet-dur: 120ms;
 
       display: block;
-      background: var(--chrome-bar);
-      border: 1px solid var(--chrome-border);
-      border-radius: 6px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-      padding: 4px;
+      background: var(--ui-surface-raised);
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-md);
+      box-shadow: var(--ui-shadow-menu);
+      padding: var(--ui-space-2);
       min-width: 180px;
     }
 
     .divider {
       height: 1px;
-      background: var(--chrome-border);
-      margin: 4px 0;
+      background: var(--ui-border);
+      margin: var(--ui-space-2) 0;
     }
 
     button {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: var(--ui-space-4);
       width: 100%;
-      padding: 6px 10px;
+      padding: var(--ui-space-3) var(--ui-space-5);
       background: transparent;
       border: none;
-      border-radius: 4px;
-      color: var(--chrome-text-bright);
-      font-size: 13px;
+      border-radius: var(--ui-radius-sm);
+      color: var(--ui-text);
+      font-size: var(--ui-text-md);
       font-family: inherit;
       cursor: pointer;
       text-align: left;
@@ -53,7 +54,7 @@ export class MuxLauncherMenu extends LitElement {
     }
 
     button:hover {
-      background: var(--chrome-hover);
+      background: var(--ui-surface-hover);
     }
 
     .lucide-icon {
@@ -67,7 +68,7 @@ export class MuxLauncherMenu extends LitElement {
     }
 
     /* ── Surface 3: the same menu as a bottom sheet ─────────────────────────
-       Set by the narrow-mode nav bar. A 6px/10px pad is ~26px tall,
+       Set by the narrow-mode nav bar. A 6px/12px pad is ~26px tall,
        which is below the touch floor IN A MOBILE BAR; at 56px in a sheet the
        problem disappears. Same chrome as the pane sheet, so the two surfaces
        the bar opens read as one family.
@@ -87,8 +88,8 @@ export class MuxLauncherMenu extends LitElement {
       border-right: 0;
       border-bottom: 0;
       border-left: 0;
-      border-radius: 16px 16px 0 0;
-      box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+      border-radius: var(--ui-radius-xl) var(--ui-radius-xl) 0 0;
+      box-shadow: var(--ui-shadow-sheet);
       translate: 0 100%;
       transition:
         translate var(--sheet-dur) ease,
@@ -128,7 +129,7 @@ export class MuxLauncherMenu extends LitElement {
       width: 36px;
       height: 4px;
       border-radius: 2px;
-      background: var(--chrome-text-dim);
+      background: var(--ui-text-muted);
       margin: 8px auto;
     }
 
@@ -136,7 +137,7 @@ export class MuxLauncherMenu extends LitElement {
       min-height: var(--row-h);
       padding: 0 12px;
       border-radius: 0;
-      border-bottom: 1px solid var(--chrome-border);
+      border-bottom: 1px solid var(--ui-border);
     }
 
     :host([sheet]) button:last-of-type {
@@ -199,6 +200,9 @@ export class MuxLauncherMenu extends LitElement {
             <div class="divider"></div>
           `
         : ''}
+      <button data-action="connect-machine" @click="${() => this._dispatch('connect-machine')}">
+        ${icon(Monitor, { size: 14 })} Connect machine
+      </button>
       <button data-action="shortcuts" @click="${() => this._dispatch('shortcuts')}">
         ${icon(Keyboard, { size: 14 })} Keyboard Shortcuts
       </button>

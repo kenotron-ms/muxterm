@@ -6,6 +6,10 @@ import { parseHostRef } from '../lib/host-ref.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import { muxLog } from '../lib/mux-log.js';
 import { store } from '../state.js';
+import '../ui/button.js';
+import '../ui/text-field.js';
+import '../ui/status-badge.js';
+import type { MuxUITextField } from '../ui/text-field.js';
 
 /**
  * mux-connect-dialog — "Connect machine" (plan U3, wireframe screen 4).
@@ -34,8 +38,7 @@ import { store } from '../state.js';
  * real. Inventing a version string is exactly the trap the YAGNI pass already
  * threw out, and it would be a lie the moment the far side is upgraded.
  *
- * The dialog chrome (`.dialog.cdialog` in the wireframe) is app.ts's
- * `.overlay-backdrop > .overlay-dialog.cdialog`, shared with Settings. This
+ * The dialog chrome is the shared `mux-ui-dialog` shell in app.ts. This
  * component is the contents: header, body, footer.
  *
  * Events:
@@ -164,20 +167,14 @@ function countLabel(n: number, singular: string): string {
 export class MuxConnectDialog extends LitElement {
   static styles = css`
     ${subtleScrollbars}
-    /* Tokens the wireframe assumes. --ink-3 is defined the same way
-       a mix of the chrome text tokens, so it holds its contrast in every theme. */
     :host {
-      --ink-3: color-mix(in srgb, var(--chrome-text-dim) 55%, var(--chrome-text-bright));
-      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-
       display: flex;
       flex-direction: column;
       width: 100%;
       height: 100%;
-      background: var(--chrome-body);
-      color: var(--chrome-text-bright);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 13px;
+      background: var(--ui-surface-overlay);
+      color: var(--ui-text);
+      font: var(--ui-text-md)/1.5 var(--ui-font-sans);
       box-sizing: border-box;
       overflow: hidden;
     }
@@ -187,97 +184,80 @@ export class MuxConnectDialog extends LitElement {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 16px 20px 14px;
-      border-bottom: 1px solid var(--chrome-border);
+      padding: var(--ui-space-6) var(--ui-space-7);
+      border-bottom: 1px solid var(--ui-border);
       flex-shrink: 0;
     }
 
     .d-header h2 {
       margin: 0;
-      font-size: 15px;
+      font-size: var(--ui-text-xl);
       font-weight: 600;
-    }
-
-    .close-btn {
-      background: transparent;
-      border: none;
-      color: var(--chrome-text-dim);
-      cursor: pointer;
-      font-size: 18px;
-      line-height: 1;
-      padding: 3px 7px;
-      border-radius: 4px;
-      transition: color 0.1s, background 0.1s;
-    }
-
-    .close-btn:hover {
-      color: var(--chrome-text-bright);
-      background: var(--chrome-hover);
     }
 
     /* ── Body ── */
     .cd-body {
       flex: 1;
       min-height: 0;
-      padding: 18px 20px;
+      padding: var(--ui-space-6) var(--ui-space-7);
       overflow-y: auto;
     }
 
     .cand {
       display: flex;
       align-items: center;
-      gap: 11px;
-      padding: 9px 11px;
+      gap: var(--ui-space-5);
+      padding: var(--ui-space-4) var(--ui-space-5);
       border: 1px solid transparent;
-      border-radius: 6px;
+      border-radius: var(--ui-radius-md);
       cursor: pointer;
     }
 
-    .cand:hover { background: var(--chrome-hover); }
+    .cand:hover { background: var(--ui-surface-hover); }
 
     .cand.sel {
-      background: var(--chrome-hover);
-      border-color: var(--chrome-accent);
+      background: var(--ui-surface-hover);
+      border-color: var(--ui-accent);
     }
 
     .cand:focus-visible {
       outline: none;
-      border-color: var(--chrome-accent);
-      box-shadow: 0 0 0 2px color-mix(in srgb, var(--chrome-accent) 25%, transparent);
+      border-color: var(--ui-focus);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-focus) 25%, transparent);
     }
 
     .cand-radio {
       width: 14px;
       height: 14px;
       border-radius: 50%;
-      border: 1px solid var(--chrome-text-dim);
+      border: 1px solid var(--ui-text-muted);
       flex-shrink: 0;
       position: relative;
     }
 
-    .cand.sel .cand-radio { border-color: var(--chrome-accent); }
+    .cand.sel .cand-radio { border-color: var(--ui-accent); }
 
     .cand.sel .cand-radio::after {
       content: '';
       position: absolute;
       inset: 3px;
       border-radius: 50%;
-      background: var(--chrome-accent);
+      background: var(--ui-accent);
     }
 
     .cand-main { flex: 1; min-width: 0; }
 
     .cand-name {
-      font-size: 13px;
-      color: var(--chrome-text-bright);
+      font-size: var(--ui-text-md);
+      color: var(--ui-text);
       font-weight: 500;
     }
 
     .cand-sub {
-      font-family: var(--mono);
-      font-size: 10.5px;
-      color: var(--chrome-text-dim);
-      margin-top: 2px;
+      font-family: var(--ui-font-mono);
+      font-size: var(--ui-text-xs);
+      color: var(--ui-text-muted);
+      margin-top: var(--ui-space-1);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -286,102 +266,43 @@ export class MuxConnectDialog extends LitElement {
     /* Amber, and ONLY for probe === "absent". login-shell-only gets no tag:
        Dial goes through a login shell precisely so that install works, so a
        tag there would be a warning about a non-problem. */
-    .cand-tag {
-      font-family: var(--mono);
-      font-size: 9px;
-      padding: 1px 5px;
-      border-radius: 3px;
-      flex-shrink: 0;
-      color: var(--mux-warn);
-      border: 1px solid color-mix(in srgb, var(--mux-warn) 45%, transparent);
-      background: color-mix(in srgb, var(--mux-warn) 12%, transparent);
-    }
+    .cand-tag { flex-shrink: 0; }
 
     .divider {
       height: 1px;
-      background: var(--chrome-border);
-      margin: 14px 0 12px;
-    }
-
-    .ai-input {
-      padding: 6px 8px;
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border);
-      border-radius: 4px;
-      color: var(--chrome-text-bright);
-      font: inherit;
-      font-size: 12px;
-      width: 100%;
-      box-sizing: border-box;
-    }
-
-    .ai-input:focus {
-      outline: none;
-      border-color: var(--chrome-accent);
-      box-shadow: 0 0 0 2px color-mix(in srgb, var(--chrome-accent) 25%, transparent);
+      background: var(--ui-border);
+      margin: var(--ui-space-6) 0 var(--ui-space-5);
     }
 
     /* ── The three-line trace ── */
     .probe {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--ink-3);
+      font-family: var(--ui-font-mono);
+      font-size: var(--ui-text-xs);
+      color: var(--ui-text-muted);
       line-height: 1.8;
-      background: var(--chrome-bar);
-      border: 1px solid var(--chrome-border);
-      border-radius: 6px;
-      padding: 10px 12px;
-      margin-top: 14px;
+      background: var(--ui-surface-raised);
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-md);
+      padding: var(--ui-space-5);
+      margin-top: var(--ui-space-6);
       white-space: pre-wrap;
     }
 
-    .probe .ok { color: var(--mux-ok); }
-    .probe .run { color: var(--mux-ansi-6); }
+    .probe .ok { color: var(--ui-success); }
+    .probe .run { color: var(--ui-info); }
     /* Not in the wireframe, which only drew the happy path. A ✗ that renders
        in the same ink as a ✓ is a failure the eye slides past. */
-    .probe .fail { color: var(--mux-error); }
+    .probe .fail { color: var(--ui-danger-text); }
 
     /* ── Footer ── */
     .cd-foot {
       display: flex;
       justify-content: flex-end;
-      gap: 9px;
-      padding: 14px 20px 16px;
-      border-top: 1px solid var(--chrome-border);
+      gap: var(--ui-space-4);
+      padding: var(--ui-space-6) var(--ui-space-7);
+      border-top: 1px solid var(--ui-border);
       flex-shrink: 0;
     }
-
-    .b-cancel {
-      padding: 10px 18px;
-      background: transparent;
-      color: var(--chrome-text-dim);
-      border: 1px solid var(--chrome-border);
-      border-radius: 7px;
-      font: inherit;
-      font-size: 14px;
-      cursor: pointer;
-    }
-
-    .b-cancel:hover {
-      background: var(--chrome-hover);
-      color: var(--chrome-text-bright);
-    }
-
-    .b-confirm {
-      padding: 10px 22px;
-      background: var(--chrome-accent);
-      color: var(--chrome-body);
-      border: none;
-      border-radius: 7px;
-      font: inherit;
-      font-size: 14px;
-      font-weight: 600;
-      min-width: 96px;
-      cursor: pointer;
-    }
-
-    .b-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
-    .b-confirm:not(:disabled):hover { opacity: 0.85; }
   `;
 
   /** Discovered candidates. Empty is a legal, complete state (D7). */
@@ -429,29 +350,20 @@ export class MuxConnectDialog extends LitElement {
     return html`
       <div class="d-header">
         <h2>Connect machine</h2>
-        <button class="close-btn" title="Close" @click="${this._close}">×</button>
+        <mux-ui-button variant="quiet" size="small" icon-only accessible-label="Close" @click="${this._close}">×</mux-ui-button>
       </div>
       <div class="cd-body">
-        ${this._candidates.map((row) => this._renderCandidate(row))}
+        ${this._candidates.length > 0 ? html`<div role="radiogroup" aria-label="Discovered machines">${this._candidates.map((row) => this._renderCandidate(row))}</div>` : ''}
         ${this._candidates.length > 0 ? html`<div class="divider"></div>` : ''}
-        <input
-          class="ai-input"
-          type="text"
-          placeholder="user@host"
-          .value="${this._manual}"
-          ?disabled="${this._busy}"
-          @input="${this._onManualInput}"
-          @keydown="${this._onManualKeyDown}"
-        />
+        <mux-ui-text-field label="Connect to another machine" placeholder="user@host"
+          autocomplete="off" .value="${this._manual}" ?disabled="${this._busy}"
+          @input="${this._onManualInput}" @keydown="${this._onManualKeyDown}"></mux-ui-text-field>
         ${this._renderProbe()}
       </div>
       <div class="cd-foot">
-        <button class="b-cancel" @click="${this._close}">Cancel</button>
-        <button
-          class="b-confirm"
-          ?disabled="${this._busy || !this._hasTarget}"
-          @click="${this._onConfirm}"
-        >${this._confirmLabel(probe)}</button>
+        <mux-ui-button @click="${this._close}">Cancel</mux-ui-button>
+        <mux-ui-button variant="primary" ?busy="${this._busy}" ?disabled="${!this._hasTarget}"
+          @click="${this._onConfirm}">${this._confirmLabel(probe)}</mux-ui-button>
       </div>
     `;
   }
@@ -472,7 +384,7 @@ export class MuxConnectDialog extends LitElement {
           <div class="cand-name">${row.name}</div>
           <div class="cand-sub">${row.target}</div>
         </div>
-        ${row.probe === 'absent' ? html`<span class="cand-tag">not installed</span>` : ''}
+        ${row.probe === 'absent' ? html`<mux-ui-status-badge class="cand-tag" tone="warning">not installed</mux-ui-status-badge>` : ''}
       </div>
     `;
   }
@@ -557,7 +469,7 @@ export class MuxConnectDialog extends LitElement {
   }
 
   private _onManualInput = (e: Event): void => {
-    this._manual = (e.target as HTMLInputElement).value;
+    this._manual = (e.target as MuxUITextField).value;
     // Typing is choosing: a filled manual field and a selected radio would be
     // two answers to one question.
     this._selectedId = '';
