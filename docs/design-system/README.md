@@ -66,7 +66,7 @@ seams and the source of truth for each screen.
 
 The app shell uses the same semantic surface, text, focus, spacing and shadow tokens as the component library. Workspace creation uses a shared adaptive Dialog, Text Field and Buttons through `mux-workspace-create-dialog`; Storybook records desktop, phone, busy and light states. A shared Sidebar Button now opens that dialog from desktop chrome or the phone navigation drawer, without a local/remote choice. Storybook catalogs the entry and dialog together. Isolated Chromium created fresh sessiond workspaces from both visible paths without horizontal overflow. The shell owns workspace creation through sessiond.
 
-The Sidebar's active chrome and spacing now use semantic tokens. Destinations and Settings use the same Navigation Item, with the version shown as Settings detail; the footer's New workspace action uses the shared Button. The phone drawer omits the brand row already present in the mobile title bar. Storybook records reachable destinations, the creation action and dialog, phone and light states; the older workspace chooser story was removed because the current Sidebar does not render that control. Inactive workspace preview and machine-group code remains in the source inventory for cleanup.
+The Sidebar's active chrome and spacing now use semantic tokens. Destinations and Settings use the same Navigation Item, with the version shown as Settings detail; the footer's New workspace action uses the shared Button. The phone drawer omits the brand row already present in the mobile title bar. Storybook records reachable destinations, the creation action and dialog, phone and light states. The unreachable workspace chooser, workspace preview and machine-group code was removed.
 
 Destructive pane and workspace close uses the same adaptive Dialog and semantic tokens. Its risk summary is the dialog's accessible description, Cancel receives initial focus, and an in-flight confirmation blocks dismissal. Sessiond alone decides whether the close requires confirmation and when a pane or workspace actually disappears. Storybook records pane, workspace, multi-risk, phone, busy and light states; a real dev-local pane verified the close path.
 
@@ -157,9 +157,12 @@ and phone editor, dismissed it with Escape, and followed “Start a new chat for
 this job.” No job was created or run; populated rows use synthetic data.
 
 Operator status uses shared Filter Chip, Status Badge, Button and Feedback.
+Its lane disclosure uses Button's expanded and controlled-panel semantics.
 Storybook covers desktop and phone progress, expanded lane actions and an error
-state without stale loading. Lane progress and closure authority remain with
-the real operator and sessiond in the running app.
+state without stale loading. Chromium verified Enter disclosure and panel
+linkage at both widths. The live dev-local Status tab displayed a regular
+chat's task progress; populated operator lanes require an operator fixture.
+Lane progress and closure authority remain with the real operator and sessiond.
 
 Main chat now uses semantic palette tokens throughout its transcript and goal
 ledger. The goal editor uses the shared adaptive Dialog, Text Area and Buttons;
