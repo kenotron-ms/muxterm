@@ -18,7 +18,7 @@ function paneFixture(panes: SessiondPaneInfo[], activePaneId: number, attention:
   return fixture;
 }
 
-const single = () => paneFixture([pane(1,'Terminal')], 0);
+const single = () => paneFixture([pane(1,'Terminal')], 1);
 const many = () => paneFixture([
   pane(1,'Editor'), pane(2,'Build logs'), pane(3,'Test runner'), pane(4,'Server'),
   pane(5,'Git status'), pane(6,'Docs'), pane(7,'Shell'), pane(8,'Database'), pane(9,'Notes'),
@@ -30,7 +30,8 @@ const longNames = () => paneFixture([
 ], 2, [], 'Research and development workspace with a long name');
 
 function view(fixture: MuxStore) {
-  return html`<div style="box-sizing:border-box;display:flex;align-items:center;gap:var(--ui-space-4);width:100%;height:var(--ui-control-lg);padding:0 var(--ui-space-5);border-bottom:1px solid var(--ui-border);background:var(--ui-surface-raised)">
+  return html`<div class="pane-picker-story" style="width:100%;min-height:100vh;background:var(--ui-surface-base)">
+  <div style="box-sizing:border-box;display:flex;align-items:center;gap:var(--ui-space-4);width:100%;height:var(--ui-control-lg);padding:0 var(--ui-space-5);border-bottom:1px solid var(--ui-border);background:var(--ui-surface-raised)">
     <strong style="color:var(--ui-text);font:600 var(--ui-text-md) var(--ui-font-sans)">muxterm</strong>
     <mux-pane-picker .paneStore=${fixture}
       @pane-select=${(event: CustomEvent<{paneId:number}>) => fixture.setActivePane(event.detail.paneId)}
@@ -39,8 +40,13 @@ function view(fixture: MuxStore) {
         fixture.applySessiond({ type:SessiondType.PaneAdded, paneId, cols:80, rows:24, title:`Pane ${paneId}` });
         fixture.setActivePane(paneId);
       }}
-      @pane-close=${(event: CustomEvent<{paneId:number}>) => fixture.applySessiond({ type:SessiondType.PaneClosed, paneId:event.detail.paneId })}
+      @pane-close=${(event: CustomEvent<{paneId:number}>) => {
+        const status = (event.currentTarget as HTMLElement).closest('.pane-picker-story')?.querySelector<HTMLElement>('[role=status]');
+        if (status) status.textContent = `Close requested for pane ${event.detail.paneId}; waiting for sessiond.`;
+      }}
     ></mux-pane-picker>
+  </div>
+  <div role="status" style="padding:var(--ui-space-5);color:var(--ui-text-muted);font:var(--ui-text-sm) var(--ui-font-sans)">Pane lifecycle is owned by sessiond.</div>
   </div>`;
 }
 
@@ -62,3 +68,11 @@ export const Single: Story = { play:openSheet };
 export const ManyPanes: Story = { render:() => view(many()), play:openSheet };
 export const NeedsAttention: Story = { render:() => view(attention()), play:openSheet };
 export const LongNames: Story = { render:() => view(longNames()), play:openSheet };
+export const CloseIntent: Story = {
+  render:() => view(attention()),
+  play:({canvasElement}) => {
+    const picker = canvasElement.querySelector('mux-pane-picker');
+    picker?.shadowRoot?.querySelector<HTMLButtonElement>('.breadcrumb')?.click();
+    picker?.shadowRoot?.querySelector<HTMLButtonElement>('.pane-close')?.click();
+  },
+};

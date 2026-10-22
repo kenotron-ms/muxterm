@@ -193,3 +193,13 @@ narrowed the real tree, and Storybook accepted a new sort selection. Quick Open
 searched real files; Enter opened a Storybook file result and one Escape
 closed a filled live search. Pages and Changes use synthetic Storybook data
 because the isolated app had no chat.
+
+The mobile pane picker uses the native Popover API for its bounded phone sheet.
+Storybook now renders its own fixture store, including nine-pane scrolling,
+attention marks, long names and a close intent that leaves the pane present.
+Chromium checked the handoff at 767/768 px: the picker is available below 768 px
+and Dockview tabs appear at 768 px. In a fresh dev-local workspace, the phone
+sheet created two real panes and selected another. Closing a pane with a
+running command opened the adaptive confirmation sheet; Cancel kept it and
+confirmation removed it after sessiond responded. Screenshots are stored
+outside git.

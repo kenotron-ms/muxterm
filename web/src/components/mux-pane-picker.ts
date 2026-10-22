@@ -52,9 +52,8 @@ export class MuxPanePicker extends LitElement {
       justify-content: flex-start;
     }
 
-    /* Narrow-only. Wide mode has the dockview tab strip and the sidebar; this
-       exists precisely because mux-dock hides its tabs below 769px. */
-    @media (min-width: 769px) {
+    /* Narrow-only. At 768px Dockview's wide tabs are visible. */
+    @media (min-width: 768px) {
       :host {
         display: none;
       }
@@ -114,7 +113,7 @@ export class MuxPanePicker extends LitElement {
 
     .bell-dot {
       flex: none;
-      font-size: 9px;
+      font-size: var(--ui-attention-mark-size);
       color: var(--ui-attention);
     }
 
@@ -189,7 +188,7 @@ export class MuxPanePicker extends LitElement {
       letter-spacing: 0.11em;
       text-transform: uppercase;
       color: var(--ui-text-muted);
-      padding: 6px 12px 4px;
+      padding: var(--ui-space-3) var(--ui-space-5) var(--ui-space-2);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -231,7 +230,7 @@ export class MuxPanePicker extends LitElement {
          thumb cannot reach, so the last row has to scroll up clear of the
          home indicator instead of resting under it — and the pinned block
          must not be shoved up by a notch it does not touch. */
-      padding-bottom: env(safe-area-inset-bottom, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0);
     }
 
     .pane-row {
@@ -388,7 +387,7 @@ export class MuxPanePicker extends LitElement {
     // dependency so store subscription bumps trigger re-renders.
     void this._version;
 
-    const { panes, activePaneId, attached } = store;
+    const { panes, activePaneId, attached } = this.paneStore;
     const validPanes = panes.filter((p) => p.paneId >= 0);
     const activePane = validPanes.find((p) => p.paneId === activePaneId) ?? validPanes[0];
 
