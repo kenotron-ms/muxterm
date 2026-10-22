@@ -24,8 +24,10 @@ reviewers. Those PNGs are generated in CI and stay outside git.
 Overlay order is part of the shared contract. Local tokens order content,
 screens, drawers, drag overlays, listboxes, menus, window chrome, side panels,
 and phone sheets within their feature stacking contexts. App-wide tokens order
-toasts, connection and reconnect overlays, alerts, and Settings. The Tokens
-story shows each name and value. Native modal dialogs use the browser top layer.
+toasts, the connection layer, Settings, alerts, and the reconnect overlay. The
+Tokens story shows each name and value. Native modal dialogs use the browser
+top layer; connection loss closes Settings and workspace creation so the
+reconnect notice stays visible and those surfaces stay closed until recovery.
 `check:ui` rejects literal `z-index` values in both shared controls and feature
 styles so a new surface cannot silently invent its own layer.
 The same gate rejects literal palette colors and spacing, radius, or type-scale

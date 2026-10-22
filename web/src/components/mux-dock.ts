@@ -378,6 +378,15 @@ export class MuxDock extends LitElement {
   private _focusRestoreToken = 0;
   private _pendingFrames = new Set<number>();
 
+  /** A tab gesture takes priority over the short post-restore focus sequence. */
+  private readonly _onTabSelectionIntent = (event: Event): void => {
+    if (!this._settingActive) return;
+    if (event instanceof KeyboardEvent && !['Enter', ' ', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (!event.composedPath().some(target => target instanceof Element && target.classList.contains('dv-default-tab'))) return;
+    this._focusRestoreToken++;
+    this._settingActive = false;
+  };
+
   /** Defer Dockview work without letting a detached host touch old panels. */
   private _nextFrame(callback: () => void): void {
     if (!this.isConnected) return;
@@ -1161,6 +1170,9 @@ export class MuxDock extends LitElement {
     this._dockObserver = new MutationObserver(() => this._scheduleWorkspaceActions());
     this._dockObserver.observe(dockRoot, { childList: true, subtree: true });
     this.addEventListener('dblclick', this._onTabDblClick);
+    this.addEventListener('pointerdown', this._onTabSelectionIntent, true);
+    this.addEventListener('keydown', this._onTabSelectionIntent, true);
+    this.addEventListener('click', this._onTabSelectionIntent, true);
     this._dv = new DockviewComponent(dockRoot, {
       // Total by construction: EVERY component name resolves to a
       // TerminalRenderer, `opts.name` is never inspected. dockview calls this
@@ -1233,6 +1245,9 @@ export class MuxDock extends LitElement {
     this._settingActive = false;
     this._restoringLayout = false;
     this.removeEventListener('dblclick', this._onTabDblClick);
+    this.removeEventListener('pointerdown', this._onTabSelectionIntent, true);
+    this.removeEventListener('keydown', this._onTabSelectionIntent, true);
+    this.removeEventListener('click', this._onTabSelectionIntent, true);
     this._unsubSessions?.();
     this._unsubSessions = null;
     this._unsubRemotes?.();
@@ -1612,6 +1627,10 @@ export class MuxDock extends LitElement {
     if (this.workspaceKey !== store.attached || !store.panes.some((pane) => pane.paneId === paneId)) return false;
     const panel = this._panels.get(paneId);
     if (!panel) return false;
+    // An explicit selection supersedes any restore focus still queued across
+    // frames. Clear its suppression flag here: the canceled final frame will
+    // no longer be responsible for doing so.
+    this._focusRestoreToken++;
     if (!panel.api.isActive) {
       this._settingActive = true;
       try {
@@ -1619,7 +1638,7 @@ export class MuxDock extends LitElement {
       } finally {
         this._settingActive = false;
       }
-    }
+    } else this._settingActive = false;
     store.ackPane(paneId);
     this.dispatchEvent(
       new CustomEvent('pane-select', {

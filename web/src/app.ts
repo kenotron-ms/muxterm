@@ -667,6 +667,7 @@ export class MuxApp extends LitElement {
   private _dragging = false;
 
   private _onOpenSettings = (): void => {
+    if (this._showReconnectOverlay) return;
     this._settingsOpenSection = null;
     this._overlayPanel = 'settings';
   };
@@ -717,6 +718,16 @@ export class MuxApp extends LitElement {
     } catch {
       /* already closed */
     }
+  }
+
+  /** Reveal connection loss above browser top-layer navigation and dialogs. */
+  private _revealReconnectOverlay(): void {
+    this._overlayPanel = null;
+    this._settingsOpenSection = null;
+    this._showCreateModal = false;
+    this._creatingWorkspace = false;
+    this._closeDrawer();
+    this._showReconnectOverlay = true;
   }
 
   connectedCallback(): void {
@@ -1040,7 +1051,7 @@ export class MuxApp extends LitElement {
       // any prior rows as a visible fallback, but mark even an empty prior set
       // stale until the reconnect delivers a fresh whole-state snapshot.
       homeSessions.markStale();
-      this._showReconnectOverlay = true;
+      this._revealReconnectOverlay();
       // Deliberately NOT a message: the overlay derives its headline from the
       // live phase. A message here is an override, reserved for the server
       // telling us something we cannot work out ourselves (see `detached`).
@@ -1052,7 +1063,6 @@ export class MuxApp extends LitElement {
       if (!this._daemonUnreachable) {
         this._reconnectMessage = '';
       }
-      this._creatingWorkspace = false;
       // The attach this dispatch was waiting on is gone. Reconnect replays its
       // own bootstrap attach; letting the argv survive would spawn the prompt
       // into whatever that lands on, minutes later and unasked.
@@ -1186,7 +1196,7 @@ export class MuxApp extends LitElement {
     // An overlay panel opening dismisses the drawer.
     //
     // The drawer is a popover, so it lives in the browser's TOP LAYER, which
-    // is above EVERY z-index unconditionally — .overlay-backdrop's 3000
+    // is above EVERY z-index unconditionally — even the reconnect overlay
     // included. On a phone the drawer can open an overlay such as Settings,
     // which would otherwise be painted UNDERNEATH the drawer. No number
     // fixes that; the drawer has to leave.
@@ -1598,6 +1608,7 @@ export class MuxApp extends LitElement {
    * row is inserted — the flag is the only local state change.
    */
   private _onOpenCreateModal = (e?: CustomEvent<{ host?: string }>): void => {
+    if (this._showReconnectOverlay) return;
     this._showCreateModal = true;
     // Unconditional assignment, not a conditional one: the target host is a
     // property of THIS opening, so an event without a host must reset the
@@ -1669,7 +1680,7 @@ export class MuxApp extends LitElement {
     // recovery command when the daemon is alive-but-unreachable.
     if (msg['type'] === 'error' && msg['code'] === 'daemon-unreachable') {
       this._daemonUnreachable = true;
-      this._showReconnectOverlay = true;
+      this._revealReconnectOverlay();
       this._reconnectMessage =
         typeof msg['error'] === 'string'
           ? (msg['error'] as string)
@@ -1680,7 +1691,7 @@ export class MuxApp extends LitElement {
     }
     if ('detached' in msg && msg.detached && typeof msg.detached === 'object') {
       const detached = msg.detached as { reason?: string };
-      this._showReconnectOverlay = true;
+      this._revealReconnectOverlay();
       this._reconnectMessage = detached.reason ?? 'Disconnected';
     }
     // {"type":"config",...} envelope (Phase 3 carry-forward): re-resolve theme,
@@ -2216,6 +2227,7 @@ export class MuxApp extends LitElement {
   private _onLauncherAction = (e: Event): void => {
     const detail = (e as CustomEvent<{ action: LauncherAction; section?: SettingsSection }>).detail;
     const action = detail?.action;
+    if (this._showReconnectOverlay && action !== 'reconnect') return;
     switch (action) {
       case 'settings':
         this._settingsOpenSection = detail?.section ?? null;

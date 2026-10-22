@@ -81,9 +81,9 @@
      top layer, which is above every numeric z-index here. */
   --ui-z-toast: 950;
   --ui-z-connection-overlay: 1000;
-  --ui-z-reconnect-overlay: 2000;
+  --ui-z-settings-page: 2000;
   --ui-z-alert-stack: 2500;
-  --ui-z-settings-page: 3000;
+  --ui-z-reconnect-overlay: 3000;
   --ui-toast-offset: var(--ui-space-9);
   --ui-toast-min-width: 240px;
   --ui-dialog-width: 600px;

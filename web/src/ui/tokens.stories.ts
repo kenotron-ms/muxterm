@@ -39,9 +39,9 @@ const layerTokens = [
   ['Phone sheet', '--ui-z-sheet', 70],
   ['Toast', '--ui-z-toast', 950],
   ['Connection overlay', '--ui-z-connection-overlay', 1000],
-  ['Reconnect overlay', '--ui-z-reconnect-overlay', 2000],
+  ['Settings page', '--ui-z-settings-page', 2000],
   ['Alert stack', '--ui-z-alert-stack', 2500],
-  ['Settings page', '--ui-z-settings-page', 3000],
+  ['Reconnect overlay', '--ui-z-reconnect-overlay', 3000],
 ] as const;
 
 const meta = {
