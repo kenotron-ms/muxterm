@@ -2,6 +2,9 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import { terminalRegistry } from '../lib/terminal-registry.js';
 import { resolvePalette } from '../lib/theme.js';
+import { homeSessions } from '../lib/home-sessions.js';
+import { FIXTURE_SESSIONS } from '../lib/session-state.js';
+import { store } from '../state.js';
 import type { SessiondPaneInfo } from '../types.js';
 import type { MuxDock } from './mux-dock.js';
 import './mux-dock.js';
@@ -74,6 +77,14 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const SinglePane: Story = { play:async ({canvasElement}) => { await ready(canvasElement); } };
+export const AttentionAndSession: Story = {
+  render:() => {
+    homeSessions.set([{ ...FIXTURE_SESSIONS[0], paneId: 581, workspaceId: workspace }], 'fixture');
+    store.ringPane(581);
+    return view(581);
+  },
+  play:async ({canvasElement}) => { await ready(canvasElement); },
+};
 export const Tabs: Story = {
   render:() => view(511),
   play:async ({canvasElement}) => { await create(canvasElement,'New pane'); },

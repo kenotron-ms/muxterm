@@ -21,6 +21,7 @@ import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import { parseHostRef } from '../lib/host-ref.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
+import { visuallyHidden } from '../ui/visually-hidden.js';
 import { Folder } from 'lucide';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
@@ -547,13 +548,17 @@ export class MuxDock extends LitElement {
   /** Repaint one tab: [bell dot] title [session state mark]. */
   private _paintTab(tabEl: HTMLElement, paneId: number, title: string): void {
     tabEl.textContent = '';
-    if (store.paneBellActive(paneId)) {
+    const bellActive = store.paneBellActive(paneId);
+    if (bellActive) {
       const bell = document.createElement('span');
       bell.className = 'mux-bell-prefix';
-      bell.textContent = '● ';
+      bell.setAttribute('aria-hidden', 'true');
       tabEl.appendChild(bell);
     }
-    tabEl.appendChild(document.createTextNode(title));
+    const visibleTitle = document.createElement('span');
+    visibleTitle.textContent = title;
+    visibleTitle.setAttribute('aria-hidden', 'true');
+    tabEl.appendChild(visibleTitle);
     // Bell and session mark are different questions -- "something happened here
     // while you were away" versus "this session is blocked" -- so both show.
     const session = this._sessionForPane(paneId);
@@ -562,8 +567,15 @@ export class MuxDock extends LitElement {
       mark.className = `mux-session-mark ${sessionMarkClass(session)}`;
       mark.textContent = ' ✽';
       mark.title = sessionMarkTitle(session);
+      mark.setAttribute('aria-hidden', 'true');
       tabEl.appendChild(mark);
     }
+    const spokenTitle = document.createElement('span');
+    spokenTitle.className = 'mux-tab-spoken-title';
+    spokenTitle.textContent = `${title}${bellActive ? ', new activity' : ''}${session ? `, session ${sessionMarkTitle(session)}` : ''}`;
+    tabEl.appendChild(spokenTitle);
+    tabEl.parentElement?.querySelector<HTMLButtonElement>('.dv-default-tab-action')
+      ?.setAttribute('aria-label', `Close pane ${title}`);
   }
 
   private _refreshBellTitles(): void {
@@ -1073,11 +1085,17 @@ export class MuxDock extends LitElement {
           max-width: 160px;
         }
 
-        /* Bell dot prefix on pane tabs */
+        /* Bell dot prefix on pane tabs; the spoken state is in the tab name. */
         mux-dock .mux-bell-prefix {
-          color: var(--ui-attention);
-          font-style: normal;
+          display: inline-block;
+          width: var(--ui-status-dot-size);
+          height: var(--ui-status-dot-size);
+          margin-right: var(--ui-space-3);
+          border-radius: var(--ui-radius-pill);
+          background: var(--ui-attention);
+          vertical-align: middle;
         }
+        mux-dock .mux-tab-spoken-title { ${visuallyHidden.cssText} }
 
         /* Per-session state mark on pane tabs. Same vocabulary as the home
            view; see sessionMarkClass(). */
@@ -1722,8 +1740,8 @@ export class MuxDock extends LitElement {
         const panel = this._panels.get(msg.paneId);
         if (panel) {
           const tabContent = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
-            .view?.tab?.element?.querySelector('.dv-default-tab-content');
-          if (tabContent) tabContent.textContent = msg.name ?? '';
+            .view?.tab?.element?.querySelector<HTMLElement>('.dv-default-tab-content');
+          if (tabContent) this._paintTab(tabContent, msg.paneId, msg.name ?? '');
         }
         this.dispatchEvent(
           new CustomEvent('pane-rename', {

@@ -41,6 +41,7 @@ const captures = [
   { file: 'utility-file-actions-phone.png', id: 'screens-utility--phone-file-open-actions', width: 390, height: 844, ready: 'mux-ui-menu-item', readyText: 'Download file' },
   { file: 'listbox-phone.png', id: 'components-listbox--phone-sheet', width: 390, height: 844, ready: 'mux-ui-listbox' },
   { file: 'title-bar-phone.png', id: 'composites-title-bar--mobile-workspace', width: 390, height: 844, ready: 'mux-title-bar' },
+  { file: 'dock-attention-session-desktop.png', id: 'composites-terminal-dock--attention-and-session', width: 1200, height: 700, ready: '.mux-bell-prefix' },
   { file: 'microphone-error-desktop.png', id: 'composites-microphone-button--error-toast', width: 1200, height: 800, ready: 'mux-mic-button' },
   { file: 'reconnect-desktop.png', id: 'patterns-reconnect-overlay--fatal', width: 1200, height: 800, ready: 'mux-reconnect-overlay .overlay' },
   { file: 'new-chat-desktop.png', id: 'screens-new-chat--ungrouped', width: 1200, height: 800, ready: 'mux-new-chat' },
