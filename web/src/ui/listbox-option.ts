@@ -26,6 +26,7 @@ export class MuxUIListboxOption extends LitElement {
     .label { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:var(--ui-text-sm); font-weight:600; }
     .description { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .check { flex:none; color:var(--ui-accent); font-weight:700; }
+    ::slotted([slot='detail']) { flex:none; }
     :host([layout='inline']) .copy { display:flex; align-items:baseline; gap:var(--ui-space-6); }
     :host([layout='inline']) .label { flex:none; min-width:var(--ui-space-16); color:var(--ui-accent); font:600 var(--ui-text-sm)/1.4 var(--ui-font-mono); }
     :host([layout='inline']) .description { flex:1; font-size:var(--ui-text-sm); }
@@ -46,7 +47,7 @@ export class MuxUIListboxOption extends LitElement {
     else this.removeAttribute('aria-description');
   }
   override render() {
-    return html`<div class="row"><slot name="icon"></slot><span class="copy"><span class="label">${this.label}</span>${this.description ? html`<span class="description">${this.description}</span>` : nothing}</span>${this.selected && this.showCheck ? html`<span class="check" aria-hidden="true">✓</span>` : nothing}</div>`;
+    return html`<div class="row" part="row"><slot name="icon"></slot><span class="copy"><span class="label">${this.label}</span>${this.description ? html`<span class="description">${this.description}</span>` : nothing}</span><slot name="detail"></slot>${this.selected && this.showCheck ? html`<span class="check" aria-hidden="true">✓</span>` : nothing}</div>`;
   }
 }
 

@@ -43,6 +43,7 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
       return fixtureJSON({path,name:path.split('/').pop(),size:artifact.text.length,modified:1761120000,kind:artifact.kind,contentType:artifact.kind === 'markdown' ? 'text/markdown' : 'text/plain',text:artifact.text,tooLarge:false,maxBytes:2097152,binary:false});
     }
     if (method === 'GET' && url.pathname === `${base}search`) {
+      if (id.endsWith('-search-error')) return fixtureJSON({error:'Search unavailable'},503);
       const query = (url.searchParams.get('q') || '').toLowerCase();
       return fixtureJSON({results:Object.keys(artifacts).filter(path => path.toLowerCase().includes(query)).map(path => ({path,name:path.split('/').pop(),size:artifacts[path].text.length})),truncated:false});
     }
@@ -116,6 +117,30 @@ export const PhoneQuickOpen: Story = {
   args:{sessionId:sessionId('phone-quick-open')},parameters:{apiFixture:utilityFixture(sessionId('phone-quick-open'))},
   globals:{viewport:{value:'phone390',isRotated:false}},
   play:QuickOpen.play,
+};
+const typeQuickOpen = async (canvasElement: HTMLElement, query: string) => {
+  const utility = target(canvasElement);
+  await utility?.updateComplete;
+  utility?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Quick open file"]')?.click();
+  await utility?.updateComplete;
+  const input = utility?.querySelector('mux-ui-command-search')?.shadowRoot?.querySelector<HTMLInputElement>('input');
+  if (input) { input.value = query; input.dispatchEvent(new InputEvent('input', { bubbles:true, composed:true })); }
+};
+export const QuickOpenResults: Story = {
+  args:{sessionId:sessionId('quick-open-results')},parameters:{apiFixture:utilityFixture(sessionId('quick-open-results'))},
+  play:async ({canvasElement}) => typeQuickOpen(canvasElement,'md'),
+};
+export const PhoneQuickOpenResults: Story = {
+  args:{sessionId:sessionId('phone-quick-open-results')},parameters:{apiFixture:utilityFixture(sessionId('phone-quick-open-results'))},
+  globals:{viewport:{value:'phone390',isRotated:false}}, play:QuickOpenResults.play,
+};
+export const QuickOpenNoResults: Story = {
+  args:{sessionId:sessionId('quick-open-empty')},parameters:{apiFixture:utilityFixture(sessionId('quick-open-empty'))},
+  play:async ({canvasElement}) => typeQuickOpen(canvasElement,'nothing-matches'),
+};
+export const QuickOpenError: Story = {
+  args:{sessionId:sessionId('quick-open-search-error')},parameters:{apiFixture:utilityFixture(sessionId('quick-open-search-error'))},
+  play:async ({canvasElement}) => typeQuickOpen(canvasElement,'readme'),
 };
 export const Changes: Story = {
   args:{sessionId:sessionId('changes')},parameters:{apiFixture:utilityFixture(sessionId('changes'))},

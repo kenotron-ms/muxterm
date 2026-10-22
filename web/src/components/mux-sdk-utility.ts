@@ -13,6 +13,7 @@ import './mux-operator-status.js';
 import '../ui/action-tile.js';
 import '../ui/breadcrumb.js';
 import '../ui/button.js';
+import '../ui/command-search.js';
 import '../ui/dialog.js';
 import '../ui/menu.js';
 import '../ui/rail-row.js';
@@ -24,6 +25,7 @@ import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import type { MuxUIRailRow } from '../ui/rail-row.js';
 import type { MuxUIButton } from '../ui/button.js';
+import type { MuxUICommandSearch, CommandSearchItem } from '../ui/command-search.js';
 type Artifact = {
   path: string; name: string; size: number; modified: number;
   kind: 'markdown' | 'text' | 'image' | 'download'; contentType: string;
@@ -130,7 +132,6 @@ export class MuxSDKUtility extends LitElement {
   private quickLoading = false;
   private quickTruncated = false;
   private quickError = '';
-  private quickIndex = 0;
   private quickTimer?: number;
   private quickAbort?: AbortController;
   private directoryRequest = 0;
@@ -479,12 +480,11 @@ export class MuxSDKUtility extends LitElement {
     this.quickOpen = true;
     this.quickQuery = '';
     this.quickResults = [];
-    this.quickIndex = 0;
     this.quickLoading = false;
     this.quickTruncated = false;
     this.quickError = '';
     this.paintAll();
-    void this.updateComplete.then(() => requestAnimationFrame(() => this.querySelector<HTMLInputElement>('.quick-open input')?.focus()));
+    void this.updateComplete.then(() => requestAnimationFrame(() => this.querySelector<MuxUICommandSearch>('mux-ui-command-search')?.focus()));
   }
   private hideQuickOpen() {
     this.quickAbort?.abort();
@@ -495,7 +495,6 @@ export class MuxSDKUtility extends LitElement {
   }
   private searchQuickOpen(query: string) {
     this.quickQuery = query;
-    this.quickIndex = 0;
     this.quickResults = [];
     this.quickError = '';
     this.quickTruncated = false;
@@ -713,7 +712,7 @@ export class MuxSDKUtility extends LitElement {
     }}>
       <div class="viewer">
         ${this.fileHeader(projectName, segments, file, hasAlternateView)}
-        <div class="viewer-body">${this.selected ? this.fileBody() : html`<div class="welcome-file">${icon(FolderOpen,{size:35})}<h2>Explore this project</h2><p>Choose a file from the explorer or search by name across the project.</p><button @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></button></div>`}</div>
+        <div class="viewer-body">${this.selected ? this.fileBody() : html`<div class="welcome-file">${icon(FolderOpen,{size:35})}<h2>Explore this project</h2><p>Choose a file from the explorer or search by name across the project.</p><mux-ui-button variant="secondary" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></mux-ui-button></div>`}</div>
         ${file ? html`<div class="file-status"><span>${fileLanguage(file.name)}</span>${!file.binary && !file.tooLarge && file.text ? html`<span>${file.text.split('\n').length} lines</span>` : nothing}<span class="status-spacer"></span><span class="file-action-notice" role="status">${this.fileActionNotice}</span><span>${readableSize(file.size)}</span><span>Read only</span></div>` : nothing}
       </div>
       ${this.filesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize file explorer" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'files')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'files')}></div>` : nothing}
@@ -725,7 +724,7 @@ export class MuxSDKUtility extends LitElement {
           <mux-ui-rail-row class="project-heading" variant="root" tree directory .expanded=${this.expandedDirs.has('.')} .level=${1} label=${this.terminalMode ? 'Home · ~/' : 'All files'} tooltip=${this.listing?.root || this.projectPath} data-path="." @click=${() => { if (this.expandedDirs.has('.')) this.expandedDirs.delete('.'); else this.expandedDirs.add('.'); this.paintAll(); }}><span slot="chevron">${icon(this.expandedDirs.has('.') ? ChevronDown : ChevronRight,{size:13})}</span><span slot="icon">${icon(Folder,{size:16})}</span></mux-ui-rail-row>
           ${this.expandedDirs.has('.') ? tree : nothing}${this.error ? html`<p class="empty">${this.error}</p>` : nothing}${this.listing && !tree.length ? html`<p class="empty">${this.fileQuery ? 'No files match this filter.' : 'This folder is empty.'}</p>` : nothing}${[...this.directoryCache.values()].some(item => item.truncated) ? html`<p class="empty">Some folders show only their first 500 entries.</p>` : nothing}</div>
       </div>` : nothing}
-      ${this.quickOpen ? html`<mux-ui-dialog class="quick-dialog" open size="compact" presentation="adaptive" label="Quick Open" @dismiss=${() => this.hideQuickOpen()}><div class="quick-open"><div class="quick-input">${icon(Search,{size:18})}<input type="search" aria-label="Search project files" placeholder="Search files by name…" .value=${this.quickQuery} @input=${(event: InputEvent) => this.searchQuickOpen((event.target as HTMLInputElement).value)} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.hideQuickOpen(); } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); this.quickIndex = Math.max(0,Math.min(this.quickResults.length-1,this.quickIndex+(event.key === 'ArrowDown' ? 1 : -1))); this.paintAll(); } else if (event.key === 'Enter' && this.quickResults[this.quickIndex]) { event.preventDefault(); void this.revealFile(this.quickResults[this.quickIndex].path); } }}><kbd>ESC</kbd></div><div class="quick-results">${this.quickLoading ? html`<p>Searching project…</p>` : this.quickError ? html`<p>${this.quickError}</p>` : this.quickResults.length ? this.quickResults.map((result,index) => html`<button class=${index === this.quickIndex ? 'active' : ''} @mouseenter=${() => { this.quickIndex = index; }} @click=${() => void this.revealFile(result.path)}>${icon(fileGlyph(result.name),{size:16})}<span><strong>${result.name}</strong><small>${result.path}</small></span><em>${readableSize(result.size)}</em></button>`) : html`<p>${this.quickQuery.trim().length < 2 ? 'Type at least two characters to search the project.' : 'No matching files.'}</p>`}${this.quickTruncated && !this.quickLoading ? html`<p>Showing the first matches. Narrow your search for more.</p>` : nothing}</div></div></mux-ui-dialog>` : nothing}
+      ${this.quickOpen ? html`<mux-ui-dialog class="quick-dialog" open size="compact" presentation="adaptive" label="Quick Open" @dismiss=${() => this.hideQuickOpen()}><mux-ui-command-search aria-label="Search project files" placeholder="Search files by name…" .query=${this.quickQuery} .items=${this.quickResults.map((result): CommandSearchItem => ({id:result.path,label:result.name,description:result.path,detail:readableSize(result.size),icon:fileGlyph(result.name)}))} ?loading=${this.quickLoading} .error=${this.quickError} hint="Type at least two characters to search the project." emptyMessage="No matching files." .footer=${this.quickTruncated ? 'Showing the first matches. Narrow your search for more.' : ''} @query-change=${(event: CustomEvent<{query:string}>) => this.searchQuickOpen(event.detail.query)} @item-select=${(event: CustomEvent<{id:string}>) => void this.revealFile(event.detail.id)} @dismiss=${() => this.hideQuickOpen()}><span slot="icon">${icon(Search,{size:18})}</span></mux-ui-command-search></mux-ui-dialog>` : nothing}
     </section>`;
   }
   private changesView(): TemplateResult {
@@ -935,18 +934,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .welcome-file p { max-width:290px; margin:0; font:var(--ui-text-sm)/1.5 var(--ui-font-sans); }
     mux-sdk-utility .welcome-file mux-ui-button { margin-top:var(--ui-space-3); }
     mux-sdk-utility kbd { border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); padding:calc(var(--ui-space-1) / 2) var(--ui-space-2); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
-    mux-sdk-utility .quick-open { width:100%; max-height:min(480px,75dvh); display:flex; flex-direction:column; overflow:hidden; }
-    mux-sdk-utility .quick-input { display:flex; align-items:center; gap:var(--ui-space-5); padding:var(--ui-space-5) var(--ui-space-5); border-bottom:1px solid var(--ui-border); color:var(--ui-accent); }
-    mux-sdk-utility .quick-input input { flex:1; min-width:0; border:0; outline:0; background:transparent; color:var(--ui-text); font:var(--ui-text-lg) var(--ui-font-sans); }
-    mux-sdk-utility .quick-results { overflow:auto; padding:var(--ui-space-3); }
-    mux-sdk-utility .quick-results p { margin:var(--ui-space-6); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
-    mux-sdk-utility .quick-results button { display:flex; align-items:center; gap:var(--ui-space-4); width:100%; padding:var(--ui-space-4) var(--ui-space-4); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); text-align:left; cursor:pointer; }
-    mux-sdk-utility .quick-results button:hover, mux-sdk-utility .quick-results button.active { background:var(--ui-surface-hover); }
-    mux-sdk-utility .quick-results button > svg { flex:none; color:var(--ui-accent); }
-    mux-sdk-utility .quick-results button span { display:flex; flex:1; flex-direction:column; gap:var(--ui-space-1); min-width:0; }
-    mux-sdk-utility .quick-results button strong, mux-sdk-utility .quick-results button small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    mux-sdk-utility .quick-results button strong { font:var(--ui-text-sm) var(--ui-font-sans); }
-    mux-sdk-utility .quick-results button small, mux-sdk-utility .quick-results button em { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
     mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:840px; margin:0 auto; padding:var(--ui-space-6) clamp(var(--ui-space-7),5vw,var(--ui-space-12)) var(--ui-space-13); color:var(--ui-text); font:var(--ui-text-lg)/1.48 var(--ui-font-sans); overflow-wrap:break-word; }
     mux-sdk-utility .document-view > :first-child { margin-top:0; }
     mux-sdk-utility .document-view > :last-child { margin-bottom:0; }

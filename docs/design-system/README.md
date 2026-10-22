@@ -266,6 +266,14 @@ searched real files; Enter opened a Storybook file result and one Escape
 closed a filled live search. Pages and Changes use synthetic Storybook data
 because the isolated app had no chat.
 
+Quick Open now uses the shared Command Search inside the adaptive Dialog. The
+component owns the editable combobox, embedded result listbox, active option,
+Arrow navigation, Enter selection, Escape dismissal and status messages.
+Utility continues to fetch matching files and open the chosen path. Storybook
+shows results, loading, no results, errors, truncation and a phone sheet; the
+file welcome action uses the shared Button. The Utility inventory now counts
+seven feature-owned native controls, down from 39 at the start of this pass.
+
 The mobile pane picker uses the native Popover API for its bounded phone sheet.
 Storybook now renders its own fixture store, including nine-pane scrolling,
 attention marks, long names and a close intent that leaves the pane present.

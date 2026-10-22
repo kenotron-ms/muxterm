@@ -2,7 +2,7 @@ import { LitElement, css, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 
-export type ListboxPresentation = 'popover' | 'suggestions';
+export type ListboxPresentation = 'popover' | 'suggestions' | 'embedded';
 
 /** Shared option navigation for controls that keep DOM focus on their trigger. */
 export function listboxIndexForKey(key: string, current: number, count: number): number | null {
