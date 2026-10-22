@@ -78,6 +78,8 @@
   --ui-picker-trigger-width: 290px;
   --ui-picker-trigger-compact-width: 170px;
   --ui-chat-content-width: 790px;
+  --ui-tab-min-width: 120px;
+  --ui-tab-max-width: 210px;
   --ui-choice-list-max-height: 180px;
   --ui-composer-input-min-height: 56px;
   --ui-composer-input-max-height: 220px;

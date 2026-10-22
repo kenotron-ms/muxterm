@@ -110,12 +110,17 @@ export const Status: Story = {
 };
 export const NewTab: Story = {
   args:{sessionId:sessionId('new')},parameters:{apiFixture:utilityFixture(sessionId('new'))},
-  play:async ({canvasElement}) => { target(canvasElement)?.querySelector<HTMLButtonElement>('button[aria-label="New tab"]')?.click(); },
+  play:async ({canvasElement}) => { target(canvasElement)?.querySelector('mux-ui-tab-strip')?.shadowRoot?.querySelector<HTMLButtonElement>('button.add')?.click(); },
 };
 export const PhoneFiles: Story = {
   args:{sessionId:sessionId('phone')},parameters:{apiFixture:utilityFixture(sessionId('phone'))},
   globals:{viewport:{value:'phone390',isRotated:false}},
   play:async ({canvasElement}) => { await target(canvasElement)?.showFile('README.md'); },
+};
+export const PhoneChanges: Story = {
+  args:{sessionId:sessionId('phone-changes')},parameters:{apiFixture:utilityFixture(sessionId('phone-changes'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  play:async ({canvasElement}) => { target(canvasElement)?.showPanel('changes'); },
 };
 export const PhonePages: Story = {
   args:{sessionId:sessionId('phone-pages')},parameters:{apiFixture:utilityFixture(sessionId('phone-pages'))},

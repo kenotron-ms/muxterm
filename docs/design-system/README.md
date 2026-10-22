@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Menu, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
+3. Use the shared Button, Action Menu, Tab Strip, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -198,6 +198,14 @@ theme, the Changes diff, Pages, page deletion and Quick Open. Monaco owns the
 diff editor. The phone page list leaves more room for the editor; page deletion
 and Quick Open use the adaptive Dialog for desktop modals and phone bottom
 sheets.
+The shared Tab Strip now presents Utility's Files, Status, Changes and Pages.
+It owns roving focus, arrow/Home/End selection, Delete and close actions, and
+scrolls the selected tab into view in an overflowed phone row. Utility still
+owns each panel's data and the saved tab list. Storybook catalogs selected,
+overflowed, phone and light states. In isolated dev-local Chromium, a fresh
+chat opened Files, added a tab, selected Changes, and closed it at phone width;
+focus returned to Files. The phone page had no horizontal overflow. Review
+screenshots remain outside git.
 
 In isolated dev-local Chromium, a fresh terminal pane and real sessiond showed
 the filtered file explorer and Quick Open phone sheet. The shared file filter

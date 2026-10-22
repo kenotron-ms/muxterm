@@ -14,6 +14,8 @@ import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/menu.js';
 import '../ui/select.js';
+import '../ui/tab-strip.js';
+import type { TabStripItem } from '../ui/tab-strip.js';
 import '../ui/text-field.js';
 import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextField } from '../ui/text-field.js';
@@ -208,7 +210,7 @@ export class MuxSDKUtility extends LitElement {
   override render() {
     if (this.terminalMode) return html`<style>${this.surfaceCSS}</style><div class="terminal-files-header"><strong>Files</strong><button class="icon-button" aria-label="Close file explorer" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(X,{size:16})}</button></div><div class="utility-body" aria-label="Files">${this.filesView()}</div>`;
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style><div class="utility-tabs" role="tablist" aria-label="Chat tools">${this.tabs.map(item => html`<div class="utility-tab ${item.id === tab.id ? 'active' : ''}"><button role="tab" title=${item.filePath || this.tabTitle(item)} aria-selected=${String(item.id === tab.id)} @click=${() => this.selectTab(item.id)}>${icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}<span>${this.tabTitle(item)}</span></button><button class="tab-close" aria-label=${`Close ${this.tabTitle(item)} tab`} @click=${() => this.closeTab(item.id)}>${icon(X,{size:13})}</button></div>`)}<button class="tab-add" aria-label="New tab" title="New tab" @click=${() => this.addTab()} aria-keyshortcuts="Control+T">${icon(Plus,{size:17})}</button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style><mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : this.pagesView()}</div>`;
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
@@ -857,21 +859,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility *::-webkit-scrollbar-track { background:transparent; }
     mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--ui-text-muted) 34%,transparent); border-radius:var(--ui-radius-pill); }
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--ui-text-muted) 58%,transparent); }
-    mux-sdk-utility .utility-tabs { display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-height:var(--ui-nav-height); box-sizing:border-box; padding:var(--ui-space-2) max(var(--ui-space-4),var(--wco-right-inset,0)) var(--ui-space-2) var(--ui-space-4); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); overflow-x:auto; }
-    @media (display-mode: window-controls-overlay) { mux-sdk-utility .utility-tabs { -webkit-app-region:no-drag; app-region:no-drag; } }
-    mux-sdk-utility .utility-tab { display:flex; align-items:center; flex:0 1 210px; min-width:120px; height:29px; border:1px solid transparent; border-radius:var(--ui-radius-lg); color:var(--ui-text-muted); }
-    mux-sdk-utility .utility-tab:not(:first-child):not(.active) { border-left-color:var(--ui-border); border-radius:0; }
-    mux-sdk-utility .utility-tab:hover { background:var(--ui-surface-hover); color:var(--ui-text); }
-    mux-sdk-utility .utility-tab.active { border-color:var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); box-shadow:0 1px 4px color-mix(in srgb,var(--ui-text) 7%,transparent); }
-    mux-sdk-utility .utility-tab button { display:flex; align-items:center; justify-content:flex-start; gap:var(--ui-space-4); min-width:0; height:100%; border:0; background:transparent; color:inherit; cursor:pointer; }
-    mux-sdk-utility .utility-tab .tab-select { flex:1; padding:0 var(--ui-space-3) 0 var(--ui-space-5); font:500 var(--ui-text-xs) var(--ui-font-sans); }
-    mux-sdk-utility .utility-tab .tab-select svg { flex:none; }
-    mux-sdk-utility .utility-tab .tab-select span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    mux-sdk-utility .utility-tab .tab-close { flex:none; opacity:0; }
-    mux-sdk-utility .utility-tab:hover .tab-close, mux-sdk-utility .utility-tab.active .tab-close, mux-sdk-utility .utility-tab:focus-within .tab-close { opacity:1; }
-    mux-sdk-utility .utility-tabs button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
-    mux-sdk-utility .tab-add { flex:none; }
-    @media (pointer:coarse) { mux-sdk-utility .utility-tab .tab-close { opacity:1; } }
     mux-sdk-utility .new-tab-surface { box-sizing:border-box; width:100%; height:100%; padding:var(--ui-space-9) 0; background:var(--ui-surface-base); }
     mux-sdk-utility .new-tab-home { width:min(680px,calc(100% - 44px)); margin:0 auto; }
     mux-sdk-utility .new-tab-home h2 { margin:0 0 var(--ui-space-5); color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); }
