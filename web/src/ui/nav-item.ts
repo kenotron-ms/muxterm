@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { StatusTone } from './status-badge.js';
 
@@ -38,10 +38,11 @@ export class MuxUINavItem extends LitElement {
     :host([variant='section']) button { min-height:var(--ui-control-md); padding:var(--ui-space-4) var(--ui-space-6); border-radius:0; }
     :host([variant='section'][active]) button { box-shadow:inset 3px 0 var(--ui-accent); }
     .status { display:none; flex:none; width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); border-radius:50%; background:var(--ui-text-muted); }
-    :host([status-tone='neutral']) .status,:host([status-tone='success']) .status,:host([status-tone='warning']) .status,:host([status-tone='info']) .status { display:block; }
+    :host([status-tone='neutral']) .status,:host([status-tone='success']) .status,:host([status-tone='warning']) .status,:host([status-tone='info']) .status,:host([status-tone='danger']) .status { display:block; }
     :host([status-tone='success']) .status { background:var(--ui-success); }
     :host([status-tone='warning']) .status { background:var(--ui-warning); }
     :host([status-tone='info']) .status { background:var(--ui-accent); }
+    :host([status-tone='danger']) .status { background:var(--ui-danger); }
     @media (max-width:767.98px) {
       :host([variant='section']) { display:inline-flex; flex:none; }
       :host([variant='section']) button { width:auto; min-height:var(--ui-control-lg); padding:0 var(--ui-space-5); border-bottom:2px solid transparent; white-space:nowrap; }
@@ -55,7 +56,7 @@ export class MuxUINavItem extends LitElement {
   private onIconSlotChange(event: Event): void { this.hasIcon = (event.target as HTMLSlotElement).assignedElements({flatten:true}).length > 0; }
   override render() {
     const accessibleLabel = this.statusTone && this.statusLabel ? `${this.label}, ${this.statusLabel}` : this.label;
-    return html`<button class=${this.description ? 'described' : ''} type="button" title=${this.label} aria-label=${accessibleLabel} aria-describedby=${this.description ? 'description' : ''} aria-current=${this.active ? 'page' : 'false'}>
+    return html`<button class=${this.description ? 'described' : ''} type="button" title=${this.label} aria-label=${accessibleLabel} aria-describedby=${this.description ? 'description' : nothing} aria-current=${this.active ? 'page' : 'false'}>
       <span class="icon" aria-hidden="true" ?hidden=${!this.hasIcon && !this.querySelector('[slot="icon"]')}><slot name="icon" @slotchange=${this.onIconSlotChange}></slot></span>
       <span class="copy"><span class="label">${this.label}</span>${this.description ? html`<span class="description" id="description">${this.description}</span>` : ''}</span>
       <span class="status" aria-hidden="true"></span>

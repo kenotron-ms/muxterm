@@ -199,6 +199,7 @@ class IntentTabRenderer implements ITabRenderer {
   constructor(
     private readonly _target: PaneCloseTarget,
     private readonly _requestClose: (target: PaneCloseTarget) => void,
+    private readonly _paint: (tabEl: HTMLElement, paneId: number, title: string) => void,
   ) {
     this.element = document.createElement('div');
     this.element.className = 'dv-default-tab';
@@ -253,8 +254,7 @@ class IntentTabRenderer implements ITabRenderer {
   };
 
   private _render(): void {
-    this._content.textContent = this._title;
-    this._action.setAttribute('aria-label', `Close pane ${this._title || this._target.paneId}`);
+    this._paint(this._content, this._target.paneId, this._title);
   }
 }
 
@@ -1205,6 +1205,7 @@ export class MuxDock extends LitElement {
         return new IntentTabRenderer(
           { targetKind: 'pane', workspaceId: this.workspaceKey, paneId },
           (target) => this._emitPaneCloseTarget(target),
+          (tabEl, id, title) => this._paintTab(tabEl, id, title),
         );
       },
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].

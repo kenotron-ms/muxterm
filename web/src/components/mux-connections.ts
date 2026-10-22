@@ -144,14 +144,22 @@ export class MuxConnections extends LitElement {
     if(id==='microsoft') return this.statusTone(this.microsoft?.personal.state||'');
     const services=this.data?.catalog.filter(service=>service.group==='Google Workspace')??[];
     if(services.some(service=>this.serviceStatusTone(service)==='warning')) return 'warning';
-    return services.some(service=>this.serviceStatusTone(service)==='success')?'success':'neutral';
+    if(services.some(service=>this.serviceStatusTone(service)==='success')) return 'success';
+    return services.some(service=>this.serviceStatusTone(service)==='info')?'info':'neutral';
   }
   private providerStatusLabel(id:'github'|'microsoft'|'google'):string {
     if (!this.data || !this.remotes || !this.microsoft) return 'Status unavailable';
     const tone = this.providerStatusTone(id);
     if (tone === 'success') return 'Ready';
     if (tone === 'warning') return 'Needs attention';
-    if (tone === 'info') return 'Sign-in in progress';
+    if (tone === 'info') {
+      if (id === 'google') {
+        const serviceIds=new Set(this.data.catalog.filter(service=>service.group==='Google Workspace').map(service=>service.id));
+        const items=this.remotes.items.filter(item=>item.provider&&serviceIds.has(item.provider));
+        if (!items.some(item=>item.state==='pending')) return 'Finish setup';
+      }
+      return 'Sign-in in progress';
+    }
     return 'Not connected';
   }
   private serviceStatusTone(service:Service):StatusTone {
@@ -162,6 +170,7 @@ export class MuxConnections extends LitElement {
     const items=this.remotes?.items.filter(item=>item.provider===service.id)??[];
     if (items.some(item=>item.state==='needs-attention')) return 'warning';
     if (items.some(item=>item.state==='ready'&&item.allowedTools.length>0)) return 'success';
+    if (items.some(item=>['pending','authorized','ready'].includes(item.state))) return 'info';
     return 'neutral';
   }
   private async run(name:string, action:()=>Promise<unknown>) {
@@ -266,7 +275,7 @@ If I already have a connection, check its status first. Do not remove or replace
         <mux-ui-text-field label="Client ID" aria-label="Google client ID" autocomplete="off" .value=${this.googleClientID} @input=${(e:Event)=>this.googleClientID=(e.target as MuxUITextField).value}></mux-ui-text-field>
         <mux-ui-text-field label="Client secret" aria-label="Google client secret" type="password" autocomplete="off" .value=${this.googleClientSecret} @input=${(e:Event)=>this.googleClientSecret=(e.target as MuxUITextField).value}></mux-ui-text-field>
         <div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy||!this.googleClientID.trim()||!this.googleClientSecret.trim()} @click=${()=>this.createGoogle(service)}>Save app details</mux-ui-button></div></section></details>
-      ${items.map(item=>html`<div class="box"><div class="head"><strong>${item.name} connection</strong><mux-ui-status-badge tone=${item.state==='ready'&&!item.allowedTools.length?'warning':this.statusTone(item.state)}>${item.state==='ready'?(item.allowedTools.length?'Ready':'Choose tools'):item.state==='authorized'?'Authorized · check tools':item.state==='needs-attention'?'Needs attention':'Sign in required'}</mux-ui-status-badge></div>
+      ${items.map(item=>html`<div class="box"><div class="head"><strong>${item.name} connection</strong><mux-ui-status-badge tone=${item.state==='ready'&&!item.allowedTools.length?'warning':this.statusTone(item.state)}>${item.state==='ready'?(item.allowedTools.length?'Ready':'Choose tools'):item.state==='authorized'?'Authorized · check tools':item.state==='pending'?'Sign-in in progress':item.state==='needs-attention'?'Needs attention':'Sign in required'}</mux-ui-status-badge></div>
         <p class="note">${item.error||(item.state==='ready'?`${item.toolCount} approved read tools found; ${item.allowedTools.length} enabled for chats.`:item.state==='authorized'?'Check service access to discover read tools.':'Sign in, then check service access to discover read tools.')}</p>
         <div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy} @click=${()=>this.authorizeRemote(item.id)}>${item.state==='authorization-required'?'Sign in with Google':'Reauthorize'}</mux-ui-button><mux-ui-button variant="secondary" ?disabled=${!!this.busy||item.state==='authorization-required'} @click=${()=>this.checkRemote(item.id)}>Check tools</mux-ui-button><mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${()=>this.removeRemote(item.id)}>Remove</mux-ui-button></div>
         ${item.discoveredTools?.length?html`<h3>Enable read tools for chats</h3><p class="note">These tools are off until you save your selection. Enabled tools appear in new chats across all harnesses.</p>

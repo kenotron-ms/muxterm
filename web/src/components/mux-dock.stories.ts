@@ -85,6 +85,22 @@ export const AttentionAndSession: Story = {
   },
   play:async ({canvasElement}) => { await ready(canvasElement); },
 };
+export const TitleChangeKeepsStatus: Story = {
+  render:() => {
+    homeSessions.set([{ ...FIXTURE_SESSIONS[0], paneId: 591, workspaceId: workspace }], 'fixture');
+    store.ringPane(591);
+    return view(591);
+  },
+  play:async ({canvasElement}) => {
+    const dock = await ready(canvasElement);
+    const panel = (dock as unknown as { _panels:Map<number,{api:{setTitle(title:string):void}}> })._panels.get(591);
+    if (!panel) throw new Error('Dockview pane is missing');
+    panel.api.setTitle('Renamed shell');
+    const spoken = dock.querySelector<HTMLElement>('.mux-tab-spoken-title')?.textContent || '';
+    if (!spoken.includes('Renamed shell') || !spoken.includes('new activity') || !spoken.includes('session'))
+      throw new Error(`Dock tab lost its spoken status after title change: ${spoken}`);
+  },
+};
 export const Tabs: Story = {
   render:() => view(511),
   play:async ({canvasElement}) => { await create(canvasElement,'New pane'); },

@@ -11,6 +11,7 @@ import '../ui/radio-group.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import '../ui/range-field.js';
 import '../ui/select.js';
+import '../ui/status-badge.js';
 import type { MuxUISelect } from '../ui/select.js';
 import '../ui/switch.js';
 import '../ui/text-field.js';
@@ -351,30 +352,7 @@ export class MuxSettingsSurface extends LitElement {
       margin: 0 0 var(--ui-space-6) 0;
     }
 
-    .notif-status {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--ui-space-3);
-      color: var(--ui-text-muted);
-      font-size: var(--ui-text-md);
-    }
-    .notif-status.granted {
-      color: var(--ui-text);
-    }
-    .notif-status.denied {
-      color: var(--ui-danger-text);
-    }
-
-    .notif-help-link {
-      display: inline-block;
-      margin-top: var(--ui-space-3);
-      font-size: var(--ui-text-sm);
-      color: var(--ui-accent);
-      text-decoration: none;
-    }
-    .notif-help-link:hover {
-      text-decoration: underline;
-    }
+    .notif-permission-actions { display:flex; align-items:center; gap:var(--ui-space-5); flex-wrap:wrap; }
 
     .notif-hint {
       margin-top: var(--ui-space-4);
@@ -943,42 +921,33 @@ export class MuxSettingsSurface extends LitElement {
 
     if (perm === 'unsupported') {
       return html`
-        <p class="notif-description">
+        <mux-ui-feedback kind="info" appearance="panel" density="compact">
           Desktop notifications are not supported in this browser.
-        </p>
+        </mux-ui-feedback>
       `;
     }
 
     if (perm === 'granted') {
       return html`
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <span class="notif-status granted">✓ Desktop Notifications: Enabled</span>
-          <mux-ui-button size="small" @click="${() => this._sendTestNotification()}">
+        <div class="notif-permission-actions">
+          <mux-ui-status-badge tone="success" dot>Enabled</mux-ui-status-badge>
+          <mux-ui-button size="small" variant="secondary" @click="${() => this._sendTestNotification()}">
             Send test notification
           </mux-ui-button>
         </div>
-        <p class="notif-hint" style="margin-top:8px">
-          Notifications appear when a bell fires in a background pane.
-          If the test notification doesn't appear, check
-          <strong>System Settings → Notifications → [your browser]</strong>
-          and make sure "Allow Notifications" is on. macOS Focus / Do Not Disturb
-          also suppresses them.
+        <p class="notif-hint">
+          Notifications appear when a background pane needs your attention.
+          If the test does not appear, check your browser and system notification settings.
         </p>
       `;
     }
 
     if (perm === 'denied') {
       return html`
-        <span class="notif-status denied">
-          Blocked by browser — update in browser settings
-        </span>
-        <br>
-        <a
-          class="notif-help-link"
-          href="https://support.google.com/chrome/answer/3220216"
-          target="_blank"
-          rel="noopener noreferrer"
-        >How to re-enable notifications →</a>
+        <mux-ui-feedback kind="warning" appearance="panel" density="compact">
+          Notifications are blocked for this site. Allow them in your browser's site settings.
+          <mux-ui-button slot="action" size="small" variant="secondary" @click=${() => this._refreshNotifPermission()}>Check again</mux-ui-button>
+        </mux-ui-feedback>
       `;
     }
 

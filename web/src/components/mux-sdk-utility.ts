@@ -866,14 +866,16 @@ export class MuxSDKUtility extends LitElement {
     }
     if (this.activeTab !== 'pages') return;
     for (const field of this.querySelectorAll<HTMLTextAreaElement>('.page-title')) {
-      field.style.height = 'auto';
-      field.style.height = `${Math.max(field.scrollHeight, 42)}px`;
+      this.sizePageTitle(field);
     }
   }
-  private growPageField(event: InputEvent) {
-    const field = event.target as HTMLTextAreaElement;
+  private sizePageTitle(field: HTMLTextAreaElement) {
     field.style.height = 'auto';
-    field.style.height = `${field.scrollHeight}px`;
+    const minHeight = Number.parseFloat(getComputedStyle(field).minHeight) || 0;
+    field.style.height = `${Math.max(field.scrollHeight, minHeight)}px`;
+  }
+  private growPageField(event: InputEvent) {
+    this.sizePageTitle(event.target as HTMLTextAreaElement);
   }
   private pagesView(): TemplateResult {
     const page = this.pages?.find(item => item.id === this.pageId);

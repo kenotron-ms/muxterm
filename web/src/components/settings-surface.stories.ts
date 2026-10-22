@@ -211,6 +211,31 @@ export const PhoneLightAppearance: Story = {
 };
 export const Notifications: Story = { args: { section:'notifications' } };
 export const PhoneNotifications: Story = { args:{section:'notifications'}, globals:{viewport:{value:'phone390',isRotated:false}}, render:renderPhonePage };
+async function showNotificationPermission(canvasElement: HTMLElement, permission: NotificationPermission | 'unsupported') {
+  const settings = canvasElement.querySelector<MuxSettingsSurface>('mux-settings-surface');
+  if (!settings) return;
+  await settings.updateComplete;
+  Object.assign(settings, { _notifPermission:permission });
+  await settings.updateComplete;
+}
+export const NotificationsEnabled: Story = {
+  args:{section:'notifications'},
+  play:({canvasElement}) => showNotificationPermission(canvasElement, 'granted'),
+};
+export const NotificationsBlocked: Story = {
+  args:{section:'notifications'},
+  play:({canvasElement}) => showNotificationPermission(canvasElement, 'denied'),
+};
+export const PhoneNotificationsBlocked: Story = {
+  args:{section:'notifications'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  render:renderPhonePage,
+  play:({canvasElement}) => showNotificationPermission(canvasElement, 'denied'),
+};
+export const NotificationsUnsupported: Story = {
+  args:{section:'notifications'},
+  play:({canvasElement}) => showNotificationPermission(canvasElement, 'unsupported'),
+};
 export const AIOff: Story = { args: { section:'ai' } };
 export const AIConfigured: Story = {
   args: { section:'ai', aiStatus:{ enabled:true, source:'settings', keyHint:'demo' } },

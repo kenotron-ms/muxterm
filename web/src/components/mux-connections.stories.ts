@@ -76,6 +76,10 @@ export const MicrosoftNeedsAttention:Story = {args:{selection:'microsoft'},param
 export const GooglePreview:Story = {args:{selection:'google'}};
 export const GoogleToolSelection:Story = {args:{selection:'google'},parameters:{apiFixture:fixtureFor({remoteItems:[googleToolsAccount]})}};
 export const PhoneGoogleToolSelection:Story = {args:{selection:'google'},globals:{viewport:{value:'phone390',isRotated:false}},parameters:GoogleToolSelection.parameters};
+export const GoogleSignInPending:Story = {args:{selection:'google'},parameters:{apiFixture:fixtureFor({remoteItems:[{...googleAccount,state:'pending',toolCount:0,allowedTools:[]}]})}};
+export const PhoneGoogleSignInPending:Story = {args:{selection:'google'},globals:{viewport:{value:'phone390',isRotated:false}},parameters:GoogleSignInPending.parameters};
+export const GoogleFinishSetup:Story = {args:{selection:'google'},parameters:{apiFixture:fixtureFor({remoteItems:[{...googleAccount,state:'authorized',toolCount:0,allowedTools:[]}]})}};
+export const GoogleChooseTools:Story = {args:{selection:'google'},parameters:{apiFixture:fixtureFor({remoteItems:[{...googleAccount,allowedTools:[]}]})}};
 export const GoogleRemoveConfirmation:Story = {args:{selection:'google'},parameters:{apiFixture:fixtureFor({remoteItems:[googleAccount]})},play:openConfirmation('Remove')};
 export const GoogleManualEntry:Story = {args:{selection:'google'},play:async ({canvasElement})=>{
   const screen=canvasElement.querySelector<MuxConnections>('mux-connections');

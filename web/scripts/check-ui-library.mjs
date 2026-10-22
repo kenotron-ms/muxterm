@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import ts from 'typescript';
 
 const directory = new URL('../src/ui/', import.meta.url);
 const files = await readdir(directory);
@@ -12,8 +13,11 @@ function styleSource(source) {
     ...source.matchAll(/\bvisualizationCSS\s*=\s*`([\s\S]*?)`/g),
     ...source.matchAll(/\bstyle\.textContent\s*=\s*`([\s\S]*?)`/g),
     ...source.matchAll(/<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/gi),
+    ...source.matchAll(/\bstyle\s*=\s*"([^"]*)"/g),
+    ...source.matchAll(/\bstyle\s*=\s*'([^']*)'/g),
+    ...source.matchAll(/\bstyle\.cssText\s*=\s*(['"`])([\s\S]*?)\1/g),
     ...source.matchAll(/\bunsafeCSS\(\s*(['"`])([\s\S]*?)\1\s*\)/g),
-  ].map(match => match[2] ?? match[1]).join('\n');
+  ].map(match => `${match[2] ?? match[1]};`).join('\n');
 }
 
 function literalScaleCount(styles) {
@@ -31,6 +35,23 @@ function literalDimensionCount(styles) {
 
 function literalColorCount(styles) {
   return [...styles.matchAll(/#[\da-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\s*\(/gi)].length;
+}
+
+function htmlSource(source) {
+  const file = ts.createSourceFile('component.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const chunks = [];
+  const visit = (node) => {
+    if (ts.isTaggedTemplateExpression(node) && ts.isIdentifier(node.tag) && node.tag.text === 'html') {
+      const template = node.template;
+      if (ts.isNoSubstitutionTemplateLiteral(template)) chunks.push(template.text);
+      else if (ts.isTemplateExpression(template)) {
+        chunks.push(template.head.text, ...template.templateSpans.map(span => span.literal.text));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return chunks.join('\n');
 }
 
 for (const file of files.filter(name => name.endsWith('.ts') && !name.endsWith('.stories.ts'))) {
@@ -100,6 +121,7 @@ for (const [name, url] of featureFiles) {
     failed = true;
   }
   const styles = styleSource(source);
+  const templates = htmlSource(source);
   if (/z-index\s*:\s*-?\d/.test(styles)) {
     console.error(`src/${name}: use the shared --ui-z-* layer tokens instead of a literal z-index`);
     failed = true;
@@ -109,7 +131,7 @@ for (const [name, url] of featureFiles) {
     literalColors: literalColorCount(styles),
     literalScale: literalScaleCount(styles),
     literalDimensions: literalDimensionCount(styles),
-    nativeControls: [...source.matchAll(/<(?:button|input|select|textarea)\b/g)].length,
+    nativeControls: [...templates.matchAll(/<(?:button|input|select|textarea)\b/g)].length,
   };
   const allowed = baseline[name] ?? { legacyTokens: 0, literalColors: 0, literalScale: 0, literalDimensions: 0, nativeControls: 0 };
   for (const key of Object.keys(counts)) {
