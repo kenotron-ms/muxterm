@@ -12,6 +12,7 @@ import type { MuxUIMenu } from '../ui/menu.js';
 import '../ui/text-field.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
+import '../ui/feedback.js';
 import '../ui/folder-browser.js';
 import '../ui/list-row.js';
 import '../ui/menu.js';
@@ -44,6 +45,10 @@ function chatsByRole(chats: SDKChat[], laneIds: Set<string>): SDKChat[] {
     ...chats.filter(chat => !chat.operator && laneIds.has(chat.id)),
     ...chats.filter(chat => !chat.operator && !laneIds.has(chat.id)),
   ];
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 @customElement('mux-chat-workspace')
@@ -153,7 +158,6 @@ export class MuxChatWorkspace extends LitElement {
     .confirmation h2 { margin:0; font-size:var(--ui-text-xl); }
     .confirmation p { margin:var(--ui-space-4) 0 var(--ui-space-7); color:var(--ui-text-muted); }
     .confirmation-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); }
-    .error { color:var(--ui-danger); padding:var(--ui-space-2); }
     @media(max-width:550px) {
       .row .action,.chat-row .action { display:none; opacity:1; }
       .row .action.more,.chat-row .action.more,.row:not(:has(.action.more)) .action.new-chat { display:inline-flex; }
@@ -191,7 +195,7 @@ export class MuxChatWorkspace extends LitElement {
     try {
       await sdkChats.rename(id, title);
       this.renamingId = ''; this.error = '';
-    } catch (error) { this.error = String(error); }
+    } catch (error) { this.error = errorMessage(error); }
   }
   private startEdit() {
     const project = this.model.project;
@@ -211,7 +215,7 @@ export class MuxChatWorkspace extends LitElement {
   }
   private async browseFolder(target: 'primary' | 'source', path: string) {
     try { this.editListing = await sdkChats.folders(path); this.browseTarget = target; this.error = ''; }
-    catch (error) { this.error = String(error); }
+    catch (error) { this.error = errorMessage(error); }
   }
   private selectFolder() {
     if (!this.editListing) return;
@@ -230,7 +234,7 @@ export class MuxChatWorkspace extends LitElement {
     try {
       await sdkChats.updateProject(this.model.id, { name:this.editName.trim(), path:this.editPath.trim(), sourceFolders:this.editFolders });
       this.editing = false; this.error = '';
-    } catch (error) { this.error = String(error); }
+    } catch (error) { this.error = errorMessage(error); }
   }
   private requestRemoveProject() {
     this.closeMenu();
@@ -245,17 +249,17 @@ export class MuxChatWorkspace extends LitElement {
       if (pending.kind === 'remove-project') await sdkChats.removeProject(pending.id);
       else await sdkChats.setArchived(pending.id, true);
       this.error = '';
-    } catch (error) { this.error = String(error); }
+    } catch (error) { this.error = errorMessage(error); }
   }
   private async pinProject() {
     this.closeMenu();
     try { await sdkChats.updateProject(this.model.id, { pinned: !this.model.project?.pinned }); this.error = ''; }
-    catch (error) { this.error = String(error); }
+    catch (error) { this.error = errorMessage(error); }
   }
   private async pinChat(chat: SDKChat) {
     this.closeMenu();
     try { await sdkChats.setPinned(chat.id, !chat.pinned); this.error = ''; }
-    catch (error) { this.error = String(error); }
+    catch (error) { this.error = errorMessage(error); }
   }
   private async toggleArchive(chat: SDKChat) {
     this.closeMenu();
@@ -267,12 +271,12 @@ export class MuxChatWorkspace extends LitElement {
       }
     }
     try { await sdkChats.setArchived(chat.id, !chat.archived); this.error = ''; }
-    catch (error) { this.error = String(error); }
+    catch (error) { this.error = errorMessage(error); }
   }
   private async moveChat(chat: SDKChat, projectId: string) {
     this.closeMenu();
     try { await sdkChats.moveChat(chat.id, projectId); this.error = ''; }
-    catch (error) { this.error = `Could not move chat: ${String(error)}`; }
+    catch (error) { this.error = `Could not move chat: ${errorMessage(error)}`; }
   }
   private openChat(chat: SDKChat) {
     this.closeMenu();
@@ -329,7 +333,7 @@ export class MuxChatWorkspace extends LitElement {
         ${this.editFolders.map((folder,index) => html`<div class="source"><mux-ui-text-field aria-label=${`Source folder ${index+1}`} .value=${folder} @input=${(e:Event) => { const next=[...this.editFolders]; next[index]=(e.target as MuxUITextField).value; this.editFolders=next; }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label=${`Remove source folder ${index+1}`} @click=${() => { this.editFolders=this.editFolders.filter((_,i)=>i!==index); }}>${icon(X,{size:14})}</mux-ui-button></div>`)}
         <div class="source"><mux-ui-text-field aria-label="Add source folder path" placeholder="/absolute/path/to/source" .value=${this.newSource} @input=${(e:Event) => { this.newSource=(e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') this.addSource(); }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Browse source folders" tooltip="Browse folders" @click=${() => void this.browseFolder('source',this.newSource || this.editPath)}>${icon(Folder,{size:15})}</mux-ui-button><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Add source folder" tooltip="Add source folder" @click=${() => this.addSource()}>${icon(FolderPlus,{size:15})}</mux-ui-button></div>
         ${this.editListing ? html`<mux-ui-folder-browser aria-label="Folder browser" .listing=${this.editListing} choose-label="Choose" @folder-navigate=${(event:CustomEvent<{path:string}>) => void this.browseFolder(this.browseTarget,event.detail.path)} @folder-choose=${() => this.selectFolder()}></mux-ui-folder-browser>` : nothing}
-        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+        ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.error}</mux-ui-feedback>` : nothing}
         <div class="editor-actions"><mux-ui-button size="small" variant="quiet" @click=${() => { this.editing=false; this.error=''; }}>Cancel</mux-ui-button><mux-ui-button size="small" variant="primary" ?disabled=${!this.editName.trim() || !this.editPath.trim()} @click=${() => void this.saveProject()}>Save project</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
       ${this.pendingConfirmation ? html`<mux-ui-dialog size="compact" presentation="adaptive" label=${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project' : 'Archive linked chat'} open @dismiss=${() => { this.pendingConfirmation=undefined; }}><div class="confirmation">
@@ -339,7 +343,7 @@ export class MuxChatWorkspace extends LitElement {
           : `Archive “${this.pendingConfirmation.name}”? It will be removed from its operator's lanes.`}</p>
         <div class="confirmation-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingConfirmation=undefined; }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => void this.confirmPendingAction()}>${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project' : 'Archive chat'}</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
-      ${this.error && !this.editing ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+      ${this.error && !this.editing ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.error}</mux-ui-feedback>` : nothing}
       ${this.open ? html`<div class="chats">${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<mux-ui-text-field class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}></mux-ui-text-field><mux-ui-button class="rename-save" variant="quiet" size="small" icon-only accessible-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</mux-ui-button>` : html`
@@ -383,7 +387,7 @@ export class MuxChatList extends LitElement {
     .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--ui-danger); }
     .pin-unpin { flex:none; opacity:0; }
     .pin-row:hover .pin-unpin,.pin-row:focus-within .pin-unpin { opacity:1; }
-    .pin-error { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); color:var(--ui-danger); }
+    .pin-feedback { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
     @media(hover:none), (max-width:550px) { .pin-unpin { opacity:1; } }
   `;
   override connectedCallback() {
@@ -401,7 +405,7 @@ export class MuxChatList extends LitElement {
       if (kind === 'project') await sdkChats.updateProject(id, { pinned:false });
       else await sdkChats.setPinned(id, false);
       this.pinError = '';
-    } catch (error) { this.pinError = `Could not unpin ${name}: ${String(error)}`; }
+    } catch (error) { this.pinError = `Could not unpin ${name}: ${errorMessage(error)}`; }
   }
   override render() {
     void this.version;
@@ -419,7 +423,7 @@ export class MuxChatList extends LitElement {
     ];
     return html`
       ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><mux-ui-list-row class="pin-link" label=${item.name} tooltip=${item.name} ?selected=${item.kind === 'chat' && this.selectedSession === item.id} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span slot="icon" class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span slot="icon" class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}</mux-ui-list-row><mux-ui-button class="pin-unpin" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Unpin ${item.kind} ${item.name}`} tooltip=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</mux-ui-button></div>`)}</div>` : nothing}
-      ${this.pinError ? html`<div class="pin-error" role="alert">${this.pinError}</div>` : nothing}
+      ${this.pinError ? html`<mux-ui-feedback class="pin-feedback" kind="error" appearance="panel" density="compact">${this.pinError}</mux-ui-feedback>` : nothing}
       ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
     `;
   }

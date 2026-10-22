@@ -142,6 +142,10 @@ Ungrouped new-chat action and pinned unpin actions also stay visible. Storybook
 verified the phone project sheet and Escape focus restoration, and touch
 emulation measured a 44 px target. Screenshots remain outside git.
 
+Project, editor and pinned-action failures now render through compact Feedback panels.
+Storybook opens a project action against a failing fixture at desktop and
+phone widths; Chromium confirmed the alert name and no phone overflow.
+
 Project disclosure, chat destinations and pinned entries now use the shared
 List Row. Its native inner button owns focus, selected and expanded semantics;
 the chat list keeps its actions and chat routing. Storybook catalogs group,

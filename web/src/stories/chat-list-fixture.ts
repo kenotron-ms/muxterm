@@ -21,8 +21,10 @@ const initialArchived: SDKChat[] = [
 let projects: SDKProject[] = [];
 let chats: SDKChat[] = [];
 let archived: SDKChat[] = [];
+let rejectProjectUpdate = false;
 
-export function resetChatListFixture(empty = false, linkedLane = false): void {
+export function resetChatListFixture(empty = false, linkedLane = false, failProjectUpdate = false): void {
+  rejectProjectUpdate = failProjectUpdate;
   projects = empty ? [] : initialProjects.map(project => ({...project, sourceFolders:[...(project.sourceFolders ?? [])]}));
   chats = empty ? [] : initialChats.map(chat => ({...chat}));
   if (linkedLane) chats.unshift({ id:'chat-operator', workspaceId:'atlas', projectPath:'/home/demo/atlas', title:'Coordinate workspace navigation', harness:'codex', state:'working', operator:true, operatorLanes:['chat-build'], createdAt:'2026-10-21T13:00:00Z' });
@@ -51,6 +53,7 @@ export const chatListFixture: ApiFixture = ({url,method,init}) => {
   const projectId = url.pathname.match(/\/api\/sdk-projects\/([^/]+)$/)?.[1];
   if (projectId && method === 'PATCH') {
     const change = JSON.parse(String(init?.body ?? '{}')) as Partial<SDKProject>;
+    if (rejectProjectUpdate) return new Response('Could not update this project. Try again.', {status:503});
     projects = projects.map(project => project.id === projectId ? {...project,...change} : project);
     return fixtureJSON(projects.find(project => project.id === projectId));
   }

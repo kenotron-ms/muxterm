@@ -8,8 +8,8 @@ import type { MuxUIListRow } from '../ui/list-row.js';
 import type { MuxUIMenuItem } from '../ui/menu-item.js';
 import './mux-chat-list.js';
 
-function view(selectedSession = 'chat-editor', phone = false, empty = false, linkedLane = false) {
-  resetChatListFixture(empty, linkedLane);
+function view(selectedSession = 'chat-editor', phone = false, empty = false, linkedLane = false, failProjectUpdate = false) {
+  resetChatListFixture(empty, linkedLane, failProjectUpdate);
   return html`<div style="box-sizing:border-box;width:${phone ? '335px' : '348px'};max-width:100vw;min-height:844px;padding:var(--ui-space-4);background:var(--ui-surface-nav);color:var(--ui-text)">
     <mux-chat-list .selectedSession=${selectedSession}></mux-chat-list>
   </div>`;
@@ -24,13 +24,30 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const ProjectsAndPinned: Story = {};
-export const ProjectActions: Story = { play:async ({canvasElement}) => {
+const openProjectActions = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
   await list?.updateComplete;
   const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
   project?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Project options for Atlas"]')?.click();
-} };
+};
+export const ProjectActions: Story = { play:openProjectActions };
 export const PhoneProjectActions: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:ProjectActions.play };
+const showProjectActionError = async (context: {canvasElement: HTMLElement}) => {
+  await openProjectActions(context);
+  const list = context.canvasElement.querySelector<MuxChatList>('mux-chat-list');
+  const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
+  await project?.updateComplete;
+  [...(project?.shadowRoot?.querySelectorAll<MuxUIMenuItem>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Unpin project'))?.click();
+};
+export const ProjectActionError: Story = { render:() => view('chat-editor',false,false,false,true), play:showProjectActionError };
+export const PhoneProjectActionError: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true,false,false,true), play:showProjectActionError };
+const showPinnedActionError = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+  const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
+  await list?.updateComplete;
+  list?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Unpin project Atlas"]')?.click();
+};
+export const PinnedActionError: Story = { render:() => view('chat-editor',false,false,false,true), play:showPinnedActionError };
+export const PhonePinnedActionError: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true,false,false,true), play:showPinnedActionError };
 const openMoveChat = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
   await list?.updateComplete;
@@ -68,6 +85,15 @@ const openProjectEditor = async ({canvasElement}: {canvasElement: HTMLElement}) 
 };
 export const EditProject: Story = { play:openProjectEditor };
 export const PhoneEditProject: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true), play:openProjectEditor };
+const showEditProjectError = async (context: {canvasElement: HTMLElement}) => {
+  await openProjectEditor(context);
+  const list = context.canvasElement.querySelector<MuxChatList>('mux-chat-list');
+  const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
+  await project?.updateComplete;
+  project?.shadowRoot?.querySelector<MuxUIButton>('.editor-actions mux-ui-button[variant="primary"]')?.click();
+};
+export const EditProjectError: Story = { render:() => view('chat-editor',false,false,false,true), play:showEditProjectError };
+export const PhoneEditProjectError: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true,false,false,true), play:showEditProjectError };
 const openProjectFolderBrowser = async (context: {canvasElement:HTMLElement}) => {
   await openProjectEditor(context);
   const list = context.canvasElement.querySelector<MuxChatList>('mux-chat-list');
