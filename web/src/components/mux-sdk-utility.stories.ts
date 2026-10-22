@@ -13,6 +13,7 @@ const listing = (path: string) => fixtureJSON({
     { name:'docs', dir:true, size:0, modified:1761120000 },
     { name:'src', dir:true, size:0, modified:1761120000 },
     { name:'README.md', dir:false, size:1268, modified:1761120000 },
+    { name:'preview.html', dir:false, size:131, modified:1761120000 },
     { name:'package.json', dir:false, size:489, modified:1761120000 },
   ] : path === 'docs' ? [
     { name:'design-system.md', dir:false, size:608, modified:1761120000 },
@@ -21,10 +22,11 @@ const listing = (path: string) => fixtureJSON({
   ] : [],
 });
 
-const artifacts: Record<string, {kind:'markdown'|'text'; text:string}> = {
+const artifacts: Record<string, {kind:'markdown'|'text'; text:string; contentType?:string}> = {
   'README.md': {kind:'markdown',text:'# Muxterm component library\n\nA shared visual language for the terminal, chat, and project tools.\n\n## Review checklist\n\n- Browse every component in Storybook\n- Inspect the phone layout\n- Use semantic tokens for color and spacing'},
   'docs/design-system.md': {kind:'markdown',text:'# Design system\n\nUse the shared Button, Feedback, Dialog, and navigation components.\n\n**Themes** provide semantic surfaces, borders, text, accent, and focus.'},
   'src/app.ts': {kind:'text',text:'export class MuxApp {\n  render() {\n    return "Component library";\n  }\n}\n'},
+  'preview.html': {kind:'text',contentType:'text/html',text:'<main id="result">Preview ready</main><script>document.querySelector("#result").textContent="Interactive preview running";</script>'},
   'package.json': {kind:'text',text:'{"name":"muxterm-demo","scripts":{"storybook":"storybook dev"}}'},
 };
 
@@ -40,7 +42,11 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
       const path = url.searchParams.get('path') || '';
       const artifact = artifacts[path];
       if (!artifact) return fixtureJSON({error:'File not found'},404);
-      return fixtureJSON({path,name:path.split('/').pop(),size:artifact.text.length,modified:1761120000,kind:artifact.kind,contentType:artifact.kind === 'markdown' ? 'text/markdown' : 'text/plain',text:artifact.text,tooLarge:false,maxBytes:2097152,binary:false});
+      return fixtureJSON({path,name:path.split('/').pop(),size:artifact.text.length,modified:1761120000,kind:artifact.kind,contentType:artifact.contentType || (artifact.kind === 'markdown' ? 'text/markdown' : 'text/plain'),text:artifact.text,tooLarge:false,maxBytes:2097152,binary:false});
+    }
+    if (method === 'GET' && url.pathname === `${base}raw`) {
+      const artifact = artifacts[url.searchParams.get('path') || ''];
+      return artifact ? new Response(artifact.text,{headers:{'Content-Type':artifact.contentType || 'text/plain'}}) : fixtureJSON({error:'File not found'},404);
     }
     if (method === 'GET' && url.pathname === `${base}search`) {
       if (id.endsWith('-search-error')) return fixtureJSON({error:'Search unavailable'},503);
@@ -74,6 +80,14 @@ export const Files: Story = {};
 export const FilePreview: Story = {
   args:{sessionId:sessionId('preview')},parameters:{apiFixture:utilityFixture(sessionId('preview'))},
   play:async ({canvasElement}) => { await target(canvasElement)?.showFile('README.md'); },
+};
+export const HTMLPreview: Story = {
+  args:{sessionId:sessionId('html-preview')},parameters:{apiFixture:utilityFixture(sessionId('html-preview'))},
+  play:async ({canvasElement}) => { await target(canvasElement)?.showFile('preview.html'); },
+};
+export const PhoneHTMLPreview: Story = {
+  args:{sessionId:sessionId('phone-html-preview')},parameters:{apiFixture:utilityFixture(sessionId('phone-html-preview'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:HTMLPreview.play,
 };
 export const NestedFilePreview: Story = {
   args:{sessionId:sessionId('nested-preview')},parameters:{apiFixture:utilityFixture(sessionId('nested-preview'))},

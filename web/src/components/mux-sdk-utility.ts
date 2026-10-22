@@ -574,7 +574,7 @@ export class MuxSDKUtility extends LitElement {
     if (extension === 'html' || extension === 'htm' || extension === 'svg') {
       if (!this.localSource) return html`<div class="file-empty">${this.fileError || 'Loading preview…'}</div>`;
       const policy = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src ${this.interactivePreview ? "'unsafe-inline'" : "'none'"}; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">`;
-      return html`<div class="sandbox-note">${this.interactivePreview ? 'Scripts enabled for this preview' : 'Static preview · scripts disabled'}${!this.interactivePreview ? html` <button @click=${() => { this.interactivePreview = true; this.paintAll(); }}>Run preview</button>` : nothing}</div><iframe class="document-frame" title=${`Preview of ${file.name}`} sandbox=${this.interactivePreview ? 'allow-scripts' : ''} .srcdoc=${policy + this.localSource}></iframe>`;
+      return html`<div class="sandbox-note">${this.interactivePreview ? 'Scripts enabled for this preview' : 'Static preview · scripts disabled'}${!this.interactivePreview ? html`<mux-ui-button size="small" variant="secondary" @click=${() => { this.interactivePreview = true; this.paintAll(); }}>Run preview</mux-ui-button>` : nothing}</div><iframe class="document-frame" title=${`Preview of ${file.name}`} sandbox=${this.interactivePreview ? 'allow-scripts' : ''} .srcdoc=${policy + this.localSource}></iframe>`;
     }
     if (file.kind === 'image') return html`<div class="image-view"><img src=${this.endpoint('raw', this.selected)} alt=${file.name}></div>`;
     if (file.binary || file.kind === 'download') return html`<div class="file-empty">Preview unavailable for this file type.</div>`;
@@ -919,8 +919,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .file-open-wrap { position:relative; }
     mux-sdk-utility .file-open-menu { --ui-menu-offset-y:calc(var(--ui-control-sm) + var(--ui-space-1)); --ui-menu-offset-x:0; --ui-menu-width:var(--ui-toast-min-width); }
     mux-sdk-utility .file-open-menu svg { flex:none; color:var(--ui-text-muted); }
-    mux-sdk-utility .sandbox-note button { border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); background:var(--ui-surface-raised); color:var(--ui-text); padding:var(--ui-space-2) var(--ui-space-4); text-decoration:none; font:var(--ui-text-xs) var(--ui-font-sans); white-space:nowrap; cursor:pointer; }
-    mux-sdk-utility .sandbox-note button:hover { background:var(--ui-surface-hover); }
     mux-sdk-utility .status-spacer { flex:1; }
     mux-sdk-utility .viewer-body { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; }
     mux-sdk-utility .file-empty { margin:auto; padding:var(--ui-space-7); max-width:340px; text-align:center; color:var(--ui-text-muted); }

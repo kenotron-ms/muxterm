@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, List Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
+3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, List Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice List, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -277,6 +277,12 @@ Done, Close, or Escape. Storybook covers ungrouped and project locations on
 desktop and phone; the project fixture passes the selected project's folder as
 the app does. The two remaining native New Chat controls are its auto-sizing
 composer and hidden file input.
+
+HTML previews now use the shared Button for Run preview while preserving the
+iframe script gate. Storybook shows static and running states at desktop and
+phone widths; isolated Chromium opened a real HTML file, checked the sandbox
+change after the click, and measured a 44 px phone target. External scripts in
+the real project file remain blocked by the preview policy.
 
 The Utility panel uses semantic tokens for chrome and document colors, plus
 shared compact Text Field and Select controls in the file rail. Storybook's
