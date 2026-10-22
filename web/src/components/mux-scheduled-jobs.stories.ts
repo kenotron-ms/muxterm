@@ -57,6 +57,10 @@ export const NewJobEditor: Story = { play:async ({canvasElement}) => {
   await host?.updateComplete;
   host?.shadowRoot?.querySelector<HTMLElement>('mux-ui-page-intro mux-ui-button[slot="action"]')?.click();
 } };
+export const PhoneNewJobEditor: Story = {
+  ...NewJobEditor,
+  globals:{viewport:{value:'phone390',isRotated:false}},
+};
 export const EditJobEditor: Story = { play:async ({canvasElement}) => {
   const host = canvasElement.querySelector('mux-scheduled-jobs');
   for (let attempt=0;attempt<100;attempt++) {
@@ -66,6 +70,16 @@ export const EditJobEditor: Story = { play:async ({canvasElement}) => {
     await new Promise(resolve=>setTimeout(resolve,50));
   }
   throw new Error('Release notes Edit action did not appear');
+} };
+export const PausedJobEditor: Story = { play:async ({canvasElement}) => {
+  const host = canvasElement.querySelector('mux-scheduled-jobs');
+  for (let attempt=0;attempt<100;attempt++) {
+    const row = [...(host?.shadowRoot?.querySelectorAll('tbody tr') ?? [])].find(item=>item.textContent?.includes('Weekly report'));
+    const action = row?.querySelector<HTMLElement>('.row-actions mux-ui-button:last-child');
+    if (action?.shadowRoot?.querySelector('button')) { action.click(); return; }
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  throw new Error('Weekly report Edit action did not appear');
 } };
 export const FailedRunHistory: Story = { play:async ({canvasElement}) => {
   const host = canvasElement.querySelector('mux-scheduled-jobs');

@@ -9,8 +9,13 @@ import '../ui/nav-item.js';
 import '../ui/page-intro.js';
 import '../ui/select.js';
 import '../ui/status-badge.js';
+import '../ui/switch.js';
 import '../ui/text-area.js';
 import '../ui/text-field.js';
+import type { MuxUISwitch } from '../ui/switch.js';
+import type { MuxUISelect } from '../ui/select.js';
+import type { MuxUITextArea } from '../ui/text-area.js';
+import type { MuxUITextField } from '../ui/text-field.js';
 
 type Job = { id:string; chatId:string; name:string; brief:string; revision:number; schedule:string; scheduleLabel?:string; timezone:string; enabled:boolean; nextRun?:string; activeRunId?:string; lastRunId?:string; latestRun?:Run; createdAt:string };
 type Log = { at:string; kind:string; message:string };
@@ -123,8 +128,7 @@ export class MuxScheduledJobs extends LitElement {
     .editor mux-ui-feedback { margin-bottom:var(--ui-space-5); }
     .editor .field { margin-top:var(--ui-space-6); }
     .editor .inline { display:grid; grid-template-columns:1fr 1fr; gap:var(--ui-space-5); }
-    .editor .check { display:flex; align-items:center; gap:var(--ui-space-4); margin-top:var(--ui-space-6); }
-    .editor .check input { accent-color:var(--ui-accent); }
+    .editor mux-ui-switch { margin-top:var(--ui-space-6); }
     .editor .hint { color:var(--ui-text-muted); font-size:var(--ui-text-xs); margin-top:var(--ui-space-2); }
     .editor .actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); margin-top:var(--ui-space-8); }
     @media(max-width:767.98px) { .titlebar { display:none; } }
@@ -310,14 +314,14 @@ export class MuxScheduledJobs extends LitElement {
           ${editing
             ? html`<mux-ui-text-field label="Conversation" .value=${conversation} readonly></mux-ui-text-field>`
             : html`<mux-ui-select label="Conversation" .value=${this.formChat} .options=${chatOptions}
-                @change=${(event:Event) => this.selectChat((event.target as HTMLSelectElement).value)}></mux-ui-select>`}
+                @change=${(event:Event) => this.selectChat((event.target as MuxUISelect).value)}></mux-ui-select>`}
         </div>
         ${!editing ? html`<mux-ui-button class="field" size="small" variant="quiet"
           @click=${() => this.emit('job-new')}>Start a new chat for this job</mux-ui-button>` : nothing}
         <mux-ui-text-field class="field" label="Job name" .value=${this.formName}
-          @input=${(event:InputEvent) => { this.formName = (event.target as HTMLInputElement).value; }}></mux-ui-text-field>
+          @input=${(event:InputEvent) => { this.formName = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
         <mux-ui-text-area class="field" label="Standing instructions" .value=${this.formBrief}
-          @input=${(event:InputEvent) => { this.formBrief = (event.target as HTMLTextAreaElement).value; }}></mux-ui-text-area>
+          @input=${(event:InputEvent) => { this.formBrief = (event.target as MuxUITextArea).value; }}></mux-ui-text-area>
         <mux-ui-button class="field" size="small" variant="quiet" ?disabled=${!this.formChat || !!this.busy}
           @click=${() => void this.useLatestChatAnswer()}>Use the latest chat answer as a draft</mux-ui-button>
         <div class="hint">Review the draft before saving. Changes apply to future runs; active runs keep their previous revision.</div>
@@ -325,13 +329,14 @@ export class MuxScheduledJobs extends LitElement {
           <mux-ui-text-field class="field" label="When should it run?"
             description="Examples: weekdays at 9am, every day at 6pm, every hour, or five-field cron."
             .value=${this.formSchedule}
-            @input=${(event:InputEvent) => { this.formSchedule = (event.target as HTMLInputElement).value; }}></mux-ui-text-field>
+            @input=${(event:InputEvent) => { this.formSchedule = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
           <mux-ui-text-field class="field" label="Time zone" description="IANA zone, such as America/New_York."
             .value=${this.formZone}
-            @input=${(event:InputEvent) => { this.formZone = (event.target as HTMLInputElement).value; }}></mux-ui-text-field>
+            @input=${(event:InputEvent) => { this.formZone = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
         </div>
-        <label class="check"><input type="checkbox" .checked=${this.formEnabled}
-          @change=${(event:Event) => { this.formEnabled = (event.target as HTMLInputElement).checked; }}>Enable schedule</label>
+        <mux-ui-switch layout="row" label="Enable schedule" description="Run this job at the specified time"
+          .checked=${this.formEnabled} ?disabled=${!!this.busy}
+          @change=${(event:Event) => { this.formEnabled = (event.target as MuxUISwitch).checked; }}></mux-ui-switch>
         <div class="actions">
           <mux-ui-button variant="secondary" @click=${() => { this.editorOpen = false; this.error = ''; }}>Cancel</mux-ui-button>
           <mux-ui-button variant="primary" ?busy=${this.busy === 'editor'}
@@ -367,9 +372,9 @@ export class MuxScheduledJobs extends LitElement {
           <span><strong>${attention}</strong><small>Need attention</small></span></div>
         <div class="toolbar">
           <mux-ui-text-field type="search" aria-label="Search scheduled jobs" placeholder="Search jobs"
-            .value=${this.query} @input=${(event:InputEvent) => { this.query = (event.target as HTMLInputElement).value; }}></mux-ui-text-field>
+            .value=${this.query} @input=${(event:InputEvent) => { this.query = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
           <mux-ui-select aria-label="Filter jobs by status" .value=${this.statusFilter} .options=${statusOptions}
-            @change=${(event:Event) => { this.statusFilter = (event.target as HTMLSelectElement).value; }}></mux-ui-select>
+            @change=${(event:Event) => { this.statusFilter = (event.target as MuxUISelect).value; }}></mux-ui-select>
         </div>
         <div class="table-wrap"><table>
           <thead><tr><th>Job</th><th>Status</th><th>Schedule</th><th>Next run</th><th>Last run</th><th>Actions</th></tr></thead>
