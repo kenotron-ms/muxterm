@@ -10,6 +10,8 @@ export class MuxUINavItem extends LitElement {
   @property() description = '';
   @property({ reflect: true }) variant: 'default' | 'section' = 'default';
   @property({ attribute:'status-tone', reflect:true }) statusTone: StatusTone | '' = '';
+  /** Spoken state for the visual status dot, such as "Ready" or "Needs attention". */
+  @property({ attribute:'status-label' }) statusLabel = '';
   @property({ type: Boolean, reflect: true }) active = false;
   @state() private hasIcon = false;
 
@@ -52,9 +54,10 @@ export class MuxUINavItem extends LitElement {
   override click(): void { this.renderRoot.querySelector('button')?.click(); }
   private onIconSlotChange(event: Event): void { this.hasIcon = (event.target as HTMLSlotElement).assignedElements({flatten:true}).length > 0; }
   override render() {
-    return html`<button class=${this.description ? 'described' : ''} type="button" title=${this.label} aria-current=${this.active ? 'page' : 'false'}>
+    const accessibleLabel = this.statusTone && this.statusLabel ? `${this.label}, ${this.statusLabel}` : this.label;
+    return html`<button class=${this.description ? 'described' : ''} type="button" title=${this.label} aria-label=${accessibleLabel} aria-describedby=${this.description ? 'description' : ''} aria-current=${this.active ? 'page' : 'false'}>
       <span class="icon" aria-hidden="true" ?hidden=${!this.hasIcon && !this.querySelector('[slot="icon"]')}><slot name="icon" @slotchange=${this.onIconSlotChange}></slot></span>
-      <span class="copy"><span class="label">${this.label}</span>${this.description ? html`<span class="description">${this.description}</span>` : ''}</span>
+      <span class="copy"><span class="label">${this.label}</span>${this.description ? html`<span class="description" id="description">${this.description}</span>` : ''}</span>
       <span class="status" aria-hidden="true"></span>
     </button>`;
   }

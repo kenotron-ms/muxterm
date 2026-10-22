@@ -20,9 +20,9 @@ export const KeyboardFocus: Story = { render:() => view('Terminal'), play:async 
   canvasElement.querySelector<HTMLElement>('mux-ui-nav-item[label="Scheduled jobs"]')?.focus();
 } };
 export const DescriptionsAndStatus: Story = { render:() => html`<nav aria-label="Connection services" style="box-sizing:border-box;width:300px;padding:var(--ui-space-4);background:var(--ui-surface-nav)">
-  <mux-ui-nav-item label="GitHub" .description=${'Repositories, issues, and pull requests'} status-tone="success" active></mux-ui-nav-item>
-  <mux-ui-nav-item label="OneDrive" description="Files from your personal Microsoft account" status-tone="neutral"></mux-ui-nav-item>
-  <mux-ui-nav-item label="Documentation" description="Sign in again to refresh access" status-tone="warning"></mux-ui-nav-item>
+  <mux-ui-nav-item label="GitHub" .description=${'Repositories, issues, and pull requests'} status-tone="success" status-label="Ready" active></mux-ui-nav-item>
+  <mux-ui-nav-item label="OneDrive" description="Files from your personal Microsoft account" status-tone="neutral" status-label="Not connected"></mux-ui-nav-item>
+  <mux-ui-nav-item label="Documentation" description="Sign in again to refresh access" status-tone="warning" status-label="Needs attention"></mux-ui-nav-item>
 </nav>` };
 export const SectionRail: Story = { render:() => html`<nav aria-label="Settings sections" style="box-sizing:border-box;width:180px;padding:var(--ui-space-4) 0;background:var(--ui-surface-base);border:1px solid var(--ui-border)">
   <mux-ui-nav-item variant="section" label="Appearance" active></mux-ui-nav-item>

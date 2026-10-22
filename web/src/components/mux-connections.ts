@@ -146,6 +146,14 @@ export class MuxConnections extends LitElement {
     if(services.some(service=>this.serviceStatusTone(service)==='warning')) return 'warning';
     return services.some(service=>this.serviceStatusTone(service)==='success')?'success':'neutral';
   }
+  private providerStatusLabel(id:'github'|'microsoft'|'google'):string {
+    if (!this.data || !this.remotes || !this.microsoft) return 'Status unavailable';
+    const tone = this.providerStatusTone(id);
+    if (tone === 'success') return 'Ready';
+    if (tone === 'warning') return 'Needs attention';
+    if (tone === 'info') return 'Sign-in in progress';
+    return 'Not connected';
+  }
   private serviceStatusTone(service:Service):StatusTone {
     if (service.id==='github') {
       return this.statusTone(this.data?.github.state||'');
@@ -325,9 +333,9 @@ If I already have a connection, check its status first. Do not remove or replace
     return html`<mux-ui-screen-header section="Services" heading="Connections"></mux-ui-screen-header>
       <mux-ui-page-intro heading="Connections" description="Choose an account to make its tools available in new chats."></mux-ui-page-intro>
       <div class="layout"><nav class="catalog" aria-label="Providers">
-        <mux-ui-nav-item label="Google" status-tone=${this.providerStatusTone('google')} ?active=${this.selected==='google'} @click=${()=>this.selectService('google')}></mux-ui-nav-item>
-        <mux-ui-nav-item label="Microsoft" status-tone=${this.providerStatusTone('microsoft')} ?active=${this.selected==='microsoft'} @click=${()=>this.selectService('microsoft')}></mux-ui-nav-item>
-        <mux-ui-nav-item label="GitHub" status-tone=${this.providerStatusTone('github')} ?active=${this.selected==='github'} @click=${()=>this.selectService('github')}></mux-ui-nav-item></nav>
+        <mux-ui-nav-item label="Google" status-tone=${this.providerStatusTone('google')} status-label=${this.providerStatusLabel('google')} ?active=${this.selected==='google'} @click=${()=>this.selectService('google')}></mux-ui-nav-item>
+        <mux-ui-nav-item label="Microsoft" status-tone=${this.providerStatusTone('microsoft')} status-label=${this.providerStatusLabel('microsoft')} ?active=${this.selected==='microsoft'} @click=${()=>this.selectService('microsoft')}></mux-ui-nav-item>
+        <mux-ui-nav-item label="GitHub" status-tone=${this.providerStatusTone('github')} status-label=${this.providerStatusLabel('github')} ?active=${this.selected==='github'} @click=${()=>this.selectService('github')}></mux-ui-nav-item></nav>
         <main><div class="detail">${this.error?html`<mux-ui-feedback kind="error" appearance="panel">${this.error}<mux-ui-button slot="action" variant="secondary" @click=${this.retry}>Try again</mux-ui-button></mux-ui-feedback>`:nothing}
           ${!this.data||!this.remotes||!this.microsoft?this.error?nothing:html`<mux-ui-feedback kind="loading">Loading connections…</mux-ui-feedback>`:this.selected==='github'?this.githubDetail(this.data.github):this.selected==='microsoft'?this.microsoftDetail():this.googleProviderDetail()}</div></main></div>
       ${this.confirmation?html`<mux-ui-confirmation open .heading=${this.confirmation.heading} .description=${this.confirmation.description}
