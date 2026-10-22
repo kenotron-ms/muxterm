@@ -60,7 +60,7 @@ export class MuxUIButton extends LitElement {
     }
     :host([size='small']) :is(button,a) { min-height: var(--ui-control-sm); padding: 0 var(--ui-space-4); font-size: var(--ui-text-sm); }
     :host([size='large']) :is(button,a) { min-height: var(--ui-control-lg); padding: 0 var(--ui-space-6); font-size: var(--ui-text-lg); }
-    :host([icon-only]) :is(button,a) { min-height: 100%; padding: 0; border-radius: var(--ui-radius-lg); }
+    :host([icon-only]) :is(button,a) { min-height: 100%; padding: 0; }
     :host([variant='primary']) :is(button,a) { border-color: var(--ui-accent); background: var(--ui-accent); color: var(--ui-on-accent); }
     :host([variant='danger']) :is(button,a) { border-color: var(--ui-danger); background: var(--ui-danger); color: var(--ui-on-danger); }
     :host([variant='quiet']) :is(button,a) { border-color: transparent; }

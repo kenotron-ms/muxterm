@@ -134,6 +134,28 @@ export default meta;
 type Story = StoryObj<ChatArgs>;
 
 export const Conversation: Story = {};
+export const ScrollToBottom: Story = {
+  args:{sessionId:'storybook-chat-scroll-bottom'},
+  parameters:{apiFixture:chatFixture('storybook-chat-scroll-bottom')},
+  render:(args:ChatArgs) => html`<div style="position:relative;width:100%;height:520px"><mux-sdk-chat .sessionId=${args.sessionId} .compact=${args.compact}></mux-sdk-chat></div>`,
+  play:async ({canvasElement}) => {
+    await sdkChats.refresh();
+    const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+    for (let attempt=0; attempt<50; attempt++) {
+      const body = chat?.shadowRoot?.querySelector<HTMLElement>('.body');
+      if (body && chat?.shadowRoot?.querySelectorAll('.block').length === 6 && body.scrollHeight - body.clientHeight > 100) {
+        await new Promise(resolve=>setTimeout(resolve,150));
+        body.scrollTop = 0;
+        body.dispatchEvent(new Event('scroll'));
+        await chat?.updateComplete;
+        await new Promise(resolve=>setTimeout(resolve,150));
+        if (chat?.shadowRoot?.querySelector('mux-ui-button.scroll-bottom')) return;
+      }
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    throw new Error('Scroll-to-bottom control did not appear after scrolling up');
+  },
+};
 const showHistoryFailure = async ({canvasElement}:{canvasElement:HTMLElement}) => {
   await sdkChats.refresh();
   const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
