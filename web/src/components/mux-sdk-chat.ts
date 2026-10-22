@@ -2235,6 +2235,8 @@ export class MuxSDKChat extends LitElement {
   }
   private goalBanner() {
     const record = this.goalDocument;
+    const latestControl = record?.receipts.findLast(receipt => ['set','approve','start','resume','clear'].includes(receipt.action));
+    if (record?.state === 'cleared' && (!latestControl || latestControl.action === 'clear')) return nothing;
     const condition = record?.revisions.at(-1)?.condition || this.chat?.goal || '';
     if (!condition.trim()) return nothing;
     const supported = ['codex','amplifier','claude'].includes(this.chat?.harness || '');

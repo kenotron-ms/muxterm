@@ -24,6 +24,8 @@ are retained verbatim, including blocked, usage/budget limits, and clear.
 Native clear is not rollback or proof that the current turn was interrupted.
 Clear retains human revisions; explicit resume can recreate the saved condition
 as a new native goal. Completed goals likewise require explicit resume.
+The composer goal banner disappears when the native goal is cleared; its
+revision and control history remain in the shared ledger.
 
 ## Storage and receipts
 
