@@ -37,6 +37,6 @@ const meta = {
 export default meta;
 type Story = StoryObj<DialogArgs>;
 export const Standard: Story = {};
-export const Compact: Story = { args: { size: 'compact', label: 'Connect machine' } };
+export const Compact: Story = { args: { size: 'compact', label: 'Project details' } };
 export const PhoneSheet: Story = { args:{size:'compact',presentation:'adaptive',label:'Edit project'},globals:{viewport:{value:'phone390',isRotated:false}} };
 export const BusyLocked: Story = { args:{size:'compact',label:'Creating workspace',dismissable:false} };

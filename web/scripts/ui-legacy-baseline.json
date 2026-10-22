@@ -41,12 +41,6 @@
     "literalScale": 0,
     "nativeControls": 0
   },
-  "components/mux-connect-dialog.ts": {
-    "legacyTokens": 0,
-    "literalColors": 0,
-    "literalScale": 0,
-    "nativeControls": 0
-  },
   "components/mux-connections.ts": {
     "legacyTokens": 0,
     "literalColors": 0,

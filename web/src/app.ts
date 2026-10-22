@@ -38,7 +38,6 @@ import type { MuxDock } from './components/mux-dock.js';
 import './components/close-confirmation-modal.js';
 import type { CloseConfirmationModal } from './components/close-confirmation-modal.js';
 import './components/reconnect-overlay.js';
-import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
 import type { MuxSDKChat } from './components/mux-sdk-chat.js';
@@ -78,7 +77,7 @@ import {
   SIDEBAR_MAX_WIDTH,
 } from './lib/sidebar-width.js';
 
-type LauncherAction = 'settings' | 'connect-machine' | 'shortcuts' | 'about' | 'reconnect' | 'new-workspace';
+type LauncherAction = 'settings' | 'shortcuts' | 'about' | 'reconnect' | 'new-workspace';
 
 /** Split.js gutter size (px), used both as the `gutterSize` option passed to
  *  `Split(...)` in `_initSplit()` below and as the half-gutter compensation
@@ -531,7 +530,7 @@ export class MuxApp extends LitElement {
   private _terminalCreateRef = '';
 
   @state()
-  private _overlayPanel: 'settings' | 'connect' | null = null;
+  private _overlayPanel: 'settings' | null = null;
   private _settingsOpenSection: SettingsSection | null = null;
 
   @state()
@@ -750,12 +749,6 @@ export class MuxApp extends LitElement {
     // dock, sidebar, mobile picker, and the dormant workspace picker.
     this.addEventListener('pane-close', this._onPaneCloseIntent);
     this.addEventListener('workspace-close', this._onWorkspaceCloseIntent);
-    // "+ Connect machine" — opens the connect dialog. Listened for on the HOST
-    // rather than bound on <mux-sidebar> because there are two sidebars (the
-    // wide column and the narrow drawer) and the button lives in both; a
-    // composed event bubbling to here covers them, and any later entry point,
-    // without a third binding to keep in step.
-    this.addEventListener('connect-machine', this._onConnectMachine);
     // Escape dismisses the open overlay panel — see _onOverlayPanelEscape.
     window.addEventListener('keydown', this._onOverlayPanelEscape, true);
     // Update layout mode when the viewport crosses the 768px breakpoint.
@@ -1131,7 +1124,6 @@ export class MuxApp extends LitElement {
     window.removeEventListener('popstate', this._onChatHistory);
     this.removeEventListener('pane-close', this._onPaneCloseIntent);
     this.removeEventListener('workspace-close', this._onWorkspaceCloseIntent);
-    this.removeEventListener('connect-machine', this._onConnectMachine);
     window.removeEventListener('keydown', this._onOverlayPanelEscape, true);
     this._disposePaneFocusListeners?.();
     this._disposePwaWindowControls?.();
@@ -1207,8 +1199,8 @@ export class MuxApp extends LitElement {
     // which would otherwise be painted UNDERNEATH the drawer. No number
     // fixes that; the drawer has to leave.
     //
-    // Keyed on the STATE rather than on the two call sites that open a panel
-    // (_onLauncherAction, _onConnectMachine), because the three sibling
+    // Keyed on the STATE rather than the Settings action that opens the panel,
+    // because the three sibling
     // dismissals below — _onOpenCreateModal, _onChatNew,
     // _onWorkspaceSelected — are exactly the pattern this bug escaped from:
     // a per-call-site `_closeDrawer()` that a fourth surface forgot. Nothing
@@ -1546,16 +1538,8 @@ export class MuxApp extends LitElement {
         @workspace-create-cancel=${this._cancelCreate}
         @workspace-create-submit=${this._submitCreate}></mux-workspace-create-dialog>` : ''}
       ${settingsPage ? html`<section class="settings-page" aria-label="Settings">${this._renderSettings(true)}</section>` : this._overlayPanel ? html`
-        <mux-ui-dialog open size=${this._overlayPanel === 'connect' ? 'compact' : 'standard'}
-          label=${this._overlayPanel === 'connect' ? 'Connect machine' : 'Settings'}
-          @dismiss=${this._closeOverlayPanel}>
-            <div class="overlay-body">
-              ${this._overlayPanel === 'connect' ? html`
-                <mux-connect-dialog
-                  @close="${this._closeOverlayPanel}"
-                ></mux-connect-dialog>
-              ` : this._overlayPanel === 'settings' ? this._renderSettings() : ''}
-            </div>
+        <mux-ui-dialog open size="standard" label="Settings" @dismiss=${this._closeOverlayPanel}>
+          <div class="overlay-body">${this._renderSettings()}</div>
         </mux-ui-dialog>
       ` : ''}
       ${this._showReconnectOverlay
@@ -2249,9 +2233,6 @@ export class MuxApp extends LitElement {
         this._settingsOpenSection = detail?.section ?? null;
         this._overlayPanel = action;
         break;
-      case 'connect-machine':
-        this._onConnectMachine();
-        break;
       case 'shortcuts':
       case 'about':
         this._settingsOpenSection = action;
@@ -2265,17 +2246,6 @@ export class MuxApp extends LitElement {
         this._onOpenCreateModal();
         break;
     }
-  };
-
-  /**
-   * Open the connect dialog.
-   *
-   * The event carries no detail and this handler reads none: "connect a
-   * machine" is the whole message, and the dialog asks which one. Tolerant by
-   * design — any surface that wants this door only has to dispatch the event.
-   */
-  private _onConnectMachine = (): void => {
-    this._overlayPanel = 'connect';
   };
 
   private _closeOverlayPanel = (): void => {
