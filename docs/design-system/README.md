@@ -323,6 +323,15 @@ file welcome action uses the shared Button. The Utility inventory now counts
 six feature-owned native controls, down from 39 at the start of this pass.
 File-viewer loading, empty, oversized and error states use shared Feedback.
 Failures offer Retry; Storybook includes file and raw-preview recovery states.
+The Files, Changes and Pages rails now use the same Feedback for empty,
+loading, warning and failed-load states. Their failed requests offer Retry;
+Storybook records those failures and successful recovery at desktop and phone
+widths. A failed Pages save retains the current editor content and reports the
+error without offering a reload that could discard edits.
+In isolated dev-local Chromium, fresh sessiond workspaces and a real chat
+recovered from failed Files and Changes requests, and a restored Pages tab
+recovered from a failed initial load. At phone width, Changes Retry measured
+44 px and the page had no horizontal overflow.
 Chromium returned one synthetic raw-file failure to the isolated live browser,
 then let Retry reach the real dev-local server. The preview recovered at desktop
 and phone widths; the phone Retry target measured 44 px without page overflow.

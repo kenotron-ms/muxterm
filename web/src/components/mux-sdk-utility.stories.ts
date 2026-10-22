@@ -33,13 +33,19 @@ const artifacts: Record<string, {kind:'markdown'|'text'; text:string; contentTyp
 function utilityFixture(id: string, emptyPages = false): ApiFixture {
   let fileRequests = 0;
   let rawRequests = 0;
+  let treeRequests = 0;
+  let changesRequests = 0;
+  let pagesRequests = 0;
   return ({url,method}) => {
     const base = `/api/sdk-chats/${id}/utility/`;
     if (method === 'GET' && url.pathname === '/api/sdk-chats') return fixtureJSON([]);
     if (method === 'GET' && url.pathname === `/api/sdk-chats/${id}/operator`) return fixtureJSON({
       operator:{id,title:'Component library review',harness:'codex',state:'ready',operator:true,operatorLanes:[],workspaceId:'project-1',projectPath:root},lanes:[],
     });
-    if (method === 'GET' && url.pathname === `${base}files`) return listing(url.searchParams.get('path') || '.');
+    if (method === 'GET' && url.pathname === `${base}files`) {
+      if (id.endsWith('-tree-error') || (id.endsWith('-tree-recovery') && treeRequests++ === 0)) return fixtureJSON({error:'Folder unavailable'},503);
+      return listing(url.searchParams.get('path') || '.');
+    }
     if (method === 'GET' && url.pathname === `${base}file`) {
       const path = url.searchParams.get('path') || '';
       if (id.endsWith('-file-error') || (id.endsWith('-file-recovery') && fileRequests++ === 0)) return fixtureJSON({error:'File unavailable'},503);
@@ -57,12 +63,18 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
       const query = (url.searchParams.get('q') || '').toLowerCase();
       return fixtureJSON({results:Object.keys(artifacts).filter(path => path.toLowerCase().includes(query)).map(path => ({path,name:path.split('/').pop(),size:artifacts[path].text.length})),truncated:false});
     }
-    if (method === 'GET' && url.pathname === `${base}changes`) return fixtureJSON({repos:[{root,name:'muxterm',branch:'design-system'}],changes:[{repo:root,path:'README.md',status:' M'},{repo:root,path:'src/app.ts',status:' M'}],truncated:false});
+    if (method === 'GET' && url.pathname === `${base}changes`) {
+      if (id.endsWith('-changes-error') || (id.endsWith('-changes-recovery') && changesRequests++ === 0)) return fixtureJSON({error:'Changes unavailable'},503);
+      return fixtureJSON({repos:[{root,name:'muxterm',branch:'design-system'}],changes:[{repo:root,path:'README.md',status:' M'},{repo:root,path:'src/app.ts',status:' M'}],truncated:false});
+    }
     if (method === 'GET' && url.pathname === `${base}change`) return fixtureJSON({repo:root,path:url.searchParams.get('path'),before:'# Muxterm\n',after:'# Muxterm component library\n',binary:false,tooLarge:false});
-    if (method === 'GET' && url.pathname === `${base}pages`) return fixtureJSON({version:1,pages:emptyPages ? [] : [
+    if (method === 'GET' && url.pathname === `${base}pages`) {
+      if (id.endsWith('-pages-error') || (id.endsWith('-pages-recovery') && pagesRequests++ === 0)) return fixtureJSON({error:'Pages unavailable'},503);
+      return fixtureJSON({version:1,pages:emptyPages ? [] : [
       {id:'review-page',title:id.endsWith('-subpage') ? 'Document actions review' : 'Component review',blocks:[],content:[{type:'paragraph',content:'Review the shared controls and phone layout.'}]},
       ...(id.endsWith('-subpage') ? [{id:'child-page',parentId:'review-page',title:'Phone child review of document actions',blocks:[],content:[{type:'paragraph',content:'Check the page breadcrumb.'}]}] : []),
-    ]});
+      ]});
+    }
     if (method === 'PUT' && url.pathname === `${base}pages`) return fixtureJSON({version:2});
     return fixtureJSON({error:`No utility fixture for ${method} ${url.pathname}`},501);
   };
@@ -81,6 +93,12 @@ type Story = StoryObj<UtilityArgs>;
 function target(canvasElement: HTMLElement): MuxSDKUtility | null { return canvasElement.querySelector('mux-sdk-utility'); }
 
 export const Files: Story = {};
+export const FileTreeUnavailable: Story = {
+  args:{sessionId:sessionId('tree-error')},parameters:{apiFixture:utilityFixture(sessionId('tree-error'))},
+};
+export const FileTreeRecovery: Story = {
+  args:{sessionId:sessionId('tree-recovery')},parameters:{apiFixture:utilityFixture(sessionId('tree-recovery'))},
+};
 export const FilePreview: Story = {
   args:{sessionId:sessionId('preview')},parameters:{apiFixture:utilityFixture(sessionId('preview'))},
   play:async ({canvasElement}) => { await target(canvasElement)?.showFile('README.md'); },
@@ -188,9 +206,25 @@ export const Changes: Story = {
   args:{sessionId:sessionId('changes')},parameters:{apiFixture:utilityFixture(sessionId('changes'))},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('changes'); },
 };
+export const ChangesUnavailable: Story = {
+  args:{sessionId:sessionId('changes-error')},parameters:{apiFixture:utilityFixture(sessionId('changes-error'))},
+  play:Changes.play,
+};
+export const ChangesRecovery: Story = {
+  args:{sessionId:sessionId('changes-recovery')},parameters:{apiFixture:utilityFixture(sessionId('changes-recovery'))},
+  play:Changes.play,
+};
 export const Pages: Story = {
   args:{sessionId:sessionId('pages')},parameters:{apiFixture:utilityFixture(sessionId('pages'))},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('pages'); },
+};
+export const PagesUnavailable: Story = {
+  args:{sessionId:sessionId('pages-error')},parameters:{apiFixture:utilityFixture(sessionId('pages-error'))},
+  play:Pages.play,
+};
+export const PagesRecovery: Story = {
+  args:{sessionId:sessionId('pages-recovery')},parameters:{apiFixture:utilityFixture(sessionId('pages-recovery'))},
+  play:Pages.play,
 };
 export const EmptyPages: Story = {
   args:{sessionId:sessionId('empty-pages')},parameters:{apiFixture:utilityFixture(sessionId('empty-pages'),true)},
