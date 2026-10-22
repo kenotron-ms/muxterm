@@ -41,10 +41,11 @@ export class MuxUIListboxOption extends LitElement {
   }
   override updated(): void {
     this.setAttribute('aria-selected', String(this.selected));
-    if (this.label) this.setAttribute('aria-label', this.label);
+    // The option host and its description span live in different shadow trees.
+    // Include both in the stable accessible name instead of an ID reference.
+    const accessibleName = [this.label, this.description].filter(Boolean).join(', ');
+    if (accessibleName) this.setAttribute('aria-label', accessibleName);
     else this.removeAttribute('aria-label');
-    if (this.description) this.setAttribute('aria-description', this.description);
-    else this.removeAttribute('aria-description');
   }
   override render() {
     return html`<div class="row" part="row"><slot name="icon"></slot><span class="copy"><span class="label">${this.label}</span>${this.description ? html`<span class="description">${this.description}</span>` : nothing}</span><slot name="detail"></slot>${this.selected && this.showCheck ? html`<span class="check" aria-hidden="true">✓</span>` : nothing}</div>`;

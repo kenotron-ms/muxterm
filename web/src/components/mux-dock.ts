@@ -381,6 +381,8 @@ export class MuxDock extends LitElement {
   private _restoringLayout = false;
   /** Preserve wide splits while a phone viewport presents the same panes as tabs. */
   private _wideLayoutSnapshot: string | null = null;
+  /** A reinserted host needs to repopulate its new Dockview even when inputs did not change. */
+  private _restoreOnReconnect = false;
   /**
    * Where the NEXT newly-added pane should be placed:
    *   'tab'   — a new tab in the active group (the "+" button)
@@ -1204,12 +1206,18 @@ export class MuxDock extends LitElement {
     });
 
     this._scheduleWorkspaceActions();
+    if (this.hasUpdated) {
+      this._restoreOnReconnect = true;
+      this.requestUpdate();
+    }
 
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this._focusRestoreToken++;
+    this._settingActive = false;
+    this._restoringLayout = false;
     this.removeEventListener('dblclick', this._onTabDblClick);
     this._unsubSessions?.();
     this._unsubSessions = null;
@@ -1224,8 +1232,10 @@ export class MuxDock extends LitElement {
     this._workspaceActions = null;
     if (this._layoutSaveTimer !== undefined) clearTimeout(this._layoutSaveTimer);
     this._layoutSaveTimer = undefined;
+    if (this._dv && !this.narrow && this._panels.size) this._wideLayoutSnapshot = JSON.stringify(this._dv.toJSON());
     this._dv?.dispose();
     this._dv = null;
+    this._panels.clear();
     this._dockRoot?.remove();
     this._dockRoot = null;
   }
@@ -1283,14 +1293,16 @@ export class MuxDock extends LitElement {
     if (changed.has('terminalUtilityOpen')) this.querySelector('.mux-utility-toggle')?.setAttribute('aria-pressed', String(this.terminalUtilityOpen));
     if (changed.has('workspaceActionsVisible')) this._syncWorkspaceActionVisibility();
     if (!this._dv) return;
+    const remounted = this._restoreOnReconnect;
+    this._restoreOnReconnect = false;
 
     // A phone viewport presents all panes in one tab group. Rebuild on both
     // breakpoint transitions; keeping the wide grid produces half-width
     // terminals after a desktop split when the viewport becomes narrow.
-    if (changed.has('workspaceKey') || changed.has('narrow')) {
+    if (changed.has('workspaceKey') || changed.has('narrow') || remounted) {
       const workspaceChanged = changed.has('workspaceKey');
       if (workspaceChanged) this._wideLayoutSnapshot = null;
-      else if (this.narrow) this._wideLayoutSnapshot = JSON.stringify(this._dv.toJSON());
+      else if (this.narrow && !remounted) this._wideLayoutSnapshot = JSON.stringify(this._dv.toJSON());
       const restoreLayout = this.narrow ? '' : (this._wideLayoutSnapshot ?? this.layout);
       if (this.narrow && this._layoutSaveTimer !== undefined) {
         clearTimeout(this._layoutSaveTimer);

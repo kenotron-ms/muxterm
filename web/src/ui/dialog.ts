@@ -35,6 +35,7 @@ export class MuxUIDialog extends LitElement {
     dialog[open] { display: flex; flex-direction: column; }
     dialog:not([open]) { display: none; }
     dialog:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+    .a11y-description { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
     dialog::backdrop {
       background: var(--ui-backdrop);
       background-image: var(--ui-app-backdrop-image);
@@ -104,7 +105,8 @@ export class MuxUIDialog extends LitElement {
   }
 
   override render() {
-    return html`<dialog aria-label=${this.label} aria-description=${this.description || nothing} @cancel=${this._onCancel} @click=${this._onClick}>
+    return html`<dialog aria-label=${this.label} aria-describedby=${this.description ? 'dialog-desc' : nothing} @cancel=${this._onCancel} @click=${this._onClick}>
+      ${this.description ? html`<span id="dialog-desc" class="a11y-description">${this.description}</span>` : nothing}
       <slot></slot>
     </dialog>`;
   }
