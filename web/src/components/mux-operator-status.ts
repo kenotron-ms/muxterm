@@ -9,6 +9,12 @@ import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat } from '../lib/sdk-chats.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import '../ui/button.js';
+import '../ui/feedback.js';
+import '../ui/filter-chip.js';
+import '../ui/status-badge.js';
+import type { StatusTone } from '../ui/status-badge.js';
+import { visuallyHidden } from '../ui/visually-hidden.js';
 
 type Snapshot = { operator: SDKChat; lanes: SDKChat[] };
 type LaneFilter = 'all' | 'attention' | 'running' | 'done';
@@ -27,94 +33,78 @@ export class MuxOperatorStatus extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; width:100%; min-width:0; height:100%; overflow:auto; box-sizing:border-box; padding:18px; background:var(--chrome-body); color:var(--chrome-text-bright); font:12px/1.5 system-ui,sans-serif; }
+    :host { display:block; width:100%; min-width:0; height:100%; overflow:auto; box-sizing:border-box; padding:var(--ui-space-7); background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
     * { box-sizing:border-box; }
     h2,p { margin:0; }
-    h2 { font-size:17px; line-height:1.25; font-weight:650; }
-    .head { margin-bottom:16px; }
-    .head p,.hint { margin-top:4px; color:var(--chrome-text-dim); }
-    .checklist { list-style:none; margin:16px 0; padding:0; font:var(--mux-font-size,16px)/1.5 var(--mux-font-family,system-ui,sans-serif); }
-    .todo { display:flex; align-items:baseline; gap:10px; padding:10px 0; border-bottom:1px solid var(--chrome-border); overflow-wrap:anywhere; }
-    .todo-icon { display:inline-flex; flex:none; align-self:flex-start; margin-top:4px; }
+    h2 { font-size:var(--ui-text-xl); line-height:1.25; font-weight:650; }
+    .head { margin-bottom:var(--ui-space-6); }
+    .head p,.hint { margin-top:var(--ui-space-2); color:var(--ui-text-muted); }
+    .checklist { list-style:none; margin:var(--ui-space-6) 0; padding:0; font:var(--ui-text-xl)/1.5 var(--ui-font-sans); }
+    .todo { display:flex; align-items:baseline; gap:var(--ui-space-5); padding:var(--ui-space-5) 0; border-bottom:1px solid var(--ui-border); overflow-wrap:anywhere; }
+    .todo-icon { display:inline-flex; flex:none; align-self:flex-start; margin-top:var(--ui-space-2); }
     .todo-label { min-width:0; }
-    .todo-state { display:block; color:var(--chrome-text-dim); font-size:inherit; }
-    .todo.completed .todo-icon { color:var(--chrome-success,#9ece6a); }
-    .todo.in_progress { color:var(--chrome-accent); }
-    .self-progress { max-width:420px; font:var(--mux-font-size,16px)/1.5 var(--mux-font-family,system-ui,sans-serif); }
-    .self-progress progress { display:block; width:100%; height:10px; margin-top:8px; accent-color:var(--chrome-accent); }
-    .summary { margin:0 0 12px; color:var(--chrome-text-dim); font-variant-numeric:tabular-nums; }
-    .summary strong { color:var(--chrome-text-bright); font-weight:650; }
-    .summary .sep { padding:0 7px; color:var(--chrome-border); }
-    .filters { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
-    .filter { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--chrome-border); border-radius:6px; padding:4px 8px; background:transparent; color:var(--chrome-text-dim); font-size:11px; }
-    .filter:hover { background:var(--chrome-hover); color:var(--chrome-text-bright); }
-    .filter.active { border-color:color-mix(in srgb,var(--chrome-accent) 50%,var(--chrome-border)); background:color-mix(in srgb,var(--chrome-accent) 10%,transparent); color:var(--chrome-text-bright); }
-    .filter-count { color:var(--chrome-text-dim); font-variant-numeric:tabular-nums; }
-    .error { padding:9px; margin-bottom:12px; border:1px solid var(--chrome-danger); border-radius:7px; color:var(--chrome-danger); white-space:pre-wrap; }
-    .empty { padding:24px 14px; border:1px dashed var(--chrome-border); border-radius:9px; color:var(--chrome-text-dim); text-align:center; }
-    .empty .hint { margin-top:7px; }
-    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-    .table-scroll { width:100%; min-width:0; overflow:hidden; border:1px solid var(--chrome-border); border-radius:8px; background:var(--chrome-bar); }
+    .todo-state { display:block; color:var(--ui-text-muted); font-size:inherit; }
+    .todo.completed .todo-icon { color:var(--ui-success); }
+    .todo.in_progress { color:var(--ui-accent); }
+    .self-progress { max-width:var(--ui-operator-summary-width); font:var(--ui-text-xl)/1.5 var(--ui-font-sans); }
+    .self-progress progress { display:block; width:100%; height:var(--ui-progress-height); margin-top:var(--ui-space-4); accent-color:var(--ui-accent); }
+    .summary { margin:0 0 var(--ui-space-5); color:var(--ui-text-muted); font-variant-numeric:tabular-nums; }
+    .summary strong { color:var(--ui-text); font-weight:650; }
+    .summary .sep { padding:0 var(--ui-space-3); color:var(--ui-border); }
+    .filters { display:flex; flex-wrap:wrap; gap:var(--ui-space-3); margin:0 0 var(--ui-space-5); }
+    mux-ui-feedback { margin-bottom:var(--ui-space-5); }
+    mux-ui-feedback .hint { margin-top:var(--ui-space-3); }
+    .sr-only { ${visuallyHidden} }
+    .table-scroll { width:100%; min-width:0; overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
     table { width:100%; border-collapse:collapse; table-layout:fixed; }
     col.lane-col { width:auto; }
-    col.progress-col { width:196px; }
-    col.action-col { width:52px; }
-    th { padding:10px 12px 8px; color:var(--chrome-text-dim); font-size:11px; font-weight:500; text-align:left; border-bottom:1px solid var(--chrome-border); }
-    td { padding:11px 12px; border-top:1px solid color-mix(in srgb,var(--chrome-border) 65%,transparent); vertical-align:middle; min-width:0; }
-    td:last-child { padding:6px 10px 6px 4px; }
+    col.progress-col { width:var(--ui-lane-progress-column-width); }
+    col.action-col { width:var(--ui-lane-action-column-width); }
+    th { padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:500; text-align:left; border-bottom:1px solid var(--ui-border); }
+    td { padding:var(--ui-space-5); border-top:1px solid color-mix(in srgb,var(--ui-border) 65%,transparent); vertical-align:middle; min-width:0; }
+    td:last-child { padding:var(--ui-space-3) var(--ui-space-5) var(--ui-space-3) var(--ui-space-2); }
     tbody tr:first-child td { border-top:0; }
-    tr.lane-row:hover,tr.lane-row.expanded { background:var(--chrome-hover); }
-    button { font:inherit; cursor:pointer; }
-    button:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:2px; }
-    .lane-toggle { display:flex; align-items:center; gap:8px; width:100%; min-width:0; border:0; padding:0; background:none; color:var(--chrome-text-bright); text-align:left; }
-    .chevron { display:inline-flex; flex:none; color:var(--chrome-text-dim); transition:transform .15s; }
+    tr.lane-row:hover,tr.lane-row.expanded { background:var(--ui-surface-hover); }
+    .lane-toggle { width:100%; min-width:0; }
+    .lane-toggle::part(button) { justify-content:flex-start; gap:var(--ui-space-4); min-width:0; padding:0; border:0; background:transparent; color:var(--ui-text); text-align:left; font:inherit; }
+    .chevron { display:inline-flex; flex:none; color:var(--ui-text-muted); transition:transform .15s; }
     .expanded .chevron { transform:rotate(90deg); }
     .lane-primary { display:block; min-width:0; flex:1; }
-    .lane-title { min-width:0; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; font-size:12px; }
-    .lane-meta { display:flex; align-items:center; gap:8px; margin-top:2px; white-space:nowrap; }
-    .harness { color:var(--chrome-text-dim); font-size:10px; }
-    .archived-label { color:var(--chrome-accent); }
-    .state { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; color:var(--chrome-text-dim); font-size:10px; }
-    .state::before { content:''; width:6px; height:6px; flex:none; border-radius:50%; background:currentColor; }
-    .state.working,.state.starting { color:var(--chrome-accent); }
-    .state.ready { color:var(--mux-ok,#55b981); }
-    .state.failed,.state.uncertain,.state.stopped { color:var(--chrome-danger); }
+    .lane-title { min-width:0; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; font-size:var(--ui-text-md); }
+    .lane-meta { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-2); }
+    .harness { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .archived-label { color:var(--ui-accent); }
     .progress-cell { text-align:left; }
-    .meter { display:grid; gap:4px; width:100%; min-width:0; color:var(--chrome-accent); }
-    .meter.ready { color:var(--mux-ok,#55b981); }
-    .meter.failed,.meter.uncertain,.meter.stopped { color:var(--chrome-danger); }
-    .meter-head { display:flex; align-items:baseline; justify-content:space-between; gap:6px; min-width:0; font-variant-numeric:tabular-nums; }
-    .progress-value { color:var(--chrome-text-bright); font-size:12px; font-weight:650; white-space:nowrap; }
-    .progress-basis { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-dim); font-size:10px; }
-    .track { display:block; height:5px; overflow:hidden; border-radius:6px; background:color-mix(in srgb,var(--chrome-border) 75%,transparent); }
+    .meter { display:grid; gap:var(--ui-space-2); width:100%; min-width:0; color:var(--ui-accent); }
+    .meter.ready { color:var(--ui-success); }
+    .meter.failed { color:var(--ui-danger); }
+    .meter.uncertain,.meter.stopped { color:var(--ui-warning); }
+    .meter-head { display:flex; align-items:baseline; justify-content:space-between; gap:var(--ui-space-3); min-width:0; font-variant-numeric:tabular-nums; }
+    .progress-value { color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; white-space:nowrap; }
+    .progress-basis { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .track { display:block; height:var(--ui-progress-compact-height); overflow:hidden; border-radius:var(--ui-radius-md); background:color-mix(in srgb,var(--ui-border) 75%,transparent); }
     .fill { display:block; height:100%; border-radius:inherit; background:currentColor; }
-    .meter-time { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--chrome-text-dim); font-size:10px; font-variant-numeric:tabular-nums; }
-    .open { display:grid; place-items:center; width:32px; height:32px; border:1px solid transparent; border-radius:7px; padding:6px; background:none; color:var(--chrome-text-dim); }
-    .open:hover { border-color:var(--chrome-border); background:var(--chrome-hover); color:var(--chrome-accent); }
-    .open:focus-visible { color:var(--chrome-accent); }
-    .detail td { padding:0 12px 11px 32px; background:color-mix(in srgb,var(--chrome-hover) 55%,var(--chrome-bar)); border-top:0; }
-    .message { padding:12px 0 13px; border-top:1px solid var(--chrome-border); color:var(--chrome-text-bright); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
+    .meter-time { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-variant-numeric:tabular-nums; }
+    .detail td { padding:0 var(--ui-space-5) var(--ui-space-5) var(--ui-space-9); background:color-mix(in srgb,var(--ui-surface-hover) 55%,var(--ui-surface-raised)); border-top:0; }
+    .message { padding:var(--ui-space-5) 0; border-top:1px solid var(--ui-border); color:var(--ui-text); font-size:var(--ui-text-sm); line-height:1.6; overflow-wrap:anywhere; }
     .message > :first-child,.message .md-p:first-child { margin-top:0; }
     .message > :last-child,.message .md-p:last-child { margin-bottom:0; }
-    .message .md-p { margin:0 0 9px; }
-    .message .md-h { margin:12px 0 6px; font-size:13px; line-height:1.3; }
-    .message .md-ul,.message .md-ol { margin:6px 0 9px; padding-left:20px; }
-    .message .md-li { margin:3px 0; }
-    .message .md-code { padding:1px 3px; border-radius:3px; background:var(--chrome-hover); font:11px ui-monospace,monospace; }
-    .message .md-pre { max-width:100%; overflow:auto; padding:8px; border-radius:5px; background:var(--chrome-body); font:11px/1.45 ui-monospace,monospace; }
-    .message .md-quote { margin:7px 0; padding-left:9px; border-left:2px solid var(--chrome-border); color:var(--chrome-text-dim); }
-    .message .md-link { color:var(--chrome-accent); }
-    .message .md-img { max-width:100%; max-height:240px; object-fit:contain; }
+    .message .md-p { margin:0 0 var(--ui-space-4); }
+    .message .md-h { margin:var(--ui-space-5) 0 var(--ui-space-3); font-size:var(--ui-text-md); line-height:1.3; }
+    .message .md-ul,.message .md-ol { margin:var(--ui-space-3) 0 var(--ui-space-4); padding-left:var(--ui-space-7); }
+    .message .md-li { margin:var(--ui-space-1) 0; }
+    .message .md-code { padding:var(--ui-space-1) var(--ui-space-2); border-radius:var(--ui-radius-sm); background:var(--ui-surface-hover); font:var(--ui-text-xs) var(--ui-font-mono); }
+    .message .md-pre { max-width:100%; overflow:auto; padding:var(--ui-space-4); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); font:var(--ui-text-xs)/1.45 var(--ui-font-mono); }
+    .message .md-quote { margin:var(--ui-space-4) 0; padding-left:var(--ui-space-4); border-left:2px solid var(--ui-border); color:var(--ui-text-muted); }
+    .message .md-link { color:var(--ui-accent); }
+    .message .md-img { max-width:100%; max-height:var(--ui-lane-media-height); object-fit:contain; }
     .message .md-tablewrap { max-width:100%; overflow:auto; }
     .message .md-table { border-collapse:collapse; }
-    .message .md-th,.message .md-td { padding:4px 7px; border:1px solid var(--chrome-border); }
-    .message-placeholder { color:var(--chrome-text-dim); }
-    .detail-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; border-top:1px solid var(--chrome-border); padding:8px 0 0; }
-    .detail-actions button { display:inline-flex; align-items:center; gap:5px; min-height:25px; border:0; border-radius:4px; padding:2px 0; background:none; color:var(--chrome-text-dim); font-size:11px; }
-    .detail-actions button:hover { color:var(--chrome-text-bright); }
-    .detail-actions button:disabled { opacity:.5; cursor:default; }
+    .message .md-th,.message .md-td { padding:var(--ui-space-2) var(--ui-space-4); border:1px solid var(--ui-border); }
+    .message-placeholder { color:var(--ui-text-muted); }
+    .detail-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ui-space-5); border-top:1px solid var(--ui-border); padding:var(--ui-space-4) 0 0; }
     .detail-actions .archive-action { margin-left:auto; }
-    @media(max-width:560px) { :host { padding:12px; } col.progress-col { width:122px; } col.action-col { width:40px; } th,td { padding-left:7px; padding-right:7px; } td:last-child { padding:6px 4px; } .lane-toggle { gap:3px; } .meter-time { display:none; } .progress-basis { font-size:9px; } }
+    @media(max-width:560px) { :host { padding:var(--ui-space-5); } col.progress-col { width:var(--ui-lane-progress-column-phone-width); } col.action-col { width:var(--ui-lane-action-column-width); } th,td { padding-left:var(--ui-space-4); padding-right:var(--ui-space-4); } td:last-child { padding:var(--ui-space-3) var(--ui-space-2); } .lane-toggle::part(button) { gap:var(--ui-space-2); } .lane-title { white-space:normal; overflow-wrap:anywhere; line-height:1.3; } .meter-head { display:grid; gap:var(--ui-space-1); } .meter-time { display:none; } .progress-basis { font-size:var(--ui-text-xs); } }
     @media(prefers-reduced-motion:reduce) { .chevron { transition:none; } }
   `;
 
@@ -254,10 +244,17 @@ export class MuxOperatorStatus extends LitElement {
     </div>`;
   }
   private filterButton(value: LaneFilter, label: string, count: number) {
-    return html`<button class="filter ${this.filter === value ? 'active' : ''}" aria-pressed=${this.filter === value} @click=${() => this.chooseFilter(value)}>${label}<span class="filter-count">${count}</span></button>`;
+    return html`<mux-ui-filter-chip .count=${count} ?pressed=${this.filter === value} @click=${() => this.chooseFilter(value)}>${label}</mux-ui-filter-chip>`;
   }
   private isStopped(lane: SDKChat) {
     return lane.state === 'ready' && lane.lastTurnOutcome === 'cancelled';
+  }
+  private statusTone(lane: SDKChat): StatusTone {
+    if (lane.state === 'failed') return 'danger';
+    if (lane.state === 'uncertain' || this.isStopped(lane)) return 'warning';
+    if (lane.state === 'ready') return 'success';
+    if (lane.state === 'working' || lane.state === 'starting') return 'info';
+    return 'neutral';
   }
   private needsAttention(lane: SDKChat) {
     return lane.state === 'failed' || lane.state === 'uncertain' || this.isStopped(lane);
@@ -272,7 +269,7 @@ export class MuxOperatorStatus extends LitElement {
           const active = todo.status === 'in_progress' || todo.status === 'inProgress';
           const label = done ? 'Completed' : active ? 'In progress' : 'Pending';
           return html`<li class="todo ${done ? 'completed' : active ? 'in_progress' : 'pending'}" aria-current=${active ? 'step' : nothing}><span class="todo-icon" aria-hidden="true">${icon(done ? Check : active ? LoaderCircle : Circle,{size:18})}</span><span class="todo-label">${todo.text}<span class="todo-state">${label}</span></span></li>`;
-        })}</ul>` : html`<div class="empty"><p>No task list reported yet.</p><p class="hint">The checklist appears when the agent uses its plan or TODO tool.</p></div>`}`;
+        })}</ul>` : html`<mux-ui-feedback appearance="panel" align="center"><strong>No task list reported yet.</strong><p class="hint">The checklist appears when the agent uses its plan or TODO tool.</p></mux-ui-feedback>`}`;
   }
   override render() {
     const operator = this.snapshot?.operator;
@@ -281,10 +278,10 @@ export class MuxOperatorStatus extends LitElement {
     const working = lanes.filter(chat => chat.state === 'working' || chat.state === 'starting').length;
     const done = lanes.filter(chat => chat.state === 'ready' && !this.isStopped(chat)).length;
     const visible = lanes.filter(chat => this.filter === 'all' || (this.filter === 'attention' ? this.needsAttention(chat) : this.filter === 'running' ? chat.state === 'working' || chat.state === 'starting' : chat.state === 'ready' && !this.isStopped(chat)));
-    if (operator && !operator.operator) return html`${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}${this.checklist(operator)}`;
+    if (operator && !operator.operator) return html`${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}${this.checklist(operator)}`;
     return html`<div class="head"><h2>Operator status</h2><p>Lane work, timing ranges, and latest replies.</p></div>
-      ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-      ${!operator ? html`<div class="empty">Loading operator status…</div>` : !operator.operator ? html`<div class="empty"><p>Operator mode is off.</p><p class="hint">Turn it on from the permission and mode menu in the chat composer.</p></div>` : html`
+      ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
+      ${!operator ? this.error ? nothing : html`<mux-ui-feedback kind="loading" align="center">Loading operator status…</mux-ui-feedback>` : !operator.operator ? html`<mux-ui-feedback appearance="panel" align="center"><strong>Operator mode is off.</strong><p class="hint">Turn it on from the permission and mode menu in the chat composer.</p></mux-ui-feedback>` : html`
         <p class="summary"><strong>${lanes.length}</strong> lanes<span class="sep">/</span><strong>${working}</strong> working<span class="sep">/</span><strong>${attention}</strong> need attention</p>
         ${lanes.length ? html`<div class="filters" role="group" aria-label="Filter operator lanes">
           ${this.filterButton('all', 'All', lanes.length)}
@@ -298,14 +295,14 @@ export class MuxOperatorStatus extends LitElement {
             const expanded = this.expandedLane === lane.id;
             const detailId = `operator-lane-${lane.id}`;
             return html`<tr class="lane-row ${expanded ? 'expanded' : ''}">
-              <td><button class="lane-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} ${lane.title}`} aria-expanded=${expanded} aria-controls=${detailId} @click=${() => { this.expandedLane = expanded ? '' : lane.id; }}><span class="chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-primary" title=${lane.title}><span class="lane-title">${lane.title}</span><span class="lane-meta"><span class="harness">${sdkHarnessLabel(lane.harness)}</span><span class="state ${this.isStopped(lane) ? 'stopped' : lane.state}">${this.isStopped(lane) ? 'Stopped' : lane.state === 'ready' ? 'Ready' : lane.state === 'uncertain' ? 'Uncertain' : lane.state === 'starting' ? 'Starting' : lane.state === 'failed' ? 'Failed' : 'Working'}</span>${lane.archived ? html`<span class="archived-label">Archived</span>` : nothing}</span></span></button></td>
+              <td><mux-ui-button class="lane-toggle" variant="quiet" full-width accessible-label=${`${expanded ? 'Collapse' : 'Expand'} ${lane.title}`} expandable .expanded=${expanded} .controls=${detailId} @click=${() => { this.expandedLane = expanded ? '' : lane.id; }}><span class="chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-primary" title=${lane.title}><span class="lane-title">${lane.title}</span><span class="lane-meta"><span class="harness">${sdkHarnessLabel(lane.harness)}</span><mux-ui-status-badge dot .tone=${this.statusTone(lane)}>${this.isStopped(lane) ? 'Stopped' : lane.state === 'ready' ? 'Ready' : lane.state === 'uncertain' ? 'Uncertain' : lane.state === 'starting' ? 'Starting' : lane.state === 'failed' ? 'Failed' : 'Working'}</mux-ui-status-badge>${lane.archived ? html`<span class="archived-label">Archived</span>` : nothing}</span></span></mux-ui-button></td>
               <td class="progress-cell">${this.meter(lane)}</td>
-              <td><button class="open" aria-label=${`Open lane chat: ${lane.title}`} title="Open lane chat" @click=${() => this.open(lane.id)}>${laneIcon(17)}</button></td>
+              <td><mux-ui-button icon-only size="small" variant="quiet" accessible-label=${`Open lane chat: ${lane.title}`} tooltip="Open lane chat" @click=${() => this.open(lane.id)}>${laneIcon(17)}</mux-ui-button></td>
             </tr>${expanded ? html`<tr class="detail"><td colspan="3"><div class="message" id=${detailId}>${this.message(lane)}</div>
-              <div class="detail-actions"><button aria-label=${`Unlink ${lane.title} from operator`} ?disabled=${!!this.pendingLane} @click=${() => void this.unlink(lane)}>${icon(Unlink2,{size:13})} Unlink lane</button>
-                <button class="archive-action" aria-label=${`${lane.archived ? 'Restore' : 'Archive'} chat ${lane.title}`} ?disabled=${!!this.pendingLane} @click=${() => void this.setArchived(lane, !lane.archived)}>${icon(lane.archived ? ArchiveRestore : Archive,{size:13})} ${lane.archived ? 'Restore chat' : 'Archive chat'}</button></div>
+              <div class="detail-actions"><mux-ui-button variant="quiet" size="small" accessible-label=${`Unlink ${lane.title} from operator`} ?disabled=${!!this.pendingLane} @click=${() => void this.unlink(lane)}>${icon(Unlink2,{size:13})} Unlink lane</mux-ui-button>
+                <mux-ui-button class="archive-action" variant="quiet" size="small" accessible-label=${`${lane.archived ? 'Restore' : 'Archive'} chat ${lane.title}`} ?disabled=${!!this.pendingLane} @click=${() => void this.setArchived(lane, !lane.archived)}>${icon(lane.archived ? ArchiveRestore : Archive,{size:13})} ${lane.archived ? 'Restore chat' : 'Archive chat'}</mux-ui-button></div>
             </td></tr>` : nothing}`;
           })}</tbody>
-        </table></div>` : html`<div class="empty">${this.filter === 'attention' ? 'No lanes need attention.' : this.filter === 'running' ? 'No lanes are running.' : 'No lanes are done yet.'}</div>`}` : html`<div class="empty"><p>No lanes yet.</p><p class="hint">Open a chat’s goal ledger to link it to this operator. Goal proposals need human approval or explicit operator start authorization.</p></div>`}`}`;
+        </table></div>` : html`<mux-ui-feedback align="center">${this.filter === 'attention' ? 'No lanes need attention.' : this.filter === 'running' ? 'No lanes are running.' : 'No lanes are done yet.'}</mux-ui-feedback>`}` : html`<mux-ui-feedback appearance="panel" align="center"><strong>No lanes yet.</strong><p class="hint">Open a chat’s goal ledger to link it to this operator. Goal proposals need human approval or explicit operator start authorization.</p></mux-ui-feedback>`}`}`;
   }
 }

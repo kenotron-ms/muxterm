@@ -2,6 +2,20 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
+import '../ui/button.js';
+import '../ui/color-picker.js';
+import '../ui/feedback.js';
+import type { FeedbackKind } from '../ui/feedback.js';
+import '../ui/nav-item.js';
+import '../ui/radio-group.js';
+import type { MuxUIRangeField } from '../ui/range-field.js';
+import '../ui/range-field.js';
+import '../ui/select.js';
+import '../ui/status-badge.js';
+import type { MuxUISelect } from '../ui/select.js';
+import '../ui/switch.js';
+import '../ui/text-field.js';
+import '../ui/theme-choice.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
 import {
@@ -36,6 +50,17 @@ import {
 } from '../lib/voice-settings.js';
 
 export type SettingsSection = 'appearance' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
+
+const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> = [
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'notifications', label: 'Notifications' },
+  { id: 'workspaces', label: 'Workspaces' },
+  { id: 'ai', label: 'AI' },
+  { id: 'voice', label: 'Voice' },
+  { id: 'remotes', label: 'Remotes' },
+  { id: 'shortcuts', label: 'Keyboard Shortcuts' },
+  { id: 'about', label: 'About' },
+];
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -214,10 +239,10 @@ export class MuxSettingsSurface extends LitElement {
       flex-direction: column;
       width: 100%;
       height: 100%;
-      background: var(--chrome-body);
-      color: var(--chrome-text-bright);
+      background: var(--ui-surface-base);
+      color: var(--ui-text);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 13px;
+      font-size: var(--ui-text-md);
       box-sizing: border-box;
       overflow: hidden;
     }
@@ -227,54 +252,24 @@ export class MuxSettingsSurface extends LitElement {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 16px 20px 14px;
-      border-bottom: 1px solid var(--chrome-border);
+      padding: var(--ui-space-6) var(--ui-space-7) var(--ui-space-6);
+      border-bottom: 1px solid var(--ui-border);
       flex-shrink: 0;
     }
 
     .header h2 {
       margin: 0;
-      font-size: 15px;
+      font-size: var(--ui-text-xl);
       font-weight: 600;
-      color: var(--chrome-text-bright);
-    }
-
-    .close-btn {
-      background: transparent;
-      border: none;
-      color: var(--chrome-text-dim);
-      cursor: pointer;
-      font-size: 18px;
-      line-height: 1;
-      padding: 3px 7px;
-      border-radius: 4px;
-      transition: color 0.1s, background 0.1s;
-    }
-    .close-btn:hover {
-      color: var(--chrome-text-bright);
-      background: var(--chrome-hover);
+      color: var(--ui-text);
     }
 
     :host([page-mode]) .header {
       justify-content: flex-start;
-      gap: 8px;
-      padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px;
+      gap: var(--ui-space-4);
+      padding: calc(var(--ui-space-4) + env(safe-area-inset-top, 0)) var(--ui-space-6) var(--ui-space-4);
     }
-    .back-btn {
-      display: grid;
-      place-items: center;
-      width: 44px;
-      height: 44px;
-      padding: 0;
-      border: 0;
-      border-radius: 6px;
-      background: transparent;
-      color: inherit;
-      cursor: pointer;
-    }
-    .back-btn:hover { background: var(--chrome-hover); }
-    .back-btn:focus-visible { outline: 2px solid var(--chrome-accent); }
-    :host([page-mode]) .content { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
+    :host([page-mode]) .content { padding-bottom: calc(var(--ui-space-10) + env(safe-area-inset-bottom, 0)); }
 
     /* ── Body: sidebar + content ── */
     .body {
@@ -285,35 +280,11 @@ export class MuxSettingsSurface extends LitElement {
 
     /* ── Sidebar ── */
     .sidebar {
-      width: 156px;
+      width: var(--ui-settings-sidebar-width);
       flex-shrink: 0;
-      border-right: 1px solid var(--chrome-border);
-      padding: 12px 0;
+      border-right: 1px solid var(--ui-border);
+      padding: var(--ui-space-5) 0;
       overflow-y: auto;
-    }
-
-    .sidebar-item {
-      display: block;
-      width: 100%;
-      padding: 9px 18px;
-      background: transparent;
-      border: none;
-      cursor: pointer;
-      font-size: 13px;
-      font-family: inherit;
-      color: var(--chrome-text-dim);
-      text-align: left;
-      border-radius: 0;
-      transition: color 0.1s, background 0.1s;
-    }
-    .sidebar-item:hover {
-      color: var(--chrome-text-bright);
-      background: var(--chrome-hover);
-    }
-    .sidebar-item.active {
-      color: var(--chrome-text-bright);
-      background: var(--chrome-hover);
-      font-weight: 500;
     }
 
     /* ── Content area ── */
@@ -322,478 +293,119 @@ export class MuxSettingsSurface extends LitElement {
       min-width: 0;
       overflow-y: auto;
       overflow-wrap: anywhere;
-      padding: 24px 28px 40px;
+      padding: var(--ui-space-8) var(--ui-space-9) var(--ui-space-10);
     }
 
     @media (max-width: 600px) {
       .body { flex-direction: column; }
-      .sidebar { display:flex; width:auto; padding:8px; border-right:0; border-bottom:1px solid var(--chrome-border); overflow-x:auto; }
-      .sidebar-item { width:auto; padding:8px 10px; white-space:nowrap; }
-      .content { padding:20px; }
+      .sidebar { display:flex; width:auto; padding:var(--ui-space-4); border-right:0; border-bottom:1px solid var(--ui-border); overflow-x:auto; }
+      .content { padding:var(--ui-space-7); }
     }
 
     /* ── Section headings ── */
     .section-title {
-      margin: 0 0 16px 0;
-      font-size: 11px;
+      margin: 0 0 var(--ui-space-6) 0;
+      font-size: var(--ui-text-xs);
       font-weight: 600;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     .section-gap {
-      margin-top: 32px;
+      margin-top: var(--ui-space-9);
     }
 
     /* ── Theme card grid ── */
     .theme-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-      margin-bottom: 4px;
+      gap: var(--ui-space-5);
+      margin-bottom: var(--ui-space-2);
     }
-
-    .theme-card {
-      position: relative;
-      display: block;
-      width: 100%;
-      padding: 0;
-      background: transparent;
-      color: inherit;
-      text-align: left;
-      font: inherit;
-      cursor: pointer;
-      border-radius: 8px;
-      border: 2px solid transparent;
-      overflow: hidden;
-      transition: border-color 0.15s, transform 0.1s;
-      user-select: none;
-    }
-    .theme-card:hover {
-      transform: translateY(-1px);
-    }
-    .theme-card.active {
-      border-color: var(--chrome-accent);
-    }
-    .theme-card:focus-visible {
-      outline: 2px solid var(--chrome-accent);
-      outline-offset: 2px;
-    }
-
-    .card-inner {
-      padding: 8px 9px 6px;
-      font-size: 9px;
-      font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
-      line-height: 1.6;
-    }
-
-    .card-topbar {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 6px;
-    }
-    .card-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-    }
-    .dot-r { background: #ff5f57; }
-    .dot-y { background: #febc2e; }
-    .dot-g { background: #28c840; }
-
-    .card-prompt { margin-bottom: 1px; }
-    .card-files  { margin-top: 1px; }
-
-    .card-cursor {
-      display: inline-block;
-      width: 6px;
-      height: 10px;
-      vertical-align: text-bottom;
-      margin-top: 1px;
-    }
-
-    .card-label {
-      font-size: 10px;
-      text-align: center;
-      padding: 5px 6px 6px;
-      color: var(--chrome-text-dim);
-      background: var(--chrome-bar);
-    }
-    .theme-card.active .card-label {
-      color: var(--chrome-text-bright);
-    }
-
-    .card-check {
-      position: absolute;
-      top: 5px;
-      right: 7px;
-      font-size: 10px;
-      color: var(--chrome-accent);
-      font-weight: 700;
-    }
-
-    /* ── Font family radios ── */
-    .font-radios {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .font-radio-label {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      padding: 6px 10px;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: background 0.1s;
-    }
-    .font-radio-label:hover {
-      background: var(--chrome-hover);
-    }
-
-    .font-radio-label input[type="radio"] {
-      accent-color: var(--chrome-accent);
-      width: 14px;
-      height: 14px;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-
-    .font-radio-name {
-      flex: 1;
-      color: var(--chrome-text-bright);
-    }
+    .theme-light-heading { margin-top:var(--ui-space-6); }
 
     /* ── Font size slider ── */
-    .size-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 6px 10px;
-      margin-top: 4px;
-    }
-
-    .size-label {
-      color: var(--chrome-text-dim);
-      width: 64px;
-      flex-shrink: 0;
-    }
-
-    input[type="range"] {
-      flex: 1;
-      accent-color: var(--chrome-accent);
-      height: 4px;
-      cursor: pointer;
-    }
-
-    .size-value {
-      width: 28px;
-      text-align: right;
-      color: var(--chrome-text-bright);
-      font-feature-settings: 'tnum';
-    }
+    mux-ui-range-field.font-size { margin-top:var(--ui-space-2); }
 
     /* ── Font preview line ── */
     .font-preview {
-      margin: 10px 0 0 10px;
-      padding: 8px 12px;
-      background: var(--chrome-bar);
-      border: 1px solid var(--chrome-border);
-      border-radius: 6px;
-      font-size: 12px;
-      color: var(--chrome-text-bright);
+      margin: var(--ui-space-5) 0 0 var(--ui-space-5);
+      padding: var(--ui-space-4) var(--ui-space-5);
+      background: var(--ui-surface-raised);
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-md);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-text);
       overflow: hidden;
       white-space: nowrap;
     }
 
     /* ── Notifications section ── */
     .notif-block {
-      max-width: 480px;
+      max-width: var(--ui-settings-content-width);
     }
 
     .notif-description {
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
       line-height: 1.55;
-      margin: 0 0 14px 0;
+      margin: 0 0 var(--ui-space-6) 0;
     }
 
-    .notif-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      padding: 7px 14px;
-      border-radius: 6px;
-      border: 1px solid var(--chrome-accent);
-      background: transparent;
-      color: var(--chrome-accent);
-      font: inherit;
-      font-size: 13px;
-      cursor: pointer;
-      transition: background 0.12s, color 0.12s;
-    }
-    .notif-btn:hover {
-      background: var(--chrome-accent);
-      color: var(--chrome-body);
-    }
-
-    .notif-status {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      color: var(--chrome-text-dim);
-      font-size: 13px;
-    }
-    .notif-status.granted {
-      color: #9ece6a; /* tokyo-night green */
-    }
-    .notif-status.denied {
-      color: var(--chrome-danger);
-    }
-
-    .notif-help-link {
-      display: inline-block;
-      margin-top: 6px;
-      font-size: 11px;
-      color: var(--chrome-accent);
-      text-decoration: none;
-    }
-    .notif-help-link:hover {
-      text-decoration: underline;
-    }
+    .notif-permission-actions { display:flex; align-items:center; gap:var(--ui-space-5); flex-wrap:wrap; }
 
     .notif-hint {
-      margin-top: 8px;
-      font-size: 11px;
-      color: var(--chrome-text-dim);
+      margin-top: var(--ui-space-4);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-text-muted);
       line-height: 1.5;
-    }
-
-    .notif-test-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 11px;
-      border-radius: 6px;
-      border: 1px solid var(--chrome-border);
-      background: transparent;
-      color: var(--chrome-text-dim);
-      font: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      transition: border-color 0.12s, color 0.12s;
-    }
-    .notif-test-btn:hover {
-      border-color: var(--chrome-accent);
-      color: var(--chrome-text-bright);
     }
 
     /* ── Theme section label ── */
     .theme-section-label {
       grid-column: 1 / -1;
-      font-size: 10px;
+      font-size: var(--ui-text-xs);
       font-weight: 600;
       letter-spacing: 0.07em;
       text-transform: uppercase;
-      color: var(--chrome-text-dim);
-      padding-top: 8px;
+      color: var(--ui-text-muted);
+      padding-top: var(--ui-space-4);
     }
 
     .divider {
-      height: 1px;
-      background: var(--chrome-border);
-      margin: 22px 0;
-    }
-
-    /* ── Title bar color picker ── */
-
-    /* Crayon grid — curated presets, same idea as macOS's classic Crayons
-       color-picker tab. */
-    .crayon-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-bottom: 12px;
-    }
-
-    .crayon {
-      position: relative;
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      border: 1px solid rgba(0, 0, 0, 0.12);
-      padding: 0;
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: transform 0.08s;
-    }
-    .crayon:hover {
-      transform: scale(1.12);
-    }
-    .crayon.active {
-      box-shadow: 0 0 0 2px var(--chrome-body), 0 0 0 4px var(--chrome-accent);
-    }
-    .crayon-check {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-    }
-
-    .titlebar-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .titlebar-swatch {
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      border: 1px solid var(--chrome-border);
-      padding: 0;
-      cursor: pointer;
-      flex-shrink: 0;
-      /* Native color input chrome varies a lot by browser — strip it down
-         to just the swatch so it matches the crayon grid above it. */
-      -webkit-appearance: none;
-      appearance: none;
-      background: none;
-    }
-    .titlebar-swatch::-webkit-color-swatch-wrapper {
-      padding: 0;
-    }
-    .titlebar-swatch::-webkit-color-swatch {
-      border: none;
-      border-radius: 50%;
-    }
-
-    .titlebar-custom-label {
-      font-size: 12px;
-      color: var(--chrome-text-dim);
-    }
-
-    .titlebar-reset-btn {
-      background: transparent;
-      border: 1px solid var(--chrome-border);
-      color: var(--chrome-text-dim);
-      border-radius: 6px;
-      padding: 7px 12px;
-      font-size: 12px;
-      cursor: pointer;
-      transition: border-color 0.1s, color 0.1s;
-      margin-left: auto;
-    }
-    .titlebar-reset-btn:hover {
-      border-color: var(--chrome-accent);
-      color: var(--chrome-text-bright);
+      height: var(--ui-divider-thickness);
+      background: var(--ui-border);
+      margin: var(--ui-space-8) 0;
     }
 
     .titlebar-hint {
-      font-size: 12px;
-      color: var(--chrome-text-dim);
-      margin: 0;
-    }
-
-    /* ── Bell radios ── */
-    .bell-radios {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .bell-radio-label {
-      display: flex;
-      align-items: flex-start;
-      gap: 9px;
-      padding: 7px 10px;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: background 0.1s;
-    }
-    .bell-radio-label:hover {
-      background: var(--chrome-hover);
-    }
-
-    .bell-radio-label input[type="radio"] {
-      accent-color: var(--chrome-accent);
-      width: 14px;
-      height: 14px;
-      margin-top: 1px;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-
-    .bell-radio-text {
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
-    }
-
-    .bell-radio-name {
-      color: var(--chrome-text-bright);
-    }
-
-    .bell-radio-desc {
-      font-size: 11px;
-      color: var(--chrome-text-dim);
+      font-size: var(--ui-text-sm);
+      color: var(--ui-text-muted);
+      margin: var(--ui-space-4) 0 0;
     }
 
     /* ── AI section ── */
     .ai-status {
-      margin: 0 0 12px;
-      color: var(--chrome-text-bright);
-    }
-
-    .ai-input {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 6px 8px;
-      font-family: inherit;
-      font-size: 13px;
-      color: var(--chrome-text-bright);
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border, #444);
-      border-radius: 4px;
+      margin: 0 0 var(--ui-space-5);
+      color: var(--ui-text);
     }
 
     .ai-actions {
       display: flex;
-      gap: 8px;
-      margin-top: 10px;
+      flex-wrap: wrap;
+      gap: var(--ui-space-4);
+      margin-top: var(--ui-space-5);
     }
 
-    .ai-actions button {
-      padding: 5px 12px;
-      font-family: inherit;
-      font-size: 12px;
-      color: var(--chrome-text-bright);
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border, #444);
-      border-radius: 4px;
-      cursor: pointer;
-    }
-
-    .ai-actions button[disabled] {
-      opacity: 0.5;
-      cursor: default;
-    }
-
-    .ai-message {
-      margin-top: 10px;
-      font-size: 12px;
-      color: var(--chrome-text-dim);
+    .settings-feedback {
+      margin-top: var(--ui-space-5);
     }
 
     .ai-note {
-      margin-top: 16px;
-      font-size: 11px;
+      margin-top: var(--ui-space-6);
+      font-size: var(--ui-text-sm);
       line-height: 1.5;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     /* ── Voice section ──────────────────────────────────────────────────
@@ -810,11 +422,11 @@ export class MuxSettingsSurface extends LitElement {
     .v-line {
       display: flex;
       align-items: baseline;
-      gap: 8px;
-      margin: 0 0 10px;
-      font-size: 12px;
+      gap: var(--ui-space-4);
+      margin: 0 0 var(--ui-space-5);
+      font-size: var(--ui-text-sm);
       line-height: 1.5;
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
     }
 
     /* The fixed gutter. Fixed width so every marker aligns down the column
@@ -828,119 +440,49 @@ export class MuxSettingsSurface extends LitElement {
       font-variant-numeric: tabular-nums;
     }
 
-    .v-mark.ok   { color: var(--mux-success, #3d9970); }
-    .v-mark.bad  { color: var(--mux-error); }
-    .v-mark.none { color: var(--chrome-text-dim); }
+    .v-mark.ok   { color: var(--ui-success); }
+    .v-mark.bad  { color: var(--ui-danger-text); }
+    .v-mark.none { color: var(--ui-text-muted); }
 
     .v-field {
-      margin-top: 14px;
+      margin-top: var(--ui-space-6);
     }
+
+    mux-ui-switch.v-toggle { display:block; margin-bottom:var(--ui-space-7); }
+    mux-ui-radio-group.v-modes { margin-bottom:var(--ui-space-2); }
 
     .v-label {
       display: block;
-      margin-bottom: 4px;
-      font-size: 11px;
+      margin-bottom: var(--ui-space-2);
+      font-size: var(--ui-text-xs);
       font-weight: 600;
       letter-spacing: 0.04em;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     .v-hint {
-      margin: 4px 0 0;
-      font-size: 11px;
+      margin: var(--ui-space-2) 0 0;
+      font-size: var(--ui-text-sm);
       line-height: 1.5;
-      color: var(--chrome-text-dim);
-    }
-
-    /* Mode chooser: stacked rows, each a whole tap target. No cards. */
-    .v-modes {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      margin-bottom: 4px;
-    }
-
-    .v-mode {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
-      padding: 7px 4px;
-      font-size: 13px;
-      color: var(--chrome-text-bright);
-      background: none;
-      border: none;
-      border-radius: 0;
-      text-align: left;
-      cursor: pointer;
-      font-family: inherit;
-    }
-
-    /* Selection is a marker and weight, not a slab. */
-    .v-mode[aria-checked='true'] {
-      font-weight: 700;
-    }
-
-    .v-mode:focus-visible {
-      outline: 2px solid var(--chrome-text-bright);
-      outline-offset: -2px;
-    }
-
-    .v-mode-sub {
-      display: block;
-      margin-top: 2px;
-      font-size: 11px;
-      font-weight: 400;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     .v-actions {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 16px;
-    }
-
-    .v-actions button {
-      padding: 6px 12px;
-      font-family: inherit;
-      font-size: 12px;
-      color: var(--chrome-text-bright);
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border, #444);
-      border-radius: 4px;
-      cursor: pointer;
-    }
-
-    .v-actions button[disabled] {
-      opacity: 0.5;
-      cursor: default;
-    }
-
-    /* The enable toggle reads as a sentence, not a switch in a box. */
-    .v-toggle {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
-      margin: 0 0 18px;
-      font-size: 13px;
-      color: var(--chrome-text-bright);
-      cursor: pointer;
-    }
-
-    .v-toggle input {
-      margin: 0;
-      flex: none;
+      gap: var(--ui-space-4);
+      margin-top: var(--ui-space-6);
     }
 
     .v-note {
-      margin-top: 18px;
-      font-size: 11px;
+      margin-top: var(--ui-space-7);
+      font-size: var(--ui-text-sm);
       line-height: 1.55;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     .v-note code {
-      font-size: 10.5px;
+      font-size: var(--ui-text-xs);
       word-break: break-all;
     }
 
@@ -949,49 +491,49 @@ export class MuxSettingsSurface extends LitElement {
     .v-message {
       display: flex;
       align-items: baseline;
-      gap: 8px;
-      margin-top: 14px;
-      font-size: 12px;
+      gap: var(--ui-space-4);
+      margin-top: var(--ui-space-6);
+      font-size: var(--ui-text-sm);
       line-height: 1.5;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
     }
 
     /* ── Remotes ── */
     .r-row {
       display: flex;
       align-items: center;
-      gap: 11px;
-      padding: 10px 12px;
-      border: 1px solid var(--chrome-border);
-      border-radius: 6px;
-      margin-bottom: 8px;
-      background: var(--chrome-bar);
+      gap: var(--ui-space-5);
+      padding: var(--ui-space-5) var(--ui-space-5);
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-md);
+      margin-bottom: var(--ui-space-4);
+      background: var(--ui-surface-raised);
     }
     .r-row.connected {
-      border-color: color-mix(in srgb, var(--mux-ok) 35%, var(--chrome-border));
+      border-color: color-mix(in srgb, var(--ui-success) 35%, var(--ui-border));
     }
     .r-row.degraded {
-      border-color: color-mix(in srgb, var(--mux-warn) 45%, var(--chrome-border));
-      background: color-mix(in srgb, var(--mux-warn) 6%, var(--chrome-bar));
+      border-color: color-mix(in srgb, var(--ui-warning) 45%, var(--ui-border));
+      background: color-mix(in srgb, var(--ui-warning) 6%, var(--ui-surface-raised));
     }
     .r-row.err {
-      border-color: color-mix(in srgb, var(--mux-error) 40%, var(--chrome-border));
+      border-color: color-mix(in srgb, var(--ui-danger-text) 40%, var(--ui-border));
     }
 
     .r-dot {
-      width: 8px;
-      height: 8px;
+      width: var(--ui-status-dot-lg);
+      height: var(--ui-status-dot-lg);
       border-radius: 50%;
       flex-shrink: 0;
     }
-    .r-dot.ok { background: var(--mux-ok); }
-    .r-dot.warn { background: var(--mux-warn); }
-    .r-dot.err { background: var(--mux-error); }
+    .r-dot.ok { background: var(--ui-success); }
+    .r-dot.warn { background: var(--ui-warning); }
+    .r-dot.err { background: var(--ui-danger-text); }
     .r-dot.off {
       background: transparent;
-      border: 1px solid var(--chrome-text-dim);
+      border: 1px solid var(--ui-text-muted);
     }
 
     .r-main {
@@ -1000,105 +542,60 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .r-name {
-      font-size: 13px;
+      font-size: var(--ui-text-md);
       font-weight: 500;
-      color: var(--chrome-text-bright);
+      color: var(--ui-text);
     }
 
     .r-sub {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 10.5px;
-      color: var(--chrome-text-dim);
-      margin-top: 2px;
+      font-size: var(--ui-text-xs);
+      color: var(--ui-text-muted);
+      margin-top: var(--ui-space-1);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .r-sub.err {
-      color: var(--mux-error);
+      color: var(--ui-danger-text);
     }
 
     .r-state {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 10px;
+      font-size: var(--ui-text-xs);
       flex-shrink: 0;
-      color: var(--mux-warn);
+      color: var(--ui-warning);
     }
 
-    .application-version { margin:20px 0 14px; font-size:24px; font-weight:600; color:var(--chrome-text-bright); }
-    .application-actions { display:flex; flex-wrap:wrap; gap:10px; margin:14px 0; }
-    .application-shortcuts { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; }
+    .application-version { margin:var(--ui-space-7) 0 var(--ui-space-6); font-size:var(--ui-text-3xl); font-weight:600; color:var(--ui-text); }
+    .application-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-5); margin:var(--ui-space-6) 0; }
+    .application-shortcuts { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--ui-space-6); align-items:baseline; }
     .application-shortcuts dd { margin:0; text-align:right; }
-    .application-shortcuts kbd { font:inherit; color:var(--chrome-text-bright); }
-    .application-button { padding:8px 14px; border:1px solid var(--chrome-border); border-radius:6px; background:transparent; color:var(--chrome-text-bright); font:inherit; cursor:pointer; }
-    .application-button:hover:enabled { background:var(--chrome-hover); }
-    .application-button.primary { border-color:var(--chrome-accent); background:var(--chrome-accent); color:var(--chrome-body); }
-    .application-button:disabled { opacity:.45; cursor:default; }
-    .application-button:focus-visible { outline:2px solid var(--chrome-accent); outline-offset:3px; }
-    .r-btn {
-      padding: 5px 11px;
-      border: 1px solid var(--chrome-border);
-      border-radius: 6px;
-      background: transparent;
-      color: var(--chrome-text-dim);
-      font: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-    .r-btn:hover {
-      border-color: var(--chrome-accent);
-      color: var(--chrome-text-bright);
-    }
-    .r-btn.pri {
-      border-color: var(--chrome-accent);
-      color: var(--chrome-accent);
-    }
-    .r-btn.pri:hover {
-      background: var(--chrome-accent);
-      color: var(--chrome-body);
-    }
-    .r-btn.danger:hover {
-      border-color: var(--chrome-danger);
-      color: var(--chrome-danger);
-    }
-    .r-btn[disabled] {
-      opacity: 0.5;
-      cursor: default;
-    }
-
-    /* The server's verbatim message for a request that failed outside a row:
-       a list that could not be read, or an address it refused to add. */
-    .r-error {
-      margin-top: 10px;
-      font-size: 12px;
-      line-height: 1.5;
-      white-space: pre-wrap;
-      color: var(--mux-error);
-    }
+    .application-shortcuts kbd { font:inherit; color:var(--ui-text); }
+    .r-row mux-ui-button { flex-shrink: 0; }
+    .r-actions { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: var(--ui-space-4); }
 
     @media (max-width: 767.98px) {
-      .header { min-height: 56px; box-sizing: border-box; padding: 10px 16px; }
-      .close-btn { min-width: 44px; min-height: 44px; }
+      .header { min-height: var(--ui-row-touch); box-sizing: border-box; padding: var(--ui-space-5) var(--ui-space-6); }
       .body { min-height: 0; flex-direction: column; }
       .sidebar {
         box-sizing: border-box;
         display: flex;
         flex: none;
         width: 100%;
-        min-height: 48px;
-        padding: 0 8px;
+        min-height: var(--ui-settings-section-nav-height);
+        padding: 0 var(--ui-space-4);
         overflow-x: auto;
         overflow-y: hidden;
         border-right: 0;
-        border-bottom: 1px solid var(--chrome-border);
+        border-bottom: 1px solid var(--ui-border);
         -webkit-overflow-scrolling: touch;
       }
-      .sidebar-item { flex: none; width: auto; min-height: 48px; padding: 0 12px; white-space: nowrap; border-bottom: 2px solid transparent; }
-      .sidebar-item.active { background: transparent; border-bottom-color: var(--chrome-accent); }
-      .content { min-width: 0; padding: 20px 16px 32px; }
-      .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 520px; }
-      .card-label { font-size: 12px; }
+      .content { min-width: 0; padding: var(--ui-space-7) var(--ui-space-6) var(--ui-space-9); }
+      .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: var(--ui-settings-theme-grid-width); }
+      .r-row { flex-wrap: wrap; }
+      .r-main { flex: 1 1 calc(100% - var(--ui-space-7)); }
+      .r-actions { flex: 1 1 100%; justify-content: flex-end; }
     }
 
   `;
@@ -1110,6 +607,7 @@ export class MuxSettingsSurface extends LitElement {
   @property({ type: Boolean, attribute: 'page-mode', reflect: true }) pageMode = false;
 
   @state() private _section: SettingsSection = 'appearance';
+  private _lastScrolledSection: SettingsSection | null = null;
   @state() private _updateStatus: UpdateStatus | null = null;
   @state() private _checkingVersion = false;
   @state() private _installingUpdate = false;
@@ -1119,6 +617,7 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _aiKeyInput = '';
   @state() private _aiBusy = false;
   @state() private _aiMessage = '';
+  @state() private _aiMessageKind: FeedbackKind = 'info';
 
   // ── Voice credentials ──────────────────────────────────────────────────
   // _voice is what the SERVER says. The _v* fields are the form's own edits,
@@ -1184,7 +683,28 @@ export class MuxSettingsSurface extends LitElement {
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
     if (changed.has('openSection') && this.openSection !== null) {
-      this._setSection(this.openSection);
+      const changedSection = this._setSection(this.openSection);
+      if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
+      if (changedSection && this.openSection === 'voice') void this._loadVoice();
+    }
+  }
+
+  protected override updated(changed: PropertyValues<this>): void {
+    super.updated(changed);
+    if (this._lastScrolledSection === this._section) return;
+    void this._scrollActiveSection();
+  }
+
+  private async _scrollActiveSection(): Promise<void> {
+    const nav = this.renderRoot.querySelector<HTMLElement>('.sidebar');
+    if (!nav) return;
+    await Promise.all(Array.from(nav.querySelectorAll('mux-ui-nav-item'), item => item.updateComplete));
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    if (this._lastScrolledSection === this._section) return;
+    this._lastScrolledSection = this._section;
+    if (nav.scrollWidth > nav.clientWidth) {
+      nav.querySelector<HTMLElement>('mux-ui-nav-item[active]')
+        ?.scrollIntoView({ block: 'nearest', inline: 'center' });
     }
   }
 
@@ -1193,6 +713,12 @@ export class MuxSettingsSurface extends LitElement {
     this._section = section;
     if (section === 'about') void this._checkVersion();
     return true;
+  }
+
+  private _selectSection(section: SettingsSection): void {
+    if (!this._setSection(section)) return;
+    if (section === 'voice') void this._loadVoice();
+    if (section === 'remotes') void this._loadRemotes();
   }
 
   private async _checkVersion(): Promise<void> {
@@ -1238,10 +764,10 @@ export class MuxSettingsSurface extends LitElement {
       <p>muxterm brings your terminals and agent chats into one workspace.</p>
       <div class="application-version">${status?.currentVersion ? `v${status.currentVersion.startsWith('v') ? status.currentVersion.slice(1) : status.currentVersion}` : 'Version unavailable'}</div>
       <div class="application-actions">
-        <button class="application-button" ?disabled=${this._checkingVersion || this._installingUpdate} @click=${() => void this._checkVersion()}>${this._checkingVersion ? 'Checking…' : 'Check version'}</button>
-        <button class="application-button primary" ?disabled=${!status?.canUpdate || this._checkingVersion || this._installingUpdate} @click=${() => void this._installUpdate()}>${this._installingUpdate ? 'Updating…' : 'Update'}</button>
+        <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
+        <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>
       </div>
-      <p role="status" class=${this._updateError ? 'r-error' : ''}>${message}</p>
+      <mux-ui-feedback class="settings-feedback" kind=${this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
       <p>Build <code>${__GIT_SHA__}</code></p>
       <p>Config file: <code>~/.config/muxterm/config.toml</code></p>`;
   }
@@ -1251,8 +777,8 @@ export class MuxSettingsSurface extends LitElement {
       <h3>Workspaces</h3>
       <p>Create a workspace for your terminals or reconnect to this Muxterm instance.</p>
       <div class="application-actions">
-        <button class="application-button" @click=${() => this._applicationAction('new-workspace')}>New workspace</button>
-        <button class="application-button" @click=${() => this._applicationAction('reconnect')}>Reconnect</button>
+        <mux-ui-button variant="secondary" @click=${() => this._applicationAction('new-workspace')}>New workspace</mux-ui-button>
+        <mux-ui-button variant="secondary" @click=${() => this._applicationAction('reconnect')}>Reconnect</mux-ui-button>
       </div>`;
   }
 
@@ -1351,38 +877,10 @@ export class MuxSettingsSurface extends LitElement {
 
   private _renderThemeGroup(cards: ThemeCard[], current: string) {
     return cards.map(card => {
-          const palette = PALETTES[card.id];
-          if (!palette) return html``;
-          const isActive = current === card.id;
-          return html`
-            <button
-              type="button"
-              class="theme-card ${isActive ? 'active' : ''}"
-              title="${card.label}"
-              aria-pressed="${isActive}"
-              @click="${() => this._setTheme(card.id)}"
-            >
-              <div class="card-inner" style="background:${palette.background}">
-                <div class="card-topbar">
-                  <span class="card-dot dot-r"></span>
-                  <span class="card-dot dot-y"></span>
-                  <span class="card-dot dot-g"></span>
-                </div>
-                <div class="card-prompt">
-                  <span style="color:${palette.blue}">~/proj</span>
-                  <span style="color:${palette.green}"> main</span>
-                </div>
-                <div class="card-files">
-                  <span style="color:${palette.blue}">src/ </span><span style="color:${palette.green}">run.sh</span>
-                </div>
-                <div class="card-prompt" style="color:${palette.foreground}">$ ls</div>
-                <span class="card-cursor" style="background:${palette.cursor}"></span>
-              </div>
-              <div class="card-label">${card.label}</div>
-              ${isActive ? html`<div class="card-check">✓</div>` : ''}
-            </button>
-          `;
-        });
+      const palette = PALETTES[card.id];
+      return palette ? html`<mux-ui-theme-choice label=${card.label} .preview=${palette}
+        ?selected=${current === card.id} @click=${() => this._setTheme(card.id)}></mux-ui-theme-choice>` : html``;
+    });
   }
 
   private _renderThemeCards() {
@@ -1391,7 +889,7 @@ export class MuxSettingsSurface extends LitElement {
       <div class="theme-grid">
         ${this._renderThemeGroup(DARK_THEMES, current)}
       </div>
-      <p class="section-title" style="margin-top:16px">Light</p>
+      <p class="section-title theme-light-heading">Light</p>
       <div class="theme-grid">
         ${this._renderThemeGroup(LIGHT_THEMES, current)}
       </div>
@@ -1405,32 +903,12 @@ export class MuxSettingsSurface extends LitElement {
     const size = cfg.font.size;
 
     return html`
-      <div class="font-radios">
-        ${FONT_FAMILIES.map(f => html`
-          <label class="font-radio-label">
-            <input
-              type="radio"
-              name="font-family"
-              .checked="${family === f.id}"
-              @change="${() => this._setFontFamily(f.id)}"
-            />
-            <span class="font-radio-name" style="font-family:'${f.id}',monospace">${f.label}</span>
-          </label>
-        `)}
-      </div>
-      <div class="size-row">
-        <span class="size-label">Size</span>
-        <input
-          type="range"
-          min="8" max="24" step="1"
-          .value="${String(size)}"
-          @input="${(e: Event) => {
-            const v = parseInt((e.target as HTMLInputElement).value, 10);
-            this._setFontSize(v);
-          }}"
-        />
-        <span class="size-value">${size}</span>
-      </div>
+      <mux-ui-radio-group aria-label="Terminal font family" name="font-family" .value=${family}
+        .options=${FONT_FAMILIES.map(f => ({value:f.id,label:f.label,fontFamily:f.id}))}
+        @change=${(event: CustomEvent<{value:string}>) => this._setFontFamily(event.detail.value)}></mux-ui-radio-group>
+      <mux-ui-range-field class="font-size" layout="inline" label="Size" accessible-label="Terminal font size"
+        unit=" px" .min=${8} .max=${24} .value=${size}
+        @input=${(event:Event) => this._setFontSize((event.target as MuxUIRangeField).value)}></mux-ui-range-field>
       <div
         class="font-preview"
         style="font-family:'${family}',monospace;font-size:${size}px"
@@ -1443,52 +921,44 @@ export class MuxSettingsSurface extends LitElement {
 
     if (perm === 'unsupported') {
       return html`
-        <p class="notif-description">
+        <mux-ui-feedback kind="info" appearance="panel" density="compact">
           Desktop notifications are not supported in this browser.
-        </p>
+        </mux-ui-feedback>
       `;
     }
 
     if (perm === 'granted') {
       return html`
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <span class="notif-status granted">✓ Desktop Notifications: Enabled</span>
-          <button class="notif-test-btn" @click="${() => this._sendTestNotification()}">
+        <div class="notif-permission-actions">
+          <mux-ui-status-badge tone="success" dot>Enabled</mux-ui-status-badge>
+          <mux-ui-button size="small" variant="secondary" @click="${() => this._sendTestNotification()}">
             Send test notification
-          </button>
+          </mux-ui-button>
         </div>
-        <p class="notif-hint" style="margin-top:8px">
-          Notifications appear when a bell fires in a background pane.
-          If the test notification doesn't appear, check
-          <strong>System Settings → Notifications → [your browser]</strong>
-          and make sure "Allow Notifications" is on. macOS Focus / Do Not Disturb
-          also suppresses them.
+        <p class="notif-hint">
+          Notifications appear when a background pane needs your attention.
+          If the test does not appear, check your browser and system notification settings.
         </p>
       `;
     }
 
     if (perm === 'denied') {
       return html`
-        <span class="notif-status denied">
-          Blocked by browser — update in browser settings
-        </span>
-        <br>
-        <a
-          class="notif-help-link"
-          href="https://support.google.com/chrome/answer/3220216"
-          target="_blank"
-          rel="noopener noreferrer"
-        >How to re-enable notifications →</a>
+        <mux-ui-feedback kind="warning" appearance="panel" density="compact">
+          Notifications are blocked for this site. Allow them in your browser's site settings.
+          <mux-ui-button slot="action" size="small" variant="secondary" @click=${() => this._refreshNotifPermission()}>Check again</mux-ui-button>
+        </mux-ui-feedback>
       `;
     }
 
     // default: not yet requested (or dismissed without choosing)
     return html`
-      <button
-        class="notif-btn"
+      <mux-ui-button
+        variant="primary"
+        size="small"
         ?disabled="${this._notifRequesting}"
         @click="${() => this._requestNotificationPermission()}"
-      >${this._notifRequesting ? 'Waiting for browser…' : 'Enable Desktop Notifications'}</button>
+      >${this._notifRequesting ? 'Waiting for browser…' : 'Enable Desktop Notifications'}</mux-ui-button>
       ${this._notifRequesting ? html`
         <p class="notif-hint">
           Look for a permission prompt in your browser's address bar or toolbar.
@@ -1518,7 +988,7 @@ export class MuxSettingsSurface extends LitElement {
 
   /** Live --chrome-bar value (theme's current default), as a fallback swatch
    *  seed when no custom title-bar color has been picked yet. Native
-   *  <input type="color"> requires an exact 6-digit hex, which is what every
+   *  The native color picker requires an exact 6-digit hex, which is what every
    *  built-in theme's `bar` token already is (see theme.ts CHROME_DARK/LIGHT). */
   private get _currentChromeBarHex(): string {
     const v = getComputedStyle(document.documentElement).getPropertyValue('--chrome-bar').trim();
@@ -1536,32 +1006,13 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _renderTitlebarColorPicker() {
-    const color = this._titlebarColor?.toLowerCase() ?? null;
     return html`
-      <div class="crayon-grid">
-        ${this._crayons.map(crayon => html`
-          <button
-            class="crayon ${color === crayon.hex ? 'active' : ''}"
-            style="background:${crayon.hex}"
-            title="${crayon.name}"
-            @click="${() => this._setTitlebarColor(crayon.hex)}"
-          >${color === crayon.hex ? html`<span class="crayon-check">✓</span>` : ''}</button>
-        `)}
-      </div>
-      <div class="titlebar-row">
-        <input
-          class="titlebar-swatch"
-          type="color"
-          title="Pick a custom title bar color"
-          .value="${color ?? this._currentChromeBarHex}"
-          @input="${(e: Event) => this._setTitlebarColor((e.target as HTMLInputElement).value)}"
-        />
-        <span class="titlebar-custom-label">Custom…</span>
-        <button class="titlebar-reset-btn" @click="${() => this._resetTitlebarColor()}">
-          Use theme default
-        </button>
-      </div>
-      <p class="titlebar-hint" style="margin-top:8px">
+      <mux-ui-color-picker .options=${this._crayons.map(crayon => ({label:crayon.name,color:crayon.hex}))}
+        .value=${this._titlebarColor?.toLowerCase() || ''} .fallbackColor=${this._currentChromeBarHex}
+        inputLabel="Pick a custom title bar color"
+        @color-change=${(event: CustomEvent<{color:string}>) => this._setTitlebarColor(event.detail.color)}
+        @color-reset=${() => this._resetTitlebarColor()}></mux-ui-color-picker>
+      <p class="titlebar-hint">
         Only affects this browser on <strong>${instanceLabel()}</strong> — handy for
         telling multiple muxterm instances apart at a glance.
       </p>
@@ -1585,44 +1036,13 @@ export class MuxSettingsSurface extends LitElement {
       <div class="divider"></div>
 
       <p class="section-title">Bell</p>
-      <div class="bell-radios">
-        <label class="bell-radio-label">
-          <input
-            type="radio"
-            name="bell"
-            .checked="${bell === 'visual'}"
-            @change="${() => this._setBell('visual')}"
-          />
-          <div class="bell-radio-text">
-            <span class="bell-radio-name">Visual</span>
-            <span class="bell-radio-desc">Flash the pane tab</span>
-          </div>
-        </label>
-        <label class="bell-radio-label">
-          <input
-            type="radio"
-            name="bell"
-            .checked="${bell === 'audible'}"
-            @change="${() => this._setBell('audible')}"
-          />
-          <div class="bell-radio-text">
-            <span class="bell-radio-name">Audible</span>
-            <span class="bell-radio-desc">Play the system bell sound</span>
-          </div>
-        </label>
-        <label class="bell-radio-label">
-          <input
-            type="radio"
-            name="bell"
-            .checked="${bell === 'off'}"
-            @change="${() => this._setBell('off')}"
-          />
-          <div class="bell-radio-text">
-            <span class="bell-radio-name">Off</span>
-            <span class="bell-radio-desc">Silence all bell events</span>
-          </div>
-        </label>
-      </div>
+      <mux-ui-radio-group aria-label="Bell" name="bell" .value=${bell}
+        .options=${[
+          {value:'visual',label:'Visual',description:'Flash the pane tab'},
+          {value:'audible',label:'Audible',description:'Play the system bell sound'},
+          {value:'off',label:'Off',description:'Silence all bell events'},
+        ]}
+        @change=${(event: CustomEvent<{value:string}>) => this._setBell(event.detail.value as ResolvedConfig['terminal']['bell'])}></mux-ui-radio-group>
     `;
   }
 
@@ -1644,8 +1064,10 @@ export class MuxSettingsSurface extends LitElement {
       this._emitAIStatus(await saveAIKey(key));
       this._aiKeyInput = '';
       this._aiMessage = 'Key saved.';
+      this._aiMessageKind = 'success';
     } catch {
       this._aiMessage = 'Could not save the key -- it was not stored.';
+      this._aiMessageKind = 'error';
     } finally {
       this._aiBusy = false;
     }
@@ -1659,8 +1081,10 @@ export class MuxSettingsSurface extends LitElement {
       this._emitAIStatus(await clearAIKey());
       this._aiKeyInput = '';
       this._aiMessage = 'Key removed.';
+      this._aiMessageKind = 'success';
     } catch {
       this._aiMessage = 'Could not remove the key.';
+      this._aiMessageKind = 'error';
     } finally {
       this._aiBusy = false;
     }
@@ -1670,8 +1094,10 @@ export class MuxSettingsSurface extends LitElement {
     if (this._aiBusy) return;
     this._aiBusy = true;
     this._aiMessage = 'Testing...';
+    this._aiMessageKind = 'loading';
     try {
       const res = await pingAI();
+      this._aiMessageKind = res.ok ? 'success' : 'error';
       this._aiMessage = res.ok
         ? 'Connected to Anthropic.'
         : res.error === 'ai_disabled'
@@ -1681,6 +1107,7 @@ export class MuxSettingsSurface extends LitElement {
             : 'Anthropic rejected the request. Check the key.';
     } catch {
       this._aiMessage = 'Test failed -- check your connection.';
+      this._aiMessageKind = 'error';
     } finally {
       this._aiBusy = false;
     }
@@ -1689,31 +1116,31 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAI() {
     const st = this.aiStatus;
     return html`
-      <p class="section-title">Anthropic API Key</p>
+      <p class="section-title">Anthropic</p>
       <p class="ai-status">
         ${st.enabled
           ? `AI enabled -- key ending ${st.keyHint} (from ${st.source}).`
           : 'AI features are off -- add an Anthropic API key to enable.'}
       </p>
-      <input
-        class="ai-input"
+      <mux-ui-text-field
+        label="API key"
         type="password"
         autocomplete="off"
         placeholder="sk-ant-..."
         .value="${this._aiKeyInput}"
         @input="${(e: Event) => { this._aiKeyInput = (e.target as HTMLInputElement).value; }}"
-      />
+      ></mux-ui-text-field>
       <div class="ai-actions">
-        <button
+        <mux-ui-button size="small" variant="primary"
           ?disabled="${this._aiBusy || this._aiKeyInput.trim() === ''}"
           @click="${this._saveAIKey}"
-        >Save</button>
+        >Save</mux-ui-button>
         ${st.source === 'settings'
-          ? html`<button ?disabled="${this._aiBusy}" @click="${this._removeAIKey}">Remove</button>`
+          ? html`<mux-ui-button size="small" variant="danger" ?disabled="${this._aiBusy}" @click="${this._removeAIKey}">Remove</mux-ui-button>`
           : ''}
-        <button ?disabled="${this._aiBusy}" @click="${this._testAI}">Test connection</button>
+        <mux-ui-button size="small" ?disabled="${this._aiBusy}" @click="${this._testAI}">Test connection</mux-ui-button>
       </div>
-      ${this._aiMessage ? html`<p class="ai-message">${this._aiMessage}</p>` : ''}
+      ${this._aiMessage ? html`<mux-ui-feedback class="settings-feedback" kind=${this._aiMessageKind} appearance=${this._aiMessageKind === 'error' ? 'panel' : 'plain'} density="compact">${this._aiMessage}</mux-ui-feedback>` : ''}
       <p class="ai-note">
         The key is stored locally at <code>$XDG_CONFIG_HOME/muxterm/anthropic_key</code>
         (defaults to <code>~/.config/muxterm/anthropic_key</code> when
@@ -1847,26 +1274,6 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
-  private _vModeButton(mode: VoiceMode, label: string, sub: string) {
-    const selected = this._vMode === mode;
-    return html`
-      <button
-        class="v-mode"
-        role="radio"
-        aria-checked="${selected ? 'true' : 'false'}"
-        @click="${() => this._setVoiceMode(mode)}"
-      >
-        <span class="v-mark ${selected ? 'ok' : 'none'}" aria-hidden="true"
-          >${selected ? '●' : '○'}</span
-        >
-        <span>
-          ${label}
-          <span class="v-mode-sub">${sub}</span>
-        </span>
-      </button>
-    `;
-  }
-
   private _renderVoice() {
     const st = this._voice;
     const isEntra = this._vMode === 'azure_entra';
@@ -1904,74 +1311,55 @@ export class MuxSettingsSurface extends LitElement {
         ? this._vLine('bad', 'Voice starts with muxterm, so restart it for the saved change to take effect.')
         : ''}
 
-      <label class="v-toggle">
-        <input
-          type="checkbox"
-          .checked="${this._vEnabled}"
-          @change="${(e: Event) => { this._vEnabled = (e.target as HTMLInputElement).checked; }}"
-        />
-        <span>Enable voice</span>
-      </label>
+      <mux-ui-switch class="v-toggle" layout="row" label="Enable voice" .checked=${this._vEnabled}
+        @change=${(event: CustomEvent<{checked:boolean}>) => { this._vEnabled = event.detail.checked; }}></mux-ui-switch>
 
       <p class="v-label">How voice signs in</p>
-      <div class="v-modes" role="radiogroup" aria-label="How voice signs in">
-        ${this._vModeButton('azure_entra', 'Azure OpenAI — Entra sign-in', 'Uses your signed-in identity. No key to store.')}
-        ${this._vModeButton('azure_key', 'Azure OpenAI — access key', 'A key from your Azure OpenAI resource.')}
-        ${this._vModeButton('openai_key', 'OpenAI — API key', 'A key from platform.openai.com.')}
-      </div>
+      <mux-ui-radio-group class="v-modes" aria-label="How voice signs in" name="voice-mode" .value=${this._vMode}
+        .options=${[
+          {value:'azure_entra',label:'Azure OpenAI — Entra sign-in',description:'Uses your signed-in identity. No key to store.'},
+          {value:'azure_key',label:'Azure OpenAI — access key',description:'A key from your Azure OpenAI resource.'},
+          {value:'openai_key',label:'OpenAI — API key',description:'A key from platform.openai.com.'},
+        ]}
+        @change=${(event: CustomEvent<{value:string}>) => this._setVoiceMode(event.detail.value as VoiceMode)}></mux-ui-radio-group>
 
       ${isOpenAI
         ? html`
             <div class="v-field">
-              <span class="v-label">Endpoint</span>
-              <input class="ai-input" type="text" readonly .value="${OPENAI_ENDPOINT}" />
+              <mux-ui-text-field label="Endpoint" type="url" readonly .value="${OPENAI_ENDPOINT}"></mux-ui-text-field>
               <p class="v-hint">OpenAI has one endpoint, so it is fixed.</p>
             </div>
           `
         : html`
             <div class="v-field">
-              <label class="v-label" for="v-endpoint">Endpoint</label>
-              <input
-                id="v-endpoint"
-                class="ai-input"
+              <mux-ui-text-field
+                label="Endpoint"
                 type="url"
-                inputmode="url"
                 autocomplete="off"
-                spellcheck="false"
                 placeholder="https://NAME.openai.azure.com/openai/v1"
                 .value="${this._vEndpoint}"
                 @input="${(e: Event) => { this._vEndpoint = (e.target as HTMLInputElement).value; }}"
-              />
+              ></mux-ui-text-field>
             </div>
           `}
 
       <div class="v-field">
-        <label class="v-label" for="v-model">Model</label>
-        <input
-          id="v-model"
-          class="ai-input"
+        <mux-ui-text-field
+          label="Model"
           type="text"
           autocomplete="off"
-          spellcheck="false"
           placeholder="gpt-realtime-2.1-mini"
           .value="${this._vModel}"
           @input="${(e: Event) => { this._vModel = (e.target as HTMLInputElement).value; }}"
-        />
+        ></mux-ui-text-field>
       </div>
 
       ${isEntra
         ? html`
             <div class="v-field">
-              <label class="v-label" for="v-scope">Entra scope</label>
-              <select
-                id="v-scope"
-                class="ai-input"
-                @change="${(e: Event) => { this._vScope = (e.target as HTMLSelectElement).value; }}"
-              >
-                ${(st.allowedScopes.length ? st.allowedScopes : [this._vScope]).map(
-                  (s) => html`<option value="${s}" ?selected="${s === this._vScope}">${s}</option>`,
-                )}
-              </select>
+              <mux-ui-select label="Entra scope" .value=${this._vScope}
+                .options=${(st.allowedScopes.length ? st.allowedScopes : [this._vScope]).map(s => ({value:s,label:s}))}
+                @change=${(event: Event) => { this._vScope = (event.target as MuxUISelect).value; }}></mux-ui-select>
               <p class="v-hint">
                 The token audience. AI Foundry resources take the first; Cognitive
                 Services resources take the second.
@@ -1980,17 +1368,14 @@ export class MuxSettingsSurface extends LitElement {
           `
         : html`
             <div class="v-field">
-              <label class="v-label" for="v-key">${savedKeyApplies ? 'Replace key' : 'Key'}</label>
-              <input
-                id="v-key"
-                class="ai-input"
+              <mux-ui-text-field
+                label="${savedKeyApplies ? 'Replace key' : 'Key'}"
                 type="password"
                 autocomplete="off"
-                spellcheck="false"
                 placeholder="${savedKeyApplies ? 'Leave blank to keep the saved key' : 'Paste the key'}"
                 .value="${this._vKeyInput}"
                 @input="${(e: Event) => { this._vKeyInput = (e.target as HTMLInputElement).value; }}"
-              />
+              ></mux-ui-text-field>
               <p class="v-hint">
                 Write-only. Once saved it is never sent back to this page, so it can
                 be replaced or removed but not read.
@@ -1999,16 +1384,16 @@ export class MuxSettingsSurface extends LitElement {
           `}
 
       <div class="v-actions">
-        <button ?disabled="${this._voiceBusy}" @click="${this._saveVoice}">Save</button>
-        <button ?disabled="${this._voiceBusy}" @click="${this._checkVoice}">Check sign-in</button>
-        ${st.keySource === 'stored' && st.keyConfigured
-          ? html`<button ?disabled="${this._voiceBusy}" @click="${this._clearVoiceKey}">Remove key</button>`
+        <mux-ui-button size="small" variant="primary" ?disabled="${this._voiceBusy}" @click="${this._saveVoice}">Save</mux-ui-button>
+        <mux-ui-button size="small" ?disabled="${this._voiceBusy}" @click="${this._checkVoice}">Check sign-in</mux-ui-button>
+        ${savedKeyApplies && st.keySource === 'stored'
+          ? html`<mux-ui-button size="small" variant="danger" ?disabled="${this._voiceBusy}" @click="${this._clearVoiceKey}">Remove key</mux-ui-button>`
           : ''}
       </div>
 
       ${this._voiceMessage
         ? html`
-            <p class="v-message">
+            <p class="v-message" role="status">
               <span class="v-mark ${this._voiceMessageKind || 'none'}" aria-hidden="true"
                 >${VOICE_GLYPH[this._voiceMessageKind || 'none']}</span
               >
@@ -2021,9 +1406,12 @@ export class MuxSettingsSurface extends LitElement {
         “Check sign-in” authenticates for real against the saved settings and lists
         the models — it never starts a session, so it costs nothing.
         <br /><br />
-        A key is stored at
-        <code>${st.keyPath || '$XDG_CONFIG_HOME/muxterm/voice_api_key'}</code> with
-        owner-only permissions, never in the config file. Saving rewrites only the
+        ${isEntra
+          ? html`Entra sign-in stores no key.`
+          : html`A key ${savedKeyApplies ? 'is' : 'will be'} stored at
+            <code>${st.keyPath || '$XDG_CONFIG_HOME/muxterm/voice_api_key'}</code> with
+            owner-only permissions, never in the config file.`}
+        Saving rewrites only the
         <code>[voice]</code> section of
         <code>${st.configPath || '~/.config/muxterm/config.toml'}</code>; the rest of
         that file, including your comments, is left exactly as it is. Comments inside
@@ -2175,11 +1563,11 @@ export class MuxSettingsSurface extends LitElement {
   private _renderRemoveBtn(row: RemoteRow) {
     if (!row.managed) return '';
     return html`
-      <button
-        class="r-btn danger"
+      <mux-ui-button
+        size="small" variant="danger"
         ?disabled="${this._pending.has(row.id)}"
         @click="${() => this._remove(row)}"
-      >Remove</button>
+      >Remove</mux-ui-button>
     `;
   }
 
@@ -2193,19 +1581,13 @@ export class MuxSettingsSurface extends LitElement {
           <div class="r-name">${row.name}</div>
           <div class="r-sub">${row.target}</div>
         </div>
-        ${dropped ? html`<span class="r-state">reconnecting</span>` : ''}
-        ${dropped
-          ? html`<button
-              class="r-btn"
-              ?disabled="${busy}"
-              @click="${() => this._retry(row)}"
-            >Retry</button>`
-          : html`<button
-              class="r-btn danger"
-              ?disabled="${busy}"
-              @click="${() => this._disconnect(row)}"
-            >Disconnect</button>`}
-        ${this._renderRemoveBtn(row)}
+        <div class="r-actions">
+          ${dropped ? html`<span class="r-state">reconnecting</span>` : ''}
+          ${dropped
+            ? html`<mux-ui-button size="small" variant="secondary" ?disabled="${busy}" @click="${() => this._retry(row)}">Retry</mux-ui-button>`
+            : html`<mux-ui-button size="small" variant="danger" ?disabled="${busy}" @click="${() => this._disconnect(row)}">Disconnect</mux-ui-button>`}
+          ${this._renderRemoveBtn(row)}
+        </div>
       </div>
     `;
   }
@@ -2225,12 +1607,10 @@ export class MuxSettingsSurface extends LitElement {
             <div class="r-name">${row.name}</div>
             <div class="r-sub err">${error}</div>
           </div>
-          <button
-            class="r-btn"
-            ?disabled="${busy}"
-            @click="${() => this._retry(row)}"
-          >Retry</button>
-          ${this._renderRemoveBtn(row)}
+          <div class="r-actions">
+            <mux-ui-button size="small" variant="secondary" ?disabled="${busy}" @click="${() => this._retry(row)}">Retry</mux-ui-button>
+            ${this._renderRemoveBtn(row)}
+          </div>
         </div>
       `;
     }
@@ -2245,18 +1625,12 @@ export class MuxSettingsSurface extends LitElement {
           <div class="r-name">${row.name}</div>
           <div class="r-sub">${row.target}</div>
         </div>
-        ${install
-          ? html`<button
-              class="r-btn"
-              ?disabled="${busy}"
-              @click="${() => this._provision(row)}"
-            >Install &amp; connect</button>`
-          : html`<button
-              class="r-btn pri"
-              ?disabled="${busy}"
-              @click="${() => this._connect(row)}"
-            >Connect</button>`}
-        ${this._renderRemoveBtn(row)}
+        <div class="r-actions">
+          ${install
+            ? html`<mux-ui-button size="small" variant="secondary" ?disabled="${busy}" @click="${() => this._provision(row)}">Install &amp; connect</mux-ui-button>`
+            : html`<mux-ui-button size="small" variant="primary" ?disabled="${busy}" @click="${() => this._connect(row)}">Connect</mux-ui-button>`}
+          ${this._renderRemoveBtn(row)}
+        </div>
       </div>
     `;
   }
@@ -2273,7 +1647,7 @@ export class MuxSettingsSurface extends LitElement {
     let first = connected.length === 0;
 
     return html`
-      ${this._remotesError ? html`<div class="r-error">${this._remotesError}</div>` : ''}
+      ${this._remotesError ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._remotesError}<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => void this._loadRemotes()}>Retry</mux-ui-button></mux-ui-feedback>` : ''}
       ${connected.length > 0
         ? html`
             <div class="section-title">Connected</div>
@@ -2292,17 +1666,17 @@ export class MuxSettingsSurface extends LitElement {
       })}
       <div class="divider"></div>
       <div class="section-title">Add a host</div>
-      <input
-        class="ai-input"
+      <mux-ui-text-field
         type="text"
+        aria-label="Host address"
         autocomplete="off"
-        spellcheck="false"
         placeholder="user@host"
         .value="${this._addTarget}"
-        @input="${(e: Event) => { this._addTarget = (e.target as HTMLInputElement).value; }}"
+        @input="${(e: Event) => { this._addTarget = (e.target as HTMLInputElement).value; this.requestUpdate(); }}"
         @keydown="${(e: KeyboardEvent) => { if (e.key === 'Enter') void this._addHost(); }}"
-      />
-      ${this._addError ? html`<div class="r-error">${this._addError}</div>` : ''}
+      ></mux-ui-text-field>
+      <div class="ai-actions"><mux-ui-button variant="primary" ?disabled=${!this._addTarget.trim() || this._pending.has(ADD_HOST_KEY)} @click=${() => void this._addHost()}>Add host</mux-ui-button></div>
+      ${this._addError ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._addError}</mux-ui-feedback>` : ''}
     `;
   }
 
@@ -2311,35 +1685,13 @@ export class MuxSettingsSurface extends LitElement {
 
     return html`
       <div class="header">
-        ${this.pageMode ? html`<button class="back-btn" aria-label="Back" title="Back" @click=${this._close}>${icon(ArrowLeft, { size: 20 })}</button>` : ''}
+        ${this.pageMode ? html`<mux-ui-button variant="quiet" size="large" icon-only accessible-label="Back" tooltip="Back" @click=${this._close}>${icon(ArrowLeft, { size: 20 })}</mux-ui-button>` : ''}
         <h2>Settings</h2>
-        ${this.pageMode ? '' : html`<button class="close-btn" title="Close" aria-label="Close settings" @click="${this._close}">×</button>`}
+        ${this.pageMode ? '' : html`<mux-ui-button variant="quiet" icon-only accessible-label="Close settings" tooltip="Close" @click="${this._close}">×</mux-ui-button>`}
       </div>
       <div class="body">
-        <nav class="sidebar">
-          <button
-            class="sidebar-item ${this._section === 'appearance' ? 'active' : ''}"
-            @click="${() => { this._setSection('appearance'); }}"
-          >Appearance</button>
-          <button
-            class="sidebar-item ${this._section === 'notifications' ? 'active' : ''}"
-            @click="${() => { this._setSection('notifications'); }}"
-          >Notifications</button>
-          <button class="sidebar-item ${this._section === 'workspaces' ? 'active' : ''}" @click=${() => this._setSection('workspaces')}>Workspaces</button>
-          <button
-            class="sidebar-item ${this._section === 'ai' ? 'active' : ''}"
-            @click="${() => { this._setSection('ai'); }}"
-          >AI</button>
-          <button
-            class="sidebar-item ${this._section === 'voice' ? 'active' : ''}"
-            @click="${() => { this._setSection('voice'); void this._loadVoice(); }}"
-          >Voice</button>
-          <button
-            class="sidebar-item ${this._section === 'remotes' ? 'active' : ''}"
-            @click="${() => { this._setSection('remotes'); void this._loadRemotes(); }}"
-          >Remotes</button>
-          <button class="sidebar-item ${this._section === 'shortcuts' ? 'active' : ''}" @click=${() => this._setSection('shortcuts')}>Keyboard Shortcuts</button>
-          <button class="sidebar-item ${this._section === 'about' ? 'active' : ''}" @click=${() => this._setSection('about')}>About</button>
+        <nav class="sidebar" aria-label="Settings sections">
+          ${SETTINGS_SECTIONS.map(section => html`<mux-ui-nav-item variant="section" label=${section.label} ?active=${this._section === section.id} @click=${() => this._selectSection(section.id)}></mux-ui-nav-item>`)}
         </nav>
         <div class="content">
           ${this._section === 'appearance'

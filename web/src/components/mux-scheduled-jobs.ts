@@ -2,6 +2,21 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
+import '../ui/button.js';
+import '../ui/dialog.js';
+import '../ui/feedback.js';
+import '../ui/nav-item.js';
+import '../ui/page-intro.js';
+import '../ui/screen-header.js';
+import '../ui/select.js';
+import '../ui/status-badge.js';
+import '../ui/switch.js';
+import '../ui/text-area.js';
+import '../ui/text-field.js';
+import type { MuxUISwitch } from '../ui/switch.js';
+import type { MuxUISelect } from '../ui/select.js';
+import type { MuxUITextArea } from '../ui/text-area.js';
+import type { MuxUITextField } from '../ui/text-field.js';
 
 type Job = { id:string; chatId:string; name:string; brief:string; revision:number; schedule:string; scheduleLabel?:string; timezone:string; enabled:boolean; nextRun?:string; activeRunId?:string; lastRunId?:string; latestRun?:Run; createdAt:string };
 type Log = { at:string; kind:string; message:string };
@@ -49,58 +64,79 @@ export class MuxScheduledJobs extends LitElement {
   }
 
   static override styles = css`
-    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--chrome-body); color:var(--chrome-text-bright); font:13px/1.5 system-ui,sans-serif; }
-    button, input, select, textarea { font:inherit; } button { cursor:pointer; }
-    .titlebar { box-sizing:border-box; height:var(--mux-titlebar-height,44px); flex:none; display:flex; align-items:center; gap:7px; min-width:0; padding:0 max(12px,var(--wco-right-inset,0px)) 0 16px; border-bottom:1px solid var(--chrome-border); background:var(--mux-titlebar-bg,var(--chrome-bar)); font-size:13px; }
-    .titlebar .section-name,.titlebar .divider { color:var(--chrome-text-dim); }
-    .titlebar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
-    .top { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:20px 28px; border-bottom:1px solid var(--chrome-border); background:var(--chrome-body); }
-    @media (display-mode: window-controls-overlay) {
-      .titlebar { -webkit-app-region:drag; }
+    :host {
+      position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; overflow:hidden;
+      background:var(--ui-surface-base); color:var(--ui-text);
+      font:var(--ui-text-md)/1.5 var(--ui-font-sans);
     }
-    .eyebrow { color:var(--chrome-accent); font-size:10px; letter-spacing:.13em; text-transform:uppercase; font-weight:700; }
-    h1 { margin:1px 0 1px; font-size:22px; letter-spacing:-.02em; } .subtitle { color:var(--chrome-text-dim); font-size:12px; }
-    .primary { border:1px solid var(--chrome-accent); border-radius:7px; padding:8px 12px; background:var(--chrome-accent); color:var(--chrome-body); font-weight:650; }
-    .content { flex:1; min-height:0; overflow:auto; padding:22px 28px 40px; }
-    .summary { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px; }
-    .summary span { border:1px solid var(--chrome-border); border-radius:8px; padding:9px 12px; min-width:110px; background:var(--chrome-bar); }
-    .summary strong { display:block; font-size:16px; } .summary small { color:var(--chrome-text-dim); }
-    .toolbar { display:flex; gap:9px; margin-bottom:13px; }
-    .toolbar input, .toolbar select, .editor input, .editor textarea, .editor select { box-sizing:border-box; border:1px solid var(--chrome-border); border-radius:7px; padding:8px 10px; background:var(--chrome-bar); color:var(--chrome-text-bright); }
-    .toolbar input { flex:1; min-width:140px; } .toolbar select { min-width:125px; }
-    .table-wrap { border:1px solid var(--chrome-border); border-radius:10px; overflow:auto; background:var(--chrome-bar); }
-    table { width:100%; border-collapse:collapse; min-width:830px; } th { color:var(--chrome-text-dim); text-align:left; font-size:10px; letter-spacing:.06em; text-transform:uppercase; font-weight:650; background:var(--chrome-hover); }
-    th,td { padding:12px 14px; border-bottom:1px solid var(--chrome-border); vertical-align:middle; } tr:last-child td { border-bottom:0; }
-    td { font-size:12px; } td small { display:block; color:var(--chrome-text-dim); max-width:290px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    td .job-name { display:block; border:0; padding:0; background:transparent; color:var(--chrome-text-bright); text-align:left; font-weight:680; }
-    td .job-name:hover, .link:hover { color:var(--chrome-accent); text-decoration:underline; }
-    .status { display:inline-flex; align-items:center; gap:5px; border-radius:999px; padding:3px 8px; background:var(--chrome-hover); font-size:11px; white-space:nowrap; }
-    .status::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--mux-ok); }
-    .status.paused::before { background:var(--chrome-text-dim); } .status.running::before { background:var(--chrome-accent); } .status.attention::before { background:var(--mux-warn); }
-    .schedule { font:11px ui-monospace,monospace; } .schedule small { margin-top:2px; }
-    .row-actions { display:flex; align-items:center; gap:5px; white-space:nowrap; }
-    .row-actions button, .history button, .editor .actions button, .panel-title button { border:1px solid var(--chrome-border); border-radius:6px; padding:5px 8px; background:transparent; color:var(--chrome-text-bright); font-size:11px; }
-    button:hover { background:var(--chrome-hover); } button:disabled { opacity:.5; cursor:default; }
-    .link { border:0!important; padding:0!important; background:transparent!important; color:var(--chrome-accent)!important; }
-    .empty { padding:24px; color:var(--chrome-text-dim); text-align:center; }
-    .error { border:1px solid var(--chrome-danger); border-radius:7px; padding:8px 10px; margin-bottom:12px; color:var(--chrome-danger); }
-    .history { display:grid; grid-template-columns:minmax(230px,34%) minmax(0,1fr); margin-top:19px; border:1px solid var(--chrome-border); border-radius:10px; min-height:250px; max-height:450px; overflow:hidden; background:var(--chrome-bar); }
-    .run-list { overflow:auto; border-right:1px solid var(--chrome-border); } .run-detail { overflow:auto; min-width:0; padding:15px; }
-    .panel-title { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid var(--chrome-border); font-weight:650; }
-    .run-row { display:block; width:100%; text-align:left; border:0!important; border-bottom:1px solid var(--chrome-border)!important; border-radius:0!important; padding:9px 12px!important; }
-    .run-row.active { background:var(--chrome-hover); } .run-row small { display:block; color:var(--chrome-text-dim); }
-    .run-detail h3 { margin:0 0 4px; font-size:14px; } .run-detail p { margin:0 0 12px; color:var(--chrome-text-dim); }
-    .log { display:grid; grid-template-columns:100px 85px minmax(0,1fr); gap:7px; padding:8px 0; border-top:1px solid var(--chrome-border); font-size:11px; overflow-wrap:anywhere; }
-    .log time, .log .kind { color:var(--chrome-text-dim); font:10px ui-monospace,monospace; }
-    .editor-backdrop { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:20px; background:#000a; z-index:5; }
-    .editor { box-sizing:border-box; width:min(620px,100%); max-height:90vh; overflow:auto; border:1px solid var(--chrome-border); border-radius:12px; padding:23px; background:var(--chrome-bar); box-shadow:0 20px 70px #0009; }
-    .editor h2 { margin:0 0 3px; font-size:19px; } .editor p { color:var(--chrome-text-dim); margin:0 0 14px; font-size:12px; }
-    .editor label { display:block; margin:13px 0 0; font-weight:600; font-size:12px; } .editor label input, .editor label select, .editor textarea { display:block; width:100%; margin-top:5px; font-weight:400; }
-    .editor textarea { height:125px; resize:vertical; line-height:1.5; } .editor .hint { color:var(--chrome-text-dim); font-size:11px; margin-top:4px; }
-    .editor .inline { display:grid; grid-template-columns:1fr 1fr; gap:12px; } .editor .check { display:flex; align-items:center; gap:8px; } .editor .check input { width:auto; margin:0; }
-    .editor .actions { display:flex; justify-content:flex-end; gap:8px; margin-top:21px; } .editor .actions button:last-child { border-color:var(--chrome-accent); background:var(--chrome-accent); color:var(--chrome-body); font-weight:650; }
-    @media(max-width:767.98px) { .titlebar { display:none; } }
-    @media(max-width:700px) { .top { padding:14px; } .content { padding:15px; } .table-wrap { border:0; background:transparent; } table,thead,tbody,tr,td { display:block; min-width:0; } thead { display:none; } tr { margin-bottom:11px; border:1px solid var(--chrome-border); border-radius:9px; background:var(--chrome-bar); } td { padding:7px 12px; border:0; } .history { grid-template-columns:1fr; max-height:none; } .run-list { max-height:210px; border-right:0; border-bottom:1px solid var(--chrome-border); } .editor .inline { grid-template-columns:1fr; } }
+    .content { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-7) var(--ui-space-9) var(--ui-space-10); }
+    .content > mux-ui-feedback { margin-bottom:var(--ui-space-5); }
+    .summary { display:flex; gap:var(--ui-space-5); flex-wrap:wrap; margin-bottom:var(--ui-space-7); }
+    .summary span {
+      border:1px solid var(--ui-border); border-radius:var(--ui-radius-md);
+      padding:var(--ui-space-4) var(--ui-space-5); min-width:var(--ui-jobs-summary-min-width); background:var(--ui-surface-raised);
+    }
+    .summary strong { display:block; font-size:var(--ui-text-xl); }
+    .summary small { color:var(--ui-text-muted); }
+    .toolbar { display:flex; gap:var(--ui-space-4); margin-bottom:var(--ui-space-5); }
+    .toolbar mux-ui-text-field { flex:1; min-width:var(--ui-jobs-search-min-width); }
+    .toolbar mux-ui-select { width:var(--ui-jobs-filter-width); }
+    .table-wrap { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); overflow:auto; background:var(--ui-surface-raised); }
+    table { width:100%; border-collapse:collapse; min-width:var(--ui-jobs-table-min-width); }
+    th { color:var(--ui-text-muted); text-align:left; font-size:var(--ui-text-xs); letter-spacing:.06em; text-transform:uppercase; font-weight:650; background:var(--ui-surface-hover); }
+    th,td { padding:var(--ui-space-5) var(--ui-space-6); border-bottom:1px solid var(--ui-border); vertical-align:middle; }
+    tr:last-child td { border-bottom:0; }
+    td { font-size:var(--ui-text-sm); }
+    td small { display:block; color:var(--ui-text-muted); max-width:var(--ui-jobs-description-width); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .schedule { font:var(--ui-text-xs) var(--ui-font-mono); }
+    .schedule small { margin-top:var(--ui-space-1); }
+    .row-actions { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); }
+    .history {
+      display:grid; grid-template-columns:minmax(230px,34%) minmax(0,1fr);
+      margin-top:var(--ui-space-7); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg);
+      min-height:var(--ui-jobs-history-min-height); max-height:var(--ui-jobs-history-max-height); overflow:hidden; background:var(--ui-surface-raised);
+    }
+    .run-list { overflow:auto; border-right:1px solid var(--ui-border); }
+    .run-list mux-ui-nav-item { border-bottom:1px solid var(--ui-border); }
+    .run-detail { overflow:auto; min-width:0; padding:var(--ui-space-6); }
+    .panel-title {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:var(--ui-space-5) var(--ui-space-6); border-bottom:1px solid var(--ui-border); font-weight:650;
+    }
+    .run-detail h3 { margin:0 0 var(--ui-space-2); font-size:var(--ui-text-lg); }
+    .run-detail p { margin:0 0 var(--ui-space-5); color:var(--ui-text-muted); }
+    .log {
+      display:grid; grid-template-columns:100px 85px minmax(0,1fr); gap:var(--ui-space-3);
+      padding:var(--ui-space-4) 0; border-top:1px solid var(--ui-border);
+      font-size:var(--ui-text-xs); overflow-wrap:anywhere;
+    }
+    .log time,.log .kind { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
+    .editor {
+      box-sizing:border-box; height:100%; min-height:0; overflow:auto;
+      padding:var(--ui-space-8); background:var(--ui-surface-overlay);
+    }
+    .editor h2 { margin:0 0 var(--ui-space-2); font-size:var(--ui-text-2xl); }
+    .editor > p { margin:0 0 var(--ui-space-6); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .editor mux-ui-feedback { margin-bottom:var(--ui-space-5); }
+    .editor .field { margin-top:var(--ui-space-6); }
+    .editor .inline { display:grid; grid-template-columns:1fr 1fr; gap:var(--ui-space-5); }
+    .editor mux-ui-switch { margin-top:var(--ui-space-6); }
+    .editor .hint { color:var(--ui-text-muted); font-size:var(--ui-text-xs); margin-top:var(--ui-space-2); }
+    .editor .actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); margin-top:var(--ui-space-8); }
+    @media(max-width:700px) {
+      .content { padding:var(--ui-space-6); }
+      .toolbar { flex-wrap:wrap; }
+      .toolbar mux-ui-text-field,.toolbar mux-ui-select { flex:1 1 100%; width:100%; }
+      .table-wrap { border:0; background:transparent; }
+      table,thead,tbody,tr,td { display:block; min-width:0; }
+      thead { display:none; }
+      tr { margin-bottom:var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
+      td { padding:var(--ui-space-4) var(--ui-space-5); border:0; }
+      td[data-label]::before { content:attr(data-label); display:block; margin-bottom:var(--ui-space-1); color:var(--ui-text-muted); font-size:var(--ui-text-xs); text-transform:uppercase; letter-spacing:.04em; }
+      .history { grid-template-columns:1fr; max-height:none; }
+      .run-list { max-height:var(--ui-jobs-run-list-max-height); border-right:0; border-bottom:1px solid var(--ui-border); }
+      .editor .inline { grid-template-columns:1fr; }
+    }
   `;
 
   override connectedCallback() { super.connectedCallback(); void this.refresh(); this.timer = window.setInterval(() => void this.refresh(), 5000); }
@@ -183,24 +219,166 @@ export class MuxScheduledJobs extends LitElement {
     } catch(error) { this.error=String(error); } finally { this.busy=''; }
   }
   private emit(type:string,detail?:object) { this.dispatchEvent(new CustomEvent(type,{bubbles:true,composed:true,detail})); }
-  // The selected option is marked directly because a new chat can arrive in
-  // the option list after Lit first assigns the select element's value.
-  override render() {
-    const rows=this.jobs.filter(job=>`${job.name} ${job.brief}`.toLowerCase().includes(this.query.toLowerCase()) && (this.statusFilter==='all'||this.status(job).toLowerCase().replace(' ','-')===this.statusFilter));
-    const priority=(job:Job)=>({'Needs attention':0,'Running':1,'Active':2,'Paused':3})[this.status(job)] ?? 4;
-    rows.sort((a,b)=>priority(a)-priority(b) || Date.parse(a.nextRun||'')-Date.parse(b.nextRun||'') || a.name.localeCompare(b.name));
-    const active=this.jobs.filter(job=>job.enabled).length;
-    const attention=this.jobs.filter(job=>this.status(job)==='Needs attention').length;
-    const current=this.jobs.find(job=>job.id===this.selectedJob);
-    return html`<header class="titlebar"><span class="section-name">Automation</span><span class="divider" aria-hidden="true">›</span><strong>Scheduled jobs</strong></header>
-      <div class="top"><div><div class="eyebrow">Automation</div><h1>Scheduled jobs</h1><div class="subtitle">Repeatable work in persistent conversations</div></div><button class="primary" @click=${()=>void this.openEditorForChat()}>＋ New job</button></div>
-      <main class="content">${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}
-      <div class="summary"><span><strong>${this.jobs.length}</strong><small>Total jobs</small></span><span><strong>${active}</strong><small>Active schedules</small></span><span><strong>${attention}</strong><small>Need attention</small></span></div>
-      <div class="toolbar"><input type="search" aria-label="Search scheduled jobs" placeholder="Search jobs" .value=${this.query} @input=${(event:InputEvent)=>{this.query=(event.target as HTMLInputElement).value;}}><select aria-label="Filter jobs by status" .value=${this.statusFilter} @change=${(event:Event)=>{this.statusFilter=(event.target as HTMLSelectElement).value;}}><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="running">Running</option><option value="needs-attention">Needs attention</option></select></div>
-      <div class="table-wrap"><table><thead><tr><th>Job</th><th>Status</th><th>Schedule</th><th>Next run</th><th>Last run</th><th>Actions</th></tr></thead><tbody>${rows.map(job=>{const last=this.latest(job),status=this.status(job),chatState=this.chatFor(job)?.state;return html`<tr><td><button class="job-name" @click=${()=>this.emit('chat-open',{sessionId:job.chatId})}>${job.name}</button><small title=${job.brief}>${job.brief}</small></td><td><span class="status ${status==='Needs attention'?'attention':status.toLowerCase()}">${status}</span></td><td class="schedule" title=${job.schedule}>${job.scheduleLabel || job.schedule}<small>${job.timezone} · ${job.schedule}</small></td><td>${job.enabled?timeLabel(job.nextRun):'—'}</td><td>${last?html`${timeLabel(last.startedAt)}<small>${last.trigger} · ${last.status}</small>`:'Never'}</td><td><div class="row-actions"><button title=${chatState==='working'?'Wait for the job chat to finish its current turn':'Start a manual run'} @click=${()=>void this.runNow(job)} ?disabled=${!!job.activeRunId||chatState==='working'||chatState==='starting'||chatState==='uncertain'||!!this.busy}>Run now</button><button @click=${()=>void this.openHistory(job)}>History</button><button @click=${()=>void this.toggle(job)}>${job.enabled?'Pause':'Resume'}</button><button @click=${()=>void this.openEditorForChat(job.chatId)}>Edit</button></div></td></tr>`})}</tbody></table>${!rows.length?html`<div class="empty">${this.jobs.length?'No jobs match your filters.':'No scheduled jobs yet. Use New job to choose a chat or start one.'}</div>`:nothing}</div>
-      ${current?html`<section class="history" aria-label="Run history for ${current.name}"><div class="run-list"><div class="panel-title">${current.name} · runs <button @click=${()=>{this.selectedJob='';this.detail=undefined;}} aria-label="Close run history">×</button></div>${(this.runs[current.id]||[]).map(run=>html`<button class="run-row ${this.detail?.id===run.id?'active':''}" @click=${()=>void this.loadRun(run)}><strong>${run.trigger==='manual'?'Manual':'Scheduled'} · ${run.status}</strong><small>${timeLabel(run.startedAt)} · brief v${run.revision}</small></button>`)}${!this.runs[current.id]?.length?html`<div class="empty">No runs yet.</div>`:nothing}</div><div class="run-detail">${this.detail?html`<h3>${this.detail.trigger==='manual'?'Manual':'Scheduled'} run · ${this.detail.status}</h3><p>${timeLabel(this.detail.startedAt)}${this.detail.finishedAt?` → ${timeLabel(this.detail.finishedAt)}`:''} · brief revision ${this.detail.revision}</p>${this.detail.summary?html`<p>${this.detail.summary}</p>`:nothing}<button @click=${()=>this.emit('chat-open',{sessionId:current.chatId})}>Open job chat</button><h3 style="margin-top:18px">Run log</h3>${(this.detail.logs||[]).map(log=>html`<div class="log"><time>${new Date(log.at).toLocaleTimeString()}</time><span class="kind">${log.kind}</span><span>${log.message}</span></div>`)}`:html`<div class="empty">Select a run to read its log.</div>`}</div></section>`:nothing}
-      </main>${this.editorOpen?html`<div class="editor-backdrop"><div class="editor" role="dialog" aria-modal="true" aria-label=${this.editorJob?'Edit scheduled job':'Review scheduled job'}><h2>${this.editorJob?'Edit scheduled job':'Review scheduled job'}</h2><p>The chat remains this job’s conversation. Scheduled runs use its agent permissions to run tools and change project files, even while you are away.</p>${this.error?html`<div class="error" role="alert">${this.error}</div>`:nothing}${this.editorJob?html`<label>Conversation<input aria-label="Job conversation" .value=${sdkChats.chats.find(chat=>chat.id===this.formChat)?.title||this.formChat} readonly></label>`:html`<label>Conversation<select aria-label="Job conversation" @change=${(event:Event)=>this.selectChat((event.target as HTMLSelectElement).value)}><option value="" ?selected=${!this.formChat}>Choose a chat</option>${this.availableChats().map(chat=>html`<option value=${chat.id} ?selected=${chat.id===this.formChat}>${chat.title} · ${chat.projectPath}</option>`)}</select></label>`}${!this.editorJob?html`<button class="link" @click=${()=>this.emit('job-new')}>Start a new chat for this job</button>`:nothing}<label>Job name<input aria-label="Job name" .value=${this.formName} @input=${(event:InputEvent)=>{this.formName=(event.target as HTMLInputElement).value;}}></label><label>Standing instructions<textarea aria-label="Standing instructions" .value=${this.formBrief} @input=${(event:InputEvent)=>{this.formBrief=(event.target as HTMLTextAreaElement).value;}}></textarea></label><button class="link" @click=${()=>void this.useLatestChatAnswer()} ?disabled=${!this.formChat||!!this.busy}>Use the latest chat answer as a draft</button><div class="hint">Review the draft before saving. Changes apply to future runs; active runs keep their previous revision.</div><div class="inline"><label>When should it run?<input aria-label="Job schedule" .value=${this.formSchedule} @input=${(event:InputEvent)=>{this.formSchedule=(event.target as HTMLInputElement).value;}}><div class="hint">Examples: weekdays at 9am, every day at 6pm, every hour, or five-field cron.</div></label><label>Time zone<input aria-label="Job time zone" .value=${this.formZone} @input=${(event:InputEvent)=>{this.formZone=(event.target as HTMLInputElement).value;}}><div class="hint">IANA zone, such as America/New_York.</div></label></div><label class="check"><input type="checkbox" .checked=${this.formEnabled} @change=${(event:Event)=>{this.formEnabled=(event.target as HTMLInputElement).checked;}}>Enable schedule</label><div class="actions"><button @click=${()=>{this.editorOpen=false;this.error='';}}>Cancel</button><button @click=${()=>void this.saveEditor()} ?disabled=${!!this.busy||!this.formChat||!this.formName.trim()||!this.formBrief.trim()}>${this.editorJob?'Save changes':'Create job'}</button></div></div></div>`:nothing}`;
+  private renderJobRow(job: Job) {
+    const last = this.latest(job);
+    const status = this.status(job);
+    const chatState = this.chatFor(job)?.state;
+    const runDisabled = !!job.activeRunId || chatState === 'working' || chatState === 'starting'
+      || chatState === 'uncertain' || !!this.busy;
+    return html`
+      <tr>
+        <td data-label="Job">
+          <mux-ui-button class="job-name" size="small" variant="quiet"
+            @click=${() => this.emit('chat-open', { sessionId:job.chatId })}>${job.name}</mux-ui-button>
+          <small title=${job.brief}>${job.brief}</small>
+        </td>
+        <td data-label="Status"><mux-ui-status-badge dot
+          tone=${status === 'Needs attention' ? 'warning' : status === 'Running' ? 'info' : status === 'Active' ? 'success' : 'neutral'}
+          >${status}</mux-ui-status-badge></td>
+        <td class="schedule" data-label="Schedule" title=${job.schedule}>
+          ${job.scheduleLabel || job.schedule}<small>${job.timezone} · ${job.schedule}</small>
+        </td>
+        <td data-label="Next run">${job.enabled ? timeLabel(job.nextRun) : '—'}</td>
+        <td data-label="Last run">${last ? html`${timeLabel(last.startedAt)}<small>${last.trigger} · ${last.status}</small>` : 'Never'}</td>
+        <td data-label="Actions"><div class="row-actions">
+          <mux-ui-button size="small" variant="secondary"
+            tooltip=${chatState === 'working' ? 'Wait for the job chat to finish its current turn' : 'Start a manual run'}
+            ?disabled=${runDisabled} @click=${() => void this.runNow(job)}>Run now</mux-ui-button>
+          <mux-ui-button size="small" variant="secondary" @click=${() => void this.openHistory(job)}>History</mux-ui-button>
+          <mux-ui-button size="small" variant="secondary" ?disabled=${!!this.busy}
+            @click=${() => void this.toggle(job)}>${job.enabled ? 'Pause' : 'Resume'}</mux-ui-button>
+          <mux-ui-button size="small" variant="secondary" ?disabled=${!!this.busy}
+            @click=${() => void this.openEditorForChat(job.chatId)}>Edit</mux-ui-button>
+        </div></td>
+      </tr>
+    `;
   }
+
+  private renderHistory(current: Job) {
+    return html`<section class="history" aria-label="Run history for ${current.name}">
+      <div class="run-list">
+        <div class="panel-title">${current.name} · runs
+          <mux-ui-button size="small" variant="quiet" icon-only accessible-label="Close run history"
+            @click=${() => { this.selectedJob = ''; this.detail = undefined; }}>×</mux-ui-button>
+        </div>
+        ${(this.runs[current.id] || []).map(run => html`
+          <mux-ui-nav-item
+            label=${`${run.trigger === 'manual' ? 'Manual' : 'Scheduled'} · ${run.status}`}
+            description=${`${timeLabel(run.startedAt)} · brief v${run.revision}`}
+            ?active=${this.detail?.id === run.id}
+            @click=${() => void this.loadRun(run)}></mux-ui-nav-item>
+        `)}
+        ${!this.runs[current.id]?.length ? html`<mux-ui-feedback align="center">No runs yet.</mux-ui-feedback>` : nothing}
+      </div>
+      <div class="run-detail">
+        ${this.detail ? html`
+          <h3>${this.detail.trigger === 'manual' ? 'Manual' : 'Scheduled'} run · ${this.detail.status}</h3>
+          <p>${timeLabel(this.detail.startedAt)}${this.detail.finishedAt ? ` → ${timeLabel(this.detail.finishedAt)}` : ''} · brief revision ${this.detail.revision}</p>
+          ${this.detail.summary ? html`<p>${this.detail.summary}</p>` : nothing}
+          <mux-ui-button size="small" variant="secondary"
+            @click=${() => this.emit('chat-open', { sessionId:current.chatId })}>Open job chat</mux-ui-button>
+          <h3 style="margin-top:var(--ui-space-7)">Run log</h3>
+          ${(this.detail.logs || []).map(log => html`<div class="log">
+            <time>${new Date(log.at).toLocaleTimeString()}</time>
+            <span class="kind">${log.kind}</span><span>${log.message}</span>
+          </div>`)}
+        ` : html`<mux-ui-feedback align="center">Select a run to read its log.</mux-ui-feedback>`}
+      </div>
+    </section>`;
+  }
+
+  private renderEditor() {
+    const editing = !!this.editorJob;
+    const title = editing ? 'Edit scheduled job' : 'Review scheduled job';
+    const conversation = sdkChats.chats.find(chat => chat.id === this.formChat)?.title || this.formChat;
+    const chatOptions = [
+      { value:'', label:'Choose a chat' },
+      ...this.availableChats().map(chat => ({ value:chat.id, label:`${chat.title} · ${chat.projectPath}` })),
+    ];
+    return html`<mux-ui-dialog class="job-editor" open label=${title}
+      @dismiss=${() => { this.editorOpen = false; this.error = ''; }}>
+      <div class="editor">
+        <h2>${title}</h2>
+        <p>The chat remains this job’s conversation. Scheduled runs use its agent permissions to run tools and change project files, even while you are away.</p>
+        ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
+        <div class="field">
+          ${editing
+            ? html`<mux-ui-text-field label="Conversation" .value=${conversation} readonly></mux-ui-text-field>`
+            : html`<mux-ui-select label="Conversation" .value=${this.formChat} .options=${chatOptions}
+                @change=${(event:Event) => this.selectChat((event.target as MuxUISelect).value)}></mux-ui-select>`}
+        </div>
+        ${!editing ? html`<mux-ui-button class="field" size="small" variant="quiet"
+          @click=${() => this.emit('job-new')}>Start a new chat for this job</mux-ui-button>` : nothing}
+        <mux-ui-text-field class="field" label="Job name" .value=${this.formName}
+          @input=${(event:InputEvent) => { this.formName = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
+        <mux-ui-text-area class="field" label="Standing instructions" .value=${this.formBrief}
+          @input=${(event:InputEvent) => { this.formBrief = (event.target as MuxUITextArea).value; }}></mux-ui-text-area>
+        <mux-ui-button class="field" size="small" variant="quiet" ?disabled=${!this.formChat || !!this.busy}
+          @click=${() => void this.useLatestChatAnswer()}>Use the latest chat answer as a draft</mux-ui-button>
+        <div class="hint">Review the draft before saving. Changes apply to future runs; active runs keep their previous revision.</div>
+        <div class="inline">
+          <mux-ui-text-field class="field" label="When should it run?"
+            description="Examples: weekdays at 9am, every day at 6pm, every hour, or five-field cron."
+            .value=${this.formSchedule}
+            @input=${(event:InputEvent) => { this.formSchedule = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
+          <mux-ui-text-field class="field" label="Time zone" description="IANA zone, such as America/New_York."
+            .value=${this.formZone}
+            @input=${(event:InputEvent) => { this.formZone = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
+        </div>
+        <mux-ui-switch layout="row" label="Enable schedule" description="Run this job at the specified time"
+          .checked=${this.formEnabled} ?disabled=${!!this.busy}
+          @change=${(event:Event) => { this.formEnabled = (event.target as MuxUISwitch).checked; }}></mux-ui-switch>
+        <div class="actions">
+          <mux-ui-button variant="secondary" @click=${() => { this.editorOpen = false; this.error = ''; }}>Cancel</mux-ui-button>
+          <mux-ui-button variant="primary" ?busy=${this.busy === 'editor'}
+            ?disabled=${!!this.busy || !this.formChat || !this.formName.trim() || !this.formBrief.trim()}
+            @click=${() => void this.saveEditor()}>${editing ? 'Save changes' : 'Create job'}</mux-ui-button>
+        </div>
+      </div>
+    </mux-ui-dialog>`;
+  }
+
+  override render() {
+    const rows = this.jobs.filter(job => `${job.name} ${job.brief}`.toLowerCase().includes(this.query.toLowerCase())
+      && (this.statusFilter === 'all' || this.status(job).toLowerCase().replace(' ', '-') === this.statusFilter));
+    const priority = (job:Job) => ({'Needs attention':0,'Running':1,'Active':2,'Paused':3})[this.status(job)] ?? 4;
+    rows.sort((a,b) => priority(a)-priority(b) || Date.parse(a.nextRun || '')-Date.parse(b.nextRun || '') || a.name.localeCompare(b.name));
+    const active = this.jobs.filter(job => job.enabled).length;
+    const attention = this.jobs.filter(job => this.status(job) === 'Needs attention').length;
+    const current = this.jobs.find(job => job.id === this.selectedJob);
+    const statusOptions = [
+      { value:'all', label:'All statuses' }, { value:'active', label:'Active' },
+      { value:'paused', label:'Paused' }, { value:'running', label:'Running' },
+      { value:'needs-attention', label:'Needs attention' },
+    ];
+    return html`
+      <mux-ui-screen-header section="Automation" heading="Scheduled jobs"></mux-ui-screen-header>
+      <mux-ui-page-intro heading="Scheduled jobs" description="Repeatable work in persistent conversations">
+        <mux-ui-button slot="action" variant="primary" @click=${() => void this.openEditorForChat()}>＋ New job</mux-ui-button>
+      </mux-ui-page-intro>
+      <main class="content">
+        ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
+        <div class="summary"><span><strong>${this.jobs.length}</strong><small>Total jobs</small></span>
+          <span><strong>${active}</strong><small>Active schedules</small></span>
+          <span><strong>${attention}</strong><small>Need attention</small></span></div>
+        <div class="toolbar">
+          <mux-ui-text-field type="search" aria-label="Search scheduled jobs" placeholder="Search jobs"
+            .value=${this.query} @input=${(event:InputEvent) => { this.query = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
+          <mux-ui-select aria-label="Filter jobs by status" .value=${this.statusFilter} .options=${statusOptions}
+            @change=${(event:Event) => { this.statusFilter = (event.target as MuxUISelect).value; }}></mux-ui-select>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Job</th><th>Status</th><th>Schedule</th><th>Next run</th><th>Last run</th><th>Actions</th></tr></thead>
+          <tbody>${rows.map(job => this.renderJobRow(job))}</tbody>
+        </table>
+        ${!rows.length ? html`<mux-ui-feedback align="center">${this.jobs.length ? 'No jobs match your filters.' : 'No scheduled jobs yet. Use New job to choose a chat or start one.'}</mux-ui-feedback>` : nothing}
+        </div>
+        ${current ? this.renderHistory(current) : nothing}
+      </main>
+      ${this.editorOpen ? this.renderEditor() : nothing}
+    `;
+  }
+
 }
 
 declare global { interface HTMLElementTagNameMap { 'mux-scheduled-jobs': MuxScheduledJobs } }

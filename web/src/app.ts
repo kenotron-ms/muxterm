@@ -1,13 +1,16 @@
 import { subtleScrollbars } from './lib/subtle-scrollbars.js';
+import './ui/tokens.css';
+import './ui/dialog.js';
+import './ui/button.js';
+import './ui/feedback.js';
 import { LitElement, html, css } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { MonitorX } from 'lucide';
+import { MonitorX, Plus } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
-import { previewStore } from './lib/preview-store.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
@@ -32,11 +35,9 @@ import './components/mux-dock.js';
 import './components/settings-surface.js';
 import type { SettingsSection } from './components/settings-surface.js';
 import type { MuxDock } from './components/mux-dock.js';
-import type { LauncherAction } from './components/launcher-menu.js';
 import './components/close-confirmation-modal.js';
 import type { CloseConfirmationModal } from './components/close-confirmation-modal.js';
 import './components/reconnect-overlay.js';
-import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
 import type { MuxSDKChat } from './components/mux-sdk-chat.js';
@@ -45,6 +46,7 @@ import './components/mux-scheduled-jobs.js';
 import './components/mux-connections.js';
 import './components/mux-skills.js';
 import './components/mux-sdk-utility.js';
+import './components/workspace-create-dialog.js';
 import { homeSessions } from './lib/home-sessions.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
@@ -74,6 +76,8 @@ import {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
 } from './lib/sidebar-width.js';
+
+type LauncherAction = 'settings' | 'shortcuts' | 'about' | 'reconnect' | 'new-workspace';
 
 /** Split.js gutter size (px), used both as the `gutterSize` option passed to
  *  `Split(...)` in `_initSplit()` below and as the half-gutter compensation
@@ -193,7 +197,7 @@ export class MuxApp extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host {
-      --main-header-inline-padding: 24px;
+      --main-header-inline-padding: var(--ui-space-8);
       display: flex;
       flex-direction: column;
       width: 100vw;
@@ -202,8 +206,8 @@ export class MuxApp extends LitElement {
          to svh (smallest stable viewport) then 100vh for older browsers. */
       height: 100vh;    /* fallback for browsers without dvh support */
       height: 100dvh;   /* dynamic viewport — shrinks with mobile browser chrome */
-      background: var(--chrome-body);
-      color: var(--mux-fg);
+      background: var(--ui-surface-base);
+      color: var(--ui-text);
       overflow: hidden;
     }
 
@@ -213,203 +217,34 @@ export class MuxApp extends LitElement {
       right: 0;
       bottom: 0;
       left: 0;
-      background: color-mix(in srgb, var(--chrome-body) 85%, transparent);
+      background: var(--ui-connection-scrim);
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 1000;
-      color: var(--mux-warn);
-      font-size: 16px;
+      z-index: var(--ui-z-connection-overlay);
+      color: var(--ui-warning);
+      font-size: var(--ui-text-xl);
     }
 
     .overlay.hidden {
       display: none;
     }
 
-    .close-alert-stack {
+    .shell-feedback-stack {
       position: fixed;
-      top: 16px;
+      top: calc(var(--ui-nav-height) + var(--ui-space-4));
       left: 50%;
       transform: translateX(-50%);
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      width: min(560px, calc(100vw - 24px));
-      z-index: 2500;
+      gap: var(--ui-space-4);
+      width: min(var(--ui-shell-notice-max-width), calc(100vw - var(--ui-space-8)));
+      z-index: var(--ui-z-alert-stack);
     }
 
-    .close-alert {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 12px;
-      border: 1px solid var(--chrome-danger);
-      border-radius: 7px;
-      background: var(--chrome-body);
-      color: var(--chrome-text-bright);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-      font-size: 13px;
-    }
+    .shell-feedback-stack mux-ui-feedback { box-shadow:var(--ui-shadow-menu); }
 
-    .close-alert span {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .close-alert button {
-      flex-shrink: 0;
-      min-width: 32px;
-      min-height: 32px;
-      padding: 0 8px;
-      border: 1px solid var(--chrome-border);
-      border-radius: 5px;
-      background: transparent;
-      color: var(--chrome-text-bright);
-      font: inherit;
-      cursor: pointer;
-    }
-
-    @media (pointer: coarse) {
-      .close-alert button {
-        min-width: 44px;
-        min-height: 44px;
-      }
-    }
-
-    /* ── Centered workspace-create modal ── */
-    .ws-create-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.55);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 3000;
-    }
-
-    .ws-create-dialog {
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border);
-      border-radius: 12px;
-      padding: 28px 28px 24px;
-      width: min(420px, calc(100vw - 40px));
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
-    }
-
-    .ws-create-dialog h3 {
-      margin: 0;
-      color: var(--chrome-text-bright);
-      font-size: 17px;
-      font-weight: 600;
-    }
-
-    .ws-create-input {
-      width: 100%;
-      background: var(--chrome-hover);
-      border: 1px solid var(--chrome-border);
-      border-radius: 6px;
-      color: var(--chrome-text-bright);
-      font: inherit;
-      font-size: 15px;
-      padding: 11px 14px;
-      outline: none;
-      box-sizing: border-box;
-      transition: border-color 0.12s, box-shadow 0.12s;
-    }
-
-    .ws-create-input:focus {
-      border-color: var(--chrome-accent);
-      box-shadow: 0 0 0 2px color-mix(in srgb, var(--chrome-accent) 25%, transparent);
-    }
-
-    .ws-create-input:disabled { opacity: 0.5; }
-
-    .ws-create-row {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-    }
-
-    .ws-create-confirm {
-      padding: 10px 22px;
-      background: var(--chrome-accent);
-      color: var(--chrome-body);
-      border: none;
-      border-radius: 7px;
-      font: inherit;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      min-width: 96px;
-      transition: opacity 0.12s;
-    }
-
-    .ws-create-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
-    .ws-create-confirm:not(:disabled):hover { opacity: 0.85; }
-
-    .ws-create-cancel {
-      padding: 10px 18px;
-      background: transparent;
-      color: var(--chrome-text-dim);
-      border: 1px solid var(--chrome-border);
-      border-radius: 7px;
-      font: inherit;
-      font-size: 14px;
-      cursor: pointer;
-      transition: background-color 0.12s, color 0.12s;
-    }
-
-    .ws-create-cancel:disabled { opacity: 0.45; cursor: not-allowed; }
-    .ws-create-cancel:not(:disabled):hover { background: var(--chrome-hover); color: var(--chrome-text-bright); }
-
-    /* ── Overlay panel (settings / shortcuts / about) ── */
-    .overlay-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.6);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 3000;
-    }
-
-    .overlay-dialog {
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border);
-      border-radius: 10px;
-      width: min(600px, calc(100vw - 32px));
-      height: min(80vh, 640px);
-      display: flex;
-      flex-direction: column;
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
-      overflow: hidden;
-    }
-
-    /* The connect dialog is the one overlay that is content-sized: it holds a
-       list whose length is the user's ssh config, and a fixed 640px box would
-       be mostly empty for the common case of two or three machines. Same
-       backdrop, same chrome, different box — the wireframe's .cdialog. */
-    .overlay-dialog.cdialog {
-      width: min(520px, calc(100vw - 32px));
-      height: auto;
-      max-height: min(80vh, 600px);
-    }
-
-    @media (max-width: 767.98px) {
-      .overlay-dialog.settings-dialog {
-        box-sizing: border-box;
-        width: 100vw;
-        height: 100dvh;
-        padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
-        border: 0;
-        border-radius: 0;
-        box-shadow: none;
-      }
-    }
-
+    /* The shared native dialog owns overlay geometry and focus. */
     .overlay-body {
       flex: 1;
       overflow: hidden;
@@ -419,101 +254,9 @@ export class MuxApp extends LitElement {
     .settings-page {
       position: fixed;
       inset: 0;
-      z-index: 3000;
+      z-index: var(--ui-z-settings-page);
       display: flex;
-      background: var(--chrome-body);
-    }
-
-    /* shortcuts / about panels rendered inline */
-    .info-panel {
-      padding: 24px 24px 32px;
-    }
-
-    .info-panel h2 {
-      margin: 0 0 20px;
-      font-size: 17px;
-      font-weight: 600;
-      color: var(--chrome-text-bright);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .info-panel .close-btn {
-      background: transparent;
-      border: none;
-      color: var(--chrome-text-dim);
-      cursor: pointer;
-      font-size: 18px;
-      line-height: 1;
-      padding: 0 4px;
-      border-radius: 4px;
-    }
-
-    .info-panel .close-btn:hover { color: var(--chrome-text-bright); background: var(--chrome-hover); }
-
-    .shortcut-grid {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 0;
-    }
-
-    .shortcut-grid .sc-label {
-      padding: 8px 0;
-      border-bottom: 1px solid var(--chrome-border);
-      font-size: 13px;
-      color: var(--chrome-text-dim);
-    }
-
-    .shortcut-grid .sc-key {
-      padding: 8px 0;
-      border-bottom: 1px solid var(--chrome-border);
-      font-size: 12px;
-      color: var(--chrome-text-bright);
-      font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
-      text-align: right;
-    }
-
-    .about-body {
-      font-size: 13px;
-      color: var(--chrome-text-dim);
-      line-height: 1.7;
-    }
-
-    .about-body strong { color: var(--chrome-text-bright); }
-
-    .about-version {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 16px;
-      color: var(--chrome-text-bright);
-    }
-
-    .about-check {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 30px;
-      height: 30px;
-      border: 1px solid var(--chrome-border);
-      border-radius: 5px;
-      background: transparent;
-      color: var(--chrome-text-dim);
-      cursor: pointer;
-    }
-
-    .about-check:not(:disabled):hover { color: var(--chrome-text-bright); background: var(--chrome-hover); }
-    .about-check:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: 2px; }
-    .about-check:disabled { opacity: 0.55; cursor: default; }
-
-    .about-version-note { color: var(--chrome-text-dim); font-size: 12px; line-height: 1.4; }
-
-    .about-sha {
-      margin-top: 16px;
-      font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
-      font-size: 11px;
-      color: var(--chrome-text-dim);
+      background: var(--ui-surface-base);
     }
 
     /* Empty workspace state — shown when the attached workspace has no panes.
@@ -524,9 +267,9 @@ export class MuxApp extends LitElement {
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 16px;
-      background: var(--chrome-body);
-      color: var(--chrome-text-dim);
+      gap: var(--ui-space-6);
+      background: var(--ui-surface-base);
+      color: var(--ui-text-muted);
       user-select: none;
     }
 
@@ -542,35 +285,17 @@ export class MuxApp extends LitElement {
     }
 
     .empty-workspace .headline {
-      font-size: 16px;
-      color: var(--mux-fg);
+      font-size: var(--ui-text-xl);
+      color: var(--ui-text);
       font-weight: 600;
     }
 
     .empty-workspace .subtext {
-      font-size: 13px;
-      color: var(--chrome-text-dim);
+      font-size: var(--ui-text-md);
+      color: var(--ui-text-muted);
     }
 
-    .empty-workspace button {
-      margin-top: 8px;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 18px;
-      font-size: 13px;
-      color: var(--chrome-text-bright);
-      background: var(--chrome-hover);
-      border: 1px solid var(--chrome-text-dim);
-      border-radius: 6px;
-      cursor: pointer;
-      transition: background 0.12s ease, border-color 0.12s ease;
-    }
-
-    .empty-workspace button:hover {
-      background: var(--chrome-hover);
-      border-color: var(--chrome-accent);
-    }
+    .empty-workspace mux-ui-button { margin-top:var(--ui-space-4); }
 
     .window-chrome { display: none; }
 
@@ -578,8 +303,8 @@ export class MuxApp extends LitElement {
       .window-chrome {
         display: block;
         flex: none;
-        height: max(44px, calc(env(titlebar-area-y, 0px) + env(titlebar-area-height, 44px)));
-        background: var(--mux-titlebar-bg, var(--chrome-bar));
+        height: max(var(--ui-control-lg), calc(env(titlebar-area-y, 0px) + env(titlebar-area-height, var(--ui-control-lg))));
+        background: var(--ui-surface-nav);
         -webkit-app-region: drag;
         app-region: drag;
       }
@@ -607,20 +332,20 @@ export class MuxApp extends LitElement {
     }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
-    .terminal-utility { box-sizing:border-box; width:min(360px,42%); min-width:270px; flex:none; display:flex; flex-direction:column; border-left:1px solid var(--chrome-border); background:var(--chrome-body); color:var(--chrome-text-bright); }
+    .terminal-utility { box-sizing:border-box; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); }
     .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
-    @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:6; top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:-10px 0 25px #0005; } }
+    @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,var(--ui-terminal-utility-width)); min-width:0; box-shadow:var(--ui-shadow-side); } }
 
     /* Keep the 4px resize target, but continue the title bar across its top.
        Painting the whole gutter as chrome-body leaves a visible stripe between
        the sidebar header and the breadcrumb header. */
     .sidebar-gutter {
-      width: 4px;
+      width: var(--ui-space-2);
       position: relative;
       cursor: col-resize;
       background: linear-gradient(to bottom,
-        var(--mux-titlebar-bg, var(--chrome-bar)) 0 var(--mux-titlebar-height, 44px),
-        var(--chrome-body) var(--mux-titlebar-height, 44px) 100%);
+        var(--ui-surface-nav) 0 var(--ui-nav-height),
+        var(--ui-surface-base) var(--ui-nav-height) 100%);
       transition: background 0.15s;
     }
 
@@ -628,17 +353,17 @@ export class MuxApp extends LitElement {
     .sidebar-gutter::after {
       content: '';
       position: absolute;
-      top: calc(var(--mux-titlebar-height, 44px) - 1px);
+      top: calc(var(--ui-nav-height) - var(--ui-space-px));
       left: 0;
       right: 0;
-      border-bottom: 1px solid var(--chrome-border);
+      border-bottom: 1px solid var(--ui-border);
       pointer-events: none;
     }
 
     .sidebar-gutter:hover {
       background: linear-gradient(to bottom,
-        var(--mux-titlebar-bg, var(--chrome-bar)) 0 var(--mux-titlebar-height, 44px),
-        color-mix(in srgb, var(--chrome-accent) 40%, var(--chrome-body)) var(--mux-titlebar-height, 44px) 100%);
+        var(--ui-surface-nav) 0 var(--ui-nav-height),
+        color-mix(in srgb, var(--ui-accent) 40%, var(--ui-surface-base)) var(--ui-nav-height) 100%);
     }
 
     /* ── Surface 1: the workspace drawer ─────────────────────────────────
@@ -656,12 +381,12 @@ export class MuxApp extends LitElement {
        live previews inside are the whole argument for the drawer.
        ─────────────────────────────────────────────────────────────────── */
     .drawer {
-      --scrim: color-mix(in srgb, var(--chrome-body) 62%, transparent);
-      --drawer-dur: 120ms;
+      --scrim: var(--ui-backdrop-sheet);
+      --drawer-dur: var(--ui-motion-fast);
 
       position: fixed;
       inset: 0 auto 0 0;
-      width: min(86vw, 340px);
+      width: min(86vw, var(--ui-mobile-drawer-width));
       height: 100%;
       max-width: none;
       max-height: none;
@@ -678,11 +403,11 @@ export class MuxApp extends LitElement {
          display ... allow-discrete transition below mean anything. */
       flex-direction: column;
       overflow: hidden;
-      background: var(--chrome-bar);
-      color: var(--chrome-text-bright);
+      background: var(--ui-surface-nav);
+      color: var(--ui-text);
       border: 0;
-      border-right: 1px solid var(--chrome-border);
-      box-shadow: 8px 0 24px rgba(0, 0, 0, 0.4);
+      border-right: 1px solid var(--ui-border);
+      box-shadow: var(--ui-shadow-drawer);
       translate: -100% 0;
       transition:
         translate var(--drawer-dur) ease,
@@ -724,7 +449,8 @@ export class MuxApp extends LitElement {
       max-width: none;
       border-right: 0;
       padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
-      padding-left: env(safe-area-inset-left, 0px);
+      padding-left: 0;
+      padding-left: env(safe-area-inset-left);
       box-sizing: border-box;
     }
   `;
@@ -771,8 +497,6 @@ export class MuxApp extends LitElement {
   @state()
   private _showCreateModal = false;
 
-  @state()
-  private _createModalName = '';
 
   /**
    * Which host the open create-workspace modal will create on, as a
@@ -788,7 +512,7 @@ export class MuxApp extends LitElement {
   private _terminalCreateRef = '';
 
   @state()
-  private _overlayPanel: 'settings' | 'connect' | null = null;
+  private _overlayPanel: 'settings' | null = null;
   private _settingsOpenSection: SettingsSection | null = null;
 
   @state()
@@ -926,6 +650,7 @@ export class MuxApp extends LitElement {
   private _dragging = false;
 
   private _onOpenSettings = (): void => {
+    if (this._showReconnectOverlay) return;
     this._settingsOpenSection = null;
     this._overlayPanel = 'settings';
   };
@@ -978,6 +703,16 @@ export class MuxApp extends LitElement {
     }
   }
 
+  /** Reveal connection loss above browser top-layer navigation and dialogs. */
+  private _revealReconnectOverlay(): void {
+    this._overlayPanel = null;
+    this._settingsOpenSection = null;
+    this._showCreateModal = false;
+    this._creatingWorkspace = false;
+    this._closeDrawer();
+    this._showReconnectOverlay = true;
+  }
+
   connectedCallback(): void {
     super.connectedCallback();
     this._unsubscribeChats = sdkChats.subscribe(() => this.requestUpdate());
@@ -986,7 +721,7 @@ export class MuxApp extends LitElement {
     // muxterm's own marker and preserve any unrelated URL parameters.
     const url = new URL(window.location.href);
     const connectionReturn = url.searchParams.get('connections');
-    if (connectionReturn && ['github', 'remote', 'gmail', 'google-drive', 'google-calendar', 'google-docs', 'google-sheets', 'google-slides'].includes(connectionReturn)) {
+    if (connectionReturn && ['github', 'gmail', 'google-drive', 'google-calendar', 'google-docs', 'google-sheets', 'google-slides'].includes(connectionReturn)) {
       this._connectionSelection = connectionReturn;
       url.searchParams.delete('connections');
       window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
@@ -1007,12 +742,6 @@ export class MuxApp extends LitElement {
     // dock, sidebar, mobile picker, and the dormant workspace picker.
     this.addEventListener('pane-close', this._onPaneCloseIntent);
     this.addEventListener('workspace-close', this._onWorkspaceCloseIntent);
-    // "+ Connect machine" — opens the connect dialog. Listened for on the HOST
-    // rather than bound on <mux-sidebar> because there are two sidebars (the
-    // wide column and the narrow drawer) and the button lives in both; a
-    // composed event bubbling to here covers them, and any later entry point,
-    // without a third binding to keep in step.
-    this.addEventListener('connect-machine', this._onConnectMachine);
     // Escape dismisses the open overlay panel — see _onOverlayPanelEscape.
     window.addEventListener('keydown', this._onOverlayPanelEscape, true);
     // Update layout mode when the viewport crosses the 768px breakpoint.
@@ -1021,10 +750,6 @@ export class MuxApp extends LitElement {
     // Apply default theme tokens immediately so --mux-* and --chrome-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     applyChromeTokens(store.config.theme.palette);
-    // Sidebar preview density. Decided before the socket exists so the opt-in
-    // is already resolved when attach() first gets a chance to send it; the
-    // daemon's real config arrives on the WS config frame and re-applies this.
-    previewStore.setMode(store.config.sidebar.preview);
     // Reflect which machine this instance is running on — document title
     // (PWA window title / browser tab / Alt-Tab preview) and, if the user
     // picked one in Settings, a distinguishing title-bar accent color.
@@ -1074,9 +799,6 @@ export class MuxApp extends LitElement {
     this._socket.onPaneResized = (paneId, cols, rows) => {
       terminalRegistry.applyServerResize(paneId, cols, rows);
     };
-    // Sidebar previews are on-demand workspace-screen reads; the store owns the
-    // authenticated socket seam and does not subscribe or poll at startup.
-    previewStore.attach(this._socket);
     this._applyBootSurface();
     // Home view session state. Opt in once per connection; the daemon does no
     // work at all until we ask.
@@ -1281,7 +1003,6 @@ export class MuxApp extends LitElement {
       if (msg.type === SessiondType.WorkspaceCreated && this._creatingWorkspace) {
         this._creatingWorkspace = false;
         this._showCreateModal = false;
-        this._createModalName = '';
         this._createModalHost = '';
       }
     };
@@ -1313,7 +1034,7 @@ export class MuxApp extends LitElement {
       // any prior rows as a visible fallback, but mark even an empty prior set
       // stale until the reconnect delivers a fresh whole-state snapshot.
       homeSessions.markStale();
-      this._showReconnectOverlay = true;
+      this._revealReconnectOverlay();
       // Deliberately NOT a message: the overlay derives its headline from the
       // live phase. A message here is an override, reserved for the server
       // telling us something we cannot work out ourselves (see `detached`).
@@ -1325,7 +1046,6 @@ export class MuxApp extends LitElement {
       if (!this._daemonUnreachable) {
         this._reconnectMessage = '';
       }
-      this._creatingWorkspace = false;
       // The attach this dispatch was waiting on is gone. Reconnect replays its
       // own bootstrap attach; letting the argv survive would spawn the prompt
       // into whatever that lands on, minutes later and unasked.
@@ -1389,7 +1109,6 @@ export class MuxApp extends LitElement {
     window.removeEventListener('popstate', this._onChatHistory);
     this.removeEventListener('pane-close', this._onPaneCloseIntent);
     this.removeEventListener('workspace-close', this._onWorkspaceCloseIntent);
-    this.removeEventListener('connect-machine', this._onConnectMachine);
     window.removeEventListener('keydown', this._onOverlayPanelEscape, true);
     this._disposePaneFocusListeners?.();
     this._disposePwaWindowControls?.();
@@ -1451,12 +1170,6 @@ export class MuxApp extends LitElement {
 
   override updated(changed: Map<PropertyKey, unknown>): void {
     super.updated(changed);
-    // Auto-focus the name input when the create modal opens.
-    if (changed.has('_showCreateModal') && this._showCreateModal) {
-      requestAnimationFrame(() => {
-        this.shadowRoot?.querySelector<HTMLInputElement>('.ws-create-input')?.focus();
-      });
-    }
     // Narrow→wide: init Split.js AFTER Lit has placed the sidebar/main-pane
     // elements back in the DOM (updated fires post-render) — see
     // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
@@ -1466,13 +1179,13 @@ export class MuxApp extends LitElement {
     // An overlay panel opening dismisses the drawer.
     //
     // The drawer is a popover, so it lives in the browser's TOP LAYER, which
-    // is above EVERY z-index unconditionally — .overlay-backdrop's 3000
+    // is above EVERY z-index unconditionally — even the reconnect overlay
     // included. On a phone the drawer can open an overlay such as Settings,
     // which would otherwise be painted UNDERNEATH the drawer. No number
     // fixes that; the drawer has to leave.
     //
-    // Keyed on the STATE rather than on the two call sites that open a panel
-    // (_onLauncherAction, _onConnectMachine), because the three sibling
+    // Keyed on the STATE rather than the Settings action that opens the panel,
+    // because the three sibling
     // dismissals below — _onOpenCreateModal, _onChatNew,
     // _onWorkspaceSelected — are exactly the pattern this bug escaped from:
     // a per-call-site `_closeDrawer()` that a fourth surface forgot. Nothing
@@ -1656,7 +1369,6 @@ export class MuxApp extends LitElement {
             .connectionsActive="${this._sdkChatId === 'connections'}"
             .skillsActive="${this._sdkChatId === 'skills'}"
             .selectedSDKChat="${selectedSDKChat}"
-            .showLauncher="${this._sdkChatId !== 'new'}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @chat-open="${this._onChatOpen}"
             @home-open="${this._onHomeOpen}"
@@ -1689,7 +1401,7 @@ export class MuxApp extends LitElement {
                   <div class="subtext">
                     This workspace has nothing running. Create a pane to get started.
                   </div>
-                  <button @click="${this._onCreatePane}"><span>+</span> New pane</button>
+                  <mux-ui-button @click="${this._onCreatePane}"><span slot="leading">${icon(Plus,{size:16})}</span>New pane</mux-ui-button>
                 </div>
               `
             : html`
@@ -1722,7 +1434,7 @@ export class MuxApp extends LitElement {
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .sessionId=${this._sdkChatId} .compact=${this._layoutMode === 'narrow'} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -1737,14 +1449,13 @@ export class MuxApp extends LitElement {
               @toggle="${this._onDrawerPopoverToggle}"
             >
               <mux-sidebar
+                .drawer=${true}
                 .newChatActive="${this._sdkChatId === 'new'}"
                 .terminalActive="${this._sdkChatId === null}"
                 .jobsActive="${this._sdkChatId === 'jobs'}"
                 .connectionsActive="${this._sdkChatId === 'connections'}"
                 .skillsActive="${this._sdkChatId === 'skills'}"
                 .selectedSDKChat="${selectedSDKChat}"
-                .previewsVisible="${this._drawerOpen}"
-                .showLauncher="${this._sdkChatId !== 'new'}"
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @chat-open="${this._onChatOpen}"
                 @home-open="${this._onHomeOpen}"
@@ -1762,32 +1473,34 @@ export class MuxApp extends LitElement {
           `
         : ''}
 
-      <div class="close-alert-stack" aria-live="polite">
+      <div class="shell-feedback-stack" aria-live="polite">
         ${this._dispatchAlert
           ? html`
-              <div class="close-alert" role="alert">
-                <span>${this._dispatchAlert.message} Your prompt:
-                  "${this._dispatchAlert.prompt}"</span>
-                <button
-                  type="button"
-                  aria-label="Dismiss session start error"
+              <mux-ui-feedback kind="error" appearance="panel" density="compact" layout="inline">
+                ${this._dispatchAlert.message} Your prompt:
+                  "${this._dispatchAlert.prompt}"
+                <mux-ui-button
+                  slot="action"
+                  size="small"
+                  accessible-label="Dismiss session start error"
                   @click="${() => {
                     this._dispatchAlert = null;
                   }}"
-                >Dismiss</button>
-              </div>
+                >Dismiss</mux-ui-button>
+              </mux-ui-feedback>
             `
           : ''}
         ${[...this._closeAlerts.entries()].map(
           ([key, alert]) => html`
-            <div class="close-alert" role="alert">
-              <span>${alert.message}</span>
-              <button
-                type="button"
-                aria-label="Dismiss close error"
+            <mux-ui-feedback kind="error" appearance="panel" density="compact" layout="inline">
+              ${alert.message}
+              <mux-ui-button
+                slot="action"
+                size="small"
+                accessible-label="Dismiss close error"
                 @click="${() => this._dismissCloseAlert(key)}"
-              >Dismiss</button>
-            </div>
+              >Dismiss</mux-ui-button>
+            </mux-ui-feedback>
           `,
         )}
       </div>
@@ -1805,47 +1518,13 @@ export class MuxApp extends LitElement {
         Connecting to muxterm...
       </div>
 
-      ${this._showCreateModal ? html`
-        <div class="ws-create-backdrop" @click="${this._cancelCreate}">
-          <div class="ws-create-dialog" @click="${(e: Event) => e.stopPropagation()}">
-            <h3>New workspace</h3>
-            <input
-              class="ws-create-input"
-              type="text"
-              placeholder="Workspace name"
-              ?disabled="${this._creatingWorkspace}"
-              @keydown="${this._onCreateModalKeyDown}"
-            />
-            <div class="ws-create-row">
-              <button
-                class="ws-create-cancel"
-                ?disabled="${this._creatingWorkspace}"
-                @click="${this._cancelCreate}"
-              >Cancel</button>
-              <button
-                class="ws-create-confirm"
-                ?disabled="${this._creatingWorkspace}"
-                @click="${this._submitCreate}"
-              >${this._creatingWorkspace ? 'Creating…' : 'Create'}</button>
-            </div>
-          </div>
-        </div>
-      ` : ''}
+      ${this._showCreateModal ? html`<mux-workspace-create-dialog open .busy=${this._creatingWorkspace}
+        @workspace-create-cancel=${this._cancelCreate}
+        @workspace-create-submit=${this._submitCreate}></mux-workspace-create-dialog>` : ''}
       ${settingsPage ? html`<section class="settings-page" aria-label="Settings">${this._renderSettings(true)}</section>` : this._overlayPanel ? html`
-        <div class="overlay-backdrop" @click="${this._closeOverlayPanel}">
-          <div
-            class="overlay-dialog${this._overlayPanel === 'connect' ? ' cdialog' : this._overlayPanel === 'settings' ? ' settings-dialog' : ''}"
-            @click="${(e: Event) => e.stopPropagation()}"
-          >
-            <div class="overlay-body">
-              ${this._overlayPanel === 'connect' ? html`
-                <mux-connect-dialog
-                  @close="${this._closeOverlayPanel}"
-                ></mux-connect-dialog>
-              ` : this._overlayPanel === 'settings' ? this._renderSettings() : ''}
-            </div>
-          </div>
-        </div>
+        <mux-ui-dialog open size="standard" label="Settings" @dismiss=${this._closeOverlayPanel}>
+          <div class="overlay-body">${this._renderSettings()}</div>
+        </mux-ui-dialog>
       ` : ''}
       ${this._showReconnectOverlay
         ? html`<mux-reconnect-overlay
@@ -1914,8 +1593,8 @@ export class MuxApp extends LitElement {
    * row is inserted — the flag is the only local state change.
    */
   private _onOpenCreateModal = (e?: CustomEvent<{ host?: string }>): void => {
+    if (this._showReconnectOverlay) return;
     this._showCreateModal = true;
-    this._createModalName = '';
     // Unconditional assignment, not a conditional one: the target host is a
     // property of THIS opening, so an event without a host must reset the
     // previous opening's, never inherit it.
@@ -1925,16 +1604,8 @@ export class MuxApp extends LitElement {
     this._closeDrawer();
   };
 
-  private _onCreateModalKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Enter')  { e.preventDefault(); this._submitCreate(); }
-    if (e.key === 'Escape') { e.preventDefault(); this._cancelCreate(); }
-  };
-
-  private _submitCreate = (): void => {
-    // Read directly from the DOM — more reliable than state on mobile where
-    // IME/autocorrect can delay @input events, leaving _createModalName stale.
-    const input = this.shadowRoot?.querySelector<HTMLInputElement>('.ws-create-input');
-    const name = (input?.value ?? this._createModalName).trim();
+  private _submitCreate = (event: CustomEvent<{name:string}>): void => {
+    const name = event.detail.name.trim();
     if (!name || this._creatingWorkspace) return;
     this._creatingWorkspace = true;
     // '' is the local daemon, and createWorkspace then sends exactly today's
@@ -1945,7 +1616,6 @@ export class MuxApp extends LitElement {
   private _cancelCreate = (): void => {
     if (this._creatingWorkspace) return;
     this._showCreateModal = false;
-    this._createModalName = '';
     this._createModalHost = '';
   };
 
@@ -1995,7 +1665,7 @@ export class MuxApp extends LitElement {
     // recovery command when the daemon is alive-but-unreachable.
     if (msg['type'] === 'error' && msg['code'] === 'daemon-unreachable') {
       this._daemonUnreachable = true;
-      this._showReconnectOverlay = true;
+      this._revealReconnectOverlay();
       this._reconnectMessage =
         typeof msg['error'] === 'string'
           ? (msg['error'] as string)
@@ -2006,7 +1676,7 @@ export class MuxApp extends LitElement {
     }
     if ('detached' in msg && msg.detached && typeof msg.detached === 'object') {
       const detached = msg.detached as { reason?: string };
-      this._showReconnectOverlay = true;
+      this._revealReconnectOverlay();
       this._reconnectMessage = detached.reason ?? 'Disconnected';
     }
     // {"type":"config",...} envelope (Phase 3 carry-forward): re-resolve theme,
@@ -2017,7 +1687,6 @@ export class MuxApp extends LitElement {
       applyThemeTokens(resolvePalette(cfg.theme.palette));
       applyChromeTokens(cfg.theme.palette);
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
-      previewStore.setMode(cfg.sidebar.preview);
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
       disposeHomeToggle?.();
@@ -2543,6 +2212,7 @@ export class MuxApp extends LitElement {
   private _onLauncherAction = (e: Event): void => {
     const detail = (e as CustomEvent<{ action: LauncherAction; section?: SettingsSection }>).detail;
     const action = detail?.action;
+    if (this._showReconnectOverlay && action !== 'reconnect') return;
     switch (action) {
       case 'settings':
         this._settingsOpenSection = detail?.section ?? null;
@@ -2561,17 +2231,6 @@ export class MuxApp extends LitElement {
         this._onOpenCreateModal();
         break;
     }
-  };
-
-  /**
-   * Open the connect dialog.
-   *
-   * The event carries no detail and this handler reads none: "connect a
-   * machine" is the whole message, and the dialog asks which one. Tolerant by
-   * design — any surface that wants this door only has to dispatch the event.
-   */
-  private _onConnectMachine = (): void => {
-    this._overlayPanel = 'connect';
   };
 
   private _closeOverlayPanel = (): void => {
@@ -2615,7 +2274,6 @@ export class MuxApp extends LitElement {
     applyThemeTokens(resolvePalette(cfg.theme.palette));
     applyChromeTokens(cfg.theme.palette);
     configureTerminals(cfg);
-    previewStore.setMode(cfg.sidebar.preview);
     disposeKeys?.();
     disposeKeys = installKeybindings(uiActions);
     disposeHomeToggle?.();

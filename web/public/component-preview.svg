@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title description">
+  <title id="title">Component library preview</title>
+  <desc id="description">A diagram of shared controls beside a terminal pane.</desc>
+  <rect width="640" height="360" rx="18" fill="#171923"/>
+  <rect x="24" y="25" width="592" height="310" rx="12" fill="#222738" stroke="#485578"/>
+  <path d="M24 67h592" stroke="#485578"/>
+  <circle cx="48" cy="46" r="5" fill="#e17f82"/>
+  <circle cx="66" cy="46" r="5" fill="#e9bd75"/>
+  <circle cx="84" cy="46" r="5" fill="#9dcb77"/>
+  <text x="112" y="51" fill="#d7dfff" font-family="Arial,sans-serif" font-size="16" font-weight="700">Muxterm component library</text>
+  <rect x="44" y="89" width="250" height="224" rx="9" fill="#191e2c" stroke="#485578"/>
+  <text x="61" y="117" fill="#a4b7ef" font-family="Arial,sans-serif" font-size="12" letter-spacing="2">TERMINAL</text>
+  <text x="61" y="160" fill="#9dcb77" font-family="monospace" font-size="17">$ muxterm storybook</text>
+  <rect x="61" y="177" width="160" height="7" rx="3" fill="#8290b0" opacity=".55"/>
+  <rect x="61" y="198" width="123" height="7" rx="3" fill="#8290b0" opacity=".35"/>
+  <rect x="61" y="219" width="185" height="7" rx="3" fill="#8290b0" opacity=".35"/>
+  <text x="61" y="280" fill="#9dcb77" font-family="monospace" font-size="17">$ _</text>
+  <rect x="312" y="89" width="284" height="224" rx="9" fill="#2a3147" stroke="#485578"/>
+  <text x="331" y="117" fill="#a4b7ef" font-family="Arial,sans-serif" font-size="12" letter-spacing="2">SHARED CONTROLS</text>
+  <rect x="331" y="140" width="106" height="38" rx="8" fill="#7898e4"/>
+  <text x="356" y="164" fill="#161923" font-family="Arial,sans-serif" font-size="15" font-weight="700">Button</text>
+  <rect x="451" y="140" width="117" height="38" rx="8" fill="none" stroke="#8290b0"/>
+  <text x="481" y="164" fill="#d7dfff" font-family="Arial,sans-serif" font-size="15">Dialog</text>
+  <rect x="331" y="196" width="237" height="55" rx="8" fill="#1d2831" stroke="#508b82"/>
+  <circle cx="353" cy="223" r="7" fill="#9dcb77"/>
+  <text x="372" y="229" fill="#d7dfff" font-family="Arial,sans-serif" font-size="15">Consistent feedback</text>
+  <text x="331" y="284" fill="#a4b7ef" font-family="Arial,sans-serif" font-size="13">Tokens make every screen feel related.</text>
+</svg>

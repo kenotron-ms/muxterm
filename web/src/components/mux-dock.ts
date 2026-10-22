@@ -21,6 +21,7 @@ import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import { parseHostRef } from '../lib/host-ref.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
+import { visuallyHidden } from '../ui/visually-hidden.js';
 import { Folder } from 'lucide';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
@@ -71,8 +72,6 @@ function dropLabel(state: HostConnState): string {
 interface DockHost {
   /** HostRef.ID -- what POST /api/remotes/{id}/connect takes. */
   id: string;
-  /** Display label. Never the raw "ssh:" id. */
-  name: string;
   state: HostConnState;
   /** ms epoch of the next dial, when the store knows of one. */
   retryAt?: number;
@@ -88,12 +87,15 @@ class TerminalRenderer implements IContentRenderer {
   private readonly _paneId: number;
   private readonly _isActivePane: (paneId: number) => boolean;
   private _attached = false;
+  private _disposed = false;
+  private _layoutFrame: number | undefined;
+  private readonly _swallowPointer = (event: Event): void => event.stopPropagation();
 
   constructor(id: string, isActivePane: (paneId: number) => boolean) {
     this._paneId = parseInt(id, 10);
     this._isActivePane = isActivePane;
     const el = document.createElement('div');
-    el.style.cssText = 'box-sizing:border-box;width:100%;height:100%;overflow:hidden;padding:12px 14px;background:var(--mux-bg);';
+    el.style.cssText = 'box-sizing:border-box;width:100%;height:100%;overflow:hidden;padding:var(--ui-space-5) var(--ui-dock-terminal-padding-inline);background:var(--ui-terminal-surface);';
 
     // Isolate xterm's pointer events from dockview's panel drag-and-drop.
     //
@@ -110,10 +112,9 @@ class TerminalRenderer implements IContentRenderer {
     // stopPropagation() keeps these events from reaching dockview's drop target
     // while leaving xterm's listeners (on descendants) fully functional. Panel
     // focus uses focus/blur events, not pointer events, so it is unaffected.
-    const swallow = (e: Event): void => e.stopPropagation();
-    el.addEventListener('pointerdown', swallow);
-    el.addEventListener('pointermove', swallow);
-    el.addEventListener('pointerup', swallow);
+    el.addEventListener('pointerdown', this._swallowPointer);
+    el.addEventListener('pointermove', this._swallowPointer);
+    el.addEventListener('pointerup', this._swallowPointer);
 
     this.element = el;
   }
@@ -130,6 +131,7 @@ class TerminalRenderer implements IContentRenderer {
   }
 
   layout(): void {
+    if (this._disposed) return;
     if (!this._attached) {
       muxLog('renderer layout', `pane=${this._paneId} not-yet-attached`,
         { isConnected: this.element.isConnected,
@@ -140,7 +142,12 @@ class TerminalRenderer implements IContentRenderer {
         // Panel not in DOM yet — retry next frame (dockview only calls layout()
         // on the active panel after DOM append; inactive panels get one
         // isConnected=false call and nothing after).
-        requestAnimationFrame(() => this.layout());
+        if (this._layoutFrame === undefined) {
+          this._layoutFrame = requestAnimationFrame(() => {
+            this._layoutFrame = undefined;
+            this.layout();
+          });
+        }
         return;
       }
 
@@ -161,6 +168,12 @@ class TerminalRenderer implements IContentRenderer {
   }
 
   dispose(): void {
+    this._disposed = true;
+    if (this._layoutFrame !== undefined) cancelAnimationFrame(this._layoutFrame);
+    this._layoutFrame = undefined;
+    this.element.removeEventListener('pointerdown', this._swallowPointer);
+    this.element.removeEventListener('pointermove', this._swallowPointer);
+    this.element.removeEventListener('pointerup', this._swallowPointer);
     // Does NOT destroy the terminal — PTY stays alive, scrollback preserved.
     terminalRegistry.detach(this._paneId);
   }
@@ -186,6 +199,7 @@ class IntentTabRenderer implements ITabRenderer {
   constructor(
     private readonly _target: PaneCloseTarget,
     private readonly _requestClose: (target: PaneCloseTarget) => void,
+    private readonly _paint: (tabEl: HTMLElement, paneId: number, title: string) => void,
   ) {
     this.element = document.createElement('div');
     this.element.className = 'dv-default-tab';
@@ -240,8 +254,7 @@ class IntentTabRenderer implements ITabRenderer {
   };
 
   private _render(): void {
-    this._content.textContent = this._title;
-    this._action.setAttribute('aria-label', `Close pane ${this._title || this._target.paneId}`);
+    this._paint(this._content, this._target.paneId, this._title);
   }
 }
 
@@ -363,12 +376,37 @@ export class MuxDock extends LitElement {
   private _dv: DockviewComponent | null = null;
   private _panels = new Map<number, IDockviewPanel>();
   private _settingActive = false;
+  private _focusRestoreToken = 0;
+  private _pendingFrames = new Set<number>();
+
+  /** A tab gesture takes priority over the short post-restore focus sequence. */
+  private readonly _onTabSelectionIntent = (event: Event): void => {
+    if (!this._settingActive) return;
+    if (event instanceof KeyboardEvent && !['Enter', ' ', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (!event.composedPath().some(target => target instanceof Element && target.classList.contains('dv-default-tab'))) return;
+    this._focusRestoreToken++;
+    this._settingActive = false;
+  };
+
+  /** Defer Dockview work without letting a detached host touch old panels. */
+  private _nextFrame(callback: () => void): void {
+    if (!this.isConnected) return;
+    const frame = requestAnimationFrame(() => {
+      this._pendingFrames.delete(frame);
+      if (this.isConnected) callback();
+    });
+    this._pendingFrames.add(frame);
+  }
   /** User-defined pane names, isolated by workspace-local pane identity. */
   private _customTitles = new Map<string, string>();
   /** Debounce timer for layout-save events. */
   private _layoutSaveTimer: number | undefined;
   /** True while restoring a layout via fromJSON — suppresses layout-save echoes. */
   private _restoringLayout = false;
+  /** Preserve wide splits while a phone viewport presents the same panes as tabs. */
+  private _wideLayoutSnapshot: string | null = null;
+  /** A reinserted host needs to repopulate its new Dockview even when inputs did not change. */
+  private _restoreOnReconnect = false;
   /**
    * Where the NEXT newly-added pane should be placed:
    *   'tab'   — a new tab in the active group (the "+" button)
@@ -434,9 +472,9 @@ export class MuxDock extends LitElement {
    * find the grid leaf whose group id === activeGroup, and return that leaf's
    * activeView (the pane id). Returns undefined if the layout can't tell us.
    */
-  private _activePaneIdFromSavedLayout(): string | undefined {
+  private _activePaneIdFromSavedLayout(layout = this.layout): string | undefined {
     try {
-      const parsed = JSON.parse(this.layout) as SerializedDockview & { activeGroup?: string };
+      const parsed = JSON.parse(layout) as SerializedDockview & { activeGroup?: string };
       const activeGroup = parsed.activeGroup;
       if (activeGroup === undefined) return undefined;
       // Walk the grid tree to find the leaf node whose data.id === activeGroup.
@@ -463,7 +501,8 @@ export class MuxDock extends LitElement {
     if (this._restoringLayout) return; // don't echo a save while we're restoring
     if (this._layoutSaveTimer !== undefined) clearTimeout(this._layoutSaveTimer);
     this._layoutSaveTimer = window.setTimeout(() => {
-      if (!this._dv) return;
+      this._layoutSaveTimer = undefined;
+      if (!this.isConnected || !this._dv) return;
       const json = JSON.stringify(this._dv.toJSON());
       this.dispatchEvent(new CustomEvent('layout-save', { detail: { layout: json }, bubbles: true, composed: true }));
     }, 400);
@@ -490,19 +529,7 @@ export class MuxDock extends LitElement {
     );
   }
 
-  /**
-   * The machine the attached workspace lives on, or null when there is nothing
-   * to mark.
-   *
-   * THE ZERO-REMOTE GATE for this component. `remotesStore.any` is false until
-   * the first host-state frame arrives, and a browser with no remotes never
-   * receives one -- so on that machine this returns null, no pin is created, no
-   * dropbar is mounted and no class lands on the host element. The tab strip is
-   * the one main renders, node for node.
-   *
-   * A LOCAL workspace returns null too, and that is ux D2 rather than an
-   * optimisation: local is the norm, and the norm is unmarked.
-   */
+  /** The host connection, when the active workspace depends on one. */
   private _remoteHost(): DockHost | null {
     if (!remotesStore.any) return null;
     const { host } = parseHostRef(this.workspaceKey);
@@ -513,35 +540,25 @@ export class MuxDock extends LitElement {
     // still live must fail closed -- the same rule stateOf() follows.
     return {
       id: host,
-      name: entry?.name || host,
       state: entry?.state ?? 'never-connected',
       retryAt: entry?.retryAt,
     };
   }
 
-  /** Repaint one tab: [bell dot] [host pin] title [session state mark]. */
+  /** Repaint one tab: [bell dot] title [session state mark]. */
   private _paintTab(tabEl: HTMLElement, paneId: number, title: string): void {
     tabEl.textContent = '';
-    if (store.paneBellActive(paneId)) {
+    const bellActive = store.paneBellActive(paneId);
+    if (bellActive) {
       const bell = document.createElement('span');
       bell.className = 'mux-bell-prefix';
-      bell.textContent = '● ';
+      bell.setAttribute('aria-hidden', 'true');
       tabEl.appendChild(bell);
     }
-    // WHICH MACHINE this pane is on, before its name -- the tab strip's answer
-    // to the question the sidebar's host groups answer spatially. Dropped, the
-    // pin takes the spinner and the warn colour, so one look at the strip is
-    // enough to know which panes are still being served.
-    const host = this._remoteHost();
-    if (host) {
-      const pin = document.createElement('span');
-      const dropped = host.state !== 'connected';
-      pin.className = dropped ? 'hostpin warn' : 'hostpin';
-      pin.textContent = dropped ? `${DROP_GLYPH} ${host.name}` : host.name;
-      pin.title = dropped ? `${host.name} — ${dropLabel(host.state)}` : host.name;
-      tabEl.appendChild(pin);
-    }
-    tabEl.appendChild(document.createTextNode(title));
+    const visibleTitle = document.createElement('span');
+    visibleTitle.textContent = title;
+    visibleTitle.setAttribute('aria-hidden', 'true');
+    tabEl.appendChild(visibleTitle);
     // Bell and session mark are different questions -- "something happened here
     // while you were away" versus "this session is blocked" -- so both show.
     const session = this._sessionForPane(paneId);
@@ -550,8 +567,15 @@ export class MuxDock extends LitElement {
       mark.className = `mux-session-mark ${sessionMarkClass(session)}`;
       mark.textContent = ' ✽';
       mark.title = sessionMarkTitle(session);
+      mark.setAttribute('aria-hidden', 'true');
       tabEl.appendChild(mark);
     }
+    const spokenTitle = document.createElement('span');
+    spokenTitle.className = 'mux-tab-spoken-title';
+    spokenTitle.textContent = `${title}${bellActive ? ', new activity' : ''}${session ? `, session ${sessionMarkTitle(session)}` : ''}`;
+    tabEl.appendChild(spokenTitle);
+    tabEl.parentElement?.querySelector<HTMLButtonElement>('.dv-default-tab-action')
+      ?.setAttribute('aria-label', `Close pane ${title}`);
   }
 
   private _refreshBellTitles(): void {
@@ -593,9 +617,6 @@ export class MuxDock extends LitElement {
   private _syncDropState(): void {
     const host = this._remoteHost();
     const dropped = host !== null && host.state !== 'connected';
-    // toggle(x, false) on an absent class does not touch the attribute, so a
-    // local or zero-remote dock keeps exactly the class list it has on main.
-    this.classList.toggle('remote', host !== null);
     this.classList.toggle('dropped', dropped);
 
     if (!dropped || !host) {
@@ -748,7 +769,7 @@ export class MuxDock extends LitElement {
    * so the grid matches the box it is in.
    */
   private _refit(): void {
-    requestAnimationFrame(() => {
+    this._nextFrame(() => {
       for (const paneId of terminalRegistry.visiblePaneIds()) {
         terminalRegistry.fitIfVisible(paneId);
       }
@@ -827,15 +848,8 @@ export class MuxDock extends LitElement {
       target.appendChild(base);
     }
 
-    // Base = dockview's built-in "abyss" theme (for its flat STRUCTURE only:
-    // zero tab radius/margin, transparent sashes). We re-skin all of its COLORS
-    // to Tokyo Night below so the tab bar matches muxterm's title bar and
-    // follows VS Code's tab hierarchy:
-    //   • active tab background == terminal body (#1a1b26) → tab "merges" into
-    //     the content, the VS Code selected-tab look,
-    //   • tab bar + inactive tabs share the title bar surface (#16161e) with
-    //     dimmer text, so unselected tabs recede,
-    //   • the active tab carries a blue top accent border as the selection cue.
+    // Dockview's abyss theme supplies the flat structure. Semantic tokens supply
+    // the colors for the active tab, muted tabs, controls and resize sash.
     if (!target.querySelector(`#${STYLE_ID}`)) {
       const style = document.createElement('style');
       style.id = STYLE_ID;
@@ -858,44 +872,41 @@ export class MuxDock extends LitElement {
            entire tab strip + panel chrome follows the selected theme. */
         mux-dock .dv-dockview {
           --dv-tabs-and-actions-container-height: 44px;
-          --dv-background-color: var(--chrome-body);
+          --dv-background-color: var(--ui-surface-base);
 
-          /* Panel CONTENT background. Must equal the terminal background so the
-             few sub-character pixels left when xterm can't fill the pane to an
-             exact row height don't bleed a contrasting color. --mux-bg is set
-             by applyThemeTokens() to the palette's background colour. */
-          --dv-group-view-background-color: var(--mux-bg);
+          /* Match xterm's surface at the edges of its character grid. */
+          --dv-group-view-background-color: var(--ui-terminal-surface);
 
           /* Tab bar surface — same as the title bar so the chrome reads as one
              continuous band. */
-          --dv-tabs-and-actions-container-background-color: var(--mux-titlebar-bg, var(--chrome-bar));
+          --dv-tabs-and-actions-container-background-color: var(--ui-surface-nav);
 
           /* Active group: selected tab merges into the body, others into the bar. */
-          --dv-activegroup-visiblepanel-tab-background-color: var(--chrome-body);
-          --dv-activegroup-hiddenpanel-tab-background-color: var(--chrome-bar);
+          --dv-activegroup-visiblepanel-tab-background-color: var(--ui-surface-base);
+          --dv-activegroup-hiddenpanel-tab-background-color: var(--ui-surface-nav);
           /* Inactive group (unfocused split): same hierarchy, no extra dimming. */
-          --dv-inactivegroup-visiblepanel-tab-background-color: var(--chrome-body);
-          --dv-inactivegroup-hiddenpanel-tab-background-color: var(--chrome-bar);
+          --dv-inactivegroup-visiblepanel-tab-background-color: var(--ui-surface-base);
+          --dv-inactivegroup-hiddenpanel-tab-background-color: var(--ui-surface-nav);
 
           /* Text: selected bright, unselected dim. */
-          --dv-activegroup-visiblepanel-tab-color: var(--chrome-text-bright);
-          --dv-activegroup-hiddenpanel-tab-color: var(--chrome-text-dim);
-          --dv-inactivegroup-visiblepanel-tab-color: var(--mux-fg);
-          --dv-inactivegroup-hiddenpanel-tab-color: var(--chrome-text-dim);
+          --dv-activegroup-visiblepanel-tab-color: var(--ui-text);
+          --dv-activegroup-hiddenpanel-tab-color: var(--ui-text-muted);
+          --dv-inactivegroup-visiblepanel-tab-color: var(--ui-text);
+          --dv-inactivegroup-hiddenpanel-tab-color: var(--ui-text-muted);
 
           /* Hairline separators kept subtle. */
-          --dv-separator-border: var(--chrome-border);
-          --dv-tab-divider-color: var(--chrome-bar);
+          --dv-separator-border: var(--ui-border);
+          --dv-tab-divider-color: var(--ui-surface-nav);
 
           /* Resize sash: invisible track, accent only while dragging. */
           --dv-sash-color: transparent;
-          --dv-active-sash-color: var(--chrome-accent);
+          --dv-active-sash-color: var(--ui-accent);
         }
 
         @media (display-mode: window-controls-overlay) {
           mux-dock .dv-tabs-and-actions-container:not(.dv-groupview-header-vertical) {
             box-sizing: border-box;
-            padding-right: var(--wco-right-inset, 0px);
+            padding-right: var(--wco-right-inset, 0);
           }
           mux-dock[terminalutilityopen] .dv-tabs-and-actions-container:not(.dv-groupview-header-vertical) { padding-right:0; }
           mux-dock .dv-void-container { -webkit-app-region: drag; }
@@ -917,23 +928,24 @@ export class MuxDock extends LitElement {
           border-top: 2px solid transparent;
           flex-grow: 0 !important;   /* beats dv-single-tab full-width rule */
           flex-shrink: 0 !important; /* beats dv-tab { flex-shrink:0 } default; no compression */
-          flex-basis: var(--mux-tab-max-width, 180px);
-          padding: 0.25rem 0.5rem !important; /* restored — dv-single-tab zeros it */
-          min-width: var(--mux-tab-min-width, 80px);
-          max-width: var(--mux-tab-max-width, 180px);
+          flex-basis: var(--ui-dock-tab-width);
+          padding: var(--ui-space-2) var(--ui-space-4) !important; /* restored — dv-single-tab zeros it */
+          min-width: var(--ui-dock-tab-min-width);
+          max-width: var(--ui-dock-tab-width);
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
         mux-dock .dv-tabs-container > .dv-tab:first-child {
-          padding-inline-start: 8px !important;
+          padding-inline-start: var(--ui-space-4) !important;
         }
+        mux-dock .mux-workspace-prefix-label { overflow:hidden; text-overflow:ellipsis; }
         mux-dock:not([workspace-actions-visible]) .mux-workspace-actions {
           visibility: hidden;
           pointer-events: none;
         }
         mux-dock .dv-tab.dv-active-tab {
-          border-top: 2px solid var(--chrome-accent) !important;
+          border-top: 2px solid var(--ui-accent) !important;
         }
 
         /* Close button — show on hover + always on active tab */
@@ -946,25 +958,25 @@ export class MuxDock extends LitElement {
           align-items: center;
           justify-content: center;
           align-self: center;
-          width: 24px;
-          height: 24px;
+          width: var(--ui-control-sm);
+          height: var(--ui-control-sm);
           padding: 0;
           border: none;
-          border-radius: 4px;
+          border-radius: var(--ui-radius-sm);
           background: transparent;
-          color: var(--mux-fg);
+          color: var(--ui-text);
           cursor: pointer;
         }
         mux-dock button.dv-default-tab-action:hover {
-          background: color-mix(in srgb, var(--chrome-accent) 15%, transparent);
+          background: color-mix(in srgb, var(--ui-accent) 15%, transparent);
         }
         mux-dock button.dv-default-tab-action:focus-visible {
-          outline: 2px solid var(--chrome-accent);
+          outline: 2px solid var(--ui-accent);
           outline-offset: -2px;
           opacity: 1;
         }
         mux-dock .dv-tab .dv-default-tab-action svg {
-          fill: var(--mux-fg);
+          fill: var(--ui-text);
         }
         mux-dock .dv-tab:hover .dv-default-tab-action,
         mux-dock .dv-tab.dv-active-tab .dv-default-tab-action {
@@ -975,8 +987,8 @@ export class MuxDock extends LitElement {
             opacity: 1;
           }
           mux-dock button.dv-default-tab-action {
-            width: 44px;
-            height: 44px;
+            width: var(--ui-control-lg);
+            height: var(--ui-control-lg);
           }
         }
 
@@ -986,41 +998,46 @@ export class MuxDock extends LitElement {
           align-items: center;
           justify-content: center;
           align-self: center;
-          width: 28px;
-          height: 28px;
-          margin: 0 4px;
+          width: var(--ui-control-sm);
+          height: var(--ui-control-sm);
+          margin: 0 var(--ui-space-2);
           padding: 0;
           border: none;
-          border-radius: 4px;
+          border-radius: var(--ui-radius-sm);
           background: transparent;
-          color: var(--mux-fg);
+          color: var(--ui-text);
           cursor: pointer;
           flex-shrink: 0;
           transition: background 0.12s, color 0.12s;
         }
         mux-dock .mux-header-btn:hover {
-          background: color-mix(in srgb, var(--chrome-accent) 15%, transparent);
-          color: var(--chrome-text-bright);
+          background: color-mix(in srgb, var(--ui-accent) 15%, transparent);
+          color: var(--ui-text);
         }
         mux-dock .mux-header-btn:active {
-          background: color-mix(in srgb, var(--chrome-accent) 25%, transparent);
+          background: color-mix(in srgb, var(--ui-accent) 25%, transparent);
+        }
+        mux-dock .mux-header-btn:focus-visible,
+        mux-dock .dv-tab:focus-visible {
+          outline: 2px solid var(--ui-focus);
+          outline-offset: -2px;
         }
 
         mux-dock .mux-workspace-actions {
           display: flex;
           align-items: center;
-          gap: 4px;
-          flex: 0 0 44px;
-          width: 44px;
+          gap: var(--ui-space-2);
+          flex: 0 0 var(--ui-dock-action-rail-width);
+          width: var(--ui-dock-action-rail-width);
           height: 100%;
           box-sizing: border-box;
         }
         mux-dock .mux-workspace-launcher {
-          flex: 0 0 44px;
-          width: 44px;
-          height: 44px;
-          min-width: 44px;
-          min-height: 44px;
+          flex: 0 0 var(--ui-control-lg);
+          width: var(--ui-control-lg);
+          height: var(--ui-control-lg);
+          min-width: var(--ui-control-lg);
+          min-height: var(--ui-control-lg);
           box-sizing: border-box;
         }
         mux-dock .mux-workspace-launcher {
@@ -1029,18 +1046,18 @@ export class MuxDock extends LitElement {
           justify-content: center;
           padding: 0;
           border: 0;
-          border-radius: 6px;
+          border-radius: var(--ui-radius-md);
           background: transparent;
-          color: var(--chrome-text-bright);
+          color: var(--ui-text);
           cursor: pointer;
         }
         mux-dock .mux-workspace-launcher:hover,
         mux-dock .mux-workspace-launcher:focus-visible {
-          outline: 2px solid var(--chrome-accent);
+          outline: 2px solid var(--ui-accent);
           outline-offset: -2px;
-          background: var(--chrome-hover);
+          background: var(--ui-surface-hover);
         }
-        mux-dock .mux-utility-toggle[aria-pressed="true"] { color:var(--chrome-accent); background:var(--chrome-hover); }
+        mux-dock .mux-utility-toggle[aria-pressed="true"] { color:var(--ui-accent); background:var(--ui-surface-hover); }
 
         /* dockview's action containers shrink-wrap their button and sit at the
            header's top edge, so the 28px button is top-pinned in the 35px bar.
@@ -1055,77 +1072,46 @@ export class MuxDock extends LitElement {
 
         /* Inline tab rename input */
         mux-dock .mux-tab-rename-input {
-          background: var(--chrome-bar);
-          color: var(--chrome-text-bright);
-          border: 1px solid var(--chrome-accent);
-          border-radius: 3px;
-          padding: 0 4px;
+          background: var(--ui-surface-nav);
+          color: var(--ui-text);
+          border: 1px solid var(--ui-accent);
+          border-radius: var(--ui-radius-sm);
+          padding: 0 var(--ui-space-2);
           font: inherit;
           font-size: inherit;
           outline: none;
-          width: 100px;
-          min-width: 60px;
-          max-width: 160px;
+          width: var(--ui-dock-rename-width);
+          min-width: var(--ui-dock-rename-min-width);
+          max-width: var(--ui-dock-rename-max-width);
         }
 
-        /* Bell dot prefix on pane tabs */
+        /* Bell dot prefix on pane tabs; the spoken state is in the tab name. */
         mux-dock .mux-bell-prefix {
-          color: var(--mux-bell, #e0af68);
-          font-style: normal;
+          display: inline-block;
+          width: var(--ui-status-dot-size);
+          height: var(--ui-status-dot-size);
+          margin-right: var(--ui-space-3);
+          border-radius: var(--ui-radius-pill);
+          background: var(--ui-attention);
+          vertical-align: middle;
         }
+        mux-dock .mux-tab-spoken-title { ${visuallyHidden.cssText} }
 
         /* Per-session state mark on pane tabs. Same vocabulary as the home
            view; see sessionMarkClass(). */
         mux-dock .mux-session-mark {
           font-style: normal;
-          margin-left: 4px;
+          margin-left: var(--ui-space-2);
         }
-        mux-dock .mux-session-mark.need { color: var(--mux-warn, #e0af68); }
-        mux-dock .mux-session-mark.work { color: var(--mux-ansi-6, #7dcfff); }
-        mux-dock .mux-session-mark.done { color: var(--mux-ok, #9ece6a); }
-        mux-dock .mux-session-mark.fail { color: var(--mux-error, #f7768e); }
-        mux-dock .mux-session-mark.idle { color: var(--chrome-text-dim, #565f89); }
+        mux-dock .mux-session-mark.need { color: var(--ui-warning); }
+        mux-dock .mux-session-mark.work { color: var(--ui-info); }
+        mux-dock .mux-session-mark.done { color: var(--ui-success); }
+        mux-dock .mux-session-mark.fail { color: var(--ui-danger); }
+        mux-dock .mux-session-mark.idle { color: var(--ui-text-muted); }
 
-        /* ── Remote hosts ─────────────────────────────────────────────────
-           Nothing below this line can match on a machine with no remotes:
-           .hostpin and .dropbar are never created, and .remote/.dropped never
-           land on the host element. The rules are here, inert, rather than
-           injected on demand -- a stylesheet that appears halfway through a
-           session is a repaint nobody asked for. */
-
-        /* The pin: WHICH MACHINE, in the tab, before the name. --remote is
-           the one token the fleet added (ux D3); it plays the same "this one
-           is different" role .badge.autonomous plays in the home view. */
-        mux-dock .hostpin {
-          display: inline-block;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-          font-size: 9px;
-          font-style: normal;
-          line-height: 1.4;
-          padding: 0 4px;
-          margin-right: 5px;
-          border-radius: 3px;
-          color: var(--remote, #bb9af7);
-          background: color-mix(in srgb, var(--remote, #bb9af7) 15%, transparent);
-          border: 1px solid color-mix(in srgb, var(--remote, #bb9af7) 40%, transparent);
-          vertical-align: baseline;
-        }
-        /* Dropped, the pin stops saying "elsewhere" and starts saying
-           "unreachable", so it moves to the warn colour the whole app uses
-           for that. The wireframe did this with an inline style; a class is
-           the same picture without a style attribute per tab. */
-        mux-dock .hostpin.warn {
-          color: var(--mux-warn, #e0af68);
-          background: color-mix(in srgb, var(--mux-warn, #e0af68) 12%, transparent);
-          border-color: color-mix(in srgb, var(--mux-warn, #e0af68) 40%, transparent);
-        }
-
-        /* The active tab's top accent follows the same vocabulary. */
-        mux-dock.remote .dv-tab.dv-active-tab {
-          border-top-color: var(--remote, #bb9af7) !important;
-        }
+        /* Connection loss remains visible because the pane cannot accept input. */
         mux-dock.dropped .dv-tab.dv-active-tab {
-          border-top-color: var(--mux-warn, #e0af68) !important;
+          border-top-color: var(--ui-warning) !important;
         }
         /* Dimmed, not hidden: the panes are still running on that machine
            (sessiond owns the PTYs), so the tabs must not read as closed. */
@@ -1134,36 +1120,36 @@ export class MuxDock extends LitElement {
 
         /* The bar itself. 24px, under the tab strip, only while dropped. */
         mux-dock .dropbar {
-          height: 24px;
+          height: var(--ui-dock-dropbar-height);
           flex-shrink: 0;
           display: flex;
           align-items: center;
-          gap: 6px;
-          padding: 0 12px;
+          gap: var(--ui-space-3);
+          padding: 0 var(--ui-space-5);
           font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-          font-size: 10px;
-          color: var(--chrome-text-dim);
-          background: color-mix(in srgb, var(--mux-warn, #e0af68) 10%, var(--chrome-bar));
+          font-size: var(--ui-text-xs);
+          color: var(--ui-text-muted);
+          background: color-mix(in srgb, var(--ui-warning) 10%, var(--ui-surface-nav));
           border-bottom: 1px solid
-            color-mix(in srgb, var(--mux-warn, #e0af68) 40%, var(--chrome-border));
+            color-mix(in srgb, var(--ui-warning) 40%, var(--ui-border));
         }
         mux-dock .dropbar b {
-          color: var(--mux-warn, #e0af68);
+          color: var(--ui-warning);
           font-weight: 600;
         }
         mux-dock .dropbar .retry-btn {
           margin-left: auto;
           font: inherit;
-          padding: 1px 6px;
-          border-radius: 3px;
-          border: 1px solid var(--chrome-border);
+          padding: var(--ui-space-1) var(--ui-space-3);
+          border-radius: var(--ui-radius-sm);
+          border: 1px solid var(--ui-border);
           background: transparent;
-          color: var(--chrome-text-dim);
+          color: var(--ui-text-muted);
           cursor: pointer;
         }
         mux-dock .dropbar .retry-btn:hover {
-          border-color: var(--mux-warn, #e0af68);
-          color: var(--mux-warn, #e0af68);
+          border-color: var(--ui-warning);
+          color: var(--ui-warning);
         }
 
         /* The pane goes READ-ONLY and looks it. No copy explaining that input
@@ -1202,6 +1188,9 @@ export class MuxDock extends LitElement {
     this._dockObserver = new MutationObserver(() => this._scheduleWorkspaceActions());
     this._dockObserver.observe(dockRoot, { childList: true, subtree: true });
     this.addEventListener('dblclick', this._onTabDblClick);
+    this.addEventListener('pointerdown', this._onTabSelectionIntent, true);
+    this.addEventListener('keydown', this._onTabSelectionIntent, true);
+    this.addEventListener('click', this._onTabSelectionIntent, true);
     this._dv = new DockviewComponent(dockRoot, {
       // Total by construction: EVERY component name resolves to a
       // TerminalRenderer, `opts.name` is never inspected. dockview calls this
@@ -1216,6 +1205,7 @@ export class MuxDock extends LitElement {
         return new IntentTabRenderer(
           { targetKind: 'pane', workspaceId: this.workspaceKey, paneId },
           (target) => this._emitPaneCloseTarget(target),
+          (tabEl, id, title) => this._paintTab(tabEl, id, title),
         );
       },
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
@@ -1246,14 +1236,14 @@ export class MuxDock extends LitElement {
       // dockview tab-click handler fires BEFORE the browser finishes resolving
       // focus for the clicked tab element, so the browser steals it back. An rAF
       // defers until after the click event is fully processed.
-      requestAnimationFrame(() => terminalRegistry.focus(paneId));
+      this._nextFrame(() => terminalRegistry.focus(paneId));
       // Persist the new active selection: onDidLayoutChange does NOT fire on a
       // pure active-tab switch, so without this the saved layout keeps a stale
       // activeView and the wrong pane is selected after a refresh.
       this._scheduleLayoutSave();
     });
     this._dv.onDidRemovePanel(() => {
-      requestAnimationFrame(() => {
+      this._nextFrame(() => {
         if (this._dv) {
           this._dv.layout(this.offsetWidth, this.offsetHeight, true);
         }
@@ -1261,25 +1251,41 @@ export class MuxDock extends LitElement {
     });
 
     this._scheduleWorkspaceActions();
+    if (this.hasUpdated) {
+      this._restoreOnReconnect = true;
+      this.requestUpdate();
+    }
 
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this._focusRestoreToken++;
+    this._settingActive = false;
+    this._restoringLayout = false;
     this.removeEventListener('dblclick', this._onTabDblClick);
+    this.removeEventListener('pointerdown', this._onTabSelectionIntent, true);
+    this.removeEventListener('keydown', this._onTabSelectionIntent, true);
+    this.removeEventListener('click', this._onTabSelectionIntent, true);
     this._unsubSessions?.();
     this._unsubSessions = null;
     this._unsubRemotes?.();
     this._unsubRemotes = null;
     this._removeDropbar();
+    for (const frame of this._pendingFrames) cancelAnimationFrame(frame);
+    this._pendingFrames.clear();
     if (this._workspaceActionsFrame !== undefined) cancelAnimationFrame(this._workspaceActionsFrame);
     this._workspaceActionsFrame = undefined;
     this._dockObserver?.disconnect();
     this._dockObserver = null;
     this._workspaceActions?.remove();
     this._workspaceActions = null;
+    if (this._layoutSaveTimer !== undefined) clearTimeout(this._layoutSaveTimer);
+    this._layoutSaveTimer = undefined;
+    if (this._dv && !this.narrow && this._panels.size) this._wideLayoutSnapshot = JSON.stringify(this._dv.toJSON());
     this._dv?.dispose();
     this._dv = null;
+    this._panels.clear();
     this._dockRoot?.remove();
     this._dockRoot = null;
   }
@@ -1337,13 +1343,28 @@ export class MuxDock extends LitElement {
     if (changed.has('terminalUtilityOpen')) this.querySelector('.mux-utility-toggle')?.setAttribute('aria-pressed', String(this.terminalUtilityOpen));
     if (changed.has('workspaceActionsVisible')) this._syncWorkspaceActionVisibility();
     if (!this._dv) return;
+    const remounted = this._restoreOnReconnect;
+    this._restoreOnReconnect = false;
 
-    // Case 1: workspaceKey changed → full panel reset
-    if (changed.has('workspaceKey')) {
-      muxLog('dock case1', `workspaceKey changed`,
+    // A phone viewport presents all panes in one tab group. Rebuild on both
+    // breakpoint transitions; keeping the wide grid produces half-width
+    // terminals after a desktop split when the viewport becomes narrow.
+    if (changed.has('workspaceKey') || changed.has('narrow') || remounted) {
+      const workspaceChanged = changed.has('workspaceKey');
+      if (workspaceChanged) this._wideLayoutSnapshot = null;
+      else if (this.narrow && !remounted) this._wideLayoutSnapshot = JSON.stringify(this._dv.toJSON());
+      const restoreLayout = this.narrow ? '' : (this._wideLayoutSnapshot ?? this.layout);
+      if (this.narrow && this._layoutSaveTimer !== undefined) {
+        clearTimeout(this._layoutSaveTimer);
+        this._layoutSaveTimer = undefined;
+      }
+      muxLog('dock case1', `workspace or viewport mode changed`,
         { workspaceKey: this.workspaceKey, panes: this.panes.map(p => p.paneId),
-          activePaneId: this.activePaneId, hasLayout: !!this.layout });
+          activePaneId: this.activePaneId, hasLayout: !!restoreLayout });
+      const focusToken = ++this._focusRestoreToken;
+      let focusPending = false;
       this._settingActive = true;
+      this._restoringLayout = true;
       try {
         // Close all existing panels
         for (const [, panel] of this._panels) {
@@ -1361,11 +1382,10 @@ export class MuxDock extends LitElement {
         // single dockview group as tabs.
         const alive = new Set(this.panes.filter((p) => p.paneId >= 0).map((p) => p.paneId));
         let restored = false;
-        if (!this.narrow && this.layout) {
+        if (restoreLayout) {
           try {
-            this._restoringLayout = true;
-            muxLog('dock restore', 'calling fromJSON', { layoutLength: this.layout.length });
-            this._dv.fromJSON(JSON.parse(this.layout) as SerializedDockview);
+            muxLog('dock restore', 'calling fromJSON', { layoutLength: restoreLayout.length });
+            this._dv.fromJSON(JSON.parse(restoreLayout) as SerializedDockview);
             // Rebuild the panel map from whatever fromJSON recreated.
             this._panels.clear();
             for (const panel of this._dv.panels) {
@@ -1398,8 +1418,6 @@ export class MuxDock extends LitElement {
             restored = false;
             this._panels.clear();
             this._dv.clear();
-          } finally {
-            this._restoringLayout = false;
           }
         }
 
@@ -1422,7 +1440,7 @@ export class MuxDock extends LitElement {
           // re-activate the panel named by the saved layout's activeGroup +
           // that group's activeView. Fall back to dockview's own activePanel
           // only if the saved layout can't tell us.
-          const _fromLayout = this._activePaneIdFromSavedLayout();
+          const _fromLayout = this._activePaneIdFromSavedLayout(restoreLayout);
           const _fromDv = this._dv.activePanel?.id;
           // An explicit request outranks the saved layout: the user asked for
           // this pane by name, which is newer information than what the layout
@@ -1431,14 +1449,20 @@ export class MuxDock extends LitElement {
             this.requestedPaneId >= 0 && this._panels.has(this.requestedPaneId)
               ? String(this.requestedPaneId)
               : undefined;
+          // A viewport change is newer than the wide snapshot. Keep the pane
+          // selected on the phone when restoring split geometry on desktop.
+          const _current = !workspaceChanged && this._panels.has(this.activePaneId)
+            ? String(this.activePaneId)
+            : undefined;
           muxLog('dock restore', 'active pane resolution',
-            { requested: _requested, fromLayout: _fromLayout, fromDockview: _fromDv, storeActivePaneId: this.activePaneId });
-          const activePaneId = _requested ?? _fromLayout ?? _fromDv;
+            { requested: _requested, current: _current, fromLayout: _fromLayout, fromDockview: _fromDv, storeActivePaneId: this.activePaneId });
+          const activePaneId = _requested ?? _current ?? _fromLayout ?? _fromDv;
           if (activePaneId !== undefined) {
             const paneId = parseInt(String(activePaneId), 10);
             const panel = this._panels.get(paneId);
             muxLog('dock restore', `setActive pane=${paneId}`, { panelFound: !!panel });
             if (panel) {
+              focusPending = true;
               // setActive makes this panel's group the GLOBAL active group.
               panel.api.setActive();
             }
@@ -1454,12 +1478,19 @@ export class MuxDock extends LitElement {
             // focus-storm lands on the stale store-default pane, reverting the
             // active group. Re-activating AND focusing the restored pane after
             // those frames makes it stick (and leaves it keyboard-focused).
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
+            this._nextFrame(() => {
+              this._nextFrame(() => {
+                if (focusToken !== this._focusRestoreToken) return;
                 if (this._panels.get(paneId)?.api.setActive) {
                   this._panels.get(paneId)?.api.setActive();
                   terminalRegistry.focus(paneId);
                 }
+                // Terminal attachment may focus another group after fromJSON.
+                // Keep dockview's focus events from replacing the chosen pane
+                // until the final browser focus frame has completed.
+                this._nextFrame(() => {
+                  if (focusToken === this._focusRestoreToken) this._settingActive = false;
+                });
               });
             });
           }
@@ -1474,13 +1505,15 @@ export class MuxDock extends LitElement {
           }
         }
       } finally {
-        this._settingActive = false;
+        if (!focusPending) this._settingActive = false;
+        this._restoringLayout = false;
       }
       this._refreshBellTitles();
       // A different workspace can be on a different machine, and the layout it
       // just restored is a brand-new set of group elements -- so the bar has to
       // be re-decided and re-homed, not left pointing at the old DOM.
       this._syncDropState();
+      if (!this.narrow && !workspaceChanged && !remounted) this._scheduleLayoutSave();
       return;
     }
 
@@ -1532,11 +1565,12 @@ export class MuxDock extends LitElement {
         { panels: [...this._panels.keys()], prevActivePaneId: changed.get('activePaneId') });
       const panel = this._panels.get(this.activePaneId);
       if (panel && !panel.api.isActive) {
+        const wasSettingActive = this._settingActive;
         this._settingActive = true;
         try {
           panel.api.setActive();
         } finally {
-          this._settingActive = false;
+          this._settingActive = wasSettingActive;
         }
         // onDidActivePanelChange is suppressed while _settingActive=true, so
         // focus would never be placed in the terminal for programmatic pane
@@ -1544,7 +1578,7 @@ export class MuxDock extends LitElement {
         // rAF: same reason as onDidActivePanelChange — defer until after the
         // browser finishes resolving focus for the panel/tab element.
         const paneIdToFocus = this.activePaneId;
-        requestAnimationFrame(() => terminalRegistry.focus(paneIdToFocus));
+        this._nextFrame(() => terminalRegistry.focus(paneIdToFocus));
       }
     }
     // Bell dot updates are reactive without a direct store.subscribe() here:
@@ -1612,6 +1646,10 @@ export class MuxDock extends LitElement {
     if (this.workspaceKey !== store.attached || !store.panes.some((pane) => pane.paneId === paneId)) return false;
     const panel = this._panels.get(paneId);
     if (!panel) return false;
+    // An explicit selection supersedes any restore focus still queued across
+    // frames. Clear its suppression flag here: the canceled final frame will
+    // no longer be responsible for doing so.
+    this._focusRestoreToken++;
     if (!panel.api.isActive) {
       this._settingActive = true;
       try {
@@ -1619,7 +1657,7 @@ export class MuxDock extends LitElement {
       } finally {
         this._settingActive = false;
       }
-    }
+    } else this._settingActive = false;
     store.ackPane(paneId);
     this.dispatchEvent(
       new CustomEvent('pane-select', {
@@ -1628,7 +1666,7 @@ export class MuxDock extends LitElement {
         composed: true,
       }),
     );
-    requestAnimationFrame(() => terminalRegistry.focus(paneId));
+    this._nextFrame(() => terminalRegistry.focus(paneId));
     this._scheduleLayoutSave();
     return true;
   }
@@ -1703,8 +1741,8 @@ export class MuxDock extends LitElement {
         const panel = this._panels.get(msg.paneId);
         if (panel) {
           const tabContent = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
-            .view?.tab?.element?.querySelector('.dv-default-tab-content');
-          if (tabContent) tabContent.textContent = msg.name ?? '';
+            .view?.tab?.element?.querySelector<HTMLElement>('.dv-default-tab-content');
+          if (tabContent) this._paintTab(tabContent, msg.paneId, msg.name ?? '');
         }
         this.dispatchEvent(
           new CustomEvent('pane-rename', {

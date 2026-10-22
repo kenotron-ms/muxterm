@@ -25,48 +25,36 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
  * kept here at all.
  */
 
-import { LitElement, html, css } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
-import { store } from '../state.js';
+import { LitElement, html, css, type PropertyValues } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
+import { store, type MuxStore } from '../state.js';
 import { icon } from '../lib/icons.js';
 import { Plus, X } from 'lucide';
+import '../ui/button.js';
 
-/** DESIGN.md: U+25CF, prepended to a label with a 4px gap, in --mux-bell. */
+/** DESIGN.md: U+25CF attention mark in the semantic attention color. */
 const BELL_DOT = '●';
 /** The current-pane mark in the sheet's fixed 24px check gutter. */
 const CHECK_MARK = '✓';
 
 @customElement('mux-pane-picker')
 export class MuxPanePicker extends LitElement {
+  /** Storybook may supply an isolated session store; the app uses its shared store. */
+  @property({ attribute: false }) paneStore: MuxStore = store;
   static styles = css`
     ${subtleScrollbars}
     :host {
-      /* Derived, never invented. --edge is deliberately a heavier mix than
-         --chrome-border: the scroll edge has to out-weigh the hairline
-         between two rows, and two steps of difference is what makes it read
-         at a glance. --scrim is a TINT, not a blackout — the terminal behind
-         a non-modal surface stays visibly alive. */
-      --edge: color-mix(in srgb, var(--chrome-border) 40%, var(--chrome-text-dim));
-      --scrim: color-mix(in srgb, var(--chrome-body) 62%, transparent);
-      /* The nav-bar/icon-button floor, and the list-row height. 56 rather
-         than 44 for rows: 44 is the floor for a target you AIM at, and this
-         is a list you scan and stab at while walking. */
-      --nav-h: 44px;
-      --row-h: 56px;
-      --sheet-dur: 120ms;
-
       position: relative;
       display: flex;
       align-items: center;
       flex: 1;
       min-width: 0;
-      min-height: var(--nav-h);
+      min-height: var(--ui-control-lg);
       justify-content: flex-start;
     }
 
-    /* Narrow-only. Wide mode has the dockview tab strip and the sidebar; this
-       exists precisely because mux-dock hides its tabs below 769px. */
-    @media (min-width: 769px) {
+    /* Narrow-only. At 768px Dockview's wide tabs are visible. */
+    @media (min-width: 768px) {
       :host {
         display: none;
       }
@@ -75,16 +63,12 @@ export class MuxPanePicker extends LitElement {
     /* Someone who asked for less motion asked for less motion. The sheet
        still opens and closes — instantly. */
     @media (prefers-reduced-motion: reduce) {
-      :host {
-        --sheet-dur: 0ms;
-      }
-
       .sheet {
         transition: none;
       }
     }
 
-    button {
+    .breadcrumb {
       background: transparent;
       border: none;
       color: inherit;
@@ -92,32 +76,33 @@ export class MuxPanePicker extends LitElement {
       cursor: pointer;
       padding: 0;
     }
+    .breadcrumb:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
 
     /* ── the breadcrumb ─────────────────────────────────────────────────── */
 
     .breadcrumb {
       flex: 1;
       min-width: 0;
-      min-height: var(--nav-h);
+      min-height: var(--ui-control-lg);
       display: flex;
       align-items: center;
-      gap: 4px; /* DESIGN.md: 4px between the bell dot and its label */
-      padding: 0 6px;
-      border-radius: 8px;
-      color: var(--chrome-text-bright);
-      font-size: 0.85rem;
+      gap: var(--ui-space-2);
+      padding: 0 var(--ui-space-3);
+      border-radius: var(--ui-radius-lg);
+      color: var(--ui-text);
+      font-size: var(--ui-text-md);
       overflow: hidden;
       white-space: nowrap;
     }
 
     .breadcrumb:hover,
     .breadcrumb:active {
-      background: var(--chrome-hover);
+      background: var(--ui-surface-hover);
     }
 
     .caret {
       flex: none;
-      color: var(--chrome-text-dim);
+      color: var(--ui-text-muted);
     }
 
     .pane-name {
@@ -129,8 +114,8 @@ export class MuxPanePicker extends LitElement {
 
     .bell-dot {
       flex: none;
-      font-size: 9px;
-      color: var(--mux-bell);
+      font-size: var(--ui-attention-mark-size);
+      color: var(--ui-attention);
     }
 
     /* ── the sheet ──────────────────────────────────────────────────────── */
@@ -151,19 +136,19 @@ export class MuxPanePicker extends LitElement {
       flex-direction: column;
       overflow: hidden;
       max-height: 60dvh;
-      background: var(--chrome-bar);
-      color: var(--chrome-text-bright);
-      border: 1px solid var(--chrome-border);
+      background: var(--ui-surface-raised);
+      color: var(--ui-text);
+      border: 1px solid var(--ui-border);
       border-right: 0;
       border-bottom: 0;
       border-left: 0;
-      border-radius: 16px 16px 0 0;
-      box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+      border-radius: var(--ui-radius-xl) var(--ui-radius-xl) 0 0;
+      box-shadow: var(--ui-shadow-sheet);
       translate: 0 100%;
       transition:
-        translate var(--sheet-dur) ease,
-        display var(--sheet-dur) allow-discrete,
-        overlay var(--sheet-dur) allow-discrete;
+        translate var(--ui-motion-fast) ease,
+        display var(--ui-motion-fast) allow-discrete,
+        overlay var(--ui-motion-fast) allow-discrete;
     }
 
     .sheet:popover-open {
@@ -178,7 +163,7 @@ export class MuxPanePicker extends LitElement {
     }
 
     .sheet::backdrop {
-      background: var(--scrim);
+      background: var(--ui-backdrop-sheet);
     }
 
     /* The pinned block: grab handle, heading, "+ New pane". flex: none, so it
@@ -186,27 +171,25 @@ export class MuxPanePicker extends LitElement {
        is what makes it genuinely not scroll rather than merely appear not to. */
     .sheet-head {
       flex: none;
-      /* THE SCROLL EDGE. 2px of --edge against the 1px --chrome-border
-         hairline between two rows, so the boundary reads without waiting for
-         motion to reveal it. */
-      border-bottom: 2px solid var(--edge);
+      /* A stronger border separates the pinned action from scrollable rows. */
+      border-bottom: 2px solid var(--ui-border-strong);
     }
 
     .grab {
-      width: 36px;
-      height: 4px;
-      border-radius: 2px;
-      background: var(--chrome-text-dim);
-      margin: 8px auto 2px;
+      width: var(--ui-control-md);
+      height: var(--ui-space-2);
+      border-radius: var(--ui-radius-pill);
+      background: var(--ui-text-muted);
+      margin: var(--ui-space-4) auto var(--ui-space-1);
     }
 
     .sheet-title {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 10px;
+      font-family: var(--ui-font-mono);
+      font-size: var(--ui-text-xs);
       letter-spacing: 0.11em;
       text-transform: uppercase;
-      color: var(--chrome-text-dim);
-      padding: 6px 12px 4px;
+      color: var(--ui-text-muted);
+      padding: var(--ui-space-3) var(--ui-space-5) var(--ui-space-2);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -214,25 +197,25 @@ export class MuxPanePicker extends LitElement {
 
     /* "+ New pane" — the shared 56px action row. */
     .rowbtn {
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      display: block;
       width: 100%;
-      min-height: var(--row-h);
-      padding: 0 12px;
-      font-size: 13px;
+    }
+
+    .rowbtn::part(button) {
+      justify-content: flex-start;
+      gap: var(--ui-space-4);
+      min-height: var(--ui-row-touch);
+      padding: 0 var(--ui-space-5);
+      border: 0;
+      border-radius: 0;
       text-align: left;
-      background: color-mix(in srgb, var(--chrome-accent) 10%, transparent);
-      color: var(--chrome-accent);
+      background: color-mix(in srgb, var(--ui-accent) 10%, transparent);
+      color: var(--ui-accent);
     }
 
-    .rowbtn:hover,
-    .rowbtn:active {
-      background: color-mix(in srgb, var(--chrome-accent) 18%, transparent);
-    }
-
-    .rowbtn .lucide-icon {
-      color: var(--chrome-accent);
+    .rowbtn::part(button):hover,
+    .rowbtn::part(button):active {
+      background: color-mix(in srgb, var(--ui-accent) 18%, transparent);
     }
 
     .pane-list {
@@ -248,41 +231,53 @@ export class MuxPanePicker extends LitElement {
          thumb cannot reach, so the last row has to scroll up clear of the
          home indicator instead of resting under it — and the pinned block
          must not be shoved up by a notch it does not touch. */
-      padding-bottom: env(safe-area-inset-bottom, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0);
     }
 
     .pane-row {
       display: grid;
       /* pick | gap | 44x44 close. The gap is real estate, not decoration: a
          thumb aiming at "switch to logs" must not kill it. */
-      grid-template-columns: 1fr 8px var(--nav-h);
+      grid-template-columns: 1fr var(--ui-space-4) var(--ui-control-lg);
       align-items: center;
-      min-height: var(--row-h);
-      padding-right: 6px;
-      border-bottom: 1px solid var(--chrome-border);
+      min-height: var(--ui-row-touch);
+      padding-right: var(--ui-space-3);
+      border-bottom: 1px solid var(--ui-border);
     }
 
     .pane-item {
       min-width: 0;
-      min-height: var(--row-h);
       display: flex;
-      align-items: center;
-      gap: 4px;
-      text-align: left;
-      font-size: 13px;
-      color: var(--chrome-text-bright);
+      width: 100%;
     }
 
-    .pane-item:hover,
-    .pane-item:active {
-      background: var(--chrome-hover);
+    .pane-item::part(button) {
+      min-width: 0;
+      min-height: var(--ui-row-touch);
+      justify-content: flex-start;
+      align-items: center;
+      gap: var(--ui-space-2);
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      text-align: left;
+      font-size: var(--ui-text-md);
+      font-weight: 400;
+      color: var(--ui-text);
+    }
+
+    .pane-item.active::part(button) { background:color-mix(in srgb,var(--ui-accent) 10%,transparent); }
+
+    .pane-item::part(button):hover,
+    .pane-item::part(button):active {
+      background: var(--ui-surface-hover);
     }
 
     .check {
       flex: none;
-      width: 24px; /* the fixed 24px check gutter */
+      width: var(--ui-space-8);
       text-align: center;
-      color: var(--chrome-accent);
+      color: var(--ui-accent);
     }
 
     .pane-label {
@@ -294,19 +289,19 @@ export class MuxPanePicker extends LitElement {
     }
 
     .row-close {
-      width: var(--nav-h);
-      height: var(--nav-h);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 8px;
-      color: var(--chrome-text-dim);
+      width: var(--ui-control-lg);
+      height: var(--ui-control-lg);
     }
 
-    .row-close:hover,
-    .row-close:active {
-      color: var(--chrome-danger);
-      background: var(--chrome-hover);
+    .row-close::part(button) {
+      border-radius: var(--ui-radius-lg);
+      color: var(--ui-text-muted);
+    }
+
+    .row-close::part(button):hover,
+    .row-close::part(button):active {
+      color: var(--ui-danger-text);
+      background: var(--ui-surface-hover);
     }
 
     .lucide-icon {
@@ -315,20 +310,26 @@ export class MuxPanePicker extends LitElement {
       flex-shrink: 0;
     }
 
-    button .lucide-icon {
-      pointer-events: none;
-    }
   `;
 
   @state() private _version = 0;
 
   private _unsubscribe: (() => void) | null = null;
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this._unsubscribe = store.subscribe(() => {
+  private _subscribeStore(): void {
+    this._unsubscribe?.();
+    this._unsubscribe = this.paneStore.subscribe(() => {
       this._version++;
     });
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this._subscribeStore();
+  }
+
+  protected override updated(changed: PropertyValues<this>): void {
+    if (this.isConnected && changed.has('paneStore')) this._subscribeStore();
   }
 
   override disconnectedCallback(): void {
@@ -351,7 +352,7 @@ export class MuxPanePicker extends LitElement {
 
   private _selectPane(paneId: number): void {
     this._closeSheet();
-    store.ackPane(paneId);
+    this.paneStore.ackPane(paneId);
     this.dispatchEvent(
       new CustomEvent('pane-select', {
         detail: { paneId },
@@ -394,15 +395,14 @@ export class MuxPanePicker extends LitElement {
     // dependency so store subscription bumps trigger re-renders.
     void this._version;
 
-    const { panes, activePaneId, attached } = store;
+    const { panes, activePaneId, attached } = this.paneStore;
     const validPanes = panes.filter((p) => p.paneId >= 0);
-    const activePane = validPanes.find((p) => p.paneId === activePaneId);
+    const activePane = validPanes.find((p) => p.paneId === activePaneId) ?? validPanes[0];
 
     // Active pane display name.
-    const activePaneName =
-      activePane?.title ?? (activePaneId >= 0 ? `Pane ${activePaneId}` : '—');
+    const activePaneName = activePane?.title ?? (activePane ? `Pane ${activePane.paneId}` : '—');
 
-    const activeBell = activePaneId >= 0 && store.paneBellActive(activePaneId);
+    const activeBell = activePane ? this.paneStore.paneBellActive(activePane.paneId) : false;
 
     return html`
       <button
@@ -413,42 +413,40 @@ export class MuxPanePicker extends LitElement {
       >
         ${activeBell ? html`<span class="bell-dot">${BELL_DOT}</span>` : ''}
         <span class="pane-name">${activePaneName}</span>
-        <span class="caret">▾</span>
+        <span class="caret" aria-hidden="true">▾</span>
       </button>
 
       <div id="pane-sheet" class="sheet" popover="auto" aria-label="Panes">
         <div class="sheet-head">
           <div class="grab"></div>
           <div class="sheet-title">Panes</div>
-          <button class="rowbtn" type="button" @click="${this._createPane}">
-            ${icon(Plus, { size: 18 })}<span>New pane</span>
-          </button>
+          <mux-ui-button class="rowbtn" variant="quiet" full-width @click="${this._createPane}">
+            <span slot="leading">${icon(Plus, { size: 18 })}</span>New pane
+          </mux-ui-button>
         </div>
         <div class="pane-list">
           ${validPanes.map((p) => {
-            const isActive = p.paneId === activePaneId;
-            const hasBell = store.paneBellActive(p.paneId);
+            const isActive = p.paneId === activePane?.paneId;
+            const hasBell = this.paneStore.paneBellActive(p.paneId);
             const label = p.title ?? `Pane ${p.paneId}`;
             return html`
               <div class="pane-row">
-                <button
-                  type="button"
+                <mux-ui-button
                   class="pane-item ${isActive ? 'active' : ''}"
-                  aria-label="Switch to pane ${label}"
+                  variant="quiet" full-width toggle .pressed=${isActive}
+                  accessible-label="Switch to pane ${label}${hasBell ? ', needs attention' : ''}"
                   @click="${() => this._selectPane(p.paneId)}"
                 >
-                  <span class="check">${isActive ? CHECK_MARK : ''}</span>
-                  ${hasBell ? html`<span class="bell-dot">${BELL_DOT}</span>` : ''}
+                  <span class="check" aria-hidden="true">${isActive ? CHECK_MARK : ''}</span>
+                  ${hasBell ? html`<span class="bell-dot" aria-hidden="true">${BELL_DOT}</span>` : ''}
                   <span class="pane-label">${label}</span>
-                </button>
+                </mux-ui-button>
                 <span></span>
-                <button
-                  type="button"
-                  class="row-close pane-close"
-                  aria-label="Close pane ${label}"
-                  title="Close pane"
+                <mux-ui-button
+                  class="row-close pane-close" icon-only size="large" variant="quiet" tone="muted"
+                  accessible-label="Close pane ${label}" tooltip="Close pane"
                   @click="${(e: Event) => this._closePane(e, attached, p.paneId)}"
-                >${icon(X, { size: 16 })}</button>
+                >${icon(X, { size: 16 })}</mux-ui-button>
               </div>
             `;
           })}

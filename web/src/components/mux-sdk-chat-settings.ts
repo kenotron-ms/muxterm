@@ -3,6 +3,15 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
+import '../ui/choice-item.js';
+import '../ui/choice-list.js';
+import '../ui/choice-picker.js';
+import '../ui/choice-section.js';
+import '../ui/feedback.js';
+import '../ui/button.js';
+import type { MuxUIRangeField } from '../ui/range-field.js';
+import '../ui/range-field.js';
+import '../ui/switch.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
 type ModeOption = { name: string; description?: string; source?: string };
@@ -24,58 +33,13 @@ export class MuxSDKChatSettings extends LitElement {
   @state() private loading = false;
   @state() private error = '';
   private requestVersion = 0;
-  private readonly closePickersOnOutsidePointer = (event: PointerEvent) => {
-    const path = event.composedPath();
-    this.renderRoot.querySelectorAll<HTMLDetailsElement>('.picker[open]').forEach(picker => {
-      if (!path.includes(picker)) picker.open = false;
-    });
-  };
-  override connectedCallback() {
-    super.connectedCallback();
-    document.addEventListener('pointerdown', this.closePickersOnOutsidePointer);
-  }
-  override disconnectedCallback() {
-    document.removeEventListener('pointerdown', this.closePickersOnOutsidePointer);
-    super.disconnectedCallback();
-  }
   static styles = css`
     ${subtleScrollbars}
-    :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:8px; font:12px/1.4 system-ui,sans-serif; }
-    .picker { position:relative; min-width:0; }
+    :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:var(--ui-space-4); font:var(--ui-text-sm)/1.4 var(--ui-font-sans); }
+    .picker { min-width:0; }
     .model-picker { margin-left:auto; }
-    summary { display:flex; align-items:center; height:32px; max-width:min(290px,40vw); box-sizing:border-box; padding:0 10px; border:1px solid transparent; border-radius:10px; color:var(--chrome-text-bright,#d9def0); cursor:pointer; list-style:none; white-space:nowrap; }
-    summary::-webkit-details-marker { display:none; }
-    summary:hover, summary:focus-visible, details[open] summary { background:var(--chrome-hover); border-color:var(--chrome-border,#41485f); outline:none; }
-    .summary-text { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-    .panel { position:absolute; z-index:30; bottom:40px; width:min(350px,calc(100vw - 44px)); max-height:min(72vh,640px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--chrome-border,#41485f); border-radius:16px; background:var(--chrome-bar,#202632); box-shadow:0 20px 60px rgba(0,0,0,.45); }
-    .permission-picker .panel { left:0; }
-    .model-picker .panel { right:0; }
-    .heading { padding:9px 10px 5px; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
-    .divider { height:1px; margin:7px 5px; background:var(--chrome-border,#41485f); }
-    .choice { display:flex; align-items:center; gap:9px; width:100%; min-height:37px; border:0; border-radius:9px; padding:7px 10px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:inherit; text-align:left; cursor:pointer; }
-    .choice:hover:not(:disabled), .choice:focus-visible { background:var(--chrome-hover); outline:none; }
-    .choice.selected { background:color-mix(in srgb,var(--chrome-accent,#9bb8f7) 15%,transparent); }
-    .choice:disabled { opacity:.46; cursor:default; }
-    .choice-main { display:grid; gap:2px; min-width:0; flex:1; }
-    .choice-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .hint { color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .check { color:var(--chrome-accent,#9bb8f7); font-weight:700; }
-    .group { margin:2px 4px 8px; }
-    .model-list { max-height:190px; overflow-y:auto; }
-    .slider { padding:4px 10px 13px; }
-    .slider-header { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
-    input[type=range] { width:100%; margin:12px 0 4px; accent-color:var(--chrome-accent,#9bb8f7); cursor:pointer; }
-    .slider-ends { display:flex; justify-content:space-between; color:var(--chrome-text-dim,#9aa3b8); font-size:10px; }
-    .notice { padding:9px 10px; color:var(--chrome-text-dim,#9aa3b8); font-size:11px; }
-    .error { color:var(--chrome-danger); padding:7px 10px; overflow-wrap:anywhere; }
-    .busy { opacity:.55; }
-    .operator-choice { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; border:0; border-radius:9px; padding:10px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:inherit; text-align:left; cursor:pointer; }
-    .operator-choice:hover,.operator-choice:focus-visible { background:var(--chrome-hover); outline:none; }
-    .operator-choice:disabled { opacity:.5; cursor:default; }
-    .switch { flex:none; width:30px; height:18px; box-sizing:border-box; border-radius:99px; padding:3px; background:var(--chrome-border,#41485f); }
-    .switch::after { content:''; display:block; width:12px; height:12px; border-radius:50%; background:var(--chrome-text-bright,#d9def0); transition:transform .15s; }
-    .operator-choice[aria-checked="true"] .switch { background:var(--chrome-accent,#9bb8f7); }
-    .operator-choice[aria-checked="true"] .switch::after { transform:translateX(12px); background:var(--chrome-bar,#202632); }
+    .group { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
+    .load-feedback { flex:1; }
   `;
   override updated(changed: Map<string, unknown>) {
     if (changed.has('sessionId') && this.sessionId) { this.settings = undefined; this.error = ''; void this.load(this.sessionId); }
@@ -83,13 +47,13 @@ export class MuxSDKChatSettings extends LitElement {
   private pending(value: boolean) { this.dispatchEvent(new CustomEvent('settings-pending', { detail:value, bubbles:true, composed:true })); }
   private async load(sessionId: string) {
     const version = ++this.requestVersion;
-    this.loading = true;
+    this.loading = true; this.error = '';
     try {
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/settings`));
       if (!response.ok) throw new Error(await response.text());
       const settings = await response.json() as Settings;
       if (this.sessionId === sessionId && this.requestVersion === version) this.settings = settings;
-    } catch (error) { if (this.sessionId === sessionId && this.requestVersion === version) this.error = String(error); }
+    } catch (error) { if (this.sessionId === sessionId && this.requestVersion === version) this.error = error instanceof Error ? error.message : String(error); }
     finally { if (this.requestVersion === version) this.loading = false; }
   }
   private async select(change: Record<string, string>) {
@@ -100,7 +64,7 @@ export class MuxSDKChatSettings extends LitElement {
       if (!response.ok) throw new Error(await response.text());
       this.settings = await response.json() as Settings;
       this.dispatchEvent(new CustomEvent('settings-changed', { detail:this.settings, bubbles:true, composed:true }));
-    } catch (error) { this.error = String(error); }
+    } catch (error) { this.error = error instanceof Error ? error.message : String(error); }
     finally { this.loading = false; this.pending(false); }
   }
   private async toggleOperator() {
@@ -113,7 +77,7 @@ export class MuxSDKChatSettings extends LitElement {
     finally { this.loading = false; }
   }
   private operatorControl() {
-    return html`<div class="divider"></div><div class="heading">Operator</div><button class="operator-choice" role="switch" aria-label="Operator mode" aria-checked=${this.operator ? 'true' : 'false'} ?disabled=${this.loading} @click=${() => void this.toggleOperator()}><span class="choice-main"><span class="choice-name">Operator mode</span><span class="hint">Coordinate other chats as lanes</span></span><span class="switch" aria-hidden="true"></span></button>`;
+    return html`<mux-ui-choice-section heading="Operator" separated><mux-ui-switch layout="row" label="Operator mode" description="Coordinate other chats as lanes" .checked=${this.operator} ?disabled=${this.loading} @change=${() => void this.toggleOperator()}></mux-ui-switch></mux-ui-choice-section>`;
   }
   /** Amplifier has no permission switch to offer -- its tool access comes from
    *  the composed bundle. What it does have, and nothing else exposed, is its
@@ -122,21 +86,21 @@ export class MuxSDKChatSettings extends LitElement {
     const active = s.mode || '';
     const options = s.modeOptions || [];
     return html`
-      <details class="picker permission-picker" aria-label="Amplifier mode and operator"><summary><span class="summary-text">${modeLabel(active)}${this.operator ? ' · Operator' : ''}</span></summary><div class="panel">
-        <div class="heading">Mode</div>
-        ${this.choice('Default', 'No overlay — the bundle exactly as composed', active === '', true, () => void this.select({ mode:'' }))}
-        ${options.map(option => this.choice(modeLabel(option.name), option.description || '', active === option.name, true, () => void this.select({ mode:option.name })))}
-        ${options.length ? nothing : html`<div class="notice">This bundle composes no modes.</div>`}
+      <mux-ui-choice-picker class="picker permission-picker" label="Amplifier mode and operator" .summary=${`${modeLabel(active)}${this.operator ? ' · Operator' : ''}`} placement="above" appearance="plain" panel-align="left">
+        <mux-ui-choice-section heading="Mode" .description=${options.length ? '' : 'This bundle composes no modes.'}>
+          ${this.choice('Default', 'No overlay — the bundle exactly as composed', active === '', true, () => void this.select({ mode:'' }))}
+          ${options.map(option => this.choice(modeLabel(option.name), option.description || '', active === option.name, true, () => void this.select({ mode:option.name })))}
+        </mux-ui-choice-section>
         ${this.operatorControl()}
-        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-      </div></details>`;
+        ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
+      </mux-ui-choice-picker>`;
   }
   private choice(name: string, hint: string, selected: boolean, available: boolean, action: () => void) {
-    return html`<button class="choice ${selected ? 'selected' : ''}" ?disabled=${!available || this.loading || this.turnBusy} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span><span class="hint">${available ? hint : 'Unavailable for this harness'}</span></span>${selected ? html`<span class="check">✓</span>` : nothing}</button>`;
+    return html`<mux-ui-choice-item .label=${name} .description=${available ? hint : 'Unavailable for this harness'} ?selected=${selected} ?disabled=${!available || this.loading || this.turnBusy} @click=${action}></mux-ui-choice-item>`;
   }
   override render() {
     const s = this.settings;
-    if (!s) return html`<span class="notice ${this.error ? 'error' : ''}">${this.error || 'Loading controls…'}</span>`;
+    if (!s) return html`<mux-ui-feedback class="load-feedback" kind=${this.error ? 'error' : 'loading'} density="compact">${this.error || 'Loading controls…'}${this.error ? html`<mux-ui-button slot="action" size="small" @click=${() => void this.load(this.sessionId)}>Retry</mux-ui-button>` : nothing}</mux-ui-feedback>`;
     const model = s.models.find(item => item.id === s.model);
     const models = model ? s.models : s.model ? [{ id:s.model, label:s.model, efforts:[] }, ...s.models] : s.models;
     const efforts = model?.efforts || [];
@@ -145,21 +109,27 @@ export class MuxSDKChatSettings extends LitElement {
     const mode = s.mode || 'agent';
     return html`
       ${this.harness === 'amplifier' ? this.modePicker(s) : html`
-      <details class="picker permission-picker" aria-label="Permission, mode and operator"><summary><span class="summary-text">${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}${this.operator ? ' · Operator' : ''}</span></summary><div class="panel">
-        <div class="heading">Permission</div>
-        ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
-        <div class="divider"></div><div class="heading">Mode</div>
-        ${this.choice('Agent', 'Work with the selected permission', mode === 'agent', s.modes.includes('agent') && (this.harness !== 'claude' || permission !== 'read-only'), () => void this.select({ mode:'agent' }))}
-        ${this.choice('Plan', 'Explore and prepare a plan', mode === 'plan', s.modes.includes('plan') && (this.harness !== 'claude' || permission === 'read-only'), () => void this.select({ mode:'plan' }))}
+      <mux-ui-choice-picker class="picker permission-picker" label="Permission, mode and operator" .summary=${`${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}${this.operator ? ' · Operator' : ''}`} placement="above" appearance="plain" panel-align="left">
+        <mux-ui-choice-section heading="Permission">
+          ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
+        </mux-ui-choice-section>
+        <mux-ui-choice-section heading="Mode" separated>
+          ${this.choice('Agent', 'Work with the selected permission', mode === 'agent', s.modes.includes('agent') && (this.harness !== 'claude' || permission !== 'read-only'), () => void this.select({ mode:'agent' }))}
+          ${this.choice('Plan', 'Explore and prepare a plan', mode === 'plan', s.modes.includes('plan') && (this.harness !== 'claude' || permission === 'read-only'), () => void this.select({ mode:'plan' }))}
+        </mux-ui-choice-section>
         ${this.operatorControl()}
-        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-      </div></details>`}
-      <details class="picker model-picker" aria-label="Provider, model and thinking"><summary><span class="summary-text">${model?.label || s.model || this.harness}</span></summary><div class="panel">
-        ${this.harness === 'amplifier' ? html`<div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${this.harness}</div>`}
-        <div class="divider"></div><div class="heading">Model</div>
-        <div class="model-list">${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}</div>
-        ${efforts.length > 1 ? html`<div class="divider"></div><div class="slider"><div class="slider-header"><span>Thinking</span><span>${efforts[effortIndex]}</span></div><input type="range" aria-label="Thinking effort" min="0" max=${efforts.length - 1} step="1" .value=${String(effortIndex)} ?disabled=${this.loading || this.turnBusy} @change=${(event: Event) => void this.select({ effort:efforts[Number((event.target as HTMLInputElement).value)] })}><div class="slider-ends"><span>${efforts[0]}</span><span>${efforts[efforts.length - 1]}</span></div></div>` : nothing}
-        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-      </div></details>`;
+        ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
+      </mux-ui-choice-picker>`}
+      <mux-ui-choice-picker class="picker model-picker" label="Provider, model and thinking" .summary=${model?.label || s.model || this.harness} placement="above" appearance="plain" panel-align="right">
+        ${this.harness === 'amplifier' ? html`
+          <mux-ui-choice-section heading="Bundle">${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}</mux-ui-choice-section>
+          <mux-ui-choice-section heading="Provider" separated>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}</mux-ui-choice-section>
+        ` : html`<mux-ui-choice-section heading="Provider" .description=${`${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${this.harness}`}></mux-ui-choice-section>`}
+        <mux-ui-choice-section heading="Model" separated>
+          <mux-ui-choice-list>${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<mux-ui-feedback kind="empty" density="compact">No models advertised by this harness.</mux-ui-feedback>`}</mux-ui-choice-list>
+        </mux-ui-choice-section>
+        ${efforts.length > 1 ? html`<mux-ui-choice-section separated><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} ?disabled=${this.loading || this.turnBusy} @change=${(event:Event) => void this.select({ effort:efforts[(event.target as MuxUIRangeField).value] })}></mux-ui-range-field></mux-ui-choice-section>` : nothing}
+        ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
+      </mux-ui-choice-picker>`;
   }
 }

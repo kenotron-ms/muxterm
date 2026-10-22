@@ -285,6 +285,13 @@ export class MuxStore {
           title: msg.title,
           clientRef: msg.clientRef,
         });
+        // A new workspace arrives as an empty Composition, then its first
+        // pane arrives separately. The Composition leaves activePaneId at the
+        // no-pane sentinel; make the first authoritative pane the active one
+        // so the title bar, voice target, and visible dock agree immediately.
+        if (!this._panes.some((pane) => pane.paneId === this._activePaneId && pane.paneId >= 0)) {
+          this._activePaneId = this._panes.find((pane) => pane.paneId >= 0)?.paneId ?? 0;
+        }
         break;
       }
 
