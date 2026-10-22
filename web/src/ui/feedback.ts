@@ -4,6 +4,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 export type FeedbackKind = 'empty' | 'loading' | 'info' | 'success' | 'warning' | 'error';
 export type FeedbackAppearance = 'plain' | 'panel';
 export type FeedbackDensity = 'regular' | 'compact';
+export type FeedbackLayout = 'stacked' | 'inline';
 
 /** A consistent place for empty, loading, success, and error messages. */
 @customElement('mux-ui-feedback')
@@ -11,6 +12,7 @@ export class MuxUIFeedback extends LitElement {
   @property({ reflect: true }) kind: FeedbackKind = 'empty';
   @property({ reflect: true }) appearance: FeedbackAppearance = 'plain';
   @property({ reflect: true }) density: FeedbackDensity = 'regular';
+  @property({ reflect: true }) layout: FeedbackLayout = 'stacked';
   @property({ reflect: true }) align: 'start' | 'center' = 'start';
   @state() private hasAction = false;
 
@@ -52,6 +54,15 @@ export class MuxUIFeedback extends LitElement {
     }
     :host([kind='loading']) .spinner { display: block; }
     .action { margin-top: var(--ui-space-5); }
+    :host([layout='inline']) { container-type:inline-size; }
+    :host([layout='inline']) .body { display:flex; align-items:center; gap:var(--ui-space-5); }
+    :host([layout='inline']) .content { flex:1; min-width:0; }
+    :host([layout='inline']) .message { overflow-wrap:anywhere; }
+    :host([layout='inline']) .action { flex:none; margin-top:0; }
+    @container (max-width: 380px) {
+      :host([layout='inline']) .body { flex-direction:column; align-items:stretch; }
+      :host([layout='inline']) .action { align-self:flex-end; }
+    }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 1.5s; } }
   `;
@@ -62,7 +73,7 @@ export class MuxUIFeedback extends LitElement {
 
   override render() {
     const role = this.kind === 'error' || this.kind === 'warning' ? 'alert' : this.kind === 'success' || this.kind === 'loading' ? 'status' : nothing;
-    return html`<div role=${role} aria-busy=${this.kind === 'loading' ? 'true' : nothing}>
+    return html`<div class="body" role=${role} aria-busy=${this.kind === 'loading' ? 'true' : nothing}>
       <div class="content"><span class="spinner" aria-hidden="true"></span><div class="message"><slot></slot></div></div>
       <div class="action" ?hidden=${!this.hasAction}><slot name="action" @slotchange=${this.onActionSlotChange}></slot></div>
     </div>`;

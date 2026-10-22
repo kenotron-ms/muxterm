@@ -90,6 +90,7 @@
   --ui-z-reconnect-overlay: 3000;
   --ui-toast-offset: var(--ui-space-9);
   --ui-toast-min-width: 240px;
+  --ui-shell-notice-max-width: 520px;
   --ui-dialog-width: 600px;
   --ui-dialog-compact-width: 520px;
   --ui-dialog-height: 640px;

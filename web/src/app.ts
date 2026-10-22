@@ -2,6 +2,7 @@ import { subtleScrollbars } from './lib/subtle-scrollbars.js';
 import './ui/tokens.css';
 import './ui/dialog.js';
 import './ui/button.js';
+import './ui/feedback.js';
 import { LitElement, html, css } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
@@ -229,37 +230,19 @@ export class MuxApp extends LitElement {
       display: none;
     }
 
-    .close-alert-stack {
+    .shell-feedback-stack {
       position: fixed;
-      top: 16px;
+      top: calc(var(--ui-nav-height) + var(--ui-space-4));
       left: 50%;
       transform: translateX(-50%);
       display: flex;
       flex-direction: column;
       gap: var(--ui-space-4);
-      width: min(560px, calc(100vw - 24px));
+      width: min(var(--ui-shell-notice-max-width), calc(100vw - var(--ui-space-8)));
       z-index: var(--ui-z-alert-stack);
     }
 
-    .close-alert {
-      display: flex;
-      align-items: center;
-      gap: var(--ui-space-5);
-      padding: var(--ui-space-4) var(--ui-space-5);
-      border: 1px solid var(--ui-danger);
-      border-radius: var(--ui-radius-md);
-      background: var(--ui-surface-base);
-      color: var(--ui-text);
-      box-shadow: var(--ui-shadow-menu);
-      font-size: var(--ui-text-md);
-    }
-
-    .close-alert span {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .close-alert mux-ui-button { flex-shrink:0; }
+    .shell-feedback-stack mux-ui-feedback { box-shadow:var(--ui-shadow-menu); }
 
     /* The shared native dialog owns overlay geometry and focus. */
     .overlay-body {
@@ -1490,32 +1473,34 @@ export class MuxApp extends LitElement {
           `
         : ''}
 
-      <div class="close-alert-stack" aria-live="polite">
+      <div class="shell-feedback-stack" aria-live="polite">
         ${this._dispatchAlert
           ? html`
-              <div class="close-alert" role="alert">
-                <span>${this._dispatchAlert.message} Your prompt:
-                  "${this._dispatchAlert.prompt}"</span>
+              <mux-ui-feedback kind="error" appearance="panel" density="compact" layout="inline">
+                ${this._dispatchAlert.message} Your prompt:
+                  "${this._dispatchAlert.prompt}"
                 <mux-ui-button
+                  slot="action"
                   size="small"
                   accessible-label="Dismiss session start error"
                   @click="${() => {
                     this._dispatchAlert = null;
                   }}"
                 >Dismiss</mux-ui-button>
-              </div>
+              </mux-ui-feedback>
             `
           : ''}
         ${[...this._closeAlerts.entries()].map(
           ([key, alert]) => html`
-            <div class="close-alert" role="alert">
-              <span>${alert.message}</span>
+            <mux-ui-feedback kind="error" appearance="panel" density="compact" layout="inline">
+              ${alert.message}
               <mux-ui-button
+                slot="action"
                 size="small"
                 accessible-label="Dismiss close error"
                 @click="${() => this._dismissCloseAlert(key)}"
               >Dismiss</mux-ui-button>
-            </div>
+            </mux-ui-feedback>
           `,
         )}
       </div>
