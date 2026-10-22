@@ -399,38 +399,32 @@ export const EmbeddedPhoneChat: Story = {
     <div style="position:relative;flex:1;min-height:0"><mux-sdk-chat .sessionId=${args.sessionId} .compact=${args.compact}></mux-sdk-chat></div>
   </div>`,
 };
-const openLedger = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+const openGoalTab = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   await sdkChats.refresh();
   const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
   await chat?.updateComplete;
-  chat?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Open goal ledger"]')?.click();
-};
-export const GoalLedger: Story = {
-  args:{sessionId:'storybook-chat-goal'},
-  parameters:{apiFixture:chatFixture('storybook-chat-goal','ready','active')},
-  play:openLedger,
+  await chat?.navigateUI('tab',undefined,'goal');
 };
 export const GoalRail: Story = {
   args:{sessionId:'storybook-chat-goal-rail'},
   parameters:{apiFixture:chatFixture('storybook-chat-goal-rail','ready','active')},
 };
+export const GoalTab: Story = {
+  args:{sessionId:'storybook-chat-goal-tab'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goal-tab','ready','active')},
+  play:openGoalTab,
+};
 export const GoalRailCleared: Story = {
   args:{sessionId:'storybook-chat-goal-rail-cleared'},
   parameters:{apiFixture:chatFixture('storybook-chat-goal-rail-cleared','ready','cleared')},
 };
-export const GoalPendingProposal: Story = {
-  args:{sessionId:'storybook-chat-proposal'},
-  parameters:{apiFixture:chatFixture('storybook-chat-proposal','ready','proposal')},
-  play:openLedger,
+export const GoalProposal: Story = {
+  args:{sessionId:'storybook-chat-goal-proposal'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goal-proposal','ready','proposal')},
 };
-export const PhoneGoalEditor: Story = {
+export const PhoneGoalTab: Story = {
   args:{sessionId:'storybook-chat-phone-goal'},
   globals:{viewport:{value:'phone390',isRotated:false}},
   parameters:{apiFixture:chatFixture('storybook-chat-phone-goal','ready','active')},
-  play:async (context) => {
-    await openLedger(context);
-    const chat = context.canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
-    await chat?.updateComplete;
-    chat?.shadowRoot?.querySelector<HTMLElement>('.goal-edit-action')?.click();
-  },
+  play:openGoalTab,
 };

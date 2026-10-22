@@ -12,7 +12,9 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import '../ui/button.js';
 import '../ui/feedback.js';
 import '../ui/filter-chip.js';
+import '../ui/select.js';
 import '../ui/status-badge.js';
+import type { MuxUISelect } from '../ui/select.js';
 import type { StatusTone } from '../ui/status-badge.js';
 import { visuallyHidden } from '../ui/visually-hidden.js';
 
@@ -51,6 +53,7 @@ export class MuxOperatorStatus extends LitElement {
     .summary { margin:0 0 var(--ui-space-5); color:var(--ui-text-muted); font-variant-numeric:tabular-nums; }
     .summary strong { color:var(--ui-text); font-weight:650; }
     .summary .sep { padding:0 var(--ui-space-3); color:var(--ui-border); }
+    .add-lane { display:block; max-width:var(--ui-operator-summary-width); margin-bottom:var(--ui-space-5); }
     .filters { display:flex; flex-wrap:wrap; gap:var(--ui-space-3); margin:0 0 var(--ui-space-5); }
     mux-ui-feedback { margin-bottom:var(--ui-space-5); }
     mux-ui-feedback .hint { margin-top:var(--ui-space-3); }
@@ -167,6 +170,19 @@ export class MuxOperatorStatus extends LitElement {
     } catch (error) { if (this.sessionId === operatorId) this.error = `Could not unlink lane: ${String(error)}`; }
     finally { this.pendingLane = ''; void this.load(); }
   }
+  private async link(laneId: string) {
+    if (!laneId || this.pendingLane) return;
+    const operatorId = this.sessionId;
+    const operator = this.snapshot?.operator;
+    if (!operator) return;
+    this.requestVersion++;
+    this.pendingLane = laneId;
+    this.error = '';
+    try {
+      await sdkChats.operator(operatorId,{laneIds:[...new Set([...(operator.operatorLanes || []),laneId])]});
+    } catch (error) { if (this.sessionId === operatorId) this.error = `Could not link lane: ${String(error)}`; }
+    finally { this.pendingLane = ''; void this.load(); }
+  }
   private async setArchived(lane: SDKChat, archived: boolean) {
     if (this.pendingLane) return;
     const operatorId = this.sessionId;
@@ -278,11 +294,14 @@ export class MuxOperatorStatus extends LitElement {
     const working = lanes.filter(chat => chat.state === 'working' || chat.state === 'starting').length;
     const done = lanes.filter(chat => chat.state === 'ready' && !this.isStopped(chat)).length;
     const visible = lanes.filter(chat => this.filter === 'all' || (this.filter === 'attention' ? this.needsAttention(chat) : this.filter === 'running' ? chat.state === 'working' || chat.state === 'starting' : chat.state === 'ready' && !this.isStopped(chat)));
+    const linkedIds = new Set(sdkChats.chats.filter(chat => chat.operator).flatMap(chat => chat.operatorLanes || []));
+    const availableLanes = sdkChats.chats.filter(chat => chat.id !== this.sessionId && !chat.operator && !chat.archived && !linkedIds.has(chat.id));
     if (operator && !operator.operator) return html`${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}${this.checklist(operator)}`;
     return html`<div class="head"><h2>Operator status</h2><p>Lane work, timing ranges, and latest replies.</p></div>
       ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
       ${!operator ? this.error ? nothing : html`<mux-ui-feedback kind="loading" align="center">Loading operator status…</mux-ui-feedback>` : !operator.operator ? html`<mux-ui-feedback appearance="panel" align="center"><strong>Operator mode is off.</strong><p class="hint">Turn it on from the permission and mode menu in the chat composer.</p></mux-ui-feedback>` : html`
         <p class="summary"><strong>${lanes.length}</strong> lanes<span class="sep">/</span><strong>${working}</strong> working<span class="sep">/</span><strong>${attention}</strong> need attention</p>
+        ${availableLanes.length ? html`<mux-ui-select class="add-lane" label="Add a lane" aria-label="Add a lane" .value=${''} .options=${[{value:'',label:'Choose a chat…'},...availableLanes.map(chat => ({value:chat.id,label:chat.title}))]} ?disabled=${!!this.pendingLane} @change=${(event:Event) => void this.link((event.target as MuxUISelect).value)}></mux-ui-select>` : nothing}
         ${lanes.length ? html`<div class="filters" role="group" aria-label="Filter operator lanes">
           ${this.filterButton('all', 'All', lanes.length)}
           ${this.filterButton('attention', 'Needs attention', attention)}
@@ -303,6 +322,6 @@ export class MuxOperatorStatus extends LitElement {
                 <mux-ui-button class="archive-action" variant="quiet" size="small" accessible-label=${`${lane.archived ? 'Restore' : 'Archive'} chat ${lane.title}`} ?disabled=${!!this.pendingLane} @click=${() => void this.setArchived(lane, !lane.archived)}>${icon(lane.archived ? ArchiveRestore : Archive,{size:13})} ${lane.archived ? 'Restore chat' : 'Archive chat'}</mux-ui-button></div>
             </td></tr>` : nothing}`;
           })}</tbody>
-        </table></div>` : html`<mux-ui-feedback align="center">${this.filter === 'attention' ? 'No lanes need attention.' : this.filter === 'running' ? 'No lanes are running.' : 'No lanes are done yet.'}</mux-ui-feedback>`}` : html`<mux-ui-feedback appearance="panel" align="center"><strong>No lanes yet.</strong><p class="hint">Open a chat’s goal ledger to link it to this operator. Goal proposals need human approval or explicit operator start authorization.</p></mux-ui-feedback>`}`}`;
+        </table></div>` : html`<mux-ui-feedback align="center">${this.filter === 'attention' ? 'No lanes need attention.' : this.filter === 'running' ? 'No lanes are running.' : 'No lanes are done yet.'}</mux-ui-feedback>`}` : html`<mux-ui-feedback appearance="panel" align="center"><strong>No lanes yet.</strong><p class="hint">${availableLanes.length ? 'Choose a chat above to make it a lane.' : 'Create another chat to add as a lane.'} Goal proposals appear in that chat for your approval.</p></mux-ui-feedback>`}`}`;
   }
 }

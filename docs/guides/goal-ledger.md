@@ -1,9 +1,12 @@
 # Goals and the shared ledger
 
-The composer has a single-line goal banner. Its icon controls open the human
-editor, request pause/resume or native clear, and open the shared ledger utility.
-Ordinary messages do not revise the stop condition. Standalone chats need no
-operator. Full conditions are available in the editor and banner tooltip.
+The composer has a single-line goal rail. Selecting it opens the Goal utility
+tab, which renders only the current stop condition as markdown. The `/goal`
+command sets, inspects, pauses, resumes, and clears the goal. Ordinary messages
+do not revise the stop condition. Standalone chats need no operator. The shared
+ledger stays behind the UI as the authority and history store.
+Pending proposals appear beside the chat composer for human approval. Operators
+link chats as lanes from their Status tab.
 
 ## Native capability boundaries
 
@@ -59,7 +62,7 @@ Nothing is replayed. Human pause holds survive restart, including failed or
 uncertain native acknowledgements. Reconcile before making another request.
 Passive settings/title loads and queued operator reports cannot restart an
 uncertain goal. Legacy native conditions without a human ledger revision require
-explicit adoption in the human editor, not inferred provenance.
+explicit adoption through the `/goal` command, not inferred provenance.
 
 ## Authority
 
@@ -82,7 +85,7 @@ Keep that exclusion list and the server authority boundary aligned.
 ## Proposals and changeable policy
 
 Proposing and authorizing are separate typed operations. An agent proposal is an
-inert receipt. In the shared ledger, a human may approve and start it, or approve
+inert receipt. Through authorized goal control, a human may approve and start it, or approve
 its exact condition and authorize the direct operator to start that revision.
 The authorization is a JSON policy record scoped to operator identity and human
 revision, consumed on one admitted start, and explicitly revocable. Relinking or

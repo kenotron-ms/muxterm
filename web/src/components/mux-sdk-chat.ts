@@ -21,7 +21,6 @@ import '../ui/button.js';
 import '../ui/attachment.js';
 import '../ui/action-tile.js';
 import '../ui/breadcrumb.js';
-import '../ui/dialog.js';
 import '../ui/feedback.js';
 import '../ui/status-badge.js';
 import '../ui/screen-header.js';
@@ -30,10 +29,8 @@ import { visuallyHidden } from '../ui/visually-hidden.js';
 import { listboxIndexForKey } from '../ui/listbox.js';
 import '../ui/listbox-option.js';
 import '../ui/select.js';
-import '../ui/text-area.js';
 import '../ui/voice-bars.js';
 import type { MuxUISelect } from '../ui/select.js';
-import type { MuxUITextArea } from '../ui/text-area.js';
 import type { MuxUIVoiceBars } from '../ui/voice-bars.js';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
@@ -81,7 +78,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, CircleX, Copy, FilePenLine, Folder, GitFork, Globe, Mic, Network, NotebookTabs, PanelRight, Paperclip, Pause, Pencil, Play, Search, Square, Target, Terminal, Wrench, X, type IconNode } from 'lucide';
+import { ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, FilePenLine, Folder, GitFork, Globe, Mic, Network, PanelRight, Paperclip, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
 
 type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
@@ -92,8 +89,6 @@ export class MuxSDKChat extends LitElement {
   @property({ type: Boolean, reflect: true }) compact = false;
   @state() private chat?: SDKChat;
   @state() private goalDocument?: GoalDocument;
-  @state() private goalEditor = false;
-  @state() private goalDraft = '';
   @state() private goalNotice = '';
   @state() private goalSaving = false;
   @state() private commandNotice = '';
@@ -102,9 +97,6 @@ export class MuxSDKChat extends LitElement {
   private commandGeneration = 0;
   @state() private slashSelection = 0;
   private slashDismissedFor = '';
-  @state() private goalLedgerOpen = false;
-  @state() private goalLedgerDocuments: GoalDocument[] = [];
-  private goalEditorVersion = 0;
   @state() private scheduledJob?: { name:string };
   @state() private blocks: Block[] = [];
   @state() private trajectory: SDKEvent[] = [];
@@ -413,26 +405,17 @@ export class MuxSDKChat extends LitElement {
     .composer { box-sizing:border-box; max-width:var(--ui-chat-content-width); margin:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-2xl); background:var(--ui-surface-raised); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); box-shadow:var(--ui-shadow-control); transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
     .composer-row { display:flex; }
-    .goal-banner { display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; min-height:var(--ui-control-md); margin-bottom:var(--ui-space-4); border-bottom:1px solid var(--ui-border); padding-bottom:var(--ui-space-3); font-size:var(--ui-text-sm); }
+    .goal-banner { display:flex; align-items:center; gap:var(--ui-space-4); box-sizing:border-box; width:100%; min-width:0; min-height:var(--ui-control-md); margin-bottom:var(--ui-space-4); border:0; border-bottom:1px solid var(--ui-border); padding:0 0 var(--ui-space-3); background:transparent; color:var(--ui-text); text-align:left; font:var(--ui-text-sm)/1.5 var(--ui-font-sans); cursor:pointer; }
+    .goal-banner:hover .goal-condition { text-decoration:underline; text-underline-offset:3px; }
+    .goal-banner:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; border-radius:var(--ui-radius-sm); }
     .goal-condition { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:0; }
     .goal-state { flex-shrink:0; color:var(--ui-text-muted); font-size:var(--ui-text-xs); max-width:36%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .goal-icon { flex-shrink:0; margin-left:auto; }
-    .goal-editor { box-sizing:border-box; width:100%; padding:var(--ui-space-7); background:var(--ui-surface-overlay); color:var(--ui-text); }
-    .goal-editor h2, .goal-utility h2 { margin:0 0 var(--ui-space-5); font-size:var(--ui-text-xl); }
-    .goal-editor mux-ui-text-area { display:block; width:100%; }
-    .goal-editor p, .goal-utility p { color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.5; }
-    .goal-editor-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:var(--ui-space-4); margin-top:var(--ui-space-6); }
-    .goal-utility { position:absolute; z-index:var(--ui-z-side-panel); top:0; right:0; bottom:0; box-sizing:border-box; width:min(var(--ui-chat-goal-utility-width),100%); overflow:auto; padding:var(--ui-space-7); background:var(--ui-surface-raised); border-left:1px solid var(--ui-border); box-shadow:var(--ui-shadow-side); }
-    .goal-utility header { display:flex; align-items:center; justify-content:space-between; }
-    .goal-utility mux-ui-feedback { margin-top:var(--ui-space-4); }
-    .goal-ledger-record { border-top:1px solid var(--ui-border); padding:var(--ui-space-6) 0; overflow-wrap:anywhere; }
-    .goal-ledger-record li { font-size:var(--ui-text-sm); margin:var(--ui-space-4) 0; line-height:1.5; }
-    .goal-ledger-record ol { padding-left:var(--ui-space-7); }
-    .goal-ledger-record mux-ui-select { margin:var(--ui-space-5) 0; }
-    .goal-proposal { margin-top:var(--ui-space-6); padding:var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-base); }
-    .goal-proposal h3 { margin:0 0 var(--ui-space-4); font-size:var(--ui-text-md); }
-    .goal-proposal p { margin:0; }
     .goal-notice { font-size:var(--ui-text-sm); color:var(--ui-text-muted); padding:var(--ui-space-2) 0; }
+    .goal-action-panel { margin-bottom:var(--ui-space-4); padding:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); }
+    .goal-action-panel p { margin:0 0 var(--ui-space-3); font-size:var(--ui-text-sm); line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .goal-action-panel strong { display:block; margin-bottom:var(--ui-space-2); font-size:var(--ui-text-sm); }
+    .goal-action-panel mux-ui-select { display:block; margin-bottom:var(--ui-space-3); }
+    .goal-action-buttons { display:flex; flex-wrap:wrap; gap:var(--ui-space-3); }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-4); min-height:var(--ui-control-md); }
     .composer-controls .send, .composer-controls .stop { margin-left:auto; }
     .textarea-sizing { position:relative; flex:1; min-width:0; min-height:var(--ui-chat-composer-min-height); max-height:var(--ui-composer-input-max-height); font:var(--ui-text-lg)/1.55 var(--ui-content-font-family); }
@@ -628,7 +611,7 @@ export class MuxSDKChat extends LitElement {
     await this.updateComplete;
     const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
     if (action === 'file' && path) await utility?.showFile(path);
-    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'pages')) utility?.showPanel(tab);
+    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'goal')) utility?.showPanel(tab);
   }
   private async operatorChanged(chat: SDKChat) {
     this.chat = chat;
@@ -703,7 +686,7 @@ export class MuxSDKChat extends LitElement {
     this.voice?.stop();
     this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
     this.activeSession = this.sessionId;
-    this.goalDocument = undefined; this.goalEditor = false; this.goalLedgerOpen = false; this.goalNotice = '';
+    this.goalDocument = undefined; this.goalNotice = '';
     this.commandGeneration++; this.commandNotice = ''; this.commandFailed = false; this.commandPending = false; this.slashDismissedFor = ''; this.slashSelection = 0;
     void this.refreshGoal();
     this.draft = readDraft(this.activeSession, 'message');
@@ -2056,7 +2039,7 @@ export class MuxSDKChat extends LitElement {
       this.goalDocument = current;
       if (command.action === 'inspect') {
         this.commandFailed = false;
-        this.commandNotice = current.revisions.at(-1)?.condition || 'No goal is set for this chat. Type /goal followed by a condition.';
+        this.commandNotice = this.currentGoalText(current) || 'No goal is set for this chat. Type /goal followed by a condition.';
       } else {
         const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/goal`), {
           method:'PATCH', headers:{'Content-Type':'application/json'},
@@ -2179,7 +2162,7 @@ export class MuxSDKChat extends LitElement {
     return html`<mux-ui-button class="send ${mode === 'voice-stop' ? 'voice-active' : ''}" variant=${mode === 'task-stop' ? 'danger' : 'primary'} ?icon-only=${mode !== 'voice-stop'} accessible-label=${label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</mux-ui-button>`;
   }
   private readonly onGoalChanged = (event: Event) => {
-    if ((event as CustomEvent<string>).detail === this.activeSession || this.goalLedgerOpen) void this.refreshGoal();
+    if ((event as CustomEvent<string>).detail === this.activeSession) void this.refreshGoal();
   };
   private readonly onGoalReconnected = () => { if (this.activeSession) void this.refreshGoal(); };
   private async refreshGoal() {
@@ -2191,26 +2174,22 @@ export class MuxSDKChat extends LitElement {
       if (id !== this.activeSession) return;
       if (this.goalDocument && record.version < this.goalDocument.version) return;
       this.goalDocument = record;
-      if (this.goalLedgerOpen) {
-        const ledger = await fetch(apiPath('/api/sdk-goal-ledger'), { cache:'no-store' });
-        if (!ledger.ok) throw new Error(await ledger.text());
-        const records = await ledger.json() as GoalDocument[];
-        if (id === this.activeSession) this.goalLedgerDocuments = records.some(existing => existing.chatId === id) ? records : [record,...records];
-      }
+      this.goalNotice = '';
     } catch (error) { if (id === this.activeSession) this.goalNotice = String(error); }
   }
-  private async openGoalEditor() {
-    const id = this.activeSession;
-    await this.refreshGoal();
-    if (id !== this.activeSession) return;
-    this.goalDraft = this.goalDocument?.revisions.at(-1)?.condition || this.chat?.goal || '';
-    this.goalEditorVersion = this.goalDocument?.controlVersion || 0;
-    this.goalEditor = true;
-    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxUITextArea>('.goal-editor mux-ui-text-area')?.focus());
+  private currentGoalText(record = this.goalDocument): string {
+    const latestControl = record?.receipts.findLast(receipt => ['set','approve','start','resume','clear'].includes(receipt.action));
+    if (record?.state === 'cleared' && (!latestControl || latestControl.action === 'clear')) return '';
+    return record?.revisions.at(-1)?.condition || this.chat?.goal || '';
   }
-  private async linkGoalOperator(record:GoalDocument, operatorId:string) {
+  private openGoalTab() {
+    this.setPaneMode('split');
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('goal'));
+  }
+  private async linkGoalOperator(operatorId:string) {
+    const record = this.goalDocument;
     const operator = sdkChats.chats.find(chat => chat.id === operatorId && chat.operator);
-    if (!operator || this.goalSaving) return;
+    if (!record || !operator || this.goalSaving) return;
     this.goalSaving = true;
     try {
       await sdkChats.operator(operatorId,{laneIds:[...new Set([...(operator.operatorLanes || []),record.chatId])]});
@@ -2218,71 +2197,49 @@ export class MuxSDKChat extends LitElement {
     } catch (error) { this.goalNotice = String(error); }
     finally { this.goalSaving = false; }
   }
-  private async controlGoal(action:string, target = this.goalDocument, details:{proposalId?:string;startBy?:string} = {}) {
-    if (!target || this.goalSaving) return;
-    const id = target.chatId;
+  private async controlGoal(action:'approve'|'authorize'|'revoke', details:{proposalId?:string;startBy?:'human'|'operator'} = {}) {
+    const record = this.goalDocument;
+    if (!record || this.goalSaving) return;
     this.goalSaving = true; this.goalNotice = '';
     try {
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/goal`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action,objective:action === 'set' ? this.goalDraft : '',clientRef:crypto.randomUUID(),expectedVersion:action === 'set' ? this.goalEditorVersion : target.controlVersion,...details}) });
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(record.chatId)}/goal`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action,clientRef:crypto.randomUUID(),expectedVersion:record.controlVersion,...details}) });
       if (!response.ok) throw new Error(await response.text());
-      const record = await response.json() as GoalDocument;
-      if (id === this.activeSession && record.version >= (this.goalDocument?.version || 0)) this.goalDocument = record;
-      this.goalLedgerDocuments = this.goalLedgerDocuments.map(existing => existing.chatId === id ? record : existing);
-      this.goalEditor = false;
-      this.goalNotice = '';
+      const updated = await response.json() as GoalDocument;
+      if (record.chatId === this.activeSession && updated.version >= (this.goalDocument?.version || 0)) this.goalDocument = updated;
     } catch (error) { this.goalNotice = String(error); }
     finally { this.goalSaving = false; }
   }
-  private goalBanner() {
+  private goalActions() {
     const record = this.goalDocument;
-    const latestControl = record?.receipts.findLast(receipt => ['set','approve','start','resume','clear'].includes(receipt.action));
-    if (record?.state === 'cleared' && (!latestControl || latestControl.action === 'clear')) return nothing;
-    const condition = record?.revisions.at(-1)?.condition || this.chat?.goal || '';
-    if (!condition.trim()) return nothing;
-    const supported = ['codex','amplifier','claude'].includes(this.chat?.harness || '');
-    const pending = record?.requestedRevision !== record?.appliedRevision;
-    const pausePending = record?.receipts.some(receipt => receipt.action === 'pause' && receipt.status === 'dispatching');
-    const humanHold = pausePending ? 'Pause requested' : record?.state === 'paused' ? 'Paused by you' : `Human hold · ${record?.state}`;
-    const state = record?.humanPaused ? `${humanHold}${pending ? ` · v${record.requestedRevision} pending` : ''}` : !supported ? 'Controls unavailable' : pending ? `v${record?.requestedRevision} requested · v${record?.appliedRevision || 0} applied` : record?.state || 'Not set';
-    const paused = record?.humanPaused || ['not-set','paused','complete','achieved','stalled','cap_hit','cancelled','error','ended','cleared'].includes(record?.state || '');
-    const button = (label:string, glyph:IconNode, action:()=>void, disabled=false, title=label) => html`<mux-ui-button class="goal-icon" variant="quiet" size="small" icon-only accessible-label=${label} tooltip=${title} ?disabled=${disabled || this.goalSaving} @click=${action}>${icon(glyph,{size:14})}</mux-ui-button>`;
-    const executionTitle = !supported ? record?.gap : this.chat?.harness === 'claude' ? paused ? 'Reactivate the native goal; counters reset' : 'Suspend by clearing the native Claude goal; current tool effects are retained' : record?.state === 'cleared' ? 'Resume the saved condition as a new native goal' : paused ? 'Resume goal' : 'Pause goal';
-    return html`<div class="goal-banner" aria-label="Goal"><span aria-hidden="true">${icon(Target,{size:14})}</span><span class="goal-condition" title=${condition || 'Set a human-owned stop condition'}>${condition || 'No goal set'}</span><span class="goal-state" title=${`${state}. ${record?.gap || ''}`}>${condition ? state : ''}</span>${button('Edit goal',Pencil,() => this.openGoalEditor())}${button(paused ? 'Resume goal' : 'Pause goal',paused ? Play : Pause,() => void this.controlGoal(paused ? 'resume' : 'pause'),!condition || !supported, executionTitle)}${button('Cancel goal',CircleX,() => void this.controlGoal('clear'),!condition || !supported)}${button('Open ledger',NotebookTabs,() => { this.goalLedgerOpen = !this.goalLedgerOpen; void this.refreshGoal(); })}</div>${this.goalNotice ? html`<div class="goal-notice" role="status">${this.goalNotice}</div>` : nothing}`;
-  }
-  private goalLedgerRecord(record:GoalDocument) {
+    if (!record) return nothing;
+    const proposals = record.receipts.filter(receipt => receipt.action === 'propose' && receipt.status === 'recorded');
+    const grant = record.policy?.operatorStart;
+    const condition = this.currentGoalText(record);
+    if (!condition && !proposals.length) return nothing;
+    if (!proposals.length && !grant && !(condition && record.operatorId && record.requestedRevision)) return nothing;
     const operators = sdkChats.chats.filter(chat => chat.operator && chat.id !== record.chatId);
-    return html`<section class="goal-ledger-record">
-      <strong>${sdkChats.chats.find(chat => chat.id === record.chatId)?.title || record.chatId}</strong>
-      <p>${record.harness} · requested v${record.requestedRevision} · applied v${record.appliedRevision} · ${record.state}${record.humanPaused ? ' · human pause held' : ''}</p>
-      <p>${record.gap}</p>
-      ${!record.operatorId ? html`<mux-ui-select label="Link direct operator" aria-label="Link direct operator" .value=${''} .options=${[{value:'',label:'Choose an operator…'},...operators.map(operator => ({value:operator.id,label:operator.title}))]} ?disabled=${this.goalSaving || !operators.length} @change=${(event:Event) => void this.linkGoalOperator(record,(event.target as MuxUISelect).value)}></mux-ui-select>` : html`<p>Direct operator: ${sdkChats.chats.find(chat => chat.id === record.operatorId)?.title || record.operatorId}</p>`}
-      ${record.policy?.operatorStart ? html`<p>Operator start: v${record.policy.operatorStart.revision} · ${record.policy.operatorStart.consumedBy ? 'used' : 'authorized by human'}</p>${!record.policy.operatorStart.consumedBy ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('revoke',record)}>Revoke operator authorization</mux-ui-button>` : nothing}` : nothing}
-      ${record.requestedRevision && record.operatorId && (!record.policy?.operatorStart || record.policy.operatorStart.consumedBy) ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('authorize',record)}>Allow operator to start v${record.requestedRevision}</mux-ui-button>` : nothing}
-      ${record.receipts.filter(receipt => receipt.action === 'propose' && receipt.status === 'recorded').map(proposal => html`<section class="goal-proposal" aria-label="Pending goal proposal"><h3>Goal proposed · not started</h3><p>${proposal.objective}</p><div class="goal-editor-actions"><mux-ui-button size="small" variant="primary" ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('approve',record,{proposalId:proposal.id,startBy:'human'})}>Approve and start</mux-ui-button><mux-ui-button size="small" variant="secondary" ?disabled=${this.goalSaving || !record.operatorId} tooltip=${record.operatorId ? 'Authorize this direct operator for this approved revision only' : 'Link a direct operator first'} @click=${() => void this.controlGoal('approve',record,{proposalId:proposal.id,startBy:'operator'})}>Allow operator to start</mux-ui-button></div></section>`)}
-      <ol>${record.revisions.map(revision => html`<li>v${revision.revision} · ${revision.provenance}<br>${revision.condition}</li>`)}</ol>
-      <h3>Control receipts</h3>
-      <ol>${record.receipts.map(receipt => html`<li>${receipt.action} · v${receipt.revision} · ${receipt.status}${receipt.detail ? ` — ${receipt.detail}` : ''}${receipt.action === 'propose' ? html`<p>Proposal only: ${receipt.objective}</p>` : nothing}${receipt.evidence?.map(reference => html`<p>${reference}</p>`)}</li>`)}</ol>
-      <details><summary>Native evidence (${record.observations.length})</summary><ol>${record.observations.map(observation => html`<li>${observation.at} · ${observation.event.type} · ${observation.event.goalState || ''}<br>${observation.event.goalReason || observation.event.goalSummary || ''}</li>`)}</ol></details>
+    return html`<section class="goal-action-panel" aria-label="Goal actions">
+      ${proposals.map(proposal => html`<div class="goal-proposal"><strong>Goal proposed</strong><p>${proposal.objective}</p>
+        ${!record.operatorId && operators.length ? html`<mux-ui-select label="Direct operator" aria-label="Direct operator" .value=${''} .options=${[{value:'',label:'Choose an operator…'},...operators.map(operator => ({value:operator.id,label:operator.title}))]} ?disabled=${this.goalSaving} @change=${(event:Event) => void this.linkGoalOperator((event.target as MuxUISelect).value)}></mux-ui-select>` : nothing}
+        <div class="goal-action-buttons"><mux-ui-button size="small" variant="primary" ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('approve',{proposalId:proposal.id,startBy:'human'})}>Approve and start</mux-ui-button><mux-ui-button size="small" variant="secondary" ?disabled=${this.goalSaving || !record.operatorId} tooltip=${record.operatorId ? 'Authorize this direct operator for this revision' : 'Link a direct operator first'} @click=${() => void this.controlGoal('approve',{proposalId:proposal.id,startBy:'operator'})}>Allow operator to start</mux-ui-button></div></div>`)}
+      ${condition && record.operatorId && record.requestedRevision && (!grant || grant.consumedBy) ? html`<div class="goal-action-buttons"><mux-ui-button size="small" variant="secondary" ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('authorize')}>Allow operator to start v${record.requestedRevision}</mux-ui-button></div>` : nothing}
+      ${grant && !grant.consumedBy ? html`<div class="goal-action-buttons"><span>Operator may start v${grant.revision}</span><mux-ui-button size="small" variant="secondary" ?disabled=${this.goalSaving} @click=${() => void this.controlGoal('revoke')}>Revoke permission</mux-ui-button></div>` : nothing}
     </section>`;
   }
-  private goalSurfaces() {
-    return html`${this.goalLedgerOpen ? html`<aside class="goal-utility" aria-label="Shared goal ledger">
-      <header><h2>Shared goal ledger</h2><mux-ui-button class="goal-icon" variant="quiet" size="small" icon-only accessible-label="Close ledger" tooltip="Close ledger" @click=${() => this.goalLedgerOpen = false}>${icon(X,{size:16})}</mux-ui-button></header>
-      <p>Human revisions, native observations, and durable control receipts. Shared visibility does not grant shared control.</p>
-      <mux-ui-button class="goal-edit-action" size="small" variant="secondary" ?disabled=${this.goalSaving} @click=${() => void this.openGoalEditor()}>${this.goalDocument?.requestedRevision ? 'Edit current goal' : 'Set goal'}</mux-ui-button>
-      ${this.goalNotice ? html`<mux-ui-feedback kind="info" appearance="panel">${this.goalNotice}</mux-ui-feedback>` : nothing}
-      ${this.goalLedgerDocuments.map(record => this.goalLedgerRecord(record))}
-    </aside>` : nothing}${this.goalEditor ? html`<mux-ui-dialog class="goal-dialog" size="compact" presentation="adaptive" label=${this.goalDocument?.requestedRevision ? 'Edit goal' : 'Set goal'} open @dismiss=${() => { this.goalEditor = false; }}>
-      <section class="goal-editor">
-        <h2>${this.goalDocument?.requestedRevision ? 'Edit goal' : 'Set goal'}</h2><p>Human edit · applies at the next supported harness boundary. Editing does not resume a stopped goal. Saving the first condition starts a native goal. Agent proposals stay inert until you approve them or authorize an operator.</p>
-        <mux-ui-text-area aria-label="Stop condition" .value=${this.goalDraft} .maxLength=${4000} .rows=${7} @input=${(event:InputEvent) => { this.goalDraft = (event.target as MuxUITextArea).value; }}></mux-ui-text-area>
-        ${this.goalDocument?.gap ? html`<p>${this.goalDocument.gap}</p>` : nothing}
-        <div class="goal-editor-actions">
-          <mux-ui-button variant="secondary" ?disabled=${this.goalSaving} @click=${() => this.goalEditor = false}>Discard</mux-ui-button>
-          <mux-ui-button variant="primary" ?disabled=${this.goalSaving || !this.goalDraft.trim()} @click=${() => void this.controlGoal('set')}>${this.goalDocument?.requestedRevision ? 'Save revision' : 'Save and start goal'}</mux-ui-button>
-        </div>
-      </section>
-    </mux-ui-dialog>` : nothing}`;
+  private goalBanner() {
+    const condition = this.currentGoalText();
+    if (!condition.trim()) return nothing;
+    const record = this.goalDocument;
+    const state = record?.humanPaused ? 'Paused by you'
+      : record?.receipts.some(receipt => receipt.status === 'dispatching') ? 'Applying goal change…'
+      : record && record.requestedRevision > record.appliedRevision ? 'Goal change requested'
+      : record?.state === 'active' || record?.state === 'continuing' ? 'Pursuing goal'
+      : record?.state === 'complete' || record?.state === 'achieved' ? 'Goal achieved'
+      : record?.state === 'uncertain' || record?.state === 'error' ? 'Goal needs review'
+      : record?.state === 'ended' ? 'Goal ended · outcome unknown'
+      : record?.state === 'paused' ? 'Paused goal'
+      : 'Goal';
+    return html`<button class="goal-banner" type="button" aria-label="View goal" @click=${this.openGoalTab}><span aria-hidden="true">${icon(Target,{size:14})}</span><span class="goal-condition" title=${condition}>${condition}</span><span class="goal-state">${state}</span></button>`;
   }
   private isACPChat() { return this.chat?.harness === 'pi' || this.chat?.harness === 'opencode' || this.chat?.harness === 'deepseek'; }
   private laneCard(block: Block) {
@@ -2326,7 +2283,6 @@ export class MuxSDKChat extends LitElement {
       <span slot="section-icon">${icon(Folder,{size:14})}</span>
       ${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div slot="heading" class="chat-title">${parentOperator && !this.compact ? html`<mux-ui-button class="operator-parent" variant="quiet" size="small" icon-only accessible-label=${`Open operator chat: ${parentOperator.title}`} tooltip=${`Open operator chat: ${parentOperator.title}`} @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:parentOperator.id},bubbles:true,composed:true}))}>${icon(Network,{size:15})}</mux-ui-button><span class="operator-crumb" aria-hidden="true">${icon(ChevronRight,{size:13})}</span>` : nothing}<h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}
       <div slot="actions" class="topbar-actions">
-      <mux-ui-button class="goal-icon" variant="quiet" size="small" icon-only expandable .expanded=${this.goalLedgerOpen} accessible-label="Open goal ledger" tooltip="Open goal ledger" @click=${() => { this.goalLedgerOpen = !this.goalLedgerOpen; void this.refreshGoal(); }}>${icon(NotebookTabs,{size:16})}</mux-ui-button>
       <div class="pane-controls"><mux-ui-button variant="quiet" size="small" icon-only toggle .pressed=${this.drawerOpen} accessible-label=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} tooltip=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} @click=${() => this.setPaneMode(this.drawerOpen ? 'chat' : 'split')}>${icon(PanelRight,{size:17})}</mux-ui-button></div></div>
     </mux-ui-screen-header>
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
@@ -2335,18 +2291,20 @@ export class MuxSDKChat extends LitElement {
       <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
       ${this.error ? html`<mux-ui-feedback class="block" kind="error" appearance="panel" density="compact">${this.error}${this.reconnectFailed ? html`<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryConnection}>Retry now</mux-ui-button>` : nothing}</mux-ui-feedback>` : nothing}
-    </div>${this.goalSurfaces()}${this.showScrollBottom ? html`<div class="scroll-bottom-row"><mux-ui-button class="scroll-bottom" variant="secondary" size="small" accessible-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</mux-ui-button></div>` : nothing}<div class="composer-wrap">
+    </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><mux-ui-button class="scroll-bottom" variant="secondary" size="small" accessible-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</mux-ui-button></div>` : nothing}<div class="composer-wrap">
       ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions">${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
       ${this.commandNotice ? html`<mux-ui-feedback class="command-notice" kind=${this.commandFailed ? 'error' : 'info'} appearance=${this.commandFailed ? 'panel' : 'plain'} density="compact" role=${this.commandFailed ? nothing : 'status'}>${this.commandNotice}</mux-ui-feedback>` : nothing}
       <div class="composer" @paste=${this.onPaste}>
       ${this.goalBanner()}
+      ${this.goalActions()}
+      ${this.goalNotice ? html`<div class="goal-notice" role="status">${this.goalNotice}</div>` : nothing}
       ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><mux-ui-button variant="quiet" icon-only accessible-label="Attach files for later" tooltip="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:18})}</mux-ui-button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-mic" aria-hidden="true">${icon(Mic, { size:17 })}</span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.busy ? html`<mux-ui-button class="stop" variant="danger" icon-only accessible-label="Stop root turn and delegated agent" tooltip="Stop root turn and delegated agent" ?disabled=${this.stopping} @click=${() => void this.stop()}>${icon(Square,{size:16})}</mux-ui-button>` : nothing}<mux-ui-button class="steer" variant="secondary" ?disabled=${!this.agentDraftHasContent} @click=${() => void this.steerAgent()}>Send to root ↗</mux-ui-button></div>` : html`
       ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
       <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-haspopup="listbox" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><mux-ui-button variant="quiet" icon-only accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:18})}</mux-ui-button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
-      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}
+      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`;
   }
 }
