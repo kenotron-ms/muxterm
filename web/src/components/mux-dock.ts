@@ -86,6 +86,8 @@ class TerminalRenderer implements IContentRenderer {
   private readonly _paneId: number;
   private readonly _isActivePane: (paneId: number) => boolean;
   private _attached = false;
+  private _disposed = false;
+  private _layoutFrame: number | undefined;
 
   constructor(id: string, isActivePane: (paneId: number) => boolean) {
     this._paneId = parseInt(id, 10);
@@ -128,6 +130,7 @@ class TerminalRenderer implements IContentRenderer {
   }
 
   layout(): void {
+    if (this._disposed) return;
     if (!this._attached) {
       muxLog('renderer layout', `pane=${this._paneId} not-yet-attached`,
         { isConnected: this.element.isConnected,
@@ -138,7 +141,12 @@ class TerminalRenderer implements IContentRenderer {
         // Panel not in DOM yet — retry next frame (dockview only calls layout()
         // on the active panel after DOM append; inactive panels get one
         // isConnected=false call and nothing after).
-        requestAnimationFrame(() => this.layout());
+        if (this._layoutFrame === undefined) {
+          this._layoutFrame = requestAnimationFrame(() => {
+            this._layoutFrame = undefined;
+            this.layout();
+          });
+        }
         return;
       }
 
@@ -159,6 +167,9 @@ class TerminalRenderer implements IContentRenderer {
   }
 
   dispose(): void {
+    this._disposed = true;
+    if (this._layoutFrame !== undefined) cancelAnimationFrame(this._layoutFrame);
+    this._layoutFrame = undefined;
     // Does NOT destroy the terminal — PTY stays alive, scrollback preserved.
     terminalRegistry.detach(this._paneId);
   }
@@ -464,7 +475,8 @@ export class MuxDock extends LitElement {
     if (this._restoringLayout) return; // don't echo a save while we're restoring
     if (this._layoutSaveTimer !== undefined) clearTimeout(this._layoutSaveTimer);
     this._layoutSaveTimer = window.setTimeout(() => {
-      if (!this._dv) return;
+      this._layoutSaveTimer = undefined;
+      if (!this.isConnected || !this._dv) return;
       const json = JSON.stringify(this._dv.toJSON());
       this.dispatchEvent(new CustomEvent('layout-save', { detail: { layout: json }, bubbles: true, composed: true }));
     }, 400);
@@ -1210,6 +1222,8 @@ export class MuxDock extends LitElement {
     this._dockObserver = null;
     this._workspaceActions?.remove();
     this._workspaceActions = null;
+    if (this._layoutSaveTimer !== undefined) clearTimeout(this._layoutSaveTimer);
+    this._layoutSaveTimer = undefined;
     this._dv?.dispose();
     this._dv = null;
     this._dockRoot?.remove();

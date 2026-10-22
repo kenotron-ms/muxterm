@@ -48,6 +48,7 @@ export class MuxUITabStrip extends LitElement {
 
   private focusTab(id: string) {
     void this.updateComplete.then(() => {
+      if (!this.isConnected) return;
       for (const button of this.renderRoot.querySelectorAll<HTMLButtonElement>('button[role="tab"]')) {
         if (button.dataset.id === id) { button.focus(); button.scrollIntoView({block:'nearest',inline:'nearest'}); break; }
       }
@@ -59,7 +60,7 @@ export class MuxUITabStrip extends LitElement {
   }
 
   private focusSelectedAfterChange() {
-    window.requestAnimationFrame(() => this.focusTab(this.activeId));
+    window.requestAnimationFrame(() => { if (this.isConnected) this.focusTab(this.activeId); });
   }
 
   private onTabKeydown(event: KeyboardEvent, id: string) {

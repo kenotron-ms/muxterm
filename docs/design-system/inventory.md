@@ -48,6 +48,12 @@ source of truth.
 | Document and source viewers | `mux-sdk-utility`, PDF, Monaco and BlockNote | semantic document/media tokens, compact Text Field and Select, Button, Action Tile, Breadcrumb, Tab Strip, Rail Row, Command Search, adaptive Dialog and Action Menu; integration exception for owned DOM | Utility's stylesheet now uses only semantic color and spacing tokens. The file rail uses shared compact search and sort controls. Quick Open uses the shared Dialog and Command Search; page deletion opens the same desktop modal and phone sheet pattern. Open file actions use Action Menu. Tabs and repeated file, change, page and explorer-root rows use shared elements; viewer and Pages paths use Breadcrumb. Ten viewer/explorer toolbar actions, five document page actions and the file welcome action use Button, and four New-tab tool choices use Action Tile, reducing feature-owned native controls from 39 to 6 across these passes. The HTML Run preview action uses Button while the iframe keeps its explicit script gate; Storybook covers disabled and enabled scripts at desktop and phone widths, and isolated Chromium checked the live gate. The inline page title and BlockNote content keep their native editor semantics. File-viewer loading, empty, oversized and error states use shared Feedback, as do Files, Changes and Pages rail messages. Failed file, raw-preview and rail requests offer Retry when it preserves editor state. A failed raw HTML/PDF fetch now resolves to an error state instead of leaving Loading preview indefinitely. The Files, Changes and Pages full-panel empty views use Empty State; editor-owned surfaces remain for shared-pattern review. Monaco and BlockNote own their editor surfaces. |
 | Browser pairing and connection actions | `mux-browser-assistant` | Button and Feedback | Migrated; story states cover unpaired, paired and unavailable service |
 
+## Shelved surfaces
+
+- The old Connect machine overlay and its launcher entry were removed after the active UI stopped emitting `connect-machine`. Settings → Remotes remains the reachable remote-host setup path.
+- Browser Assistant remains cataloged in Storybook but has no current Connections destination or app render path.
+- The generic custom OAuth remote-service form was removed from Connections. The current provider scope is Google, Microsoft and GitHub; Google keeps its service picker inside the Google detail view.
+
 ## Catalog coverage
 
 The catalog has stories for the shared UI elements and the primary current

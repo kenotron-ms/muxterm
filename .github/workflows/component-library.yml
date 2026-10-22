@@ -40,6 +40,7 @@ jobs:
             if curl --fail --silent http://127.0.0.1:6006/index.json > /dev/null; then break; fi
             sleep 1
           done
+          curl --fail --silent http://127.0.0.1:6006/index.json > /dev/null || { echo "Storybook server did not start"; exit 1; }
           npm run capture:storybook-review
         working-directory: web
       - uses: actions/upload-artifact@v4

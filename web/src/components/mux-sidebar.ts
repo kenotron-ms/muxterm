@@ -88,7 +88,7 @@ export class MuxSidebar extends LitElement {
 
   override firstUpdated(): void {
     void fetchUpdateStatus()
-      .then((status) => { this.updateStatus = status; })
+      .then((status) => { if (this.isConnected) this.updateStatus = status; })
       .catch(() => { /* The footer omits the version when status is unavailable. */ });
   }
 
