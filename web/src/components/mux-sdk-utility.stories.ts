@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import { fixtureJSON, type ApiFixture } from '../stories/api-fixture.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
+import type { MuxUIButton } from '../ui/button.js';
 import './mux-sdk-utility.js';
 
 const root = '/home/demo/muxterm';
@@ -75,7 +76,7 @@ export const FileOpenActions: Story = {
   play:async ({canvasElement}) => {
     const utility = target(canvasElement);
     await utility?.showFile('README.md');
-    utility?.querySelector<HTMLButtonElement>('.file-open-button')?.click();
+    utility?.querySelector<MuxUIButton>('.file-open-button')?.click();
   },
 };
 export const PhoneFileOpenActions: Story = {
@@ -88,7 +89,7 @@ export const QuickOpen: Story = {
   play:async ({canvasElement}) => {
     const utility = target(canvasElement);
     await utility?.updateComplete;
-    utility?.querySelector<HTMLButtonElement>('button[aria-label="Quick open file"]')?.click();
+    utility?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Quick open file"]')?.click();
   },
 };
 export const PhoneQuickOpen: Story = {

@@ -20,6 +20,8 @@ export class MuxUIButton extends LitElement {
   @property({ reflect: true }) tone: 'default' | 'muted' = 'default';
   @property() haspopup = '';
   @property({ type: Boolean }) expanded = false;
+  @property({ type: Boolean }) toggle = false;
+  @property({ type: Boolean, reflect: true }) pressed = false;
   @property() tooltip = '';
   @property() keyshortcuts = '';
 
@@ -55,6 +57,7 @@ export class MuxUIButton extends LitElement {
     :host([variant='quiet']) button { border-color: transparent; }
     :host([tone='muted']) button { color: var(--ui-text-muted); }
     :host([tone='muted']) button:hover:not(:disabled) { color: var(--ui-text); }
+    :host([toggle][pressed][variant='quiet']) button { color: var(--ui-accent); background: color-mix(in srgb, var(--ui-accent) 12%, var(--ui-surface-raised)); }
     button:hover:not(:disabled) { background: var(--ui-surface-hover); }
     :host([variant='primary']) button:hover:not(:disabled) { filter: brightness(1.1); background: var(--ui-accent); }
     :host([variant='danger']) button:hover:not(:disabled) { filter: brightness(1.1); background: var(--ui-danger); }
@@ -71,7 +74,7 @@ export class MuxUIButton extends LitElement {
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (pointer: coarse) {
-      button { min-height: var(--ui-control-lg); }
+      button, :host([size='small']) button { min-height: var(--ui-control-lg); }
       :host([icon-only]),:host([icon-only][size='small']) { width: var(--ui-control-lg); height: var(--ui-control-lg); }
     }
     @media (prefers-reduced-motion: reduce) { button { transition: none; } .spinner { animation-duration: 1.5s; } }
@@ -89,7 +92,8 @@ export class MuxUIButton extends LitElement {
     return html`<button part="button" type="button" ?disabled=${this.disabled || this.busy}
       title=${this.tooltip || nothing}
       aria-label=${this.accessibleLabel || nothing} aria-keyshortcuts=${this.keyshortcuts || nothing} aria-busy=${String(this.busy)}
-      aria-haspopup=${this.haspopup || nothing} aria-expanded=${this.haspopup ? String(this.expanded) : nothing}>
+      aria-haspopup=${this.haspopup || nothing} aria-expanded=${this.haspopup ? String(this.expanded) : nothing}
+      aria-pressed=${this.toggle ? String(this.pressed) : nothing}>
       ${this.busy ? html`<span class="spinner" aria-hidden="true"></span>` : html`<slot name="leading"></slot>`}
       <slot></slot><slot name="trailing"></slot>
     </button>`;

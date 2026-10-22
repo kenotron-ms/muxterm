@@ -160,6 +160,14 @@ keyboard path and phone sheet. Storybook's actual Utility screen showed the
 file menu at desktop and phone widths; Chromium confirmed End reaches Close file
 and Escape restores focus to Open. Its Storybook fixture supplies the preview
 file, so file-launch actions were not exercised against a live filesystem.
+The Utility viewer and explorer toolbar now use shared Buttons for ten repeated
+actions: close, back, ask, source/preview, browser toggle, Open menu, file
+search/refresh/collapse, and new page. The Button owns toggle and menu ARIA
+state, while the screen owns the action handlers. Browser review found that
+small text-and-icon Buttons were only 28 px tall under touch emulation; the
+shared coarse-pointer rule now raises them to 44 px. The phone file header and
+explorer toolbar fit without horizontal overflow. The remaining Utility page
+toolbar and inline editor treatments are recorded in the inventory.
 
 The shared Switch also replaces the bespoke Operator toggle in chat settings.
 It has inline and described-row layouts, checked and disabled stories, native

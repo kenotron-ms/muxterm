@@ -53,6 +53,13 @@ export const PhoneIconOnly: Story = {
   globals:{viewport:{value:'phone390',isRotated:false}},
   render:IconOnly.render,
 };
+export const PhoneSmall: Story = {
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  args:{size:'small',label:'Open file'},
+};
 export const MenuTrigger: Story = {
   render:() => html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Project options" tooltip="Project options" haspopup="menu" @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.expanded = !button.expanded; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>`,
+};
+export const ToggleIcon: Story = {
+  render:() => html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" toggle accessible-label="Show file browser" tooltip="Show file browser" @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.pressed = !button.pressed; }}>${icon(Paperclip,{size:16})}</mux-ui-button>`,
 };
