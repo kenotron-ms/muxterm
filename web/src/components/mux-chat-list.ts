@@ -115,12 +115,11 @@ export class MuxChatWorkspace extends LitElement {
     .name,.title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .name { font-weight:500; }
     .archived .name { color:var(--ui-text-muted); }
-    .action { display:inline-flex; align-items:center; justify-content:center; width:var(--ui-control-sm); height:var(--ui-control-sm); flex:none; border-radius:var(--ui-radius-sm); color:var(--ui-text-muted); opacity:0; }
+    .action { flex:none; opacity:0; }
     .row:hover .action,.row:focus-within .action { opacity:1; }
     .chat-row .action { display:none; opacity:1; }
     .chat-row .action.more { display:none; }
     .chat-row:hover .action,.chat-row:has(.chat:focus-visible) .action { display:inline-flex; }
-    .action:hover { background:var(--ui-surface-hover); color:inherit; }
     .row:has(mux-ui-menu) .action.more,.chat-row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
     mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-space-8); }
@@ -130,7 +129,7 @@ export class MuxChatWorkspace extends LitElement {
     .harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
     .harness-mark.working { color:var(--ui-success); }
     .harness-mark.blocked,.harness-mark.failed { color:var(--ui-danger); }
-    .row:focus-within,.chat-row:focus-within { outline:2px solid var(--ui-focus); outline-offset:-2px; }
+    .row:has(.group:focus-visible),.chat-row:has(.chat:focus-visible) { outline:2px solid var(--ui-focus); outline-offset:-2px; }
     .row:has(.rename-input):focus-within,.chat-row:has(.rename-input):focus-within { outline:none; }
     .status { width:6px; height:6px; border-radius:50%; background:var(--ui-text-muted); flex:none; }
     .status.working { background:var(--ui-success); }
@@ -161,6 +160,11 @@ export class MuxChatWorkspace extends LitElement {
     .confirmation p { margin:var(--ui-space-4) 0 var(--ui-space-7); color:var(--ui-text-muted); }
     .confirmation-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); }
     .error { color:var(--ui-danger); padding:var(--ui-space-2); }
+    @media(max-width:550px) {
+      .row .action,.chat-row .action { display:none; opacity:1; }
+      .row .action.more,.chat-row .action.more,.row:not(:has(.action.more)) .action.new-chat { display:inline-flex; }
+      .chat-row:hover .action:not(.more),.chat-row:has(.chat:focus-visible) .action:not(.more) { display:none; }
+    }
     @media(max-width:700px) { .editor { max-height:calc(100dvh - env(safe-area-inset-top) - var(--ui-space-8)); padding:var(--ui-space-5) var(--ui-space-5) calc(var(--ui-space-5) + env(safe-area-inset-bottom)); } }
   `;
 
@@ -316,11 +320,11 @@ export class MuxChatWorkspace extends LitElement {
             <span class="folder">${icon(this.open ? FolderOpen : Folder, { size: 16 })}</span>
             <span class="name">${group.name}</span>
           </button>
-          ${!group.archived ? html`<button class="action" aria-label=${`New chat in ${group.name}`} title=${`New chat in ${group.name}`} @click=${() => this.newProjectChat()}>${icon(Plus,{size:15})}</button>` : nothing}
+          ${!group.archived ? html`<mux-ui-button class="action new-chat" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`New chat in ${group.name}`} tooltip=${`New chat in ${group.name}`} @click=${() => this.newProjectChat()}>${icon(Plus,{size:15})}</mux-ui-button>` : nothing}
           ${group.project ? html`
-            <button class="action" aria-label=${`${group.project.pinned ? 'Unpin' : 'Pin'} ${group.name}`} title=${group.project.pinned ? 'Unpin project' : 'Pin project'} @click=${() => void this.pinProject()}>${icon(group.project.pinned ? PinOff : Pin,{size:14})}</button>
-            <button class="action" aria-label=${`Edit ${group.name}`} title="Edit project" @click=${() => this.startEdit()}>${icon(Pencil,{size:14})}</button>
-            <button class="action more" aria-label=${`Project options for ${group.name}`} aria-haspopup="menu" aria-expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>` : nothing}
+            <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${group.project.pinned ? 'Unpin' : 'Pin'} ${group.name}`} tooltip=${group.project.pinned ? 'Unpin project' : 'Pin project'} @click=${() => void this.pinProject()}>${icon(group.project.pinned ? PinOff : Pin,{size:14})}</mux-ui-button>
+            <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Edit ${group.name}`} tooltip="Edit project" @click=${() => this.startEdit()}>${icon(Pencil,{size:14})}</mux-ui-button>
+            <mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Project options for ${group.name}`} tooltip="Project options" haspopup="menu" .expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>` : nothing}
         ${this.menuFor === 'project' && group.project ? this.projectMenu() : nothing}
       </div>
       ${this.editing && group.project ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Edit project" open @dismiss=${() => { this.editing=false; this.error=''; this.editListing=undefined; }}><div class="editor">
@@ -349,9 +353,9 @@ export class MuxChatWorkspace extends LitElement {
             <button class="chat" title=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
               ${chat.operator || group.laneIds.has(chat.id) ? html`<span class="status ${chat.operator ? 'operator' : 'lane'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : `Lane · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : laneIcon(14)}</span>` : harnessMark(chat)}<span class="title">${chat.title}</span>
             </button>
-            <button class="action" aria-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} title=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</button>
-            <button class="action" aria-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} title=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</button>`}
-          ${this.renamingId === chat.id ? nothing : html`<button class="action more" data-chat-id=${chat.id} aria-label=${`Options for ${chat.title}`} title="Chat options" aria-haspopup="menu" aria-expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>`}
+            <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} tooltip=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</mux-ui-button>
+            <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} tooltip=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</mux-ui-button>`}
+          ${this.renamingId === chat.id ? nothing : html`<mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" data-chat-id=${chat.id} accessible-label=${`Options for ${chat.title}`} tooltip="Chat options" haspopup="menu" .expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>`}
           ${this.menuFor === chat.id ? this.chatMenu(chat) : nothing}
         </div>`)}
       </div>` : nothing}
@@ -386,12 +390,11 @@ export class MuxChatList extends LitElement {
     .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--ui-accent); }
     .pin-icon.lane.ready { color:var(--ui-success); }
     .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--ui-danger); }
-    .pin-unpin { display:grid; place-items:center; flex:none; width:var(--ui-control-sm); height:var(--ui-control-sm); border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-2); background:transparent; color:var(--ui-text-muted); opacity:0; cursor:pointer; }
+    .pin-unpin { flex:none; opacity:0; }
     .pin-row:hover .pin-unpin,.pin-row:focus-within .pin-unpin { opacity:1; }
-    .pin-unpin:hover { background:var(--ui-surface-hover); color:var(--ui-text); }
-    .pin-link:focus-visible,.pin-unpin:focus-visible { outline:2px solid var(--ui-focus); outline-offset:1px; }
+    .pin-link:focus-visible { outline:2px solid var(--ui-focus); outline-offset:1px; }
     .pin-error { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); color:var(--ui-danger); }
-    @media(hover:none) { .pin-unpin { opacity:1; } }
+    @media(hover:none), (max-width:550px) { .pin-unpin { opacity:1; } }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -425,7 +428,7 @@ export class MuxChatList extends LitElement {
       ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, operator:!!chat.operator, lane:laneIds.has(chat.id), state:chat.state, chat })),
     ];
     return html`
-      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><button class="pin-link" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}<span class="pin-name">${item.name}</span></button><button class="pin-unpin" aria-label=${`Unpin ${item.kind} ${item.name}`} title=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</button></div>`)}</div>` : nothing}
+      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><button class="pin-link" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}<span class="pin-name">${item.name}</span></button><mux-ui-button class="pin-unpin" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Unpin ${item.kind} ${item.name}`} tooltip=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</mux-ui-button></div>`)}</div>` : nothing}
       ${this.pinError ? html`<div class="pin-error" role="alert">${this.pinError}</div>` : nothing}
       ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
     `;

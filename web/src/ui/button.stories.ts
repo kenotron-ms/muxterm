@@ -1,9 +1,9 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
-import { ArrowUp, Paperclip, Trash2 } from 'lucide';
+import { ArrowUp, Ellipsis, Paperclip, Trash2 } from 'lucide';
 import { icon } from '../lib/icons.js';
 import './button.js';
-import type { ButtonSize, ButtonVariant } from './button.js';
+import type { ButtonSize, ButtonVariant, MuxUIButton } from './button.js';
 
 interface ButtonArgs {
   label: string;
@@ -52,4 +52,7 @@ export const IconOnly: Story = {
 export const PhoneIconOnly: Story = {
   globals:{viewport:{value:'phone390',isRotated:false}},
   render:IconOnly.render,
+};
+export const MenuTrigger: Story = {
+  render:() => html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Project options" tooltip="Project options" haspopup="menu" @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.expanded = !button.expanded; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>`,
 };

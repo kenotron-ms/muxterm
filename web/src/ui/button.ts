@@ -17,6 +17,9 @@ export class MuxUIButton extends LitElement {
   @property({ type: Boolean, reflect: true, attribute: 'full-width' }) fullWidth = false;
   @property({ type: Boolean, reflect: true, attribute: 'icon-only' }) iconOnly = false;
   @property({ attribute: 'accessible-label' }) accessibleLabel = '';
+  @property({ reflect: true }) tone: 'default' | 'muted' = 'default';
+  @property() haspopup = '';
+  @property({ type: Boolean }) expanded = false;
   @property() tooltip = '';
   @property() keyshortcuts = '';
 
@@ -50,6 +53,8 @@ export class MuxUIButton extends LitElement {
     :host([variant='primary']) button { border-color: var(--ui-accent); background: var(--ui-accent); color: var(--ui-on-accent); }
     :host([variant='danger']) button { border-color: var(--ui-danger); background: var(--ui-danger); color: var(--ui-on-danger); }
     :host([variant='quiet']) button { border-color: transparent; }
+    :host([tone='muted']) button { color: var(--ui-text-muted); }
+    :host([tone='muted']) button:hover:not(:disabled) { color: var(--ui-text); }
     button:hover:not(:disabled) { background: var(--ui-surface-hover); }
     :host([variant='primary']) button:hover:not(:disabled) { filter: brightness(1.1); background: var(--ui-accent); }
     :host([variant='danger']) button:hover:not(:disabled) { filter: brightness(1.1); background: var(--ui-danger); }
@@ -83,7 +88,8 @@ export class MuxUIButton extends LitElement {
   override render() {
     return html`<button part="button" type="button" ?disabled=${this.disabled || this.busy}
       title=${this.tooltip || nothing}
-      aria-label=${this.accessibleLabel || nothing} aria-keyshortcuts=${this.keyshortcuts || nothing} aria-busy=${String(this.busy)}>
+      aria-label=${this.accessibleLabel || nothing} aria-keyshortcuts=${this.keyshortcuts || nothing} aria-busy=${String(this.busy)}
+      aria-haspopup=${this.haspopup || nothing} aria-expanded=${this.haspopup ? String(this.expanded) : nothing}>
       ${this.busy ? html`<span class="spinner" aria-hidden="true"></span>` : html`<slot name="leading"></slot>`}
       <slot></slot><slot name="trailing"></slot>
     </button>`;

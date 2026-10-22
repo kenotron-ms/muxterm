@@ -105,6 +105,16 @@ Project, chat and move actions now use the shared Action Menu. Its native
 button/link items get arrow, Home/End, Escape and Tab behavior in one place;
 Escape restores the feature trigger. Chromium inspected the project menu on
 desktop and as a phone sheet, and opened a real chat's actions in dev-local.
+The chat list's eight repeated project, chat and pinned icon actions now use
+the shared Button. Menu triggers expose `aria-haspopup` and `aria-expanded`
+through its native inner button. On phones, project and chat options remain
+visible without hover, while their secondary actions live in the menu; the
+Ungrouped new-chat action and pinned unpin actions also stay visible. Storybook
+verified the phone project sheet and Escape focus restoration, and touch
+emulation measured a 44 px target. The isolated live app verified the phone
+Ungrouped action opens New Chat in a fresh sessiond workspace; it had no chat
+or project row available for live menu activation. Screenshots remain outside
+git.
 
 Connections has three primary destinations: Google, Microsoft and GitHub.
 Google preview services sit inside its provider view; Microsoft mail, calendar

@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import { chatListFixture, chatListStoryModel, resetChatListFixture } from '../stories/chat-list-fixture.js';
 import type { MuxChatWorkspace } from './mux-chat-list.js';
+import type { MuxUIButton } from '../ui/button.js';
 import './mux-chat-list.js';
 
 function view(phone = false) {
@@ -23,29 +24,31 @@ export const ProjectWithChats: Story = {};
 export const ProjectMenu: Story = { play:async ({canvasElement}) => {
   const row = canvasElement.querySelector<MuxChatWorkspace>('mux-chat-workspace');
   await row?.updateComplete;
-  row?.shadowRoot?.querySelector<HTMLButtonElement>('.row .action.more')?.click();
+  row?.shadowRoot?.querySelector<MuxUIButton>('.row .action.more')?.click();
 } };
 export const ChatMenu: Story = { play:async ({canvasElement}) => {
   const row = canvasElement.querySelector<MuxChatWorkspace>('mux-chat-workspace');
   await row?.updateComplete;
-  row?.shadowRoot?.querySelector<HTMLButtonElement>('.chat-row .action.more')?.click();
+  row?.shadowRoot?.querySelector<MuxUIButton>('.chat-row .action.more')?.click();
 } };
 export const EditProject: Story = { play:async ({canvasElement}) => {
   const row = canvasElement.querySelector<MuxChatWorkspace>('mux-chat-workspace');
   await row?.updateComplete;
-  row?.shadowRoot?.querySelector<HTMLButtonElement>('.row .action.more')?.click();
+  row?.shadowRoot?.querySelector<MuxUIButton>('.row .action.more')?.click();
   await row?.updateComplete;
-  row?.shadowRoot?.querySelector<HTMLButtonElement>('.menu button:nth-child(2)')?.click();
+  [...(row?.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Edit project and folders'))?.click();
 } };
 export const RenameProject: Story = { play:async ({canvasElement}) => {
   const row = canvasElement.querySelector<MuxChatWorkspace>('mux-chat-workspace');
   await row?.updateComplete;
-  row?.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Rename Atlas"]')?.click();
+  row?.shadowRoot?.querySelector<MuxUIButton>('.row .action.more')?.click();
+  await row?.updateComplete;
+  [...(row?.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Rename project'))?.click();
 } };
 export const RenameChat: Story = { play:async ({canvasElement}) => {
   const row = canvasElement.querySelector<MuxChatWorkspace>('mux-chat-workspace');
   await row?.updateComplete;
-  row?.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Options for Refine workspace navigation"]')?.click();
+  row?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Options for Refine workspace navigation"]')?.click();
   await row?.updateComplete;
   [...(row?.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Rename chat'))?.click();
 } };
