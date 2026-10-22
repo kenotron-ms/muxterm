@@ -320,7 +320,12 @@ Arrow navigation, Enter selection, Escape dismissal and status messages.
 Utility continues to fetch matching files and open the chosen path. Storybook
 shows results, loading, no results, errors, truncation and a phone sheet; the
 file welcome action uses the shared Button. The Utility inventory now counts
-seven feature-owned native controls, down from 39 at the start of this pass.
+six feature-owned native controls, down from 39 at the start of this pass.
+File-viewer loading, empty, oversized and error states use shared Feedback.
+Failures offer Retry; Storybook includes file and raw-preview recovery states.
+Chromium returned one synthetic raw-file failure to the isolated live browser,
+then let Retry reach the real dev-local server. The preview recovered at desktop
+and phone widths; the phone Retry target measured 44 px without page overflow.
 
 The mobile pane picker uses the native Popover API for its bounded phone sheet.
 Storybook now renders its own fixture store, including nine-pane scrolling,

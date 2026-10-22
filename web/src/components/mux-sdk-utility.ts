@@ -15,6 +15,7 @@ import '../ui/breadcrumb.js';
 import '../ui/button.js';
 import '../ui/command-search.js';
 import '../ui/dialog.js';
+import '../ui/feedback.js';
 import '../ui/menu.js';
 import '../ui/rail-row.js';
 import '../ui/select.js';
@@ -26,6 +27,7 @@ import type { MuxUITextField } from '../ui/text-field.js';
 import type { MuxUIRailRow } from '../ui/rail-row.js';
 import type { MuxUIButton } from '../ui/button.js';
 import type { MuxUICommandSearch, CommandSearchItem } from '../ui/command-search.js';
+import type { FeedbackKind } from '../ui/feedback.js';
 type Artifact = {
   path: string; name: string; size: number; modified: number;
   kind: 'markdown' | 'text' | 'image' | 'download'; contentType: string;
@@ -442,25 +444,23 @@ export class MuxSDKUtility extends LitElement {
       const ext = result.name.toLowerCase().split('.').pop();
       if (!result.tooLarge && result.size <= 2 * 1024 * 1024 && (ext === 'html' || ext === 'htm' || ext === 'svg')) {
         const raw = await fetch(this.previewURL(path, 2 * 1024 * 1024), { signal: controller.signal });
-        if (raw.ok) {
-          const bytes = await raw.arrayBuffer();
-          if (current === this.pendingFile && !controller.signal.aborted) {
-            try { this.localSource = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-            catch { this.fileError = 'This file is not UTF-8 text.'; }
-            this.fileSnapshots.set(path, { artifact: result, localSource: this.localSource, pdfBytes: null });
-          }
+        if (!raw.ok) throw new Error(`Preview unavailable (${raw.status})`);
+        const bytes = await raw.arrayBuffer();
+        if (current === this.pendingFile && !controller.signal.aborted) {
+          try { this.localSource = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+          catch { this.fileError = 'This file is not UTF-8 text.'; }
+          this.fileSnapshots.set(path, { artifact: result, localSource: this.localSource, pdfBytes: null });
         }
       } else if (!result.tooLarge && result.size <= 8 * 1024 * 1024 && ext === 'pdf') {
         const raw = await fetch(this.previewURL(path, 8 * 1024 * 1024), { signal: controller.signal });
-        if (raw.ok) {
-          const bytes = new Uint8Array(await raw.arrayBuffer());
-          if (current === this.pendingFile && !controller.signal.aborted) {
-            this.pdfBytes = bytes;
-            this.fileSnapshots.set(path, { artifact: result, localSource: '', pdfBytes: bytes });
-          }
+        if (!raw.ok) throw new Error(`Preview unavailable (${raw.status})`);
+        const bytes = new Uint8Array(await raw.arrayBuffer());
+        if (current === this.pendingFile && !controller.signal.aborted) {
+          this.pdfBytes = bytes;
+          this.fileSnapshots.set(path, { artifact: result, localSource: '', pdfBytes: bytes });
         }
       }
-    } catch (error) { if (current === this.pendingFile && !controller.signal.aborted) this.fileError = String(error); }
+    } catch (error) { if (current === this.pendingFile && !controller.signal.aborted) this.fileError = error instanceof Error ? error.message : String(error); }
     this.paintAll();
   }
   private resetFileView() {
@@ -564,20 +564,26 @@ export class MuxSDKUtility extends LitElement {
   private sourceView(source: string): TemplateResult {
     return html`<mux-monaco-source .scope=${this.sessionId} .path=${this.selected} .source=${source} aria-label=${`Source of ${this.artifact?.name || this.selected}`}></mux-monaco-source>`;
   }
+  private fileFeedback(kind: FeedbackKind, message: string, retry = false): TemplateResult {
+    return html`<mux-ui-feedback class="file-empty" .kind=${kind} align="center">${message}${retry ? html`<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => void this.openFile(this.selected,true)}>Retry</mux-ui-button>` : nothing}</mux-ui-feedback>`;
+  }
   private fileBody(): TemplateResult {
     const file = this.artifact;
-    if (!file) return html`<div class="file-empty">${this.fileError || (this.selected ? 'Opening file…' : 'Choose a file to preview it here.')}</div>`;
-    if (file.tooLarge) return html`<div class="file-empty">This file is too large to preview. Download it to inspect the full contents.</div>`;
+    if (!file) return this.fileFeedback(this.fileError ? 'error' : this.selected ? 'loading' : 'empty', this.fileError || (this.selected ? 'Opening file…' : 'Choose a file to preview it here.'), !!this.fileError);
+    if (file.tooLarge) return this.fileFeedback('warning', 'This file is too large to preview. Download it to inspect the full contents.');
     const extension = file.name.toLowerCase().split('.').pop();
-    if (this.fileMode === 'source') return this.sourceView(extension === 'html' || extension === 'htm' || extension === 'svg' ? this.localSource : file.text);
-    if (extension === 'pdf') return this.pdfBytes ? html`<mux-sdk-pdf-preview .bytes=${this.pdfBytes}></mux-sdk-pdf-preview>` : html`<div class="file-empty">${this.fileError || 'Loading PDF preview…'}</div>`;
+    if (this.fileMode === 'source') {
+      if ((extension === 'html' || extension === 'htm' || extension === 'svg') && this.fileError && !this.localSource) return this.fileFeedback('error', this.fileError, true);
+      return this.sourceView(extension === 'html' || extension === 'htm' || extension === 'svg' ? this.localSource : file.text);
+    }
+    if (extension === 'pdf') return this.pdfBytes ? html`<mux-sdk-pdf-preview .bytes=${this.pdfBytes}></mux-sdk-pdf-preview>` : this.fileFeedback(this.fileError ? 'error' : 'loading', this.fileError || 'Loading PDF preview…', !!this.fileError);
     if (extension === 'html' || extension === 'htm' || extension === 'svg') {
-      if (!this.localSource) return html`<div class="file-empty">${this.fileError || 'Loading preview…'}</div>`;
+      if (!this.localSource) return this.fileFeedback(this.fileError ? 'error' : 'loading', this.fileError || 'Loading preview…', !!this.fileError);
       const policy = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src ${this.interactivePreview ? "'unsafe-inline'" : "'none'"}; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">`;
       return html`<div class="sandbox-note">${this.interactivePreview ? 'Scripts enabled for this preview' : 'Static preview · scripts disabled'}${!this.interactivePreview ? html`<mux-ui-button size="small" variant="secondary" @click=${() => { this.interactivePreview = true; this.paintAll(); }}>Run preview</mux-ui-button>` : nothing}</div><iframe class="document-frame" title=${`Preview of ${file.name}`} sandbox=${this.interactivePreview ? 'allow-scripts' : ''} .srcdoc=${policy + this.localSource}></iframe>`;
     }
     if (file.kind === 'image') return html`<div class="image-view"><img src=${this.endpoint('raw', this.selected)} alt=${file.name}></div>`;
-    if (file.binary || file.kind === 'download') return html`<div class="file-empty">Preview unavailable for this file type.</div>`;
+    if (file.binary || file.kind === 'download') return this.fileFeedback('info', 'Preview unavailable for this file type.');
     if (extension === 'csv' || extension === 'tsv') {
       const data = tableRows(file.text, extension === 'tsv' ? '\t' : ',');
       return html`<div class="table-view"><table><tbody>${data.rows.map((row, index) => html`<tr>${row.map(value => index === 0 ? html`<th>${value}</th>` : html`<td>${value}</td>`)}</tr>`)}</tbody></table>${data.truncated ? html`<p class="empty">Showing the first 200 rows.</p>` : nothing}</div>`;
@@ -921,7 +927,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .file-open-menu svg { flex:none; color:var(--ui-text-muted); }
     mux-sdk-utility .status-spacer { flex:1; }
     mux-sdk-utility .viewer-body { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; }
-    mux-sdk-utility .file-empty { margin:auto; padding:var(--ui-space-7); max-width:340px; text-align:center; color:var(--ui-text-muted); }
+    mux-sdk-utility mux-ui-feedback.file-empty { margin:auto; max-width:340px; }
     mux-sdk-utility mux-monaco-source { display:block; flex:1; min-height:0; min-width:0; }
     mux-sdk-utility mux-monaco-source .monaco-host { width:100%; height:100%; }
     mux-sdk-utility .file-status { display:flex; align-items:center; gap:var(--ui-space-6); flex:none; min-height:22px; padding:0 var(--ui-space-5); border-top:1px solid var(--ui-border); background:var(--ui-surface-raised); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }

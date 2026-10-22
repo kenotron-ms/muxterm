@@ -31,6 +31,8 @@ const artifacts: Record<string, {kind:'markdown'|'text'; text:string; contentTyp
 };
 
 function utilityFixture(id: string, emptyPages = false): ApiFixture {
+  let fileRequests = 0;
+  let rawRequests = 0;
   return ({url,method}) => {
     const base = `/api/sdk-chats/${id}/utility/`;
     if (method === 'GET' && url.pathname === '/api/sdk-chats') return fixtureJSON([]);
@@ -40,11 +42,13 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
     if (method === 'GET' && url.pathname === `${base}files`) return listing(url.searchParams.get('path') || '.');
     if (method === 'GET' && url.pathname === `${base}file`) {
       const path = url.searchParams.get('path') || '';
+      if (id.endsWith('-file-error') || (id.endsWith('-file-recovery') && fileRequests++ === 0)) return fixtureJSON({error:'File unavailable'},503);
       const artifact = artifacts[path];
       if (!artifact) return fixtureJSON({error:'File not found'},404);
-      return fixtureJSON({path,name:path.split('/').pop(),size:artifact.text.length,modified:1761120000,kind:artifact.kind,contentType:artifact.contentType || (artifact.kind === 'markdown' ? 'text/markdown' : 'text/plain'),text:artifact.text,tooLarge:false,maxBytes:2097152,binary:false});
+      return fixtureJSON({path,name:path.split('/').pop(),size:artifact.text.length,modified:1761120000,kind:artifact.kind,contentType:artifact.contentType || (artifact.kind === 'markdown' ? 'text/markdown' : 'text/plain'),text:artifact.text,tooLarge:id.endsWith('-file-large'),maxBytes:2097152,binary:false});
     }
     if (method === 'GET' && url.pathname === `${base}raw`) {
+      if (id.endsWith('-raw-error') || (id.endsWith('-raw-recovery') && rawRequests++ === 0)) return fixtureJSON({error:'Preview unavailable'},503);
       const artifact = artifacts[url.searchParams.get('path') || ''];
       return artifact ? new Response(artifact.text,{headers:{'Content-Type':artifact.contentType || 'text/plain'}}) : fixtureJSON({error:'File not found'},404);
     }
@@ -80,6 +84,30 @@ export const Files: Story = {};
 export const FilePreview: Story = {
   args:{sessionId:sessionId('preview')},parameters:{apiFixture:utilityFixture(sessionId('preview'))},
   play:async ({canvasElement}) => { await target(canvasElement)?.showFile('README.md'); },
+};
+export const FileUnavailable: Story = {
+  args:{sessionId:sessionId('file-error')},parameters:{apiFixture:utilityFixture(sessionId('file-error'))},
+  play:async ({canvasElement}) => { await target(canvasElement)?.showFile('README.md'); },
+};
+export const FileRecovery: Story = {
+  args:{sessionId:sessionId('file-recovery')},parameters:{apiFixture:utilityFixture(sessionId('file-recovery'))},
+  play:FileUnavailable.play,
+};
+export const FileTooLarge: Story = {
+  args:{sessionId:sessionId('file-large')},parameters:{apiFixture:utilityFixture(sessionId('file-large'))},
+  play:async ({canvasElement}) => { await target(canvasElement)?.showFile('README.md'); },
+};
+export const PhoneFileUnavailable: Story = {
+  args:{sessionId:sessionId('phone-file-error')},parameters:{apiFixture:utilityFixture(sessionId('phone-file-error'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:FileUnavailable.play,
+};
+export const HTMLPreviewUnavailable: Story = {
+  args:{sessionId:sessionId('raw-error')},parameters:{apiFixture:utilityFixture(sessionId('raw-error'))},
+  play:async ({canvasElement}) => { await target(canvasElement)?.showFile('preview.html'); },
+};
+export const HTMLPreviewRecovery: Story = {
+  args:{sessionId:sessionId('raw-recovery')},parameters:{apiFixture:utilityFixture(sessionId('raw-recovery'))},
+  play:HTMLPreviewUnavailable.play,
 };
 export const HTMLPreview: Story = {
   args:{sessionId:sessionId('html-preview')},parameters:{apiFixture:utilityFixture(sessionId('html-preview'))},
