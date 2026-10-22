@@ -18,7 +18,7 @@ function styleSource(source) {
 
 function literalScaleCount(styles) {
   // Keep the declaration separator available for the next match.
-  return [...styles.matchAll(/(?:(?<=;)|(?<=\{)|^)\s*(?:padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?|gap|row-gap|column-gap|border-radius|font-size)\s*:\s*([^;{}]+);/gm)]
+  return [...styles.matchAll(/(?:(?<=;)|(?<=\{)|^)\s*(?:padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?|gap|row-gap|column-gap|border-radius|font-size|font)\s*:\s*([^;{}]+);/gm)]
     .filter(match => /\b(?:[1-9]\d*(?:\.\d+)?|0?\.\d+)(?:px|rem|em)\b/.test(match[1])).length;
 }
 

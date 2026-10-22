@@ -220,19 +220,20 @@ export class MuxSDKChat extends LitElement {
     .topbar-actions { display:flex; align-items:center; gap:var(--ui-space-4); }
     @media (display-mode: window-controls-overlay) { .chat-screen-header mux-ui-button { -webkit-app-region:no-drag; } }
     .breadcrumbs { min-width:0; flex:1; }
-    .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:var(--ui-space-4) 0; color:var(--ui-danger); font-size:var(--ui-content-font-size); }
-    .delegate-card { display:block; width:100%; max-width:560px; }
+    .agent-history-error { align-self:center; width:calc(100% - var(--ui-space-11)); max-width:var(--ui-chat-transcript-width); margin:var(--ui-space-5) auto 0; }
+    .delegate-card { display:block; width:100%; max-width:var(--ui-chat-delegate-card-width); }
     .delegate-card mux-ui-status-badge { min-height:0; padding:var(--ui-space-1) var(--ui-space-3); }
     .delegate-duration { font:var(--ui-text-xs) var(--ui-font-sans); font-variant-numeric:tabular-nums; }
     @media(max-width:560px) { .delegate-duration { display:none; } }
-    .agent-chat { max-width:760px; width:100%; align-self:center; }
+    .agent-chat { max-width:var(--ui-chat-transcript-width); width:100%; align-self:center; }
     .agent-chat .instruction { padding:var(--ui-space-5) var(--ui-space-6); border-radius:var(--ui-radius-xl); background:color-mix(in srgb,var(--ui-accent) 16%,var(--ui-surface-base)); margin:var(--ui-space-5) 0 var(--ui-space-8) auto; max-width:82%; white-space:pre-wrap; }
     .agent-chat .reply { padding:var(--ui-space-5) var(--ui-space-6); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); white-space:pre-wrap; }
     .agent-chat .reply pre { white-space:pre-wrap; overflow-wrap:anywhere; }
     .agent-step { margin:var(--ui-space-5) 0; padding:var(--ui-space-5) var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
-    .agent-step pre { margin:var(--ui-space-3) 0 0; max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:var(--ui-content-font-size)/1.5 ui-monospace,monospace; }
+    .agent-step pre { margin:var(--ui-space-3) 0 0; max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:var(--ui-content-font-size)/1.5 var(--ui-font-mono); }
     .agent-notice { color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
-    .recovery { max-width:760px; width:calc(100% - 48px); box-sizing:border-box; align-self:center; margin:var(--ui-space-5) auto 0; padding:var(--ui-space-5) var(--ui-space-6); border:1px solid color-mix(in srgb,var(--ui-warning) 55%,var(--ui-border)); border-radius:var(--ui-radius-lg); background:color-mix(in srgb,var(--ui-warning) 10%,var(--ui-surface-base)); color:var(--ui-text); }
+    .recovery { max-width:var(--ui-chat-transcript-width); width:calc(100% - var(--ui-space-11)); align-self:center; margin:var(--ui-space-5) auto 0; }
+    .recovery + .body, .agent-history-error + .body { margin-top:var(--ui-space-5); }
     .recovery strong { display:block; margin-bottom:var(--ui-space-2); }
     .recovery p { margin:0 0 var(--ui-space-4); }
     h1 { font-size:var(--ui-content-font-size); margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -253,7 +254,7 @@ export class MuxSDKChat extends LitElement {
     .scroll-bottom { position:absolute; left:50%; bottom:var(--ui-space-5); transform:translateX(-50%); }
     .scroll-bottom::part(button) { border-radius:var(--ui-radius-pill); box-shadow:var(--ui-shadow-menu); }
     .virtual-spacer { width:1px; flex:none; pointer-events:none; }
-    .block { max-width:760px; width:100%; align-self:center; margin-bottom:var(--ui-space-9); box-sizing:border-box; }
+    .block { max-width:var(--ui-chat-transcript-width); width:100%; align-self:center; margin-bottom:var(--ui-space-9); box-sizing:border-box; }
     .block.work { margin-top:calc(-1 * var(--ui-space-5)); margin-bottom:var(--ui-space-7); }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:25px; color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; animation:thinking-pulse 1.6s ease-in-out infinite; }
@@ -279,15 +280,15 @@ export class MuxSDKChat extends LitElement {
     .work-passage .md-h { margin:var(--ui-space-4) 0 var(--ui-space-3); font-size:var(--ui-text-lg); line-height:1.45; color:var(--ui-text); }
     .work-passage .md-ul,.work-passage .md-ol { margin:var(--ui-space-3) 0; padding-left:var(--ui-space-7); }
     .work-passage .md-pre { max-width:100%; overflow:auto; padding:var(--ui-space-4) var(--ui-space-4); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
-    .work-passage .md-code { font:14px ui-monospace,monospace; }
+    .work-passage .md-code { font:var(--ui-text-lg) var(--ui-font-mono); }
     .work-current-tool { display:flex; align-items:center; gap:var(--ui-space-4); min-height:27px; overflow:hidden; color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .work-current-tool .work-line { flex:1; }
     .work-current-tool.failed { color:var(--ui-danger); }
     .user { display:flex; flex-direction:column; align-items:flex-end; }
-    .bubble { max-width:min(82%,660px); padding:var(--ui-space-5) var(--ui-space-6); border-radius:var(--ui-radius-2xl); background:color-mix(in srgb,var(--ui-accent) 14%,var(--ui-surface-base)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:var(--ui-text-lg); line-height:1.55; }
+    .bubble { max-width:min(82%,var(--ui-chat-bubble-width)); padding:var(--ui-space-5) var(--ui-space-6); border-radius:var(--ui-radius-2xl); background:color-mix(in srgb,var(--ui-accent) 14%,var(--ui-surface-base)); white-space:pre-wrap; overflow-wrap:anywhere; font-size:var(--ui-text-lg); line-height:1.55; }
     .bubble img { display:block; max-width:min(100%,240px); max-height:180px; border-radius:var(--ui-radius-lg); margin-top:var(--ui-space-4); object-fit:contain; }
     .bubble a { display:block; margin-top:var(--ui-space-4); color:var(--ui-accent); }
-    .lane-report-table { box-sizing:border-box; width:100%; max-width:720px; min-width:0; overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
+    .lane-report-table { box-sizing:border-box; width:100%; max-width:var(--ui-chat-report-width); min-width:0; overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
     .chat-message-card.operator-to-lane { background:color-mix(in srgb,var(--ui-accent) 7%,var(--ui-surface-raised)); }
     .chat-message-card.lane-to-lane { background:color-mix(in srgb,var(--ui-success) 8%,var(--ui-surface-raised)); }
     .chat-message-card.lane-to-operator { background:color-mix(in srgb,var(--ui-message-lane-to-operator) 8%,var(--ui-surface-raised)); }
@@ -322,8 +323,8 @@ export class MuxSDKChat extends LitElement {
     .lane-report-detail .md-h { margin:var(--ui-space-5) 0 var(--ui-space-3); font-size:var(--ui-content-font-size); line-height:1.3; }
     .lane-report-detail .md-ul,.lane-report-detail .md-ol { margin:var(--ui-space-3) 0 var(--ui-space-4); padding-left:var(--ui-space-7); }
     .lane-report-detail .md-li { margin:var(--ui-space-2) 0; }
-    .lane-report-detail .md-code { padding:var(--ui-space-px) var(--ui-space-2); border-radius:var(--ui-radius-sm); background:var(--ui-surface-hover); font:var(--ui-content-font-size) ui-monospace,monospace; }
-    .lane-report-detail .md-pre { box-sizing:border-box; max-width:100%; padding:var(--ui-space-4); background:var(--ui-surface-base); font:var(--ui-content-font-size)/1.45 ui-monospace,monospace; }
+    .lane-report-detail .md-code { padding:var(--ui-space-px) var(--ui-space-2); border-radius:var(--ui-radius-sm); background:var(--ui-surface-hover); font:var(--ui-content-font-size) var(--ui-font-mono); }
+    .lane-report-detail .md-pre { box-sizing:border-box; max-width:100%; padding:var(--ui-space-4); background:var(--ui-surface-base); font:var(--ui-content-font-size)/1.45 var(--ui-font-mono); }
     .lane-report-detail .md-pre code { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
     .lane-report-detail .md-quote { margin:var(--ui-space-4) 0; padding-left:var(--ui-space-4); border-left:2px solid var(--ui-border); color:var(--ui-text-muted); }
     .lane-report-detail .md-link { color:var(--ui-accent); text-decoration:underline; text-underline-offset:2px; }
@@ -341,7 +342,7 @@ export class MuxSDKChat extends LitElement {
     .message-actions .sr-only { ${visuallyHidden} }
     .message-time { margin-left:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-lg); font-variant-numeric:tabular-nums; white-space:nowrap; }
     .user .message-time { order:-1; margin:0 var(--ui-space-3) 0 0; }
-    .message-edit { box-sizing:border-box; width:min(82%,660px); padding:var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
+    .message-edit { box-sizing:border-box; width:min(82%,var(--ui-chat-bubble-width)); padding:var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
     .message-edit .textarea-sizing { width:100%; min-height:96px; max-height:320px; }
     .message-edit textarea,.message-edit .textarea-mirror { min-height:96px; max-height:320px; }
     .message-edit-controls { display:flex; justify-content:flex-end; gap:var(--ui-space-4); margin-top:var(--ui-space-4); }
@@ -358,10 +359,10 @@ export class MuxSDKChat extends LitElement {
     .text h3.md-h { font-size:var(--ui-content-heading-3); }
     .text h4.md-h, .text h5.md-h, .text h6.md-h { font-size:var(--ui-content-heading-4); }
     .text strong { color:var(--ui-text); font-weight:700; }
-    .text .md-code { padding:var(--ui-inline-code-padding-block) var(--ui-inline-code-padding-inline); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); background:var(--ui-surface-raised); font:var(--ui-content-heading-4)/1.4 ui-monospace,monospace; }
+    .text .md-code { padding:var(--ui-inline-code-padding-block) var(--ui-inline-code-padding-inline); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); background:var(--ui-surface-raised); font:var(--ui-content-heading-4)/1.4 var(--ui-font-mono); }
     .text .md-pre { box-sizing:border-box; max-width:100%; overflow:auto; margin:0 0 var(--ui-space-7); padding:var(--ui-space-6) var(--ui-space-7); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
-    .text .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:calc(-1 * var(--ui-space-2)) 0 var(--ui-space-5); color:var(--ui-text-muted); font:14px/1.4 var(--ui-content-font-family); text-transform:uppercase; letter-spacing:.04em; }
-    .text .md-pre code { color:inherit; font:14px/1.6 ui-monospace,monospace; white-space:pre; }
+    .text .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:calc(-1 * var(--ui-space-2)) 0 var(--ui-space-5); color:var(--ui-text-muted); font:var(--ui-text-lg)/1.4 var(--ui-content-font-family); text-transform:uppercase; letter-spacing:.04em; }
+    .text .md-pre code { color:inherit; font:var(--ui-text-lg)/1.6 var(--ui-font-mono); white-space:pre; }
     .text .md-pre[data-streaming] { border-bottom-color:var(--ui-accent); }
     .text .md-link { color:var(--ui-accent); text-decoration:underline; text-underline-offset:3px; }
     .text .md-chat-link { display:inline-flex; align-items:baseline; gap:var(--ui-space-2); max-width:100%; padding:var(--ui-space-px) var(--ui-space-3); border:1px solid color-mix(in srgb,var(--ui-accent) 48%,transparent); border-radius:var(--ui-radius-md); background:color-mix(in srgb,var(--ui-accent) 12%,transparent); font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
@@ -398,7 +399,7 @@ export class MuxSDKChat extends LitElement {
     .tool-entry .detail { box-sizing:border-box; max-width:min(100%,650px); margin:var(--ui-space-3) 0 var(--ui-space-5) var(--ui-space-8); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:color-mix(in srgb,var(--ui-accent) 5%,var(--ui-surface-base)); }
     .tool-detail-title { color:var(--ui-text); font-size:var(--ui-text-lg); font-weight:600; }
     .detail-label { color:var(--ui-accent); font-weight:600; margin:var(--ui-space-4) 0 var(--ui-space-2); }
-    .detail pre { margin:0; padding:var(--ui-space-4) var(--ui-space-5); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--ui-text); font:14px/1.5 ui-monospace,monospace; }
+    .detail pre { margin:0; padding:var(--ui-space-4) var(--ui-space-5); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; color:var(--ui-text); font:var(--ui-text-lg)/1.5 var(--ui-font-mono); }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { position:relative; padding:0 var(--ui-space-7) var(--ui-space-7); }
     .slash-menu { --ui-listbox-width:var(--ui-chat-content-width); }

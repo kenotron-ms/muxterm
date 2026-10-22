@@ -74,7 +74,7 @@ const meta = {
         <div style="display:flex;align-items:center;gap:var(--ui-space-4)"><span style="display:block;width:var(--ui-divider-thickness);height:var(--ui-control-sm);background:var(--ui-border-strong)"></span><span>Divider · 1</span></div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:var(--ui-space-4);margin-top:var(--ui-space-6);color:var(--ui-text-muted);font:var(--ui-text-xs) var(--ui-font-mono)">
-        <span>--ui-breadcrumb-ancestor-max-width</span><span>--ui-breadcrumb-current-max-width</span><span>--ui-empty-state-width</span><span>--ui-command-search-max-height</span><span>--ui-shell-notice-max-width</span>
+        <span>--ui-breadcrumb-ancestor-max-width</span><span>--ui-breadcrumb-current-max-width</span><span>--ui-empty-state-width</span><span>--ui-command-search-max-height</span><span>--ui-shell-notice-max-width</span><span>--ui-chat-transcript-width</span><span>--ui-chat-report-width</span><span>--ui-chat-bubble-width</span><span>--ui-chat-delegate-card-width</span>
       </div>
       <h2 style="font-size:var(--ui-text-2xl);margin:var(--ui-space-9) 0 var(--ui-space-5)">Shape and elevation</h2>
       <div style="display:flex;flex-wrap:wrap;gap:var(--ui-space-8)">

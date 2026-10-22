@@ -106,6 +106,10 @@
   --ui-picker-trigger-width: 290px;
   --ui-picker-trigger-compact-width: 170px;
   --ui-chat-content-width: 790px;
+  --ui-chat-transcript-width: 760px;
+  --ui-chat-report-width: 720px;
+  --ui-chat-bubble-width: 660px;
+  --ui-chat-delegate-card-width: 560px;
   --ui-tab-min-width: 120px;
   --ui-tab-max-width: 210px;
   --ui-choice-list-max-height: 180px;

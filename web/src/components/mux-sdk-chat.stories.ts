@@ -374,6 +374,16 @@ export const RecoveryRequired: Story = {
   args:{sessionId:'storybook-chat-recovery'},
   parameters:{apiFixture:chatFixture('storybook-chat-recovery','uncertain')},
 };
+export const PhoneRecoveryRequired: Story = {
+  args:{sessionId:'storybook-chat-phone-recovery'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-recovery','uncertain')},
+};
+export const LightRecoveryRequired: Story = {
+  args:{sessionId:'storybook-chat-light-recovery'},
+  globals:{palette:'github-light'},
+  parameters:{apiFixture:chatFixture('storybook-chat-light-recovery','uncertain')},
+};
 export const PhoneConversation: Story = {
   args:{sessionId:'storybook-chat-phone'},
   globals:{viewport:{value:'phone390',isRotated:false}},
