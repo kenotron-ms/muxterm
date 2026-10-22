@@ -76,6 +76,14 @@ export default meta;
 type Story = StoryObj<NewChatArgs>;
 export const Ungrouped: Story = {};
 export const Project: Story = { args: { project:'atlas' } };
+const openProjectPicker = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+  const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
+  await sdkChats.refresh();
+  await screen?.updateComplete;
+  screen?.shadowRoot?.querySelector<HTMLButtonElement>('.project-trigger')?.click();
+};
+export const ProjectPicker: Story = { args:{project:'atlas'}, play:openProjectPicker };
+export const PhoneProjectPicker: Story = { args:{project:'atlas'},globals:{viewport:{value:'phone390',isRotated:false}},play:openProjectPicker };
 export const WorktreeSelected: Story = {
   args:{project:'atlas'},
   play:async ({canvasElement}) => {
@@ -100,7 +108,7 @@ export const NewProject: Story = {
     await screen.updateComplete;
     screen.shadowRoot?.querySelector<HTMLButtonElement>('.project-trigger')?.click();
     await screen.updateComplete;
-    screen.shadowRoot?.querySelectorAll<HTMLButtonElement>('.project-option').item(3)?.click();
+    screen.shadowRoot?.querySelectorAll<HTMLElement>('mux-ui-listbox-option').item(3)?.click();
   },
 };
 export const PhoneNewProject: Story = {

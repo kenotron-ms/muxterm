@@ -154,6 +154,28 @@ export const DraftMessage: Story = {
     }
   },
 };
+const showCommandSuggestions = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+  await sdkChats.refresh();
+  const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+  await chat?.updateComplete;
+  const field = chat?.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea');
+  if (field) {
+    field.value = '/goal ';
+    field.dispatchEvent(new InputEvent('input',{bubbles:true,composed:true}));
+    field.focus();
+  }
+};
+export const CommandSuggestions: Story = {
+  args:{sessionId:'storybook-chat-commands'},
+  parameters:{apiFixture:chatFixture('storybook-chat-commands')},
+  play:showCommandSuggestions,
+};
+export const PhoneCommandSuggestions: Story = {
+  args:{sessionId:'storybook-chat-phone-commands'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-commands')},
+  play:showCommandSuggestions,
+};
 export const FileAttached: Story = {
   args:{sessionId:'storybook-chat-attachment'},
   parameters:{apiFixture:chatFixture('storybook-chat-attachment')},

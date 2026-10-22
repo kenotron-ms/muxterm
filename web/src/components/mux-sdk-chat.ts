@@ -20,6 +20,8 @@ import type { MuxSDKUtility } from './mux-sdk-utility.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
+import { listboxIndexForKey } from '../ui/listbox.js';
+import '../ui/listbox-option.js';
 import '../ui/select.js';
 import '../ui/text-area.js';
 import type { MuxUISelect } from '../ui/select.js';
@@ -422,13 +424,8 @@ export class MuxSDKChat extends LitElement {
     .error { color:var(--ui-danger); }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { position:relative; padding:0 var(--ui-space-7) var(--ui-space-7); }
-    .slash-menu { position:absolute; z-index:12; bottom:calc(100% - 1px); left:50%; transform:translateX(-50%); box-sizing:border-box; width:min(790px,calc(100% - 38px)); padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-menu); }
-    .slash-menu button { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-6); width:100%; min-height:44px; border:0; border-radius:var(--ui-radius-md); padding:var(--ui-space-4) var(--ui-space-5); background:transparent; color:var(--ui-text); text-align:left; cursor:pointer; }
-    .slash-menu button[aria-selected="true"],.slash-menu button:hover { background:var(--ui-surface-hover); }
-    .slash-menu code { flex:none; min-width:108px; color:var(--ui-accent); font:600 12px ui-monospace,monospace; }
-    .slash-menu span { min-width:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
-    .slash-menu button:focus-visible { outline:2px solid var(--ui-accent); outline-offset:-2px; }
-    .command-notice { box-sizing:border-box; width:min(790px,100%); margin:0 auto var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-sm); white-space:pre-wrap; overflow-wrap:anywhere; }
+    .slash-menu { --ui-listbox-width:var(--ui-chat-content-width); }
+    .command-notice { box-sizing:border-box; width:min(var(--ui-chat-content-width),100%); margin:0 auto var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-sm); white-space:pre-wrap; overflow-wrap:anywhere; }
     .command-notice.error { color:var(--ui-danger); }
     .attachments { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); padding:0 0 var(--ui-space-5); }
     .attachment { position:relative; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; max-width:min(100%,230px); padding:var(--ui-space-3) var(--ui-space-9) var(--ui-space-3) var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
@@ -444,7 +441,7 @@ export class MuxSDKChat extends LitElement {
     .file-input { display:none; }
     .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb,var(--ui-surface-base) 92%,transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
     /* The border extends 15px beyond each 760px transcript edge so typed text aligns with replies. */
-    .composer { box-sizing:border-box; max-width:790px; margin:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-2xl); background:var(--ui-surface-raised); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); box-shadow:var(--ui-shadow-control); transition:border-color .15s,box-shadow .15s; }
+    .composer { box-sizing:border-box; max-width:var(--ui-chat-content-width); margin:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-2xl); background:var(--ui-surface-raised); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); box-shadow:var(--ui-shadow-control); transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
     .composer-row { display:flex; }
     .goal-banner { display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; min-height:var(--ui-control-md); margin-bottom:var(--ui-space-4); border-bottom:1px solid var(--ui-border); padding-bottom:var(--ui-space-3); font-size:var(--ui-text-sm); }
@@ -895,9 +892,10 @@ export class MuxSDKChat extends LitElement {
   }
   private onMessageKeyDown(event: KeyboardEvent) {
     const suggestions = this.slashSuggestions();
-    if (suggestions.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    const next = listboxIndexForKey(event.key, this.slashSelection, suggestions.length);
+    if (next !== null) {
       event.preventDefault();
-      this.slashSelection = (this.slashSelection + (event.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length;
+      this.slashSelection = next;
       return;
     }
     if (event.key === 'Escape' && suggestions.length) {
@@ -2373,7 +2371,7 @@ export class MuxSDKChat extends LitElement {
       ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : html`<div class="block">Loading recent messages…</div>`}
       ${this.error ? html`<div class="block error" role="alert">${this.error}${this.reconnectFailed ? html` <button @click=${this.retryConnection}>Retry now</button>` : nothing}</div>` : nothing}
     </div>${this.goalSurfaces()}${this.showScrollBottom ? html`<div class="scroll-bottom-row"><button class="scroll-bottom" aria-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</button></div>` : nothing}<div class="composer-wrap">
-      ${slashSuggestions.length ? html`<div class="slash-menu" id="chat-slash-menu" role="listbox" aria-label="Chat commands">${slashSuggestions.map((suggestion,index) => html`<button id=${`chat-slash-option-${index}`} role="option" aria-selected=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}><code>${suggestion.label}</code><span>${suggestion.description}</span></button>`)}</div>` : nothing}
+      ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions">${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
       ${this.commandNotice ? html`<div class="command-notice ${this.commandFailed ? 'error' : ''}" role=${this.commandFailed ? 'alert' : 'status'}>${this.commandNotice}</div>` : nothing}
       <div class="composer" @paste=${this.onPaste}>
       ${this.goalBanner()}
@@ -2384,7 +2382,7 @@ export class MuxSDKChat extends LitElement {
         <span class="status ${a.error ? 'failed' : ''}" role=${a.error ? 'alert' : 'status'}>${a.error || (a.uploading ? 'Uploading…' : '')}</span>
         <mux-ui-button class="attachment-remove" icon-only size="small" variant="quiet" accessible-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>${icon(X,{size:14})}</mux-ui-button>
       </div>`)}</div>` : nothing}
-      <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
+      <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy && this.isACPChat() ? 'Message after current turn' : this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-haspopup="listbox" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy && this.isACPChat() ? 'Wait for this turn to finish, or stop it…' : this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><button class="attach-button" aria-label="Attach files or images" title="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>

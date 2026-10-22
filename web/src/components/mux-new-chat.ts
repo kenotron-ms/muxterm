@@ -11,6 +11,8 @@ import '../ui/choice-picker.js';
 import '../ui/choice-section.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
+import { listboxIndexForKey } from '../ui/listbox.js';
+import '../ui/listbox-option.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import '../ui/range-field.js';
 import '../ui/select.js';
@@ -69,6 +71,7 @@ export class MuxNewChat extends LitElement {
   @state() private pickerOpen = false;
   @state() private locationOpen = false;
   @state() private projectPickerOpen = false;
+  @state() private projectActiveIndex = 0;
   @state() private busy = false;
   @state() private error = '';
   @state() private copiedSetup = '';
@@ -122,14 +125,7 @@ export class MuxNewChat extends LitElement {
     .project-trigger .project-name { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
     .project-trigger .project-symbol { display:flex; color:var(--ui-accent); }
     .project-trigger .down { display:flex; margin-left:auto; color:var(--ui-text-muted); }
-    .project-options { position:absolute; z-index:20; top:36px; left:0; width:270px; max-width:min(270px,calc(100vw - 72px)); max-height:280px; overflow:auto; padding:5px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-menu); }
-    .project-option { width:100%; display:flex; align-items:center; gap:9px; padding:8px; border:0; border-radius:6px; background:transparent; color:var(--ui-text); text-align:left; }
-    .project-option:hover,.project-option[selected] { background:color-mix(in srgb,var(--ui-accent) 15%,transparent); }
-    .project-option .option-copy { flex:1; min-width:0; display:grid; gap:1px; }
-    .project-option .option-copy strong,.project-option .option-copy small { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-    .project-option .option-copy small { color:var(--ui-text-muted); font-size:10px; }
-    .project-option svg { flex:none; color:var(--ui-accent); }
-    .project-divider { height:1px; margin:4px 6px; background:var(--ui-border); }
+    .project-picker mux-ui-listbox { --ui-listbox-width:var(--ui-picker-trigger-width); }
     .folder { display:grid; gap:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .folder-line { display:flex; align-items:center; gap:var(--ui-space-3); }
     .folder-line mux-ui-text-field { flex:1; min-width:0; }
@@ -277,6 +273,29 @@ export class MuxNewChat extends LitElement {
     if (base && folder.startsWith(base === '/' ? '/' : `${base}/`)) return folder.slice(base === '/' ? 1 : base.length + 1);
     return folder;
   }
+  private projectValues(): string[] { return ['ungrouped', ...sdkChats.projects.map(project => project.id), 'new']; }
+  private openProjectPicker() {
+    this.projectActiveIndex = Math.max(0, this.projectValues().indexOf(this.projectId));
+    this.projectPickerOpen = true;
+  }
+  private onProjectTriggerKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && this.projectPickerOpen) {
+      event.preventDefault();
+      this.projectPickerOpen = false;
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && this.projectPickerOpen) {
+      event.preventDefault();
+      this.onProjectChange(this.projectValues()[this.projectActiveIndex] || 'ungrouped');
+      return;
+    }
+    const next = listboxIndexForKey(event.key, this.projectPickerOpen ? this.projectActiveIndex : Math.max(0, this.projectValues().indexOf(this.projectId)), this.projectValues().length);
+    if (next === null) return;
+    event.preventDefault();
+    this.projectPickerOpen = true;
+    this.projectActiveIndex = next;
+    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>(`#project-option-${next}`)?.scrollIntoView({block:'nearest'}));
+  }
   private onProjectChange(value: string) {
     this.projectId = value;
     this.projectPickerOpen = false;
@@ -286,6 +305,7 @@ export class MuxNewChat extends LitElement {
     else if (value === 'ungrouped' && this.listing) this.folder = this.listing.base;
     if (value === 'ungrouped' || value === 'new') this.workMode = 'local';
     void this.loadCatalog();
+    if (value !== 'new') void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>('.project-trigger')?.focus());
   }
   private onHarnessChange(value: SDKHarnessName) {
     const option = this.startOptions?.find(item => item.harness === value);
@@ -483,12 +503,12 @@ export class MuxNewChat extends LitElement {
       <h1>What would you like to do?</h1>
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
         <div class="controls">
-        <div class="project"><div class="project-picker"><button class="project-trigger" role="combobox" aria-label="Project" aria-expanded=${this.projectPickerOpen} aria-controls="project-options" @click=${() => { this.projectPickerOpen = !this.projectPickerOpen; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Escape') this.projectPickerOpen = false; if (e.key === 'ArrowDown') this.projectPickerOpen = true; }}><span class="project-symbol">${icon(this.projectId === 'new' ? Plus : Folder,{size:15})}</span><span class="project-name">${selectedProject?.name || (this.projectId === 'new' ? 'New project' : 'Ungrouped')}</span><span class="down">${icon(ChevronDown,{size:16})}</span></button>
-          ${this.projectPickerOpen ? html`<div id="project-options" class="project-options" role="listbox" aria-label="Projects">
-            <button class="project-option" role="option" aria-selected=${this.projectId === 'ungrouped'} ?selected=${this.projectId === 'ungrouped'} @click=${() => this.onProjectChange('ungrouped')}>${icon(Folder,{size:16})}<span class="option-copy"><strong>Ungrouped</strong><small>Choose a folder for this chat</small></span></button>
-            ${sdkChats.projects.map(p => html`<button class="project-option" role="option" aria-selected=${this.projectId === p.id} ?selected=${this.projectId === p.id} title=${p.path} @click=${() => this.onProjectChange(p.id)}>${icon(Folder,{size:16})}<span class="option-copy"><strong>${p.name}</strong><small>${p.path}</small></span></button>`)}
-            <div class="project-divider"></div><button class="project-option" role="option" aria-selected=${this.projectId === 'new'} ?selected=${this.projectId === 'new'} @click=${() => this.onProjectChange('new')}>${icon(Plus,{size:16})}<span class="option-copy"><strong>New project</strong><small>Choose its primary folder</small></span></button>
-          </div>` : nothing}
+        <div class="project"><div class="project-picker"><button class="project-trigger" role="combobox" aria-label="Project" aria-haspopup="listbox" aria-expanded=${this.projectPickerOpen} aria-controls=${this.projectPickerOpen ? 'project-options' : nothing} aria-activedescendant=${this.projectPickerOpen ? `project-option-${this.projectActiveIndex}` : nothing} @click=${() => { if (this.projectPickerOpen) this.projectPickerOpen = false; else this.openProjectPicker(); }} @keydown=${this.onProjectTriggerKeyDown}><span class="project-symbol">${icon(this.projectId === 'new' ? Plus : Folder,{size:15})}</span><span class="project-name">${selectedProject?.name || (this.projectId === 'new' ? 'New project' : 'Ungrouped')}</span><span class="down">${icon(ChevronDown,{size:16})}</span></button>
+          ${this.projectPickerOpen ? html`<mux-ui-listbox id="project-options" label="Projects">
+            <mux-ui-listbox-option id="project-option-0" label="Ungrouped" description="Choose a folder for this chat" ?selected=${this.projectId === 'ungrouped'} ?active=${this.projectActiveIndex === 0} show-check @click=${() => this.onProjectChange('ungrouped')}><span slot="icon">${icon(Folder,{size:16})}</span></mux-ui-listbox-option>
+            ${sdkChats.projects.map((project,index) => html`<mux-ui-listbox-option id=${`project-option-${index + 1}`} .label=${project.name} .description=${project.path} title=${project.path} ?selected=${this.projectId === project.id} ?active=${this.projectActiveIndex === index + 1} show-check @click=${() => this.onProjectChange(project.id)}><span slot="icon">${icon(Folder,{size:16})}</span></mux-ui-listbox-option>`)}
+            <div role="separator"></div><mux-ui-listbox-option id=${`project-option-${sdkChats.projects.length + 1}`} label="New project" description="Choose its primary folder" ?selected=${this.projectId === 'new'} ?active=${this.projectActiveIndex === sdkChats.projects.length + 1} show-check @click=${() => this.onProjectChange('new')}><span slot="icon">${icon(Plus,{size:16})}</span></mux-ui-listbox-option>
+          </mux-ui-listbox>` : nothing}
         </div></div>
         <div class="location-settings"><button class="location-trigger" type="button" aria-haspopup="dialog" aria-expanded=${this.locationOpen} aria-label="Chat location" title=${this.folder} @click=${() => { this.locationOpen = true; }}><span class="folder-symbol">${icon(Folder,{size:14})}</span><span class="folder-label">${this.locationLabel()}</span></button>
           ${this.locationOpen ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Chat location" open @dismiss=${() => { this.locationOpen = false; this.pickerOpen = false; }}>

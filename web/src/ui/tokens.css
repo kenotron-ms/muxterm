@@ -75,6 +75,7 @@
   --ui-picker-compact-height: 340px;
   --ui-picker-trigger-width: 290px;
   --ui-picker-trigger-compact-width: 170px;
+  --ui-chat-content-width: 790px;
 
   --ui-surface-base: var(--chrome-body);
   --ui-surface-raised: var(--chrome-bar);

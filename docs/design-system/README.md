@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Menu, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Text Field, Text Area, Select,
+3. Use the shared Button, Action Menu, Listbox, Listbox Option, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -153,6 +153,19 @@ screens and terminal font size in Settings. Chromium checked keyboard value
 changes in Storybook and in the isolated live New Chat and Settings screens;
 the live font-size change was restored after verification. Model-list sizing,
 loading and error messages inside pickers still need shared-pattern review.
+
+New Chat's project selection and the chat command suggestions now use the same
+Listbox and Listbox Option elements. The shared rows own selected, active,
+description and icon presentation; the shared surface places project choices as
+a desktop popover or phone sheet and command suggestions above the composer.
+The project combobox keeps DOM focus while Arrow keys change the active option,
+Enter commits the choice, and Escape dismisses the sheet. The chat textarea
+keeps focus while Arrow keys move through suggestions; Enter inserts a command
+without sending it. Both controls reference active options with
+`aria-activedescendant`, following the [WAI-ARIA listbox pattern](https://www.w3.org/WAI/ARIA/apg/patterns/listbox/)
+and [combobox pattern](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/).
+Chromium checked desktop and phone Storybook states and both controls in
+isolated dev-local; command execution was not part of this pass.
 
 The Utility panel uses semantic tokens for chrome and document colors, plus
 shared compact Text Field and Select controls in the file rail. Storybook's
