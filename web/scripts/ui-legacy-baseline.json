@@ -126,10 +126,10 @@
     "nativeControls": 39
   },
   "components/mux-sidebar.ts": {
-    "legacyTokens": 135,
-    "literalColors": 1,
-    "literalScale": 95,
-    "nativeControls": 6
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "nativeControls": 5
   },
   "components/mux-skills.ts": {
     "legacyTokens": 11,

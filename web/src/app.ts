@@ -1472,6 +1472,7 @@ export class MuxApp extends LitElement {
               @toggle="${this._onDrawerPopoverToggle}"
             >
               <mux-sidebar
+                .drawer=${true}
                 .newChatActive="${this._sdkChatId === 'new'}"
                 .terminalActive="${this._sdkChatId === null}"
                 .jobsActive="${this._sdkChatId === 'jobs'}"
