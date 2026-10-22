@@ -5,6 +5,8 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import '../ui/choice-item.js';
 import { choicePickerSheetStyles, closeChoicePickerOnEscape } from '../ui/choice-picker-pattern.js';
+import type { MuxUIRangeField } from '../ui/range-field.js';
+import '../ui/range-field.js';
 import '../ui/switch.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
@@ -58,10 +60,6 @@ export class MuxSDKChatSettings extends LitElement {
     .divider { height:1px; margin:var(--ui-space-4) var(--ui-space-3); background:var(--ui-border); }
     .group { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
     .model-list { max-height:190px; overflow-y:auto; }
-    .slider { padding:var(--ui-space-2) var(--ui-space-5) var(--ui-space-5); }
-    .slider-header { display:flex; justify-content:space-between; gap:var(--ui-space-4); font-weight:600; }
-    input[type=range] { width:100%; margin:var(--ui-space-5) 0 var(--ui-space-2); accent-color:var(--ui-accent); cursor:pointer; }
-    .slider-ends { display:flex; justify-content:space-between; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .notice { padding:var(--ui-space-4) var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .error { color:var(--ui-danger-text); padding:var(--ui-space-4) var(--ui-space-5); overflow-wrap:anywhere; }
     .busy { opacity:.55; }
@@ -148,7 +146,7 @@ export class MuxSDKChatSettings extends LitElement {
         ${this.harness === 'amplifier' ? html`<div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${this.harness}</div>`}
         <div class="divider"></div><div class="heading">Model</div>
         <div class="model-list">${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}</div>
-        ${efforts.length > 1 ? html`<div class="divider"></div><div class="slider"><div class="slider-header"><span>Thinking</span><span>${efforts[effortIndex]}</span></div><input type="range" aria-label="Thinking effort" min="0" max=${efforts.length - 1} step="1" .value=${String(effortIndex)} ?disabled=${this.loading || this.turnBusy} @change=${(event: Event) => void this.select({ effort:efforts[Number((event.target as HTMLInputElement).value)] })}><div class="slider-ends"><span>${efforts[0]}</span><span>${efforts[efforts.length - 1]}</span></div></div>` : nothing}
+        ${efforts.length > 1 ? html`<div class="divider"></div><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} ?disabled=${this.loading || this.turnBusy} @change=${(event:Event) => void this.select({ effort:efforts[(event.target as MuxUIRangeField).value] })}></mux-ui-range-field>` : nothing}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></details>`;
   }

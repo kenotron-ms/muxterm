@@ -80,8 +80,8 @@
   "components/mux-new-chat.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 82,
-    "nativeControls": 12
+    "literalScale": 78,
+    "nativeControls": 11
   },
   "components/mux-operator-status.ts": {
     "legacyTokens": 0,
@@ -105,7 +105,7 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "nativeControls": 1
+    "nativeControls": 0
   },
   "components/mux-sdk-chat.ts": {
     "legacyTokens": 0,
@@ -153,7 +153,7 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "nativeControls": 11
+    "nativeControls": 10
   },
   "components/title-bar.ts": {
     "legacyTokens": 1,

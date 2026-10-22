@@ -4,6 +4,8 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
 import '../ui/button.js';
 import '../ui/nav-item.js';
+import type { MuxUIRangeField } from '../ui/range-field.js';
+import '../ui/range-field.js';
 import '../ui/text-field.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
@@ -436,33 +438,7 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     /* ── Font size slider ── */
-    .size-row {
-      display: flex;
-      align-items: center;
-      gap: var(--ui-space-5);
-      padding: var(--ui-space-3) var(--ui-space-5);
-      margin-top: var(--ui-space-2);
-    }
-
-    .size-label {
-      color: var(--ui-text-muted);
-      width: 64px;
-      flex-shrink: 0;
-    }
-
-    input[type="range"] {
-      flex: 1;
-      accent-color: var(--ui-accent);
-      height: 4px;
-      cursor: pointer;
-    }
-
-    .size-value {
-      width: 28px;
-      text-align: right;
-      color: var(--ui-text);
-      font-feature-settings: 'tnum';
-    }
+    mux-ui-range-field.font-size { margin-top:var(--ui-space-2); }
 
     /* ── Font preview line ── */
     .font-preview {
@@ -1302,20 +1278,9 @@ export class MuxSettingsSurface extends LitElement {
           </label>
         `)}
       </div>
-      <div class="size-row">
-        <span class="size-label">Size</span>
-        <input
-          type="range"
-          aria-label="Terminal font size"
-          min="8" max="24" step="1"
-          .value="${String(size)}"
-          @input="${(e: Event) => {
-            const v = parseInt((e.target as HTMLInputElement).value, 10);
-            this._setFontSize(v);
-          }}"
-        />
-        <span class="size-value">${size}</span>
-      </div>
+      <mux-ui-range-field class="font-size" layout="inline" label="Size" accessible-label="Terminal font size"
+        unit=" px" .min=${8} .max=${24} .value=${size}
+        @input=${(event:Event) => this._setFontSize((event.target as MuxUIRangeField).value)}></mux-ui-range-field>
       <div
         class="font-preview"
         style="font-family:'${family}',monospace;font-size:${size}px"

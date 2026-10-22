@@ -10,6 +10,8 @@ import '../ui/choice-item.js';
 import { choicePickerSheetStyles, closeChoicePickerOnEscape } from '../ui/choice-picker-pattern.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
+import type { MuxUIRangeField } from '../ui/range-field.js';
+import '../ui/range-field.js';
 import '../ui/select.js';
 import '../ui/switch.js';
 import '../ui/text-field.js';
@@ -120,11 +122,6 @@ export class MuxNewChat extends LitElement {
     .chat-picker .divider { height:1px; margin:7px 5px; background:var(--ui-border); }
     .chat-picker .hint { color:var(--ui-text-muted); font-size:11px; }
     .chat-picker .model-list { max-height:180px; overflow-y:auto; }
-    .chat-picker .slider { padding:4px 10px 12px; }
-    .chat-picker .slider-header,.chat-picker .slider-ends { display:flex; justify-content:space-between; gap:8px; }
-    .chat-picker .slider-header { font-weight:600; }
-    .chat-picker .slider-ends { color:var(--ui-text-muted); font-size:10px; }
-    .chat-picker input[type=range] { width:100%; height:auto; margin:12px 0 4px; padding:0; border:0; accent-color:var(--ui-accent); cursor:pointer; }
     .chat-picker .custom-model { width:calc(100% - 20px); margin:6px 10px; }
     .catalog-status { color:var(--ui-text-muted); font-size:11px; }
     .controls mux-ui-switch { margin-left:auto; }
@@ -381,7 +378,7 @@ export class MuxNewChat extends LitElement {
         ${this.pickerChoice('Other model ID…', '', this.customModel, () => this.onModelChange('__custom__'))}
       </div>
       ${this.customModel ? html`<mux-ui-text-field class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(event:Event) => { this.model = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
-      ${efforts.length > 1 ? html`<div class="divider"></div><div class="slider"><div class="slider-header"><span>Thinking</span><span>${efforts[effortIndex]}</span></div><input type="range" aria-label="Thinking effort" min="0" max=${efforts.length - 1} step="1" .value=${String(effortIndex)} @input=${(event:Event) => { this.effort = efforts[Number((event.target as HTMLInputElement).value)]; }}><div class="slider-ends"><span>${efforts[0]}</span><span>${efforts[efforts.length - 1]}</span></div></div>` : nothing}
+      ${efforts.length > 1 ? html`<div class="divider"></div><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} @input=${(event:Event) => { this.effort = efforts[(event.target as MuxUIRangeField).value]; }}></mux-ui-range-field>` : nothing}
       ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
     </div></details>`;
   }
