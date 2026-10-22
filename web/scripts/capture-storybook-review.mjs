@@ -8,6 +8,8 @@ const chromePath = process.env.CHROME_PATH;
 const captures = [
   { file: 'theme-lab-desktop.png', id: 'foundations-theme-lab--custom-palette', width: 1200, height: 800, ready: 'mux-ui-page-intro', readyText: 'Project workspace' },
   { file: 'tokens-layer-order.png', id: 'foundations-tokens--semantic-scale', width: 1200, height: 900, ready: 'section', readyText: 'Layer order' },
+  { file: 'screen-header-desktop.png', id: 'patterns-screen-header--standard', width: 1200, height: 600, ready: 'mux-ui-screen-header', readyText: 'Skills' },
+  { file: 'screen-header-long-labels.png', id: 'patterns-screen-header--long-labels', width: 900, height: 600, ready: 'mux-ui-screen-header', readyText: 'Scheduled jobs' },
   { file: 'action-tile-phone.png', id: 'primitives-action-tile--phone', width: 390, height: 844, ready: 'mux-ui-action-tile' },
   { file: 'breadcrumb-phone.png', id: 'primitives-breadcrumb--phone-path', width: 390, height: 844, ready: 'mux-ui-breadcrumb' },
   { file: 'navigation-status-desktop.png', id: 'primitives-navigation-item--descriptions-and-status', width: 1200, height: 800, ready: 'mux-ui-nav-item' },
@@ -31,7 +33,9 @@ const captures = [
   { file: 'new-chat-desktop.png', id: 'screens-new-chat--ungrouped', width: 1200, height: 800, ready: 'mux-new-chat' },
   { file: 'chat-desktop.png', id: 'screens-chat--conversation', width: 1200, height: 800, ready: 'mux-sdk-chat' },
   { file: 'jobs-desktop.png', id: 'screens-scheduled-jobs--statuses', width: 1200, height: 800, ready: 'mux-scheduled-jobs' },
+  { file: 'jobs-phone.png', id: 'screens-scheduled-jobs--phone-statuses', width: 390, height: 844, ready: 'mux-scheduled-jobs' },
   { file: 'skills-desktop.png', id: 'screens-skills--installed', width: 1200, height: 800, ready: 'mux-skills' },
+  { file: 'skills-phone.png', id: 'screens-skills--phone-installed', width: 390, height: 844, ready: 'mux-skills' },
   { file: 'connections-google-desktop.png', id: 'screens-connections--google-tool-selection', width: 1200, height: 800, ready: 'mux-connections', readyText: 'Choose a Google service' },
   { file: 'connections-microsoft-phone.png', id: 'screens-connections--phone-microsoft-ready', width: 390, height: 844, ready: 'mux-connections', readyText: 'Personal Microsoft account' },
   { file: 'settings-appearance-phone.png', id: 'screens-settings--phone-appearance', width: 390, height: 844, ready: 'mux-settings-surface', readyText: 'Appearance' },

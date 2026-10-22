@@ -51,6 +51,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const Statuses: Story = {};
+export const PhoneStatuses: Story = { globals:{viewport:{value:'phone390',isRotated:false}} };
 export const Empty: Story = { parameters: { apiFixture:jobsFixture([]) } };
 export const NewJobEditor: Story = { play:async ({canvasElement}) => {
   const host = canvasElement.querySelector('mux-scheduled-jobs');

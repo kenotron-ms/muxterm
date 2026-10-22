@@ -6,6 +6,7 @@ import '../ui/button.js';
 import '../ui/feedback.js';
 import '../ui/nav-item.js';
 import '../ui/page-intro.js';
+import '../ui/screen-header.js';
 import '../ui/status-badge.js';
 import '../ui/text-field.js';
 import '../ui/select.js';
@@ -50,11 +51,7 @@ export class MuxConnections extends LitElement {
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; overflow:hidden; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
     * { box-sizing:border-box; } button { font:inherit; cursor:pointer; }
-    .titlebar { height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); font-size:var(--ui-text-md); }
-    .titlebar .section-name,.titlebar .divider { color:var(--ui-text-muted); }
-    .titlebar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
     mux-ui-page-intro { flex:none; }
-    @media (display-mode: window-controls-overlay) { .titlebar { -webkit-app-region:drag; } }
     p { margin:0; color:var(--ui-text-muted); }
     .layout { min-height:0; display:flex; flex-direction:column; flex:1; }
     .catalog { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--ui-space-3); flex:none; padding:var(--ui-space-5) var(--ui-space-7); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
@@ -78,7 +75,6 @@ export class MuxConnections extends LitElement {
     .provider-intro p { margin-top:var(--ui-space-2); }
     .service-picker { max-width:var(--ui-connection-service-picker-width); margin:var(--ui-space-7) 0; }
     .setup-section { margin-top:var(--ui-space-6); padding-top:var(--ui-space-6); border-top:1px solid var(--ui-border); }
-    @media(max-width:767.98px) { .titlebar { display:none; } }
     @media(max-width:700px) { .catalog { gap:var(--ui-space-1); padding:var(--ui-space-2); } .catalog mux-ui-nav-item { min-width:0; } main { padding:var(--ui-space-6) var(--ui-space-5) var(--ui-space-10); } .provider-intro { margin-bottom:var(--ui-space-5); } }
   `;
 
@@ -328,7 +324,7 @@ If I already have a connection, check its status first. Do not remove or replace
       ${services.length?html`<mux-ui-select class="service-picker" label="Choose a Google service" .value=${selected.id} .options=${services.map(service=>({value:service.id,label:service.name}))} @change=${(event:Event)=>{this.googleService=(event.target as MuxUISelect).value;this.googleClientID='';this.googleClientSecret='';}}></mux-ui-select>${this.googleDetail(selected)}`:html`<mux-ui-feedback kind="empty">No Google services are available.</mux-ui-feedback>`}`;
   }
   override render() {
-    return html`<header class="titlebar"><span class="section-name">Services</span><span class="divider" aria-hidden="true">›</span><strong>Connections</strong></header>
+    return html`<mux-ui-screen-header section="Services" heading="Connections"></mux-ui-screen-header>
       <mux-ui-page-intro heading="Connections" description="Choose an account to make its tools available in new chats."></mux-ui-page-intro>
       <div class="layout"><nav class="catalog" aria-label="Providers">
         <mux-ui-nav-item label="Google" status-tone=${this.providerStatusTone('google')} ?active=${this.selected==='google'} @click=${()=>this.selectService('google')}></mux-ui-nav-item>

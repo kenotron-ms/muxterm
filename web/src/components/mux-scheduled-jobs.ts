@@ -7,6 +7,7 @@ import '../ui/dialog.js';
 import '../ui/feedback.js';
 import '../ui/nav-item.js';
 import '../ui/page-intro.js';
+import '../ui/screen-header.js';
 import '../ui/select.js';
 import '../ui/status-badge.js';
 import '../ui/switch.js';
@@ -68,15 +69,6 @@ export class MuxScheduledJobs extends LitElement {
       background:var(--ui-surface-base); color:var(--ui-text);
       font:var(--ui-text-md)/1.5 var(--ui-font-sans);
     }
-    .titlebar {
-      box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center;
-      gap:var(--ui-space-3); min-width:0;
-      padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6);
-      border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav);
-    }
-    .titlebar .section-name,.titlebar .divider { color:var(--ui-text-muted); }
-    .titlebar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
-    @media (display-mode:window-controls-overlay) { .titlebar { -webkit-app-region:drag; } }
     .content { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-7) var(--ui-space-9) var(--ui-space-10); }
     .content > mux-ui-feedback { margin-bottom:var(--ui-space-5); }
     .summary { display:flex; gap:var(--ui-space-5); flex-wrap:wrap; margin-bottom:var(--ui-space-7); }
@@ -131,7 +123,6 @@ export class MuxScheduledJobs extends LitElement {
     .editor mux-ui-switch { margin-top:var(--ui-space-6); }
     .editor .hint { color:var(--ui-text-muted); font-size:var(--ui-text-xs); margin-top:var(--ui-space-2); }
     .editor .actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); margin-top:var(--ui-space-8); }
-    @media(max-width:767.98px) { .titlebar { display:none; } }
     @media(max-width:700px) {
       .content { padding:var(--ui-space-6); }
       .toolbar { flex-wrap:wrap; }
@@ -361,7 +352,7 @@ export class MuxScheduledJobs extends LitElement {
       { value:'needs-attention', label:'Needs attention' },
     ];
     return html`
-      <header class="titlebar"><span class="section-name">Automation</span><span class="divider" aria-hidden="true">›</span><strong>Scheduled jobs</strong></header>
+      <mux-ui-screen-header section="Automation" heading="Scheduled jobs"></mux-ui-screen-header>
       <mux-ui-page-intro heading="Scheduled jobs" description="Repeatable work in persistent conversations">
         <mux-ui-button slot="action" variant="primary" @click=${() => void this.openEditorForChat()}>＋ New job</mux-ui-button>
       </mux-ui-page-intro>

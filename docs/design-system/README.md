@@ -57,7 +57,7 @@ remain native or keyboard-operable buttons, while BlockNote owns editing.
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
 3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Menu Item, Tab Strip, Rail Row, List Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice List, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
-   Feedback, Empty State, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
+   Feedback, Empty State, Screen Header, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
    disabled, error, and narrow-screen states where relevant.
@@ -96,6 +96,13 @@ Destructive pane and workspace close uses the same adaptive Dialog and semantic 
 Connections uses the shared Confirmation composite for GitHub disable, Microsoft disconnect, old Work IQ authorization removal, and Google connection removal. Its three provider destinations stay visible while each provider owns its setup details. Google's manual setup is a sequence of divided sections instead of nested cards, and Connections spacing uses semantic scales. Storybook shows account and confirmation states at desktop and phone widths. The isolated live app rendered all three providers at both widths without horizontal overflow; authentication and destructive API calls were not exercised there.
 
 Skills uses semantic page, surface, border, type and spacing tokens throughout. Storybook records search results, install success, empty results, load errors, recovery, phone and light states. A failed installed-list request now shows a readable error with Retry instead of a misleading empty-library message; the fixture's Retry action reloads the installed list.
+
+Connections, Skills and Scheduled Jobs now use one Screen Header for the
+desktop section path above Page Intro. It owns the common height, surface,
+divider, truncation and window drag treatment, and it disappears on phones
+where the app title bar provides location. Storybook covers long names and
+light palette; each migrated screen has desktop and phone states. New Chat and
+Chat keep their workspace-aware rows for a separate interaction review.
 
 ## Main-based browser evidence
 

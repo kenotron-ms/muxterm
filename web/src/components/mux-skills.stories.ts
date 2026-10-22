@@ -41,6 +41,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const Installed: Story = {};
+export const PhoneInstalled: Story = { globals:{viewport:{value:'phone390',isRotated:false}} };
 export const EmptyLibrary: Story = { parameters: { apiFixture:skillsFixture(false) } };
 export const SearchResults: Story = { render:() => html`<mux-skills .query=${'project'}></mux-skills>` };
 export const InstalledAfterAction: Story = {
