@@ -56,11 +56,12 @@ the live WebSocket/sessiond lifecycle; its constituent screens have stories and
 the app shell must be reviewed in dev-local. `mux-browser-assistant` is included
 because it is a screen introduced on main after the earlier catalog branch.
 
-`launcher-menu.ts` and `mux-connect-dialog.ts` still exist on main, but current
-title-bar and sidebar navigation do not mount the launcher. The Connect machine
+The unreachable legacy launcher menu and its Storybook stories were removed.
+`mux-connect-dialog.ts` remains mounted behind the app's connect overlay, but
+current title-bar and sidebar navigation do not open it. Its Connect machine
 story demonstrates the component, not a reachable path in today's app. Remote
-host actions are available in Settings → Remotes. Remove or reconnect these
-orphaned elements in a focused product change before claiming live coverage.
+host actions are available in Settings → Remotes; review that remaining legacy
+path before claiming live coverage.
 The Sidebar's old workspace-preview and machine-group methods likewise remain
 in source but are not called by its current render path; Storybook does not
 present them as reachable UI.

@@ -58,8 +58,7 @@ export class MuxTitleBar extends LitElement {
     }
     :host([window-chrome]) mux-ui-button,
     :host([window-chrome]) mux-pane-picker,
-    :host([window-chrome]) mux-mic-button,
-    :host([window-chrome]) mux-launcher-menu {
+    :host([window-chrome]) mux-mic-button {
       -webkit-app-region: no-drag;
       app-region: no-drag;
     }
@@ -68,7 +67,7 @@ export class MuxTitleBar extends LitElement {
     :host([window-chrome]) .brand-sha { display: none; }
     @media (display-mode: window-controls-overlay) {
       :host { -webkit-app-region: drag; }
-      mux-ui-button, mux-pane-picker, mux-mic-button, mux-launcher-menu {
+      mux-ui-button, mux-pane-picker, mux-mic-button {
         -webkit-app-region: no-drag;
       }
     }
@@ -126,7 +125,7 @@ export class MuxTitleBar extends LitElement {
        and handing the win straight back: flex: 0 1 auto shrinks, but its basis
        is its content, so a long host name still outbids the one control in
        the bar you actually navigate with. Cap it, and drop the build sha --
-       on a phone that is a dev detail, and the launcher's About still has it. */
+       on a phone that is a dev detail. */
     @media (max-width: 480px) {
       .brand {
         max-width: 33%;
@@ -157,13 +156,6 @@ export class MuxTitleBar extends LitElement {
       border-radius: var(--ui-radius-pill);
       background: var(--ui-attention);
       pointer-events: none;
-    }
-
-    /* The launcher sheet's scrim. ::backdrop belongs to the popover element,
-       which lives in THIS root, so the rule does too. A tint rather than a
-       blackout, matching the pane sheet. */
-    mux-launcher-menu::backdrop {
-      background: var(--ui-backdrop-sheet);
     }
 
     .lucide-icon {

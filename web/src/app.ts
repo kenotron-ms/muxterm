@@ -35,7 +35,6 @@ import './components/mux-dock.js';
 import './components/settings-surface.js';
 import type { SettingsSection } from './components/settings-surface.js';
 import type { MuxDock } from './components/mux-dock.js';
-import type { LauncherAction } from './components/launcher-menu.js';
 import './components/close-confirmation-modal.js';
 import type { CloseConfirmationModal } from './components/close-confirmation-modal.js';
 import './components/reconnect-overlay.js';
@@ -78,6 +77,8 @@ import {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
 } from './lib/sidebar-width.js';
+
+type LauncherAction = 'settings' | 'connect-machine' | 'shortcuts' | 'about' | 'reconnect' | 'new-workspace';
 
 /** Split.js gutter size (px), used both as the `gutterSize` option passed to
  *  `Split(...)` in `_initSplit()` below and as the half-gutter compensation

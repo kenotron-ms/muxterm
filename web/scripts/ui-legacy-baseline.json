@@ -11,12 +11,6 @@
     "literalScale": 0,
     "nativeControls": 0
   },
-  "components/launcher-menu.ts": {
-    "legacyTokens": 0,
-    "literalColors": 0,
-    "literalScale": 4,
-    "nativeControls": 5
-  },
   "components/mic-button.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
