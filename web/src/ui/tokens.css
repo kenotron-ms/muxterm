@@ -51,6 +51,10 @@
   --ui-control-sm: 28px;
   --ui-control-md: 36px;
   --ui-control-lg: 44px;
+  --ui-switch-track-width: 32px;
+  --ui-switch-track-height: 20px;
+  --ui-switch-thumb-size: 14px;
+  --ui-switch-thumb-travel: 12px;
   --ui-row-touch: 56px;
   --ui-dock-tab-width: 180px;
   --ui-dock-tab-min-width: 80px;

@@ -76,6 +76,20 @@ export default meta;
 type Story = StoryObj<NewChatArgs>;
 export const Ungrouped: Story = {};
 export const Project: Story = { args: { project:'atlas' } };
+export const WorktreeSelected: Story = {
+  args:{project:'atlas'},
+  play:async ({canvasElement}) => {
+    const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
+    await sdkChats.refresh();
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const control = screen?.shadowRoot?.querySelector<HTMLElement>('mux-ui-switch[accessible-label="Use a separate Git worktree"]');
+      if (control && !control.hasAttribute('disabled')) { control.click(); return; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw new Error('The project worktree switch did not enable');
+  },
+};
+export const PhoneWorktree: Story = { args:{project:'atlas'}, globals:{viewport:{value:'phone390',isRotated:false}}, play:WorktreeSelected.play };
 export const DraftMessage: Story = { args: { project:'atlas', prompt:'Summarize the open tasks in this project.' } };
 export const Compact: Story = { args: { compact:true } };
 export const NewProject: Story = {

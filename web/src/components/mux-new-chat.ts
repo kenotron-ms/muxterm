@@ -9,6 +9,7 @@ import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
 import '../ui/select.js';
+import '../ui/switch.js';
 import '../ui/text-field.js';
 import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextField } from '../ui/text-field.js';
@@ -131,14 +132,7 @@ export class MuxNewChat extends LitElement {
     .chat-picker input[type=range] { width:100%; height:auto; margin:12px 0 4px; padding:0; border:0; accent-color:var(--ui-accent); cursor:pointer; }
     .chat-picker .custom-model { width:calc(100% - 20px); margin:6px 10px; }
     .catalog-status { color:var(--ui-text-muted); font-size:11px; }
-    .worktree-toggle { display:inline-flex; align-items:center; gap:7px; height:31px; margin-left:auto; padding:0 3px 0 8px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--ui-text-muted); font-size:12px; white-space:nowrap; }
-    .worktree-toggle:hover:not(:disabled),.worktree-toggle:focus-visible { background:var(--ui-surface-hover); color:var(--ui-text); outline:none; }
-    .worktree-toggle:disabled { opacity:.45; cursor:default; }
-    .worktree-toggle .track { display:flex; align-items:center; box-sizing:border-box; width:29px; height:17px; padding:2px; border:1px solid var(--ui-border); border-radius:999px; background:var(--ui-surface-base); transition:background .15s; }
-    .worktree-toggle .thumb { width:11px; height:11px; border-radius:50%; background:var(--ui-text-muted); transition:transform .15s; }
-    .worktree-toggle[aria-checked="true"] { color:var(--ui-text); }
-    .worktree-toggle[aria-checked="true"] .track { border-color:var(--ui-accent); background:var(--ui-accent); }
-    .worktree-toggle[aria-checked="true"] .thumb { background:var(--ui-surface-base); transform:translateX(12px); }
+    .controls mux-ui-switch { margin-left:auto; }
     .composer-actions { display:flex; align-items:center; gap:7px; padding-top:8px; border-top:1px solid var(--ui-border); }
     .composer-actions .send { margin-left:auto; }
     .controls mux-ui-select { max-width:150px; }
@@ -529,7 +523,7 @@ export class MuxNewChat extends LitElement {
         ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
         ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
         ${this.catalogLoading ? html`<span class="catalog-status" role="status">Loading models…</span>` : nothing}
-        <button class="worktree-toggle" type="button" role="switch" aria-label="Use a separate Git worktree" aria-checked=${this.workMode === 'worktree'} title=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @click=${() => { this.workMode = this.workMode === 'worktree' ? 'local' : 'worktree'; }}><span>Worktree</span><span class="track" aria-hidden="true"><span class="thumb"></span></span></button>
+        <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
         </div>
         ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><button aria-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>×</button></div>`)}</div>` : nothing}
         <div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${this.onPromptInput} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div>

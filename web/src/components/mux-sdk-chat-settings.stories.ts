@@ -50,24 +50,37 @@ function settingsFixture(initial: Record<string, unknown>, failLoad = false): Ap
   };
 }
 
-interface ChatSettingsArgs { harness: string; turnBusy: boolean }
+interface ChatSettingsArgs { harness: string; turnBusy: boolean; operator: boolean }
 
 const meta = {
   title:'Composites/Chat settings',
   tags:['autodocs'],
   parameters:{ layout:'fullscreen', apiFixture:settingsFixture(codex) },
-  args:{ harness:'codex', turnBusy:false },
+  args:{ harness:'codex', turnBusy:false, operator:false },
   argTypes:{ harness:{ control:'select', options:['codex','claude','amplifier'] } },
   render:(args: ChatSettingsArgs) => html`
     <div style="position:fixed;inset:auto 16px 16px;box-sizing:border-box;width:calc(100% - 32px);max-width:780px;margin:auto;padding:var(--ui-space-5);border:1px solid var(--ui-border);border-radius:var(--ui-radius-xl);background:var(--ui-surface-raised)">
       <div style="min-height:52px;color:var(--ui-text-muted)">Message the agent…</div>
-      <mux-sdk-chat-settings sessionId="storybook-chat" .harness=${args.harness} .turnBusy=${args.turnBusy}></mux-sdk-chat-settings>
+      <mux-sdk-chat-settings sessionId="storybook-chat" .harness=${args.harness} .turnBusy=${args.turnBusy} .operator=${args.operator}></mux-sdk-chat-settings>
     </div>`,
 } satisfies Meta<ChatSettingsArgs>;
 
 export default meta;
 type Story = StoryObj<ChatSettingsArgs>;
 export const Codex: Story = {};
+export const OperatorOn: Story = {
+  args:{ operator:true },
+  play:async ({canvasElement}) => {
+    const picker = canvasElement.querySelector('mux-sdk-chat-settings');
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const summary = picker?.shadowRoot?.querySelector<HTMLElement>('.permission-picker summary');
+      if (summary) { summary.click(); return; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw new Error('The operator picker did not render');
+  },
+};
+export const PhoneOperator: Story = { args:{operator:true}, globals:{viewport:{value:'phone390',isRotated:false}}, play:OperatorOn.play };
 export const ClaudePlan: Story = { args:{ harness:'claude' }, parameters:{ apiFixture:settingsFixture(claude) } };
 export const Amplifier: Story = { args:{ harness:'amplifier' }, parameters:{ apiFixture:settingsFixture(amplifier) } };
 export const TurnBusy: Story = { args:{ turnBusy:true } };

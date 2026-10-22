@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
+import '../ui/switch.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
 type ModeOption = { name: string; description?: string; source?: string };
@@ -60,33 +61,26 @@ export class MuxSDKChatSettings extends LitElement {
     .panel { position:absolute; z-index:30; bottom:calc(var(--ui-control-md) + var(--ui-space-2)); width:min(350px,calc(100vw - 44px)); max-height:min(72dvh,640px); overflow:auto; box-sizing:border-box; padding:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-overlay); }
     .permission-picker .panel { left:0; }
     .model-picker .panel { right:0; }
-    .heading { padding:9px 10px 5px; color:var(--ui-text-muted); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
-    .divider { height:1px; margin:7px 5px; background:var(--ui-border); }
+    .heading { padding:var(--ui-space-4) var(--ui-space-5) var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
+    .divider { height:1px; margin:var(--ui-space-4) var(--ui-space-3); background:var(--ui-border); }
     .choice { display:flex; align-items:center; gap:var(--ui-space-4); width:100%; min-height:var(--ui-control-md); border:0; border-radius:var(--ui-radius-md); padding:var(--ui-space-3) var(--ui-space-5); background:transparent; color:var(--ui-text); font:inherit; text-align:left; cursor:pointer; }
     .choice:hover:not(:disabled) { background:var(--ui-surface-hover); }
     .choice:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
     .choice.selected { background:color-mix(in srgb,var(--ui-accent) 15%,transparent); }
     .choice:disabled { opacity:.46; cursor:default; }
-    .choice-main { display:grid; gap:2px; min-width:0; flex:1; }
+    .choice-main { display:grid; gap:var(--ui-space-1); min-width:0; flex:1; }
     .choice-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .hint { color:var(--ui-text-muted); font-size:11px; }
+    .hint { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .check { color:var(--ui-accent); font-weight:700; }
-    .group { margin:2px 4px 8px; }
+    .group { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
     .model-list { max-height:190px; overflow-y:auto; }
-    .slider { padding:4px 10px 13px; }
-    .slider-header { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
-    input[type=range] { width:100%; margin:12px 0 4px; accent-color:var(--ui-accent); cursor:pointer; }
-    .slider-ends { display:flex; justify-content:space-between; color:var(--ui-text-muted); font-size:10px; }
-    .notice { padding:9px 10px; color:var(--ui-text-muted); font-size:11px; }
-    .error { color:var(--ui-danger-text); padding:7px 10px; overflow-wrap:anywhere; }
+    .slider { padding:var(--ui-space-2) var(--ui-space-5) var(--ui-space-5); }
+    .slider-header { display:flex; justify-content:space-between; gap:var(--ui-space-4); font-weight:600; }
+    input[type=range] { width:100%; margin:var(--ui-space-5) 0 var(--ui-space-2); accent-color:var(--ui-accent); cursor:pointer; }
+    .slider-ends { display:flex; justify-content:space-between; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .notice { padding:var(--ui-space-4) var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .error { color:var(--ui-danger-text); padding:var(--ui-space-4) var(--ui-space-5); overflow-wrap:anywhere; }
     .busy { opacity:.55; }
-    .operator-choice { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; border:0; border-radius:9px; padding:10px; background:transparent; color:var(--chrome-text-bright,#d9def0); font:inherit; text-align:left; cursor:pointer; }
-    .operator-choice:hover,.operator-choice:focus-visible { background:var(--chrome-hover); outline:none; }
-    .operator-choice:disabled { opacity:.5; cursor:default; }
-    .switch { flex:none; width:30px; height:18px; box-sizing:border-box; border-radius:99px; padding:3px; background:var(--chrome-border,#41485f); }
-    .switch::after { content:''; display:block; width:12px; height:12px; border-radius:50%; background:var(--chrome-text-bright,#d9def0); transition:transform .15s; }
-    .operator-choice[aria-checked="true"] .switch { background:var(--chrome-accent,#9bb8f7); }
-    .operator-choice[aria-checked="true"] .switch::after { transform:translateX(12px); background:var(--chrome-bar,#202632); }
   `;
   override updated(changed: Map<string, unknown>) {
     if (changed.has('sessionId') && this.sessionId) { this.settings = undefined; this.error = ''; void this.load(this.sessionId); }
@@ -124,7 +118,7 @@ export class MuxSDKChatSettings extends LitElement {
     finally { this.loading = false; }
   }
   private operatorControl() {
-    return html`<div class="divider"></div><div class="heading">Operator</div><button class="operator-choice" role="switch" aria-label="Operator mode" aria-checked=${this.operator ? 'true' : 'false'} ?disabled=${this.loading} @click=${() => void this.toggleOperator()}><span class="choice-main"><span class="choice-name">Operator mode</span><span class="hint">Coordinate other chats as lanes</span></span><span class="switch" aria-hidden="true"></span></button>`;
+    return html`<div class="divider"></div><div class="heading">Operator</div><mux-ui-switch layout="row" label="Operator mode" description="Coordinate other chats as lanes" .checked=${this.operator} ?disabled=${this.loading} @change=${() => void this.toggleOperator()}></mux-ui-switch>`;
   }
   /** Amplifier has no permission switch to offer -- its tool access comes from
    *  the composed bundle. What it does have, and nothing else exposed, is its
