@@ -10,6 +10,8 @@ type ChatEvent = {
   at:string; type:string; text?:string; kind?:string; source?:string;
   inputId?:string; inputIds?:string[]; itemId?:string; complete?:boolean;
   toolId?:string; name?:string; raw?:unknown; summary?:boolean;
+  agent?:string; childSessionId?:string; parentSessionId?:string;
+  origin?:{type:'operator-lane'|'chat-message';chatId:string;name:string;harness:string;status:string;relation?:'chat-to-chat'};
 };
 
 const at = (second: number) => `2026-10-22T10:00:${String(second).padStart(2,'0')}Z`;
@@ -34,6 +36,23 @@ const running: ChatEvent[] = [
   {at:at(26),type:'commentary.delta',itemId:'progress-3',text:'I’m comparing the phone composer with the shared controls.',complete:true},
 ];
 
+const delegated: ChatEvent[] = [
+  {at:at(1),type:'input.accepted',kind:'user',source:'browser',inputId:'delegation-1',text:'Ask the design agent to review the chat controls.'},
+  {at:at(2),type:'tool.started',toolId:'delegate-tool',name:'delegate',raw:{prompt:'Review the chat controls and report remaining seams.'}},
+  {at:at(3),type:'delegate.spawned',toolId:'delegate-tool',childSessionId:'design-agent-1',agent:'Design review'},
+  {at:at(4),type:'delegate.message',childSessionId:'design-agent-1',text:'Comparing shared controls with the chat surface.',complete:true},
+  {at:at(5),type:'delegate.completed',childSessionId:'design-agent-1',agent:'Design review'},
+  {at:at(6),type:'assistant.delta',text:'The delegated review is complete. Open its card to inspect the work.'},
+  {at:at(7),type:'turn.completed',inputIds:['delegation-1']},
+];
+const linkedReports: ChatEvent[] = [
+  {at:at(1),type:'operator.lane.report',childSessionId:'linked-lane-1',text:'**Catalog review complete.** The shared controls now cover the chat toolbar and composer.',origin:{type:'operator-lane',chatId:'linked-lane-1',name:'Design review lane',harness:'codex',status:'ready'}},
+  {at:at(2),type:'input.accepted',kind:'user',source:'browser',inputId:'report-1',text:'Show the linked report and source message.'},
+  {at:at(3),type:'input.accepted',text:'Please check the phone controls too.',origin:{type:'chat-message',chatId:'source-chat-1',name:'Companion chat',harness:'codex',status:'ready',relation:'chat-to-chat'}},
+  {at:at(4),type:'assistant.delta',text:'Both linked items can be expanded or opened from the source action.'},
+  {at:at(5),type:'turn.completed',inputIds:['report-1']},
+];
+
 const settings = {
   model:'gpt-6-sol', effort:'medium', permission:'full-permission', mode:'agent',
   permissions:['read-only','workspace-write','full-permission'], modes:['agent','plan'],
@@ -43,7 +62,7 @@ const settings = {
   ],
 };
 
-function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal' = 'none'): ApiFixture {
+function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal' = 'none', scenario:'default'|'delegated'|'reports' = 'default'): ApiFixture {
   const chat: SDKChat = {
     id, title:'Component library review', workspaceId:'project-1',
     projectPath:'/home/demo/muxterm', harness:'codex', state,
@@ -69,7 +88,7 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     ],
     observations:goalState === 'none' ? [] : [{at:at(4),event:{type:'goal.started',goalState:'active',goalSummary:'The native harness acknowledged revision 1.'}}],
   };
-  const events = state === 'working' ? running : transcript;
+  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : state === 'working' ? running : transcript;
   const messages = events.filter(event => event.type !== 'tool.started' && event.type !== 'tool.completed');
   return ({url,method,init}) => {
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON(goalState === 'proposal' ? [chat,operator] : [chat]);
@@ -78,7 +97,7 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/goal`)) return fixtureJSON(goal);
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-goal-ledger')) return fixtureJSON(goalState === 'none' ? [] : [goal]);
     if (method === 'GET' && url.pathname.endsWith('/api/voice/settings')) return fixtureJSON({enabled:false,restartRequired:false});
-    if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/agents`)) return fixtureJSON([]);
+    if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/agents`)) return fixtureJSON(scenario === 'delegated' ? delegated.filter(event => event.type.startsWith('delegate.') || event.type.startsWith('tool.')) : []);
     if (url.pathname.endsWith(`/api/sdk-chats/${id}/settings`)) {
       if (method === 'GET') return fixtureJSON(settings);
       if (method === 'PATCH') return fixtureJSON({...settings,...JSON.parse(String(init?.body || '{}')) as Record<string,unknown>});
@@ -136,6 +155,38 @@ export const WorkDetails: Story = {
     const disclosures = chat?.shadowRoot?.querySelectorAll<HTMLDetailsElement>('.work-disclosure');
     disclosures?.item(1)?.querySelector('summary')?.click();
   },
+};
+export const DelegatedWork: Story = {
+  args:{sessionId:'storybook-chat-delegated'},
+  parameters:{apiFixture:chatFixture('storybook-chat-delegated','ready','none','delegated')},
+};
+export const PhoneDelegatedWork: Story = {
+  args:{sessionId:'storybook-chat-phone-delegated'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-delegated','ready','none','delegated')},
+};
+export const DelegatedWorkOpen: Story = {
+  args:{sessionId:'storybook-chat-delegated-open'},
+  parameters:{apiFixture:chatFixture('storybook-chat-delegated-open','ready','none','delegated')},
+  play:async ({canvasElement}) => {
+    await sdkChats.refresh();
+    const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const card = chat?.shadowRoot?.querySelector<HTMLElement>('mux-ui-action-tile.delegate-card');
+      if (card) { card.click(); return; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw new Error('The delegated work card did not render');
+  },
+};
+export const LinkedReports: Story = {
+  args:{sessionId:'storybook-chat-linked-reports'},
+  parameters:{apiFixture:chatFixture('storybook-chat-linked-reports','ready','none','reports')},
+};
+export const PhoneLinkedReports: Story = {
+  args:{sessionId:'storybook-chat-phone-linked-reports'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-linked-reports','ready','none','reports')},
 };
 const showRunningTurn = async ({canvasElement}: {canvasElement:HTMLElement}) => {
   await sdkChats.refresh();

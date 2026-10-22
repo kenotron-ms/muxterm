@@ -8,6 +8,8 @@ import { customElement, property } from 'lit/decorators.js';
 export class MuxUIActionTile extends LitElement {
   @property() label = '';
   @property() description = '';
+  @property({ attribute:'accessible-label' }) accessibleLabel = '';
+  @property({ reflect:true }) size: 'medium' | 'large' = 'medium';
   @property({ type: Boolean, reflect: true }) disabled = false;
 
   static override styles = css`
@@ -24,18 +26,23 @@ export class MuxUIActionTile extends LitElement {
     button:disabled { opacity:.5; cursor:default; }
     .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:20px; height:20px; color:var(--ui-text-muted); }
     .copy { display:flex; flex-direction:column; gap:var(--ui-space-1); min-width:0; }
-    .label { font:600 var(--ui-text-sm)/1.25 var(--ui-font-sans); }
-    .description { color:var(--ui-text-muted); font:var(--ui-text-xs)/1.35 var(--ui-font-sans); }
+    .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:600 var(--ui-text-sm)/1.25 var(--ui-font-sans); }
+    .description { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font:var(--ui-text-xs)/1.35 var(--ui-font-sans); }
+    .trailing { display:inline-flex; align-items:center; gap:var(--ui-space-3); flex:none; margin-left:auto; color:var(--ui-text-muted); }
+    :host([size='large']) button { min-height:var(--ui-space-13); }
+    :host([size='large']) .label { font-size:var(--ui-text-lg); }
+    :host([size='large']) .description { font-size:var(--ui-text-sm); }
   `;
 
   override focus(options?: FocusOptions): void { this.renderRoot.querySelector('button')?.focus(options); }
   override click(): void { if (!this.disabled) this.renderRoot.querySelector('button')?.click(); }
 
   override render() {
-    return html`<button type="button" ?disabled=${this.disabled} aria-label=${this.label || nothing}
+    return html`<button type="button" ?disabled=${this.disabled} aria-label=${this.accessibleLabel || this.label || nothing}
       aria-describedby=${this.description ? 'description' : nothing}>
       <span class="icon" aria-hidden="true"><slot name="icon"></slot></span>
       <span class="copy"><span class="label">${this.label}</span>${this.description ? html`<span class="description" id="description">${this.description}</span>` : nothing}</span>
+      <span class="trailing"><slot name="trailing"></slot></span>
     </button>`;
   }
 }

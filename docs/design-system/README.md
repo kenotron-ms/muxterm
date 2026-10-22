@@ -177,10 +177,16 @@ Chromium opened the real chat's goal ledger and utility pane, attached and
 removed a file without sending a message, and checked the phone composer.
 The narrow shell supplies the chat title once; the inner chat row keeps its
 actions.
+Delegated work now uses Action Tile with a visible Status Badge and an
+accessible status name. Agent ancestry uses Breadcrumb, so each ancestor is
+keyboard navigable. Linked lane reports and cross-chat messages use shared
+Buttons for disclosure and source navigation; the Button carries expanded
+and controlled-panel semantics. Storybook includes delegated, open-delegated,
+linked-report and phone states. Chromium checked expansion, return navigation,
+and 44 px source actions in a touch-enabled phone viewport.
 These stories use synthetic read-only goal data and do not exercise live goal
-control. Agent lineage and cards, lane report controls, the auto-sizing
-composer and hidden file input still need shared-pattern review, as recorded
-in the inventory.
+control. The auto-sizing composer and hidden file input keep native editor
+semantics, as recorded in the inventory.
 
 Utility's Open file actions use the same Action Menu, including its separator,
 keyboard path and phone sheet. Storybook's actual Utility screen showed the

@@ -18,8 +18,11 @@ import { laneIcon } from '../lib/lane-icon.js';
 import './mux-sdk-utility.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
 import '../ui/button.js';
+import '../ui/action-tile.js';
+import '../ui/breadcrumb.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
+import '../ui/status-badge.js';
 import { listboxIndexForKey } from '../ui/listbox.js';
 import '../ui/listbox-option.js';
 import '../ui/select.js';
@@ -216,22 +219,12 @@ export class MuxSDKChat extends LitElement {
     .workspace-crumb .lucide-icon { flex:none; }
     .workspace-divider { flex:none; color:var(--ui-text-muted); }
     @media (display-mode: window-controls-overlay) { .topbar { -webkit-app-region:drag; } .topbar button,.topbar mux-ui-button { -webkit-app-region:no-drag; } }
-    .breadcrumbs { display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; }
-    .breadcrumbs button { border:0; padding:var(--ui-space-2); border-radius:var(--ui-radius-sm); background:transparent; color:var(--ui-accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
-    .breadcrumbs button:hover { background:var(--ui-surface-hover); }
+    .breadcrumbs { min-width:0; }
     .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:var(--ui-space-4) 0; color:var(--ui-danger); font-size:var(--ui-content-font-size); }
-    .delegate-card { box-sizing:border-box; display:grid; grid-template-columns:18px minmax(0,1fr) auto; align-items:center; gap:var(--ui-space-4); width:100%; max-width:560px; min-height:54px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); padding:var(--ui-space-4) var(--ui-space-5); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; }
-    .delegate-card:hover { border-color:color-mix(in srgb,var(--ui-accent) 45%,var(--ui-border)); background:color-mix(in srgb,var(--ui-surface-raised) 90%,var(--ui-accent)); }
-    .delegate-card:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
-    .delegate-icon { display:inline-flex; color:var(--ui-accent); }
-    .delegate-copy { display:flex; flex-direction:column; min-width:0; gap:var(--ui-space-1); }
-    .delegate-name { font-size:var(--ui-content-font-size); font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .delegate-task { color:var(--ui-text-muted); font-size:var(--ui-content-font-size); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .delegate-meta { display:flex; align-items:center; align-self:start; gap:var(--ui-space-4); min-height:18px; color:var(--ui-text-muted); font-size:var(--ui-content-font-size); font-variant-numeric:tabular-nums; }
-    .delegate-status-dot { width:7px; height:7px; border-radius:50%; background:var(--ui-success); }
-    .delegate-status-dot.running { background:var(--ui-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
-    .delegate-status-dot.failed { background:var(--ui-danger); }
-    .delegate-chevron { display:inline-flex; opacity:.75; }
+    .delegate-card { display:block; width:100%; max-width:560px; }
+    .delegate-card mux-ui-status-badge { min-height:0; padding:var(--ui-space-1) var(--ui-space-3); }
+    .delegate-duration { font:var(--ui-text-xs) var(--ui-font-sans); font-variant-numeric:tabular-nums; }
+    @media(max-width:560px) { .delegate-duration { display:none; } }
     .agent-chat { max-width:760px; width:100%; align-self:center; }
     .agent-chat .instruction { padding:var(--ui-space-5) var(--ui-space-6); border-radius:var(--ui-radius-xl); background:color-mix(in srgb,var(--ui-accent) 16%,var(--ui-surface-base)); margin:var(--ui-space-5) 0 var(--ui-space-8) auto; max-width:82%; white-space:pre-wrap; }
     .agent-chat .reply { padding:var(--ui-space-5) var(--ui-space-6); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); white-space:pre-wrap; }
@@ -310,7 +303,8 @@ export class MuxSDKChat extends LitElement {
     .chat-message-card .lane-report-meta { margin-top:var(--ui-space-2); }
     .lane-report-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,196px) 52px; min-height:58px; align-items:center; }
     .lane-report-row:hover,.lane-report-table.expanded .lane-report-row { background:var(--ui-surface-hover); }
-    .lane-report-toggle { display:flex; align-items:center; gap:var(--ui-space-4); width:100%; min-width:0; height:100%; border:0; padding:var(--ui-space-5) var(--ui-space-5); background:none; color:var(--ui-text); text-align:left; cursor:pointer; }
+    .lane-report-toggle { display:flex; width:100%; min-width:0; height:100%; }
+    .lane-report-toggle::part(button) { min-height:var(--ui-row-touch); justify-content:flex-start; gap:var(--ui-space-4); border:0; border-radius:0; padding:var(--ui-space-5); text-align:left; white-space:normal; }
     .lane-report-chevron { display:inline-flex; flex:none; color:var(--ui-text-muted); transition:transform .15s; }
     .lane-report-table.expanded .lane-report-chevron { transform:rotate(90deg); }
     .lane-report-primary { display:block; min-width:0; flex:1; }
@@ -324,9 +318,7 @@ export class MuxSDKChat extends LitElement {
     .lane-report-state.failed,.lane-report-state.uncertain,.lane-report-state.stopped { color:var(--ui-danger); }
     .lane-report-preview { min-width:0; padding:var(--ui-space-5) var(--ui-space-5); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
     .lane-report-open-cell { display:grid; place-items:center; padding:var(--ui-space-3) var(--ui-space-5) var(--ui-space-3) var(--ui-space-2); }
-    .lane-report-open { display:grid; place-items:center; width:32px; height:32px; border:1px solid transparent; border-radius:var(--ui-radius-md); padding:var(--ui-space-3); background:none; color:var(--ui-text-muted); cursor:pointer; }
-    .lane-report-open:hover { border-color:var(--ui-border); background:var(--ui-surface-hover); color:var(--ui-accent); }
-    .lane-report-toggle:focus-visible,.lane-report-open:focus-visible { outline:2px solid var(--ui-accent); outline-offset:-2px; }
+    .lane-report-open { color:var(--ui-text-muted); }
     .lane-report-detail { min-width:0; padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-5) var(--ui-space-9); border-top:1px solid var(--ui-border); background:color-mix(in srgb,var(--ui-surface-hover) 55%,var(--ui-surface-raised)); color:var(--ui-text); font-size:var(--ui-content-font-size); line-height:1.6; overflow-wrap:anywhere; }
     .lane-report-detail > :first-child,.lane-report-detail .md-p:first-child { margin-top:0; }
     .lane-report-detail > :last-child,.lane-report-detail .md-p:last-child { margin-bottom:0; }
@@ -345,7 +337,7 @@ export class MuxSDKChat extends LitElement {
     .lane-report-detail .md-tablewrap { max-width:100%; min-width:0; overflow:auto; }
     .lane-report-detail .md-table { width:100%; table-layout:fixed; border-collapse:collapse; }
     .lane-report-detail .md-th,.lane-report-detail .md-td { padding:var(--ui-space-2) var(--ui-space-4); border:1px solid var(--ui-border); overflow-wrap:anywhere; }
-    @media(max-width:560px) { .lane-report-row { grid-template-columns:minmax(0,1fr) 40px; } .lane-report-preview { display:none; } .lane-report-toggle { gap:var(--ui-space-2); padding-left:var(--ui-space-4); padding-right:var(--ui-space-4); } .lane-report-open-cell { padding:var(--ui-space-3) var(--ui-space-2); } }
+    @media(max-width:560px) { .lane-report-row { grid-template-columns:minmax(0,1fr) var(--ui-control-lg); } .lane-report-preview { display:none; } .lane-report-toggle::part(button) { gap:var(--ui-space-2); padding-left:var(--ui-space-4); padding-right:var(--ui-space-4); } .lane-report-open-cell { padding:0; } }
     @media(prefers-reduced-motion:reduce) { .lane-report-chevron { transition:none; } }
     .message-actions { display:flex; align-items:center; gap:var(--ui-space-2); margin-top:var(--ui-space-3); min-height:25px; opacity:0; transition:opacity .12s ease; }
     .user .message-actions { justify-content:flex-end; }
@@ -1668,7 +1660,10 @@ export class MuxSDKChat extends LitElement {
       chain.unshift(current);
       current = byId.get(current.parentId);
     }
-    return html`<nav class="breadcrumbs" aria-label="Agent lineage"><button @click=${this.returnToParent}>${this.chat?.title || 'Root session'}</button>${chain.map(agent => html`<span>›</span><strong>${agent.name}</strong>`)}</nav>`;
+    return html`<mux-ui-breadcrumb class="breadcrumbs" label="Agent lineage" .items=${[
+      {id:this.sessionId,label:this.chat?.title || 'Root session',actionLabel:'Return to root chat'},
+      ...chain.map(agent => ({id:agent.id,label:agent.name,actionLabel:`Open ${agent.name} work`}))
+    ]} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => event.detail.id === this.sessionId ? this.returnToParent() : this.openAgent(event.detail.id)}></mux-ui-breadcrumb>`;
   }
   private agentCard(block: Block, agents: AgentView[]) {
     const agent = agents.find(item => item.id === block.id);
@@ -1677,11 +1672,15 @@ export class MuxSDKChat extends LitElement {
     const duration = this.agentDuration(agent);
     const task = agent?.legs[0]?.task;
     const preview = task && task !== 'undefined' ? task : agent?.progress || 'View delegated work';
-    return html`<button class="delegate-card" aria-label=${`View ${name} work, ${status.toLowerCase()}${duration ? `, ${duration}` : ''}`} @click=${() => this.openAgent(block.id || '')}>
-      <span class="delegate-icon" aria-hidden="true">${icon(Bot, { size:16 })}</span>
-      <span class="delegate-copy"><span class="delegate-name">${name}</span><span class="delegate-task" title=${preview}>${preview}</span></span>
-      <span class="delegate-meta"><span class="delegate-status-dot ${status.toLowerCase()}" title=${status} aria-hidden="true"></span>${duration ? html`<span>${duration}</span>` : nothing}<span class="delegate-chevron" aria-hidden="true">${icon(ChevronRight, { size:15 })}</span></span>
-    </button>`;
+    const tone = status === 'Failed' ? 'danger' : status === 'Completed' ? 'success' : 'info';
+    return html`<mux-ui-action-tile class="delegate-card" size="large" label=${name} description=${preview}
+      accessible-label=${`View ${name} work, ${status.toLowerCase()}${duration ? `, ${duration}` : ''}`}
+      @click=${() => this.openAgent(block.id || '')}>
+      <span slot="icon">${icon(Bot, { size:16 })}</span>
+      <mux-ui-status-badge slot="trailing" tone=${tone} dot>${status}</mux-ui-status-badge>
+      ${duration ? html`<span slot="trailing" class="delegate-duration">${duration}</span>` : nothing}
+      <span slot="trailing" aria-hidden="true">${icon(ChevronRight, { size:15 })}</span>
+    </mux-ui-action-tile>`;
   }
   private agentDuration(agent?: AgentView) {
     if (agent?.startedAt === undefined) return '';
@@ -2312,7 +2311,7 @@ export class MuxSDKChat extends LitElement {
       .replace(/!?\[([^\]]+)\]\([^)]+\)/g, '$1')
       .replace(/^#{1,6}\s*|^(?:[-*+]|\d+\.)\s+/g, '')
       .replace(/[*_`]/g, '') || 'Lane update';
-    return html`<article class="lane-report-table ${expanded ? 'expanded' : ''}" aria-label=${`Report from lane ${name}`}><div class="lane-report-row"><button class="lane-report-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} report from ${name}`} aria-expanded=${expanded} aria-controls=${detailId} @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}><span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${harness}</span><span class="lane-report-state ${block.laneState || ''}">${state}</span></span></span></button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<button class="lane-report-open" aria-label=${`Open lane chat: ${name}`} title="Open lane chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${laneIcon(17)}</button>` : nothing}</div></div>${expanded ? html`<div class="lane-report-detail" id=${detailId}>${this.markdown(block, block.key)}</div>` : nothing}</article>`;
+    return html`<article class="lane-report-table ${expanded ? 'expanded' : ''}" aria-label=${`Report from lane ${name}`}><div class="lane-report-row"><mux-ui-button class="lane-report-toggle" variant="quiet" full-width expandable .expanded=${expanded} .controls=${detailId} accessible-label=${`${expanded ? 'Collapse' : 'Expand'} report from ${name}`} @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}><span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${harness}</span><span class="lane-report-state ${block.laneState || ''}">${state}</span></span></span></mux-ui-button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<mux-ui-button class="lane-report-open" variant="quiet" size="small" icon-only accessible-label=${`Open lane chat: ${name}`} tooltip="Open lane chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${laneIcon(17)}</mux-ui-button>` : nothing}</div></div>${expanded ? html`<div class="lane-report-detail" id=${detailId}>${this.markdown(block, block.key)}</div>` : nothing}</article>`;
   }
   private chatMessageCard(block: Block) {
     const relation = block.relation || 'chat-to-chat';
@@ -2325,11 +2324,11 @@ export class MuxSDKChat extends LitElement {
     const sourceIcon = relation === 'operator-to-lane' ? icon(Network,{size:15}) : relation === 'external-tool' ? icon(Wrench,{size:15})
       : relation === 'chat-to-chat' ? icon(Bot,{size:15}) : laneIcon(15);
     return html`<article class="lane-report-table chat-message-card ${relation} ${expanded ? 'expanded' : ''}" aria-label=${`${label} message from ${name}`}>
-      <div class="lane-report-row"><button class="lane-report-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} ${label} message from ${name}`} aria-expanded=${expanded} aria-controls=${detailId}
+      <div class="lane-report-row"><mux-ui-button class="lane-report-toggle" variant="quiet" full-width expandable .expanded=${expanded} .controls=${detailId} accessible-label=${`${expanded ? 'Collapse' : 'Expand'} ${label} message from ${name}`}
         @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}>
         <span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="chat-message-mark" aria-hidden="true">${sourceIcon}</span>
         <span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${label}</span></span></span>
-      </button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<button class="lane-report-open" aria-label=${`Open source chat: ${name}`} title="Open source chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${sourceIcon}</button>` : nothing}</div></div>
+      </mux-ui-button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<mux-ui-button class="lane-report-open" variant="quiet" size="small" icon-only accessible-label=${`Open source chat: ${name}`} tooltip="Open source chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${sourceIcon}</mux-ui-button>` : nothing}</div></div>
       ${expanded ? html`<div class="lane-report-detail input-message-detail" id=${detailId}>${this.markdown(block, block.key, true)}</div>` : nothing}</article>`;
   }
   override render() {

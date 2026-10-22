@@ -23,6 +23,7 @@ export class MuxUIButton extends LitElement {
   @property() haspopup = '';
   @property({ type: Boolean }) expandable = false;
   @property({ type: Boolean }) expanded = false;
+  @property() controls = '';
   @property({ type: Boolean }) toggle = false;
   @property({ type: Boolean, reflect: true }) pressed = false;
   @property() tooltip = '';
@@ -99,6 +100,25 @@ export class MuxUIButton extends LitElement {
 
   override click(): void {
     if (!this.disabled && !this.busy) this.renderRoot.querySelector('button')?.click();
+  }
+
+  protected override updated(): void {
+    const button = this.renderRoot.querySelector('button');
+    if (!button) return;
+    if (!this.controls && !button.hasAttribute('aria-controls')) return;
+    if (!this.controls) {
+      if ('ariaControlsElements' in button) button.ariaControlsElements = [];
+      button.removeAttribute('aria-controls');
+      return;
+    }
+    const root = this.getRootNode();
+    const panel = root instanceof ShadowRoot ? root.getElementById(this.controls)
+      : root instanceof Document ? root.getElementById(this.controls) : null;
+    // The panel may live in the Button host's tree, outside this shadow root.
+    if ('ariaControlsElements' in button) {
+      button.ariaControlsElements = panel ? [panel] : [];
+      if (!panel) button.removeAttribute('aria-controls');
+    }
   }
 
   override render() {
