@@ -24,7 +24,7 @@ export class MuxUIActionTile extends LitElement {
     button:hover:not(:disabled) .icon { color:var(--ui-accent); }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
     button:disabled { opacity:.5; cursor:default; }
-    .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:20px; height:20px; color:var(--ui-text-muted); }
+    .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:var(--ui-icon-md); height:var(--ui-icon-md); color:var(--ui-text-muted); }
     .copy { display:flex; flex-direction:column; gap:var(--ui-space-1); min-width:0; }
     .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:600 var(--ui-text-sm)/1.25 var(--ui-font-sans); }
     .description { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font:var(--ui-text-xs)/1.35 var(--ui-font-sans); }

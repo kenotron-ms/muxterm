@@ -313,7 +313,7 @@ export class MuxSDKChat extends LitElement {
     .lane-report-meta { display:flex; align-items:center; gap:var(--ui-space-4); margin-top:var(--ui-space-1); white-space:nowrap; }
     .lane-report-harness { color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
     .lane-report-state { display:inline-flex; align-items:center; gap:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
-    .lane-report-state::before { content:''; width:6px; height:6px; flex:none; border-radius:50%; background:currentColor; }
+    .lane-report-state::before { content:''; width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); flex:none; border-radius:50%; background:currentColor; }
     .lane-report-state.working,.lane-report-state.starting { color:var(--ui-accent); }
     .lane-report-state.ready { color:var(--ui-success); }
     .lane-report-state.failed,.lane-report-state.uncertain,.lane-report-state.stopped { color:var(--ui-danger); }

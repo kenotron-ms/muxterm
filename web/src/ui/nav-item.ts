@@ -25,7 +25,7 @@ export class MuxUINavItem extends LitElement {
     button:hover { background:var(--ui-surface-hover); color:var(--ui-text); }
     :host([active]) button { background:var(--ui-nav-selected); color:var(--ui-text); }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
-    .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:17px; height:17px; color:currentColor; }
+    .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:var(--ui-icon-sm); height:var(--ui-icon-sm); color:currentColor; }
     .icon[hidden] { display:none; }
     .copy { flex:1; min-width:0; }
     .label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -35,7 +35,7 @@ export class MuxUINavItem extends LitElement {
     button.described .description { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
     :host([variant='section']) button { min-height:var(--ui-control-md); padding:var(--ui-space-4) var(--ui-space-6); border-radius:0; }
     :host([variant='section'][active]) button { box-shadow:inset 3px 0 var(--ui-accent); }
-    .status { display:none; flex:none; width:7px; height:7px; border-radius:50%; background:var(--ui-text-muted); }
+    .status { display:none; flex:none; width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); border-radius:50%; background:var(--ui-text-muted); }
     :host([status-tone='neutral']) .status,:host([status-tone='success']) .status,:host([status-tone='warning']) .status,:host([status-tone='info']) .status { display:block; }
     :host([status-tone='success']) .status { background:var(--ui-success); }
     :host([status-tone='warning']) .status { background:var(--ui-warning); }

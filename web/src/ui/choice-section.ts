@@ -10,7 +10,7 @@ export class MuxUIChoiceSection extends LitElement {
 
   static override styles = css`
     :host { display:block; min-width:0; font-family:var(--ui-font-sans); }
-    .divider { height:1px; margin:var(--ui-space-4) var(--ui-space-3) var(--ui-space-2); background:var(--ui-border); }
+    .divider { height:var(--ui-divider-thickness); margin:var(--ui-space-4) var(--ui-space-3) var(--ui-space-2); background:var(--ui-border); }
     .heading {
       padding:var(--ui-space-3) var(--ui-space-5);
       color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:700;

@@ -65,6 +65,17 @@ const meta = {
         <span style="height:var(--ui-nav-height);display:grid;place-items:center;border:1px solid var(--ui-border);padding:0 var(--ui-space-5);border-radius:var(--ui-radius-md)">Navigation row</span>
         <span style="height:var(--ui-row-touch);display:grid;place-items:center;border:1px solid var(--ui-border);padding:0 var(--ui-space-5);border-radius:var(--ui-radius-md)">Touch row · 56</span>
       </div>
+      <h2 style="font-size:var(--ui-text-2xl);margin:var(--ui-space-9) 0 var(--ui-space-5)">Component sizing</h2>
+      <p style="color:var(--ui-text-muted);margin:0 0 var(--ui-space-5)">Shared controls use these sizes for icon slots, status indicators, and dividers. Content bounds are named for the component that owns them.</p>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:var(--ui-space-7)">
+        <div style="display:flex;align-items:center;gap:var(--ui-space-4)"><span style="display:block;width:var(--ui-icon-sm);height:var(--ui-icon-sm);background:var(--ui-accent);border-radius:var(--ui-radius-sm)"></span><span>Icon small · 16</span></div>
+        <div style="display:flex;align-items:center;gap:var(--ui-space-4)"><span style="display:block;width:var(--ui-icon-md);height:var(--ui-icon-md);background:var(--ui-accent);border-radius:var(--ui-radius-sm)"></span><span>Icon medium · 20</span></div>
+        <div style="display:flex;align-items:center;gap:var(--ui-space-4)"><span style="display:block;width:var(--ui-status-dot-size);height:var(--ui-status-dot-size);background:var(--ui-success);border-radius:var(--ui-radius-pill)"></span><span>Status dot · 6</span></div>
+        <div style="display:flex;align-items:center;gap:var(--ui-space-4)"><span style="display:block;width:var(--ui-divider-thickness);height:var(--ui-control-sm);background:var(--ui-border-strong)"></span><span>Divider · 1</span></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:var(--ui-space-4);margin-top:var(--ui-space-6);color:var(--ui-text-muted);font:var(--ui-text-xs) var(--ui-font-mono)">
+        <span>--ui-breadcrumb-ancestor-max-width</span><span>--ui-breadcrumb-current-max-width</span><span>--ui-empty-state-width</span><span>--ui-command-search-max-height</span>
+      </div>
       <h2 style="font-size:var(--ui-text-2xl);margin:var(--ui-space-9) 0 var(--ui-space-5)">Shape and elevation</h2>
       <div style="display:flex;flex-wrap:wrap;gap:var(--ui-space-8)">
         <div style="padding:var(--ui-space-8);border:1px solid var(--ui-border);border-radius:var(--ui-radius-md);background:var(--ui-surface-overlay);box-shadow:var(--ui-shadow-menu)">Menu surface</div>

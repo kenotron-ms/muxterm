@@ -31,7 +31,11 @@ reconnect notice stays visible and those surfaces stay closed until recovery.
 `check:ui` rejects literal `z-index` values in both shared controls and feature
 styles so a new surface cannot silently invent its own layer.
 The same gate rejects literal palette colors and spacing, radius, or type-scale
-declarations in shared control styles. Color Picker's color-value defaults remain
+declarations in shared control styles. It also rejects fixed positive pixel or rem
+width and height declarations there. Shared icon slots, status dots, dividers,
+breadcrumb truncation, empty-state width, and command-search height now use
+named tokens shown in the Tokens story. Font-relative spinner sizes remain tied
+to their text. Color Picker's color-value defaults remain
 ordinary input data, not presentation styles.
 
 The `Screens/` and `Composites/` stories render production Lit components.

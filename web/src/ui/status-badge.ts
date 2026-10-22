@@ -31,7 +31,7 @@ export class MuxUIStatusBadge extends LitElement {
     :host([tone='warning']) { --badge-tone: var(--ui-warning); }
     :host([tone='info']) { --badge-tone: var(--ui-accent); }
     :host([tone='danger']) { --badge-tone: var(--ui-danger); }
-    .dot { display: none; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--badge-tone); }
+    .dot { display: none; flex: none; width: var(--ui-status-dot-size); height: var(--ui-status-dot-size); border-radius: 50%; background: var(--badge-tone); }
     :host([dot]) .dot { display: block; }
   `;
 

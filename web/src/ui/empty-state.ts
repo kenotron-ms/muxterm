@@ -32,7 +32,7 @@ export class MuxUIEmptyState extends LitElement {
       --empty-muted: var(--ui-document-muted);
       --empty-accent: var(--ui-document-accent);
     }
-    .content { display: flex; width: 100%; max-width: 340px; flex-direction: column; align-items: center; }
+    .content { display: flex; width: 100%; max-width: var(--ui-empty-state-width); flex-direction: column; align-items: center; }
     .icon {
       display: grid;
       width: var(--ui-control-lg);

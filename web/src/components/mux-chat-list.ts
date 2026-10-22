@@ -131,7 +131,7 @@ export class MuxChatWorkspace extends LitElement {
     .harness-mark.working { color:var(--ui-success); }
     .harness-mark.blocked,.harness-mark.failed { color:var(--ui-danger); }
     .row:has(.rename-input):focus-within,.chat-row:has(.rename-input):focus-within { outline:none; }
-    .status { width:6px; height:6px; border-radius:50%; background:var(--ui-text-muted); flex:none; }
+    .status { width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); border-radius:50%; background:var(--ui-text-muted); flex:none; }
     .status.working { background:var(--ui-success); }
     .status.operator { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-accent); }
     .status.operator.working { background:none; color:var(--ui-success); }

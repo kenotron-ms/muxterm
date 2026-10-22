@@ -22,6 +22,13 @@ function literalScaleCount(styles) {
     .filter(match => /\b(?:[1-9]\d*(?:\.\d+)?|0?\.\d+)(?:px|rem|em)\b/.test(match[1])).length;
 }
 
+function literalDimensionCount(styles) {
+  // Relative em-sized spinners follow their text; fixed shared-control bounds
+  // belong in the token contract. Zero does not need a design token.
+  return [...styles.matchAll(/(?:(?<=;)|(?<=\{)|^)\s*(?:(?:min|max)-)?(?:width|height)\s*:\s*([^;{}]+);/gm)]
+    .filter(match => /\b(?:[1-9]\d*(?:\.\d+)?|0?\.\d+)(?:px|rem)\b/.test(match[1])).length;
+}
+
 function literalColorCount(styles) {
   return [...styles.matchAll(/#[\da-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\s*\(/gi)].length;
 }
@@ -49,8 +56,8 @@ for (const file of files.filter(name => name.endsWith('.ts') && !name.endsWith('
     console.error(`${join('src/ui', file)}: use the shared --ui-z-* layer tokens instead of a literal z-index`);
     failed = true;
   }
-  if (literalColorCount(styles) || literalScaleCount(styles)) {
-    console.error(`${join('src/ui', file)}: shared control styles must use --ui-* color and scale tokens`);
+  if (literalColorCount(styles) || literalScaleCount(styles) || literalDimensionCount(styles)) {
+    console.error(`${join('src/ui', file)}: shared control styles must use --ui-* color, scale and dimension tokens`);
     failed = true;
   }
 }

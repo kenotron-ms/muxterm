@@ -31,7 +31,7 @@ export class MuxUICommandSearch extends LitElement {
 
   static override styles = css`
     ${subtleScrollbars}
-    :host { display:flex; flex-direction:column; width:100%; max-height:min(480px,75dvh); overflow:hidden; color:var(--ui-text); font:var(--ui-text-sm) var(--ui-font-sans); }
+    :host { display:flex; flex-direction:column; width:100%; max-height:min(var(--ui-command-search-max-height),75dvh); overflow:hidden; color:var(--ui-text); font:var(--ui-text-sm) var(--ui-font-sans); }
     .search { display:flex; align-items:center; gap:var(--ui-space-5); padding:var(--ui-space-5); border-bottom:1px solid var(--ui-border); color:var(--ui-accent); }
     .search-icon { flex:none; display:flex; }
     input { flex:1; min-width:0; border:0; outline:0; background:transparent; color:var(--ui-text); font:var(--ui-text-lg) var(--ui-font-sans); }

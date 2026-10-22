@@ -52,6 +52,10 @@
   --ui-control-sm: 28px;
   --ui-control-md: 36px;
   --ui-control-lg: 44px;
+  --ui-icon-sm: var(--ui-space-6);
+  --ui-icon-md: var(--ui-space-7);
+  --ui-status-dot-size: var(--ui-space-3);
+  --ui-divider-thickness: var(--ui-space-px);
   --ui-switch-track-width: 32px;
   --ui-switch-track-height: 20px;
   --ui-switch-thumb-size: 14px;
@@ -92,6 +96,10 @@
   --ui-dialog-compact-max-height: 600px;
   --ui-menu-min-width: 180px;
   --ui-menu-max-height: 280px;
+  --ui-breadcrumb-ancestor-max-width: 130px;
+  --ui-breadcrumb-current-max-width: 280px;
+  --ui-empty-state-width: 340px;
+  --ui-command-search-max-height: 480px;
   --ui-picker-width: 350px;
   --ui-picker-compact-height: 340px;
   --ui-picker-trigger-width: 290px;

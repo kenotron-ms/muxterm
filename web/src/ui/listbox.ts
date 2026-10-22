@@ -38,7 +38,7 @@ export class MuxUIListbox extends LitElement {
       width:min(var(--ui-listbox-width,var(--ui-dialog-width)),calc(100% - var(--ui-space-8)));
       max-height:var(--ui-menu-max-height);
     }
-    ::slotted([role='separator']) { display:block; height:1px; margin:var(--ui-space-3) var(--ui-space-2); background:var(--ui-border); }
+    ::slotted([role='separator']) { display:block; height:var(--ui-divider-thickness); margin:var(--ui-space-3) var(--ui-space-2); background:var(--ui-border); }
     @media(max-width:700px) {
       :host([presentation='popover']) {
         position:fixed; z-index:var(--ui-z-sheet); inset:auto 0 0; width:100vw; max-height:min(78dvh,var(--ui-dialog-height));
