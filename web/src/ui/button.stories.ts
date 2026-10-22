@@ -63,6 +63,9 @@ export const MenuTrigger: Story = {
 export const Disclosure: Story = {
   render:() => html`<mux-ui-button variant="quiet" expandable @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.expanded = !button.expanded; }}>Open navigation</mux-ui-button>`,
 };
+export const ControlledDisclosure: Story = {
+  render:() => html`<div><mux-ui-button variant="quiet" expandable .controls=${'story-disclosure-panel'} accessible-label="Show details" @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.expanded = !button.expanded; }}>Show details</mux-ui-button><div id="story-disclosure-panel" role="region" aria-label="Details">Panel content</div></div>`,
+};
 export const ToggleIcon: Story = {
   render:() => html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" toggle accessible-label="Show file browser" tooltip="Show file browser" @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.pressed = !button.pressed; }}>${icon(Paperclip,{size:16})}</mux-ui-button>`,
 };

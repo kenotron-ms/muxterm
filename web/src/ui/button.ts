@@ -107,7 +107,7 @@ export class MuxUIButton extends LitElement {
     if (!button) return;
     if (!this.controls && !button.hasAttribute('aria-controls')) return;
     if (!this.controls) {
-      if ('ariaControlsElements' in button) button.ariaControlsElements = [];
+      if (Reflect.has(button, 'ariaControlsElements')) button.ariaControlsElements = [];
       button.removeAttribute('aria-controls');
       return;
     }
@@ -115,9 +115,13 @@ export class MuxUIButton extends LitElement {
     const panel = root instanceof ShadowRoot ? root.getElementById(this.controls)
       : root instanceof Document ? root.getElementById(this.controls) : null;
     // The panel may live in the Button host's tree, outside this shadow root.
-    if ('ariaControlsElements' in button) {
+    if (Reflect.has(button, 'ariaControlsElements')) {
       button.ariaControlsElements = panel ? [panel] : [];
       if (!panel) button.removeAttribute('aria-controls');
+    } else if (panel) {
+      button.setAttribute('aria-controls', this.controls);
+    } else {
+      button.removeAttribute('aria-controls');
     }
   }
 

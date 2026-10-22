@@ -27,6 +27,9 @@ export const Closed: Story = {};
 export const OpenBelow: Story = { args:{open:true} };
 export const OpenAbove: Story = { args:{open:true,placement:'above',appearance:'plain',panelAlign:'right'} };
 export const PhoneSheet: Story = { args:{open:true}, globals:{viewport:{value:'phone390',isRotated:false}} };
+export const PendingSummary: Story = {
+  render:() => html`<div style="min-height:220px;display:flex;gap:var(--ui-space-6);padding:var(--ui-space-8)"><mux-ui-choice-picker label="Model"><mux-ui-choice-item label="GPT-6-Sol"></mux-ui-choice-item></mux-ui-choice-picker><mux-ui-choice-picker><mux-ui-choice-item label="GPT-6-Astra"></mux-ui-choice-item></mux-ui-choice-picker></div>`,
+};
 export const LongModelList: Story = {
   render:() => html`<div style="min-height:440px;padding:32px"><mux-ui-choice-picker label="Model" summary="GPT-6-Sol" open>
     <mux-ui-choice-section heading="Model"><mux-ui-choice-list>

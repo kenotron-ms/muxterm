@@ -88,6 +88,7 @@ class TerminalRenderer implements IContentRenderer {
   private _attached = false;
   private _disposed = false;
   private _layoutFrame: number | undefined;
+  private readonly _swallowPointer = (event: Event): void => event.stopPropagation();
 
   constructor(id: string, isActivePane: (paneId: number) => boolean) {
     this._paneId = parseInt(id, 10);
@@ -110,10 +111,9 @@ class TerminalRenderer implements IContentRenderer {
     // stopPropagation() keeps these events from reaching dockview's drop target
     // while leaving xterm's listeners (on descendants) fully functional. Panel
     // focus uses focus/blur events, not pointer events, so it is unaffected.
-    const swallow = (e: Event): void => e.stopPropagation();
-    el.addEventListener('pointerdown', swallow);
-    el.addEventListener('pointermove', swallow);
-    el.addEventListener('pointerup', swallow);
+    el.addEventListener('pointerdown', this._swallowPointer);
+    el.addEventListener('pointermove', this._swallowPointer);
+    el.addEventListener('pointerup', this._swallowPointer);
 
     this.element = el;
   }
@@ -170,6 +170,9 @@ class TerminalRenderer implements IContentRenderer {
     this._disposed = true;
     if (this._layoutFrame !== undefined) cancelAnimationFrame(this._layoutFrame);
     this._layoutFrame = undefined;
+    this.element.removeEventListener('pointerdown', this._swallowPointer);
+    this.element.removeEventListener('pointermove', this._swallowPointer);
+    this.element.removeEventListener('pointerup', this._swallowPointer);
     // Does NOT destroy the terminal — PTY stays alive, scrollback preserved.
     terminalRegistry.detach(this._paneId);
   }

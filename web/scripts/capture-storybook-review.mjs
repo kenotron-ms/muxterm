@@ -9,6 +9,7 @@ const captures = [
   { file: 'theme-lab-desktop.png', id: 'foundations-theme-lab--custom-palette', width: 1200, height: 800, ready: 'mux-ui-page-intro', readyText: 'Project workspace' },
   { file: 'tokens-layer-order.png', id: 'foundations-tokens--semantic-scale', width: 1200, height: 900, ready: 'section', readyText: 'Layer order' },
   { file: 'choice-picker-phone.png', id: 'components-choice-picker--phone-sheet', width: 390, height: 844, ready: 'mux-ui-choice-picker[open]', readyText: 'GPT-6-Astra' },
+  { file: 'choice-picker-pending-summary.png', id: 'components-choice-picker--pending-summary', width: 900, height: 400, ready: 'mux-ui-choice-picker', readyText: 'Choose an option' },
   { file: 'action-menu-phone.png', id: 'components-action-menu--phone-sheet', width: 390, height: 844, ready: 'mux-ui-menu' },
   { file: 'listbox-phone.png', id: 'components-listbox--phone-sheet', width: 390, height: 844, ready: 'mux-ui-listbox' },
   { file: 'title-bar-phone.png', id: 'composites-title-bar--mobile-workspace', width: 390, height: 844, ready: 'mux-title-bar' },
