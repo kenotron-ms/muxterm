@@ -12,6 +12,7 @@ import './mux-monaco-diff.js';
 import './mux-operator-status.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
+import '../ui/menu.js';
 import '../ui/select.js';
 import '../ui/text-field.js';
 import type { MuxUISelect } from '../ui/select.js';
@@ -660,17 +661,17 @@ export class MuxSDKUtility extends LitElement {
         ${!this.terminalMode ? html`<button class="icon-button file-browser-toggle ${this.filesRailOpen ? 'active' : ''}" aria-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} title=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} aria-pressed=${String(this.filesRailOpen)} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.fileMenuOpen = false; this.paintAll(); }}>${icon(Folder,{size:15})}</button>` : nothing}
         ${file ? html`<div class="file-open-wrap">
           <button class="file-open-button" aria-label="Open file options" title="Open file options" aria-haspopup="menu" aria-expanded=${String(this.fileMenuOpen)} @click=${() => { this.fileMenuOpen = !this.fileMenuOpen; this.paintAll(); }}>${icon(ExternalLink,{size:14})}<span>Open</span>${icon(ChevronDown,{size:13})}</button>
-          ${this.fileMenuOpen ? html`<div class="file-open-menu" role="menu" aria-label="Open file">
+          ${this.fileMenuOpen ? html`<mux-ui-menu class="file-open-menu" label="Open file" @menu-dismiss=${(event:CustomEvent<{restoreFocus:boolean}>) => { this.fileMenuOpen = false; this.paintAll(); if (event.detail.restoreFocus) queueMicrotask(() => this.querySelector<HTMLButtonElement>('.file-open-button')?.focus()); }}>
             ${canOpenInBrowser ? html`<button role="menuitem" @click=${() => { this.fileMenuOpen = false; this.openFileInBrowser(); }}>${icon(ExternalLink,{size:14})}Open in browser tab</button>` : nothing}
             ${vsCodeURL ? html`<a role="menuitem" href=${vsCodeURL} @click=${() => { this.fileMenuOpen = false; }}>${icon(Code2,{size:14})}Open with VS Code</a>` : nothing}
-            <div class="file-menu-divider"></div>
+            <div role="separator"></div>
             <button role="menuitem" @click=${() => { this.fileMenuOpen = false; void this.copyFilePath(); }}>${icon(Copy,{size:14})}Copy file path</button>
             <a role="menuitem" href=${this.endpoint('raw', this.selected)} download=${file.name} @click=${() => { this.fileMenuOpen = false; }}>${icon(Download,{size:14})}Download file</a>
-            <div class="file-menu-divider"></div>
+            <div role="separator"></div>
             <button role="menuitem" @click=${() => { this.fileMenuOpen = false; void this.openFile(this.selected, true); }}>${icon(RefreshCw,{size:14})}Refresh file</button>
             ${!this.terminalMode ? html`<button role="menuitem" @click=${() => { this.fileMenuOpen = false; this.dispatchEvent(new CustomEvent('sdk-file-focus',{bubbles:true,composed:true})); }}>${icon(this.focused ? Minimize2 : Maximize2,{size:14})}${this.focused ? 'Show chat beside files' : 'Focus file viewer'}</button>` : nothing}
             <button role="menuitem" @click=${() => { this.fileMenuOpen = false; if (this.terminalMode) this.backToTerminalFiles(); else this.closeTab(this.currentTab.id); }}>${icon(X,{size:14})}Close file</button>
-          </div>` : nothing}
+          </mux-ui-menu>` : nothing}
         </div>` : nothing}
       </div>
     </div>`;
@@ -924,11 +925,8 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .file-action-button, mux-sdk-utility .file-open-button { display:inline-flex; align-items:center; justify-content:center; gap:var(--ui-space-3); min-height:27px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); padding:0 var(--ui-space-4); background:var(--ui-surface-raised); color:var(--ui-text); font:var(--ui-text-xs) var(--ui-font-sans); white-space:nowrap; cursor:pointer; }
     mux-sdk-utility .file-action-button:hover, mux-sdk-utility .file-open-button:hover { background:var(--ui-surface-hover); }
     mux-sdk-utility .file-open-wrap { position:relative; }
-    mux-sdk-utility .file-open-menu { position:absolute; z-index:21; top:33px; right:0; width:215px; padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); box-shadow:var(--ui-shadow-menu); }
-    mux-sdk-utility .file-open-menu button, mux-sdk-utility .file-open-menu a { display:flex; align-items:center; gap:var(--ui-space-5); width:100%; min-height:28px; box-sizing:border-box; border:0; border-radius:var(--ui-radius-sm); padding:0 var(--ui-space-4); background:transparent; color:var(--ui-text); text-align:left; text-decoration:none; font:var(--ui-text-xs) var(--ui-font-sans); cursor:pointer; }
-    mux-sdk-utility .file-open-menu button:hover, mux-sdk-utility .file-open-menu a:hover, mux-sdk-utility .file-open-menu button:focus-visible, mux-sdk-utility .file-open-menu a:focus-visible { background:var(--ui-surface-hover); outline:0; }
+    mux-sdk-utility .file-open-menu { --ui-menu-offset-y:calc(var(--ui-control-sm) + var(--ui-space-1)); --ui-menu-offset-x:0; --ui-menu-width:var(--ui-toast-min-width); }
     mux-sdk-utility .file-open-menu svg { flex:none; color:var(--ui-text-muted); }
-    mux-sdk-utility .file-menu-divider { height:1px; margin:var(--ui-space-3) var(--ui-space-2); background:var(--ui-border); }
     mux-sdk-utility .sandbox-note button { border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); background:var(--ui-surface-raised); color:var(--ui-text); padding:var(--ui-space-2) var(--ui-space-4); text-decoration:none; font:var(--ui-text-xs) var(--ui-font-sans); white-space:nowrap; cursor:pointer; }
     mux-sdk-utility .sandbox-note button:hover { background:var(--ui-surface-hover); }
     mux-sdk-utility .status-spacer { flex:1; }

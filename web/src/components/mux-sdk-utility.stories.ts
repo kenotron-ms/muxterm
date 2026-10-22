@@ -70,6 +70,19 @@ export const FilePreview: Story = {
   args:{sessionId:sessionId('preview')},parameters:{apiFixture:utilityFixture(sessionId('preview'))},
   play:async ({canvasElement}) => { await target(canvasElement)?.showFile('README.md'); },
 };
+export const FileOpenActions: Story = {
+  args:{sessionId:sessionId('file-actions')},parameters:{apiFixture:utilityFixture(sessionId('file-actions'))},
+  play:async ({canvasElement}) => {
+    const utility = target(canvasElement);
+    await utility?.showFile('README.md');
+    utility?.querySelector<HTMLButtonElement>('.file-open-button')?.click();
+  },
+};
+export const PhoneFileOpenActions: Story = {
+  args:{sessionId:sessionId('phone-file-actions')},parameters:{apiFixture:utilityFixture(sessionId('phone-file-actions'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  play:FileOpenActions.play,
+};
 export const QuickOpen: Story = {
   args:{sessionId:sessionId('quick-open')},parameters:{apiFixture:utilityFixture(sessionId('quick-open'))},
   play:async ({canvasElement}) => {

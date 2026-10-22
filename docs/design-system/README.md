@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Text Field, Text Area, Select,
+3. Use the shared Button, Action Menu, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -85,6 +85,10 @@ inline. Removing a project and archiving a linked lane now open the adaptive
 Dialog for review before changing data. Storybook verified that Cancel and
 Escape keep the project, while confirmation removes it and moves its chats to
 Ungrouped. The Archived story uses two chats from the current main API shape.
+Project, chat and move actions now use the shared Action Menu. Its native
+button/link items get arrow, Home/End, Escape and Tab behavior in one place;
+Escape restores the feature trigger. Chromium inspected the project menu on
+desktop and as a phone sheet, and opened a real chat's actions in dev-local.
 
 Connections has three primary destinations: Google, Microsoft and GitHub.
 Google preview services sit inside its provider view; Microsoft mail, calendar
@@ -124,6 +128,12 @@ confirmed the semantic surfaces resolve to the selected theme.
 These stories use synthetic read-only goal data and do not exercise live goal
 control. Work disclosures, lane report toggles and the auto-sizing composer
 still need shared-pattern review, as recorded in the inventory.
+
+Utility's Open file actions use the same Action Menu, including its separator,
+keyboard path and phone sheet. Storybook's actual Utility screen showed the
+file menu at desktop and phone widths; Chromium confirmed End reaches Close file
+and Escape restores focus to Open. Its Storybook fixture supplies the preview
+file, so file-launch actions were not exercised against a live filesystem.
 
 The shared Switch also replaces the bespoke Operator toggle in chat settings.
 It has inline and described-row layouts, checked and disabled stories, native

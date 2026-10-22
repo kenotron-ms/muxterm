@@ -8,9 +8,11 @@ import { laneIcon } from '../lib/lane-icon.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
+import type { MuxUIMenu } from '../ui/menu.js';
 import '../ui/text-field.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
+import '../ui/menu.js';
 import codexMark from '../assets/harness/codex.svg?url';
 import claudeMark from '../assets/harness/claude.svg?url';
 import amplifierMark from '../assets/harness/amplifier.png?url';
@@ -64,8 +66,8 @@ export class MuxChatWorkspace extends LitElement {
 
   private readonly onOutsidePointer = (event: PointerEvent) => {
     const path = event.composedPath();
-    const menu = this.renderRoot.querySelector('.menu');
-    const trigger = this.menuFor === 'project' ? this.renderRoot.querySelector('.row .action.more') : null;
+    const menu = this.renderRoot.querySelector('mux-ui-menu');
+    const trigger = this.menuFor === 'project' ? this.renderRoot.querySelector('.row .action.more') : this.renderRoot.querySelector(`.chat-row .action.more[data-chat-id="${CSS.escape(this.menuFor)}"]`);
     if (this.menuFor && ![menu, trigger].some(el => el !== null && path.includes(el))) this.closeMenu();
     const browser = this.renderRoot.querySelector('.browser');
     const browseButtons = this.renderRoot.querySelectorAll('[aria-label="Browse primary folders"], [aria-label="Browse source folders"]');
@@ -96,6 +98,7 @@ export class MuxChatWorkspace extends LitElement {
     if ((changed.has('selectedSession') || changed.has('model')) && this.selectedSession) {
       this.renderRoot.querySelector<HTMLElement>('.chat-row[selected]')?.scrollIntoView({ block:'nearest' });
     }
+    if (changed.has('movingChatId') && this.menuFor) requestAnimationFrame(() => this.renderRoot.querySelector<MuxUIMenu>('mux-ui-menu')?.focusFirst());
   }
   reveal() { this.open = true; this.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
 
@@ -117,12 +120,8 @@ export class MuxChatWorkspace extends LitElement {
     .chat-row .action.more { display:none; }
     .chat-row:hover .action,.chat-row:has(.chat:focus-visible) .action { display:inline-flex; }
     .action:hover { background:var(--ui-surface-hover); color:inherit; }
-    .row:has(.menu) .action.more,.chat-row:has(.menu) .action.more { display:inline-flex; opacity:1; }
-    .menu { position:absolute; z-index:30; top:var(--ui-control-sm); right:var(--ui-space-2); min-width:var(--ui-menu-min-width); max-height:var(--ui-menu-max-height); overflow:auto; padding:var(--ui-space-2); background:var(--ui-surface-raised); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); box-shadow:var(--ui-shadow-menu); }
-    .menu.context { top:var(--ui-space-7); right:var(--ui-space-5); }
-    .menu button { display:flex; align-items:center; gap:var(--ui-space-4); width:100%; padding:var(--ui-space-4); text-align:left; border-radius:var(--ui-radius-sm); }
-    .menu button:hover { background:var(--ui-surface-hover); }
-    .menu .danger { color:var(--ui-danger); }
+    .row:has(mux-ui-menu) .action.more,.chat-row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
+    mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-space-8); }
     button.chat { flex:1; min-width:0; min-height:var(--ui-control-sm); padding:var(--ui-space-1) var(--ui-space-2); text-align:left; border-radius:var(--ui-radius-md); display:flex; align-items:center; gap:var(--ui-space-4); }
     .chat-row[selected] { background:var(--ui-nav-selected); }
@@ -170,6 +169,15 @@ export class MuxChatWorkspace extends LitElement {
   `;
 
   private closeMenu() { this.menuFor = ''; this.contextMenu = false; this.movingChatId = ''; }
+  private dismissMenu(event: CustomEvent<{restoreFocus:boolean}>) {
+    const target = this.menuFor;
+    this.closeMenu();
+    if (!event.detail.restoreFocus) return;
+    void this.updateComplete.then(() => {
+      const row = target === 'project' ? this.renderRoot.querySelector('.row') : [...this.renderRoot.querySelectorAll('.chat-row')].find(element => element.querySelector('.action.more')?.getAttribute('data-chat-id') === target);
+      (row?.querySelector<HTMLElement>('.action.more') || row?.querySelector<HTMLElement>('.chat'))?.focus();
+    });
+  }
   private showContext(event: MouseEvent, target: string) {
     event.preventDefault();
     this.menuFor = target;
@@ -282,27 +290,27 @@ export class MuxChatWorkspace extends LitElement {
   }
   private projectMenu() {
     const p = this.model.project!;
-    return html`<div class="menu ${this.contextMenu ? 'context' : ''}" role="menu">
+    return html`<mux-ui-menu class=${this.contextMenu ? 'context' : ''} label="Project actions" @menu-dismiss=${this.dismissMenu}>
       <button role="menuitem" @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</button>
       <button role="menuitem" @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit project and folders</button>
       <button role="menuitem" @click=${() => this.startEdit()}>${icon(Pencil,{size:14})} Rename project</button>
       <button role="menuitem" @click=${() => void this.pinProject()}>${icon(p.pinned ? PinOff : Pin,{size:14})} ${p.pinned ? 'Unpin project' : 'Pin project'}</button>
       <button class="danger" role="menuitem" @click=${() => this.requestRemoveProject()}>${icon(Trash2,{size:14})} Remove project</button>
-    </div>`;
+    </mux-ui-menu>`;
   }
   private chatMenu(chat: SDKChat) {
-    if (this.movingChatId === chat.id) return html`<div class="menu context" role="menu" aria-label="Move chat to project">
+    if (this.movingChatId === chat.id) return html`<mux-ui-menu class="context" label="Move chat to project" @menu-dismiss=${this.dismissMenu}>
       <button role="menuitem" @click=${() => { this.movingChatId = ''; }}>← Back</button>
       ${chat.workspaceId ? html`<button role="menuitem" @click=${() => void this.moveChat(chat, '')}>Move to Ungrouped</button>` : nothing}
       ${sdkChats.projects.filter(project => project.id !== chat.workspaceId).map(project => html`<button role="menuitem" @click=${() => void this.moveChat(chat, project.id)}>Move to ${project.name}</button>`)}
-    </div>`;
-    return html`<div class="menu context" role="menu">
+    </mux-ui-menu>`;
+    return html`<mux-ui-menu class="context" label="Chat actions" @menu-dismiss=${this.dismissMenu}>
       <button role="menuitem" @click=${() => this.openChat(chat)}>${icon(MessageSquare,{size:14})} Open chat</button>
       <button role="menuitem" @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})} ${chat.pinned ? 'Unpin chat' : 'Pin chat'}</button>
       <button role="menuitem" @click=${() => this.startRename(chat.id, chat.title)}>${icon(Pencil,{size:14})} Rename chat</button>
       <button role="menuitem" @click=${() => { this.movingChatId = chat.id; }}>Move to project…</button>
       <button role="menuitem" @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})} ${chat.archived ? 'Restore chat' : 'Archive chat'}</button>
-    </div>`;
+    </mux-ui-menu>`;
   }
   override render() {
     const group = this.model;
@@ -316,7 +324,7 @@ export class MuxChatWorkspace extends LitElement {
           ${group.project ? html`
             <button class="action" aria-label=${`${group.project.pinned ? 'Unpin' : 'Pin'} ${group.name}`} title=${group.project.pinned ? 'Unpin project' : 'Pin project'} @click=${() => void this.pinProject()}>${icon(group.project.pinned ? PinOff : Pin,{size:14})}</button>
             <button class="action" aria-label=${`Edit ${group.name}`} title="Edit project" @click=${() => this.startEdit()}>${icon(Pencil,{size:14})}</button>
-            <button class="action more" aria-label=${`Project options for ${group.name}`} aria-expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>` : nothing}
+            <button class="action more" aria-label=${`Project options for ${group.name}`} aria-haspopup="menu" aria-expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>` : nothing}
         ${this.menuFor === 'project' && group.project ? this.projectMenu() : nothing}
       </div>
       ${this.editing && group.project ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Edit project" open @dismiss=${() => { this.editing=false; this.error=''; this.editListing=undefined; }}><div class="editor">
@@ -347,7 +355,7 @@ export class MuxChatWorkspace extends LitElement {
             </button>
             <button class="action" aria-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} title=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</button>
             <button class="action" aria-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} title=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</button>`}
-          ${this.renamingId === chat.id ? nothing : html`<button class="action more" aria-label=${`Options for ${chat.title}`} title="Chat options" @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>`}
+          ${this.renamingId === chat.id ? nothing : html`<button class="action more" data-chat-id=${chat.id} aria-label=${`Options for ${chat.title}`} title="Chat options" aria-haspopup="menu" aria-expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</button>`}
           ${this.menuFor === chat.id ? this.chatMenu(chat) : nothing}
         </div>`)}
       </div>` : nothing}

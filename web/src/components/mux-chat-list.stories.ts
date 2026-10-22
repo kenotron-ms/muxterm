@@ -20,6 +20,24 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const ProjectsAndPinned: Story = {};
+export const ProjectActions: Story = { play:async ({canvasElement}) => {
+  const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
+  await list?.updateComplete;
+  const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
+  project?.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Project options for Atlas"]')?.click();
+} };
+export const PhoneProjectActions: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:ProjectActions.play };
+const openMoveChat = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+  const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
+  await list?.updateComplete;
+  const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
+  const row = [...(project?.shadowRoot?.querySelectorAll<HTMLElement>('.chat-row') ?? [])].find(node => node.textContent?.includes('Build and deployment logs'));
+  row?.querySelector<HTMLButtonElement>('.action.more')?.click();
+  await project?.updateComplete;
+  [...(row?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Move to project'))?.click();
+};
+export const MoveChatActions: Story = { play:openMoveChat };
+export const PhoneMoveChatActions: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openMoveChat };
 export const Empty: Story = { render:() => view('',false,true) };
 export const AnotherSelectedChat: Story = { render:() => view('chat-notes') };
 export const ArchivedExpanded: Story = { play:async ({canvasElement}) => {
