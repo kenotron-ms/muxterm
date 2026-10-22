@@ -53,8 +53,8 @@ const meta = {
           <strong>Overlay surface</strong>
           <p style="max-width:34ch;color:var(--ui-text-muted)">Menus inherit the selected palette and optional backdrop treatment.</p>
           <div style="position:relative;min-height:120px"><mux-ui-menu label="Project actions" style="--ui-menu-offset-y:var(--ui-space-2);--ui-menu-offset-x:auto;left:0">
-            <button role="menuitem">${icon(FolderOpen, { size: 16 })} Open project</button>
-            <button role="menuitem">Edit project</button>
+            <mux-ui-menu-item>${icon(FolderOpen, { size: 16 })} Open project</mux-ui-menu-item>
+            <mux-ui-menu-item>Edit project</mux-ui-menu-item>
           </mux-ui-menu></div>
         </section>
       </div>

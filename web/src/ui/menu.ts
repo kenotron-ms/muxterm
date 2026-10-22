@@ -1,8 +1,9 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import './menu-item.js';
 
-/** An action menu for slotted native buttons and links with role="menuitem". */
+/** An action menu for shared Menu Items. */
 @customElement('mux-ui-menu')
 export class MuxUIMenu extends LitElement {
   @property() label = 'Actions';
@@ -18,15 +19,6 @@ export class MuxUIMenu extends LitElement {
       background:var(--ui-surface-raised); background-image:var(--ui-overlay-backdrop-image); box-shadow:var(--ui-shadow-menu);
       color:var(--ui-text); font:var(--ui-text-sm)/1.4 var(--ui-font-sans);
     }
-    ::slotted(button),::slotted(a) {
-      box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-4);
-      width:100%; min-height:var(--ui-control-md); padding:var(--ui-space-3) var(--ui-space-4);
-      border:0; border-radius:var(--ui-radius-sm); background:transparent; color:var(--ui-text);
-      font:inherit; text-align:left; text-decoration:none; cursor:pointer;
-    }
-    ::slotted(button:hover),::slotted(a:hover) { background:var(--ui-surface-hover); }
-    ::slotted(button:focus-visible),::slotted(a:focus-visible) { background:var(--ui-surface-hover); outline:2px solid var(--ui-focus); outline-offset:-2px; }
-    ::slotted(.danger) { color:var(--ui-danger); }
     ::slotted([role='separator']) { display:block; height:1px; margin:var(--ui-space-3) var(--ui-space-2); background:var(--ui-border); }
     @media(max-width:700px) {
       :host {
@@ -35,20 +27,20 @@ export class MuxUIMenu extends LitElement {
         border-radius:var(--ui-radius-xl) var(--ui-radius-xl) 0 0; border-bottom:0; box-shadow:var(--ui-shadow-sheet);
       }
       :host::before { content:''; display:block; width:var(--ui-control-md); height:var(--ui-space-2); margin:0 auto var(--ui-space-5); border-radius:var(--ui-radius-pill); background:var(--ui-border); }
-      ::slotted(button),::slotted(a) { min-height:var(--ui-control-lg); }
     }
   `;
 
   private items(): HTMLElement[] {
     const slot = this.renderRoot.querySelector('slot');
     return (slot?.assignedElements({ flatten:true }) ?? []).filter((element): element is HTMLElement =>
-      element instanceof HTMLElement && element.getAttribute('role') === 'menuitem' && !element.hasAttribute('disabled'));
+      element instanceof HTMLElement && element.tagName === 'MUX-UI-MENU-ITEM' && !element.hasAttribute('disabled'));
   }
   focusFirst(): void { this.items()[0]?.focus(); }
 
   private onKeyDown(event: KeyboardEvent): void {
     const items = this.items();
-    const current = items.indexOf(event.composedPath()[0] as HTMLElement);
+    const path = event.composedPath();
+    const current = items.findIndex(item => path.includes(item));
     let next = current;
     if (event.key === 'ArrowDown') next = (current + 1) % items.length;
     else if (event.key === 'ArrowUp') next = current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length;

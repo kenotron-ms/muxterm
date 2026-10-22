@@ -76,6 +76,10 @@ for (const name of Object.keys(baseline)) {
 
 for (const [name, url] of featureFiles) {
   const source = await readFile(url, 'utf8');
+  if (/<(?:button|a)\b[^>]*\brole\s*=\s*['"]menuitem['"]/i.test(source)) {
+    console.error(`src/${name}: use mux-ui-menu-item for feature menu actions`);
+    failed = true;
+  }
   // Sidebar width bounds share numeric constants with drag behavior. It is the
   // only feature allowed to embed those constants in Lit CSS.
   const unsafeCSSCalls = [...source.matchAll(/\bunsafeCSS\s*\(/g)].length;

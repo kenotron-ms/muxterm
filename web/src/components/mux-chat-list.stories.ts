@@ -5,6 +5,7 @@ import type { MuxChatList, MuxChatWorkspace } from './mux-chat-list.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIButton } from '../ui/button.js';
 import type { MuxUIListRow } from '../ui/list-row.js';
+import type { MuxUIMenuItem } from '../ui/menu-item.js';
 import './mux-chat-list.js';
 
 function view(selectedSession = 'chat-editor', phone = false, empty = false, linkedLane = false) {
@@ -34,10 +35,10 @@ const openMoveChat = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
   await list?.updateComplete;
   const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
-  const row = [...(project?.shadowRoot?.querySelectorAll<HTMLElement>('.chat-row') ?? [])].find(node => node.textContent?.includes('Build and deployment logs'));
+  const row = [...(project?.shadowRoot?.querySelectorAll<HTMLElement>('.chat-row') ?? [])].find(node => node.querySelector<MuxUIListRow>('mux-ui-list-row')?.label === 'Build and deployment logs');
   row?.querySelector<MuxUIButton>('.action.more')?.click();
   await project?.updateComplete;
-  [...(row?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Move to project'))?.click();
+  [...(row?.querySelectorAll<MuxUIMenuItem>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Move to project'))?.click();
 };
 export const MoveChatActions: Story = { play:openMoveChat };
 export const PhoneMoveChatActions: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openMoveChat };
@@ -89,7 +90,7 @@ const openProjectRemoval = async ({canvasElement}: {canvasElement: HTMLElement})
   const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
   project?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Project options for Atlas"]')?.click();
   await project?.updateComplete;
-  [...(project?.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Remove project'))?.click();
+  [...(project?.shadowRoot?.querySelectorAll<MuxUIMenuItem>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Remove project'))?.click();
 };
 export const RemoveProjectConfirmation: Story = { play:openProjectRemoval };
 export const PhoneRemoveProjectConfirmation: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true), play:openProjectRemoval };
@@ -99,9 +100,9 @@ export const LinkedLaneArchiveConfirmation: Story = {
     const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
     await list?.updateComplete;
     const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
-    const row = [...(project?.shadowRoot?.querySelectorAll<HTMLElement>('.chat-row') ?? [])].find(node => node.textContent?.includes('Build and deployment logs'));
+    const row = [...(project?.shadowRoot?.querySelectorAll<HTMLElement>('.chat-row') ?? [])].find(node => node.querySelector<MuxUIListRow>('mux-ui-list-row')?.label === 'Build and deployment logs');
     row?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Options for Build and deployment logs"]')?.click();
     await project?.updateComplete;
-    [...(row?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Archive chat'))?.click();
+    [...(row?.querySelectorAll<MuxUIMenuItem>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Archive chat'))?.click();
   },
 };

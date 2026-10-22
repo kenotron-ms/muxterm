@@ -52,7 +52,7 @@ remain native or keyboard-operable buttons, while BlockNote owns editing.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, List Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice List, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
+3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Menu Item, Tab Strip, Rail Row, List Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice List, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Empty State, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -126,18 +126,21 @@ inline. Removing a project and archiving a linked lane now open the adaptive
 Dialog for review before changing data. Storybook verified that Cancel and
 Escape keep the project, while confirmation removes it and moves its chats to
 Ungrouped. The Archived story uses two chats from the current main API shape.
-Project, chat and move actions now use the shared Action Menu. Its native
-button/link items get arrow, Home/End, Escape and Tab behavior in one place;
-Escape restores the feature trigger. Chromium inspected the project menu on
-desktop and as a phone sheet, and opened a real chat's actions in dev-local.
+Project, chat and move actions now use the shared Action Menu and Menu Item.
+The item keeps native button or link semantics while the menu coordinates
+arrow, Home/End, Escape and Tab behavior; Escape restores the feature trigger.
+Chromium inspected the migrated Chat List
+and Utility menus at desktop and phone widths in Storybook, including named
+menu items, keyboard navigation, focus restoration, and native link attributes.
+The isolated dev-local app and sessiond passed a fresh-workspace smoke check;
+the current menu migration was exercised against Storybook's screen fixtures.
 The chat list's eight repeated project, chat and pinned icon actions now use
 the shared Button. Menu triggers expose `aria-haspopup` and `aria-expanded`
 through its native inner button. On phones, project and chat options remain
 visible without hover, while their secondary actions live in the menu; the
 Ungrouped new-chat action and pinned unpin actions also stay visible. Storybook
 verified the phone project sheet and Escape focus restoration, and touch
-emulation measured a 44 px target. A later isolated live pass opened a real
-chat action menu in the phone drawer. Screenshots remain outside git.
+emulation measured a 44 px target. Screenshots remain outside git.
 
 Project disclosure, chat destinations and pinned entries now use the shared
 List Row. Its native inner button owns focus, selected and expanded semantics;
@@ -225,7 +228,7 @@ These stories use synthetic read-only goal data and do not exercise live goal
 control. The auto-sizing composer and hidden file input keep native editor
 semantics, as recorded in the inventory.
 
-Utility's Open file actions use the same Action Menu, including its separator,
+Utility's Open file actions use the same Action Menu and Menu Item, including its separator,
 keyboard path and phone sheet. Storybook's actual Utility screen showed the
 file menu at desktop and phone widths; Chromium confirmed End reaches Close file
 and Escape restores focus to Open. Its Storybook fixture supplies the preview
@@ -357,7 +360,8 @@ Arrow navigation, Enter selection, Escape dismissal and status messages.
 Utility continues to fetch matching files and open the chosen path. Storybook
 shows results, loading, no results, errors, truncation and a phone sheet; the
 file welcome action uses the shared Button. The Utility inventory now counts
-six feature-owned native controls, down from 39 at the start of this pass.
+one feature-owned native control, down from 39 at the start of this pass.
+The page title remains a native inline editor.
 File-viewer loading, empty, oversized and error states use shared Feedback.
 Failures offer Retry; Storybook includes file and raw-preview recovery states.
 The full-panel Files welcome view, Changes selection view, and Pages empty and

@@ -697,15 +697,15 @@ export class MuxSDKUtility extends LitElement {
         ${file ? html`<div class="file-open-wrap">
           <mux-ui-button class="file-open-button" size="small" variant="secondary" accessible-label="Open file options" tooltip="Open file options" haspopup="menu" .expanded=${this.fileMenuOpen} @click=${() => { this.fileMenuOpen = !this.fileMenuOpen; this.paintAll(); }}>${icon(ExternalLink,{size:14})}<span>Open</span>${icon(ChevronDown,{size:13})}</mux-ui-button>
           ${this.fileMenuOpen ? html`<mux-ui-menu class="file-open-menu" label="Open file" @menu-dismiss=${(event:CustomEvent<{restoreFocus:boolean}>) => { this.fileMenuOpen = false; this.paintAll(); if (event.detail.restoreFocus) queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }}>
-            ${canOpenInBrowser ? html`<button role="menuitem" @click=${() => { this.fileMenuOpen = false; this.openFileInBrowser(); }}>${icon(ExternalLink,{size:14})}Open in browser tab</button>` : nothing}
-            ${vsCodeURL ? html`<a role="menuitem" href=${vsCodeURL} @click=${() => { this.fileMenuOpen = false; }}>${icon(Code2,{size:14})}Open with VS Code</a>` : nothing}
+            ${canOpenInBrowser ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.openFileInBrowser(); }}>${icon(ExternalLink,{size:14})}Open in browser tab</mux-ui-menu-item>` : nothing}
+            ${vsCodeURL ? html`<mux-ui-menu-item href=${vsCodeURL} @click=${() => { this.fileMenuOpen = false; }}>${icon(Code2,{size:14})}Open with VS Code</mux-ui-menu-item>` : nothing}
             <div role="separator"></div>
-            <button role="menuitem" @click=${() => { this.fileMenuOpen = false; void this.copyFilePath(); }}>${icon(Copy,{size:14})}Copy file path</button>
-            <a role="menuitem" href=${this.endpoint('raw', this.selected)} download=${file.name} @click=${() => { this.fileMenuOpen = false; }}>${icon(Download,{size:14})}Download file</a>
+            <mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; void this.copyFilePath(); }}>${icon(Copy,{size:14})}Copy file path</mux-ui-menu-item>
+            <mux-ui-menu-item href=${this.endpoint('raw', this.selected)} download=${file.name} @click=${() => { this.fileMenuOpen = false; }}>${icon(Download,{size:14})}Download file</mux-ui-menu-item>
             <div role="separator"></div>
-            <button role="menuitem" @click=${() => { this.fileMenuOpen = false; void this.openFile(this.selected, true); }}>${icon(RefreshCw,{size:14})}Refresh file</button>
-            ${!this.terminalMode ? html`<button role="menuitem" @click=${() => { this.fileMenuOpen = false; this.dispatchEvent(new CustomEvent('sdk-file-focus',{bubbles:true,composed:true})); }}>${icon(this.focused ? Minimize2 : Maximize2,{size:14})}${this.focused ? 'Show chat beside files' : 'Focus file viewer'}</button>` : nothing}
-            <button role="menuitem" @click=${() => { this.fileMenuOpen = false; if (this.terminalMode) this.backToTerminalFiles(); else this.closeTab(this.currentTab.id); }}>${icon(X,{size:14})}Close file</button>
+            <mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; void this.openFile(this.selected, true); }}>${icon(RefreshCw,{size:14})}Refresh file</mux-ui-menu-item>
+            ${!this.terminalMode ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.dispatchEvent(new CustomEvent('sdk-file-focus',{bubbles:true,composed:true})); }}>${icon(this.focused ? Minimize2 : Maximize2,{size:14})}${this.focused ? 'Show chat beside files' : 'Focus file viewer'}</mux-ui-menu-item>` : nothing}
+            <mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; if (this.terminalMode) this.backToTerminalFiles(); else this.closeTab(this.currentTab.id); }}>${icon(X,{size:14})}Close file</mux-ui-menu-item>
           </mux-ui-menu>` : nothing}
         </div>` : nothing}
       </div>

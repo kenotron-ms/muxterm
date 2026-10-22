@@ -36,21 +36,21 @@ export const EditProject: Story = { play:async ({canvasElement}) => {
   await row?.updateComplete;
   row?.shadowRoot?.querySelector<MuxUIButton>('.row .action.more')?.click();
   await row?.updateComplete;
-  [...(row?.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Edit project and folders'))?.click();
+  [...(row?.shadowRoot?.querySelectorAll<HTMLElement>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Edit project and folders'))?.click();
 } };
 export const RenameProject: Story = { play:async ({canvasElement}) => {
   const row = canvasElement.querySelector<MuxChatWorkspace>('mux-chat-workspace');
   await row?.updateComplete;
   row?.shadowRoot?.querySelector<MuxUIButton>('.row .action.more')?.click();
   await row?.updateComplete;
-  [...(row?.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Rename project'))?.click();
+  [...(row?.shadowRoot?.querySelectorAll<HTMLElement>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Rename project'))?.click();
 } };
 export const RenameChat: Story = { play:async ({canvasElement}) => {
   const row = canvasElement.querySelector<MuxChatWorkspace>('mux-chat-workspace');
   await row?.updateComplete;
   row?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Options for Refine workspace navigation"]')?.click();
   await row?.updateComplete;
-  [...(row?.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Rename chat'))?.click();
+  [...(row?.shadowRoot?.querySelectorAll<HTMLElement>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Rename chat'))?.click();
 } };
 export const PhoneProjectMenu: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view(true),play:ProjectMenu.play };
 export const PhoneRenameProject: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view(true),play:RenameProject.play };

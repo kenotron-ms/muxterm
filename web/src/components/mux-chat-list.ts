@@ -285,25 +285,25 @@ export class MuxChatWorkspace extends LitElement {
   private projectMenu() {
     const p = this.model.project!;
     return html`<mux-ui-menu class=${this.contextMenu ? 'context' : ''} label="Project actions" @menu-dismiss=${this.dismissMenu}>
-      <button role="menuitem" @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</button>
-      <button role="menuitem" @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit project and folders</button>
-      <button role="menuitem" @click=${() => this.startEdit()}>${icon(Pencil,{size:14})} Rename project</button>
-      <button role="menuitem" @click=${() => void this.pinProject()}>${icon(p.pinned ? PinOff : Pin,{size:14})} ${p.pinned ? 'Unpin project' : 'Pin project'}</button>
-      <button class="danger" role="menuitem" @click=${() => this.requestRemoveProject()}>${icon(Trash2,{size:14})} Remove project</button>
+      <mux-ui-menu-item @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</mux-ui-menu-item>
+      <mux-ui-menu-item @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit project and folders</mux-ui-menu-item>
+      <mux-ui-menu-item @click=${() => this.startEdit()}>${icon(Pencil,{size:14})} Rename project</mux-ui-menu-item>
+      <mux-ui-menu-item @click=${() => void this.pinProject()}>${icon(p.pinned ? PinOff : Pin,{size:14})} ${p.pinned ? 'Unpin project' : 'Pin project'}</mux-ui-menu-item>
+      <mux-ui-menu-item tone="danger" @click=${() => this.requestRemoveProject()}>${icon(Trash2,{size:14})} Remove project</mux-ui-menu-item>
     </mux-ui-menu>`;
   }
   private chatMenu(chat: SDKChat) {
     if (this.movingChatId === chat.id) return html`<mux-ui-menu class="context" label="Move chat to project" @menu-dismiss=${this.dismissMenu}>
-      <button role="menuitem" @click=${() => { this.movingChatId = ''; }}>← Back</button>
-      ${chat.workspaceId ? html`<button role="menuitem" @click=${() => void this.moveChat(chat, '')}>Move to Ungrouped</button>` : nothing}
-      ${sdkChats.projects.filter(project => project.id !== chat.workspaceId).map(project => html`<button role="menuitem" @click=${() => void this.moveChat(chat, project.id)}>Move to ${project.name}</button>`)}
+      <mux-ui-menu-item @click=${() => { this.movingChatId = ''; }}>← Back</mux-ui-menu-item>
+      ${chat.workspaceId ? html`<mux-ui-menu-item @click=${() => void this.moveChat(chat, '')}>Move to Ungrouped</mux-ui-menu-item>` : nothing}
+      ${sdkChats.projects.filter(project => project.id !== chat.workspaceId).map(project => html`<mux-ui-menu-item @click=${() => void this.moveChat(chat, project.id)}>Move to ${project.name}</mux-ui-menu-item>`)}
     </mux-ui-menu>`;
     return html`<mux-ui-menu class="context" label="Chat actions" @menu-dismiss=${this.dismissMenu}>
-      <button role="menuitem" @click=${() => this.openChat(chat)}>${icon(MessageSquare,{size:14})} Open chat</button>
-      <button role="menuitem" @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})} ${chat.pinned ? 'Unpin chat' : 'Pin chat'}</button>
-      <button role="menuitem" @click=${() => this.startRename(chat.id, chat.title)}>${icon(Pencil,{size:14})} Rename chat</button>
-      <button role="menuitem" @click=${() => { this.movingChatId = chat.id; }}>Move to project…</button>
-      <button role="menuitem" @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})} ${chat.archived ? 'Restore chat' : 'Archive chat'}</button>
+      <mux-ui-menu-item @click=${() => this.openChat(chat)}>${icon(MessageSquare,{size:14})} Open chat</mux-ui-menu-item>
+      <mux-ui-menu-item @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})} ${chat.pinned ? 'Unpin chat' : 'Pin chat'}</mux-ui-menu-item>
+      <mux-ui-menu-item @click=${() => this.startRename(chat.id, chat.title)}>${icon(Pencil,{size:14})} Rename chat</mux-ui-menu-item>
+      <mux-ui-menu-item @click=${() => { this.movingChatId = chat.id; }}>Move to project…</mux-ui-menu-item>
+      <mux-ui-menu-item @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})} ${chat.archived ? 'Restore chat' : 'Archive chat'}</mux-ui-menu-item>
     </mux-ui-menu>`;
   }
   override render() {
