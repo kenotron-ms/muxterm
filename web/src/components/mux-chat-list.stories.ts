@@ -4,8 +4,8 @@ import { chatListFixture, resetChatListFixture } from '../stories/chat-list-fixt
 import type { MuxChatList, MuxChatWorkspace } from './mux-chat-list.js';
 import './mux-chat-list.js';
 
-function view(selectedSession = 'chat-editor', phone = false, empty = false) {
-  resetChatListFixture(empty);
+function view(selectedSession = 'chat-editor', phone = false, empty = false, linkedLane = false) {
+  resetChatListFixture(empty, linkedLane);
   return html`<div style="box-sizing:border-box;width:${phone ? '335px' : '348px'};max-width:100vw;min-height:844px;padding:var(--ui-space-4);background:var(--ui-surface-nav);color:var(--ui-text)">
     <mux-chat-list .selectedSession=${selectedSession}></mux-chat-list>
   </div>`;
@@ -46,3 +46,25 @@ const openProjectEditor = async ({canvasElement}: {canvasElement: HTMLElement}) 
 };
 export const EditProject: Story = { play:openProjectEditor };
 export const PhoneEditProject: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true), play:openProjectEditor };
+const openProjectRemoval = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+  const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
+  await list?.updateComplete;
+  const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
+  project?.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Project options for Atlas"]')?.click();
+  await project?.updateComplete;
+  [...(project?.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Remove project'))?.click();
+};
+export const RemoveProjectConfirmation: Story = { play:openProjectRemoval };
+export const PhoneRemoveProjectConfirmation: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true), play:openProjectRemoval };
+export const LinkedLaneArchiveConfirmation: Story = {
+  render:() => view('chat-editor',false,false,true),
+  play:async ({canvasElement}) => {
+    const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
+    await list?.updateComplete;
+    const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
+    const row = [...(project?.shadowRoot?.querySelectorAll<HTMLElement>('.chat-row') ?? [])].find(node => node.textContent?.includes('Build and deployment logs'));
+    row?.querySelector<HTMLButtonElement>('[aria-label="Options for Build and deployment logs"]')?.click();
+    await project?.updateComplete;
+    [...(row?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])].find(button => button.textContent?.includes('Archive chat'))?.click();
+  },
+};

@@ -54,6 +54,8 @@
   --ui-dialog-compact-width: 520px;
   --ui-dialog-height: 640px;
   --ui-dialog-compact-max-height: 600px;
+  --ui-menu-min-width: 180px;
+  --ui-menu-max-height: 280px;
 
   --ui-surface-base: var(--chrome-body);
   --ui-surface-raised: var(--chrome-bar);

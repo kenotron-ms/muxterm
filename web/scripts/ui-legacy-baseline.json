@@ -37,8 +37,8 @@
   },
   "components/mux-chat-list.ts": {
     "legacyTokens": 0,
-    "literalColors": 12,
-    "literalScale": 27,
+    "literalColors": 0,
+    "literalScale": 0,
     "nativeControls": 27
   },
   "components/mux-chat-remote-image.ts": {

@@ -77,7 +77,10 @@ authority boundary, so live project save awaits an authorized fixture.
 The chat project editor uses shared Text Field, Button and Dialog controls with
 semantic colors. Project renaming opens the same editor as folder changes;
 Storybook verified that saving a name updates the row. Chat renaming stays
-inline. The Archived story uses two chats from the current main API shape.
+inline. Removing a project and archiving a linked lane now open the adaptive
+Dialog for review before changing data. Storybook verified that Cancel and
+Escape keep the project, while confirmation removes it and moves its chats to
+Ungrouped. The Archived story uses two chats from the current main API shape.
 
 Connections has three primary destinations: Google, Microsoft and GitHub.
 Google preview services sit inside its provider view; Microsoft mail, calendar

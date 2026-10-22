@@ -22,9 +22,10 @@ let projects: SDKProject[] = [];
 let chats: SDKChat[] = [];
 let archived: SDKChat[] = [];
 
-export function resetChatListFixture(empty = false): void {
+export function resetChatListFixture(empty = false, linkedLane = false): void {
   projects = empty ? [] : initialProjects.map(project => ({...project, sourceFolders:[...(project.sourceFolders ?? [])]}));
   chats = empty ? [] : initialChats.map(chat => ({...chat}));
+  if (linkedLane) chats.unshift({ id:'chat-operator', workspaceId:'atlas', projectPath:'/home/demo/atlas', title:'Coordinate workspace navigation', harness:'codex', state:'working', operator:true, operatorLanes:['chat-build'], createdAt:'2026-10-21T13:00:00Z' });
   archived = empty ? [] : initialArchived.map(chat => ({...chat}));
   sdkChats.projects = projects;
   sdkChats.chats = [...chats, ...archived];
@@ -53,12 +54,22 @@ export const chatListFixture: ApiFixture = ({url,method,init}) => {
     projects = projects.map(project => project.id === projectId ? {...project,...change} : project);
     return fixtureJSON(projects.find(project => project.id === projectId));
   }
+  if (projectId && method === 'DELETE') {
+    projects = projects.filter(project => project.id !== projectId);
+    chats = chats.map(chat => chat.workspaceId === projectId ? {...chat,workspaceId:''} : chat);
+    archived = archived.map(chat => chat.workspaceId === projectId ? {...chat,workspaceId:''} : chat);
+    return fixtureJSON({ok:true});
+  }
   const chatId = url.pathname.match(/\/api\/sdk-chats\/([^/]+)$/)?.[1];
   if (chatId && method === 'PATCH') {
     const change = JSON.parse(String(init?.body ?? '{}')) as Partial<SDKChat>;
     chats = chats.map(chat => chat.id === chatId ? {...chat,...change} : chat);
     archived = archived.map(chat => chat.id === chatId ? {...chat,...change} : chat);
-    if (change.archived === true) { const row = chats.find(chat => chat.id === chatId); if (row) { archived = [...archived,row]; chats = chats.filter(chat => chat.id !== chatId); } }
+    if (change.archived === true) {
+      const row = chats.find(chat => chat.id === chatId);
+      if (row) { archived = [...archived,row]; chats = chats.filter(chat => chat.id !== chatId); }
+      chats = chats.map(chat => chat.operatorLanes?.includes(chatId) ? {...chat,operatorLanes:chat.operatorLanes.filter(id => id !== chatId)} : chat);
+    }
     if (change.archived === false) { const row = archived.find(chat => chat.id === chatId); if (row) { chats = [...chats,row]; archived = archived.filter(chat => chat.id !== chatId); } }
     return fixtureJSON({ok:true});
   }

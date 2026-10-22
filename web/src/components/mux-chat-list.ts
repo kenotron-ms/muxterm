@@ -28,6 +28,9 @@ function harnessMark(chat: SDKChat, className = 'chat-icon') {
 }
 
 interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean }
+type PendingConfirmation =
+  | { kind:'remove-project'; id:string; name:string }
+  | { kind:'archive-linked-chat'; id:string; name:string };
 
 // The input is already newest-first. Keep that order within each role while
 // leaving Pinned and Archived as separate sections.
@@ -57,6 +60,7 @@ export class MuxChatWorkspace extends LitElement {
   @state() private error = '';
   @state() private renamingId = '';
   @state() private renameDraft = '';
+  @state() private pendingConfirmation?: PendingConfirmation;
 
   private readonly onOutsidePointer = (event: PointerEvent) => {
     const path = event.composedPath();
@@ -97,36 +101,36 @@ export class MuxChatWorkspace extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; margin:0 0 12px; font:var(--sidebar-item-font-size,12.5px)/1.35 Inter,system-ui,sans-serif; color:var(--ui-text,#d8dce5); }
+    :host { display:block; margin:0 0 var(--ui-space-5); font:var(--sidebar-item-font-size,var(--ui-text-sm))/1.35 var(--ui-font-sans); color:var(--ui-text); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
-    .row,.chat-row { display:flex; align-items:center; min-height:34px; border-radius:6px; position:relative; }
+    .row,.chat-row { display:flex; align-items:center; min-height:var(--ui-control-md); border-radius:var(--ui-radius-md); position:relative; }
     .row:hover,.chat-row:hover { background:var(--ui-surface-hover); }
-    .group { display:flex; align-items:center; gap:7px; flex:1; min-width:0; min-height:34px; padding:0 6px; text-align:left; }
+    .group { display:flex; align-items:center; gap:var(--ui-space-4); flex:1; min-width:0; min-height:var(--ui-control-md); padding:0 var(--ui-space-3); text-align:left; }
     .folder { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
-    .folder { width:17px; color:var(--ui-text-muted); }
+    .folder { width:var(--ui-space-6); color:var(--ui-text-muted); }
     .name,.title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .name { font-weight:500; }
-    .archived .name { color:var(--ui-text-muted,#aab2c1); }
-    .action { display:inline-flex; align-items:center; justify-content:center; width:25px; height:25px; flex:none; border-radius:5px; color:var(--ui-text-muted,#aab2c1); opacity:0; }
+    .archived .name { color:var(--ui-text-muted); }
+    .action { display:inline-flex; align-items:center; justify-content:center; width:var(--ui-control-sm); height:var(--ui-control-sm); flex:none; border-radius:var(--ui-radius-sm); color:var(--ui-text-muted); opacity:0; }
     .row:hover .action,.row:focus-within .action { opacity:1; }
     .chat-row .action { display:none; opacity:1; }
     .chat-row .action.more { display:none; }
     .chat-row:hover .action,.chat-row:has(.chat:focus-visible) .action { display:inline-flex; }
     .action:hover { background:var(--ui-surface-hover); color:inherit; }
     .row:has(.menu) .action.more,.chat-row:has(.menu) .action.more { display:inline-flex; opacity:1; }
-    .menu { position:absolute; z-index:30; top:28px; right:4px; min-width:180px; max-height:280px; overflow:auto; padding:5px; background:var(--ui-surface-raised,#252b38); border:1px solid var(--ui-border,#3b4355); border-radius:9px; box-shadow:0 12px 28px #0008; }
-    .menu.context { top:20px; right:12px; }
-    .menu button { display:flex; align-items:center; gap:9px; width:100%; padding:8px; text-align:left; border-radius:5px; }
+    .menu { position:absolute; z-index:30; top:var(--ui-control-sm); right:var(--ui-space-2); min-width:var(--ui-menu-min-width); max-height:var(--ui-menu-max-height); overflow:auto; padding:var(--ui-space-2); background:var(--ui-surface-raised); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); box-shadow:var(--ui-shadow-menu); }
+    .menu.context { top:var(--ui-space-7); right:var(--ui-space-5); }
+    .menu button { display:flex; align-items:center; gap:var(--ui-space-4); width:100%; padding:var(--ui-space-4); text-align:left; border-radius:var(--ui-radius-sm); }
     .menu button:hover { background:var(--ui-surface-hover); }
     .menu .danger { color:var(--ui-danger); }
-    .chats { margin:0 0 5px; padding-left:25px; }
-    button.chat { flex:1; min-width:0; min-height:28px; padding:3px 5px; text-align:left; border-radius:6px; display:flex; align-items:center; gap:7px; }
-    .chat-row[selected] { background:color-mix(in srgb,var(--ui-accent) 18%,var(--ui-surface-raised)); }
-    .chat-icon { width:17px; height:17px; display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
+    .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-space-8); }
+    button.chat { flex:1; min-width:0; min-height:var(--ui-control-sm); padding:var(--ui-space-1) var(--ui-space-2); text-align:left; border-radius:var(--ui-radius-md); display:flex; align-items:center; gap:var(--ui-space-4); }
+    .chat-row[selected] { background:var(--ui-nav-selected); }
+    .chat-icon { width:var(--ui-space-6); height:var(--ui-space-6); display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
     .harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
     .harness-mark.working { color:var(--ui-success); }
     .harness-mark.blocked,.harness-mark.failed { color:var(--ui-danger); }
-    .row:focus-within,.chat-row:focus-within { outline:2px solid var(--ui-accent); outline-offset:-2px; }
+    .row:focus-within,.chat-row:focus-within { outline:2px solid var(--ui-focus); outline-offset:-2px; }
     .row:has(.rename-input):focus-within,.chat-row:has(.rename-input):focus-within { outline:none; }
     .status { width:6px; height:6px; border-radius:50%; background:var(--ui-text-muted); flex:none; }
     .status.working { background:var(--ui-success); }
@@ -135,29 +139,33 @@ export class MuxChatWorkspace extends LitElement {
     .status.operator.failed,.status.operator.uncertain { color:var(--ui-danger); }
     .status.lane { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-text-muted); }
     .status.lane.starting,.status.lane.working { background:none; color:var(--ui-accent); }
-    .status.lane.ready { color:var(--ui-success,#55b981); }
+    .status.lane.ready { color:var(--ui-success); }
     .status.lane.failed,.status.lane.uncertain { color:var(--ui-danger); }
     .status.chat { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-text-muted); }
     .status.chat.working { color:var(--ui-success); }
     .status.chat.failed,.status.chat.uncertain { color:var(--ui-danger); }
     .title { font-weight:550; }
-    .rename-input { flex:1; min-width:0; margin:3px 5px; }
+    .rename-input { flex:1; min-width:0; margin:var(--ui-space-1) var(--ui-space-2); }
     .rename-save { flex:none; margin-right:var(--ui-space-2); }
-    .editor { box-sizing:border-box; width:100%; max-height:calc(80dvh - 24px); overflow:auto; padding:var(--ui-space-6); display:grid; gap:var(--ui-space-4); background:var(--ui-surface-overlay); }
+    .editor { box-sizing:border-box; width:100%; max-height:calc(80dvh - var(--ui-space-8)); overflow:auto; padding:var(--ui-space-6); display:grid; gap:var(--ui-space-4); background:var(--ui-surface-overlay); }
     .editor-head { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); }
     .editor-head h2 { margin:0; font-size:var(--ui-text-xl); line-height:1.25; }
     .editor-intro { margin:0 0 var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .editor mux-ui-text-field { width:100%; }
     .field-label { color:var(--ui-text-muted); font-size:var(--ui-text-md); font-weight:600; }
-    .source { display:flex; align-items:center; gap:4px; }
+    .source { display:flex; align-items:center; gap:var(--ui-space-2); }
     .source mux-ui-text-field { flex:1; }
     .editor-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-2); margin-top:var(--ui-space-3); }
-    .browser { display:grid; max-height:200px; overflow:auto; border:1px solid var(--ui-border,#3b4355); border-radius:6px; padding:4px; }
-    .browser button { padding:5px 7px; border-radius:4px; text-align:left; }
+    .confirmation { box-sizing:border-box; padding:var(--ui-space-7); background:var(--ui-surface-overlay); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
+    .confirmation h2 { margin:0; font-size:var(--ui-text-xl); }
+    .confirmation p { margin:var(--ui-space-4) 0 var(--ui-space-7); color:var(--ui-text-muted); }
+    .confirmation-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); }
+    .browser { display:grid; max-height:200px; overflow:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); padding:var(--ui-space-2); }
+    .browser button { padding:var(--ui-space-2) var(--ui-space-4); border-radius:var(--ui-radius-sm); text-align:left; }
     .browser button:hover { background:var(--ui-surface-hover); }
-    .browser-head { display:flex; align-items:center; gap:4px; }
+    .browser-head { display:flex; align-items:center; gap:var(--ui-space-2); }
     .browser-head span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .error { color:var(--ui-danger); padding:5px; }
+    .error { color:var(--ui-danger); padding:var(--ui-space-2); }
     @media(max-width:700px) { .editor { max-height:calc(100dvh - env(safe-area-inset-top) - var(--ui-space-8)); padding:var(--ui-space-5) var(--ui-space-5) calc(var(--ui-space-5) + env(safe-area-inset-bottom)); } }
   `;
 
@@ -222,10 +230,20 @@ export class MuxChatWorkspace extends LitElement {
       this.editing = false; this.error = '';
     } catch (error) { this.error = String(error); }
   }
-  private async removeProject() {
+  private requestRemoveProject() {
     this.closeMenu();
-    if (!this.model.project || !confirm(`Remove project "${this.model.name}"? Its chats will stay in Ungrouped.`)) return;
-    try { await sdkChats.removeProject(this.model.id); } catch (error) { this.error = String(error); }
+    if (!this.model.project) return;
+    this.pendingConfirmation = { kind:'remove-project', id:this.model.id, name:this.model.name };
+  }
+  private async confirmPendingAction() {
+    const pending = this.pendingConfirmation;
+    if (!pending) return;
+    this.pendingConfirmation = undefined;
+    try {
+      if (pending.kind === 'remove-project') await sdkChats.removeProject(pending.id);
+      else await sdkChats.setArchived(pending.id, true);
+      this.error = '';
+    } catch (error) { this.error = String(error); }
   }
   private async pinProject() {
     this.closeMenu();
@@ -241,7 +259,10 @@ export class MuxChatWorkspace extends LitElement {
     this.closeMenu();
     if (!chat.archived) {
       const linked = sdkChats.chats.some(parent => parent.operator && parent.operatorLanes?.includes(chat.id));
-      if (linked && !confirm(`Archive "${chat.title}"? It will be removed from its operator's lanes.`)) return;
+      if (linked) {
+        this.pendingConfirmation = { kind:'archive-linked-chat', id:chat.id, name:chat.title };
+        return;
+      }
     }
     try { await sdkChats.setArchived(chat.id, !chat.archived); this.error = ''; }
     catch (error) { this.error = String(error); }
@@ -266,7 +287,7 @@ export class MuxChatWorkspace extends LitElement {
       <button role="menuitem" @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit project and folders</button>
       <button role="menuitem" @click=${() => this.startEdit()}>${icon(Pencil,{size:14})} Rename project</button>
       <button role="menuitem" @click=${() => void this.pinProject()}>${icon(p.pinned ? PinOff : Pin,{size:14})} ${p.pinned ? 'Unpin project' : 'Pin project'}</button>
-      <button class="danger" role="menuitem" @click=${() => void this.removeProject()}>${icon(Trash2,{size:14})} Remove project</button>
+      <button class="danger" role="menuitem" @click=${() => this.requestRemoveProject()}>${icon(Trash2,{size:14})} Remove project</button>
     </div>`;
   }
   private chatMenu(chat: SDKChat) {
@@ -310,6 +331,13 @@ export class MuxChatWorkspace extends LitElement {
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
         <div class="editor-actions"><mux-ui-button size="small" variant="quiet" @click=${() => { this.editing=false; this.error=''; }}>Cancel</mux-ui-button><mux-ui-button size="small" variant="primary" ?disabled=${!this.editName.trim() || !this.editPath.trim()} @click=${() => void this.saveProject()}>Save project</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
+      ${this.pendingConfirmation ? html`<mux-ui-dialog size="compact" presentation="adaptive" label=${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project' : 'Archive linked chat'} open @dismiss=${() => { this.pendingConfirmation=undefined; }}><div class="confirmation">
+        <h2>${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project?' : 'Archive chat?'}</h2>
+        <p>${this.pendingConfirmation.kind === 'remove-project'
+          ? `Remove “${this.pendingConfirmation.name}”? Its chats will stay in Ungrouped.`
+          : `Archive “${this.pendingConfirmation.name}”? It will be removed from its operator's lanes.`}</p>
+        <div class="confirmation-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingConfirmation=undefined; }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => void this.confirmPendingAction()}>${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project' : 'Archive chat'}</mux-ui-button></div>
+      </div></mux-ui-dialog>` : nothing}
       ${this.error && !this.editing ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       ${this.open ? html`<div class="chats">${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
@@ -339,26 +367,26 @@ export class MuxChatList extends LitElement {
   };
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; color:var(--ui-text-muted,#9299a5); font:var(--sidebar-item-font-size,12.5px)/1.35 Inter,system-ui,sans-serif; }
-    .heading { padding:9px 5px 3px; font-size:inherit; font-weight:600; letter-spacing:0; text-transform:none; }
-    .pinned { margin-bottom:8px; padding-bottom:7px; border-bottom:1px solid var(--ui-border,#3b4355); }
-    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:34px; padding:2px 4px; border-radius:6px; color:var(--ui-text,#d8dce5); }
+    :host { display:block; color:var(--ui-text-muted); font:var(--sidebar-item-font-size,var(--ui-text-sm))/1.35 var(--ui-font-sans); }
+    .heading { padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-1); font-size:inherit; font-weight:600; letter-spacing:0; text-transform:none; }
+    .pinned { margin-bottom:var(--ui-space-4); padding-bottom:var(--ui-space-4); border-bottom:1px solid var(--ui-border); }
+    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border-radius:var(--ui-radius-md); color:var(--ui-text); }
     .pin-row:hover,.pin-row:focus-within { background:var(--ui-surface-hover); }
-    .pin-row[selected] { background:color-mix(in srgb,var(--ui-accent) 18%,var(--ui-surface-raised)); }
-    .pin-link { display:flex; align-items:center; gap:8px; min-width:0; flex:1; min-height:30px; border:0; border-radius:4px; padding:2px; background:transparent; color:inherit; text-align:left; font:inherit; cursor:pointer; }
+    .pin-row[selected] { background:var(--ui-nav-selected); }
+    .pin-link { display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; flex:1; min-height:var(--ui-control-sm); border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-1); background:transparent; color:inherit; text-align:left; font:inherit; cursor:pointer; }
     .pin-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .pin-icon { display:flex; flex:none; width:17px; height:17px; align-items:center; justify-content:center; color:var(--ui-text-muted); }
+    .pin-icon { display:flex; flex:none; width:var(--ui-space-6); height:var(--ui-space-6); align-items:center; justify-content:center; color:var(--ui-text-muted); }
     .pin-icon.harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
     .pin-icon.harness-mark.working { color:var(--ui-success); }
     .pin-icon.harness-mark.blocked,.pin-icon.harness-mark.failed { color:var(--ui-danger); }
     .pin-icon.lane.starting,.pin-icon.lane.working { color:var(--ui-accent); }
-    .pin-icon.lane.ready { color:var(--ui-success,#55b981); }
+    .pin-icon.lane.ready { color:var(--ui-success); }
     .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--ui-danger); }
-    .pin-unpin { display:grid; place-items:center; flex:none; width:26px; height:26px; border:0; border-radius:5px; padding:4px; background:transparent; color:var(--ui-text-muted); opacity:0; cursor:pointer; }
+    .pin-unpin { display:grid; place-items:center; flex:none; width:var(--ui-control-sm); height:var(--ui-control-sm); border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-2); background:transparent; color:var(--ui-text-muted); opacity:0; cursor:pointer; }
     .pin-row:hover .pin-unpin,.pin-row:focus-within .pin-unpin { opacity:1; }
-    .pin-unpin:hover { background:color-mix(in srgb,var(--ui-border) 45%,transparent); color:var(--ui-text); }
-    .pin-link:focus-visible,.pin-unpin:focus-visible { outline:2px solid var(--ui-accent); outline-offset:1px; }
-    .pin-error { margin:3px 5px 8px; color:var(--ui-danger); }
+    .pin-unpin:hover { background:var(--ui-surface-hover); color:var(--ui-text); }
+    .pin-link:focus-visible,.pin-unpin:focus-visible { outline:2px solid var(--ui-focus); outline-offset:1px; }
+    .pin-error { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); color:var(--ui-danger); }
     @media(hover:none) { .pin-unpin { opacity:1; } }
   `;
   override connectedCallback() {
