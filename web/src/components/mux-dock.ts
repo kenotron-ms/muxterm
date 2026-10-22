@@ -373,6 +373,17 @@ export class MuxDock extends LitElement {
   private _panels = new Map<number, IDockviewPanel>();
   private _settingActive = false;
   private _focusRestoreToken = 0;
+  private _pendingFrames = new Set<number>();
+
+  /** Defer Dockview work without letting a detached host touch old panels. */
+  private _nextFrame(callback: () => void): void {
+    if (!this.isConnected) return;
+    const frame = requestAnimationFrame(() => {
+      this._pendingFrames.delete(frame);
+      if (this.isConnected) callback();
+    });
+    this._pendingFrames.add(frame);
+  }
   /** User-defined pane names, isolated by workspace-local pane identity. */
   private _customTitles = new Map<string, string>();
   /** Debounce timer for layout-save events. */
@@ -734,7 +745,7 @@ export class MuxDock extends LitElement {
    * so the grid matches the box it is in.
    */
   private _refit(): void {
-    requestAnimationFrame(() => {
+    this._nextFrame(() => {
       for (const paneId of terminalRegistry.visiblePaneIds()) {
         terminalRegistry.fitIfVisible(paneId);
       }
@@ -1191,14 +1202,14 @@ export class MuxDock extends LitElement {
       // dockview tab-click handler fires BEFORE the browser finishes resolving
       // focus for the clicked tab element, so the browser steals it back. An rAF
       // defers until after the click event is fully processed.
-      requestAnimationFrame(() => terminalRegistry.focus(paneId));
+      this._nextFrame(() => terminalRegistry.focus(paneId));
       // Persist the new active selection: onDidLayoutChange does NOT fire on a
       // pure active-tab switch, so without this the saved layout keeps a stale
       // activeView and the wrong pane is selected after a refresh.
       this._scheduleLayoutSave();
     });
     this._dv.onDidRemovePanel(() => {
-      requestAnimationFrame(() => {
+      this._nextFrame(() => {
         if (this._dv) {
           this._dv.layout(this.offsetWidth, this.offsetHeight, true);
         }
@@ -1224,6 +1235,8 @@ export class MuxDock extends LitElement {
     this._unsubRemotes?.();
     this._unsubRemotes = null;
     this._removeDropbar();
+    for (const frame of this._pendingFrames) cancelAnimationFrame(frame);
+    this._pendingFrames.clear();
     if (this._workspaceActionsFrame !== undefined) cancelAnimationFrame(this._workspaceActionsFrame);
     this._workspaceActionsFrame = undefined;
     this._dockObserver?.disconnect();
@@ -1428,8 +1441,8 @@ export class MuxDock extends LitElement {
             // focus-storm lands on the stale store-default pane, reverting the
             // active group. Re-activating AND focusing the restored pane after
             // those frames makes it stick (and leaves it keyboard-focused).
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
+            this._nextFrame(() => {
+              this._nextFrame(() => {
                 if (focusToken !== this._focusRestoreToken) return;
                 if (this._panels.get(paneId)?.api.setActive) {
                   this._panels.get(paneId)?.api.setActive();
@@ -1438,7 +1451,7 @@ export class MuxDock extends LitElement {
                 // Terminal attachment may focus another group after fromJSON.
                 // Keep dockview's focus events from replacing the chosen pane
                 // until the final browser focus frame has completed.
-                requestAnimationFrame(() => {
+                this._nextFrame(() => {
                   if (focusToken === this._focusRestoreToken) this._settingActive = false;
                 });
               });
@@ -1528,7 +1541,7 @@ export class MuxDock extends LitElement {
         // rAF: same reason as onDidActivePanelChange — defer until after the
         // browser finishes resolving focus for the panel/tab element.
         const paneIdToFocus = this.activePaneId;
-        requestAnimationFrame(() => terminalRegistry.focus(paneIdToFocus));
+        this._nextFrame(() => terminalRegistry.focus(paneIdToFocus));
       }
     }
     // Bell dot updates are reactive without a direct store.subscribe() here:
@@ -1612,7 +1625,7 @@ export class MuxDock extends LitElement {
         composed: true,
       }),
     );
-    requestAnimationFrame(() => terminalRegistry.focus(paneId));
+    this._nextFrame(() => terminalRegistry.focus(paneId));
     this._scheduleLayoutSave();
     return true;
   }

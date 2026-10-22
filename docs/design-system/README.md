@@ -21,6 +21,12 @@ component-library pull request workflow uploads the built catalog and a curated
 `review-screenshots/index.html` as the `muxterm-component-library` artifact for
 reviewers. Those PNGs are generated in CI and stay outside git.
 
+Overlay order is part of the shared contract: `--ui-z-dropdown` (20),
+`--ui-z-menu` (30), and `--ui-z-sheet` (70) coordinate listboxes, menus, and
+phone sheets within their feature stacking contexts. Native modal dialogs use
+the browser top layer. `check:ui` rejects literal `z-index` values in shared
+controls so a new overlay cannot silently invent its own layer.
+
 The `Screens/` and `Composites/` stories render production Lit components.
 `web/src/stories/api-fixture.ts` replaces their API responses inside the
 Storybook frame. Stories can show an error or action state, but they cannot

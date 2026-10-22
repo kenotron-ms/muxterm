@@ -65,6 +65,11 @@
   --ui-nav-height: var(--mux-titlebar-height, var(--mux-dock-height, 44px));
   --ui-motion-fast: 120ms;
   --ui-motion-pulse: 1.5s;
+  /* Overlay order within a feature's stacking context. Modal dialogs use the
+     browser top layer; sheets sit above menus and select lists on phones. */
+  --ui-z-dropdown: 20;
+  --ui-z-menu: 30;
+  --ui-z-sheet: 70;
   --ui-toast-offset: var(--ui-space-9);
   --ui-toast-min-width: 240px;
   --ui-dialog-width: 600px;

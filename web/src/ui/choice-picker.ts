@@ -20,7 +20,7 @@ export class MuxUIChoicePicker extends LitElement {
   static override styles = css`
     ${subtleScrollbars}
     :host { position:relative; display:block; min-width:0; font-family:var(--ui-font-sans); }
-    :host([open]) { z-index:70; }
+    :host([open]) { z-index:var(--ui-z-sheet); }
     details { min-width:0; }
     summary {
       box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3);
@@ -37,7 +37,7 @@ export class MuxUIChoicePicker extends LitElement {
     :host([appearance='outlined']) summary:hover,:host([appearance='outlined'][open]) summary { border-color:var(--ui-accent); }
     :host([appearance='plain']) summary:hover,:host([appearance='plain'][open]) summary { background:var(--ui-surface-hover); border-color:var(--ui-border); }
     .panel {
-      box-sizing:border-box; position:absolute; z-index:30; width:min(var(--ui-picker-width),calc(100vw - var(--ui-space-11)));
+      box-sizing:border-box; position:absolute; z-index:var(--ui-z-menu); width:min(var(--ui-picker-width),calc(100vw - var(--ui-space-11)));
       max-height:min(72dvh,var(--ui-dialog-height)); overflow:auto; padding:var(--ui-space-4);
       border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl);
       background:var(--ui-surface-raised); background-image:var(--ui-overlay-backdrop-image); box-shadow:var(--ui-shadow-overlay);
@@ -48,7 +48,7 @@ export class MuxUIChoicePicker extends LitElement {
     :host([panel-align='right']) .panel { right:0; }
     @media(max-width:700px) {
       :host([placement]) .panel {
-        position:fixed; z-index:70; inset:auto 0 0; width:100vw; max-width:none;
+        position:fixed; z-index:var(--ui-z-sheet); inset:auto 0 0; width:100vw; max-width:none;
         max-height:min(78dvh,var(--ui-dialog-height)); padding:var(--ui-space-6);
         border-radius:var(--ui-radius-xl) var(--ui-radius-xl) 0 0;
         border-bottom:0; box-shadow:var(--ui-shadow-sheet);

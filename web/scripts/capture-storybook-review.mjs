@@ -6,7 +6,11 @@ const baseURL = process.env.STORYBOOK_URL || 'http://127.0.0.1:6006';
 const outputDir = process.env.STORYBOOK_REVIEW_DIR || new URL('../storybook-static/review-screenshots/', import.meta.url).pathname;
 const chromePath = process.env.CHROME_PATH;
 const captures = [
-  { file: 'theme-lab-desktop.png', id: 'foundations-theme-lab--custom-palette', width: 1200, height: 800, ready: 'mux-ui-page-intro' },
+  { file: 'theme-lab-desktop.png', id: 'foundations-theme-lab--custom-palette', width: 1200, height: 800, ready: 'mux-ui-page-intro', readyText: 'Project workspace' },
+  { file: 'tokens-layer-order.png', id: 'foundations-tokens--semantic-scale', width: 1200, height: 900, ready: 'section', readyText: 'Layer order' },
+  { file: 'choice-picker-phone.png', id: 'components-choice-picker--phone-sheet', width: 390, height: 844, ready: 'mux-ui-choice-picker[open]', readyText: 'GPT-6-Astra' },
+  { file: 'action-menu-phone.png', id: 'components-action-menu--phone-sheet', width: 390, height: 844, ready: 'mux-ui-menu' },
+  { file: 'listbox-phone.png', id: 'components-listbox--phone-sheet', width: 390, height: 844, ready: 'mux-ui-listbox' },
   { file: 'connections-google-desktop.png', id: 'screens-connections--google-tool-selection', width: 1200, height: 800, ready: 'mux-connections', readyText: 'Choose a Google service' },
   { file: 'connections-microsoft-phone.png', id: 'screens-connections--phone-microsoft-ready', width: 390, height: 844, ready: 'mux-connections', readyText: 'Personal Microsoft account' },
   { file: 'settings-appearance-phone.png', id: 'screens-settings--phone-appearance', width: 390, height: 844, ready: 'mux-settings-surface', readyText: 'Appearance' },
@@ -38,4 +42,4 @@ try {
 }
 
 const links = captures.map(capture => `<li><a href="${capture.file}">${capture.file}</a> — <a href="../iframe.html?id=${capture.id}&amp;viewMode=story">open story</a></li>`).join('\n');
-await writeFile(join(outputDir, 'index.html'), `<!doctype html><html lang="en"><meta charset="utf-8"><title>Muxterm Storybook review screenshots</title><style>body{font:16px/1.5 system-ui;margin:3rem;max-width:55rem}li{margin:.5rem 0}</style><h1>Muxterm Storybook review screenshots</h1><p>Captured from this artifact's Storybook build in Chromium. Screens are fixture states; live sessiond behavior is described in the pull request.</p><ul>${links}</ul></html>\n`);
+await writeFile(join(outputDir, 'index.html'), `<!doctype html><html lang="en"><meta charset="utf-8"><title>Muxterm Storybook review screenshots</title><style>body{font:16px/1.5 system-ui;margin:3rem;max-width:55rem}li{margin:.5rem 0}</style><h1>Muxterm Storybook review screenshots</h1><p>Captured from this artifact's Storybook build in Chromium. Screens are fixture states; live session behavior is described in the pull request.</p><ul>${links}</ul></html>\n`);

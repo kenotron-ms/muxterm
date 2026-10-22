@@ -57,6 +57,11 @@ const meta = {
         </div>
         <mux-ui-feedback kind="error" appearance="panel" align="center" style="min-width:var(--ui-toast-min-width);box-shadow:var(--ui-shadow-menu)">Toast feedback surface</mux-ui-feedback>
       </div>
+      <h2 style="font-size:var(--ui-text-2xl);margin:var(--ui-space-9) 0 var(--ui-space-5)">Layer order</h2>
+      <p style="color:var(--ui-text-muted);margin:0 0 var(--ui-space-5)">Lists sit under menus. Phone sheets sit above both. Modal dialogs use the browser top layer.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:var(--ui-space-5)">
+        ${([['Dropdown', '--ui-z-dropdown', '20'], ['Menu', '--ui-z-menu', '30'], ['Phone sheet', '--ui-z-sheet', '70']] as const).map(([label, token, value]) => html`<div style="min-width:140px;padding:var(--ui-space-5);border:1px solid var(--ui-border);border-radius:var(--ui-radius-md);background:var(--ui-surface-raised)"><strong>${label}</strong><div style="color:var(--ui-text-muted);font:var(--ui-text-xs) var(--ui-font-mono)">${token}: ${value}</div></div>`)}
+      </div>
     </section>`,
 } satisfies Meta;
 

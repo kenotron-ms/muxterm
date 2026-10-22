@@ -18,6 +18,10 @@ for (const file of files.filter(name => name.endsWith('.ts') && !name.endsWith('
     console.error(`${join('src/ui', file)}: use --ui-* semantic tokens instead of legacy theme variables`);
     failed = true;
   }
+  if (/z-index\s*:\s*-?\d/.test(source)) {
+    console.error(`${join('src/ui', file)}: use the shared --ui-z-* layer tokens instead of a literal z-index`);
+    failed = true;
+  }
 }
 
 // Existing feature styles and native controls are being migrated screen by

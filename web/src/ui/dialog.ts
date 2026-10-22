@@ -105,7 +105,7 @@ export class MuxUIDialog extends LitElement {
   }
 
   override render() {
-    return html`<dialog aria-label=${this.label || nothing} aria-describedby=${this.description ? 'dialog-desc' : nothing} @cancel=${this._onCancel} @click=${this._onClick}>
+    return html`<dialog aria-modal="true" aria-label=${this.label || nothing} aria-describedby=${this.description ? 'dialog-desc' : nothing} @cancel=${this._onCancel} @click=${this._onClick}>
       ${this.description ? html`<span id="dialog-desc" class="a11y-description">${this.description}</span>` : nothing}
       <slot></slot>
     </dialog>`;

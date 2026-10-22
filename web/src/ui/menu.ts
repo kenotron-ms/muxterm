@@ -10,7 +10,7 @@ export class MuxUIMenu extends LitElement {
   static override styles = css`
     ${subtleScrollbars}
     :host {
-      box-sizing:border-box; display:block; position:absolute; z-index:30;
+      box-sizing:border-box; display:block; position:absolute; z-index:var(--ui-z-menu);
       top:var(--ui-menu-offset-y,var(--ui-control-sm)); right:var(--ui-menu-offset-x,var(--ui-space-2));
       width:max-content; min-width:var(--ui-menu-min-width); max-width:min(var(--ui-menu-width,var(--ui-picker-width)),calc(100vw - var(--ui-space-8)));
       max-height:var(--ui-menu-max-height); overflow:auto; padding:var(--ui-space-2);
@@ -30,7 +30,7 @@ export class MuxUIMenu extends LitElement {
     ::slotted([role='separator']) { display:block; height:1px; margin:var(--ui-space-3) var(--ui-space-2); background:var(--ui-border); }
     @media(max-width:700px) {
       :host {
-        position:fixed; inset:auto 0 0; width:100vw; min-width:0; max-width:none;
+        position:fixed; z-index:var(--ui-z-sheet); inset:auto 0 0; width:100vw; min-width:0; max-width:none;
         max-height:min(78dvh,var(--ui-dialog-height)); padding:var(--ui-space-6) var(--ui-space-6) calc(var(--ui-space-6) + env(safe-area-inset-bottom));
         border-radius:var(--ui-radius-xl) var(--ui-radius-xl) 0 0; border-bottom:0; box-shadow:var(--ui-shadow-sheet);
       }
