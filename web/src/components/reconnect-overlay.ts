@@ -47,7 +47,7 @@ export class MuxReconnectOverlay extends LitElement {
       flex-direction: column;
       align-items: center;
       gap: var(--ui-space-5);
-      max-width: 320px;
+      max-width: var(--ui-reconnect-panel-width);
       width: 100%;
       box-sizing: border-box;
       padding: var(--ui-space-8);
@@ -59,8 +59,8 @@ export class MuxReconnectOverlay extends LitElement {
     }
 
     .spinner {
-      width: 24px;
-      height: 24px;
+      width: var(--ui-icon-lg);
+      height: var(--ui-icon-lg);
       border: 3px solid var(--ui-border);
       border-top-color: var(--ui-accent);
       border-radius: 50%;
@@ -70,8 +70,8 @@ export class MuxReconnectOverlay extends LitElement {
     /* Same footprint as the spinner so the dialog does not jump between the
        waiting and retrying states. */
     .dot {
-      width: 24px;
-      height: 24px;
+      width: var(--ui-icon-lg);
+      height: var(--ui-icon-lg);
       border-radius: 50%;
       background: var(--ui-border);
     }

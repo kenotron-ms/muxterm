@@ -46,8 +46,8 @@ export class MuxOperatorStatus extends LitElement {
     .todo-state { display:block; color:var(--ui-text-muted); font-size:inherit; }
     .todo.completed .todo-icon { color:var(--ui-success); }
     .todo.in_progress { color:var(--ui-accent); }
-    .self-progress { max-width:420px; font:var(--ui-text-xl)/1.5 var(--ui-font-sans); }
-    .self-progress progress { display:block; width:100%; height:10px; margin-top:var(--ui-space-4); accent-color:var(--ui-accent); }
+    .self-progress { max-width:var(--ui-operator-summary-width); font:var(--ui-text-xl)/1.5 var(--ui-font-sans); }
+    .self-progress progress { display:block; width:100%; height:var(--ui-progress-height); margin-top:var(--ui-space-4); accent-color:var(--ui-accent); }
     .summary { margin:0 0 var(--ui-space-5); color:var(--ui-text-muted); font-variant-numeric:tabular-nums; }
     .summary strong { color:var(--ui-text); font-weight:650; }
     .summary .sep { padding:0 var(--ui-space-3); color:var(--ui-border); }
@@ -58,8 +58,8 @@ export class MuxOperatorStatus extends LitElement {
     .table-scroll { width:100%; min-width:0; overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
     table { width:100%; border-collapse:collapse; table-layout:fixed; }
     col.lane-col { width:auto; }
-    col.progress-col { width:196px; }
-    col.action-col { width:52px; }
+    col.progress-col { width:var(--ui-lane-progress-column-width); }
+    col.action-col { width:var(--ui-lane-action-column-width); }
     th { padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:500; text-align:left; border-bottom:1px solid var(--ui-border); }
     td { padding:var(--ui-space-5); border-top:1px solid color-mix(in srgb,var(--ui-border) 65%,transparent); vertical-align:middle; min-width:0; }
     td:last-child { padding:var(--ui-space-3) var(--ui-space-5) var(--ui-space-3) var(--ui-space-2); }
@@ -82,7 +82,7 @@ export class MuxOperatorStatus extends LitElement {
     .meter-head { display:flex; align-items:baseline; justify-content:space-between; gap:var(--ui-space-3); min-width:0; font-variant-numeric:tabular-nums; }
     .progress-value { color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; white-space:nowrap; }
     .progress-basis { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    .track { display:block; height:5px; overflow:hidden; border-radius:var(--ui-radius-md); background:color-mix(in srgb,var(--ui-border) 75%,transparent); }
+    .track { display:block; height:var(--ui-progress-compact-height); overflow:hidden; border-radius:var(--ui-radius-md); background:color-mix(in srgb,var(--ui-border) 75%,transparent); }
     .fill { display:block; height:100%; border-radius:inherit; background:currentColor; }
     .meter-time { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-variant-numeric:tabular-nums; }
     .detail td { padding:0 var(--ui-space-5) var(--ui-space-5) var(--ui-space-9); background:color-mix(in srgb,var(--ui-surface-hover) 55%,var(--ui-surface-raised)); border-top:0; }
@@ -97,14 +97,14 @@ export class MuxOperatorStatus extends LitElement {
     .message .md-pre { max-width:100%; overflow:auto; padding:var(--ui-space-4); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); font:var(--ui-text-xs)/1.45 var(--ui-font-mono); }
     .message .md-quote { margin:var(--ui-space-4) 0; padding-left:var(--ui-space-4); border-left:2px solid var(--ui-border); color:var(--ui-text-muted); }
     .message .md-link { color:var(--ui-accent); }
-    .message .md-img { max-width:100%; max-height:240px; object-fit:contain; }
+    .message .md-img { max-width:100%; max-height:var(--ui-lane-media-height); object-fit:contain; }
     .message .md-tablewrap { max-width:100%; overflow:auto; }
     .message .md-table { border-collapse:collapse; }
     .message .md-th,.message .md-td { padding:var(--ui-space-2) var(--ui-space-4); border:1px solid var(--ui-border); }
     .message-placeholder { color:var(--ui-text-muted); }
     .detail-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ui-space-5); border-top:1px solid var(--ui-border); padding:var(--ui-space-4) 0 0; }
     .detail-actions .archive-action { margin-left:auto; }
-    @media(max-width:560px) { :host { padding:var(--ui-space-5); } col.progress-col { width:112px; } col.action-col { width:52px; } th,td { padding-left:var(--ui-space-4); padding-right:var(--ui-space-4); } td:last-child { padding:var(--ui-space-3) var(--ui-space-2); } .lane-toggle::part(button) { gap:var(--ui-space-2); } .lane-title { white-space:normal; overflow-wrap:anywhere; line-height:1.3; } .meter-head { display:grid; gap:var(--ui-space-1); } .meter-time { display:none; } .progress-basis { font-size:var(--ui-text-xs); } }
+    @media(max-width:560px) { :host { padding:var(--ui-space-5); } col.progress-col { width:var(--ui-lane-progress-column-phone-width); } col.action-col { width:var(--ui-lane-action-column-width); } th,td { padding-left:var(--ui-space-4); padding-right:var(--ui-space-4); } td:last-child { padding:var(--ui-space-3) var(--ui-space-2); } .lane-toggle::part(button) { gap:var(--ui-space-2); } .lane-title { white-space:normal; overflow-wrap:anywhere; line-height:1.3; } .meter-head { display:grid; gap:var(--ui-space-1); } .meter-time { display:none; } .progress-basis { font-size:var(--ui-text-xs); } }
     @media(prefers-reduced-motion:reduce) { .chevron { transition:none; } }
   `;
 

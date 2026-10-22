@@ -3,7 +3,6 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "literalDimensions": 5,
     "nativeControls": 0
   },
   "components/close-confirmation-modal.ts": {
@@ -52,7 +51,6 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "literalDimensions": 4,
     "nativeControls": 0
   },
   "components/mux-monaco-diff.ts": {
@@ -77,7 +75,6 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "literalDimensions": 8,
     "nativeControls": 0
   },
   "components/mux-pane-picker.ts": {
@@ -90,7 +87,6 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "literalDimensions": 8,
     "nativeControls": 0
   },
   "components/mux-sdk-chat-settings.ts": {
@@ -103,7 +99,6 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "literalDimensions": 40,
     "nativeControls": 5
   },
   "components/mux-sdk-pdf-preview.ts": {
@@ -116,7 +111,6 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "literalDimensions": 25,
     "nativeControls": 1
   },
   "components/mux-sidebar.ts": {
@@ -141,21 +135,18 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "literalDimensions": 5,
     "nativeControls": 0
   },
   "components/settings-surface.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "literalDimensions": 8,
     "nativeControls": 0
   },
   "components/title-bar.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "literalDimensions": 1,
     "nativeControls": 0
   }
 }

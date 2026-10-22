@@ -279,7 +279,7 @@ export class MuxSettingsSurface extends LitElement {
 
     /* ── Sidebar ── */
     .sidebar {
-      width: 156px;
+      width: var(--ui-settings-sidebar-width);
       flex-shrink: 0;
       border-right: 1px solid var(--ui-border);
       padding: var(--ui-space-5) 0;
@@ -342,7 +342,7 @@ export class MuxSettingsSurface extends LitElement {
 
     /* ── Notifications section ── */
     .notif-block {
-      max-width: 480px;
+      max-width: var(--ui-settings-content-width);
     }
 
     .notif-description {
@@ -395,7 +395,7 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .divider {
-      height: 1px;
+      height: var(--ui-divider-thickness);
       background: var(--ui-border);
       margin: var(--ui-space-8) 0;
     }
@@ -545,8 +545,8 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .r-dot {
-      width: 8px;
-      height: 8px;
+      width: var(--ui-status-dot-lg);
+      height: var(--ui-status-dot-lg);
       border-radius: 50%;
       flex-shrink: 0;
     }
@@ -598,14 +598,14 @@ export class MuxSettingsSurface extends LitElement {
     .r-actions { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: var(--ui-space-4); }
 
     @media (max-width: 767.98px) {
-      .header { min-height: 56px; box-sizing: border-box; padding: var(--ui-space-5) var(--ui-space-6); }
+      .header { min-height: var(--ui-row-touch); box-sizing: border-box; padding: var(--ui-space-5) var(--ui-space-6); }
       .body { min-height: 0; flex-direction: column; }
       .sidebar {
         box-sizing: border-box;
         display: flex;
         flex: none;
         width: 100%;
-        min-height: 48px;
+        min-height: var(--ui-settings-section-nav-height);
         padding: 0 var(--ui-space-4);
         overflow-x: auto;
         overflow-y: hidden;
@@ -614,7 +614,7 @@ export class MuxSettingsSurface extends LitElement {
         -webkit-overflow-scrolling: touch;
       }
       .content { min-width: 0; padding: var(--ui-space-7) var(--ui-space-6) var(--ui-space-9); }
-      .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 520px; }
+      .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: var(--ui-settings-theme-grid-width); }
       .r-row { flex-wrap: wrap; }
       .r-main { flex: 1 1 calc(100% - var(--ui-space-7)); }
       .r-actions { flex: 1 1 100%; justify-content: flex-end; }

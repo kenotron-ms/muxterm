@@ -1080,9 +1080,9 @@ export class MuxDock extends LitElement {
           font: inherit;
           font-size: inherit;
           outline: none;
-          width: 100px;
-          min-width: 60px;
-          max-width: 160px;
+          width: var(--ui-dock-rename-width);
+          min-width: var(--ui-dock-rename-min-width);
+          max-width: var(--ui-dock-rename-max-width);
         }
 
         /* Bell dot prefix on pane tabs; the spoken state is in the tab name. */
@@ -1120,7 +1120,7 @@ export class MuxDock extends LitElement {
 
         /* The bar itself. 24px, under the tab strip, only while dropped. */
         mux-dock .dropbar {
-          height: 24px;
+          height: var(--ui-dock-dropbar-height);
           flex-shrink: 0;
           display: flex;
           align-items: center;

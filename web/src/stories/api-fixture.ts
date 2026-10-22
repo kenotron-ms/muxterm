@@ -34,8 +34,9 @@ export function useApiFixture(fixture?: ApiFixture): void {
     const NativeEventSource = window.__muxStorybookNativeEventSource;
     window.EventSource = function (input: string | URL, init?: EventSourceInit): EventSource {
       const url = new URL(String(input), window.location.href);
-      if (activeFixture && (url.pathname.endsWith('/api/sdk-chat-names/events') ||
-        /\/api\/sdk-chats\/[^/]+\/events$/.test(url.pathname))) {
+      // The published catalog is static. API streams must never fall through
+      // to the Pages origin, even when a story has no fixture selected.
+      if (url.pathname.includes('/api/')) {
         return new FixtureEventSource(url.href) as unknown as EventSource;
       }
       return new NativeEventSource(input, init);
@@ -45,9 +46,13 @@ export function useApiFixture(fixture?: ApiFixture): void {
   }
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
-    if (activeFixture && url.pathname.includes('/api/')) {
+    if (url.pathname.includes('/api/')) {
       const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
-      return activeFixture({ url, method, init });
+      // GitHub Pages serves the catalog under /muxterm/. Fixtures use the
+      // app's canonical /api/... paths so the same story works at either base.
+      const fixtureURL = new URL(url.href);
+      fixtureURL.pathname = url.pathname.slice(url.pathname.indexOf('/api/'));
+      return activeFixture?.({ url:fixtureURL, method, init }) ?? fixtureJSON({ error:'No Storybook fixture for this API request' }, 503);
     }
     return window.__muxStorybookNativeFetch!(input, init);
   };

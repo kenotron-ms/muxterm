@@ -892,25 +892,25 @@ export class MuxSDKUtility extends LitElement {
   private surfaceCSS = `
     mux-sdk-utility { display:flex; flex-direction:column; min-width:0; height:100%; background:var(--ui-surface-raised); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
     mux-sdk-utility * { scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--ui-text-muted) 34%,transparent) transparent; }
-    mux-sdk-utility *::-webkit-scrollbar { width:6px; height:6px; }
+    mux-sdk-utility *::-webkit-scrollbar { width:var(--ui-utility-scrollbar-size); height:var(--ui-utility-scrollbar-size); }
     mux-sdk-utility *::-webkit-scrollbar-track { background:transparent; }
     mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--ui-text-muted) 34%,transparent); border-radius:var(--ui-radius-pill); }
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--ui-text-muted) 58%,transparent); }
     mux-sdk-utility .new-tab-surface { box-sizing:border-box; width:100%; height:100%; padding:var(--ui-space-9) 0; background:var(--ui-surface-base); container-type:inline-size; }
-    mux-sdk-utility .new-tab-home { width:min(680px,calc(100% - 44px)); margin:0 auto; }
+    mux-sdk-utility .new-tab-home { width:min(var(--ui-utility-home-width),calc(100% - var(--ui-utility-home-gutter))); margin:0 auto; }
     mux-sdk-utility .new-tab-home h2 { margin:0 0 var(--ui-space-6); color:var(--ui-text); font:600 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
     mux-sdk-utility .new-tab-tools { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--ui-space-4); }
     @container(max-width:560px) { mux-sdk-utility .new-tab-tools { grid-template-columns:minmax(0,1fr); } }
     mux-sdk-utility .utility-body { flex:1; min-height:0; min-width:0; overflow:hidden; container-type:inline-size; }
     mux-sdk-utility .utility-placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--ui-text-muted); }
     mux-sdk-utility .empty { color:var(--ui-text-muted); line-height:1.6; } mux-sdk-utility a { color:var(--ui-accent); }
-    mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { display:grid; grid-template-columns:clamp(180px,var(--rail-width),45%) 6px minmax(0,1fr); height:100%; min-width:0; overflow:hidden; position:relative; background:var(--ui-surface-base); }
+    mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { display:grid; grid-template-columns:clamp(var(--ui-utility-rail-min-width),var(--rail-width),45%) var(--ui-utility-rail-resizer-width) minmax(0,1fr); height:100%; min-width:0; overflow:hidden; position:relative; background:var(--ui-surface-base); }
     mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr) 6px clamp(180px,var(--rail-width),45%); }
     mux-sdk-utility .files-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
     mux-sdk-utility .browser { display:flex; flex-direction:column; min-width:0; min-height:0; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
     mux-sdk-utility .files-panel .browser { border-left:1px solid var(--ui-border); background:var(--ui-surface-base); }
-    mux-sdk-utility .files-panel .browser-heading { height:42px; flex:none; }
-    mux-sdk-utility .browser-heading { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); height:34px; padding:0 var(--ui-space-4) 0 var(--ui-space-6); }
+    mux-sdk-utility .files-panel .browser-heading { height:var(--ui-utility-file-header-height); flex:none; }
+    mux-sdk-utility .browser-heading { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); height:var(--ui-utility-browser-heading-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); }
     mux-sdk-utility .explorer-label { color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); letter-spacing:.13em; }
     mux-sdk-utility .explorer-actions { display:flex; align-items:center; gap:var(--ui-space-1); }
     mux-sdk-utility .browser-tools { display:flex; align-items:stretch; gap:var(--ui-space-3); margin:0 var(--ui-space-4) var(--ui-space-3); }
@@ -918,27 +918,27 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .browser-tools mux-ui-text-field { flex:1; min-width:0; }
     mux-sdk-utility .browser-tools mux-ui-select { flex:none; width:var(--ui-dock-tab-min-width); }
     mux-sdk-utility .file-list { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-1) 0 var(--ui-space-5); }
-    mux-sdk-utility .tree-chevron, mux-sdk-utility .file-glyph { display:flex; align-items:center; justify-content:center; flex:none; width:14px; color:var(--ui-text-muted); }
-    mux-sdk-utility .file-glyph { width:17px; color:var(--ui-accent); }
+    mux-sdk-utility .tree-chevron, mux-sdk-utility .file-glyph { display:flex; align-items:center; justify-content:center; flex:none; width:var(--ui-icon-xs); color:var(--ui-text-muted); }
+    mux-sdk-utility .file-glyph { width:var(--ui-utility-file-glyph-width); color:var(--ui-accent); }
     mux-sdk-utility .file-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    mux-sdk-utility .touched-files { max-height:25%; min-height:50px; overflow:auto; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) 0 var(--ui-space-4); }
+    mux-sdk-utility .touched-files { max-height:25%; min-height:var(--ui-utility-touched-files-min-height); overflow:auto; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) 0 var(--ui-space-4); }
     mux-sdk-utility .touched-files h3 { display:flex; justify-content:space-between; margin:0 var(--ui-space-5) var(--ui-space-3); font:600 var(--ui-text-xs) var(--ui-font-sans); color:var(--ui-text-muted); }
     mux-sdk-utility mux-ui-feedback.rail-feedback { margin:var(--ui-space-1) var(--ui-space-2); }
     mux-sdk-utility .viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--ui-surface-base); }
-    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:42px; box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:var(--ui-surface-raised); }
+    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:var(--ui-surface-raised); }
     mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; }
     mux-sdk-utility .file-open-wrap { position:relative; }
     mux-sdk-utility .file-open-menu { --ui-menu-offset-y:calc(var(--ui-control-sm) + var(--ui-space-1)); --ui-menu-offset-x:0; --ui-menu-width:var(--ui-toast-min-width); }
     mux-sdk-utility .file-open-menu svg { flex:none; color:var(--ui-text-muted); }
     mux-sdk-utility .status-spacer { flex:1; }
     mux-sdk-utility .viewer-body { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; }
-    mux-sdk-utility mux-ui-feedback.file-empty { margin:auto; max-width:340px; }
+    mux-sdk-utility mux-ui-feedback.file-empty { margin:auto; max-width:var(--ui-empty-state-width); }
     mux-sdk-utility mux-monaco-source { display:block; flex:1; min-height:0; min-width:0; }
     mux-sdk-utility mux-monaco-source .monaco-host { width:100%; height:100%; }
-    mux-sdk-utility .file-status { display:flex; align-items:center; gap:var(--ui-space-6); flex:none; min-height:22px; padding:0 var(--ui-space-5); border-top:1px solid var(--ui-border); background:var(--ui-surface-raised); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
+    mux-sdk-utility .file-status { display:flex; align-items:center; gap:var(--ui-space-6); flex:none; min-height:var(--ui-utility-status-height); padding:0 var(--ui-space-5); border-top:1px solid var(--ui-border); background:var(--ui-surface-raised); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .file-status span:first-child { color:var(--ui-accent); }
     mux-sdk-utility kbd { border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); padding:calc(var(--ui-space-1) / 2) var(--ui-space-2); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
-    mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:840px; margin:0 auto; padding:var(--ui-space-6) clamp(var(--ui-space-7),5vw,var(--ui-space-12)) var(--ui-space-13); color:var(--ui-text); font:var(--ui-text-lg)/1.48 var(--ui-font-sans); overflow-wrap:break-word; }
+    mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:var(--ui-utility-document-width); margin:0 auto; padding:var(--ui-space-6) clamp(var(--ui-space-7),5vw,var(--ui-space-12)) var(--ui-space-13); color:var(--ui-text); font:var(--ui-text-lg)/1.48 var(--ui-font-sans); overflow-wrap:break-word; }
     mux-sdk-utility .document-view > :first-child { margin-top:0; }
     mux-sdk-utility .document-view > :last-child { margin-bottom:0; }
     mux-sdk-utility .document-view .md-p { margin:0 0 var(--ui-space-3); }
@@ -970,49 +970,49 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .document-view .md-th { background:var(--ui-surface-raised); font-weight:650; white-space:nowrap; }
     mux-sdk-utility .document-view .md-img { display:block; max-width:100%; height:auto; margin:0 0 var(--ui-space-4); border-radius:var(--ui-radius-md); }
     mux-sdk-utility .image-view { display:flex; justify-content:center; align-items:flex-start; padding:var(--ui-space-7); }
-    mux-sdk-utility .image-view img { max-width:100%; max-height:calc(100vh - 200px); object-fit:contain; }
+    mux-sdk-utility .image-view img { max-width:100%; max-height:calc(100vh - var(--ui-utility-image-viewport-inset)); object-fit:contain; }
     mux-sdk-utility .table-view { flex:1; overflow:auto; padding:var(--ui-space-5); } mux-sdk-utility .table-view table { border-collapse:collapse; font:var(--ui-text-xs)/1.5 var(--ui-font-sans); }
-    mux-sdk-utility .table-view th, mux-sdk-utility .table-view td { border:1px solid var(--ui-border); padding:var(--ui-space-3) var(--ui-space-4); max-width:320px; min-width:65px; text-align:left; vertical-align:top; overflow-wrap:anywhere; }
+    mux-sdk-utility .table-view th, mux-sdk-utility .table-view td { border:1px solid var(--ui-border); padding:var(--ui-space-3) var(--ui-space-4); max-width:var(--ui-utility-table-cell-max-width); min-width:var(--ui-utility-table-cell-min-width); text-align:left; vertical-align:top; overflow-wrap:anywhere; }
     mux-sdk-utility .table-view th { position:sticky; top:0; background:var(--ui-surface-raised); font-weight:650; }
     mux-sdk-utility .sandbox-note { display:flex; align-items:center; gap:var(--ui-space-4); padding:var(--ui-space-4) var(--ui-space-5); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    mux-sdk-utility .document-frame { display:block; box-sizing:border-box; flex:1; width:100%; min-height:300px; border:0; background:var(--ui-document-surface); }
+    mux-sdk-utility .document-frame { display:block; box-sizing:border-box; flex:1; width:100%; min-height:var(--ui-utility-document-frame-min-height); border:0; background:var(--ui-document-surface); }
     mux-sdk-utility mux-sdk-pdf-preview { display:block; flex:1; min-height:0; }
     mux-sdk-utility .vertical-resizer { position:relative; cursor:col-resize; background:var(--ui-border); touch-action:none; }
     mux-sdk-utility .vertical-resizer:hover, mux-sdk-utility .vertical-resizer:focus-visible { background:var(--ui-accent); outline:0; }
     mux-sdk-utility .changes-list { min-width:0; min-height:0; overflow:auto; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
-    mux-sdk-utility .changes-list > header { display:flex; justify-content:space-between; align-items:center; height:38px; padding:0 var(--ui-space-4) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); letter-spacing:.1em; }
+    mux-sdk-utility .changes-list > header { display:flex; justify-content:space-between; align-items:center; height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); letter-spacing:.1em; }
     mux-sdk-utility .changes-list > header div { display:flex; align-items:center; gap:var(--ui-space-4); }
     mux-sdk-utility .changes-list > header span { border-radius:var(--ui-radius-lg); padding:calc(var(--ui-space-1) / 2) var(--ui-space-3); background:var(--ui-surface-hover); }
     mux-sdk-utility .change-repo-title { display:flex; flex-direction:column; gap:var(--ui-space-1); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-4); color:var(--ui-text); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .change-repo-title span { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
     mux-sdk-utility .change-viewer { display:flex; flex-direction:column; min-width:0; min-height:0; }
-    mux-sdk-utility .change-viewer > header { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); min-height:38px; padding:0 var(--ui-space-5); border-bottom:1px solid var(--ui-border); font:var(--ui-text-xs) var(--ui-font-mono); }
+    mux-sdk-utility .change-viewer > header { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); min-height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-5); border-bottom:1px solid var(--ui-border); font:var(--ui-text-xs) var(--ui-font-mono); }
     mux-sdk-utility .change-viewer > header span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .change-viewer > header small { color:var(--ui-accent); }
-    mux-sdk-utility mux-ui-feedback.change-feedback { margin:auto; max-width:340px; }
+    mux-sdk-utility mux-ui-feedback.change-feedback { margin:auto; max-width:var(--ui-empty-state-width); }
     mux-sdk-utility mux-monaco-diff { display:block; flex:1; min-height:0; min-width:0; }
     mux-sdk-utility mux-monaco-diff .monaco-diff-host { width:100%; height:100%; }
     mux-sdk-utility .pages-list { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
     mux-sdk-utility .pages-list .browser-heading { flex:none; }
     mux-sdk-utility .page-list-rows { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-1) 0 var(--ui-space-5); }
     mux-sdk-utility .page-editor { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:auto; }
-    mux-sdk-utility .page-editor-top { display:flex; align-items:center; justify-content:space-between; min-height:38px; padding:0 var(--ui-space-7); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
+    mux-sdk-utility .page-editor-top { display:flex; align-items:center; justify-content:space-between; min-height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-7); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .page-editor-top span:first-child { display:flex; align-items:center; gap:var(--ui-space-4); }
-    mux-sdk-utility .page-paper { width:min(720px,100%); box-sizing:border-box; margin:0 auto; padding:var(--ui-space-11) clamp(var(--ui-space-7),8%,var(--ui-space-14)) var(--ui-space-15); }
-    mux-sdk-utility .page-title { display:block; width:100%; min-height:75px; resize:none; overflow:hidden; border:0; outline:0; margin-bottom:var(--ui-space-8); background:transparent; color:var(--ui-text); font:700 clamp(var(--ui-text-3xl),3vw,var(--ui-text-5xl))/1.3 var(--ui-font-sans); }
+    mux-sdk-utility .page-paper { width:min(var(--ui-utility-page-width),100%); box-sizing:border-box; margin:0 auto; padding:var(--ui-space-11) clamp(var(--ui-space-7),8%,var(--ui-space-14)) var(--ui-space-15); }
+    mux-sdk-utility .page-title { display:block; width:100%; min-height:var(--ui-utility-page-title-min-height); resize:none; overflow:hidden; border:0; outline:0; margin-bottom:var(--ui-space-8); background:transparent; color:var(--ui-text); font:700 clamp(var(--ui-text-3xl),3vw,var(--ui-text-5xl))/1.3 var(--ui-font-sans); }
     mux-sdk-utility .page-new-button { margin-top:var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); padding:var(--ui-space-4) var(--ui-space-5); background:var(--ui-surface-raised); color:var(--ui-text); cursor:pointer; }
     mux-sdk-utility .pages-panel { background:var(--ui-document-surface); color:var(--ui-document-text); }
     mux-sdk-utility .pages-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
     mux-sdk-utility .pages-panel .vertical-resizer { background:var(--ui-border); }
     mux-sdk-utility .pages-panel .vertical-resizer:hover, mux-sdk-utility .pages-panel .vertical-resizer:focus-visible { background:var(--ui-accent); }
     mux-sdk-utility .page-editor { background:var(--ui-document-surface); color:var(--ui-document-text); }
-    mux-sdk-utility .page-toolbar { display:flex; justify-content:space-between; align-items:center; flex:none; min-height:42px; padding:0 var(--ui-space-6); border-bottom:1px solid var(--ui-document-border); color:var(--ui-document-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
+    mux-sdk-utility .page-toolbar { display:flex; justify-content:space-between; align-items:center; flex:none; min-height:var(--ui-utility-page-toolbar-height); padding:0 var(--ui-space-6); border-bottom:1px solid var(--ui-document-border); color:var(--ui-document-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .page-toolbar > div { display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; }
     mux-sdk-utility .page-toolbar-actions { flex:none; }
     @container(max-width:430px) { mux-sdk-utility .page-toolbar.nested .page-save-state:not([data-saving]) { display:none; } }
     mux-sdk-utility .page-canvas { flex:1; overflow:auto; min-height:0; }
-    mux-sdk-utility .page-paper { width:min(720px,100%); margin:0 auto; padding:var(--ui-space-10) clamp(var(--ui-space-6),6%,var(--ui-space-14)) var(--ui-space-16) clamp(var(--ui-space-13),8%,var(--ui-space-14)); }
-    mux-sdk-utility .page-title { min-height:42px; margin:0 0 var(--ui-space-11); color:var(--ui-document-text); font:700 var(--ui-text-4xl)/1.28 var(--ui-font-sans); }
+    mux-sdk-utility .page-paper { width:min(var(--ui-utility-page-width),100%); margin:0 auto; padding:var(--ui-space-10) clamp(var(--ui-space-6),6%,var(--ui-space-14)) var(--ui-space-16) clamp(var(--ui-space-13),8%,var(--ui-space-14)); }
+    mux-sdk-utility .page-title { min-height:var(--ui-utility-page-title-compact-min-height); margin:0 0 var(--ui-space-11); color:var(--ui-document-text); font:700 var(--ui-text-4xl)/1.28 var(--ui-font-sans); }
     mux-sdk-utility .page-subpage { margin-top:var(--ui-space-7); }
     mux-sdk-utility .page-delete-dialog { box-sizing:border-box; padding:var(--ui-space-7); background:var(--ui-surface-overlay); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
     mux-sdk-utility .page-delete-dialog h2 { margin:0; font-size:var(--ui-text-xl); }

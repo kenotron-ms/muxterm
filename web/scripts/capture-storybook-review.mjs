@@ -26,6 +26,8 @@ const captures = [
   { file: 'status-inline-desktop.png', id: 'foundations-status-badge--inline-states', width: 1200, height: 600, ready: 'mux-ui-status-badge[appearance="plain"]' },
   { file: 'status-inline-phone.png', id: 'foundations-status-badge--phone-inline-states', width: 390, height: 844, ready: 'mux-ui-status-badge[appearance="plain"]' },
   { file: 'status-inline-light.png', id: 'foundations-status-badge--light-inline-states', width: 1200, height: 600, ready: 'mux-ui-status-badge[appearance="plain"]' },
+  { file: 'voice-bars-resting.png', id: 'components-voice-bars--resting', width: 1200, height: 600, ready: 'mux-ui-voice-bars' },
+  { file: 'voice-bars-speaking.png', id: 'components-voice-bars--speaking', width: 1200, height: 600, ready: 'mux-ui-voice-bars' },
   { file: 'shell-feedback-desktop.png', id: 'patterns-feedback--inline-shell-error', width: 1200, height: 600, ready: 'mux-ui-feedback[layout="inline"]' },
   { file: 'shell-feedback-phone.png', id: 'patterns-feedback--phone-inline-shell-error', width: 390, height: 844, ready: 'mux-ui-feedback[layout="inline"]' },
   { file: 'shell-feedback-long-desktop.png', id: 'patterns-feedback--long-inline-shell-error', width: 1200, height: 600, ready: 'mux-ui-feedback[layout="inline"]' },

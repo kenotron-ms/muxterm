@@ -49,7 +49,7 @@ export class MuxTitleBar extends LitElement {
       top: env(titlebar-area-y, 0px);
       left: env(titlebar-area-x, 0px);
       width: env(titlebar-area-width, 100%);
-      height: env(titlebar-area-height, 44px);
+      height: env(titlebar-area-height, var(--ui-control-lg));
       padding: 0 var(--ui-space-4);
       border: 0;
       z-index: var(--ui-z-window-chrome);

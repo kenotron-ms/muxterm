@@ -303,7 +303,7 @@ export class MuxApp extends LitElement {
       .window-chrome {
         display: block;
         flex: none;
-        height: max(44px, calc(env(titlebar-area-y, 0px) + env(titlebar-area-height, 44px)));
+        height: max(var(--ui-control-lg), calc(env(titlebar-area-y, 0px) + env(titlebar-area-height, var(--ui-control-lg))));
         background: var(--ui-surface-nav);
         -webkit-app-region: drag;
         app-region: drag;
@@ -332,9 +332,9 @@ export class MuxApp extends LitElement {
     }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
-    .terminal-utility { box-sizing:border-box; width:min(360px,42%); min-width:270px; flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); }
+    .terminal-utility { box-sizing:border-box; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); }
     .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
-    @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:var(--ui-shadow-side); } }
+    @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,var(--ui-terminal-utility-width)); min-width:0; box-shadow:var(--ui-shadow-side); } }
 
     /* Keep the 4px resize target, but continue the title bar across its top.
        Painting the whole gutter as chrome-body leaves a visible stripe between
@@ -386,7 +386,7 @@ export class MuxApp extends LitElement {
 
       position: fixed;
       inset: 0 auto 0 0;
-      width: min(86vw, 340px);
+      width: min(86vw, var(--ui-mobile-drawer-width));
       height: 100%;
       max-width: none;
       max-height: none;

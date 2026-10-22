@@ -74,27 +74,27 @@ export class MuxScheduledJobs extends LitElement {
     .summary { display:flex; gap:var(--ui-space-5); flex-wrap:wrap; margin-bottom:var(--ui-space-7); }
     .summary span {
       border:1px solid var(--ui-border); border-radius:var(--ui-radius-md);
-      padding:var(--ui-space-4) var(--ui-space-5); min-width:110px; background:var(--ui-surface-raised);
+      padding:var(--ui-space-4) var(--ui-space-5); min-width:var(--ui-jobs-summary-min-width); background:var(--ui-surface-raised);
     }
     .summary strong { display:block; font-size:var(--ui-text-xl); }
     .summary small { color:var(--ui-text-muted); }
     .toolbar { display:flex; gap:var(--ui-space-4); margin-bottom:var(--ui-space-5); }
-    .toolbar mux-ui-text-field { flex:1; min-width:140px; }
-    .toolbar mux-ui-select { width:180px; }
+    .toolbar mux-ui-text-field { flex:1; min-width:var(--ui-jobs-search-min-width); }
+    .toolbar mux-ui-select { width:var(--ui-jobs-filter-width); }
     .table-wrap { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); overflow:auto; background:var(--ui-surface-raised); }
-    table { width:100%; border-collapse:collapse; min-width:830px; }
+    table { width:100%; border-collapse:collapse; min-width:var(--ui-jobs-table-min-width); }
     th { color:var(--ui-text-muted); text-align:left; font-size:var(--ui-text-xs); letter-spacing:.06em; text-transform:uppercase; font-weight:650; background:var(--ui-surface-hover); }
     th,td { padding:var(--ui-space-5) var(--ui-space-6); border-bottom:1px solid var(--ui-border); vertical-align:middle; }
     tr:last-child td { border-bottom:0; }
     td { font-size:var(--ui-text-sm); }
-    td small { display:block; color:var(--ui-text-muted); max-width:290px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    td small { display:block; color:var(--ui-text-muted); max-width:var(--ui-jobs-description-width); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .schedule { font:var(--ui-text-xs) var(--ui-font-mono); }
     .schedule small { margin-top:var(--ui-space-1); }
     .row-actions { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); }
     .history {
       display:grid; grid-template-columns:minmax(230px,34%) minmax(0,1fr);
       margin-top:var(--ui-space-7); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg);
-      min-height:250px; max-height:450px; overflow:hidden; background:var(--ui-surface-raised);
+      min-height:var(--ui-jobs-history-min-height); max-height:var(--ui-jobs-history-max-height); overflow:hidden; background:var(--ui-surface-raised);
     }
     .run-list { overflow:auto; border-right:1px solid var(--ui-border); }
     .run-list mux-ui-nav-item { border-bottom:1px solid var(--ui-border); }
@@ -134,7 +134,7 @@ export class MuxScheduledJobs extends LitElement {
       td { padding:var(--ui-space-4) var(--ui-space-5); border:0; }
       td[data-label]::before { content:attr(data-label); display:block; margin-bottom:var(--ui-space-1); color:var(--ui-text-muted); font-size:var(--ui-text-xs); text-transform:uppercase; letter-spacing:.04em; }
       .history { grid-template-columns:1fr; max-height:none; }
-      .run-list { max-height:210px; border-right:0; border-bottom:1px solid var(--ui-border); }
+      .run-list { max-height:var(--ui-jobs-run-list-max-height); border-right:0; border-bottom:1px solid var(--ui-border); }
       .editor .inline { grid-template-columns:1fr; }
     }
   `;

@@ -21,6 +21,14 @@ component-library pull request workflow uploads the built catalog and a curated
 `review-screenshots/index.html` as the `muxterm-component-library` artifact for
 reviewers. Those PNGs are generated in CI and stay outside git.
 
+The public catalog is deployed as static files to
+`https://kenotron-ms.github.io/muxterm/` by the `Storybook Pages` workflow.
+That workflow builds from this review branch until merge and from `main` after
+merge. It needs no AI keys or application server: Storybook API requests and
+event streams stay inside browser fixtures, and an unconfigured request gets a
+fixture error instead of reaching a live Muxterm API. The published
+`review-screenshots/index.html` holds the same curated evidence at a durable URL.
+
 Overlay order is part of the shared contract. Local tokens order content,
 screens, drawers, drag overlays, listboxes, menus, window chrome, side panels,
 and phone sheets within their feature stacking contexts. App-wide tokens order
