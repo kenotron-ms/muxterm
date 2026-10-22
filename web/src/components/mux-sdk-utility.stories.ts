@@ -120,6 +120,11 @@ export const NewTab: Story = {
   args:{sessionId:sessionId('new')},parameters:{apiFixture:utilityFixture(sessionId('new'))},
   play:async ({canvasElement}) => { target(canvasElement)?.querySelector('mux-ui-tab-strip')?.shadowRoot?.querySelector<HTMLButtonElement>('button.add')?.click(); },
 };
+export const PhoneNewTab: Story = {
+  args:{sessionId:sessionId('phone-new')},parameters:{apiFixture:utilityFixture(sessionId('phone-new'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  play:NewTab.play,
+};
 export const PhoneFiles: Story = {
   args:{sessionId:sessionId('phone')},parameters:{apiFixture:utilityFixture(sessionId('phone'))},
   globals:{viewport:{value:'phone390',isRotated:false}},

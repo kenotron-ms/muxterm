@@ -10,6 +10,7 @@ import './mux-sdk-pdf-preview.js';
 import './mux-monaco-source.js';
 import './mux-monaco-diff.js';
 import './mux-operator-status.js';
+import '../ui/action-tile.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/menu.js';
@@ -287,7 +288,12 @@ export class MuxSDKUtility extends LitElement {
     this.saveTabs(); this.paintAll();
   }
   private newTabView(): TemplateResult {
-    return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Tools</h2><div class="new-tab-tools"><button @click=${() => this.chooseTool('files')}>${icon(Folder,{size:16})}<span>Files</span></button><button @click=${() => this.chooseTool('status')}>${icon(Network,{size:16})}<span>Status</span></button><button @click=${() => this.chooseTool('changes')}>${icon(GitCompare,{size:16})}<span>Changes</span></button><button @click=${() => this.chooseTool('pages')}>${icon(NotebookPen,{size:16})}<span>New page</span></button></div></div></section>`;
+    return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Open a tool</h2><div class="new-tab-tools">
+      <mux-ui-action-tile label="Files" description="Browse and preview project files" @click=${() => this.chooseTool('files')}><span slot="icon">${icon(Folder,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="Status" description="See agent activity" @click=${() => this.chooseTool('status')}><span slot="icon">${icon(Network,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="Changes" description="Review edits in this project" @click=${() => this.chooseTool('changes')}><span slot="icon">${icon(GitCompare,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="New page" description="Write notes for this chat" @click=${() => this.chooseTool('pages')}><span slot="icon">${icon(NotebookPen,{size:18})}</span></mux-ui-action-tile>
+    </div></div></section>`;
   }
   private async loadChanges() {
     this.changesError = '';
@@ -867,12 +873,11 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility *::-webkit-scrollbar-track { background:transparent; }
     mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--ui-text-muted) 34%,transparent); border-radius:var(--ui-radius-pill); }
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--ui-text-muted) 58%,transparent); }
-    mux-sdk-utility .new-tab-surface { box-sizing:border-box; width:100%; height:100%; padding:var(--ui-space-9) 0; background:var(--ui-surface-base); }
+    mux-sdk-utility .new-tab-surface { box-sizing:border-box; width:100%; height:100%; padding:var(--ui-space-9) 0; background:var(--ui-surface-base); container-type:inline-size; }
     mux-sdk-utility .new-tab-home { width:min(680px,calc(100% - 44px)); margin:0 auto; }
-    mux-sdk-utility .new-tab-home h2 { margin:0 0 var(--ui-space-5); color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); }
+    mux-sdk-utility .new-tab-home h2 { margin:0 0 var(--ui-space-6); color:var(--ui-text); font:600 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
     mux-sdk-utility .new-tab-tools { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--ui-space-4); }
-    mux-sdk-utility .new-tab-tools button { display:flex; align-items:center; gap:var(--ui-space-5); min-width:0; height:37px; padding:0 var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; font:500 var(--ui-text-xs) var(--ui-font-sans); cursor:pointer; }
-    mux-sdk-utility .new-tab-tools button:hover { border-color:var(--ui-accent); }
+    @container(max-width:560px) { mux-sdk-utility .new-tab-tools { grid-template-columns:minmax(0,1fr); } }
     mux-sdk-utility .utility-body { flex:1; min-height:0; min-width:0; overflow:hidden; container-type:inline-size; }
     mux-sdk-utility .utility-placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--ui-text-muted); }
     mux-sdk-utility .empty { color:var(--ui-text-muted); line-height:1.6; } mux-sdk-utility a { color:var(--ui-accent); }

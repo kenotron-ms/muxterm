@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
+3. Use the shared Button, Action Tile, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -176,6 +176,14 @@ states. On narrow nested pages, the idle Saved label gives space to the
 breadcrumb; Saving remains visible. Icon-only Buttons do not shrink below
 their shared touch target when a breadcrumb is long. The title field and
 BlockNote content retain native editing semantics.
+The New tab tool chooser now uses the shared Action Tile for Files, Status,
+Changes and New page. Each tile gives the action a short name and a useful
+description, while its native button keeps keyboard behavior. Storybook
+catalogs the default, focused, disabled, phone and light states. The live
+chooser used a single column on a 390 px phone, with four 58 px touch targets
+and no horizontal overflow; all four actions opened their expected tools in a
+real chat. The tool names and descriptions stay with the screen, while the
+surface and interaction states belong to the shared element.
 
 The shared Switch also replaces the bespoke Operator toggle in chat settings.
 It has inline and described-row layouts, checked and disabled stories, native
