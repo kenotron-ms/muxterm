@@ -8,6 +8,7 @@ import { icon } from '../lib/icons.js';
 import '../ui/button.js';
 import '../ui/choice-item.js';
 import '../ui/choice-picker.js';
+import '../ui/choice-section.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
@@ -107,9 +108,6 @@ export class MuxNewChat extends LitElement {
     .controls label { display:block; }
     .controls .project { min-width:0; }
     .controls .harness { min-width:0; }
-    .chat-picker .heading { padding:8px 10px 5px; color:var(--ui-text-muted); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
-    .chat-picker .divider { height:1px; margin:7px 5px; background:var(--ui-border); }
-    .chat-picker .hint { color:var(--ui-text-muted); font-size:11px; }
     .chat-picker .model-list { max-height:180px; overflow-y:auto; }
     .chat-picker .custom-model { width:calc(100% - 20px); margin:6px 10px; }
     .catalog-status { color:var(--ui-text-muted); font-size:11px; }
@@ -347,26 +345,30 @@ export class MuxNewChat extends LitElement {
   }
   private renderBundlePicker() {
     return html`<mux-ui-choice-picker class="chat-picker bundle-picker" label="Bundle" .summary=${this.bundle || 'Bundle'} placement="below" panel-align="left">
-      <div class="heading">Bundle</div>
-      ${(this.catalog?.bundles || []).map(value => this.pickerChoice(value, '', this.bundle === value, () => { this.bundle = value; this.provider = 'configured'; void this.loadCatalog(); }))}
-      ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
+      <mux-ui-choice-section heading="Bundle">
+        ${(this.catalog?.bundles || []).map(value => this.pickerChoice(value, '', this.bundle === value, () => { this.bundle = value; this.provider = 'configured'; void this.loadCatalog(); }))}
+        ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
+      </mux-ui-choice-section>
     </mux-ui-choice-picker>`;
   }
   private renderModelPicker(models: ModelOption[], selectedModel: ModelOption | undefined, efforts: string[]) {
     const effortIndex = Math.max(0, efforts.indexOf(this.effort || selectedModel?.defaultEffort || efforts[0]));
     const modelLabel = selectedModel?.label || this.model || (this.catalog?.defaultModel ? `Default (${this.catalog.defaultModel})` : 'Model');
+    const providerDescription = this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent';
     return html`<mux-ui-choice-picker class="chat-picker settings-picker" label="Provider, model and thinking" .summary=${`${modelLabel}${this.effort ? ` · ${this.effort}` : ''}`} placement="below" panel-align="right">
-      <div class="heading">Provider</div>
-      ${this.harness === 'amplifier' ? (this.catalog?.providers || []).map(value => this.pickerChoice(providerLabel(value), '', this.provider === value, () => { this.provider = value; void this.loadCatalog(); })) : html`<div class="hint">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${sdkHarnessLabel(this.harness)}</div>`}
-      <div class="divider"></div><div class="heading">Model</div>
-      <div class="model-list">
-        ${this.harness !== 'amplifier' ? this.pickerChoice(this.catalog?.defaultModel ? `Harness default (${this.catalog.defaultModel})` : 'Harness default', '', !this.customModel && !this.model, () => this.onModelChange('')) : nothing}
-        ${this.model && !selectedModel && !this.customModel ? this.pickerChoice(this.model, '', true, () => this.onModelChange(this.model)) : nothing}
-        ${models.map(item => this.pickerChoice(item.label, item.id, !this.customModel && this.model === item.id, () => this.onModelChange(item.id)))}
-        ${this.pickerChoice('Other model ID…', '', this.customModel, () => this.onModelChange('__custom__'))}
-      </div>
-      ${this.customModel ? html`<mux-ui-text-field class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(event:Event) => { this.model = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
-      ${efforts.length > 1 ? html`<div class="divider"></div><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} @input=${(event:Event) => { this.effort = efforts[(event.target as MuxUIRangeField).value]; }}></mux-ui-range-field>` : nothing}
+      <mux-ui-choice-section heading="Provider" .description=${this.harness === 'amplifier' ? '' : `${providerDescription} · managed by ${sdkHarnessLabel(this.harness)}`}>
+        ${this.harness === 'amplifier' ? (this.catalog?.providers || []).map(value => this.pickerChoice(providerLabel(value), '', this.provider === value, () => { this.provider = value; void this.loadCatalog(); })) : nothing}
+      </mux-ui-choice-section>
+      <mux-ui-choice-section heading="Model" separated>
+        <div class="model-list">
+          ${this.harness !== 'amplifier' ? this.pickerChoice(this.catalog?.defaultModel ? `Harness default (${this.catalog.defaultModel})` : 'Harness default', '', !this.customModel && !this.model, () => this.onModelChange('')) : nothing}
+          ${this.model && !selectedModel && !this.customModel ? this.pickerChoice(this.model, '', true, () => this.onModelChange(this.model)) : nothing}
+          ${models.map(item => this.pickerChoice(item.label, item.id, !this.customModel && this.model === item.id, () => this.onModelChange(item.id)))}
+          ${this.pickerChoice('Other model ID…', '', this.customModel, () => this.onModelChange('__custom__'))}
+        </div>
+        ${this.customModel ? html`<mux-ui-text-field class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(event:Event) => { this.model = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
+      </mux-ui-choice-section>
+      ${efforts.length > 1 ? html`<mux-ui-choice-section separated><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} @input=${(event:Event) => { this.effort = efforts[(event.target as MuxUIRangeField).value]; }}></mux-ui-range-field></mux-ui-choice-section>` : nothing}
       ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
     </mux-ui-choice-picker>`;
   }

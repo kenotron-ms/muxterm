@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import './choice-picker.js';
 import './choice-item.js';
+import './choice-section.js';
 
 interface PickerArgs { summary:string; placement:'below'|'above'; appearance:'outlined'|'plain'; panelAlign:'left'|'right'; open:boolean }
 const meta = {
@@ -11,9 +12,10 @@ const meta = {
   render:(args:PickerArgs) => html`<div style="min-height:440px;display:flex;align-items:${args.placement === 'above' ? 'end' : 'start'};justify-content:${args.panelAlign === 'right' ? 'end' : 'start'};padding:32px">
     <mux-ui-choice-picker label="Provider, model and thinking" .summary=${args.summary}
       .placement=${args.placement} .appearance=${args.appearance} .panelAlign=${args.panelAlign} .open=${args.open}>
-      <div style="padding:var(--ui-space-4) var(--ui-space-5);color:var(--ui-text-muted);font-size:var(--ui-text-xs);font-weight:700;letter-spacing:.09em;text-transform:uppercase">Model</div>
-      <mux-ui-choice-item label="GPT-6-Sol" description="General purpose model" selected></mux-ui-choice-item>
-      <mux-ui-choice-item label="GPT-6-Astra" description="Complex reasoning"></mux-ui-choice-item>
+      <mux-ui-choice-section heading="Model">
+        <mux-ui-choice-item label="GPT-6-Sol" description="General purpose model" selected></mux-ui-choice-item>
+        <mux-ui-choice-item label="GPT-6-Astra" description="Complex reasoning"></mux-ui-choice-item>
+      </mux-ui-choice-section>
     </mux-ui-choice-picker>
   </div>`,
 } satisfies Meta<PickerArgs>;

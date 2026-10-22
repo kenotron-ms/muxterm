@@ -80,7 +80,7 @@
   "components/mux-new-chat.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 73,
+    "literalScale": 69,
     "nativeControls": 11
   },
   "components/mux-operator-status.ts": {

@@ -5,6 +5,7 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import '../ui/choice-item.js';
 import '../ui/choice-picker.js';
+import '../ui/choice-section.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import '../ui/range-field.js';
 import '../ui/switch.js';
@@ -34,8 +35,6 @@ export class MuxSDKChatSettings extends LitElement {
     :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:var(--ui-space-4); font:var(--ui-text-sm)/1.4 var(--ui-font-sans); }
     .picker { min-width:0; }
     .model-picker { margin-left:auto; }
-    .heading { padding:var(--ui-space-4) var(--ui-space-5) var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
-    .divider { height:1px; margin:var(--ui-space-4) var(--ui-space-3); background:var(--ui-border); }
     .group { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
     .model-list { max-height:190px; overflow-y:auto; }
     .notice { padding:var(--ui-space-4) var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
@@ -78,7 +77,7 @@ export class MuxSDKChatSettings extends LitElement {
     finally { this.loading = false; }
   }
   private operatorControl() {
-    return html`<div class="divider"></div><div class="heading">Operator</div><mux-ui-switch layout="row" label="Operator mode" description="Coordinate other chats as lanes" .checked=${this.operator} ?disabled=${this.loading} @change=${() => void this.toggleOperator()}></mux-ui-switch>`;
+    return html`<mux-ui-choice-section heading="Operator" separated><mux-ui-switch layout="row" label="Operator mode" description="Coordinate other chats as lanes" .checked=${this.operator} ?disabled=${this.loading} @change=${() => void this.toggleOperator()}></mux-ui-switch></mux-ui-choice-section>`;
   }
   /** Amplifier has no permission switch to offer -- its tool access comes from
    *  the composed bundle. What it does have, and nothing else exposed, is its
@@ -88,10 +87,10 @@ export class MuxSDKChatSettings extends LitElement {
     const options = s.modeOptions || [];
     return html`
       <mux-ui-choice-picker class="picker permission-picker" label="Amplifier mode and operator" .summary=${`${modeLabel(active)}${this.operator ? ' · Operator' : ''}`} placement="above" appearance="plain" panel-align="left">
-        <div class="heading">Mode</div>
-        ${this.choice('Default', 'No overlay — the bundle exactly as composed', active === '', true, () => void this.select({ mode:'' }))}
-        ${options.map(option => this.choice(modeLabel(option.name), option.description || '', active === option.name, true, () => void this.select({ mode:option.name })))}
-        ${options.length ? nothing : html`<div class="notice">This bundle composes no modes.</div>`}
+        <mux-ui-choice-section heading="Mode" .description=${options.length ? '' : 'This bundle composes no modes.'}>
+          ${this.choice('Default', 'No overlay — the bundle exactly as composed', active === '', true, () => void this.select({ mode:'' }))}
+          ${options.map(option => this.choice(modeLabel(option.name), option.description || '', active === option.name, true, () => void this.select({ mode:option.name })))}
+        </mux-ui-choice-section>
         ${this.operatorControl()}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </mux-ui-choice-picker>`;
@@ -111,19 +110,25 @@ export class MuxSDKChatSettings extends LitElement {
     return html`
       ${this.harness === 'amplifier' ? this.modePicker(s) : html`
       <mux-ui-choice-picker class="picker permission-picker" label="Permission, mode and operator" .summary=${`${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}${this.operator ? ' · Operator' : ''}`} placement="above" appearance="plain" panel-align="left">
-        <div class="heading">Permission</div>
-        ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
-        <div class="divider"></div><div class="heading">Mode</div>
-        ${this.choice('Agent', 'Work with the selected permission', mode === 'agent', s.modes.includes('agent') && (this.harness !== 'claude' || permission !== 'read-only'), () => void this.select({ mode:'agent' }))}
-        ${this.choice('Plan', 'Explore and prepare a plan', mode === 'plan', s.modes.includes('plan') && (this.harness !== 'claude' || permission === 'read-only'), () => void this.select({ mode:'plan' }))}
+        <mux-ui-choice-section heading="Permission">
+          ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
+        </mux-ui-choice-section>
+        <mux-ui-choice-section heading="Mode" separated>
+          ${this.choice('Agent', 'Work with the selected permission', mode === 'agent', s.modes.includes('agent') && (this.harness !== 'claude' || permission !== 'read-only'), () => void this.select({ mode:'agent' }))}
+          ${this.choice('Plan', 'Explore and prepare a plan', mode === 'plan', s.modes.includes('plan') && (this.harness !== 'claude' || permission === 'read-only'), () => void this.select({ mode:'plan' }))}
+        </mux-ui-choice-section>
         ${this.operatorControl()}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </mux-ui-choice-picker>`}
       <mux-ui-choice-picker class="picker model-picker" label="Provider, model and thinking" .summary=${model?.label || s.model || this.harness} placement="above" appearance="plain" panel-align="right">
-        ${this.harness === 'amplifier' ? html`<div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${this.harness}</div>`}
-        <div class="divider"></div><div class="heading">Model</div>
-        <div class="model-list">${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}</div>
-        ${efforts.length > 1 ? html`<div class="divider"></div><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} ?disabled=${this.loading || this.turnBusy} @change=${(event:Event) => void this.select({ effort:efforts[(event.target as MuxUIRangeField).value] })}></mux-ui-range-field>` : nothing}
+        ${this.harness === 'amplifier' ? html`
+          <mux-ui-choice-section heading="Bundle">${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}</mux-ui-choice-section>
+          <mux-ui-choice-section heading="Provider" separated>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}</mux-ui-choice-section>
+        ` : html`<mux-ui-choice-section heading="Provider" .description=${`${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${this.harness}`}></mux-ui-choice-section>`}
+        <mux-ui-choice-section heading="Model" separated>
+          <div class="model-list">${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}</div>
+        </mux-ui-choice-section>
+        ${efforts.length > 1 ? html`<mux-ui-choice-section separated><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} ?disabled=${this.loading || this.turnBusy} @change=${(event:Event) => void this.select({ effort:efforts[(event.target as MuxUIRangeField).value] })}></mux-ui-range-field></mux-ui-choice-section>` : nothing}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </mux-ui-choice-picker>`;
   }
