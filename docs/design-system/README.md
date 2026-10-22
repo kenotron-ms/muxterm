@@ -68,6 +68,18 @@ interaction reference when refining shared controls. Check its current
 icon treatment, states, and semantic surfaces. Implement the resulting pattern
 in Muxterm's Lit components and `--ui-*` tokens, then record it in Storybook.
 
+For AI-facing screens, use [shadcn/ui AI Elements](https://ui.shadcn.com/docs/ai-elements)
+as the companion reference. Compare [Prompt Input](https://ui.shadcn.com/docs/ai-elements/base/prompt-input)
+for the composer, attachments, and send action;
+[Chat](https://ui.shadcn.com/docs/ai-elements/base/chat) and
+[Message](https://ui.shadcn.com/docs/ai-elements/base/message) for the
+transcript; [Model Selector](https://ui.shadcn.com/docs/ai-elements/base/model-selector)
+for model controls; and [Tool](https://ui.shadcn.com/docs/ai-elements/base/tool)
+and [Reasoning](https://ui.shadcn.com/docs/ai-elements/base/reasoning) for
+agent activity. Apply the relevant composition, interaction, and visual states
+through Muxterm's Lit components and Storybook, while preserving the app's
+sessiond and chat behavior.
+
 1. Start with a pattern in Storybook. Add missing states to the shared
    component and its stories before adding a screen-specific treatment.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
