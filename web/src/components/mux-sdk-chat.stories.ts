@@ -42,18 +42,40 @@ const settings = {
   ],
 };
 
-function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready'): ApiFixture {
+function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal' = 'none'): ApiFixture {
   const chat: SDKChat = {
     id, title:'Component library review', workspaceId:'project-1',
     projectPath:'/home/demo/muxterm', harness:'codex', state,
     createdAt:'2026-10-22T10:00:00Z',
   };
+  const operator: SDKChat = {
+    id:'storybook-operator', title:'Design system operator', workspaceId:'project-1',
+    projectPath:'/home/demo/muxterm', harness:'codex', state:'working', operator:true,
+    operatorLanes:[id], createdAt:'2026-10-22T09:00:00Z',
+  };
+  const goal = {
+    schema:1, chatId:id, harness:'codex', version:goalState === 'none' ? 0 : 3,
+    controlVersion:goalState === 'none' ? 0 : 3,
+    requestedRevision:goalState === 'none' ? 0 : 1,
+    appliedRevision:goalState === 'none' ? 0 : 1,
+    humanPaused:false, state:goalState === 'none' ? 'not-set' : 'active',
+    ...(goalState === 'proposal' ? {operatorId:operator.id} : {}),
+    gap:'',
+    revisions:goalState === 'none' ? [] : [{revision:1,condition:'Catalog every shared control, then stop after browser review.',provenance:'human',at:at(1)}],
+    receipts:goalState === 'none' ? [] : [
+      {id:'goal-start',action:'set',revision:1,actor:'human',status:'recorded',at:at(2)},
+      ...(goalState === 'proposal' ? [{id:'goal-proposal',action:'propose',revision:2,actor:'agent',status:'recorded',objective:'Review and replace remaining chat one-offs.',at:at(3)}] : []),
+    ],
+    observations:goalState === 'none' ? [] : [{at:at(4),event:{type:'goal.started',goalState:'active',goalSummary:'The native harness acknowledged revision 1.'}}],
+  };
   const events = state === 'working' ? running : transcript;
   const messages = events.filter(event => event.type !== 'tool.started' && event.type !== 'tool.completed');
   return ({url,method,init}) => {
-    if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON([chat]);
+    if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON(goalState === 'proposal' ? [chat,operator] : [chat]);
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-projects')) return fixtureJSON([{id:'project-1',name:'Component library',path:'/home/demo/muxterm'}]);
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-jobs')) return fixtureJSON([]);
+    if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/goal`)) return fixtureJSON(goal);
+    if (method === 'GET' && url.pathname.endsWith('/api/sdk-goal-ledger')) return fixtureJSON(goalState === 'none' ? [] : [goal]);
     if (method === 'GET' && url.pathname.endsWith('/api/voice/settings')) return fixtureJSON({enabled:false,restartRequired:false});
     if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/agents`)) return fixtureJSON([]);
     if (url.pathname.endsWith(`/api/sdk-chats/${id}/settings`)) {
@@ -136,4 +158,31 @@ export const PhoneConversation: Story = {
   args:{sessionId:'storybook-chat-phone'},
   globals:{viewport:{value:'phone390',isRotated:false}},
   parameters:{apiFixture:chatFixture('storybook-chat-phone')},
+};
+const openLedger = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+  await sdkChats.refresh();
+  const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+  await chat?.updateComplete;
+  chat?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Open goal ledger"]')?.click();
+};
+export const GoalLedger: Story = {
+  args:{sessionId:'storybook-chat-goal'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goal','ready','active')},
+  play:openLedger,
+};
+export const GoalPendingProposal: Story = {
+  args:{sessionId:'storybook-chat-proposal'},
+  parameters:{apiFixture:chatFixture('storybook-chat-proposal','ready','proposal')},
+  play:openLedger,
+};
+export const PhoneGoalEditor: Story = {
+  args:{sessionId:'storybook-chat-phone-goal'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-goal','ready','active')},
+  play:async (context) => {
+    await openLedger(context);
+    const chat = context.canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+    await chat?.updateComplete;
+    chat?.shadowRoot?.querySelector<HTMLElement>('.goal-edit-action')?.click();
+  },
 };

@@ -14,6 +14,7 @@ export class MuxUITextArea extends LitElement {
   @property() name = '';
   @property({ attribute: 'aria-label' }) accessibleLabel = '';
   @property({ type: Number }) rows = 5;
+  @property({ type: Number }) maxLength = -1;
   @property({ type: Boolean, reflect: true }) disabled = false;
   @property({ type: Boolean, reflect: true }) required = false;
   @property({ type: Boolean, reflect: true }) readonly = false;
@@ -77,7 +78,7 @@ export class MuxUITextArea extends LitElement {
     const describedBy = [this.description && 'description', this.error && 'error'].filter(Boolean).join(' ');
     return html`
       ${this.label ? html`<label for="field">${this.label}${this.required ? ' *' : ''}</label>` : nothing}
-      <textarea id="field" .value=${this.value} rows=${this.rows} placeholder=${this.placeholder}
+      <textarea id="field" .value=${this.value} rows=${this.rows} maxlength=${this.maxLength >= 0 ? this.maxLength : nothing} placeholder=${this.placeholder}
         ?disabled=${this.disabled} ?readonly=${this.readonly} ?required=${this.required}
         aria-label=${this.accessibleLabel || nothing} aria-invalid=${String(Boolean(this.error))}
         aria-describedby=${describedBy || nothing} @input=${this.onInput}></textarea>

@@ -106,6 +106,16 @@ Storybook covers desktop and phone progress, expanded lane actions and an error
 state without stale loading. Lane progress and closure authority remain with
 the real operator and sessiond in the running app.
 
+Main chat now uses semantic palette tokens throughout its transcript and goal
+ledger. The goal editor uses the shared adaptive Dialog, Text Area and Buttons;
+ledger actions use shared Buttons, Select and Feedback. Storybook shows an
+active goal, a pending proposal with separate approval actions, and the phone
+editor as a bottom sheet. Chromium confirmed the phone sheet accepts edits,
+Escape dismisses it, and the desktop transcript still shows work details.
+These stories use synthetic read-only goal data and do not exercise live goal
+control. Transcript actions, disclosures and the auto-sizing composer still
+need shared-pattern review, as recorded in the inventory.
+
 The Utility panel uses semantic tokens for chrome and document colors, plus
 shared compact Text Field and Select controls in the file rail. Storybook's
 Utility stories cover the file viewer at desktop and phone widths, its light

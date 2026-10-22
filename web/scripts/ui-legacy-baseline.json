@@ -108,10 +108,10 @@
     "nativeControls": 3
   },
   "components/mux-sdk-chat.ts": {
-    "legacyTokens": 220,
-    "literalColors": 83,
-    "literalScale": 195,
-    "nativeControls": 40
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 149,
+    "nativeControls": 28
   },
   "components/mux-sdk-pdf-preview.ts": {
     "legacyTokens": 0,

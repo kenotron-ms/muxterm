@@ -14,3 +14,4 @@ export const Default:Story = {};
 export const Filled:Story = { args:{ value:'Review open pull requests and summarize the risks for the team.' } };
 export const Error:Story = { args:{ error:'Add standing instructions before scheduling this job.', required:true } };
 export const Disabled:Story = { args:{ value:'This job is managed elsewhere.', disabled:true } };
+export const LimitedLength:Story = { render:()=>html`<div style="width:min(460px,100%)"><mux-ui-text-area label="Stop condition" description="Up to 4,000 characters." .maxLength=${4000} rows="7"></mux-ui-text-area></div>` };

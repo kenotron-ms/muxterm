@@ -3,6 +3,8 @@
 :root {
   --ui-font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
   --ui-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ui-content-font-family: var(--mux-font-family, var(--ui-font-sans));
+  --ui-content-font-size: var(--mux-font-size, var(--ui-text-xl));
 
   --ui-text-xs: 11px;
   --ui-text-sm: 12px;
@@ -14,6 +16,7 @@
   --ui-text-4xl: 30px;
   --ui-text-5xl: 36px;
 
+  --ui-space-px: 1px;
   --ui-space-1: 2px;
   --ui-space-2: 4px;
   --ui-space-3: 6px;
@@ -35,7 +38,15 @@
   --ui-radius-md: 7px;
   --ui-radius-lg: 10px;
   --ui-radius-xl: 14px;
+  --ui-radius-2xl: 18px;
   --ui-radius-pill: 999px;
+
+  --ui-content-heading-1: 1.45em;
+  --ui-content-heading-2: 1.25em;
+  --ui-content-heading-3: 1.12em;
+  --ui-content-heading-4: 1em;
+  --ui-inline-code-padding-block: .13em;
+  --ui-inline-code-padding-inline: .38em;
 
   --ui-control-sm: 28px;
   --ui-control-md: 36px;
@@ -76,6 +87,8 @@
   --ui-warning: var(--mux-warn);
   --ui-attention: var(--mux-bell);
   --ui-info: var(--mux-ansi-6);
+  --ui-message-lane-to-operator: #aa7c42;
+  --ui-message-external: #8773b0;
   --ui-remote: var(--remote, #bb9af7);
   --ui-terminal-surface: var(--mux-bg);
   --ui-focus: var(--chrome-accent);
@@ -83,7 +96,10 @@
   --ui-backdrop-sheet: color-mix(in srgb, var(--ui-surface-base) 62%, transparent);
   --ui-shadow-overlay: 0 24px 64px color-mix(in srgb, black 55%, transparent);
   --ui-shadow-menu: 0 4px 12px color-mix(in srgb, black 50%, transparent);
+  --ui-shadow-control: 0 8px 28px color-mix(in srgb, black 8%, transparent);
   --ui-shadow-sheet: 0 -8px 24px color-mix(in srgb, black 40%, transparent);
+  --ui-shadow-side: -8px 0 28px color-mix(in srgb, black 20%, transparent);
+  --ui-shadow-side-strong: -10px 0 30px color-mix(in srgb, black 50%, transparent);
 
   /* Editable documents can keep a paper-like surface while a theme overrides
      every document color independently of the surrounding app chrome. */
