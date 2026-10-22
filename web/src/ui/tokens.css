@@ -52,6 +52,7 @@
   --ui-control-sm: 28px;
   --ui-control-md: 36px;
   --ui-control-lg: 44px;
+  --ui-icon-xs: 14px;
   --ui-icon-sm: var(--ui-space-6);
   --ui-icon-md: var(--ui-space-7);
   --ui-status-dot-size: var(--ui-space-3);

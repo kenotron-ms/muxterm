@@ -108,16 +108,17 @@ for (const [name, url] of featureFiles) {
     legacyTokens: [...styles.matchAll(/var\(--(?:chrome|mux)-[\w-]+/g)].length,
     literalColors: literalColorCount(styles),
     literalScale: literalScaleCount(styles),
+    literalDimensions: literalDimensionCount(styles),
     nativeControls: [...source.matchAll(/<(?:button|input|select|textarea)\b/g)].length,
   };
-  const allowed = baseline[name] ?? { legacyTokens: 0, literalColors: 0, literalScale: 0, nativeControls: 0 };
+  const allowed = baseline[name] ?? { legacyTokens: 0, literalColors: 0, literalScale: 0, literalDimensions: 0, nativeControls: 0 };
   for (const key of Object.keys(counts)) {
     const ceiling = allowed[key] ?? 0;
     if (counts[key] === ceiling) continue;
     if (counts[key] < ceiling) {
       console.error(`src/${name}: ${key} fell from ${ceiling} to ${counts[key]}; lower the checked-in baseline to lock in the migration`);
     } else {
-      console.error(`src/${name}: ${key} increased from ${ceiling} to ${counts[key]}; use shared UI components or --ui-* tokens, or document a necessary native control in the inventory`);
+      console.error(`src/${name}: ${key} increased from ${ceiling} to ${counts[key]}; use shared UI components or --ui-* tokens, or document an intentional exception in the inventory`);
     }
     failed = true;
   }

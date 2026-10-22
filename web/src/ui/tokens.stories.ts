@@ -68,6 +68,7 @@ const meta = {
       <h2 style="font-size:var(--ui-text-2xl);margin:var(--ui-space-9) 0 var(--ui-space-5)">Component sizing</h2>
       <p style="color:var(--ui-text-muted);margin:0 0 var(--ui-space-5)">Shared controls use these sizes for icon slots, status indicators, and dividers. Content bounds are named for the component that owns them.</p>
       <div style="display:flex;flex-wrap:wrap;align-items:center;gap:var(--ui-space-7)">
+        <div style="display:flex;align-items:center;gap:var(--ui-space-4)"><span style="display:block;width:var(--ui-icon-xs);height:var(--ui-icon-xs);background:var(--ui-accent);border-radius:var(--ui-radius-sm)"></span><span>Icon extra small · 14</span></div>
         <div style="display:flex;align-items:center;gap:var(--ui-space-4)"><span style="display:block;width:var(--ui-icon-sm);height:var(--ui-icon-sm);background:var(--ui-accent);border-radius:var(--ui-radius-sm)"></span><span>Icon small · 16</span></div>
         <div style="display:flex;align-items:center;gap:var(--ui-space-4)"><span style="display:block;width:var(--ui-icon-md);height:var(--ui-icon-md);background:var(--ui-accent);border-radius:var(--ui-radius-sm)"></span><span>Icon medium · 20</span></div>
         <div style="display:flex;align-items:center;gap:var(--ui-space-4)"><span style="display:block;width:var(--ui-status-dot-size);height:var(--ui-status-dot-size);background:var(--ui-success);border-radius:var(--ui-radius-pill)"></span><span>Status dot · 6</span></div>

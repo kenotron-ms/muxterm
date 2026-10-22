@@ -133,14 +133,14 @@ export class MuxChatWorkspace extends LitElement {
     .row:has(.rename-input):focus-within,.chat-row:has(.rename-input):focus-within { outline:none; }
     .status { width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); border-radius:50%; background:var(--ui-text-muted); flex:none; }
     .status.working { background:var(--ui-success); }
-    .status.operator { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-accent); }
+    .status.operator { display:inline-flex; align-items:center; justify-content:center; width:var(--ui-icon-xs); height:var(--ui-icon-xs); border-radius:0; background:none; color:var(--ui-accent); }
     .status.operator.working { background:none; color:var(--ui-success); }
     .status.operator.failed,.status.operator.uncertain { color:var(--ui-danger); }
-    .status.lane { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-text-muted); }
+    .status.lane { display:inline-flex; align-items:center; justify-content:center; width:var(--ui-icon-xs); height:var(--ui-icon-xs); border-radius:0; background:none; color:var(--ui-text-muted); }
     .status.lane.starting,.status.lane.working { background:none; color:var(--ui-accent); }
     .status.lane.ready { color:var(--ui-success); }
     .status.lane.failed,.status.lane.uncertain { color:var(--ui-danger); }
-    .status.chat { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-text-muted); }
+    .status.chat { display:inline-flex; align-items:center; justify-content:center; width:var(--ui-icon-xs); height:var(--ui-icon-xs); border-radius:0; background:none; color:var(--ui-text-muted); }
     .status.chat.working { color:var(--ui-success); }
     .status.chat.failed,.status.chat.uncertain { color:var(--ui-danger); }
     .rename-input { flex:1; min-width:0; margin:var(--ui-space-1) var(--ui-space-2); }

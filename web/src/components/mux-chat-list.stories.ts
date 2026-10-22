@@ -24,6 +24,8 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const ProjectsAndPinned: Story = {};
+export const OperatorAndLaneStatus: Story = { render:() => view('chat-operator',false,false,true) };
+export const PhoneOperatorAndLaneStatus: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-operator',true,false,true) };
 const openProjectActions = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
   await list?.updateComplete;
