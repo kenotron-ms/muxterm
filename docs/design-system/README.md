@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Filter Chip, Switch, Dialog, Text Field, Text Area, Select,
+3. Use the shared Button, Choice Item, Filter Chip, Switch, Dialog, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -129,8 +129,13 @@ The shared Switch also replaces the bespoke Operator toggle in chat settings.
 It has inline and described-row layouts, checked and disabled stories, native
 button keyboard behavior, and semantic theme colors. Chromium confirmed click
 and Space activation in the standalone story, plus the Operator row in desktop,
-phone and light-theme chat settings. The settings picker rows and range slider
-remain specialized controls for further pattern review.
+phone and light-theme chat settings. The New Chat and chat settings pickers now
+use the same Choice Item for selected, disabled, and described options. Their
+phone panels share a full-width bottom sheet style and Escape behavior.
+Chromium verified model selection and Escape focus restoration in the isolated
+live New Chat, plus the Storybook picker states at desktop and phone widths.
+Picker triggers, outside-click behavior, headings, and range sliders still
+belong to their feature components and need shared-pattern review.
 
 The Utility panel uses semantic tokens for chrome and document colors, plus
 shared compact Text Field and Select controls in the file rail. Storybook's

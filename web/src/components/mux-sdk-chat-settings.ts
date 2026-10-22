@@ -3,6 +3,8 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
+import '../ui/choice-item.js';
+import { choicePickerSheetStyles, closeChoicePickerOnEscape } from '../ui/choice-picker-pattern.js';
 import '../ui/switch.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
@@ -31,15 +33,6 @@ export class MuxSDKChatSettings extends LitElement {
       if (!path.includes(picker)) picker.open = false;
     });
   };
-  private readonly closePickerOnEscape = (event: KeyboardEvent) => {
-    if (event.key !== 'Escape') return;
-    const picker = event.currentTarget as HTMLDetailsElement;
-    if (!picker.open) return;
-    event.preventDefault();
-    event.stopPropagation();
-    picker.open = false;
-    picker.querySelector('summary')?.focus();
-  };
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener('pointerdown', this.closePickersOnOutsidePointer);
@@ -63,15 +56,6 @@ export class MuxSDKChatSettings extends LitElement {
     .model-picker .panel { right:0; }
     .heading { padding:var(--ui-space-4) var(--ui-space-5) var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
     .divider { height:1px; margin:var(--ui-space-4) var(--ui-space-3); background:var(--ui-border); }
-    .choice { display:flex; align-items:center; gap:var(--ui-space-4); width:100%; min-height:var(--ui-control-md); border:0; border-radius:var(--ui-radius-md); padding:var(--ui-space-3) var(--ui-space-5); background:transparent; color:var(--ui-text); font:inherit; text-align:left; cursor:pointer; }
-    .choice:hover:not(:disabled) { background:var(--ui-surface-hover); }
-    .choice:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
-    .choice.selected { background:color-mix(in srgb,var(--ui-accent) 15%,transparent); }
-    .choice:disabled { opacity:.46; cursor:default; }
-    .choice-main { display:grid; gap:var(--ui-space-1); min-width:0; flex:1; }
-    .choice-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .hint { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    .check { color:var(--ui-accent); font-weight:700; }
     .group { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
     .model-list { max-height:190px; overflow-y:auto; }
     .slider { padding:var(--ui-space-2) var(--ui-space-5) var(--ui-space-5); }
@@ -81,6 +65,7 @@ export class MuxSDKChatSettings extends LitElement {
     .notice { padding:var(--ui-space-4) var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .error { color:var(--ui-danger-text); padding:var(--ui-space-4) var(--ui-space-5); overflow-wrap:anywhere; }
     .busy { opacity:.55; }
+    ${choicePickerSheetStyles}
   `;
   override updated(changed: Map<string, unknown>) {
     if (changed.has('sessionId') && this.sessionId) { this.settings = undefined; this.error = ''; void this.load(this.sessionId); }
@@ -127,7 +112,7 @@ export class MuxSDKChatSettings extends LitElement {
     const active = s.mode || '';
     const options = s.modeOptions || [];
     return html`
-      <details class="picker permission-picker" aria-label="Amplifier mode and operator"><summary><span class="summary-text">${modeLabel(active)}${this.operator ? ' · Operator' : ''}</span></summary><div class="panel">
+      <details class="picker choice-picker-sheet permission-picker" aria-label="Amplifier mode and operator" @keydown=${closeChoicePickerOnEscape}><summary><span class="summary-text">${modeLabel(active)}${this.operator ? ' · Operator' : ''}</span></summary><div class="panel">
         <div class="heading">Mode</div>
         ${this.choice('Default', 'No overlay — the bundle exactly as composed', active === '', true, () => void this.select({ mode:'' }))}
         ${options.map(option => this.choice(modeLabel(option.name), option.description || '', active === option.name, true, () => void this.select({ mode:option.name })))}
@@ -137,7 +122,7 @@ export class MuxSDKChatSettings extends LitElement {
       </div></details>`;
   }
   private choice(name: string, hint: string, selected: boolean, available: boolean, action: () => void) {
-    return html`<button class="choice ${selected ? 'selected' : ''}" aria-pressed=${selected} ?disabled=${!available || this.loading || this.turnBusy} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span><span class="hint">${available ? hint : 'Unavailable for this harness'}</span></span>${selected ? html`<span class="check" aria-hidden="true">✓</span>` : nothing}</button>`;
+    return html`<mux-ui-choice-item .label=${name} .description=${available ? hint : 'Unavailable for this harness'} ?selected=${selected} ?disabled=${!available || this.loading || this.turnBusy} @click=${action}></mux-ui-choice-item>`;
   }
   override render() {
     const s = this.settings;
@@ -150,7 +135,7 @@ export class MuxSDKChatSettings extends LitElement {
     const mode = s.mode || 'agent';
     return html`
       ${this.harness === 'amplifier' ? this.modePicker(s) : html`
-      <details class="picker permission-picker" aria-label="Permission, mode and operator"><summary><span class="summary-text">${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}${this.operator ? ' · Operator' : ''}</span></summary><div class="panel">
+      <details class="picker choice-picker-sheet permission-picker" aria-label="Permission, mode and operator" @keydown=${closeChoicePickerOnEscape}><summary><span class="summary-text">${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}${this.operator ? ' · Operator' : ''}</span></summary><div class="panel">
         <div class="heading">Permission</div>
         ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
         <div class="divider"></div><div class="heading">Mode</div>
@@ -159,7 +144,7 @@ export class MuxSDKChatSettings extends LitElement {
         ${this.operatorControl()}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
       </div></details>`}
-      <details class="picker model-picker" aria-label="Provider, model and thinking" @keydown=${this.closePickerOnEscape}><summary><span class="summary-text">${model?.label || s.model || this.harness}</span></summary><div class="panel">
+      <details class="picker choice-picker-sheet model-picker" aria-label="Provider, model and thinking" @keydown=${closeChoicePickerOnEscape}><summary><span class="summary-text">${model?.label || s.model || this.harness}</span></summary><div class="panel">
         ${this.harness === 'amplifier' ? html`<div class="heading">Bundle</div>${(s.bundles || []).map(value => this.choice(value, '', s.bundle === value, true, () => void this.select({ bundle:value })))}<div class="divider"></div><div class="heading">Provider</div>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}` : html`<div class="heading">Provider</div><div class="notice">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${this.harness}</div>`}
         <div class="divider"></div><div class="heading">Model</div>
         <div class="model-list">${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}</div>

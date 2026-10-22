@@ -6,6 +6,8 @@ import { apiPath } from '../lib/base-path.js';
 import { ArrowUp, ChevronDown, Folder, Paperclip, Plus, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import '../ui/button.js';
+import '../ui/choice-item.js';
+import { choicePickerSheetStyles, closeChoicePickerOnEscape } from '../ui/choice-picker-pattern.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
 import '../ui/select.js';
@@ -116,14 +118,7 @@ export class MuxNewChat extends LitElement {
     .settings-picker .panel { right:0; }
     .chat-picker .heading { padding:8px 10px 5px; color:var(--ui-text-muted); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
     .chat-picker .divider { height:1px; margin:7px 5px; background:var(--ui-border); }
-    .chat-picker .choice { display:flex; align-items:center; gap:9px; width:100%; min-height:36px; padding:7px 10px; border:0; border-radius:9px; background:transparent; color:var(--ui-text); font:12px/1.4 system-ui,sans-serif; text-align:left; cursor:pointer; }
-    .chat-picker .choice:hover:not(:disabled),.chat-picker .choice:focus-visible { background:var(--ui-surface-hover); outline:none; }
-    .chat-picker .choice.selected { background:color-mix(in srgb,var(--ui-accent) 15%,transparent); }
-    .chat-picker .choice:disabled { opacity:.5; cursor:default; }
-    .chat-picker .choice-main { display:grid; gap:2px; min-width:0; flex:1; }
-    .chat-picker .choice-name { font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
     .chat-picker .hint { color:var(--ui-text-muted); font-size:11px; }
-    .chat-picker .check { color:var(--ui-accent); font-weight:700; }
     .chat-picker .model-list { max-height:180px; overflow-y:auto; }
     .chat-picker .slider { padding:4px 10px 12px; }
     .chat-picker .slider-header,.chat-picker .slider-ends { display:flex; justify-content:space-between; gap:8px; }
@@ -216,6 +211,7 @@ export class MuxNewChat extends LitElement {
       .project-trigger { max-width:135px; }
       .location-fields { padding-bottom:max(var(--ui-space-6),env(safe-area-inset-bottom)); }
     }
+    ${choicePickerSheetStyles}
   `;
 
   override connectedCallback() {
@@ -362,10 +358,10 @@ export class MuxNewChat extends LitElement {
     this.effort = '';
   }
   private pickerChoice(name: string, hint: string, selected: boolean, action: () => void) {
-    return html`<button class="choice ${selected ? 'selected' : ''}" type="button" ?disabled=${this.catalogLoading} @click=${action}><span class="choice-main"><span class="choice-name">${name}</span>${hint ? html`<span class="hint">${hint}</span>` : nothing}</span>${selected ? html`<span class="check">✓</span>` : nothing}</button>`;
+    return html`<mux-ui-choice-item .label=${name} .description=${hint} ?selected=${selected} ?disabled=${this.catalogLoading} @click=${action}></mux-ui-choice-item>`;
   }
   private renderBundlePicker() {
-    return html`<details class="chat-picker bundle-picker" aria-label="Bundle"><summary>${this.bundle || 'Bundle'}</summary><div class="panel">
+    return html`<details class="chat-picker choice-picker-sheet bundle-picker" aria-label="Bundle" @keydown=${closeChoicePickerOnEscape}><summary>${this.bundle || 'Bundle'}</summary><div class="panel">
       <div class="heading">Bundle</div>
       ${(this.catalog?.bundles || []).map(value => this.pickerChoice(value, '', this.bundle === value, () => { this.bundle = value; this.provider = 'configured'; void this.loadCatalog(); }))}
       ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
@@ -374,7 +370,7 @@ export class MuxNewChat extends LitElement {
   private renderModelPicker(models: ModelOption[], selectedModel: ModelOption | undefined, efforts: string[]) {
     const effortIndex = Math.max(0, efforts.indexOf(this.effort || selectedModel?.defaultEffort || efforts[0]));
     const modelLabel = selectedModel?.label || this.model || (this.catalog?.defaultModel ? `Default (${this.catalog.defaultModel})` : 'Model');
-    return html`<details class="chat-picker settings-picker" aria-label="Provider, model and thinking"><summary>${modelLabel}${this.effort ? ` · ${this.effort}` : ''}</summary><div class="panel">
+    return html`<details class="chat-picker choice-picker-sheet settings-picker" aria-label="Provider, model and thinking" @keydown=${closeChoicePickerOnEscape}><summary>${modelLabel}${this.effort ? ` · ${this.effort}` : ''}</summary><div class="panel">
       <div class="heading">Provider</div>
       ${this.harness === 'amplifier' ? (this.catalog?.providers || []).map(value => this.pickerChoice(providerLabel(value), '', this.provider === value, () => { this.provider = value; void this.loadCatalog(); })) : html`<div class="hint">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${sdkHarnessLabel(this.harness)}</div>`}
       <div class="divider"></div><div class="heading">Model</div>
