@@ -7,15 +7,16 @@ interface DialogArgs {
   size: 'standard' | 'compact';
   presentation: 'centered' | 'adaptive';
   label: string;
+  dismissable: boolean;
 }
 
 const meta = {
   title: 'Components/Dialog',
   tags: ['autodocs'],
-  args: { size: 'standard', presentation:'centered', label: 'Example settings' },
+  args: { size: 'standard', presentation:'centered', label: 'Example settings',dismissable:true },
   argTypes: { size: { control: 'select', options: ['standard', 'compact'] }, presentation:{control:'select',options:['centered','adaptive']} },
   render: (args: DialogArgs) => html`
-    <mux-ui-dialog open .size=${args.size} .presentation=${args.presentation} .label=${args.label}>
+    <mux-ui-dialog open .size=${args.size} .presentation=${args.presentation} .label=${args.label} .dismissable=${args.dismissable}>
       <section style=${`display:flex;flex-direction:column;min-height:0;${args.size === 'standard' ? 'flex:1' : ''}`}>
         <header style="padding:var(--ui-space-6);border-bottom:1px solid var(--ui-border)">
           <h2 style="margin:0;font-size:var(--ui-text-xl)">${args.label}</h2>
@@ -37,3 +38,4 @@ type Story = StoryObj<DialogArgs>;
 export const Standard: Story = {};
 export const Compact: Story = { args: { size: 'compact', label: 'Connect machine' } };
 export const PhoneSheet: Story = { args:{size:'compact',presentation:'adaptive',label:'Edit project'},globals:{viewport:{value:'phone390',isRotated:false}} };
+export const BusyLocked: Story = { args:{size:'compact',label:'Creating workspace',dismissable:false} };

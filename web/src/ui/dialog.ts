@@ -13,6 +13,7 @@ export class MuxUIDialog extends LitElement {
   @property({ reflect: true }) size: DialogSize = 'standard';
   @property({ reflect: true }) presentation: DialogPresentation = 'centered';
   @property() label = '';
+  @property({ type:Boolean }) dismissable = true;
 
   static override styles = css`
     :host { display: contents; }
@@ -94,11 +95,11 @@ export class MuxUIDialog extends LitElement {
 
   private _onCancel(event: Event): void {
     event.preventDefault();
-    this._dismiss();
+    if (this.dismissable) this._dismiss();
   }
 
   private _onClick(event: MouseEvent): void {
-    if (event.target === this._dialog) this._dismiss();
+    if (this.dismissable && event.target === this._dialog) this._dismiss();
   }
 
   override render() {

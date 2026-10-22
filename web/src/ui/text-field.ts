@@ -94,6 +94,9 @@ export class MuxUITextField extends LitElement {
     this.renderRoot.querySelector('input')?.focus(options);
   }
 
+  /** Reads the native input synchronously, including text still being composed. */
+  get liveValue(): string { return this.renderRoot.querySelector('input')?.value ?? this.value; }
+
   select(): void {
     this.renderRoot.querySelector('input')?.select();
   }

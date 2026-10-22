@@ -82,6 +82,7 @@
   --ui-surface-nav: var(--mux-titlebar-bg, var(--chrome-bar));
   --ui-surface-hover: var(--chrome-hover);
   --ui-surface-tinted: color-mix(in srgb, var(--ui-accent) 9%, var(--ui-surface-raised));
+  --ui-connection-scrim: color-mix(in srgb, var(--ui-surface-base) 85%, transparent);
   --ui-nav-selected: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface-raised));
   --ui-surface-overlay: var(--chrome-body);
   --ui-border: var(--chrome-border);
@@ -110,6 +111,7 @@
   --ui-shadow-sheet: 0 -8px 24px color-mix(in srgb, black 40%, transparent);
   --ui-shadow-side: -8px 0 28px color-mix(in srgb, black 20%, transparent);
   --ui-shadow-side-strong: -10px 0 30px color-mix(in srgb, black 50%, transparent);
+  --ui-shadow-drawer: 8px 0 24px color-mix(in srgb, black 40%, transparent);
 
   /* Editable documents can keep a paper-like surface while a theme overrides
      every document color independently of the surrounding app chrome. */

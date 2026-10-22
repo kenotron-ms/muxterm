@@ -58,6 +58,8 @@ is still migrating: `check:ui` is a ratchet, not a claim that every feature
 stylesheet is fully tokenized. See [the inventory](inventory.md) for the open
 seams and the source of truth for each screen.
 
+The app shell uses the same semantic surface, text, focus, spacing and shadow tokens as the component library. Workspace creation uses a shared adaptive Dialog, Text Field and Buttons through `mux-workspace-create-dialog`; Storybook records desktop, phone, busy and light states. The shell owns workspace creation through sessiond.
+
 ## Main-based browser evidence
 
 Chromium verification uses Storybook for populated UI fixtures and isolated
