@@ -1120,6 +1120,7 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name, Path    string
 		SourceFolders []string
+		CreateFolder  bool
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil || !filepath.IsAbs(req.Path) {
 		http.Error(w, "absolute project path required", 400)
@@ -1139,6 +1140,12 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" {
 		req.Name = filepath.Base(req.Path)
 	}
+	if req.CreateFolder {
+		if err := os.Mkdir(req.Path, 0755); err != nil {
+			http.Error(w, "cannot create project folder: "+err.Error(), 400)
+			return
+		}
+	}
 	p := &sdkProject{ID: sdkID(), Name: req.Name, Path: req.Path, SourceFolders: folders}
 	h.mu.Lock()
 	h.projects[p.ID] = p
@@ -1148,6 +1155,9 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 	if err != nil {
+		if req.CreateFolder {
+			_ = os.Remove(req.Path)
+		}
 		http.Error(w, err.Error(), 500)
 		return
 	}

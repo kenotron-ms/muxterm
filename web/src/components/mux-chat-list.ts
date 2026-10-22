@@ -364,6 +364,11 @@ export class MuxChatWorkspace extends LitElement {
 export class MuxChatList extends LitElement {
   @state() private version = 0;
   @state() private pinError = '';
+  @state() private projectDialogOpen = false;
+  @state() private projectName = '';
+  @state() private projectParent = '';
+  @state() private projectError = '';
+  @state() private projectCreating = false;
   @property() selectedSession = '';
   private unsub?: () => void;
   private readonly onChatOpen = (event: Event) => {
@@ -374,6 +379,8 @@ export class MuxChatList extends LitElement {
     ${subtleScrollbars}
     :host { display:block; color:var(--ui-text-muted); font:var(--ui-text-sm)/1.35 var(--ui-font-sans); }
     .heading { padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-1); font-size:inherit; font-weight:600; letter-spacing:0; text-transform:none; }
+    .heading-row { display:flex; align-items:center; justify-content:space-between; }
+    .heading-actions { display:flex; align-items:center; }
     .pinned { margin-bottom:var(--ui-space-4); padding-bottom:var(--ui-space-4); border-bottom:1px solid var(--ui-border); }
     .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border-radius:var(--ui-radius-md); color:var(--ui-text); }
     .pin-row:hover,.pin-row:focus-within { background:var(--ui-surface-hover); }
@@ -388,6 +395,10 @@ export class MuxChatList extends LitElement {
     .pin-unpin { flex:none; opacity:0; }
     .pin-row:hover .pin-unpin,.pin-row:focus-within .pin-unpin { opacity:1; }
     .pin-feedback { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
+    .project-form { display:grid; gap:var(--ui-space-5); padding:var(--ui-space-6); color:var(--ui-text); }
+    .project-form h2 { margin:0; font-size:var(--ui-text-xl); }
+    .project-preview { overflow-wrap:anywhere; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .project-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-3); }
     @media(hover:none), (max-width:550px) { .pin-unpin { opacity:1; } }
   `;
   override connectedCallback() {
@@ -407,6 +418,39 @@ export class MuxChatList extends LitElement {
       this.pinError = '';
     } catch (error) { this.pinError = `Could not unpin ${name}: ${errorMessage(error)}`; }
   }
+  private async openProjectDialog() {
+    this.projectName = '';
+    this.projectError = '';
+    this.projectDialogOpen = true;
+    try { this.projectParent = (await sdkChats.folders()).base; }
+    catch (error) { this.projectError = errorMessage(error); }
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxUITextField>('.project-form mux-ui-text-field')?.focus());
+  }
+  private closeProjectDialog() {
+    if (!this.projectCreating) this.projectDialogOpen = false;
+  }
+  private async createProject() {
+    if (this.projectCreating) return;
+    const name = this.projectName.trim();
+    const parent = this.projectParent.trim().replace(/\/+$/, '') || '/';
+    if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+      this.projectError = 'Choose a folder name without slashes.';
+      return;
+    }
+    if (!parent.startsWith('/')) {
+      this.projectError = 'Enter an absolute parent folder path.';
+      return;
+    }
+    this.projectCreating = true;
+    this.projectError = '';
+    try {
+      const path = `${parent === '/' ? '' : parent}/${name}`;
+      const project = await sdkChats.createProject(path, name, [], true);
+      this.projectDialogOpen = false;
+      this.dispatchEvent(new CustomEvent('chat-new-project', { detail:{projectId:project.id}, bubbles:true, composed:true }));
+    } catch (error) { this.projectError = errorMessage(error); }
+    finally { this.projectCreating = false; }
+  }
   override render() {
     void this.version;
     const projects = [...sdkChats.projects].sort((a,b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
@@ -423,8 +467,17 @@ export class MuxChatList extends LitElement {
     ];
     return html`
       ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><mux-ui-list-row class="pin-link" label=${item.name} tooltip=${item.name} ?selected=${item.kind === 'chat' && this.selectedSession === item.id} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span slot="icon" class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span slot="icon" class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}</mux-ui-list-row><mux-ui-button class="pin-unpin" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Unpin ${item.kind} ${item.name}`} tooltip=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</mux-ui-button></div>`)}</div>` : nothing}
+      <div class="heading-row"><div class="heading">Chats</div><div class="heading-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="New folder" tooltip="New folder" @click=${() => void this.openProjectDialog()}>${icon(FolderPlus,{size:16})}</mux-ui-button></div></div>
       ${this.pinError ? html`<mux-ui-feedback class="pin-feedback" kind="error" appearance="panel" density="compact">${this.pinError}</mux-ui-feedback>` : nothing}
       ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
+      ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New project folder" .dismissable=${!this.projectCreating} @dismiss=${() => this.closeProjectDialog()}><div class="project-form">
+        <h2>New project folder</h2>
+        <mux-ui-text-field label="Folder name" aria-label="Folder name" autocomplete="off" .value=${this.projectName} @input=${(event:Event) => { this.projectName=(event.target as MuxUITextField).value; }} @keydown=${(event:KeyboardEvent) => { if (event.key === 'Enter') void this.createProject(); }}></mux-ui-text-field>
+        <mux-ui-text-field label="Inside folder" aria-label="Inside folder" .value=${this.projectParent} @input=${(event:Event) => { this.projectParent=(event.target as MuxUITextField).value; }} @keydown=${(event:KeyboardEvent) => { if (event.key === 'Enter') void this.createProject(); }}></mux-ui-text-field>
+        <div class="project-preview">${this.projectName.trim() ? `${this.projectParent.replace(/\/+$/, '')}/${this.projectName.trim()}` : 'Enter a name to create a folder and project.'}</div>
+        ${this.projectError ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.projectError}</mux-ui-feedback>` : nothing}
+        <div class="project-actions"><mux-ui-button variant="quiet" ?disabled=${this.projectCreating} @click=${() => this.closeProjectDialog()}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${this.projectCreating || !this.projectName.trim() || !this.projectParent.trim()} @click=${() => void this.createProject()}>${this.projectCreating ? 'Creating…' : 'Create folder'}</mux-ui-button></div>
+      </div></mux-ui-dialog>` : nothing}
     `;
   }
 }

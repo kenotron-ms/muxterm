@@ -24,6 +24,13 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const ProjectsAndPinned: Story = {};
+const openNewProjectFolder = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+  const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
+  await list?.updateComplete;
+  list?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="New folder"]')?.click();
+};
+export const NewProjectFolder: Story = { play:openNewProjectFolder };
+export const PhoneNewProjectFolder: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openNewProjectFolder };
 export const OperatorAndLaneStatus: Story = { render:() => view('chat-operator',false,false,true) };
 export const PhoneOperatorAndLaneStatus: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-operator',true,false,true) };
 const openProjectActions = async ({canvasElement}: {canvasElement: HTMLElement}) => {

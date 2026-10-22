@@ -76,8 +76,8 @@ class SDKChatStore {
     await this.refresh();
     return operator;
   }
-  async createProject(path: string, name = '', sourceFolders: string[] = []) {
-    const response = await fetch(apiPath('/api/sdk-projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name, sourceFolders }) });
+  async createProject(path: string, name = '', sourceFolders: string[] = [], createFolder = false) {
+    const response = await fetch(apiPath('/api/sdk-projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name, sourceFolders, createFolder }) });
     if (!response.ok) throw new Error(await response.text());
     const project = await response.json() as SDKProject;
     await this.refresh();
