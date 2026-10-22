@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
+3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -123,11 +123,16 @@ synthetic Microsoft sign-in state. Dev-local Chromium verified all three
 primary destinations, provider navigation at desktop and phone widths, and no
 horizontal overflow.
 
-Settings uses shared section Navigation Item, Button, Text Field and Range Field controls and
-semantic tokens. Dev-local Chromium verified all eight destinations, phone
-navigation visibility, Workspaces and About controls, without starting an
-update. Native theme cards, color crayons, voice-mode radio presentation and
-other browser-owned form controls remain in the inventory for pattern review.
+Settings uses shared section Navigation Item, Button, Text Field, Range Field,
+Radio Group, Switch and Select controls with semantic tokens. One native Radio
+Group now owns font family, terminal bell and voice sign-in choices; the voice
+enable control uses Switch and the Entra scope uses Select. Storybook and live
+dev-local Chromium verified selection, keyboard navigation, the font preview,
+phone layout and scope changes. The Settings native-control baseline fell from
+10 to 3. Dev-local also verified all eight destinations, phone navigation
+visibility, Workspaces and About controls, without starting an update. Theme
+preview cards, title-bar crayons and the native color picker remain specialized
+for visual theme selection.
 
 Scheduled Jobs uses shared form fields, Dialog, Button, Navigation Item, Page
 Intro, Status Badge and Feedback. Storybook covers populated rows, failed run

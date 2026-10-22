@@ -4,8 +4,12 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
 import '../ui/button.js';
 import '../ui/nav-item.js';
+import '../ui/radio-group.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import '../ui/range-field.js';
+import '../ui/select.js';
+import type { MuxUISelect } from '../ui/select.js';
+import '../ui/switch.js';
 import '../ui/text-field.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
@@ -404,39 +408,6 @@ export class MuxSettingsSurface extends LitElement {
       font-weight: 700;
     }
 
-    /* ── Font family radios ── */
-    .font-radios {
-      display: flex;
-      flex-direction: column;
-      gap: var(--ui-space-2);
-    }
-
-    .font-radio-label {
-      display: flex;
-      align-items: center;
-      gap: var(--ui-space-4);
-      padding: var(--ui-space-3) var(--ui-space-5);
-      border-radius: var(--ui-radius-md);
-      cursor: pointer;
-      transition: background 0.1s;
-    }
-    .font-radio-label:hover {
-      background: var(--ui-surface-hover);
-    }
-
-    .font-radio-label input[type="radio"] {
-      accent-color: var(--ui-accent);
-      width: 14px;
-      height: 14px;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-
-    .font-radio-name {
-      flex: 1;
-      color: var(--ui-text);
-    }
-
     /* ── Font size slider ── */
     mux-ui-range-field.font-size { margin-top:var(--ui-space-2); }
 
@@ -592,69 +563,11 @@ export class MuxSettingsSurface extends LitElement {
       margin: 0;
     }
 
-    /* ── Bell radios ── */
-    .bell-radios {
-      display: flex;
-      flex-direction: column;
-      gap: var(--ui-space-1);
-    }
-
-    .bell-radio-label {
-      display: flex;
-      align-items: flex-start;
-      gap: var(--ui-space-4);
-      padding: var(--ui-space-3) var(--ui-space-5);
-      border-radius: var(--ui-radius-md);
-      cursor: pointer;
-      transition: background 0.1s;
-    }
-    .bell-radio-label:hover {
-      background: var(--ui-surface-hover);
-    }
-
-    .bell-radio-label input[type="radio"] {
-      accent-color: var(--ui-accent);
-      width: 14px;
-      height: 14px;
-      margin-top: var(--ui-space-1);
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-
-    .bell-radio-text {
-      display: flex;
-      flex-direction: column;
-      gap: var(--ui-space-1);
-    }
-
-    .bell-radio-name {
-      color: var(--ui-text);
-    }
-
-    .bell-radio-desc {
-      font-size: var(--ui-text-sm);
-      color: var(--ui-text-muted);
-    }
-
     /* ── AI section ── */
     .ai-status {
       margin: 0 0 var(--ui-space-5);
       color: var(--ui-text);
     }
-
-    .ai-input {
-      width: 100%;
-      box-sizing: border-box;
-      min-height: var(--ui-control-md);
-      padding: 0 var(--ui-space-5);
-      font-family: inherit;
-      font-size: var(--ui-text-md);
-      color: var(--ui-text);
-      background: var(--ui-surface-raised);
-      border: 1px solid var(--ui-border);
-      border-radius: var(--ui-radius-md);
-    }
-    .ai-input:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
 
     .ai-actions {
       display: flex;
@@ -716,6 +629,9 @@ export class MuxSettingsSurface extends LitElement {
       margin-top: var(--ui-space-6);
     }
 
+    mux-ui-switch.v-toggle { display:block; margin-bottom:var(--ui-space-7); }
+    mux-ui-radio-group.v-modes { margin-bottom:var(--ui-space-2); }
+
     .v-label {
       display: block;
       margin-bottom: var(--ui-space-2);
@@ -732,68 +648,11 @@ export class MuxSettingsSurface extends LitElement {
       color: var(--ui-text-muted);
     }
 
-    /* Mode chooser: stacked rows, each a whole tap target. No cards. */
-    .v-modes {
-      display: flex;
-      flex-direction: column;
-      gap: var(--ui-space-1);
-      margin-bottom: var(--ui-space-2);
-    }
-
-    .v-mode {
-      display: flex;
-      align-items: baseline;
-      gap: var(--ui-space-4);
-      padding: var(--ui-space-3) var(--ui-space-2);
-      font-size: var(--ui-text-md);
-      color: var(--ui-text);
-      background: none;
-      border: none;
-      border-radius: 0;
-      text-align: left;
-      cursor: pointer;
-      font-family: inherit;
-    }
-
-    /* Selection is a marker and weight, not a slab. */
-    .v-mode[aria-checked='true'] {
-      font-weight: 700;
-    }
-
-    .v-mode:focus-visible {
-      outline: 2px solid var(--ui-text);
-      outline-offset: -2px;
-    }
-
-    .v-mode-sub {
-      display: block;
-      margin-top: var(--ui-space-1);
-      font-size: var(--ui-text-sm);
-      font-weight: 400;
-      color: var(--ui-text-muted);
-    }
-
     .v-actions {
       display: flex;
       flex-wrap: wrap;
       gap: var(--ui-space-4);
       margin-top: var(--ui-space-6);
-    }
-
-    /* The enable toggle reads as a sentence, not a switch in a box. */
-    .v-toggle {
-      display: flex;
-      align-items: baseline;
-      gap: var(--ui-space-4);
-      margin: 0 0 var(--ui-space-7);
-      font-size: var(--ui-text-md);
-      color: var(--ui-text);
-      cursor: pointer;
-    }
-
-    .v-toggle input {
-      margin: 0;
-      flex: none;
     }
 
     .v-note {
@@ -1265,19 +1124,9 @@ export class MuxSettingsSurface extends LitElement {
     const size = cfg.font.size;
 
     return html`
-      <div class="font-radios">
-        ${FONT_FAMILIES.map(f => html`
-          <label class="font-radio-label">
-            <input
-              type="radio"
-              name="font-family"
-              .checked="${family === f.id}"
-              @change="${() => this._setFontFamily(f.id)}"
-            />
-            <span class="font-radio-name" style="font-family:'${f.id}',monospace">${f.label}</span>
-          </label>
-        `)}
-      </div>
+      <mux-ui-radio-group aria-label="Terminal font family" name="font-family" .value=${family}
+        .options=${FONT_FAMILIES.map(f => ({value:f.id,label:f.label,fontFamily:f.id}))}
+        @change=${(event: CustomEvent<{value:string}>) => this._setFontFamily(event.detail.value)}></mux-ui-radio-group>
       <mux-ui-range-field class="font-size" layout="inline" label="Size" accessible-label="Terminal font size"
         unit=" px" .min=${8} .max=${24} .value=${size}
         @input=${(event:Event) => this._setFontSize((event.target as MuxUIRangeField).value)}></mux-ui-range-field>
@@ -1434,44 +1283,13 @@ export class MuxSettingsSurface extends LitElement {
       <div class="divider"></div>
 
       <p class="section-title">Bell</p>
-      <div class="bell-radios">
-        <label class="bell-radio-label">
-          <input
-            type="radio"
-            name="bell"
-            .checked="${bell === 'visual'}"
-            @change="${() => this._setBell('visual')}"
-          />
-          <div class="bell-radio-text">
-            <span class="bell-radio-name">Visual</span>
-            <span class="bell-radio-desc">Flash the pane tab</span>
-          </div>
-        </label>
-        <label class="bell-radio-label">
-          <input
-            type="radio"
-            name="bell"
-            .checked="${bell === 'audible'}"
-            @change="${() => this._setBell('audible')}"
-          />
-          <div class="bell-radio-text">
-            <span class="bell-radio-name">Audible</span>
-            <span class="bell-radio-desc">Play the system bell sound</span>
-          </div>
-        </label>
-        <label class="bell-radio-label">
-          <input
-            type="radio"
-            name="bell"
-            .checked="${bell === 'off'}"
-            @change="${() => this._setBell('off')}"
-          />
-          <div class="bell-radio-text">
-            <span class="bell-radio-name">Off</span>
-            <span class="bell-radio-desc">Silence all bell events</span>
-          </div>
-        </label>
-      </div>
+      <mux-ui-radio-group aria-label="Bell" name="bell" .value=${bell}
+        .options=${[
+          {value:'visual',label:'Visual',description:'Flash the pane tab'},
+          {value:'audible',label:'Audible',description:'Play the system bell sound'},
+          {value:'off',label:'Off',description:'Silence all bell events'},
+        ]}
+        @change=${(event: CustomEvent<{value:string}>) => this._setBell(event.detail.value as ResolvedConfig['terminal']['bell'])}></mux-ui-radio-group>
     `;
   }
 
@@ -1696,26 +1514,6 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
-  private _vModeButton(mode: VoiceMode, label: string, sub: string) {
-    const selected = this._vMode === mode;
-    return html`
-      <button
-        class="v-mode"
-        role="radio"
-        aria-checked="${selected ? 'true' : 'false'}"
-        @click="${() => this._setVoiceMode(mode)}"
-      >
-        <span class="v-mark ${selected ? 'ok' : 'none'}" aria-hidden="true"
-          >${selected ? '●' : '○'}</span
-        >
-        <span>
-          ${label}
-          <span class="v-mode-sub">${sub}</span>
-        </span>
-      </button>
-    `;
-  }
-
   private _renderVoice() {
     const st = this._voice;
     const isEntra = this._vMode === 'azure_entra';
@@ -1753,21 +1551,17 @@ export class MuxSettingsSurface extends LitElement {
         ? this._vLine('bad', 'Voice starts with muxterm, so restart it for the saved change to take effect.')
         : ''}
 
-      <label class="v-toggle">
-        <input
-          type="checkbox"
-          .checked="${this._vEnabled}"
-          @change="${(e: Event) => { this._vEnabled = (e.target as HTMLInputElement).checked; }}"
-        />
-        <span>Enable voice</span>
-      </label>
+      <mux-ui-switch class="v-toggle" layout="row" label="Enable voice" .checked=${this._vEnabled}
+        @change=${(event: CustomEvent<{checked:boolean}>) => { this._vEnabled = event.detail.checked; }}></mux-ui-switch>
 
       <p class="v-label">How voice signs in</p>
-      <div class="v-modes" role="radiogroup" aria-label="How voice signs in">
-        ${this._vModeButton('azure_entra', 'Azure OpenAI — Entra sign-in', 'Uses your signed-in identity. No key to store.')}
-        ${this._vModeButton('azure_key', 'Azure OpenAI — access key', 'A key from your Azure OpenAI resource.')}
-        ${this._vModeButton('openai_key', 'OpenAI — API key', 'A key from platform.openai.com.')}
-      </div>
+      <mux-ui-radio-group class="v-modes" aria-label="How voice signs in" name="voice-mode" .value=${this._vMode}
+        .options=${[
+          {value:'azure_entra',label:'Azure OpenAI — Entra sign-in',description:'Uses your signed-in identity. No key to store.'},
+          {value:'azure_key',label:'Azure OpenAI — access key',description:'A key from your Azure OpenAI resource.'},
+          {value:'openai_key',label:'OpenAI — API key',description:'A key from platform.openai.com.'},
+        ]}
+        @change=${(event: CustomEvent<{value:string}>) => this._setVoiceMode(event.detail.value as VoiceMode)}></mux-ui-radio-group>
 
       ${isOpenAI
         ? html`
@@ -1803,16 +1597,9 @@ export class MuxSettingsSurface extends LitElement {
       ${isEntra
         ? html`
             <div class="v-field">
-              <label class="v-label" for="v-scope">Entra scope</label>
-              <select
-                id="v-scope"
-                class="ai-input"
-                @change="${(e: Event) => { this._vScope = (e.target as HTMLSelectElement).value; }}"
-              >
-                ${(st.allowedScopes.length ? st.allowedScopes : [this._vScope]).map(
-                  (s) => html`<option value="${s}" ?selected="${s === this._vScope}">${s}</option>`,
-                )}
-              </select>
+              <mux-ui-select label="Entra scope" .value=${this._vScope}
+                .options=${(st.allowedScopes.length ? st.allowedScopes : [this._vScope]).map(s => ({value:s,label:s}))}
+                @change=${(event: Event) => { this._vScope = (event.target as MuxUISelect).value; }}></mux-ui-select>
               <p class="v-hint">
                 The token audience. AI Foundry resources take the first; Cognitive
                 Services resources take the second.

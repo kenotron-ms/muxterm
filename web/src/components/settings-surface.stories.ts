@@ -134,7 +134,9 @@ const meta = {
 export default meta;
 type Story = StoryObj<SettingsArgs>;
 export const Appearance: Story = {};
+export const PhoneAppearance: Story = { globals:{viewport:{value:'phone390',isRotated:false}} };
 export const Notifications: Story = { args: { section:'notifications' } };
+export const PhoneNotifications: Story = { args:{section:'notifications'}, globals:{viewport:{value:'phone390',isRotated:false}} };
 export const AIOff: Story = { args: { section:'ai' } };
 export const AIConfigured: Story = {
   args: { section:'ai', aiStatus:{ enabled:true, source:'settings', keyHint:'demo' } },
@@ -146,6 +148,10 @@ export const VoiceOpenAIKey: Story = {
 export const VoiceAzureEntra: Story = {
   args: { section:'voice' },
   parameters: { apiFixture:fixtureForVoice(azureEntra) },
+};
+export const PhoneVoiceAzureEntra: Story = {
+  args:{section:'voice'}, globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:fixtureForVoice(azureEntra)},
 };
 export const VoiceAzureKeyMissing: Story = {
   args: { section:'voice' },
