@@ -12,6 +12,7 @@ import type { MuxUIMenu } from '../ui/menu.js';
 import '../ui/text-field.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
+import '../ui/folder-browser.js';
 import '../ui/menu.js';
 import codexMark from '../assets/harness/codex.svg?url';
 import claudeMark from '../assets/harness/claude.svg?url';
@@ -69,8 +70,8 @@ export class MuxChatWorkspace extends LitElement {
     const menu = this.renderRoot.querySelector('mux-ui-menu');
     const trigger = this.menuFor === 'project' ? this.renderRoot.querySelector('.row .action.more') : this.renderRoot.querySelector(`.chat-row .action.more[data-chat-id="${CSS.escape(this.menuFor)}"]`);
     if (this.menuFor && ![menu, trigger].some(el => el !== null && path.includes(el))) this.closeMenu();
-    const browser = this.renderRoot.querySelector('.browser');
-    const browseButtons = this.renderRoot.querySelectorAll('[aria-label="Browse primary folders"], [aria-label="Browse source folders"]');
+    const browser = this.renderRoot.querySelector('mux-ui-folder-browser');
+    const browseButtons = this.renderRoot.querySelectorAll('mux-ui-button[accessible-label="Browse primary folders"], mux-ui-button[accessible-label="Browse source folders"]');
     if (this.editListing && !(browser && path.includes(browser)) && ![...browseButtons].some(el => path.includes(el))) {
       this.editListing = undefined;
     }
@@ -159,11 +160,6 @@ export class MuxChatWorkspace extends LitElement {
     .confirmation h2 { margin:0; font-size:var(--ui-text-xl); }
     .confirmation p { margin:var(--ui-space-4) 0 var(--ui-space-7); color:var(--ui-text-muted); }
     .confirmation-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); }
-    .browser { display:grid; max-height:200px; overflow:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); padding:var(--ui-space-2); }
-    .browser button { padding:var(--ui-space-2) var(--ui-space-4); border-radius:var(--ui-radius-sm); text-align:left; }
-    .browser button:hover { background:var(--ui-surface-hover); }
-    .browser-head { display:flex; align-items:center; gap:var(--ui-space-2); }
-    .browser-head span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .error { color:var(--ui-danger); padding:var(--ui-space-2); }
     @media(max-width:700px) { .editor { max-height:calc(100dvh - env(safe-area-inset-top) - var(--ui-space-8)); padding:var(--ui-space-5) var(--ui-space-5) calc(var(--ui-space-5) + env(safe-area-inset-bottom)); } }
   `;
@@ -335,7 +331,7 @@ export class MuxChatWorkspace extends LitElement {
         <span class="field-label">Additional source folders</span>
         ${this.editFolders.map((folder,index) => html`<div class="source"><mux-ui-text-field aria-label=${`Source folder ${index+1}`} .value=${folder} @input=${(e:Event) => { const next=[...this.editFolders]; next[index]=(e.target as MuxUITextField).value; this.editFolders=next; }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label=${`Remove source folder ${index+1}`} @click=${() => { this.editFolders=this.editFolders.filter((_,i)=>i!==index); }}>${icon(X,{size:14})}</mux-ui-button></div>`)}
         <div class="source"><mux-ui-text-field aria-label="Add source folder path" placeholder="/absolute/path/to/source" .value=${this.newSource} @input=${(e:Event) => { this.newSource=(e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') this.addSource(); }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Browse source folders" tooltip="Browse folders" @click=${() => void this.browseFolder('source',this.newSource || this.editPath)}>${icon(Folder,{size:15})}</mux-ui-button><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Add source folder" tooltip="Add source folder" @click=${() => this.addSource()}>${icon(FolderPlus,{size:15})}</mux-ui-button></div>
-        ${this.editListing ? html`<div class="browser" aria-label="Folder browser"><div class="browser-head"><button aria-label="Parent folder" @click=${() => void this.browseFolder(this.browseTarget,this.editListing!.parent)}>↑</button><span title=${this.editListing.path}>${this.editListing.path}</span><button @click=${() => this.selectFolder()}>Choose</button></div>${this.editListing.folders.map(folder => html`<button @click=${() => void this.browseFolder(this.browseTarget,`${this.editListing!.path.replace(/\/$/,'')}/${folder}`)}>▸ ${folder}</button>`)}</div>` : nothing}
+        ${this.editListing ? html`<mux-ui-folder-browser aria-label="Folder browser" .listing=${this.editListing} choose-label="Choose" @folder-navigate=${(event:CustomEvent<{path:string}>) => void this.browseFolder(this.browseTarget,event.detail.path)} @folder-choose=${() => this.selectFolder()}></mux-ui-folder-browser>` : nothing}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
         <div class="editor-actions"><mux-ui-button size="small" variant="quiet" @click=${() => { this.editing=false; this.error=''; }}>Cancel</mux-ui-button><mux-ui-button size="small" variant="primary" ?disabled=${!this.editName.trim() || !this.editPath.trim()} @click=${() => void this.saveProject()}>Save project</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}

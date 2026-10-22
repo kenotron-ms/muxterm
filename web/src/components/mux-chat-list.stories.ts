@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import { chatListFixture, resetChatListFixture } from '../stories/chat-list-fixture.js';
 import type { MuxChatList, MuxChatWorkspace } from './mux-chat-list.js';
+import type { MuxUIDialog } from '../ui/dialog.js';
 import './mux-chat-list.js';
 
 function view(selectedSession = 'chat-editor', phone = false, empty = false, linkedLane = false) {
@@ -64,6 +65,22 @@ const openProjectEditor = async ({canvasElement}: {canvasElement: HTMLElement}) 
 };
 export const EditProject: Story = { play:openProjectEditor };
 export const PhoneEditProject: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true), play:openProjectEditor };
+const openProjectFolderBrowser = async (context: {canvasElement:HTMLElement}) => {
+  await openProjectEditor(context);
+  const list = context.canvasElement.querySelector<MuxChatList>('mux-chat-list');
+  const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
+  await project?.updateComplete;
+  await project?.shadowRoot?.querySelector<MuxUIDialog>('mux-ui-dialog')?.updateComplete;
+  project?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Browse primary folders"]')?.click();
+  for (let attempt=0; attempt<20; attempt++) {
+    await project?.updateComplete;
+    if (project?.shadowRoot?.querySelector('mux-ui-folder-browser')) return;
+    await new Promise(resolve => setTimeout(resolve,50));
+  }
+  throw new Error('The project folder browser did not open');
+};
+export const EditProjectFolderBrowser: Story = { play:openProjectFolderBrowser };
+export const PhoneEditProjectFolderBrowser: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openProjectFolderBrowser };
 const openProjectRemoval = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
   await list?.updateComplete;

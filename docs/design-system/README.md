@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Menu, Listbox, Listbox Option, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Text Field, Text Area, Select,
+3. Use the shared Button, Action Menu, Listbox, Listbox Option, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -166,6 +166,12 @@ without sending it. Both controls reference active options with
 and [combobox pattern](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/).
 Chromium checked desktop and phone Storybook states and both controls in
 isolated dev-local; command execution was not part of this pass.
+
+New Chat's location editor and the project editor use one Folder Browser for
+parent navigation, subfolders, and choosing a path. The optional new-folder
+field only proposes a path; it does not create a directory. Navigation in New
+Chat leaves the chosen path unchanged until the user selects a folder. Storybook
+contains populated, empty, project-editor, phone, and light-theme states.
 
 The Utility panel uses semantic tokens for chrome and document colors, plus
 shared compact Text Field and Select controls in the file rail. Storybook's

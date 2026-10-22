@@ -39,7 +39,7 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "nativeControls": 27
+    "nativeControls": 24
   },
   "components/mux-chat-remote-image.ts": {
     "legacyTokens": 0,
@@ -80,8 +80,8 @@
   "components/mux-new-chat.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 62,
-    "nativeControls": 8
+    "literalScale": 56,
+    "nativeControls": 5
   },
   "components/mux-operator-status.ts": {
     "legacyTokens": 0,

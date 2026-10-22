@@ -11,6 +11,7 @@ import '../ui/choice-picker.js';
 import '../ui/choice-section.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
+import '../ui/folder-browser.js';
 import { listboxIndexForKey } from '../ui/listbox.js';
 import '../ui/listbox-option.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
@@ -48,7 +49,6 @@ export class MuxNewChat extends LitElement {
   @state() private folder = '';
   @state() private workMode: 'local' | 'worktree' = 'local';
   @state() private projectName = '';
-  @state() private newFolderName = '';
   @state() private harness: SDKHarnessName = 'codex';
   @state() private provider = 'openai';
   @state() private bundle = '';
@@ -130,14 +130,7 @@ export class MuxNewChat extends LitElement {
     .folder-line { display:flex; align-items:center; gap:var(--ui-space-3); }
     .folder-line mux-ui-text-field { flex:1; min-width:0; }
     button { cursor:pointer; font:inherit; }
-    .picker { max-height:240px; overflow:auto; border:1px solid var(--ui-border); border-radius:9px; margin:0 0 14px; background:var(--ui-surface-raised); }
-    .picker-head { display:flex; align-items:center; gap:8px; padding:8px; border-bottom:1px solid var(--ui-border); }
-    .picker-head span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .picker button { border:0; color:inherit; background:transparent; padding:6px 10px; border-radius:5px; }
-    .picker button:hover { background:var(--ui-surface-hover); }
-    .picker-create { display:flex; align-items:center; gap:var(--ui-space-3); padding:var(--ui-space-4); border-bottom:1px solid var(--ui-border); }
-    .picker-create mux-ui-text-field { flex:1; }
-    .folder-entry { display:block; width:100%; text-align:left; }
+    mux-ui-folder-browser { margin-bottom:var(--ui-space-4); }
     .composer { position:relative; display:flex; flex-direction:column; gap:9px; border:1px solid var(--ui-border); border-radius:18px; background:var(--ui-surface-raised); padding:15px 14px 10px; transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
     .textarea-sizing { position:relative; width:100%; min-width:0; min-height:56px; max-height:220px; font:16px/1.55 system-ui,sans-serif; }
@@ -247,7 +240,7 @@ export class MuxNewChat extends LitElement {
     return value;
   }
   private async browse(path = this.folder) {
-    try { this.listing = await sdkChats.folders(path); if (this.listing.path === path) { this.folder = this.listing.path; this.onFolderChanged(); } this.pickerOpen = true; this.error = ''; }
+    try { this.listing = await sdkChats.folders(path); this.pickerOpen = true; this.error = ''; }
     catch (error) { this.error = String(error); }
   }
   private onFolderChanged() {
@@ -516,7 +509,7 @@ export class MuxNewChat extends LitElement {
             <div class="location-head"><h2>Chat location</h2><mux-ui-button icon-only variant="quiet" size="small" accessible-label="Close chat location" @click=${() => { this.locationOpen = false; this.pickerOpen = false; }}>${icon(X,{size:17})}</mux-ui-button></div>
             <div class="folder"><span>${this.projectId === 'ungrouped' ? 'Folder' : 'Primary folder'}</span><div class="folder-line"><mux-ui-text-field aria-label="Primary folder" .value=${this.folder} ?readonly=${this.projectId !== 'ungrouped' && this.projectId !== 'new'} @input=${(e:Event) => { this.folder = (e.target as MuxUITextField).value; this.onFolderChanged(); }}></mux-ui-text-field>${this.projectId === 'ungrouped' || this.projectId === 'new' ? html`<mux-ui-button size="small" accessible-label="Browse server folders" @click=${() => void this.browse()}>Browse</mux-ui-button>` : nothing}</div></div>
             ${this.projectId === 'new' ? html`<mux-ui-text-field label="Project name" aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
-            ${this.pickerOpen && this.listing ? html`<div class="picker" aria-label="Server folder picker"><div class="picker-head"><button aria-label="Parent folder" @click=${() => void this.browse(this.listing!.parent)}>↑</button><span>${this.listing.path}</span><button @click=${() => { this.pickerOpen = false; }}>Choose this folder</button></div><div class="picker-create"><mux-ui-text-field aria-label="New folder name" placeholder="New folder name" .value=${this.newFolderName} @input=${(e:Event) => { this.newFolderName = (e.target as MuxUITextField).value; }}></mux-ui-text-field><mux-ui-button size="small" @click=${() => { if (!this.newFolderName.trim() || this.newFolderName.includes('/')) return; this.folder = `${this.listing!.path.replace(/\/$/,'')}/${this.newFolderName.trim()}`; this.onFolderChanged(); this.pickerOpen = false; }}>Use new folder</mux-ui-button></div>${this.listing.folders.map(name => html`<button class="folder-entry" @click=${() => void this.browse(`${this.listing!.path.replace(/\/$/,'')}/${name}`)}>▸ ${name}</button>`)}</div>` : nothing}
+            ${this.pickerOpen && this.listing ? html`<mux-ui-folder-browser aria-label="Server folder picker" .listing=${this.listing} allow-new-folder @folder-navigate=${(event:CustomEvent<{path:string}>) => void this.browse(event.detail.path)} @folder-choose=${(event:CustomEvent<{path:string}>) => { this.folder = event.detail.path; this.onFolderChanged(); this.pickerOpen = false; }} @folder-use-new=${(event:CustomEvent<{path:string}>) => { this.folder = event.detail.path; this.onFolderChanged(); this.pickerOpen = false; }}></mux-ui-folder-browser>` : nothing}
             <p class="location-note">${this.workMode === 'worktree' ? 'A separate Git worktree will be created from this project’s primary folder.' : this.projectId === 'ungrouped' ? 'This chat will use the chosen folder.' : 'This chat will use the project’s primary folder.'}${selectedProject?.sourceFolders?.length ? ` ${selectedProject.sourceFolders.length} additional source ${selectedProject.sourceFolders.length === 1 ? 'folder is' : 'folders are'} available at their existing paths.` : ''}</p>
             <div class="location-actions"><mux-ui-button variant="primary" @click=${() => { this.locationOpen = false; this.pickerOpen = false; }}>Done</mux-ui-button></div>
           </div>

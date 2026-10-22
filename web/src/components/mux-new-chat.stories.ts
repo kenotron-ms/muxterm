@@ -4,6 +4,7 @@ import { fixtureJSON, type ApiFixture } from '../stories/api-fixture.js';
 import { sdkChats, type SDKHarnessName } from '../lib/sdk-chats.js';
 import './mux-new-chat.js';
 import type { MuxNewChat } from './mux-new-chat.js';
+import type { MuxUIDialog } from '../ui/dialog.js';
 
 const projects = [
   { id:'atlas', name:'Atlas', path:'/home/demo/atlas', sourceFolders:['/home/demo/notes'] },
@@ -115,6 +116,23 @@ export const PhoneNewProject: Story = {
   globals: { viewport:{ value:'phone390', isRotated:false } },
   play: NewProject.play,
 };
+const openFolderBrowser = async (context: {canvasElement:HTMLElement}) => {
+  await NewProject.play?.(context as Parameters<NonNullable<typeof NewProject.play>>[0]);
+  const screen = context.canvasElement.querySelector<MuxNewChat>('mux-new-chat');
+  await screen?.updateComplete;
+  screen?.shadowRoot?.querySelector<HTMLElement>('.location-trigger')?.click();
+  await screen?.updateComplete;
+  await screen?.shadowRoot?.querySelector<MuxUIDialog>('mux-ui-dialog')?.updateComplete;
+  screen?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Browse server folders"]')?.click();
+  for (let attempt=0; attempt<20; attempt++) {
+    await screen?.updateComplete;
+    if (screen?.shadowRoot?.querySelector('mux-ui-folder-browser')) return;
+    await new Promise(resolve => setTimeout(resolve,50));
+  }
+  throw new Error('The New Chat folder browser did not open');
+};
+export const NewProjectFolderBrowser: Story = { play:openFolderBrowser };
+export const PhoneNewProjectFolderBrowser: Story = { globals:{viewport:{value:'phone390',isRotated:false}},play:openFolderBrowser };
 export const SetupRequired: Story = {
   parameters: {
     apiFixture: ((request: Parameters<ApiFixture>[0]) => request.method === 'GET' && request.url.pathname.endsWith('/api/sdk-chat-start-options')
