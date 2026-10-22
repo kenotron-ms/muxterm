@@ -23,6 +23,7 @@ import '../ui/breadcrumb.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
 import '../ui/status-badge.js';
+import type { StatusTone } from '../ui/status-badge.js';
 import { visuallyHidden } from '../ui/visually-hidden.js';
 import { listboxIndexForKey } from '../ui/listbox.js';
 import '../ui/listbox-option.js';
@@ -310,13 +311,8 @@ export class MuxSDKChat extends LitElement {
     .lane-report-table.expanded .lane-report-chevron { transform:rotate(90deg); }
     .lane-report-primary { display:block; min-width:0; flex:1; }
     .lane-report-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ui-content-font-size); font-weight:600; }
-    .lane-report-meta { display:flex; align-items:center; gap:var(--ui-space-4); margin-top:var(--ui-space-1); white-space:nowrap; }
-    .lane-report-harness { color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
-    .lane-report-state { display:inline-flex; align-items:center; gap:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
-    .lane-report-state::before { content:''; width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); flex:none; border-radius:50%; background:currentColor; }
-    .lane-report-state.working,.lane-report-state.starting { color:var(--ui-accent); }
-    .lane-report-state.ready { color:var(--ui-success); }
-    .lane-report-state.failed,.lane-report-state.uncertain,.lane-report-state.stopped { color:var(--ui-danger); }
+    .lane-report-meta { display:flex; align-items:center; gap:var(--ui-space-4); margin-top:var(--ui-space-1); white-space:nowrap; font-size:var(--ui-content-font-size); }
+    .lane-report-harness { color:var(--ui-text-muted); }
     .lane-report-preview { min-width:0; padding:var(--ui-space-5) var(--ui-space-5); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
     .lane-report-open-cell { display:grid; place-items:center; padding:var(--ui-space-3) var(--ui-space-5) var(--ui-space-3) var(--ui-space-2); }
     .lane-report-open { color:var(--ui-text-muted); }
@@ -2303,6 +2299,7 @@ export class MuxSDKChat extends LitElement {
   private laneCard(block: Block) {
     const name = sdkChats.chats.find(chat => chat.id === block.id)?.title || block.name || 'Linked lane';
     const state = block.laneState === 'failed' ? 'Failed' : block.laneState === 'uncertain' ? 'Uncertain' : block.laneState === 'stopped' ? 'Stopped' : block.laneState === 'starting' ? 'Starting' : block.laneState === 'ready' ? 'Ready' : 'Working';
+    const tone: StatusTone = block.laneState === 'ready' ? 'success' : ['failed','uncertain','stopped'].includes(block.laneState || '') ? 'danger' : ['starting','working'].includes(block.laneState || '') ? 'info' : 'neutral';
     const harness = block.harness ? sdkHarnessLabel(block.harness as SDKHarnessName) || block.harness : 'Linked chat';
     const expanded = this.laneReportsExpanded.has(block.key);
     const detailId = `lane-report-${block.key}`;
@@ -2310,7 +2307,7 @@ export class MuxSDKChat extends LitElement {
       .replace(/!?\[([^\]]+)\]\([^)]+\)/g, '$1')
       .replace(/^#{1,6}\s*|^(?:[-*+]|\d+\.)\s+/g, '')
       .replace(/[*_`]/g, '') || 'Lane update';
-    return html`<article class="lane-report-table ${expanded ? 'expanded' : ''}" aria-label=${`Report from lane ${name}`}><div class="lane-report-row"><mux-ui-button class="lane-report-toggle" variant="quiet" full-width expandable .expanded=${expanded} .controls=${detailId} accessible-label=${`${expanded ? 'Collapse' : 'Expand'} report from ${name}`} @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}><span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${harness}</span><span class="lane-report-state ${block.laneState || ''}">${state}</span></span></span></mux-ui-button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<mux-ui-button class="lane-report-open" variant="quiet" size="small" icon-only accessible-label=${`Open lane chat: ${name}`} tooltip="Open lane chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${laneIcon(17)}</mux-ui-button>` : nothing}</div></div>${expanded ? html`<div class="lane-report-detail" id=${detailId}>${this.markdown(block, block.key)}</div>` : nothing}</article>`;
+    return html`<article class="lane-report-table ${expanded ? 'expanded' : ''}" aria-label=${`Report from lane ${name}`}><div class="lane-report-row"><mux-ui-button class="lane-report-toggle" variant="quiet" full-width expandable .expanded=${expanded} .controls=${detailId} accessible-label=${`${expanded ? 'Collapse' : 'Expand'} report from ${name}, ${state}`} @click=${() => { if (expanded) this.laneReportsExpanded.delete(block.key); else this.laneReportsExpanded.add(block.key); this.requestUpdate(); }}><span class="lane-report-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-report-primary" title=${name}><span class="lane-report-title">${name}</span><span class="lane-report-meta"><span class="lane-report-harness">${harness}</span><mux-ui-status-badge appearance="plain" tone=${tone} dot>${state}</mux-ui-status-badge></span></span></mux-ui-button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<mux-ui-button class="lane-report-open" variant="quiet" size="small" icon-only accessible-label=${`Open lane chat: ${name}`} tooltip="Open lane chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${laneIcon(17)}</mux-ui-button>` : nothing}</div></div>${expanded ? html`<div class="lane-report-detail" id=${detailId}>${this.markdown(block, block.key)}</div>` : nothing}</article>`;
   }
   private chatMessageCard(block: Block) {
     const relation = block.relation || 'chat-to-chat';

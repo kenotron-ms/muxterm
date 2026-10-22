@@ -262,9 +262,13 @@ Delegated work now uses Action Tile with a visible Status Badge and an
 accessible status name. Agent ancestry uses Breadcrumb, so each ancestor is
 keyboard navigable. Linked lane reports and cross-chat messages use shared
 Buttons for disclosure and source navigation; the Button carries expanded
-and controlled-panel semantics. Storybook includes delegated, open-delegated,
-linked-report and phone states. Chromium checked expansion, return navigation,
-and 44 px source actions in a touch-enabled phone viewport.
+and controlled-panel semantics. Linked lane reports now use Status Badge's
+plain inline appearance for their dot and state text, so a dense report row
+shares the same tone mapping without adding a pill. The disclosure's accessible
+name includes that state. Storybook catalogs plain badges in dark, light and
+phone palettes, plus ready and failed linked reports. Chromium checked
+expansion, return navigation, and 44 px source actions in a touch-enabled phone
+viewport.
 These stories use synthetic read-only goal data and do not exercise live goal
 control. The auto-sizing composer and hidden file input keep native editor
 semantics, as recorded in the inventory.

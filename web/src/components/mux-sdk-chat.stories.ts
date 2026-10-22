@@ -52,6 +52,10 @@ const linkedReports: ChatEvent[] = [
   {at:at(4),type:'assistant.delta',text:'Both linked items can be expanded or opened from the source action.'},
   {at:at(5),type:'turn.completed',inputIds:['report-1']},
 ];
+const failedLinkedReports: ChatEvent[] = [
+  {at:at(1),type:'operator.lane.report',childSessionId:'linked-lane-1',text:'**Catalog review stopped.** The component scan did not finish.',origin:{type:'operator-lane',chatId:'linked-lane-1',name:'Design review lane',harness:'codex',status:'failed'}},
+  ...linkedReports.slice(1),
+];
 
 const settings = {
   model:'gpt-6-sol', effort:'medium', permission:'full-permission', mode:'agent',
@@ -62,7 +66,7 @@ const settings = {
   ],
 };
 
-function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal' = 'none', scenario:'default'|'delegated'|'reports' = 'default'): ApiFixture {
+function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal' = 'none', scenario:'default'|'delegated'|'reports'|'failed-report' = 'default'): ApiFixture {
   let historyRequests = 0;
   const chat: SDKChat = {
     id, title:'Component library review', workspaceId:'project-1',
@@ -89,7 +93,7 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     ],
     observations:goalState === 'none' ? [] : [{at:at(4),event:{type:'goal.started',goalState:'active',goalSummary:'The native harness acknowledged revision 1.'}}],
   };
-  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : state === 'working' ? running : transcript;
+  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : state === 'working' ? running : transcript;
   const messages = events.filter(event => event.type !== 'tool.started' && event.type !== 'tool.completed');
   return ({url,method,init}) => {
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON(goalState === 'proposal' ? [chat,operator] : [chat]);
@@ -245,6 +249,10 @@ export const PhoneLinkedReports: Story = {
   args:{sessionId:'storybook-chat-phone-linked-reports'},
   globals:{viewport:{value:'phone390',isRotated:false}},
   parameters:{apiFixture:chatFixture('storybook-chat-phone-linked-reports','ready','none','reports')},
+};
+export const FailedLinkedReport: Story = {
+  args:{sessionId:'storybook-chat-failed-linked-report'},
+  parameters:{apiFixture:chatFixture('storybook-chat-failed-linked-report','ready','none','failed-report')},
 };
 const showRunningTurn = async ({canvasElement}: {canvasElement:HTMLElement}) => {
   await sdkChats.refresh();

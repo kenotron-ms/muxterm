@@ -2,12 +2,14 @@ import { LitElement, css, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 
 export type StatusTone = 'neutral' | 'success' | 'warning' | 'info' | 'danger';
+export type StatusBadgeAppearance = 'pill' | 'plain';
 
 /** Short, textual state label. The optional dot adds a visual cue but never
  * replaces the text that names the state. */
 @customElement('mux-ui-status-badge')
 export class MuxUIStatusBadge extends LitElement {
   @property({ reflect: true }) tone: StatusTone = 'neutral';
+  @property({ reflect: true }) appearance: StatusBadgeAppearance = 'pill';
   @property({ type: Boolean, reflect: true }) dot = false;
 
   static override styles = css`
@@ -31,6 +33,14 @@ export class MuxUIStatusBadge extends LitElement {
     :host([tone='warning']) { --badge-tone: var(--ui-warning); }
     :host([tone='info']) { --badge-tone: var(--ui-accent); }
     :host([tone='danger']) { --badge-tone: var(--ui-danger); }
+    :host([appearance='plain']) {
+      min-height: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--badge-tone);
+      font: inherit;
+    }
     .dot { display: none; flex: none; width: var(--ui-status-dot-size); height: var(--ui-status-dot-size); border-radius: 50%; background: var(--badge-tone); }
     :host([dot]) .dot { display: block; }
   `;
