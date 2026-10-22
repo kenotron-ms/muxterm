@@ -4,8 +4,11 @@ import { apiPath } from '../lib/base-path.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import '../ui/choice-item.js';
+import '../ui/choice-list.js';
 import '../ui/choice-picker.js';
 import '../ui/choice-section.js';
+import '../ui/feedback.js';
+import '../ui/button.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import '../ui/range-field.js';
 import '../ui/switch.js';
@@ -36,10 +39,7 @@ export class MuxSDKChatSettings extends LitElement {
     .picker { min-width:0; }
     .model-picker { margin-left:auto; }
     .group { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
-    .model-list { max-height:190px; overflow-y:auto; }
-    .notice { padding:var(--ui-space-4) var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    .error { color:var(--ui-danger-text); padding:var(--ui-space-4) var(--ui-space-5); overflow-wrap:anywhere; }
-    .busy { opacity:.55; }
+    .load-feedback { flex:1; }
   `;
   override updated(changed: Map<string, unknown>) {
     if (changed.has('sessionId') && this.sessionId) { this.settings = undefined; this.error = ''; void this.load(this.sessionId); }
@@ -47,7 +47,7 @@ export class MuxSDKChatSettings extends LitElement {
   private pending(value: boolean) { this.dispatchEvent(new CustomEvent('settings-pending', { detail:value, bubbles:true, composed:true })); }
   private async load(sessionId: string) {
     const version = ++this.requestVersion;
-    this.loading = true;
+    this.loading = true; this.error = '';
     try {
       const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/settings`));
       if (!response.ok) throw new Error(await response.text());
@@ -92,7 +92,7 @@ export class MuxSDKChatSettings extends LitElement {
           ${options.map(option => this.choice(modeLabel(option.name), option.description || '', active === option.name, true, () => void this.select({ mode:option.name })))}
         </mux-ui-choice-section>
         ${this.operatorControl()}
-        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+        ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
       </mux-ui-choice-picker>`;
   }
   private choice(name: string, hint: string, selected: boolean, available: boolean, action: () => void) {
@@ -100,7 +100,7 @@ export class MuxSDKChatSettings extends LitElement {
   }
   override render() {
     const s = this.settings;
-    if (!s) return html`<span class="notice ${this.error ? 'error' : ''}" role=${this.error ? 'alert' : 'status'}>${this.error || 'Loading controls…'}</span>`;
+    if (!s) return html`<mux-ui-feedback class="load-feedback" kind=${this.error ? 'error' : 'loading'} density="compact">${this.error || 'Loading controls…'}${this.error ? html`<mux-ui-button slot="action" size="small" @click=${() => void this.load(this.sessionId)}>Retry</mux-ui-button>` : nothing}</mux-ui-feedback>`;
     const model = s.models.find(item => item.id === s.model);
     const models = model ? s.models : s.model ? [{ id:s.model, label:s.model, efforts:[] }, ...s.models] : s.models;
     const efforts = model?.efforts || [];
@@ -118,7 +118,7 @@ export class MuxSDKChatSettings extends LitElement {
           ${this.choice('Plan', 'Explore and prepare a plan', mode === 'plan', s.modes.includes('plan') && (this.harness !== 'claude' || permission === 'read-only'), () => void this.select({ mode:'plan' }))}
         </mux-ui-choice-section>
         ${this.operatorControl()}
-        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+        ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
       </mux-ui-choice-picker>`}
       <mux-ui-choice-picker class="picker model-picker" label="Provider, model and thinking" .summary=${model?.label || s.model || this.harness} placement="above" appearance="plain" panel-align="right">
         ${this.harness === 'amplifier' ? html`
@@ -126,10 +126,10 @@ export class MuxSDKChatSettings extends LitElement {
           <mux-ui-choice-section heading="Provider" separated>${(s.providers || []).map(value => this.choice(providerLabel(value), '', s.provider === value, true, () => void this.select({ provider:value })))}</mux-ui-choice-section>
         ` : html`<mux-ui-choice-section heading="Provider" .description=${`${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${this.harness}`}></mux-ui-choice-section>`}
         <mux-ui-choice-section heading="Model" separated>
-          <div class="model-list">${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<div class="notice">No models advertised by this harness.</div>`}</div>
+          <mux-ui-choice-list>${models.length ? models.map(item => this.choice(item.label, item.id, s.model === item.id, true, () => void this.select({ model:item.id, effort:item.defaultEffort || '' }))) : html`<mux-ui-feedback kind="empty" density="compact">No models advertised by this harness.</mux-ui-feedback>`}</mux-ui-choice-list>
         </mux-ui-choice-section>
         ${efforts.length > 1 ? html`<mux-ui-choice-section separated><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} ?disabled=${this.loading || this.turnBusy} @change=${(event:Event) => void this.select({ effort:efforts[(event.target as MuxUIRangeField).value] })}></mux-ui-range-field></mux-ui-choice-section>` : nothing}
-        ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+        ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
       </mux-ui-choice-picker>`;
   }
 }

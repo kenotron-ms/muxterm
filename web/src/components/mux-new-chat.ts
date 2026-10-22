@@ -7,6 +7,7 @@ import { ArrowUp, Folder, Paperclip, Plus, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import '../ui/button.js';
 import '../ui/choice-item.js';
+import '../ui/choice-list.js';
 import '../ui/choice-picker.js';
 import '../ui/choice-section.js';
 import '../ui/dialog.js';
@@ -113,9 +114,7 @@ export class MuxNewChat extends LitElement {
     .controls label { display:block; }
     .controls .project { min-width:0; }
     .controls .harness { min-width:0; }
-    .chat-picker .model-list { max-height:var(--ui-choice-list-max-height); overflow-y:auto; }
     .chat-picker .custom-model { width:calc(100% - var(--ui-space-8)); margin:var(--ui-space-3) var(--ui-space-5); }
-    .catalog-status { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .controls mux-ui-switch { margin-left:auto; }
     .composer-actions { display:flex; align-items:center; gap:var(--ui-space-3); padding-top:var(--ui-space-4); border-top:1px solid var(--ui-border); }
     .composer-actions .send { margin-left:auto; }
@@ -334,7 +333,7 @@ export class MuxNewChat extends LitElement {
     return html`<mux-ui-choice-picker class="chat-picker bundle-picker" label="Bundle" .summary=${this.bundle || 'Bundle'} placement="below" panel-align="left">
       <mux-ui-choice-section heading="Bundle">
         ${(this.catalog?.bundles || []).map(value => this.pickerChoice(value, '', this.bundle === value, () => { this.bundle = value; this.provider = 'configured'; void this.loadCatalog(); }))}
-        ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
+        ${this.catalogLoading ? html`<mux-ui-feedback kind="loading" density="compact">Loading models…</mux-ui-feedback>` : nothing}
       </mux-ui-choice-section>
     </mux-ui-choice-picker>`;
   }
@@ -347,16 +346,16 @@ export class MuxNewChat extends LitElement {
         ${this.harness === 'amplifier' ? (this.catalog?.providers || []).map(value => this.pickerChoice(providerLabel(value), '', this.provider === value, () => { this.provider = value; void this.loadCatalog(); })) : nothing}
       </mux-ui-choice-section>
       <mux-ui-choice-section heading="Model" separated>
-        <div class="model-list">
+        <mux-ui-choice-list>
           ${this.harness !== 'amplifier' ? this.pickerChoice(this.catalog?.defaultModel ? `Harness default (${this.catalog.defaultModel})` : 'Harness default', '', !this.customModel && !this.model, () => this.onModelChange('')) : nothing}
           ${this.model && !selectedModel && !this.customModel ? this.pickerChoice(this.model, '', true, () => this.onModelChange(this.model)) : nothing}
           ${models.map(item => this.pickerChoice(item.label, item.id, !this.customModel && this.model === item.id, () => this.onModelChange(item.id)))}
           ${this.pickerChoice('Other model ID…', '', this.customModel, () => this.onModelChange('__custom__'))}
-        </div>
+        </mux-ui-choice-list>
         ${this.customModel ? html`<mux-ui-text-field class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(event:Event) => { this.model = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
       </mux-ui-choice-section>
       ${efforts.length > 1 ? html`<mux-ui-choice-section separated><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} @input=${(event:Event) => { this.effort = efforts[(event.target as MuxUIRangeField).value]; }}></mux-ui-range-field></mux-ui-choice-section>` : nothing}
-      ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
+      ${this.catalogLoading ? html`<mux-ui-feedback kind="loading" density="compact">Loading models…</mux-ui-feedback>` : nothing}
     </mux-ui-choice-picker>`;
   }
   private async loadStartOptions() {
@@ -486,7 +485,7 @@ export class MuxNewChat extends LitElement {
         ${this.startOptions?.length ? html`<mux-ui-select class="harness" aria-label="Harness" .value=${this.harness} .options=${this.startOptions.map(option => ({ value:option.harness, label:sdkHarnessLabel(option.harness) }))} @change=${(e:Event) => this.onHarnessChange((e.target as MuxUISelect).value as SDKHarnessName)}></mux-ui-select>` : nothing}
         ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
         ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
-        ${this.catalogLoading ? html`<span class="catalog-status" role="status">Loading models…</span>` : nothing}
+        ${this.catalogLoading ? html`<mux-ui-feedback kind="loading" density="compact">Loading models…</mux-ui-feedback>` : nothing}
         <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
         </div>
         ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><mux-ui-button icon-only size="small" variant="quiet" accessible-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>${icon(X,{size:14})}</mux-ui-button></div>`)}</div>` : nothing}

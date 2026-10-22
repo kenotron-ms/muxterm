@@ -179,3 +179,9 @@ export const SetupRequired: Story = {
       ? fixtureJSON([]) : fixture(request)) satisfies ApiFixture,
   },
 };
+export const CatalogError: Story = {
+  parameters:{
+    apiFixture: ((request:Parameters<ApiFixture>[0]) => request.method === 'GET' && request.url.pathname.endsWith('/api/sdk-chat-catalog')
+      ? new Response('The model catalog is temporarily unavailable.',{status:503}) : fixture(request)) satisfies ApiFixture,
+  },
+};

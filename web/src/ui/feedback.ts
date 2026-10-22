@@ -3,12 +3,14 @@ import { customElement, property, state } from 'lit/decorators.js';
 
 export type FeedbackKind = 'empty' | 'loading' | 'info' | 'success' | 'warning' | 'error';
 export type FeedbackAppearance = 'plain' | 'panel';
+export type FeedbackDensity = 'regular' | 'compact';
 
 /** A consistent place for empty, loading, success, and error messages. */
 @customElement('mux-ui-feedback')
 export class MuxUIFeedback extends LitElement {
   @property({ reflect: true }) kind: FeedbackKind = 'empty';
   @property({ reflect: true }) appearance: FeedbackAppearance = 'plain';
+  @property({ reflect: true }) density: FeedbackDensity = 'regular';
   @property({ reflect: true }) align: 'start' | 'center' = 'start';
   @state() private hasAction = false;
 
@@ -31,6 +33,8 @@ export class MuxUIFeedback extends LitElement {
       border-radius: var(--ui-radius-lg);
       background: color-mix(in srgb, var(--feedback-tone) 6%, var(--ui-surface-raised));
     }
+    :host([density='compact']) { padding:var(--ui-space-4) var(--ui-space-5); font-size:var(--ui-text-xs); line-height:1.4; }
+    :host([density='compact']) .content { gap:var(--ui-space-3); }
     :host([align='center']) { text-align: center; }
     .content { display: flex; align-items: flex-start; gap: var(--ui-space-4); }
     :host([align='center']) .content { justify-content: center; }

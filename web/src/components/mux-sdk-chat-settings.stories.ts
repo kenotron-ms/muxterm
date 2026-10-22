@@ -34,11 +34,12 @@ const amplifier = {
   models:[{ id:'amplifier-default', label:'Bundle default', efforts:[] }],
 };
 
-function settingsFixture(initial: Record<string, unknown>, failLoad = false): ApiFixture {
+function settingsFixture(initial: Record<string, unknown>, failLoad = false, failFirstLoad = false): ApiFixture {
   let settings = { ...initial };
+  let getCount = 0;
   return ({ url, method, init }) => {
     if (url.pathname.endsWith('/api/sdk-chats/storybook-chat/settings')) {
-      if (method === 'GET') return failLoad
+      if (method === 'GET') return failLoad || (failFirstLoad && getCount++ === 0)
         ? new Response('Settings are unavailable for this chat.', { status:503 })
         : fixtureJSON(settings);
       if (method === 'PATCH') {
@@ -85,3 +86,18 @@ export const ClaudePlan: Story = { args:{ harness:'claude' }, parameters:{ apiFi
 export const Amplifier: Story = { args:{ harness:'amplifier' }, parameters:{ apiFixture:settingsFixture(amplifier) } };
 export const TurnBusy: Story = { args:{ turnBusy:true } };
 export const LoadError: Story = { parameters:{ apiFixture:settingsFixture(codex,true) } };
+export const LoadRecovery: Story = {
+  parameters:{apiFixture:settingsFixture(codex,false,true)},
+};
+export const NoModels: Story = {
+  parameters:{ apiFixture:settingsFixture({...codex,model:'',models:[]}) },
+  play:async ({canvasElement}) => {
+    const settings = canvasElement.querySelector('mux-sdk-chat-settings');
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const summary = settings?.shadowRoot?.querySelector('mux-ui-choice-picker.model-picker')?.shadowRoot?.querySelector<HTMLElement>('summary');
+      if (summary) { summary.click(); return; }
+      await new Promise(resolve => setTimeout(resolve,50));
+    }
+    throw new Error('The model picker did not render');
+  },
+};

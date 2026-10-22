@@ -2,7 +2,9 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import './choice-picker.js';
 import './choice-item.js';
+import './choice-list.js';
 import './choice-section.js';
+import './feedback.js';
 
 interface PickerArgs { summary:string; placement:'below'|'above'; appearance:'outlined'|'plain'; panelAlign:'left'|'right'; open:boolean }
 const meta = {
@@ -25,3 +27,15 @@ export const Closed: Story = {};
 export const OpenBelow: Story = { args:{open:true} };
 export const OpenAbove: Story = { args:{open:true,placement:'above',appearance:'plain',panelAlign:'right'} };
 export const PhoneSheet: Story = { args:{open:true}, globals:{viewport:{value:'phone390',isRotated:false}} };
+export const LongModelList: Story = {
+  render:() => html`<div style="min-height:440px;padding:32px"><mux-ui-choice-picker label="Model" summary="GPT-6-Sol" open>
+    <mux-ui-choice-section heading="Model"><mux-ui-choice-list>
+      ${Array.from({length:12},(_,index) => html`<mux-ui-choice-item label=${`Model ${index + 1}`} description=${`model-${index + 1}`}></mux-ui-choice-item>`)}
+    </mux-ui-choice-list></mux-ui-choice-section>
+  </mux-ui-choice-picker></div>`,
+};
+export const LoadingInPicker: Story = {
+  render:() => html`<div style="min-height:440px;padding:32px"><mux-ui-choice-picker label="Model" summary="GPT-6-Sol" open>
+    <mux-ui-choice-section heading="Model"><mux-ui-feedback kind="loading" density="compact">Loading models…</mux-ui-feedback></mux-ui-choice-section>
+  </mux-ui-choice-picker></div>`,
+};

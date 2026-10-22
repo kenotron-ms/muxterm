@@ -239,14 +239,17 @@ screens use the shared Choice Picker, which owns desktop placement,
 outside-click and Escape behavior, sibling-picker coordination, and a
 full-width bottom sheet presentation. Choice Section now gives provider, model,
 permission, mode and operator groups the same heading, divider and note layout,
-with an accessible group label when a heading exists. Chromium verified model
-selection and Escape focus restoration in the isolated live New Chat, plus the
-Storybook picker states at desktop and phone widths.
+with an accessible group label when a heading exists. Choice List now owns the
+bounded model scroll region in both screens, and compact Feedback presents
+loading, empty and error states with the same status semantics. Chat settings
+can retry a failed initial load. Chromium verified model selection and Escape
+focus restoration in the isolated live New Chat, plus scrollable model lists
+at desktop and phone widths in Storybook and the isolated app. Storybook also
+shows a recovered chat-settings load.
 The same Range Field now owns the native Thinking effort sliders in both chat
 screens and terminal font size in Settings. Chromium checked keyboard value
 changes in Storybook and in the isolated live New Chat and Settings screens;
-the live font-size change was restored after verification. Model-list sizing,
-loading and error messages inside pickers still need shared-pattern review.
+the live font-size change was restored after verification.
 
 New Chat's project selection and the chat command suggestions now use shared
 Listbox and Listbox Option elements. Select Combobox also owns the project
