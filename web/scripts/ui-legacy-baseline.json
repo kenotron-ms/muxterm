@@ -75,7 +75,7 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 1,
-    "nativeControls": 1
+    "nativeControls": 0
   },
   "components/mux-pane-picker.ts": {
     "legacyTokens": 0,

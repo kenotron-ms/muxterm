@@ -64,9 +64,8 @@ export class MuxOperatorStatus extends LitElement {
     td:last-child { padding:var(--ui-space-3) var(--ui-space-5) var(--ui-space-3) var(--ui-space-2); }
     tbody tr:first-child td { border-top:0; }
     tr.lane-row:hover,tr.lane-row.expanded { background:var(--ui-surface-hover); }
-    button { font:inherit; cursor:pointer; }
-    button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
-    .lane-toggle { display:flex; align-items:center; gap:var(--ui-space-4); width:100%; min-width:0; border:0; padding:0; background:none; color:var(--ui-text); text-align:left; }
+    .lane-toggle { width:100%; min-width:0; }
+    .lane-toggle::part(button) { justify-content:flex-start; gap:var(--ui-space-4); min-width:0; padding:0; border:0; background:transparent; color:var(--ui-text); text-align:left; font:inherit; }
     .chevron { display:inline-flex; flex:none; color:var(--ui-text-muted); transition:transform .15s; }
     .expanded .chevron { transform:rotate(90deg); }
     .lane-primary { display:block; min-width:0; flex:1; }
@@ -104,7 +103,7 @@ export class MuxOperatorStatus extends LitElement {
     .message-placeholder { color:var(--ui-text-muted); }
     .detail-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ui-space-5); border-top:1px solid var(--ui-border); padding:var(--ui-space-4) 0 0; }
     .detail-actions .archive-action { margin-left:auto; }
-    @media(max-width:560px) { :host { padding:var(--ui-space-5); } col.progress-col { width:112px; } col.action-col { width:52px; } th,td { padding-left:var(--ui-space-4); padding-right:var(--ui-space-4); } td:last-child { padding:var(--ui-space-3) var(--ui-space-2); } .lane-toggle { gap:var(--ui-space-2); } .lane-title { white-space:normal; overflow-wrap:anywhere; line-height:1.3; } .meter-head { display:grid; gap:var(--ui-space-1); } .meter-time { display:none; } .progress-basis { font-size:var(--ui-text-xs); } }
+    @media(max-width:560px) { :host { padding:var(--ui-space-5); } col.progress-col { width:112px; } col.action-col { width:52px; } th,td { padding-left:var(--ui-space-4); padding-right:var(--ui-space-4); } td:last-child { padding:var(--ui-space-3) var(--ui-space-2); } .lane-toggle::part(button) { gap:var(--ui-space-2); } .lane-title { white-space:normal; overflow-wrap:anywhere; line-height:1.3; } .meter-head { display:grid; gap:var(--ui-space-1); } .meter-time { display:none; } .progress-basis { font-size:var(--ui-text-xs); } }
     @media(prefers-reduced-motion:reduce) { .chevron { transition:none; } }
   `;
 
@@ -295,7 +294,7 @@ export class MuxOperatorStatus extends LitElement {
             const expanded = this.expandedLane === lane.id;
             const detailId = `operator-lane-${lane.id}`;
             return html`<tr class="lane-row ${expanded ? 'expanded' : ''}">
-              <td><button class="lane-toggle" aria-label=${`${expanded ? 'Collapse' : 'Expand'} ${lane.title}`} aria-expanded=${expanded} aria-controls=${detailId} @click=${() => { this.expandedLane = expanded ? '' : lane.id; }}><span class="chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-primary" title=${lane.title}><span class="lane-title">${lane.title}</span><span class="lane-meta"><span class="harness">${sdkHarnessLabel(lane.harness)}</span><mux-ui-status-badge dot .tone=${this.statusTone(lane)}>${this.isStopped(lane) ? 'Stopped' : lane.state === 'ready' ? 'Ready' : lane.state === 'uncertain' ? 'Uncertain' : lane.state === 'starting' ? 'Starting' : lane.state === 'failed' ? 'Failed' : 'Working'}</mux-ui-status-badge>${lane.archived ? html`<span class="archived-label">Archived</span>` : nothing}</span></span></button></td>
+              <td><mux-ui-button class="lane-toggle" variant="quiet" full-width accessible-label=${`${expanded ? 'Collapse' : 'Expand'} ${lane.title}`} expandable .expanded=${expanded} .controls=${detailId} @click=${() => { this.expandedLane = expanded ? '' : lane.id; }}><span class="chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span><span class="lane-primary" title=${lane.title}><span class="lane-title">${lane.title}</span><span class="lane-meta"><span class="harness">${sdkHarnessLabel(lane.harness)}</span><mux-ui-status-badge dot .tone=${this.statusTone(lane)}>${this.isStopped(lane) ? 'Stopped' : lane.state === 'ready' ? 'Ready' : lane.state === 'uncertain' ? 'Uncertain' : lane.state === 'starting' ? 'Starting' : lane.state === 'failed' ? 'Failed' : 'Working'}</mux-ui-status-badge>${lane.archived ? html`<span class="archived-label">Archived</span>` : nothing}</span></span></mux-ui-button></td>
               <td class="progress-cell">${this.meter(lane)}</td>
               <td><mux-ui-button icon-only size="small" variant="quiet" accessible-label=${`Open lane chat: ${lane.title}`} tooltip="Open lane chat" @click=${() => this.open(lane.id)}>${laneIcon(17)}</mux-ui-button></td>
             </tr>${expanded ? html`<tr class="detail"><td colspan="3"><div class="message" id=${detailId}>${this.message(lane)}</div>

@@ -80,7 +80,7 @@ async function expandFirstLane(canvasElement: HTMLElement) {
   const component = canvasElement.querySelector<MuxOperatorStatus>('mux-operator-status');
   for (let attempt=0; attempt<40 && !component?.shadowRoot?.querySelector('.lane-toggle'); attempt++)
     await new Promise(resolve=>window.setTimeout(resolve,50));
-  component?.shadowRoot?.querySelector<HTMLButtonElement>('.lane-toggle')?.click();
+  component?.shadowRoot?.querySelector<HTMLElement>('.lane-toggle')?.click();
 }
 export const ExpandedLane: Story = {play:async ({canvasElement})=>{await expandFirstLane(canvasElement);}};
 export const EmptyOperator: Story = { parameters:{apiFixture:operatorFixture(true,[])} };
