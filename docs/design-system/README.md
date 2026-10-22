@@ -28,7 +28,7 @@ instance on port 8313 and a real browser for that verification.
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
 3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, List Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice List, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
-   Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
+   Feedback, Empty State, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
    disabled, error, and narrow-screen states where relevant.
@@ -323,6 +323,15 @@ file welcome action uses the shared Button. The Utility inventory now counts
 six feature-owned native controls, down from 39 at the start of this pass.
 File-viewer loading, empty, oversized and error states use shared Feedback.
 Failures offer Retry; Storybook includes file and raw-preview recovery states.
+The full-panel Files welcome view, Changes selection view, and Pages empty and
+unavailable views now use shared Empty State with icon, heading, description,
+optional action, and app or document palettes. Diff loading, oversized and
+binary states use Feedback. A failed diff request now shows an error with Retry
+instead of reporting a binary file; Storybook records error and recovery.
+In isolated dev-local Chromium, the Files Empty State opened Quick Open, the
+Changes Empty State appeared before selection, and failed real diff requests
+recovered after Retry at desktop and phone widths. The phone action targets
+measured 44 px without page overflow.
 The Files, Changes and Pages rails now use the same Feedback for empty,
 loading, warning and failed-load states. Their failed requests offer Retry;
 Storybook records those failures and successful recovery at desktop and phone

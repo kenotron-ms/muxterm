@@ -15,6 +15,7 @@ import '../ui/breadcrumb.js';
 import '../ui/button.js';
 import '../ui/command-search.js';
 import '../ui/dialog.js';
+import '../ui/empty-state.js';
 import '../ui/feedback.js';
 import '../ui/menu.js';
 import '../ui/rail-row.js';
@@ -154,6 +155,7 @@ export class MuxSDKUtility extends LitElement {
   private changesError = '';
   private selectedChange?: ChangedFile;
   private changeDetail?: ChangeDetail;
+  private changeError = '';
   private changeAbort?: AbortController;
   private pages?: NotePage[];
   private pagesVersion = 0;
@@ -306,7 +308,7 @@ export class MuxSDKUtility extends LitElement {
       if (!response.ok) throw new Error(`Changes unavailable (${response.status})`);
       this.changes = await response.json() as { repos: ChangeRepo[]; changes: ChangedFile[]; truncated: boolean };
       if (this.selectedChange && !this.changes.changes.some(row => row.repo === this.selectedChange?.repo && row.path === this.selectedChange?.path)) {
-        this.selectedChange = undefined; this.changeDetail = undefined;
+        this.selectedChange = undefined; this.changeDetail = undefined; this.changeError = '';
       }
     } catch (error) { this.changesError = error instanceof Error ? error.message : String(error); }
     this.paintAll();
@@ -315,7 +317,7 @@ export class MuxSDKUtility extends LitElement {
     this.changeAbort?.abort();
     const controller = new AbortController();
     this.changeAbort = controller;
-    this.selectedChange = change; this.changeDetail = undefined;
+    this.selectedChange = change; this.changeDetail = undefined; this.changeError = '';
     this.paintAll();
     try {
       const query = new URLSearchParams({ repo: change.repo, path: change.path });
@@ -323,8 +325,11 @@ export class MuxSDKUtility extends LitElement {
       if (!response.ok) throw new Error(`Diff unavailable (${response.status})`);
       const detail = await response.json() as ChangeDetail;
       if (!controller.signal.aborted) this.changeDetail = detail;
-    } catch { if (!controller.signal.aborted) this.changeDetail = { repo: change.repo, path: change.path, before: '', after: '', binary: true }; }
+    } catch (error) { if (!controller.signal.aborted) this.changeError = error instanceof Error ? error.message : String(error); }
     this.paintAll();
+  }
+  private retryChange() {
+    if (this.selectedChange) void this.openChange(this.selectedChange);
   }
   async showFile(path: string): Promise<void> {
     await this.revealFile(path);
@@ -718,7 +723,7 @@ export class MuxSDKUtility extends LitElement {
     }}>
       <div class="viewer">
         ${this.fileHeader(projectName, segments, file, hasAlternateView)}
-        <div class="viewer-body">${this.selected ? this.fileBody() : html`<div class="welcome-file">${icon(FolderOpen,{size:35})}<h2>Explore this project</h2><p>Choose a file from the explorer or search by name across the project.</p><mux-ui-button variant="secondary" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></mux-ui-button></div>`}</div>
+        <div class="viewer-body">${this.selected ? this.fileBody() : html`<mux-ui-empty-state heading="Explore this project"><span slot="icon">${icon(FolderOpen,{size:24})}</span>Choose a file from the explorer or search by name across the project.<mux-ui-button slot="action" variant="secondary" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></mux-ui-button></mux-ui-empty-state>`}</div>
         ${file ? html`<div class="file-status"><span>${fileLanguage(file.name)}</span>${!file.binary && !file.tooLarge && file.text ? html`<span>${file.text.split('\n').length} lines</span>` : nothing}<span class="status-spacer"></span><span class="file-action-notice" role="status">${this.fileActionNotice}</span><span>${readableSize(file.size)}</span><span>Read only</span></div>` : nothing}
       </div>
       ${this.filesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize file explorer" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'files')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'files')}></div>` : nothing}
@@ -739,7 +744,7 @@ export class MuxSDKUtility extends LitElement {
     return html`<section class="changes-panel split-panel" style=${`--rail-width:${this.railWidths.changes}px`}><div class="changes-list"><header><div><strong>CHANGES</strong><span>${changes?.changes.length ?? 0}</span></div><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Refresh changes" tooltip="Refresh changes" @click=${() => void this.loadChanges()}>${icon(RefreshCw,{size:15})}</mux-ui-button></header>
       ${this.changesError ? html`<mux-ui-feedback class="rail-feedback" kind="error" density="compact">${this.changesError}<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => void this.loadChanges()}>Retry</mux-ui-button></mux-ui-feedback>` : !changes ? html`<mux-ui-feedback class="rail-feedback" kind="loading" density="compact">Loading Git changes…</mux-ui-feedback>` : changes.repos.length ? changes.repos.map(repo => html`<div class="change-repo"><div class="change-repo-title"><strong>${repo.name}</strong><span>${repo.branch || 'detached HEAD'}</span></div>${changes.changes.filter(change => change.repo === repo.root).length ? changes.changes.filter(change => change.repo === repo.root).map(change => html`<mux-ui-rail-row label=${change.path} detail=${change.status.trim() || 'M'} detail-tone="accent" tooltip=${change.path} ?selected=${this.selectedChange?.repo === change.repo && this.selectedChange?.path === change.path} @click=${() => void this.openChange(change)}><span slot="icon">${icon(fileGlyph(change.path),{size:15})}</span></mux-ui-rail-row>`) : html`<mux-ui-feedback class="rail-feedback" kind="empty" density="compact">No changes</mux-ui-feedback>`}</div>`) : html`<mux-ui-feedback class="rail-feedback" kind="empty" density="compact">No Git repository in this chat’s project folders.</mux-ui-feedback>`}
       ${changes?.truncated ? html`<mux-ui-feedback class="rail-feedback" kind="warning" density="compact">Showing the first changes. Refresh after narrowing the project.</mux-ui-feedback>` : nothing}
-    </div><div class="vertical-resizer" role="separator" aria-label="Resize changes list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'changes')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'changes')}></div><div class="change-viewer"><header><span>${this.selectedChange?.path || 'Select a changed file'}</span>${this.selectedChange ? html`<small>${this.selectedChange.status.trim() || 'Modified'}</small>` : nothing}</header>${!this.selectedChange ? html`<div class="change-empty">${icon(GitCompare,{size:34})}<h2>Review project changes</h2><p>Select a file to compare it with HEAD.</p></div>` : !detail ? html`<div class="change-empty">Loading diff…</div>` : detail.tooLarge ? html`<div class="change-empty">This file is too large for the diff viewer.</div>` : detail.binary ? html`<div class="change-empty">Binary changes cannot be shown as text.</div>` : html`<mux-monaco-diff .repo=${detail.repo} .path=${detail.path} .originalText=${detail.before} .modifiedText=${detail.after}></mux-monaco-diff>`}</div></section>`;
+    </div><div class="vertical-resizer" role="separator" aria-label="Resize changes list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'changes')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'changes')}></div><div class="change-viewer"><header><span>${this.selectedChange?.path || 'Select a changed file'}</span>${this.selectedChange ? html`<small>${this.selectedChange.status.trim() || 'Modified'}</small>` : nothing}</header>${!this.selectedChange ? html`<mux-ui-empty-state heading="Review project changes"><span slot="icon">${icon(GitCompare,{size:24})}</span>Select a file to compare it with HEAD.</mux-ui-empty-state>` : this.changeError ? html`<mux-ui-feedback class="change-feedback" kind="error" align="center">${this.changeError}<mux-ui-button slot="action" variant="secondary" size="small" @click=${() => this.retryChange()}>Retry</mux-ui-button></mux-ui-feedback>` : !detail ? html`<mux-ui-feedback class="change-feedback" kind="loading" align="center">Loading diff…</mux-ui-feedback>` : detail.tooLarge ? html`<mux-ui-feedback class="change-feedback" kind="warning" align="center">This file is too large for the diff viewer.</mux-ui-feedback>` : detail.binary ? html`<mux-ui-feedback class="change-feedback" kind="info" align="center">Binary changes cannot be shown as text.</mux-ui-feedback>` : html`<mux-monaco-diff .repo=${detail.repo} .path=${detail.path} .originalText=${detail.before} .modifiedText=${detail.after}></mux-monaco-diff>`}</div></section>`;
   }
   private async loadPages() {
     this.pagesError = '';
@@ -880,7 +885,7 @@ export class MuxSDKUtility extends LitElement {
         <mux-ui-button appearance="document" icon-only size="small" variant="quiet" tone="muted" toggle .pressed=${this.pagesRailOpen} accessible-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} tooltip=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</mux-ui-button>
         <mux-ui-breadcrumb appearance="document" label="Page path" .items=${parent ? [{id:parent.id,label:parent.title,actionLabel:`Open parent page ${parent.title}`},{id:page?.id || '',label:page?.title || 'Pages'}] : [{id:page?.id || '',label:page?.title || 'Pages'}]} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => this.selectPage(event.detail.id)}></mux-ui-breadcrumb>
       </div><div class="page-toolbar-actions">${page ? html`<span class="page-save-state" ?data-saving=${this.pageSaving}>${this.pageSaving ? 'Saving…' : 'Saved'}</span>` : nothing}${page ? html`<mux-ui-button class="page-delete" appearance="document" icon-only size="small" variant="quiet" tone="danger" accessible-label=${`Delete page ${page.title || 'Untitled'}`} tooltip=${this.pagesConflict ? 'Reload pages before deleting' : 'Delete page'} ?disabled=${this.pagesConflict} @click=${() => this.requestDeletePage(page)}>${icon(Trash2,{size:15})}</mux-ui-button>` : nothing}</div></div>
-      ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .content=${page.content?.length ? page.content : legacyPageContent(page.blocks)} .pageId=${page.id} .documentEpoch=${this.pagesRenderEpoch} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><mux-ui-button class="page-subpage" appearance="document" size="small" variant="quiet" tone="muted" @click=${() => this.newPage(page.id)}>${icon(Plus,{size:14})}<span>New subpage</span></mux-ui-button></div></div>` : this.pagesError && !this.pages ? html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages unavailable</h2><p>Use Retry in the Pages list.</p></div>` : html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages</h2><p>Create a document for this chat.</p><mux-ui-button appearance="document" size="small" variant="secondary" @click=${() => this.newPage()}>New page</mux-ui-button></div>`}</div>
+      ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .content=${page.content?.length ? page.content : legacyPageContent(page.blocks)} .pageId=${page.id} .documentEpoch=${this.pagesRenderEpoch} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><mux-ui-button class="page-subpage" appearance="document" size="small" variant="quiet" tone="muted" @click=${() => this.newPage(page.id)}>${icon(Plus,{size:14})}<span>New subpage</span></mux-ui-button></div></div>` : this.pagesError && !this.pages ? html`<mux-ui-empty-state heading="Pages unavailable" appearance="document"><span slot="icon">${icon(NotebookPen,{size:24})}</span>Use Retry in the Pages list.</mux-ui-empty-state>` : html`<mux-ui-empty-state heading="Pages" appearance="document"><span slot="icon">${icon(NotebookPen,{size:24})}</span>Create a document for this chat.<mux-ui-button slot="action" appearance="document" size="small" variant="secondary" @click=${() => this.newPage()}>New page</mux-ui-button></mux-ui-empty-state>`}</div>
       <mux-ui-dialog size="compact" presentation="adaptive" label="Delete page" ?open=${!!this.pendingPageDeletion} @dismiss=${() => { this.pendingPageDeletion = undefined; this.paintAll(); }}><div class="page-delete-dialog"><h2>Delete page?</h2><p>${this.pendingPageDeletion?.message || ''}</p><div class="page-delete-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingPageDeletion = undefined; this.paintAll(); }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => this.deletePage()}>Delete page</mux-ui-button></div></div></mux-ui-dialog>
     </section>`;
   }
@@ -932,11 +937,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility mux-monaco-source .monaco-host { width:100%; height:100%; }
     mux-sdk-utility .file-status { display:flex; align-items:center; gap:var(--ui-space-6); flex:none; min-height:22px; padding:0 var(--ui-space-5); border-top:1px solid var(--ui-border); background:var(--ui-surface-raised); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .file-status span:first-child { color:var(--ui-accent); }
-    mux-sdk-utility .welcome-file { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:var(--ui-space-5); padding:var(--ui-space-8); color:var(--ui-text-muted); text-align:center; }
-    mux-sdk-utility .welcome-file svg { color:var(--ui-accent); }
-    mux-sdk-utility .welcome-file h2 { margin:var(--ui-space-1) 0 0; color:var(--ui-text); font-size:var(--ui-text-xl); }
-    mux-sdk-utility .welcome-file p { max-width:290px; margin:0; font:var(--ui-text-sm)/1.5 var(--ui-font-sans); }
-    mux-sdk-utility .welcome-file mux-ui-button { margin-top:var(--ui-space-3); }
     mux-sdk-utility kbd { border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); padding:calc(var(--ui-space-1) / 2) var(--ui-space-2); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
     mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:840px; margin:0 auto; padding:var(--ui-space-6) clamp(var(--ui-space-7),5vw,var(--ui-space-12)) var(--ui-space-13); color:var(--ui-text); font:var(--ui-text-lg)/1.48 var(--ui-font-sans); overflow-wrap:break-word; }
     mux-sdk-utility .document-view > :first-child { margin-top:0; }
@@ -989,10 +989,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .change-viewer > header { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); min-height:38px; padding:0 var(--ui-space-5); border-bottom:1px solid var(--ui-border); font:var(--ui-text-xs) var(--ui-font-mono); }
     mux-sdk-utility .change-viewer > header span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .change-viewer > header small { color:var(--ui-accent); }
-    mux-sdk-utility .change-empty { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:var(--ui-space-4); padding:var(--ui-space-8); color:var(--ui-text-muted); text-align:center; }
-    mux-sdk-utility .change-empty svg { color:var(--ui-accent); }
-    mux-sdk-utility .change-empty h2 { margin:0; color:var(--ui-text); font-size:var(--ui-text-xl); }
-    mux-sdk-utility .change-empty p { margin:0; font:var(--ui-text-sm) var(--ui-font-sans); }
+    mux-sdk-utility mux-ui-feedback.change-feedback { margin:auto; max-width:340px; }
     mux-sdk-utility mux-monaco-diff { display:block; flex:1; min-height:0; min-width:0; }
     mux-sdk-utility mux-monaco-diff .monaco-diff-host { width:100%; height:100%; }
     mux-sdk-utility .pages-list { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
@@ -1017,10 +1014,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-paper { width:min(720px,100%); margin:0 auto; padding:var(--ui-space-10) clamp(var(--ui-space-6),6%,var(--ui-space-14)) var(--ui-space-16) clamp(var(--ui-space-13),8%,var(--ui-space-14)); }
     mux-sdk-utility .page-title { min-height:42px; margin:0 0 var(--ui-space-11); color:var(--ui-document-text); font:700 var(--ui-text-4xl)/1.28 var(--ui-font-sans); }
     mux-sdk-utility .page-subpage { margin-top:var(--ui-space-7); }
-    mux-sdk-utility .page-no-selection { display:flex; align-items:center; justify-content:center; flex:1; flex-direction:column; gap:var(--ui-space-4); color:var(--ui-document-muted); }
-    mux-sdk-utility .page-no-selection h2 { margin:0; color:var(--ui-document-text); }
-    mux-sdk-utility .page-no-selection p { margin:0; }
-    mux-sdk-utility .page-no-selection mux-ui-button { margin-top:var(--ui-space-4); }
     mux-sdk-utility .page-delete-dialog { box-sizing:border-box; padding:var(--ui-space-7); background:var(--ui-surface-overlay); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
     mux-sdk-utility .page-delete-dialog h2 { margin:0; font-size:var(--ui-text-xl); }
     mux-sdk-utility .page-delete-dialog p { margin:var(--ui-space-4) 0 var(--ui-space-7); color:var(--ui-text-muted); }

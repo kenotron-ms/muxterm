@@ -35,6 +35,7 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
   let rawRequests = 0;
   let treeRequests = 0;
   let changesRequests = 0;
+  let diffRequests = 0;
   let pagesRequests = 0;
   return ({url,method}) => {
     const base = `/api/sdk-chats/${id}/utility/`;
@@ -67,7 +68,10 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
       if (id.endsWith('-changes-error') || (id.endsWith('-changes-recovery') && changesRequests++ === 0)) return fixtureJSON({error:'Changes unavailable'},503);
       return fixtureJSON({repos:[{root,name:'muxterm',branch:'design-system'}],changes:[{repo:root,path:'README.md',status:' M'},{repo:root,path:'src/app.ts',status:' M'}],truncated:false});
     }
-    if (method === 'GET' && url.pathname === `${base}change`) return fixtureJSON({repo:root,path:url.searchParams.get('path'),before:'# Muxterm\n',after:'# Muxterm component library\n',binary:false,tooLarge:false});
+    if (method === 'GET' && url.pathname === `${base}change`) {
+      if (id.endsWith('-diff-error') || (id.endsWith('-diff-recovery') && diffRequests++ === 0)) return fixtureJSON({error:'Diff unavailable'},503);
+      return fixtureJSON({repo:root,path:url.searchParams.get('path'),before:'# Muxterm\n',after:'# Muxterm component library\n',binary:false,tooLarge:false});
+    }
     if (method === 'GET' && url.pathname === `${base}pages`) {
       if (id.endsWith('-pages-error') || (id.endsWith('-pages-recovery') && pagesRequests++ === 0)) return fixtureJSON({error:'Pages unavailable'},503);
       return fixtureJSON({version:1,pages:emptyPages ? [] : [
@@ -213,6 +217,24 @@ export const ChangesUnavailable: Story = {
 export const ChangesRecovery: Story = {
   args:{sessionId:sessionId('changes-recovery')},parameters:{apiFixture:utilityFixture(sessionId('changes-recovery'))},
   play:Changes.play,
+};
+const openFirstChange = async (canvasElement: HTMLElement) => {
+  const utility = target(canvasElement);
+  utility?.showPanel('changes');
+  let row: HTMLElement | null = null;
+  for (let attempt=0; attempt<40 && !row; attempt++) {
+    row = utility?.querySelector<HTMLElement>('.changes-list mux-ui-rail-row') || null;
+    if (!row) await new Promise(resolve=>window.setTimeout(resolve,50));
+  }
+  row?.click();
+};
+export const DiffUnavailable: Story = {
+  args:{sessionId:sessionId('diff-error')},parameters:{apiFixture:utilityFixture(sessionId('diff-error'))},
+  play:async ({canvasElement}) => openFirstChange(canvasElement),
+};
+export const DiffRecovery: Story = {
+  args:{sessionId:sessionId('diff-recovery')},parameters:{apiFixture:utilityFixture(sessionId('diff-recovery'))},
+  play:DiffUnavailable.play,
 };
 export const Pages: Story = {
   args:{sessionId:sessionId('pages')},parameters:{apiFixture:utilityFixture(sessionId('pages'))},
