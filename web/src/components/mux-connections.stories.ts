@@ -22,6 +22,7 @@ const catalog = [
 const githubSetup = { state:'setup-required', enabled:false, ghInstalled:false, serverInstalled:false, signedIn:false, toolCount:0, error:'', installing:false, loginState:'', loginCode:'', loginError:'' };
 const microsoftDisconnected = { state:'disconnected', loginState:'', userCode:'', verificationUrl:'', error:'', toolCount:0 };
 const googleAccount = { id:'storybook-gmail', provider:'gmail', name:'Gmail', endpoint:'https://example.test/mcp', state:'ready', toolCount:1, error:'', discoveredTools:[], allowedTools:['search_mail'] };
+const googleToolsAccount = { ...googleAccount, toolCount:2, discoveredTools:[{name:'search_mail',description:'Find mail by sender or topic'},{name:'read_mail',description:'Read a selected message'}] };
 type Scenario = { github?:Record<string,unknown>; microsoft?:Record<string,unknown>; remoteItems?:Record<string,unknown>[]; error?:boolean; legacyAuthorization?:boolean };
 function fixtureFor(scenario:Scenario = {}):ApiFixture {
   return ({url,method}) => {
@@ -72,6 +73,8 @@ export const MicrosoftDisconnectConfirmation:Story = {args:{selection:'microsoft
 export const PhoneMicrosoftDisconnectConfirmation:Story = {args:{selection:'microsoft'},globals:{viewport:{value:'phone390',isRotated:false}},parameters:MicrosoftReady.parameters,play:openConfirmation('Disconnect')};
 export const MicrosoftNeedsAttention:Story = {args:{selection:'microsoft'},parameters:{apiFixture:fixtureFor({microsoft:{state:'needs-attention',error:'Sign in again to refresh access.'}})}};
 export const GooglePreview:Story = {args:{selection:'google'}};
+export const GoogleToolSelection:Story = {args:{selection:'google'},parameters:{apiFixture:fixtureFor({remoteItems:[googleToolsAccount]})}};
+export const PhoneGoogleToolSelection:Story = {args:{selection:'google'},globals:{viewport:{value:'phone390',isRotated:false}},parameters:GoogleToolSelection.parameters};
 export const GoogleRemoveConfirmation:Story = {args:{selection:'google'},parameters:{apiFixture:fixtureFor({remoteItems:[googleAccount]})},play:openConfirmation('Remove')};
 export const GoogleManualEntry:Story = {args:{selection:'google'},play:async ({canvasElement})=>{
   const screen=canvasElement.querySelector<MuxConnections>('mux-connections');

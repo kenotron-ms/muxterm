@@ -727,7 +727,7 @@ export class MuxApp extends LitElement {
     // muxterm's own marker and preserve any unrelated URL parameters.
     const url = new URL(window.location.href);
     const connectionReturn = url.searchParams.get('connections');
-    if (connectionReturn && ['github', 'remote', 'gmail', 'google-drive', 'google-calendar', 'google-docs', 'google-sheets', 'google-slides'].includes(connectionReturn)) {
+    if (connectionReturn && ['github', 'gmail', 'google-drive', 'google-calendar', 'google-docs', 'google-sheets', 'google-slides'].includes(connectionReturn)) {
       this._connectionSelection = connectionReturn;
       url.searchParams.delete('connections');
       window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);

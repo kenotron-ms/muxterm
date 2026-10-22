@@ -2,7 +2,6 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
-import './mux-browser-assistant.js';
 import '../ui/button.js';
 import '../ui/feedback.js';
 import '../ui/nav-item.js';
@@ -10,10 +9,12 @@ import '../ui/page-intro.js';
 import '../ui/status-badge.js';
 import '../ui/text-field.js';
 import '../ui/select.js';
+import '../ui/switch.js';
 import '../ui/confirmation.js';
 import type { StatusTone } from '../ui/status-badge.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import type { MuxUISelect } from '../ui/select.js';
+import type { MuxUISwitch } from '../ui/switch.js';
 
 type Service = { id:string; name:string; group:string; description:string; docsUrl:string; endpoint?:string; availability:string; scopes?:string[]; readTools?:string[] };
 type GitHubState = { state:string; enabled:boolean; ghInstalled:boolean; serverInstalled:boolean; signedIn:boolean; toolCount:number; checkedAt?:string; error:string; installing:boolean; loginState:string; loginCode:string; loginError:string };
@@ -40,13 +41,7 @@ export class MuxConnections extends LitElement {
   @state() private googleService='gmail';
   @state() private busy='';
   @state() private error='';
-  @state() private remoteName='';
-  @state() private remoteEndpoint='';
-  @state() private remoteIssuer='';
   @state() private allowedDraft:Record<string,string[]>={};
-  @state() private remoteClientID='';
-  @state() private remoteClientSecret='';
-  @state() private remoteScopes='';
   @state() private googleClientID='';
   @state() private googleClientSecret='';
   @state() private confirmation?:PendingConfirmation;
@@ -54,7 +49,7 @@ export class MuxConnections extends LitElement {
   static override styles=css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
-    * { box-sizing:border-box; } button,input { font:inherit; } button { cursor:pointer; }
+    * { box-sizing:border-box; } button { font:inherit; cursor:pointer; }
     .titlebar { height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); font-size:var(--ui-text-md); }
     .titlebar .section-name,.titlebar .divider { color:var(--ui-text-muted); }
     .titlebar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
@@ -69,9 +64,8 @@ export class MuxConnections extends LitElement {
     h2 { margin:0; font-size:var(--ui-text-xl); } h3 { margin:var(--ui-space-8) 0 var(--ui-space-3); font-size:var(--ui-text-md); }
     .lead { margin-top:var(--ui-space-4); } .box { margin-top:var(--ui-space-7); padding:var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
     details.box summary { cursor:pointer; font-weight:650; } details.box summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:var(--ui-space-1); }
-    label { display:block; margin:var(--ui-space-5) 0; font-size:var(--ui-text-sm); font-weight:650; }
     mux-ui-text-field { margin:var(--ui-space-5) 0; --ui-surface-raised:var(--ui-surface-base); }
-    input[type=checkbox] { display:inline; width:auto; margin:0 var(--ui-space-3) 0 0; }
+    .tool-choices { display:grid; gap:var(--ui-space-2); margin:var(--ui-space-5) 0; }
     .actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); margin-top:var(--ui-space-6); }
     a.action { display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); padding:var(--ui-space-4) var(--ui-space-5); color:var(--ui-text); background:var(--ui-surface-hover); text-decoration:none; }
     a.action.primary { background:var(--ui-accent); border-color:var(--ui-accent); color:var(--ui-on-accent); font-weight:700; }
@@ -91,7 +85,7 @@ export class MuxConnections extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     const initial=this.initialSelection;
-    this.selected = initial==='remote'||initial==='browser-assistant'?initial:initial==='github'?'github':initial==='microsoft'||['onedrive','outlook-mail','outlook-calendar'].includes(initial)?'microsoft':initial==='google'||['gmail','google-drive','google-calendar','google-docs','google-sheets','google-slides'].includes(initial)?'google':'github';
+    this.selected = initial==='github'?'github':initial==='microsoft'||['onedrive','outlook-mail','outlook-calendar'].includes(initial)?'microsoft':initial==='google'||['gmail','google-drive','google-calendar','google-docs','google-sheets','google-slides'].includes(initial)?'google':'github';
     if (initial.startsWith('google-')||initial==='gmail') this.googleService=initial;
     const url=new URL(window.location.href);
     const reason=url.searchParams.get('connection_error');
@@ -209,10 +203,6 @@ export class MuxConnections extends LitElement {
   private removeLegacyWorkIQ() {
     this.askConfirmation({heading:'Remove old authorization?',description:'The previous Work IQ authorization will be removed from this machine. It no longer supplies tools to new chats.',confirmLabel:'Remove authorization',busyKey:'workiq-remove',action:()=>this.request('/api/connections/workiq',{method:'DELETE'})});
   }
-  private createRemote() { void this.run('remote-create',async()=>{
-    await this.request('/api/connections/remote',{method:'POST',body:JSON.stringify({name:this.remoteName,endpoint:this.remoteEndpoint,issuerURL:this.remoteIssuer,clientID:this.remoteClientID,clientSecret:this.remoteClientSecret,scopes:this.remoteScopes})});
-    this.remoteName='';this.remoteEndpoint='';this.remoteIssuer='';this.remoteClientID='';this.remoteClientSecret='';this.remoteScopes='';
-  }); }
   private createGoogle(service:Service) { void this.run('google-create',async()=>{
     await this.request('/api/connections/remote',{method:'POST',body:JSON.stringify({provider:service.id,clientID:this.googleClientID.trim(),clientSecret:this.googleClientSecret})});
     this.googleClientID='';this.googleClientSecret='';
@@ -254,23 +244,6 @@ If I already have a connection, check its status first. Do not remove or replace
   private statusTone(state:string):StatusTone {
     return state==='ready'?'success':state==='needs-attention'?'warning':state==='authorized'||state==='pending'?'info':'neutral';
   }
-  private remoteDetail() {
-    return html`<div class="head"><h2>Remote services</h2><mux-ui-status-badge>Your connections</mux-ui-status-badge></div>
-      <p class="lead">Connect a public HTTPS service using an OAuth app you control. Credentials and tokens stay on this machine. After checking access, choose exactly which tools chats may use.</p>
-      <p class="note">Selected tools may change or delete data and can run without a separate muxterm confirmation. Grant only the OAuth scopes and tools you want all chat harnesses to use.</p>
-      ${this.remotes?.items.filter(item=>!item.provider).map(item=>html`<div class="box"><div class="head"><strong>${item.name}</strong><mux-ui-status-badge tone=${this.statusTone(item.state)}>${item.state==='ready'?'Ready':item.state==='authorized'?'Authorized':item.state==='needs-attention'?'Needs attention':'Sign in required'}</mux-ui-status-badge></div><p class="note"><code>${item.endpoint}</code></p><p class="note">${item.state==='ready'?`${item.toolCount} tools discovered; ${item.allowedTools.length} enabled for chats.`:item.error||'Authorize, then check access to discover tools.'}</p><div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy} @click=${()=>this.authorizeRemote(item.id)}>${item.state==='authorization-required'?'Authorize':'Reauthorize'}</mux-ui-button><mux-ui-button variant="secondary" ?disabled=${!!this.busy||item.state==='authorization-required'} @click=${()=>this.checkRemote(item.id)}>Check tools</mux-ui-button><mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${()=>this.removeRemote(item.id)}>Remove</mux-ui-button></div>
-      ${item.discoveredTools?.length?html`<h3>Tools available to enable</h3><p class="note">New tools are off until you select them. Enabled tools appear in new chats across all harnesses.</p>${item.discoveredTools.map(tool=>html`<label><input type="checkbox" .checked=${(this.allowedDraft[item.id]??item.allowedTools).includes(tool.name)} @change=${(e:Event)=>this.toggleRemoteTool(item,tool.name,(e.target as HTMLInputElement).checked)}><strong>${tool.name}</strong>${tool.description?html`<small> — ${tool.description}</small>`:nothing}</label>`)}<mux-ui-button variant="secondary" ?disabled=${!!this.busy||!this.allowedDraft[item.id]} @click=${()=>this.saveRemoteTools(item)}>Save enabled tools</mux-ui-button>`:nothing}</div>`)}
-      <div class="box"><strong>Add a remote service</strong><p class="note">Register a Web OAuth client with the exact callback URL below. The service must publish protected-resource metadata identifying its OAuth issuer and support PKCE.</p>
-        <mux-ui-text-field label="Callback URL" aria-label="Remote callback URL" readonly .value=${this.remotes?.callbackUrl||''}></mux-ui-text-field>
-        <mux-ui-text-field label="Name" aria-label="Remote service name" .value=${this.remoteName} @input=${(e:Event)=>this.remoteName=(e.target as MuxUITextField).value}></mux-ui-text-field>
-        <mux-ui-text-field label="Service endpoint" aria-label="Remote service endpoint" type="url" placeholder="https://service.example.com/endpoint" .value=${this.remoteEndpoint} @input=${(e:Event)=>this.remoteEndpoint=(e.target as MuxUITextField).value}></mux-ui-text-field>
-        <mux-ui-text-field label="OAuth issuer URL, if the service advertises more than one" aria-label="OAuth issuer URL" type="url" placeholder="https://login.example.com" .value=${this.remoteIssuer} @input=${(e:Event)=>this.remoteIssuer=(e.target as MuxUITextField).value}></mux-ui-text-field>
-        <mux-ui-text-field label="Client ID" aria-label="Remote client ID" autocomplete="off" .value=${this.remoteClientID} @input=${(e:Event)=>this.remoteClientID=(e.target as MuxUITextField).value}></mux-ui-text-field>
-        <mux-ui-text-field label="Client secret, if required" aria-label="Remote client secret" type="password" autocomplete="off" .value=${this.remoteClientSecret} @input=${(e:Event)=>this.remoteClientSecret=(e.target as MuxUITextField).value}></mux-ui-text-field>
-        <mux-ui-text-field label="Scopes, separated by spaces" aria-label="Remote OAuth scopes" .value=${this.remoteScopes} @input=${(e:Event)=>this.remoteScopes=(e.target as MuxUITextField).value}></mux-ui-text-field>
-        <div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy||!this.remoteName.trim()||!this.remoteEndpoint.trim()||!this.remoteClientID.trim()||!this.remoteScopes.trim()} @click=${this.createRemote}>Save connection</mux-ui-button></div></div>
-      <p class="note">This is bring-your-own OAuth setup. Service providers may define additional access requirements and charges.</p>`;
-  }
   private googleDetail(service:Service) {
     const items=this.remotes?.items.filter(item=>item.provider===service.id)??[];
     const ready=items.some(item=>item.state==='ready'&&item.allowedTools.length>0);
@@ -294,7 +267,11 @@ If I already have a connection, check its status first. Do not remove or replace
       ${items.map(item=>html`<div class="box"><div class="head"><strong>${item.name} connection</strong><mux-ui-status-badge tone=${item.state==='ready'&&!item.allowedTools.length?'warning':this.statusTone(item.state)}>${item.state==='ready'?(item.allowedTools.length?'Ready':'Choose tools'):item.state==='authorized'?'Authorized · check tools':item.state==='needs-attention'?'Needs attention':'Sign in required'}</mux-ui-status-badge></div>
         <p class="note">${item.error||(item.state==='ready'?`${item.toolCount} approved read tools found; ${item.allowedTools.length} enabled for chats.`:item.state==='authorized'?'Check service access to discover read tools.':'Sign in, then check service access to discover read tools.')}</p>
         <div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy} @click=${()=>this.authorizeRemote(item.id)}>${item.state==='authorization-required'?'Sign in with Google':'Reauthorize'}</mux-ui-button><mux-ui-button variant="secondary" ?disabled=${!!this.busy||item.state==='authorization-required'} @click=${()=>this.checkRemote(item.id)}>Check tools</mux-ui-button><mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${()=>this.removeRemote(item.id)}>Remove</mux-ui-button></div>
-        ${item.discoveredTools?.length?html`<h3>Enable read tools for chats</h3><p class="note">These tools are off until you save your selection. Enabled tools appear in new chats across all harnesses.</p>${item.discoveredTools.map(tool=>html`<label><input type="checkbox" .checked=${(this.allowedDraft[item.id]??item.allowedTools).includes(tool.name)} @change=${(e:Event)=>this.toggleRemoteTool(item,tool.name,(e.target as HTMLInputElement).checked)}><strong>${tool.name}</strong>${tool.description?html`<small> — ${tool.description}</small>`:nothing}</label>`)}<mux-ui-button variant="secondary" ?disabled=${!!this.busy||!this.allowedDraft[item.id]} @click=${()=>this.saveRemoteTools(item)}>Save enabled tools</mux-ui-button>`:nothing}</div>`)}
+        ${item.discoveredTools?.length?html`<h3>Enable read tools for chats</h3><p class="note">These tools are off until you save your selection. Enabled tools appear in new chats across all harnesses.</p>
+          <div class="tool-choices">${item.discoveredTools.map(tool=>html`<mux-ui-switch layout="row" .label=${tool.name} .description=${tool.description??''}
+            .checked=${(this.allowedDraft[item.id]??item.allowedTools).includes(tool.name)} ?disabled=${!!this.busy}
+            @change=${(event:Event)=>this.toggleRemoteTool(item,tool.name,(event.target as MuxUISwitch).checked)}></mux-ui-switch>`)}</div>
+          <mux-ui-button variant="secondary" ?disabled=${!!this.busy||!this.allowedDraft[item.id]} @click=${()=>this.saveRemoteTools(item)}>Save enabled tools</mux-ui-button>`:nothing}</div>`)}
       <p class="note">Google's service is in Developer Preview. A saved app registration or public endpoint alone does not establish access. Refresh tokens for external apps in Testing mode can expire after seven days.</p>`;
   }
   private githubDetail(g:GitHubState) {
@@ -358,7 +335,7 @@ If I already have a connection, check its status first. Do not remove or replace
         <mux-ui-nav-item label="Microsoft" status-tone=${this.providerStatusTone('microsoft')} ?active=${this.selected==='microsoft'} @click=${()=>this.selectService('microsoft')}></mux-ui-nav-item>
         <mux-ui-nav-item label="GitHub" status-tone=${this.providerStatusTone('github')} ?active=${this.selected==='github'} @click=${()=>this.selectService('github')}></mux-ui-nav-item></nav>
         <main><div class="detail">${this.error?html`<mux-ui-feedback kind="error" appearance="panel">${this.error}<mux-ui-button slot="action" variant="secondary" @click=${this.retry}>Try again</mux-ui-button></mux-ui-feedback>`:nothing}
-          ${this.selected==='browser-assistant'?html`<mux-browser-assistant></mux-browser-assistant>`:!this.data||!this.remotes||!this.microsoft?this.error?nothing:html`<mux-ui-feedback kind="loading">Loading connections…</mux-ui-feedback>`:this.selected==='remote'?this.remoteDetail():this.selected==='github'?this.githubDetail(this.data.github):this.selected==='microsoft'?this.microsoftDetail():this.googleProviderDetail()}</div></main></div>
+          ${!this.data||!this.remotes||!this.microsoft?this.error?nothing:html`<mux-ui-feedback kind="loading">Loading connections…</mux-ui-feedback>`:this.selected==='github'?this.githubDetail(this.data.github):this.selected==='microsoft'?this.microsoftDetail():this.googleProviderDetail()}</div></main></div>
       ${this.confirmation?html`<mux-ui-confirmation open .heading=${this.confirmation.heading} .description=${this.confirmation.description}
         .confirmLabel=${this.confirmation.confirmLabel} .busy=${!!this.busy}
         @confirmation-cancel=${this.cancelConfirmation} @confirmation-confirm=${this.confirmConfirmation}></mux-ui-confirmation>`:nothing}`;
