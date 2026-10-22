@@ -63,6 +63,7 @@ const settings = {
 };
 
 function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal' = 'none', scenario:'default'|'delegated'|'reports' = 'default'): ApiFixture {
+  let historyRequests = 0;
   const chat: SDKChat = {
     id, title:'Component library review', workspaceId:'project-1',
     projectPath:'/home/demo/muxterm', harness:'codex', state,
@@ -94,7 +95,10 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON(goalState === 'proposal' ? [chat,operator] : [chat]);
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-projects')) return fixtureJSON([{id:'project-1',name:'Component library',path:'/home/demo/muxterm'}]);
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-jobs')) return fixtureJSON([]);
-    if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/goal`)) return fixtureJSON(goal);
+    if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/goal`)) {
+      if (id.endsWith('-command-error')) return new Response('Goal unavailable',{status:503,headers:{'Content-Type':'text/plain'}});
+      return fixtureJSON(goal);
+    }
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-goal-ledger')) return fixtureJSON(goalState === 'none' ? [] : [goal]);
     if (method === 'GET' && url.pathname.endsWith('/api/voice/settings')) return fixtureJSON({enabled:false,restartRequired:false});
     if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/agents`)) return fixtureJSON(scenario === 'delegated' ? delegated.filter(event => event.type.startsWith('delegate.') || event.type.startsWith('tool.')) : []);
@@ -103,6 +107,7 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
       if (method === 'PATCH') return fixtureJSON({...settings,...JSON.parse(String(init?.body || '{}')) as Record<string,unknown>});
     }
     if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/history`)) {
+      if (id.endsWith('-history-error') || (id.endsWith('-history-recovery') && historyRequests++ < 2)) return fixtureJSON({error:'History unavailable'},503);
       return fixtureJSON({from:0,to:100,hasMore:false,events:url.searchParams.get('view') === 'messages' ? messages : events});
     }
     if (method === 'POST' && url.pathname.endsWith('/api/sdk-chat-attachments')) return fixtureJSON({id:'story-attachment',kind:'file'});
@@ -125,6 +130,59 @@ export default meta;
 type Story = StoryObj<ChatArgs>;
 
 export const Conversation: Story = {};
+const showHistoryFailure = async ({canvasElement}:{canvasElement:HTMLElement}) => {
+  await sdkChats.refresh();
+  const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+  if (chat) (chat as unknown as {reconnectFailures:number}).reconnectFailures = 6;
+};
+export const HistoryUnavailable: Story = {
+  args:{sessionId:'storybook-chat-history-error'},
+  parameters:{apiFixture:chatFixture('storybook-chat-history-error')},
+  play:showHistoryFailure,
+};
+export const PhoneHistoryUnavailable: Story = {
+  ...HistoryUnavailable,
+  args:{sessionId:'storybook-chat-phone-history-error'},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-history-error')},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+};
+export const HistoryRecovery: Story = {
+  args:{sessionId:'storybook-chat-history-recovery'},
+  parameters:{apiFixture:chatFixture('storybook-chat-history-recovery')},
+  play:showHistoryFailure,
+};
+const inspectGoalCommand = async ({canvasElement}:{canvasElement:HTMLElement}) => {
+  await sdkChats.refresh();
+  const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+  for (let attempt=0; attempt<40; attempt++) {
+    const field = chat?.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea');
+    if (field) {
+      field.value = '/goal';
+      field.dispatchEvent(new InputEvent('input',{bubbles:true,composed:true}));
+      await chat?.updateComplete;
+      chat?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Send message"]')?.click();
+      return;
+    }
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  throw new Error('The chat command composer did not render');
+};
+export const GoalCommandNotice: Story = {
+  args:{sessionId:'storybook-chat-command-notice'},
+  parameters:{apiFixture:chatFixture('storybook-chat-command-notice')},
+  play:inspectGoalCommand,
+};
+export const GoalCommandUnavailable: Story = {
+  args:{sessionId:'storybook-chat-command-error'},
+  parameters:{apiFixture:chatFixture('storybook-chat-command-error')},
+  play:inspectGoalCommand,
+};
+export const PhoneGoalCommandUnavailable: Story = {
+  ...GoalCommandUnavailable,
+  args:{sessionId:'storybook-chat-phone-command-error'},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-command-error')},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+};
 export const MessageEdit: Story = {
   args:{sessionId:'storybook-chat-message-edit'},
   parameters:{apiFixture:chatFixture('storybook-chat-message-edit')},

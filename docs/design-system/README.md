@@ -175,6 +175,15 @@ Touch-enabled Chromium measured send, stop, attachment removal and voice stop
 controls at 44 px without horizontal overflow. In a fresh dev-local workspace,
 Chromium opened the real chat's goal ledger and utility pane, attached and
 removed a file without sending a message, and checked the phone composer.
+Initial history loading, connection errors and goal-command notices now use
+shared Feedback. Error messages have alert semantics; a failed connection
+keeps Retry, and a successful read-only `/goal` inspection has status
+semantics. Storybook covers loading, desktop and phone failures, command
+notices and recovery to real fixture messages.
+In a fresh dev-local workspace, Chromium failed seven browser-only history
+requests to reach the real reconnect state, then Retry loaded the chat
+transcript. A read-only `/goal` command displayed the shared status notice.
+The phone Retry target measured 44 px with no horizontal overflow.
 The narrow shell supplies the chat title once; the inner chat row keeps its
 actions.
 Delegated work now uses Action Tile with a visible Status Badge and an
