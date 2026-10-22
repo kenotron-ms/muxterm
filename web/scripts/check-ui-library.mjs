@@ -11,13 +11,15 @@ function styleSource(source) {
     ...source.matchAll(/\bsurfaceCSS\s*=\s*`([\s\S]*?)`/g),
     ...source.matchAll(/\bvisualizationCSS\s*=\s*`([\s\S]*?)`/g),
     ...source.matchAll(/\bstyle\.textContent\s*=\s*`([\s\S]*?)`/g),
-  ].map(match => match[1]).join('\n');
+    ...source.matchAll(/<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/gi),
+    ...source.matchAll(/\bunsafeCSS\(\s*(['"`])([\s\S]*?)\1\s*\)/g),
+  ].map(match => match[2] ?? match[1]).join('\n');
 }
 
 function literalScaleCount(styles) {
   // Keep the declaration separator available for the next match.
   return [...styles.matchAll(/(?:(?<=;)|(?<=\{)|^)\s*(?:padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?|gap|row-gap|column-gap|border-radius|font-size)\s*:\s*([^;{}]+);/gm)]
-    .filter(match => /\b\d+(?:\.\d+)?(?:px|rem|em)\b/.test(match[1])).length;
+    .filter(match => /\b(?:[1-9]\d*(?:\.\d+)?|0?\.\d+)(?:px|rem|em)\b/.test(match[1])).length;
 }
 
 function literalColorCount(styles) {
@@ -26,16 +28,21 @@ function literalColorCount(styles) {
 
 for (const file of files.filter(name => name.endsWith('.ts') && !name.endsWith('.stories.ts'))) {
   const source = await readFile(new URL(file, directory), 'utf8');
-  if (!source.includes('@customElement(')) continue;
   const styles = styleSource(source);
 
-  const story = file.replace(/\.ts$/, '.stories.ts');
-  if (!files.includes(story)) {
-    console.error(`${join('src/ui', file)}: shared custom elements need a matching Storybook story`);
-    failed = true;
+  if (source.includes('@customElement(')) {
+    const story = file.replace(/\.ts$/, '.stories.ts');
+    if (!files.includes(story)) {
+      console.error(`${join('src/ui', file)}: shared custom elements need a matching Storybook story`);
+      failed = true;
+    }
   }
   if (/var\(--(?:chrome|mux)-/.test(source)) {
     console.error(`${join('src/ui', file)}: use --ui-* semantic tokens instead of legacy theme variables`);
+    failed = true;
+  }
+  if (/\bunsafeCSS\s*\(/.test(source)) {
+    console.error(`${join('src/ui', file)}: shared styles cannot use unsafeCSS; use a semantic token`);
     failed = true;
   }
   if (/z-index\s*:\s*-?\d/.test(styles)) {
@@ -69,6 +76,13 @@ for (const name of Object.keys(baseline)) {
 
 for (const [name, url] of featureFiles) {
   const source = await readFile(url, 'utf8');
+  // Sidebar width bounds share numeric constants with drag behavior. It is the
+  // only feature allowed to embed those constants in Lit CSS.
+  const unsafeCSSCalls = [...source.matchAll(/\bunsafeCSS\s*\(/g)].length;
+  if (unsafeCSSCalls !== (name === 'components/mux-sidebar.ts' ? 2 : 0)) {
+    console.error(`src/${name}: review unsafeCSS usage; only the two sidebar width bounds are allowed`);
+    failed = true;
+  }
   if (name !== 'app.ts' && source.includes('@customElement(') &&
       !componentFiles.includes(name.split('/').at(-1).replace(/\.ts$/, '.stories.ts'))) {
     console.error(`src/${name}: Lit custom elements need a matching Storybook story`);

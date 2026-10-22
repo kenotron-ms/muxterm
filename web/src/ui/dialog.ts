@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { visuallyHidden } from './visually-hidden.js';
 
 export type DialogSize = 'standard' | 'compact';
 export type DialogPresentation = 'centered' | 'adaptive';
@@ -35,7 +36,7 @@ export class MuxUIDialog extends LitElement {
     dialog[open] { display: flex; flex-direction: column; }
     dialog:not([open]) { display: none; }
     dialog:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
-    .a11y-description { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+    .a11y-description { ${visuallyHidden} }
     dialog::backdrop {
       background: var(--ui-backdrop);
       background-image: var(--ui-app-backdrop-image);

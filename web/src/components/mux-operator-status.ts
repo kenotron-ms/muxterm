@@ -14,6 +14,7 @@ import '../ui/feedback.js';
 import '../ui/filter-chip.js';
 import '../ui/status-badge.js';
 import type { StatusTone } from '../ui/status-badge.js';
+import { visuallyHidden } from '../ui/visually-hidden.js';
 
 type Snapshot = { operator: SDKChat; lanes: SDKChat[] };
 type LaneFilter = 'all' | 'attention' | 'running' | 'done';
@@ -53,7 +54,7 @@ export class MuxOperatorStatus extends LitElement {
     .filters { display:flex; flex-wrap:wrap; gap:var(--ui-space-3); margin:0 0 var(--ui-space-5); }
     mux-ui-feedback { margin-bottom:var(--ui-space-5); }
     mux-ui-feedback .hint { margin-top:var(--ui-space-3); }
-    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    .sr-only { ${visuallyHidden} }
     .table-scroll { width:100%; min-width:0; overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
     table { width:100%; border-collapse:collapse; table-layout:fixed; }
     col.lane-col { width:auto; }

@@ -107,7 +107,7 @@ export class MuxReconnectOverlay extends LitElement {
      * attempted; when nothing is, showing one is simply untrue.
      */
     .mark {
-      font-size: 28px;
+      font-size: var(--ui-text-4xl);
       line-height: 1;
       color: var(--ui-danger);
     }

@@ -23,6 +23,7 @@ import '../ui/breadcrumb.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
 import '../ui/status-badge.js';
+import { visuallyHidden } from '../ui/visually-hidden.js';
 import { listboxIndexForKey } from '../ui/listbox.js';
 import '../ui/listbox-option.js';
 import '../ui/select.js';
@@ -240,7 +241,7 @@ export class MuxSDKChat extends LitElement {
     .pane-controls { display:inline-flex; align-items:center; flex:none; }
     .chat-title { display:flex; align-items:center; gap:var(--ui-space-3); min-width:0; overflow:hidden; }
     .chat-title h1 { min-width:0; }
-    :host([compact]) .chat-title { position:absolute; width:var(--ui-space-px); height:var(--ui-space-px); overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+    :host([compact]) .chat-title { ${visuallyHidden} }
     .operator-crumb { display:inline-flex; flex:none; color:var(--ui-text-muted); }
     .chat-title small { display:block; color:var(--ui-text-muted); font-size:var(--ui-content-font-size); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .layout { display:flex; flex:1; min-height:0; position:relative; }
@@ -343,7 +344,7 @@ export class MuxSDKChat extends LitElement {
     .user .message-actions { justify-content:flex-end; }
     .block:hover .message-actions,.block:focus-within .message-actions { opacity:1; }
     .message-actions mux-ui-button { --ui-text:var(--ui-text-muted); }
-    .message-actions .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:calc(-1 * var(--ui-space-px)); overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+    .message-actions .sr-only { ${visuallyHidden} }
     .message-time { margin-left:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-lg); font-variant-numeric:tabular-nums; white-space:nowrap; }
     .user .message-time { order:-1; margin:0 var(--ui-space-3) 0 0; }
     .message-edit { box-sizing:border-box; width:min(82%,660px); padding:var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }

@@ -74,7 +74,7 @@
   "components/mux-operator-status.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 1,
+    "literalScale": 0,
     "nativeControls": 0
   },
   "components/mux-pane-picker.ts": {
@@ -134,7 +134,7 @@
   "components/reconnect-overlay.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 1,
+    "literalScale": 0,
     "nativeControls": 0
   },
   "components/settings-surface.ts": {
@@ -146,7 +146,7 @@
   "components/title-bar.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 1,
+    "literalScale": 0,
     "nativeControls": 0
   }
 }
