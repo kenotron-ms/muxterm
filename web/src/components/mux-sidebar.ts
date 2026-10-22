@@ -10,6 +10,7 @@ import type { SessionRunState } from '../lib/session-state.js';
 import { needsInputByWorkspace } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
 import { CalendarClock, ChevronDown, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
+import '../ui/button.js';
 import '../ui/nav-item.js';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
@@ -305,6 +306,8 @@ export class MuxSidebar extends LitElement {
       padding: var(--ui-space-4) var(--ui-space-3) var(--ui-space-5);
       border-top: 1px solid var(--ui-border);
     }
+    .workspace-create-action { margin-bottom:var(--ui-space-3); }
+    .workspace-create-action::part(button) { justify-content:flex-start; }
   `;
 
   // ---------------------------------------------------------------------------
@@ -1470,7 +1473,10 @@ export class MuxSidebar extends LitElement {
   private _renderFooter() {
     const version = this._updateStatus?.currentVersion;
     const description = version ? version.startsWith('v') ? version : `v${version}` : '';
-    return html`<div class="footer"><mux-ui-nav-item label="Settings" description=${description}
+    return html`<div class="footer"><mux-ui-button class="workspace-create-action" variant="secondary" full-width
+      @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', {detail:{host:''},bubbles:true,composed:true}))}>
+      <span slot="leading">${icon(Plus,{size:16})}</span>New workspace
+    </mux-ui-button><mux-ui-nav-item label="Settings" description=${description}
       @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action: 'settings' }, bubbles: true, composed: true }))}>
       <span slot="icon">${icon(Settings, { size: 16 })}</span>
     </mux-ui-nav-item></div>`;
