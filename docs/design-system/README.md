@@ -14,6 +14,12 @@ Palette toolbar to review dark and light themes and the viewport toolbar to
 review phone width. `npm run build:storybook` creates a static catalog in
 `web/storybook-static/`.
 
+The Theme Lab stories show how app chrome, controls, menus, and document surfaces
+respond to scoped semantic color and backdrop overrides. Change the scheme and
+backdrop controls to check a proposed theme at desktop and phone widths. The
+component-library pull request workflow uploads the built catalog as the
+`muxterm-component-library` artifact for reviewers.
+
 The `Screens/` and `Composites/` stories render production Lit components.
 `web/src/stories/api-fixture.ts` replaces their API responses inside the
 Storybook frame. Stories can show an error or action state, but they cannot
