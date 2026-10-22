@@ -9,6 +9,7 @@ function styleSource(source) {
   return [
     ...source.matchAll(/\bcss`([\s\S]*?)`/g),
     ...source.matchAll(/\bsurfaceCSS\s*=\s*`([\s\S]*?)`/g),
+    ...source.matchAll(/\bvisualizationCSS\s*=\s*`([\s\S]*?)`/g),
     ...source.matchAll(/\bstyle\.textContent\s*=\s*`([\s\S]*?)`/g),
   ].map(match => match[1]).join('\n');
 }
@@ -37,7 +38,7 @@ for (const file of files.filter(name => name.endsWith('.ts') && !name.endsWith('
     console.error(`${join('src/ui', file)}: use --ui-* semantic tokens instead of legacy theme variables`);
     failed = true;
   }
-  if (/z-index\s*:\s*-?\d/.test(source)) {
+  if (/z-index\s*:\s*-?\d/.test(styles)) {
     console.error(`${join('src/ui', file)}: use the shared --ui-z-* layer tokens instead of a literal z-index`);
     failed = true;
   }

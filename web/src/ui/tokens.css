@@ -112,6 +112,8 @@
   --ui-page-content-width: 900px;
   --ui-connection-content-width: 760px;
   --ui-connection-service-picker-width: 400px;
+  --ui-chart-height: 150px;
+  --ui-chart-bar-min-height: 3px;
 
   --ui-surface-base: var(--chrome-body);
   --ui-surface-raised: var(--chrome-bar);
@@ -157,6 +159,8 @@
   --ui-document-accent: var(--ui-accent);
   --ui-document-border: #e4e6e8;
   --ui-document-hover: #f2f3f5;
+  --ui-document-chart-fill: color-mix(in srgb, var(--ui-document-accent) 55%, var(--ui-document-surface));
+  --ui-document-chart-active: var(--ui-document-accent);
 
   /* Future themes may provide images or gradients without changing components. */
   --ui-app-backdrop-image: none;

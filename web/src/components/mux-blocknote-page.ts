@@ -69,7 +69,7 @@ export class MuxBlockNotePage extends HTMLElement {
     const shadow = this.shadowRoot || this.attachShadow({ mode: 'open' });
     if (!this.shadowRoot?.querySelector('style')) {
       const style = document.createElement('style');
-      style.textContent = `${blockNoteCSS}\n${mantineCSS}\n${visualizationCSS}\n:host{display:block;min-height:100px}.bn-container{background:transparent!important;color:var(--ui-document-text)!important}.bn-editor{padding-inline:0!important}`;
+      style.textContent = `${blockNoteCSS}\n${mantineCSS}\n${visualizationCSS}\n:host{display:block;min-height:100px}.bn-container{--bn-colors-editor-background:var(--ui-document-surface);--bn-colors-editor-text:var(--ui-document-text);background:transparent!important;color:var(--ui-document-text)!important}.bn-editor{padding-inline:0!important}`;
       shadow.append(style);
     }
     // BlockNote owns the inner textbox and replaces it when a page changes.

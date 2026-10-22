@@ -24,6 +24,10 @@ const captures = [
   { file: 'project-editor-phone.png', id: 'composites-chat-list--phone-edit-project', width: 390, height: 844, ready: 'mux-ui-dialog[open]' },
   { file: 'operator-lane-phone.png', id: 'composites-operator-status--phone-expanded-lane', width: 390, height: 844, ready: 'mux-operator-status .detail' },
   { file: 'pane-picker-phone.png', id: 'composites-mobile-pane-picker--many-panes', width: 390, height: 844, ready: 'mux-pane-picker .sheet:popover-open' },
+  { file: 'page-chart-bar-desktop.png', id: 'composites-page-visualization--bar', width: 1000, height: 700, ready: 'mux-blocknote-page .page-widget', readyText: 'Requests handled' },
+  { file: 'page-chart-line-desktop.png', id: 'composites-page-visualization--line', width: 1000, height: 700, ready: 'mux-blocknote-page .page-widget', readyText: 'Requests handled' },
+  { file: 'page-chart-dark-document.png', id: 'composites-page-visualization--dark-document', width: 1000, height: 700, ready: 'mux-blocknote-page .page-widget', readyText: 'Requests handled' },
+  { file: 'page-chart-phone.png', id: 'composites-page-visualization--phone', width: 390, height: 844, ready: 'mux-blocknote-page .page-widget', readyText: 'Requests handled' },
 ];
 
 await mkdir(outputDir, { recursive: true });

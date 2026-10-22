@@ -38,6 +38,11 @@ Storybook frame. Stories can show an error or action state, but they cannot
 verify terminal, sessiond, or service behavior. Use the isolated `make dev-local`
 instance on port 8313 and a real browser for that verification.
 
+The Page visualization stories render the actual BlockNote React island inside
+the Lit catalog. Bar, line, custom document palette, and phone states show how
+the chart and editor surface inherit `--ui-document-*` tokens. Chart points
+remain native or keyboard-operable buttons, while BlockNote owns editing.
+
 ## Rules for new interface work
 
 1. Start with a pattern in Storybook. Add missing states to the shared
