@@ -64,7 +64,7 @@ export class MuxScheduledJobs extends LitElement {
 
   static override styles = css`
     :host {
-      position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; overflow:hidden;
+      position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; overflow:hidden;
       background:var(--ui-surface-base); color:var(--ui-text);
       font:var(--ui-text-md)/1.5 var(--ui-font-sans);
     }

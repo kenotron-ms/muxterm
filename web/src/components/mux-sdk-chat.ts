@@ -211,7 +211,7 @@ export class MuxSDKChat extends LitElement {
   private parentScrollTop = 0;
   static styles = css`
     ${subtleScrollbars}
-    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-content-font-size)/1.55 var(--ui-content-font-family); }
+    :host { position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-content-font-size)/1.55 var(--ui-content-font-family); }
     .topbar { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:var(--ui-space-4); padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
     .topbar.with-utility { width:calc(100% - var(--utility-width)); padding-right:var(--ui-space-5); }
     .workspace-crumb { display:inline-flex; align-items:center; gap:var(--ui-space-4); min-width:0; max-width:38%; color:var(--ui-text-muted); font:500 var(--ui-text-sm) var(--ui-font-sans); white-space:nowrap; }
@@ -249,7 +249,7 @@ export class MuxSDKChat extends LitElement {
     .layout.preview-focused .drawer-resizer { display:none; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
     .body { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-10) var(--ui-space-8) var(--ui-space-11); display:flex; flex-direction:column; scrollbar-gutter:stable both-edges; overflow-anchor:none; }
-    .scroll-bottom-row { position:relative; z-index:2; height:0; }
+    .scroll-bottom-row { position:relative; z-index:var(--ui-z-local); height:0; }
     .scroll-bottom { position:absolute; left:50%; bottom:var(--ui-space-5); transform:translateX(-50%); }
     .scroll-bottom::part(button) { border-radius:var(--ui-radius-pill); box-shadow:var(--ui-shadow-menu); }
     .virtual-spacer { width:1px; flex:none; pointer-events:none; }
@@ -416,7 +416,7 @@ export class MuxSDKChat extends LitElement {
     .attachment .status.failed { color:var(--ui-danger); }
     .attachment-remove { position:absolute; top:var(--ui-space-2); right:var(--ui-space-2); }
     .file-input { display:none; }
-    .drop-overlay { position:absolute; inset:8px; z-index:10; display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb,var(--ui-surface-base) 92%,transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
+    .drop-overlay { position:absolute; inset:8px; z-index:var(--ui-z-drag-overlay); display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb,var(--ui-surface-base) 92%,transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
     /* The border extends 15px beyond each 760px transcript edge so typed text aligns with replies. */
     .composer { box-sizing:border-box; max-width:var(--ui-chat-content-width); margin:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-2xl); background:var(--ui-surface-raised); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); box-shadow:var(--ui-shadow-control); transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
@@ -430,7 +430,7 @@ export class MuxSDKChat extends LitElement {
     .goal-editor mux-ui-text-area { display:block; width:100%; }
     .goal-editor p, .goal-utility p { color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.5; }
     .goal-editor-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:var(--ui-space-4); margin-top:var(--ui-space-6); }
-    .goal-utility { position:absolute; z-index:60; top:0; right:0; bottom:0; box-sizing:border-box; width:min(470px,100%); overflow:auto; padding:var(--ui-space-7); background:var(--ui-surface-raised); border-left:1px solid var(--ui-border); box-shadow:var(--ui-shadow-side); }
+    .goal-utility { position:absolute; z-index:var(--ui-z-side-panel); top:0; right:0; bottom:0; box-sizing:border-box; width:min(470px,100%); overflow:auto; padding:var(--ui-space-7); background:var(--ui-surface-raised); border-left:1px solid var(--ui-border); box-shadow:var(--ui-shadow-side); }
     .goal-utility header { display:flex; align-items:center; justify-content:space-between; }
     .goal-utility mux-ui-feedback { margin-top:var(--ui-space-4); }
     .goal-ledger-record { border-top:1px solid var(--ui-border); padding:var(--ui-space-6) 0; overflow-wrap:anywhere; }
@@ -468,8 +468,8 @@ export class MuxSDKChat extends LitElement {
     @media (prefers-reduced-motion:reduce) { .voice-bars i { transition:none; } .send-icon { animation:none; } }
     .steer { margin-left:auto; }
     .status { color:color-mix(in srgb,var(--ui-warning) 70%,var(--ui-text)); font-size:var(--ui-content-font-size); }
-    .drawer { position:relative; z-index:5; flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); border-left:1px solid var(--ui-border); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
-    .drawer-resizer { position:absolute; z-index:2; left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
+    .drawer { position:relative; z-index:var(--ui-z-drawer); flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); border-left:1px solid var(--ui-border); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
+    .drawer-resizer { position:absolute; z-index:var(--ui-z-local); left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--ui-accent) 25%,transparent); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
     @media(max-width:700px) { .body { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-9); } .composer-wrap { padding:0 var(--ui-space-5) var(--ui-space-5); } .drawer { box-sizing:border-box; position:absolute; right:0; top:0; bottom:0; width:100%; height:100%; margin-top:0; box-shadow:var(--ui-shadow-side-strong); } .drawer-resizer { display:none; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar,.topbar.with-utility { width:100%; padding-left:var(--ui-space-5); padding-right:var(--ui-space-5); gap:var(--ui-space-3); } .workspace-crumb,.workspace-divider { display:none; } .chat-title,.breadcrumbs { flex:1; } }

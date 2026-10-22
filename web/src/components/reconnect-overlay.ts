@@ -34,7 +34,7 @@ export class MuxReconnectOverlay extends LitElement {
          black wash makes the dialog text below it unreadable. */
       background: color-mix(in srgb, var(--ui-surface-base) 82%, transparent);
       background-image: var(--ui-overlay-backdrop-image);
-      z-index: 2000;
+      z-index: var(--ui-z-reconnect-overlay);
       display: flex;
       align-items: center;
       justify-content: center;

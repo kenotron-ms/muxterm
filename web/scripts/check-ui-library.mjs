@@ -55,6 +55,10 @@ for (const [name, url] of featureFiles) {
     ...source.matchAll(/\bsurfaceCSS\s*=\s*`([\s\S]*?)`/g),
     ...source.matchAll(/\bstyle\.textContent\s*=\s*`([\s\S]*?)`/g),
   ].map(match => match[1]).join('\n');
+  if (/z-index\s*:\s*-?\d/.test(styles)) {
+    console.error(`src/${name}: use the shared --ui-z-* layer tokens instead of a literal z-index`);
+    failed = true;
+  }
   const counts = {
     legacyTokens: [...styles.matchAll(/var\(--(?:chrome|mux)-[\w-]+/g)].length,
     literalColors: [...styles.matchAll(/#[\da-fA-F]{3,8}\b/g)].length,

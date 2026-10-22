@@ -65,11 +65,25 @@
   --ui-nav-height: var(--mux-titlebar-height, var(--mux-dock-height, 44px));
   --ui-motion-fast: 120ms;
   --ui-motion-pulse: 1.5s;
-  /* Overlay order within a feature's stacking context. Modal dialogs use the
-     browser top layer; sheets sit above menus and select lists on phones. */
+  /* Local layers are scoped by their owning screen. These values preserve the
+     screen hierarchy while making every feature use the same named scale. */
+  --ui-z-local: 2;
+  --ui-z-screen: 4;
+  --ui-z-drawer: 5;
+  --ui-z-utility: 6;
+  --ui-z-drag-overlay: 10;
   --ui-z-dropdown: 20;
   --ui-z-menu: 30;
+  --ui-z-window-chrome: 50;
+  --ui-z-side-panel: 60;
   --ui-z-sheet: 70;
+  /* App-wide layers sit above feature contexts. Modal dialogs use the browser
+     top layer, which is above every numeric z-index here. */
+  --ui-z-toast: 950;
+  --ui-z-connection-overlay: 1000;
+  --ui-z-reconnect-overlay: 2000;
+  --ui-z-alert-stack: 2500;
+  --ui-z-settings-page: 3000;
   --ui-toast-offset: var(--ui-space-9);
   --ui-toast-min-width: 240px;
   --ui-dialog-width: 600px;

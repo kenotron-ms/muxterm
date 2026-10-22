@@ -65,7 +65,7 @@ export class MuxMicButton extends LitElement {
       bottom: var(--ui-toast-offset);
       left: 50%;
       transform: translateX(-50%);
-      z-index: 950;
+      z-index: var(--ui-z-toast);
       min-width: min(var(--ui-toast-min-width), 92vw);
       max-width: 92vw;
       box-sizing: border-box;

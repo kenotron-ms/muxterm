@@ -220,7 +220,7 @@ export class MuxApp extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 1000;
+      z-index: var(--ui-z-connection-overlay);
       color: var(--ui-warning);
       font-size: var(--ui-text-xl);
     }
@@ -238,7 +238,7 @@ export class MuxApp extends LitElement {
       flex-direction: column;
       gap: var(--ui-space-4);
       width: min(560px, calc(100vw - 24px));
-      z-index: 2500;
+      z-index: var(--ui-z-alert-stack);
     }
 
     .close-alert {
@@ -271,7 +271,7 @@ export class MuxApp extends LitElement {
     .settings-page {
       position: fixed;
       inset: 0;
-      z-index: 3000;
+      z-index: var(--ui-z-settings-page);
       display: flex;
       background: var(--ui-surface-base);
     }
@@ -351,7 +351,7 @@ export class MuxApp extends LitElement {
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
     .terminal-utility { box-sizing:border-box; width:min(360px,42%); min-width:270px; flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); }
     .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
-    @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:6; top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:var(--ui-shadow-side); } }
+    @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,360px); min-width:0; box-shadow:var(--ui-shadow-side); } }
 
     /* Keep the 4px resize target, but continue the title bar across its top.
        Painting the whole gutter as chrome-body leaves a visible stripe between

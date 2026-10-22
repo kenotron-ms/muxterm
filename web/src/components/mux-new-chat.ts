@@ -97,7 +97,7 @@ export class MuxNewChat extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
+    :host { position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
     .topbar { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
     .topbar .project { display:inline-flex; align-items:center; gap:var(--ui-space-3); min-width:0; max-width:38%; color:var(--ui-text-muted); font:500 var(--ui-text-sm) var(--ui-font-sans); white-space:nowrap; }
     .topbar .project span { overflow:hidden; text-overflow:ellipsis; }
@@ -141,7 +141,7 @@ export class MuxNewChat extends LitElement {
     .attachment .status.failed { color:var(--ui-danger-text); }
     .attachment mux-ui-button { position:absolute; top:var(--ui-space-2); right:var(--ui-space-2); }
     .file-input { display:none; }
-    .drop-overlay { position:absolute; inset:var(--ui-space-4); z-index:10; display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb, var(--ui-surface-base) 92%, transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
+    .drop-overlay { position:absolute; inset:var(--ui-space-4); z-index:var(--ui-z-drag-overlay); display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb, var(--ui-surface-base) 92%, transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
     .main > .content > mux-ui-feedback { margin:var(--ui-space-5) 0; }
     .setup-intro { margin:0 0 var(--ui-space-7); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .setup-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(var(--ui-new-chat-setup-card-width),1fr)); gap:var(--ui-space-5); }

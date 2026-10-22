@@ -26,6 +26,24 @@ const colorTokens = [
   ['Document hover', '--ui-document-hover'],
 ] as const;
 
+const layerTokens = [
+  ['Local content', '--ui-z-local', 2],
+  ['Screen', '--ui-z-screen', 4],
+  ['Drawer', '--ui-z-drawer', 5],
+  ['Utility rail', '--ui-z-utility', 6],
+  ['Drag overlay', '--ui-z-drag-overlay', 10],
+  ['Dropdown', '--ui-z-dropdown', 20],
+  ['Menu', '--ui-z-menu', 30],
+  ['Window chrome', '--ui-z-window-chrome', 50],
+  ['Side panel', '--ui-z-side-panel', 60],
+  ['Phone sheet', '--ui-z-sheet', 70],
+  ['Toast', '--ui-z-toast', 950],
+  ['Connection overlay', '--ui-z-connection-overlay', 1000],
+  ['Reconnect overlay', '--ui-z-reconnect-overlay', 2000],
+  ['Alert stack', '--ui-z-alert-stack', 2500],
+  ['Settings page', '--ui-z-settings-page', 3000],
+] as const;
+
 const meta = {
   title: 'Foundations/Tokens',
   tags: ['autodocs'],
@@ -58,9 +76,9 @@ const meta = {
         <mux-ui-feedback kind="error" appearance="panel" align="center" style="min-width:var(--ui-toast-min-width);box-shadow:var(--ui-shadow-menu)">Toast feedback surface</mux-ui-feedback>
       </div>
       <h2 style="font-size:var(--ui-text-2xl);margin:var(--ui-space-9) 0 var(--ui-space-5)">Layer order</h2>
-      <p style="color:var(--ui-text-muted);margin:0 0 var(--ui-space-5)">Lists sit under menus. Phone sheets sit above both. Modal dialogs use the browser top layer.</p>
-      <div style="display:flex;flex-wrap:wrap;gap:var(--ui-space-5)">
-        ${([['Dropdown', '--ui-z-dropdown', '20'], ['Menu', '--ui-z-menu', '30'], ['Phone sheet', '--ui-z-sheet', '70']] as const).map(([label, token, value]) => html`<div style="min-width:140px;padding:var(--ui-space-5);border:1px solid var(--ui-border);border-radius:var(--ui-radius-md);background:var(--ui-surface-raised)"><strong>${label}</strong><div style="color:var(--ui-text-muted);font:var(--ui-text-xs) var(--ui-font-mono)">${token}: ${value}</div></div>`)}
+      <p style="color:var(--ui-text-muted);margin:0 0 var(--ui-space-5)">Local layers share a screen context. App-wide layers sit above screens. Modal dialogs use the browser top layer.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:var(--ui-space-4)">
+        ${layerTokens.map(([label, token, value]) => html`<div style="padding:var(--ui-space-5);border:1px solid var(--ui-border);border-radius:var(--ui-radius-md);background:var(--ui-surface-raised)"><strong>${label}</strong><div style="color:var(--ui-text-muted);font:var(--ui-text-xs) var(--ui-font-mono)">${token}: ${value}</div></div>`)}
       </div>
     </section>`,
 } satisfies Meta;
