@@ -13,12 +13,14 @@ import './mux-operator-status.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/menu.js';
+import '../ui/rail-row.js';
 import '../ui/select.js';
 import '../ui/tab-strip.js';
 import type { TabStripItem } from '../ui/tab-strip.js';
 import '../ui/text-field.js';
 import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextField } from '../ui/text-field.js';
+import type { MuxUIRailRow } from '../ui/rail-row.js';
 type Artifact = {
   path: string; name: string; size: number; modified: number;
   kind: 'markdown' | 'text' | 'image' | 'download'; contentType: string;
@@ -578,8 +580,10 @@ export class MuxSDKUtility extends LitElement {
       const path = folder === '.' ? entry.name : `${folder}/${entry.name}`;
       const expanded = entry.dir && this.expandedDirs.has(path);
       if (query && !entry.name.toLowerCase().includes(query) && !(entry.dir && this.treeContainsMatch(path, query))) continue;
-      rows.push(html`<button class="file-entry ${this.selected === path ? 'selected' : ''} ${entry.dir ? 'directory' : ''}" role="treeitem" aria-level=${depth + 1} aria-expanded=${entry.dir ? String(expanded) : nothing} aria-selected=${String(this.selected === path)} data-path=${path} style=${`--depth:${depth}`} title=${path} @click=${() => void (entry.dir ? this.toggleDirectory(path) : this.openFile(path))}>
-        <span class="tree-chevron">${entry.dir ? icon(expanded ? ChevronDown : ChevronRight, { size: 13 }) : nothing}</span><span class="file-glyph">${icon(fileGlyph(entry.name, entry.dir, expanded), { size: 16 })}</span><span class="file-name">${entry.name}</span>${!entry.dir ? html`<span class="file-size">${readableSize(entry.size)}</span>` : nothing}</button>`);
+      rows.push(html`<mux-ui-rail-row tree ?directory=${entry.dir} ?selected=${this.selected === path} .expanded=${expanded} .level=${depth + 1} .depth=${depth} label=${entry.name} detail=${entry.dir ? '' : readableSize(entry.size)} tooltip=${path} data-path=${path} @click=${() => void (entry.dir ? this.toggleDirectory(path) : this.openFile(path))}>
+        ${entry.dir ? html`<span slot="chevron">${icon(expanded ? ChevronDown : ChevronRight, { size: 13 })}</span>` : nothing}
+        <span slot="icon">${icon(fileGlyph(entry.name, entry.dir, expanded), { size: 16 })}</span>
+      </mux-ui-rail-row>`);
       if (expanded) rows.push(...this.treeRows(path, depth + 1));
     }
     return rows;
@@ -590,17 +594,17 @@ export class MuxSDKUtility extends LitElement {
   }
   private onTreeKey(event: KeyboardEvent) {
     if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key)) return;
-    const target = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
+    const target = (event.target as HTMLElement).closest<MuxUIRailRow>('mux-ui-rail-row[tree]');
     if (!target) return;
-    const items = [...this.querySelectorAll<HTMLElement>('.file-list [role="treeitem"]')];
+    const items = [...this.querySelectorAll<MuxUIRailRow>('.file-list mux-ui-rail-row[tree]')];
     const index = items.indexOf(target);
     if (index < 0) return;
     event.preventDefault();
     if (event.key === 'ArrowDown') items[Math.min(items.length - 1, index + 1)]?.focus();
     else if (event.key === 'ArrowUp') items[Math.max(0, index - 1)]?.focus();
-    else if (event.key === 'ArrowRight' && target.getAttribute('aria-expanded') === 'false') void this.toggleDirectory(target.dataset.path || '');
+    else if (event.key === 'ArrowRight' && target.directory && !target.expanded) void this.toggleDirectory(target.dataset.path || '');
     else if (event.key === 'ArrowLeft') {
-      if (target.getAttribute('aria-expanded') === 'true') void this.toggleDirectory(target.dataset.path || '');
+      if (target.directory && target.expanded) void this.toggleDirectory(target.dataset.path || '');
       else {
         const parent = target.dataset.path?.split('/').slice(0, -1).join('/');
         if (parent) items.find(item => item.dataset.path === parent)?.focus();
@@ -697,7 +701,7 @@ export class MuxSDKUtility extends LitElement {
       ${this.filesRailOpen ? html`<div class="browser">
         <div class="browser-heading"><div class="explorer-label">FILES</div><div class="explorer-actions"><button class="icon-button" aria-label="Quick open file" title="Quick Open · Ctrl+P" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})}</button><button class="icon-button" aria-label="Refresh file tree" title="Refresh file tree" @click=${() => void this.refreshTree()}>${icon(RefreshCw,{size:15})}</button><button class="icon-button" aria-label="Collapse folders" title="Collapse folders" @click=${() => { this.expandedDirs = new Set(['.']); this.paintAll(); }}>${icon(ChevronsDownUp,{size:15})}</button></div></div>
         <div class="browser-tools"><mux-ui-text-field size="small" type="search" aria-label="Filter visible files" placeholder="Filter files…" .value=${this.fileQuery} @input=${(event: InputEvent) => { this.fileQuery = (event.target as MuxUITextField).value; this.paintAll(); }}></mux-ui-text-field><mux-ui-select size="small" aria-label="Sort files" .value=${this.fileSort} .options=${[{value:'name',label:'Name'},{value:'recent',label:'Recent'},{value:'size',label:'Size'}]} @change=${(event: Event) => { this.fileSort = (event.target as MuxUISelect).value as typeof this.fileSort; this.paintAll(); }}></mux-ui-select></div>
-        ${this.touched.length ? html`<div class="touched-files"><h3>Changed files <span>${this.touched.length}</span></h3>${this.touched.map(path => html`<button class="touched-entry" title=${path} @click=${() => void this.revealFile(path)}><span class="tree-chevron"></span><span class="file-glyph">${icon(fileGlyph(path),{size:14})}</span><span class="file-name">${path}</span></button>`)}</div>` : nothing}
+        ${this.touched.length ? html`<div class="touched-files"><h3>Changed files <span>${this.touched.length}</span></h3>${this.touched.map(path => html`<mux-ui-rail-row reserve-chevron label=${path} tooltip=${path} @click=${() => void this.revealFile(path)}><span slot="icon">${icon(fileGlyph(path),{size:14})}</span></mux-ui-rail-row>`)}</div>` : nothing}
         <button class="project-heading" title=${this.listing?.root || this.projectPath} @click=${() => { if (this.expandedDirs.has('.')) this.expandedDirs.delete('.'); else this.expandedDirs.add('.'); this.paintAll(); }} aria-expanded=${String(this.expandedDirs.has('.'))}><span class="tree-chevron">${icon(this.expandedDirs.has('.') ? ChevronDown : ChevronRight,{size:13})}</span><span class="file-glyph">${icon(Folder,{size:16})}</span><span class="file-name">${this.terminalMode ? 'Home · ~/' : 'All files'}</span></button>
         <div class="file-list" role="tree" aria-label=${this.terminalMode ? 'Home files' : 'Project files'} @keydown=${(event: KeyboardEvent) => this.onTreeKey(event)}>${this.expandedDirs.has('.') ? tree : nothing}${this.error ? html`<p class="empty">${this.error}</p>` : nothing}${this.listing && !tree.length ? html`<p class="empty">${this.fileQuery ? 'No files match this filter.' : 'This folder is empty.'}</p>` : nothing}${[...this.directoryCache.values()].some(item => item.truncated) ? html`<p class="empty">Some folders show only their first 500 entries.</p>` : nothing}</div>
       </div>` : nothing}
@@ -708,7 +712,7 @@ export class MuxSDKUtility extends LitElement {
     const changes = this.changes;
     const detail = this.changeDetail;
     return html`<section class="changes-panel split-panel" style=${`--rail-width:${this.railWidths.changes}px`}><div class="changes-list"><header><div><strong>CHANGES</strong><span>${changes?.changes.length ?? 0}</span></div><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Refresh changes" tooltip="Refresh changes" @click=${() => void this.loadChanges()}>${icon(RefreshCw,{size:15})}</mux-ui-button></header>
-      ${this.changesError ? html`<p class="empty">${this.changesError}</p>` : !changes ? html`<p class="empty">Loading Git changes…</p>` : changes.repos.length ? changes.repos.map(repo => html`<div class="change-repo"><div class="change-repo-title"><strong>${repo.name}</strong><span>${repo.branch || 'detached HEAD'}</span></div>${changes.changes.filter(change => change.repo === repo.root).length ? changes.changes.filter(change => change.repo === repo.root).map(change => html`<button class="change-row ${this.selectedChange?.repo === change.repo && this.selectedChange?.path === change.path ? 'selected' : ''}" title=${change.path} @click=${() => void this.openChange(change)}>${icon(fileGlyph(change.path),{size:15})}<span>${change.path}</span><em>${change.status.trim() || 'M'}</em></button>`) : html`<p class="empty">No changes</p>`}</div>`) : html`<p class="empty">No Git repository in this chat’s project folders.</p>`}
+      ${this.changesError ? html`<p class="empty">${this.changesError}</p>` : !changes ? html`<p class="empty">Loading Git changes…</p>` : changes.repos.length ? changes.repos.map(repo => html`<div class="change-repo"><div class="change-repo-title"><strong>${repo.name}</strong><span>${repo.branch || 'detached HEAD'}</span></div>${changes.changes.filter(change => change.repo === repo.root).length ? changes.changes.filter(change => change.repo === repo.root).map(change => html`<mux-ui-rail-row label=${change.path} detail=${change.status.trim() || 'M'} detail-tone="accent" tooltip=${change.path} ?selected=${this.selectedChange?.repo === change.repo && this.selectedChange?.path === change.path} @click=${() => void this.openChange(change)}><span slot="icon">${icon(fileGlyph(change.path),{size:15})}</span></mux-ui-rail-row>`) : html`<p class="empty">No changes</p>`}</div>`) : html`<p class="empty">No Git repository in this chat’s project folders.</p>`}
       ${changes?.truncated ? html`<p class="empty">Showing the first changes. Refresh after narrowing the project.</p>` : nothing}
     </div><div class="vertical-resizer" role="separator" aria-label="Resize changes list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'changes')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'changes')}></div><div class="change-viewer"><header><span>${this.selectedChange?.path || 'Select a changed file'}</span>${this.selectedChange ? html`<small>${this.selectedChange.status.trim() || 'Modified'}</small>` : nothing}</header>${!this.selectedChange ? html`<div class="change-empty">${icon(GitCompare,{size:34})}<h2>Review project changes</h2><p>Select a file to compare it with HEAD.</p></div>` : !detail ? html`<div class="change-empty">Loading diff…</div>` : detail.tooLarge ? html`<div class="change-empty">This file is too large for the diff viewer.</div>` : detail.binary ? html`<div class="change-empty">Binary changes cannot be shown as text.</div>` : html`<mux-monaco-diff .repo=${detail.repo} .path=${detail.path} .originalText=${detail.before} .modifiedText=${detail.after}></mux-monaco-diff>`}</div></section>`;
   }
@@ -805,7 +809,7 @@ export class MuxSDKUtility extends LitElement {
     if (depth > 8) return [];
     const rows: TemplateResult[] = [];
     for (const page of (this.pages || []).filter(item => (item.parentId || '') === parentId)) {
-      rows.push(html`<button class="page-list-item ${page.id === this.pageId ? 'selected' : ''}" style=${`--page-depth:${depth}`} title=${page.title || 'Untitled'} @click=${() => this.selectPage(page.id)}><span class="page-list-glyph">${icon(NotebookPen,{size:15})}</span><span class="page-list-name">${page.title || 'Untitled'}</span></button>`);
+      rows.push(html`<mux-ui-rail-row label=${page.title || 'Untitled'} tooltip=${page.title || 'Untitled'} .depth=${depth} ?selected=${page.id === this.pageId} @click=${() => this.selectPage(page.id)}><span slot="icon">${icon(NotebookPen,{size:15})}</span></mux-ui-rail-row>`);
       rows.push(...this.pageRows(page.id, depth + 1));
     }
     return rows;
@@ -887,19 +891,11 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .browser-tools mux-ui-text-field { flex:1; min-width:0; }
     mux-sdk-utility .browser-tools mux-ui-select { flex:none; width:var(--ui-dock-tab-min-width); }
     mux-sdk-utility .file-list { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-1) 0 var(--ui-space-5); }
-    mux-sdk-utility .file-entry { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-height:26px; border:0; padding:0 var(--ui-space-5) 0 calc(var(--ui-space-4) + var(--depth)*var(--ui-space-6)); background:transparent; color:var(--ui-text); text-align:left; font:var(--ui-text-xs) var(--ui-font-sans); cursor:pointer; }
-    mux-sdk-utility .file-entry:hover { background:var(--ui-surface-hover); }
-    mux-sdk-utility .file-entry.selected { background:color-mix(in srgb,var(--ui-accent) 17%,var(--ui-surface-hover)); box-shadow:inset 2px 0 var(--ui-accent); }
     mux-sdk-utility .tree-chevron, mux-sdk-utility .file-glyph { display:flex; align-items:center; justify-content:center; flex:none; width:14px; color:var(--ui-text-muted); }
     mux-sdk-utility .file-glyph { width:17px; color:var(--ui-accent); }
-    mux-sdk-utility .directory .file-glyph { color:color-mix(in srgb,var(--ui-accent) 65%,var(--ui-warning)); }
     mux-sdk-utility .file-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    mux-sdk-utility .file-size { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); white-space:nowrap; }
     mux-sdk-utility .touched-files { max-height:25%; min-height:50px; overflow:auto; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) 0 var(--ui-space-4); }
     mux-sdk-utility .touched-files h3 { display:flex; justify-content:space-between; margin:0 var(--ui-space-5) var(--ui-space-3); font:600 var(--ui-text-xs) var(--ui-font-sans); color:var(--ui-text-muted); }
-    mux-sdk-utility .touched-entry { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-height:26px; overflow:hidden; text-align:left; padding:0 var(--ui-space-5) 0 var(--ui-space-4); border:0; color:var(--ui-text); background:transparent; font:var(--ui-text-xs) var(--ui-font-sans); cursor:pointer; }
-    mux-sdk-utility .touched-entry:hover { background:var(--ui-surface-hover); }
-    mux-sdk-utility .touched-entry .file-glyph { color:var(--ui-accent); }
     mux-sdk-utility .file-list .empty { margin:var(--ui-space-5) var(--ui-space-6); color:var(--ui-text-muted); font:var(--ui-text-xs)/1.5 var(--ui-font-sans); }
     mux-sdk-utility .viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--ui-surface-base); }
     mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:42px; box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:var(--ui-surface-raised); }
@@ -988,12 +984,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .changes-list > header span { border-radius:var(--ui-radius-lg); padding:calc(var(--ui-space-1) / 2) var(--ui-space-3); background:var(--ui-surface-hover); }
     mux-sdk-utility .change-repo-title { display:flex; flex-direction:column; gap:var(--ui-space-1); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-4); color:var(--ui-text); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .change-repo-title span { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
-    mux-sdk-utility .change-row { display:flex; align-items:center; gap:var(--ui-space-4); width:100%; min-height:27px; padding:var(--ui-space-1) var(--ui-space-5) var(--ui-space-1) var(--ui-space-6); border:0; background:transparent; color:var(--ui-text); text-align:left; font:var(--ui-text-xs) var(--ui-font-sans); cursor:pointer; }
-    mux-sdk-utility .change-row:hover, mux-sdk-utility .change-row.selected { background:var(--ui-surface-hover); }
-    mux-sdk-utility .change-row.selected { box-shadow:inset 2px 0 var(--ui-accent); }
-    mux-sdk-utility .change-row svg { flex:none; color:var(--ui-accent); }
-    mux-sdk-utility .change-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    mux-sdk-utility .change-row em { flex:none; color:var(--ui-accent); font:700 var(--ui-text-xs) var(--ui-font-mono); }
     mux-sdk-utility .change-viewer { display:flex; flex-direction:column; min-width:0; min-height:0; }
     mux-sdk-utility .change-viewer > header { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); min-height:38px; padding:0 var(--ui-space-5); border-bottom:1px solid var(--ui-border); font:var(--ui-text-xs) var(--ui-font-mono); }
     mux-sdk-utility .change-viewer > header span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1009,11 +999,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .pages-list .empty, mux-sdk-utility .pages-error { margin:var(--ui-space-6); font:var(--ui-text-xs)/1.5 var(--ui-font-sans); color:var(--ui-text-muted); }
     mux-sdk-utility .pages-error { color:var(--ui-danger-text); }
     mux-sdk-utility .page-list-rows { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-1) 0 var(--ui-space-5); }
-    mux-sdk-utility .page-list-item { display:flex; align-items:center; gap:var(--ui-space-3); box-sizing:border-box; width:100%; min-width:0; min-height:24px; padding:0 var(--ui-space-5) 0 calc(var(--ui-space-4) + var(--page-depth)*var(--ui-space-6)); border:0; background:transparent; color:var(--ui-text); text-align:left; font:var(--ui-text-xs) var(--ui-font-sans); cursor:pointer; }
-    mux-sdk-utility .page-list-item:hover { background:var(--ui-surface-hover); }
-    mux-sdk-utility .page-list-item.selected { background:color-mix(in srgb,var(--ui-accent) 17%,var(--ui-surface-hover)); box-shadow:inset 2px 0 var(--ui-accent); }
-    mux-sdk-utility .page-list-glyph { display:flex; align-items:center; justify-content:center; flex:none; width:17px; color:var(--ui-accent); }
-    mux-sdk-utility .page-list-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .page-editor { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:auto; }
     mux-sdk-utility .page-editor-top { display:flex; align-items:center; justify-content:space-between; min-height:38px; padding:0 var(--ui-space-7); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .page-editor-top span:first-child { display:flex; align-items:center; gap:var(--ui-space-4); }

@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Menu, Tab Strip, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
+3. Use the shared Button, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -206,6 +206,13 @@ overflowed, phone and light states. In isolated dev-local Chromium, a fresh
 chat opened Files, added a tab, selected Changes, and closed it at phone width;
 focus returned to Files. The phone page had no horizontal overflow. Review
 screenshots remain outside git.
+File, touched-file, change and page rails now use one shared Rail Row. It owns
+indentation, selected and focus styling, icon, optional detail and native
+button activation; the file tree still owns cross-row Arrow navigation. In a
+fresh dev-local chat, Chromium expanded a folder, focused a nested file with
+ArrowDown, opened its preview, selected a changed file, and created a page and
+subpage at phone width. The phone page had no horizontal overflow. Storybook
+catalogs the row in file, change, page, phone and light states.
 
 In isolated dev-local Chromium, a fresh terminal pane and real sessiond showed
 the filtered file explorer and Quick Open phone sheet. The shared file filter
