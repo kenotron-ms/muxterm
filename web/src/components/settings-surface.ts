@@ -4,6 +4,8 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
 import '../ui/button.js';
 import '../ui/color-picker.js';
+import '../ui/feedback.js';
+import type { FeedbackKind } from '../ui/feedback.js';
 import '../ui/nav-item.js';
 import '../ui/radio-group.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
@@ -417,10 +419,8 @@ export class MuxSettingsSurface extends LitElement {
       margin-top: var(--ui-space-5);
     }
 
-    .ai-message {
+    .settings-feedback {
       margin-top: var(--ui-space-5);
-      font-size: var(--ui-text-sm);
-      color: var(--ui-text-muted);
     }
 
     .ai-note {
@@ -597,16 +597,6 @@ export class MuxSettingsSurface extends LitElement {
     .r-row mux-ui-button { flex-shrink: 0; }
     .r-actions { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: var(--ui-space-4); }
 
-    /* The server's verbatim message for a request that failed outside a row:
-       a list that could not be read, or an address it refused to add. */
-    .r-error {
-      margin-top: var(--ui-space-5);
-      font-size: var(--ui-text-sm);
-      line-height: 1.5;
-      white-space: pre-wrap;
-      color: var(--ui-danger-text);
-    }
-
     @media (max-width: 767.98px) {
       .header { min-height: 56px; box-sizing: border-box; padding: var(--ui-space-5) var(--ui-space-6); }
       .body { min-height: 0; flex-direction: column; }
@@ -649,6 +639,7 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _aiKeyInput = '';
   @state() private _aiBusy = false;
   @state() private _aiMessage = '';
+  @state() private _aiMessageKind: FeedbackKind = 'info';
 
   // ── Voice credentials ──────────────────────────────────────────────────
   // _voice is what the SERVER says. The _v* fields are the form's own edits,
@@ -798,7 +789,7 @@ export class MuxSettingsSurface extends LitElement {
         <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
         <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>
       </div>
-      <p role="status" class=${this._updateError ? 'r-error' : ''}>${message}</p>
+      <mux-ui-feedback class="settings-feedback" kind=${this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
       <p>Build <code>${__GIT_SHA__}</code></p>
       <p>Config file: <code>~/.config/muxterm/config.toml</code></p>`;
   }
@@ -1104,8 +1095,10 @@ export class MuxSettingsSurface extends LitElement {
       this._emitAIStatus(await saveAIKey(key));
       this._aiKeyInput = '';
       this._aiMessage = 'Key saved.';
+      this._aiMessageKind = 'success';
     } catch {
       this._aiMessage = 'Could not save the key -- it was not stored.';
+      this._aiMessageKind = 'error';
     } finally {
       this._aiBusy = false;
     }
@@ -1119,8 +1112,10 @@ export class MuxSettingsSurface extends LitElement {
       this._emitAIStatus(await clearAIKey());
       this._aiKeyInput = '';
       this._aiMessage = 'Key removed.';
+      this._aiMessageKind = 'success';
     } catch {
       this._aiMessage = 'Could not remove the key.';
+      this._aiMessageKind = 'error';
     } finally {
       this._aiBusy = false;
     }
@@ -1130,8 +1125,10 @@ export class MuxSettingsSurface extends LitElement {
     if (this._aiBusy) return;
     this._aiBusy = true;
     this._aiMessage = 'Testing...';
+    this._aiMessageKind = 'loading';
     try {
       const res = await pingAI();
+      this._aiMessageKind = res.ok ? 'success' : 'error';
       this._aiMessage = res.ok
         ? 'Connected to Anthropic.'
         : res.error === 'ai_disabled'
@@ -1141,6 +1138,7 @@ export class MuxSettingsSurface extends LitElement {
             : 'Anthropic rejected the request. Check the key.';
     } catch {
       this._aiMessage = 'Test failed -- check your connection.';
+      this._aiMessageKind = 'error';
     } finally {
       this._aiBusy = false;
     }
@@ -1173,7 +1171,7 @@ export class MuxSettingsSurface extends LitElement {
           : ''}
         <mux-ui-button size="small" ?disabled="${this._aiBusy}" @click="${this._testAI}">Test connection</mux-ui-button>
       </div>
-      ${this._aiMessage ? html`<p class="ai-message" role="status">${this._aiMessage}</p>` : ''}
+      ${this._aiMessage ? html`<mux-ui-feedback class="settings-feedback" kind=${this._aiMessageKind} appearance=${this._aiMessageKind === 'error' ? 'panel' : 'plain'} density="compact">${this._aiMessage}</mux-ui-feedback>` : ''}
       <p class="ai-note">
         The key is stored locally at <code>$XDG_CONFIG_HOME/muxterm/anthropic_key</code>
         (defaults to <code>~/.config/muxterm/anthropic_key</code> when
@@ -1680,7 +1678,7 @@ export class MuxSettingsSurface extends LitElement {
     let first = connected.length === 0;
 
     return html`
-      ${this._remotesError ? html`<div class="r-error">${this._remotesError}</div>` : ''}
+      ${this._remotesError ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._remotesError}<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => void this._loadRemotes()}>Retry</mux-ui-button></mux-ui-feedback>` : ''}
       ${connected.length > 0
         ? html`
             <div class="section-title">Connected</div>
@@ -1709,7 +1707,7 @@ export class MuxSettingsSurface extends LitElement {
         @keydown="${(e: KeyboardEvent) => { if (e.key === 'Enter') void this._addHost(); }}"
       ></mux-ui-text-field>
       <div class="ai-actions"><mux-ui-button variant="primary" ?disabled=${!this._addTarget.trim() || this._pending.has(ADD_HOST_KEY)} @click=${() => void this._addHost()}>Add host</mux-ui-button></div>
-      ${this._addError ? html`<div class="r-error">${this._addError}</div>` : ''}
+      ${this._addError ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._addError}</mux-ui-feedback>` : ''}
     `;
   }
 

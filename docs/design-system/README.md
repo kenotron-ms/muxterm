@@ -180,6 +180,14 @@ fell from 10 to 0. Dev-local also verified all eight destinations, phone
 navigation visibility, Workspaces and About controls, without starting an
 update.
 
+Settings now uses shared Feedback for AI key and connection results, version
+checks, remote-host list failures, and rejected host additions. The remote-list
+error offers Retry without clearing the host form. Storybook records these
+failure states at desktop and phone widths. Phone Settings stories render the
+full-page mode used by the live app; desktop stories keep the modal. Voice
+results retain their labeled marker gutter because it carries a distinct
+step-by-step status structure.
+
 Scheduled Jobs uses shared form fields, Dialog, Button, Navigation Item, Page
 Intro, Status Badge and Feedback. Storybook covers populated rows, failed run
 history and the new-job editor. Dev-local Chromium opened the empty Jobs screen

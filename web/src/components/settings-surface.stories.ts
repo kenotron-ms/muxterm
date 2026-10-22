@@ -5,6 +5,7 @@ import { DEFAULT_AI_STATUS, type AIStatus } from '../lib/ai.js';
 import { DEFAULT_VOICE_STATUS, type VoiceStatus } from '../lib/voice-settings.js';
 import { fixtureJSON, type ApiFixture } from '../stories/api-fixture.js';
 import '../ui/dialog.js';
+import type { MuxUITextField } from '../ui/text-field.js';
 import './settings-surface.js';
 import type { MuxSettingsSurface, SettingsSection } from './settings-surface.js';
 
@@ -100,12 +101,71 @@ function fixtureForVoice(initialVoice: VoiceStatus): ApiFixture {
   };
 }
 
+function remotesLoadFailureFixture(): ApiFixture {
+  const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
+  let failed = false;
+  return request => {
+    if (request.url.pathname.endsWith('/api/remotes') && request.method === 'GET' && !failed) {
+      failed = true;
+      return fixtureJSON({ error:'Could not load remote hosts. Try again.' }, 503);
+    }
+    return base(request);
+  };
+}
+
+function remotesAddFailureFixture(): ApiFixture {
+  const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
+  return request => request.url.pathname.endsWith('/api/remotes') && request.method === 'POST'
+    ? fixtureJSON({ error:'That host address could not be added.' }, 400)
+    : base(request);
+}
+
+function aiConnectionFailureFixture(): ApiFixture {
+  const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
+  return request => request.url.pathname.endsWith('/api/ai/ping') && request.method === 'POST'
+    ? fixtureJSON({ ok:false, error:'provider_unreachable' }, 503)
+    : base(request);
+}
+
+function updateCheckFailureFixture(): ApiFixture {
+  const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
+  return request => request.url.pathname.endsWith('/api/update/status') && request.method === 'GET'
+    ? fixtureJSON({ error:'Version service unavailable.' }, 503)
+    : base(request);
+}
+
+async function submitRejectedHost(canvasElement: HTMLElement): Promise<void> {
+  const settings = canvasElement.querySelector<MuxSettingsSurface>('mux-settings-surface');
+  await settings?.updateComplete;
+  const field = settings?.shadowRoot?.querySelector<MuxUITextField>('mux-ui-text-field[aria-label="Host address"]');
+  await field?.updateComplete;
+  const input = field?.shadowRoot?.querySelector('input');
+  if (!input || !settings) throw new Error('Host address field is missing');
+  input.value = 'bad host';
+  input.dispatchEvent(new InputEvent('input', { bubbles:true, composed:true }));
+  await settings.updateComplete;
+  const add = [...settings.shadowRoot!.querySelectorAll('mux-ui-button')].find(button => button.textContent?.trim() === 'Add host');
+  if (!add) throw new Error('Add host action is missing');
+  add.click();
+}
+
 function onConfigChange(event: Event): void {
   (event.target as MuxSettingsSurface).config =
     (event as CustomEvent<{ config: ResolvedConfig }>).detail.config;
 }
 
 interface SettingsArgs { section: SettingsSection; aiStatus: AIStatus }
+
+const renderPhonePage = (args: SettingsArgs) => html`<div style="height:100dvh;display:flex;background:var(--ui-surface-base)">
+  <mux-settings-surface
+    page-mode
+    .config=${DEFAULT_RESOLVED_CONFIG}
+    .aiStatus=${args.aiStatus}
+    .openSection=${args.section}
+    serverAddr="muxterm.example.test"
+    @config-change=${onConfigChange}
+  ></mux-settings-surface>
+</div>`;
 
 const meta = {
   title: 'Screens/Settings',
@@ -134,7 +194,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<SettingsArgs>;
 export const Appearance: Story = {};
-export const PhoneAppearance: Story = { globals:{viewport:{value:'phone390',isRotated:false}} };
+export const PhoneAppearance: Story = { globals:{viewport:{value:'phone390',isRotated:false}}, render:renderPhonePage };
 export const LightAppearance: Story = {
   globals:{palette:'github-light'},
   play:async ({canvasElement}) => {
@@ -146,13 +206,25 @@ export const LightAppearance: Story = {
 };
 export const PhoneLightAppearance: Story = {
   globals:{palette:'github-light',viewport:{value:'phone390',isRotated:false}},
+  render:renderPhonePage,
   play:LightAppearance.play,
 };
 export const Notifications: Story = { args: { section:'notifications' } };
-export const PhoneNotifications: Story = { args:{section:'notifications'}, globals:{viewport:{value:'phone390',isRotated:false}} };
+export const PhoneNotifications: Story = { args:{section:'notifications'}, globals:{viewport:{value:'phone390',isRotated:false}}, render:renderPhonePage };
 export const AIOff: Story = { args: { section:'ai' } };
 export const AIConfigured: Story = {
   args: { section:'ai', aiStatus:{ enabled:true, source:'settings', keyHint:'demo' } },
+};
+export const AIConnectionError: Story = {
+  args:{section:'ai',aiStatus:{enabled:true,source:'settings',keyHint:'demo'}},
+  parameters:{apiFixture:aiConnectionFailureFixture()},
+  play:async ({canvasElement}) => {
+    const settings = canvasElement.querySelector<MuxSettingsSurface>('mux-settings-surface');
+    await settings?.updateComplete;
+    const test = [...(settings?.shadowRoot?.querySelectorAll('mux-ui-button') ?? [])].find(button => button.textContent?.trim() === 'Test connection');
+    if (!test) throw new Error('Test connection action is missing');
+    test.click();
+  },
 };
 export const VoiceOpenAIKey: Story = {
   args: { section:'voice' },
@@ -165,15 +237,20 @@ export const VoiceAzureEntra: Story = {
 export const PhoneVoiceAzureEntra: Story = {
   args:{section:'voice'}, globals:{viewport:{value:'phone390',isRotated:false}},
   parameters:{apiFixture:fixtureForVoice(azureEntra)},
+  render:renderPhonePage,
 };
 export const VoiceAzureKeyMissing: Story = {
   args: { section:'voice' },
   parameters: { apiFixture:fixtureForVoice(azureKeyMissing) },
 };
 export const Remotes: Story = { args: { section:'remotes' } };
+export const RemotesLoadError: Story = { args:{section:'remotes'}, parameters:{apiFixture:remotesLoadFailureFixture()} };
+export const PhoneRemotesLoadError: Story = { args:{section:'remotes'}, globals:{viewport:{value:'phone390',isRotated:false}}, parameters:{apiFixture:remotesLoadFailureFixture()}, render:renderPhonePage };
+export const PhoneRemotesAddError: Story = { args:{section:'remotes'}, globals:{viewport:{value:'phone390',isRotated:false}}, parameters:{apiFixture:remotesAddFailureFixture()}, render:renderPhonePage, play:async ({canvasElement}) => submitRejectedHost(canvasElement) };
 export const Workspaces: Story = { args: { section:'workspaces' } };
 export const KeyboardShortcuts: Story = { args: { section:'shortcuts' } };
 export const AboutDevelopmentBuild: Story = { args: { section:'about' } };
+export const AboutCheckError: Story = { args:{section:'about'}, parameters:{apiFixture:updateCheckFailureFixture()} };
 export const RemotesPageMode: Story = {
   args: { section:'remotes' },
   render: (args: SettingsArgs) => html`<div style="height:100vh;min-height:500px">
