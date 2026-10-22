@@ -14,6 +14,7 @@ export class MuxUIRailRow extends LitElement {
   @property({ type:Boolean, reflect:true }) tree = false;
   @property({ type:Boolean, reflect:true }) directory = false;
   @property({ type:Boolean, reflect:true, attribute:'reserve-chevron' }) reserveChevron = false;
+  @property({ reflect:true }) variant: 'default' | 'root' = 'default';
   @property({ attribute:'detail-tone', reflect:true }) detailTone: 'muted' | 'accent' = 'muted';
   @property({ type:Boolean }) expanded = false;
 
@@ -23,6 +24,8 @@ export class MuxUIRailRow extends LitElement {
     button:hover { background:var(--ui-surface-hover); }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
     :host([selected]) button { background:color-mix(in srgb,var(--ui-accent) 17%,var(--ui-surface-hover)); box-shadow:inset 2px 0 var(--ui-accent); }
+    :host([variant='root']) button { background:color-mix(in srgb,var(--ui-surface-base) 67%,var(--ui-surface-raised)); font-weight:600; }
+    :host([variant='root']) button:hover { background:var(--ui-surface-hover); }
     .chevron,.icon { display:flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
     .chevron { display:none; width:var(--ui-space-6); }
     :host([tree]) .chevron,:host([reserve-chevron]) .chevron { display:flex; }

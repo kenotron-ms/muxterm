@@ -74,6 +74,23 @@ export const FilePreview: Story = {
   args:{sessionId:sessionId('preview')},parameters:{apiFixture:utilityFixture(sessionId('preview'))},
   play:async ({canvasElement}) => { await target(canvasElement)?.showFile('README.md'); },
 };
+export const NestedFilePreview: Story = {
+  args:{sessionId:sessionId('nested-preview')},parameters:{apiFixture:utilityFixture(sessionId('nested-preview'))},
+  play:async ({canvasElement}) => { await target(canvasElement)?.showFile('docs/design-system.md'); },
+};
+export const PhoneNestedFilePreview: Story = {
+  args:{sessionId:sessionId('phone-nested-preview')},parameters:{apiFixture:utilityFixture(sessionId('phone-nested-preview'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  play:NestedFilePreview.play,
+};
+export const HiddenFileBrowser: Story = {
+  args:{sessionId:sessionId('hidden-browser')},parameters:{apiFixture:utilityFixture(sessionId('hidden-browser'))},
+  play:async ({canvasElement}) => {
+    const utility = target(canvasElement);
+    await utility?.showFile('docs/design-system.md');
+    utility?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Hide file browser"]')?.click();
+  },
+};
 export const FileOpenActions: Story = {
   args:{sessionId:sessionId('file-actions')},parameters:{apiFixture:utilityFixture(sessionId('file-actions'))},
   play:async ({canvasElement}) => {

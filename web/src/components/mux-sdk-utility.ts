@@ -11,6 +11,7 @@ import './mux-monaco-source.js';
 import './mux-monaco-diff.js';
 import './mux-operator-status.js';
 import '../ui/action-tile.js';
+import '../ui/breadcrumb.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/menu.js';
@@ -375,6 +376,14 @@ export class MuxSDKUtility extends LitElement {
     } catch (error) { if (request === this.directoryRequest) this.error = String(error); }
     this.paintAll();
   }
+  private async navigateFileBreadcrumb(path: string) {
+    this.filesRailOpen = true;
+    await this.loadDirectory(path);
+    await this.updateComplete;
+    const row = path === '.' ? this.querySelector<MuxUIRailRow>('.project-heading')
+      : [...this.querySelectorAll<MuxUIRailRow>('.file-list mux-ui-rail-row[tree]')].find(item => item.dataset.path === path);
+    row?.focus();
+  }
   private expandAncestors(path: string) {
     this.expandedDirs.add('.');
     let parent = '';
@@ -614,8 +623,7 @@ export class MuxSDKUtility extends LitElement {
       if (target.directory && target.expanded) void this.toggleDirectory(target.dataset.path || '');
       else {
         const parent = target.dataset.path?.split('/').slice(0, -1).join('/');
-        if (parent) items.find(item => item.dataset.path === parent)?.focus();
-        else this.querySelector<HTMLElement>('.project-heading')?.focus();
+        items.find(item => item.dataset.path === (parent || '.'))?.focus();
       }
     }
   }
@@ -665,9 +673,13 @@ export class MuxSDKUtility extends LitElement {
   private fileHeader(projectName: string, segments: string[], file: Artifact | undefined, hasAlternateView: boolean): TemplateResult {
     const canOpenInBrowser = !!file && (file.kind === 'image' || !!this.pdfBytes || (!file.tooLarge && !file.binary && (file.kind === 'markdown' || file.kind === 'text')));
     const vsCodeURL = this.vsCodeURL();
+    const pathItems = segments.length ? [
+      { id:'.', label:projectName, actionLabel:'Show project files' },
+      ...segments.map((part,index) => ({id:segments.slice(0,index+1).join('/'),label:part,actionLabel:index < segments.length-1 ? `Show ${part} in file browser` : undefined})),
+    ] : [];
     return html`<div class="viewer-header">
       ${this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back to files" tooltip="Back to files" @click=${() => this.backToTerminalFiles()}>${icon(ArrowLeft,{size:15})}</mux-ui-button>` : nothing}
-      <nav class="viewer-path" aria-label="Open file path">${segments.length ? html`<button @click=${() => void this.loadDirectory('.')}>${projectName}</button>${segments.map((part,index) => html`<span>›</span>${index < segments.length-1 ? html`<button @click=${() => void this.loadDirectory(segments.slice(0,index+1).join('/'))}>${part}</button>` : html`<strong>${part}</strong>`}`)}` : html`<span>Open a file to preview it</span>`}</nav>
+      <mux-ui-breadcrumb label="Open file path" placeholder="Open a file to preview it" .items=${pathItems} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => void this.navigateFileBreadcrumb(event.detail.id)}></mux-ui-breadcrumb>
       <div class="file-header-actions">
         ${file && !this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Ask about file" tooltip="Ask about file" @click=${() => this.askAboutFile()}>${icon(MessageCircleQuestionMark,{size:15})}</mux-ui-button>` : nothing}
         ${hasAlternateView ? html`<mux-ui-button class="file-action-button" size="small" variant="secondary" accessible-label=${this.fileMode === 'preview' ? 'View source' : 'View preview'} @click=${() => this.toggleFileMode()}>${icon(Code2,{size:14})}<span>${this.fileMode === 'preview' ? 'View source' : 'View preview'}</span></mux-ui-button>` : nothing}
@@ -694,7 +706,7 @@ export class MuxSDKUtility extends LitElement {
     const hasAlternateView = !!file && !file.binary && !file.tooLarge && (file.kind === 'markdown' || /\.(csv|tsv|html?|svg)$/i.test(file.name));
     const projectName = (this.projectPath || this.listing?.root || 'Project').split('/').filter(Boolean).pop() || 'Project';
     const segments = this.selected.split('/').filter(Boolean);
-    const tree = this.treeRows('.');
+    const tree = this.treeRows('.', 1);
     return html`<section class="files-panel split-panel ${this.filesRailOpen ? '' : 'rail-closed'} ${this.terminalMode && this.selected ? 'terminal-preview' : ''}" style=${`--rail-width:${this.railWidths.files}px`} @click=${(event: MouseEvent) => { if (this.fileMenuOpen && !(event.target as HTMLElement).closest(".file-open-wrap")) { this.fileMenuOpen = false; this.paintAll(); } }} @keydown=${(event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'p') { event.preventDefault(); this.showQuickOpen(); }
       if (event.key === 'Escape' && !this.quickOpen && this.fileMenuOpen) { this.fileMenuOpen = false; this.paintAll(); queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }
@@ -709,8 +721,9 @@ export class MuxSDKUtility extends LitElement {
         <div class="browser-heading"><div class="explorer-label">FILES</div><div class="explorer-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Quick open file" tooltip="Quick Open · Ctrl+P" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Refresh file tree" tooltip="Refresh file tree" @click=${() => void this.refreshTree()}>${icon(RefreshCw,{size:15})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Collapse folders" tooltip="Collapse folders" @click=${() => { this.expandedDirs = new Set(['.']); this.paintAll(); }}>${icon(ChevronsDownUp,{size:15})}</mux-ui-button></div></div>
         <div class="browser-tools"><mux-ui-text-field size="small" type="search" aria-label="Filter visible files" placeholder="Filter files…" .value=${this.fileQuery} @input=${(event: InputEvent) => { this.fileQuery = (event.target as MuxUITextField).value; this.paintAll(); }}></mux-ui-text-field><mux-ui-select size="small" aria-label="Sort files" .value=${this.fileSort} .options=${[{value:'name',label:'Name'},{value:'recent',label:'Recent'},{value:'size',label:'Size'}]} @change=${(event: Event) => { this.fileSort = (event.target as MuxUISelect).value as typeof this.fileSort; this.paintAll(); }}></mux-ui-select></div>
         ${this.touched.length ? html`<div class="touched-files"><h3>Changed files <span>${this.touched.length}</span></h3>${this.touched.map(path => html`<mux-ui-rail-row reserve-chevron label=${path} tooltip=${path} @click=${() => void this.revealFile(path)}><span slot="icon">${icon(fileGlyph(path),{size:14})}</span></mux-ui-rail-row>`)}</div>` : nothing}
-        <button class="project-heading" title=${this.listing?.root || this.projectPath} @click=${() => { if (this.expandedDirs.has('.')) this.expandedDirs.delete('.'); else this.expandedDirs.add('.'); this.paintAll(); }} aria-expanded=${String(this.expandedDirs.has('.'))}><span class="tree-chevron">${icon(this.expandedDirs.has('.') ? ChevronDown : ChevronRight,{size:13})}</span><span class="file-glyph">${icon(Folder,{size:16})}</span><span class="file-name">${this.terminalMode ? 'Home · ~/' : 'All files'}</span></button>
-        <div class="file-list" role="tree" aria-label=${this.terminalMode ? 'Home files' : 'Project files'} @keydown=${(event: KeyboardEvent) => this.onTreeKey(event)}>${this.expandedDirs.has('.') ? tree : nothing}${this.error ? html`<p class="empty">${this.error}</p>` : nothing}${this.listing && !tree.length ? html`<p class="empty">${this.fileQuery ? 'No files match this filter.' : 'This folder is empty.'}</p>` : nothing}${[...this.directoryCache.values()].some(item => item.truncated) ? html`<p class="empty">Some folders show only their first 500 entries.</p>` : nothing}</div>
+        <div class="file-list" role="tree" aria-label=${this.terminalMode ? 'Home files' : 'Project files'} @keydown=${(event: KeyboardEvent) => this.onTreeKey(event)}>
+          <mux-ui-rail-row class="project-heading" variant="root" tree directory .expanded=${this.expandedDirs.has('.')} .level=${1} label=${this.terminalMode ? 'Home · ~/' : 'All files'} tooltip=${this.listing?.root || this.projectPath} data-path="." @click=${() => { if (this.expandedDirs.has('.')) this.expandedDirs.delete('.'); else this.expandedDirs.add('.'); this.paintAll(); }}><span slot="chevron">${icon(this.expandedDirs.has('.') ? ChevronDown : ChevronRight,{size:13})}</span><span slot="icon">${icon(Folder,{size:16})}</span></mux-ui-rail-row>
+          ${this.expandedDirs.has('.') ? tree : nothing}${this.error ? html`<p class="empty">${this.error}</p>` : nothing}${this.listing && !tree.length ? html`<p class="empty">${this.fileQuery ? 'No files match this filter.' : 'This folder is empty.'}</p>` : nothing}${[...this.directoryCache.values()].some(item => item.truncated) ? html`<p class="empty">Some folders show only their first 500 entries.</p>` : nothing}</div>
       </div>` : nothing}
       ${this.quickOpen ? html`<mux-ui-dialog class="quick-dialog" open size="compact" presentation="adaptive" label="Quick Open" @dismiss=${() => this.hideQuickOpen()}><div class="quick-open"><div class="quick-input">${icon(Search,{size:18})}<input type="search" aria-label="Search project files" placeholder="Search files by name…" .value=${this.quickQuery} @input=${(event: InputEvent) => this.searchQuickOpen((event.target as HTMLInputElement).value)} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.hideQuickOpen(); } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); this.quickIndex = Math.max(0,Math.min(this.quickResults.length-1,this.quickIndex+(event.key === 'ArrowDown' ? 1 : -1))); this.paintAll(); } else if (event.key === 'Enter' && this.quickResults[this.quickIndex]) { event.preventDefault(); void this.revealFile(this.quickResults[this.quickIndex].path); } }}><kbd>ESC</kbd></div><div class="quick-results">${this.quickLoading ? html`<p>Searching project…</p>` : this.quickError ? html`<p>${this.quickError}</p>` : this.quickResults.length ? this.quickResults.map((result,index) => html`<button class=${index === this.quickIndex ? 'active' : ''} @mouseenter=${() => { this.quickIndex = index; }} @click=${() => void this.revealFile(result.path)}>${icon(fileGlyph(result.name),{size:16})}<span><strong>${result.name}</strong><small>${result.path}</small></span><em>${readableSize(result.size)}</em></button>`) : html`<p>${this.quickQuery.trim().length < 2 ? 'Type at least two characters to search the project.' : 'No matching files.'}</p>`}${this.quickTruncated && !this.quickLoading ? html`<p>Showing the first matches. Narrow your search for more.</p>` : nothing}</div></div></mux-ui-dialog>` : nothing}
     </section>`;
@@ -858,9 +871,9 @@ export class MuxSDKUtility extends LitElement {
     return html`<section class="pages-panel split-panel ${this.pagesRailOpen ? '' : 'rail-closed'}" style=${`--rail-width:${this.railWidths.pages}px`}>
       ${this.pagesRailOpen ? html`<div class="pages-list"><div class="browser-heading"><div class="explorer-label">PAGES</div><div class="explorer-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="New page" tooltip="New page" @click=${() => this.newPage()}>${icon(Plus,{size:15})}</mux-ui-button></div></div><div class="page-list-rows">${this.pagesError ? html`<p class="pages-error">${this.pagesError}</p>` : nothing}${!this.pages ? html`<p class="empty">Loading pages…</p>` : this.pages.length ? this.pageRows() : html`<p class="empty">Create a page to start writing.</p>`}</div></div>` : nothing}
       ${this.pagesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize page list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'pages')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'pages')}></div>` : nothing}
-      <div class="page-editor"><div class="page-toolbar"><div>
+      <div class="page-editor"><div class=${parent ? 'page-toolbar nested' : 'page-toolbar'}><div>
         <mux-ui-button appearance="document" icon-only size="small" variant="quiet" tone="muted" toggle .pressed=${this.pagesRailOpen} accessible-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} tooltip=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</mux-ui-button>
-        ${parent ? html`<mux-ui-button class="page-parent" appearance="document" size="small" variant="quiet" tone="muted" accessible-label=${`Open parent page ${parent.title}`} @click=${() => this.selectPage(parent.id)}><span>${parent.title}</span></mux-ui-button><span>›</span>` : nothing}<span>${page?.title || 'Pages'}</span>
+        <mux-ui-breadcrumb appearance="document" label="Page path" .items=${parent ? [{id:parent.id,label:parent.title,actionLabel:`Open parent page ${parent.title}`},{id:page?.id || '',label:page?.title || 'Pages'}] : [{id:page?.id || '',label:page?.title || 'Pages'}]} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => this.selectPage(event.detail.id)}></mux-ui-breadcrumb>
       </div><div class="page-toolbar-actions"><span class="page-save-state" ?data-saving=${this.pageSaving}>${this.pageSaving ? 'Saving…' : 'Saved'}</span>${page ? html`<mux-ui-button class="page-delete" appearance="document" icon-only size="small" variant="quiet" tone="danger" accessible-label=${`Delete page ${page.title || 'Untitled'}`} tooltip=${this.pagesConflict ? 'Reload pages before deleting' : 'Delete page'} ?disabled=${this.pagesConflict} @click=${() => this.requestDeletePage(page)}>${icon(Trash2,{size:15})}</mux-ui-button>` : nothing}</div></div>
       ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .content=${page.content?.length ? page.content : legacyPageContent(page.blocks)} .pageId=${page.id} .documentEpoch=${this.pagesRenderEpoch} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><mux-ui-button class="page-subpage" appearance="document" size="small" variant="quiet" tone="muted" @click=${() => this.newPage(page.id)}>${icon(Plus,{size:14})}<span>New subpage</span></mux-ui-button></div></div>` : html`<div class="page-no-selection">${icon(NotebookPen,{size:32})}<h2>Pages</h2><p>Create a document for this chat.</p><mux-ui-button appearance="document" size="small" variant="secondary" @click=${() => this.newPage()}>New page</mux-ui-button></div>`}</div>
       <mux-ui-dialog size="compact" presentation="adaptive" label="Delete page" ?open=${!!this.pendingPageDeletion} @dismiss=${() => { this.pendingPageDeletion = undefined; this.paintAll(); }}><div class="page-delete-dialog"><h2>Delete page?</h2><p>${this.pendingPageDeletion?.message || ''}</p><div class="page-delete-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingPageDeletion = undefined; this.paintAll(); }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => this.deletePage()}>Delete page</mux-ui-button></div></div></mux-ui-dialog>
@@ -890,8 +903,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .browser-heading { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); height:34px; padding:0 var(--ui-space-4) 0 var(--ui-space-6); }
     mux-sdk-utility .explorer-label { color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); letter-spacing:.13em; }
     mux-sdk-utility .explorer-actions { display:flex; align-items:center; gap:var(--ui-space-1); }
-    mux-sdk-utility .project-heading { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-height:28px; padding:0 var(--ui-space-5) 0 var(--ui-space-4); border:0; background:color-mix(in srgb,var(--ui-surface-base) 67%,var(--ui-surface-raised)); color:var(--ui-text); text-align:left; font:600 var(--ui-text-xs) var(--ui-font-sans); cursor:pointer; }
-    mux-sdk-utility .project-heading span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .browser-tools { display:flex; align-items:stretch; gap:var(--ui-space-3); margin:0 var(--ui-space-4) var(--ui-space-3); }
     mux-sdk-utility .files-panel .browser-tools { margin-top:var(--ui-space-2); margin-bottom:var(--ui-space-5); }
     mux-sdk-utility .browser-tools mux-ui-text-field { flex:1; min-width:0; }
@@ -905,10 +916,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .file-list .empty { margin:var(--ui-space-5) var(--ui-space-6); color:var(--ui-text-muted); font:var(--ui-text-xs)/1.5 var(--ui-font-sans); }
     mux-sdk-utility .viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--ui-surface-base); }
     mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:42px; box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:var(--ui-surface-raised); }
-    mux-sdk-utility .viewer-path { display:flex; align-items:center; gap:var(--ui-space-3); flex:1; min-width:0; overflow:hidden; white-space:nowrap; color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
-    mux-sdk-utility .viewer-path button { border:0; padding:0; background:transparent; color:var(--ui-text-muted); cursor:pointer; }
-    mux-sdk-utility .viewer-path button:hover { color:var(--ui-accent); }
-    mux-sdk-utility .viewer-path strong { overflow:hidden; text-overflow:ellipsis; color:var(--ui-text); font-weight:500; }
     mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; }
     mux-sdk-utility .file-open-wrap { position:relative; }
     mux-sdk-utility .file-open-menu { --ui-menu-offset-y:calc(var(--ui-control-sm) + var(--ui-space-1)); --ui-menu-offset-x:0; --ui-menu-width:var(--ui-toast-min-width); }
@@ -1015,11 +1022,8 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-editor { background:var(--ui-document-surface); color:var(--ui-document-text); }
     mux-sdk-utility .page-toolbar { display:flex; justify-content:space-between; align-items:center; flex:none; min-height:42px; padding:0 var(--ui-space-6); border-bottom:1px solid var(--ui-document-border); color:var(--ui-document-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .page-toolbar > div { display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; }
-    mux-sdk-utility .page-toolbar > div > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .page-toolbar-actions { flex:none; }
-    mux-sdk-utility .page-toolbar .page-parent { min-width:0; max-width:130px; }
-    mux-sdk-utility .page-toolbar .page-parent span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    @container(max-width:430px) { mux-sdk-utility .page-toolbar:has(.page-parent) .page-save-state:not([data-saving]) { display:none; } }
+    @container(max-width:430px) { mux-sdk-utility .page-toolbar.nested .page-save-state:not([data-saving]) { display:none; } }
     mux-sdk-utility .page-canvas { flex:1; overflow:auto; min-height:0; }
     mux-sdk-utility .page-paper { width:min(720px,100%); margin:0 auto; padding:var(--ui-space-10) clamp(var(--ui-space-6),6%,var(--ui-space-14)) var(--ui-space-16) clamp(var(--ui-space-13),8%,var(--ui-space-14)); }
     mux-sdk-utility .page-title { min-height:42px; margin:0 0 var(--ui-space-11); color:var(--ui-document-text); font:700 var(--ui-text-4xl)/1.28 var(--ui-font-sans); }
@@ -1033,6 +1037,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-delete-dialog p { margin:var(--ui-space-4) 0 var(--ui-space-7); color:var(--ui-text-muted); }
     mux-sdk-utility .page-delete-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); }
     @container(max-width:650px) { mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) minmax(170px,38%); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .files-panel .vertical-resizer { display:none; } mux-sdk-utility .files-panel .browser { border-left:0; border-top:1px solid var(--ui-border); } }
+    @container(max-width:430px) { mux-sdk-utility .viewer-header { flex-wrap:wrap; padding-top:var(--ui-space-2); padding-bottom:var(--ui-space-2); } mux-sdk-utility .viewer-header mux-ui-breadcrumb { flex:1 1 100%; } mux-sdk-utility .viewer-header .file-header-actions { margin-left:auto; } }
     @container(max-width:430px) { mux-sdk-utility .file-action-button span { display:none; } }
     @media(pointer:coarse) { mux-sdk-utility .browser-heading, mux-sdk-utility .files-panel .browser-heading { height:auto; min-height:var(--ui-control-lg); } }
     @container(max-width:520px) { mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(170px,38%) minmax(0,1fr); } mux-sdk-utility .pages-panel { grid-template-rows:minmax(96px,min(18%,144px)) minmax(0,1fr); } mux-sdk-utility .pages-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .pages-panel .page-paper { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-13); } mux-sdk-utility .pages-panel .page-title { margin-bottom:var(--ui-space-8); font-size:var(--ui-text-3xl); } mux-sdk-utility .changes-panel .vertical-resizer, mux-sdk-utility .pages-panel .vertical-resizer { display:none; } mux-sdk-utility .changes-list, mux-sdk-utility .pages-list { border-bottom:1px solid var(--ui-border); } }

@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Tile, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
+3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -184,6 +184,17 @@ chooser used a single column on a 390 px phone, with four 58 px touch targets
 and no horizontal overflow; all four actions opened their expected tools in a
 real chat. The tool names and descriptions stay with the screen, while the
 surface and interaction states belong to the shared element.
+
+File and page ancestry now use the shared Breadcrumb, with theme-aware app and
+document appearances. It owns the path structure, current-location label,
+ancestor button sizing and narrow-width overflow; each screen handles the
+navigation event. In Files, choosing an ancestor opens the explorer if needed
+and focuses that folder, making the action visible while keeping the file
+preview open. The explorer root is now a shared Rail Row inside the tree, so
+its level, expanded state and Arrow navigation follow the same pattern as
+child folders. Storybook shows nested paths, hidden browser, empty, phone,
+document and light states; the live nested file path was reviewed in a real
+chat.
 
 The shared Switch also replaces the bespoke Operator toggle in chat settings.
 It has inline and described-row layouts, checked and disabled stories, native
