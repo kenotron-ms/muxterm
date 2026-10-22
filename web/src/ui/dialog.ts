@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 
 export type DialogSize = 'standard' | 'compact';
@@ -13,6 +13,7 @@ export class MuxUIDialog extends LitElement {
   @property({ reflect: true }) size: DialogSize = 'standard';
   @property({ reflect: true }) presentation: DialogPresentation = 'centered';
   @property() label = '';
+  @property() description = '';
   @property({ type:Boolean }) dismissable = true;
 
   static override styles = css`
@@ -103,7 +104,7 @@ export class MuxUIDialog extends LitElement {
   }
 
   override render() {
-    return html`<dialog aria-label=${this.label} @cancel=${this._onCancel} @click=${this._onClick}>
+    return html`<dialog aria-label=${this.label} aria-description=${this.description || nothing} @cancel=${this._onCancel} @click=${this._onClick}>
       <slot></slot>
     </dialog>`;
   }

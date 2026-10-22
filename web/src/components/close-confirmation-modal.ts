@@ -2,6 +2,8 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { MuxUIButton } from '../ui/button.js';
+import type { MuxUIDialog } from '../ui/dialog.js';
+import '../ui/dialog.js';
 import type {
   CloseConfirmationRequiredOutcome,
   CloseRiskReason,
@@ -24,57 +26,45 @@ const REASON_LABELS: Record<CloseRiskReason, string> = {
 export class CloseConfirmationModal extends LitElement {
   static styles = css`
     ${subtleScrollbars}
-    dialog {
-      width: min(480px, calc(100vw - 32px));
-      max-height: min(80dvh, 640px);
+    :host { display: contents; }
+    .content {
       box-sizing: border-box;
       overflow: auto;
-      margin: auto;
-      padding: 24px;
-      border: 1px solid var(--chrome-border);
-      border-radius: var(--ui-radius-lg);
-      background: var(--ui-surface-overlay);
-      background-image: var(--ui-overlay-backdrop-image);
+      max-height: min(78dvh, var(--ui-dialog-compact-max-height));
+      padding: var(--ui-space-8);
       color: var(--ui-text);
-      box-shadow: var(--ui-shadow-overlay);
-    }
-
-    dialog::backdrop {
-      background: var(--ui-backdrop);
-      background-image: var(--ui-app-backdrop-image);
+      font: var(--ui-text-lg)/1.5 var(--ui-font-sans);
     }
 
     h2 {
-      margin: 0 0 14px;
-      font-size: 18px;
+      margin: 0 0 var(--ui-space-6);
+      font-size: var(--ui-text-xl);
       line-height: 1.3;
     }
 
     .description {
       color: var(--ui-text-muted);
-      font-size: 14px;
-      line-height: 1.5;
     }
 
     .description p {
-      margin: 8px 0;
+      margin: var(--ui-space-4) 0;
     }
 
     .risks {
-      margin: 16px 0 0;
+      margin: var(--ui-space-6) 0 0;
       padding: 0;
       list-style: none;
-      border: 1px solid var(--chrome-border);
-      border-radius: 7px;
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-md);
       overflow: hidden;
     }
 
     .risks li {
       display: flex;
       flex-direction: column;
-      gap: 3px;
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--chrome-border);
+      gap: var(--ui-space-2);
+      padding: var(--ui-space-5);
+      border-bottom: 1px solid var(--ui-border);
     }
 
     .risks li:last-child {
@@ -83,8 +73,8 @@ export class CloseConfirmationModal extends LitElement {
 
     .risk-title {
       overflow: hidden;
-      color: var(--chrome-text-bright);
-      font-size: 13px;
+      color: var(--ui-text);
+      font-size: var(--ui-text-md);
       font-weight: 600;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -93,27 +83,30 @@ export class CloseConfirmationModal extends LitElement {
     .risk-reason,
     .omitted {
       color: var(--ui-text-muted);
-      font-size: 12px;
+      font-size: var(--ui-text-sm);
       line-height: 1.4;
     }
 
     .risk-classification {
-      color: var(--chrome-danger);
+      color: var(--ui-danger);
       font-weight: 600;
     }
 
     .omitted {
-      margin: 10px 0 0;
+      margin: var(--ui-space-5) 0 0;
     }
 
     .actions {
       display: flex;
       justify-content: flex-end;
-      gap: 10px;
-      margin-top: 22px;
+      gap: var(--ui-space-5);
+      margin-top: var(--ui-space-7);
     }
 
-    mux-ui-button { min-width: 96px; }
+    mux-ui-button { min-width: var(--ui-space-16); }
+    @media (max-width: 700px) {
+      .content { max-height: calc(100dvh - var(--ui-space-8)); padding: var(--ui-space-7) var(--ui-space-6) calc(var(--ui-space-7) + env(safe-area-inset-bottom)); }
+    }
   `;
 
   @property({ attribute: false })
@@ -125,7 +118,6 @@ export class CloseConfirmationModal extends LitElement {
   protected override updated(changed: Map<PropertyKey, unknown>): void {
     const dialog = this._dialog;
     if (!this.outcome || !dialog) return;
-    if (!dialog.open) dialog.showModal();
     if (changed.has('outcome')) {
       requestAnimationFrame(() => this.focusCancel());
     }
@@ -139,28 +131,19 @@ export class CloseConfirmationModal extends LitElement {
       ?.focus({ preventScroll: true });
   }
 
-  private get _dialog(): HTMLDialogElement | null {
-    return this.shadowRoot?.querySelector('dialog') ?? null;
+  private get _dialog(): MuxUIDialog | null {
+    return this.shadowRoot?.querySelector('mux-ui-dialog') ?? null;
   }
 
   private _emitCancel(): void {
     if (this.confirming) return;
-    this._dialog?.close();
+    if (this._dialog) this._dialog.open = false;
     this.dispatchEvent(
       new CustomEvent('close-confirmation-cancel', {
         bubbles: true,
         composed: true,
       }),
     );
-  }
-
-  private _onNativeCancel(e: Event): void {
-    e.preventDefault();
-    this._emitCancel();
-  }
-
-  private _onBackdropClick(e: MouseEvent): void {
-    if (e.target === e.currentTarget) this._emitCancel();
   }
 
   private _onKeyDown(e: KeyboardEvent): void {
@@ -177,6 +160,7 @@ export class CloseConfirmationModal extends LitElement {
     // Close every dismissal path synchronously, before the parent can re-render
     // the controlled property or the daemon can answer the confirmation.
     this.confirming = true;
+    if (this._dialog) this._dialog.dismissable = false;
     this.dispatchEvent(
       new CustomEvent<{ ticket: string }>('close-confirmation-confirm', {
         detail: { ticket: this.outcome.ticket },
@@ -193,22 +177,30 @@ export class CloseConfirmationModal extends LitElement {
     const noun = outcome.targetKind === 'pane' ? 'pane' : 'workspace';
     const title = outcome.targetKind === 'pane' ? 'Close pane?' : 'Close workspace?';
     const confirmLabel = outcome.targetKind === 'pane' ? 'Close Pane' : 'Close Workspace';
+    const busyDescription = `Running work will terminate if you close this ${noun}.`;
+    const unknownDescription = `Activity cannot be determined and work may terminate if you close this ${noun}.`;
+    const description = [
+      outcome.busyCount > 0 ? busyDescription : '',
+      outcome.unknownCount > 0 ? unknownDescription : '',
+    ].filter(Boolean).join(' ');
 
     return html`
-      <dialog
-        aria-labelledby="close-confirmation-title"
-        aria-describedby="close-confirmation-description"
-        @cancel="${this._onNativeCancel}"
-        @click="${this._onBackdropClick}"
+      <mux-ui-dialog
+        open size="compact" presentation="adaptive"
+        .label="${title}"
+        .description="${description}"
+        .dismissable="${!this.confirming}"
+        @dismiss="${this._emitCancel}"
         @keydown="${this._onKeyDown}"
       >
-        <h2 id="close-confirmation-title">${title}</h2>
-        <div id="close-confirmation-description" class="description">
+        <div class="content">
+        <h2>${title}</h2>
+        <div class="description">
           ${outcome.busyCount > 0
-            ? html`<p>Running work will terminate if you close this ${noun}.</p>`
+            ? html`<p>${busyDescription}</p>`
             : ''}
           ${outcome.unknownCount > 0
-            ? html`<p>Activity cannot be determined and work may terminate if you close this ${noun}.</p>`
+            ? html`<p>${unknownDescription}</p>`
             : ''}
         </div>
 
@@ -257,7 +249,8 @@ export class CloseConfirmationModal extends LitElement {
             ${confirmLabel}
           </mux-ui-button>
         </div>
-      </dialog>
+        </div>
+      </mux-ui-dialog>
     `;
   }
 }

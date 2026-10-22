@@ -60,6 +60,8 @@ seams and the source of truth for each screen.
 
 The app shell uses the same semantic surface, text, focus, spacing and shadow tokens as the component library. Workspace creation uses a shared adaptive Dialog, Text Field and Buttons through `mux-workspace-create-dialog`; Storybook records desktop, phone, busy and light states. The shell owns workspace creation through sessiond.
 
+Destructive pane and workspace close uses the same adaptive Dialog and semantic tokens. Its risk summary is the dialog's accessible description, Cancel receives initial focus, and an in-flight confirmation blocks dismissal. Sessiond alone decides whether the close requires confirmation and when a pane or workspace actually disappears. Storybook records pane, workspace, multi-risk, phone, busy and light states; a real dev-local pane verified the close path.
+
 ## Main-based browser evidence
 
 Chromium verification uses Storybook for populated UI fixtures and isolated

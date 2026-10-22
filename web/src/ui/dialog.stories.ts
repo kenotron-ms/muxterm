@@ -7,16 +7,17 @@ interface DialogArgs {
   size: 'standard' | 'compact';
   presentation: 'centered' | 'adaptive';
   label: string;
+  description: string;
   dismissable: boolean;
 }
 
 const meta = {
   title: 'Components/Dialog',
   tags: ['autodocs'],
-  args: { size: 'standard', presentation:'centered', label: 'Example settings',dismissable:true },
+  args: { size: 'standard', presentation:'centered', label: 'Example settings',description:'Change application preferences.',dismissable:true },
   argTypes: { size: { control: 'select', options: ['standard', 'compact'] }, presentation:{control:'select',options:['centered','adaptive']} },
   render: (args: DialogArgs) => html`
-    <mux-ui-dialog open .size=${args.size} .presentation=${args.presentation} .label=${args.label} .dismissable=${args.dismissable}>
+    <mux-ui-dialog open .size=${args.size} .presentation=${args.presentation} .label=${args.label} .description=${args.description} .dismissable=${args.dismissable}>
       <section style=${`display:flex;flex-direction:column;min-height:0;${args.size === 'standard' ? 'flex:1' : ''}`}>
         <header style="padding:var(--ui-space-6);border-bottom:1px solid var(--ui-border)">
           <h2 style="margin:0;font-size:var(--ui-text-xl)">${args.label}</h2>

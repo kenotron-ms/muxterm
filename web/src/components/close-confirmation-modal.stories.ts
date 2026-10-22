@@ -28,6 +28,9 @@ const meta = {
 export default meta;
 type Story = StoryObj<{ outcome: CloseConfirmationRequiredOutcome; confirming: boolean }>;
 export const ActivePane: Story = {};
+export const PhoneActivePane: Story = {
+  globals: { viewport: { value: 'phone390', isRotated: false } },
+};
 export const UnknownWorkspace: Story = {
   args: {
     outcome: {
@@ -36,8 +39,30 @@ export const UnknownWorkspace: Story = {
       paneId: undefined,
       busyCount: 0,
       unknownCount: 1,
-      risks: [{ paneId: 7, title: 'Remote shell', classification: 'unknown', reason: 'process-inspection-failed' }],
+      risks: [{ paneId: 7, title: 'Build watcher', classification: 'unknown', reason: 'process-inspection-failed' }],
     } as CloseConfirmationRequiredOutcome,
   },
 };
 export const Confirming: Story = { args: { confirming: true } };
+export const PhoneConfirming: Story = {
+  args: { confirming: true },
+  globals: { viewport: { value: 'phone390', isRotated: false } },
+};
+export const LightPalette: Story = { globals: { palette: 'github-light' } };
+export const SeveralRisks: Story = {
+  args: {
+    outcome: {
+      ...paneOutcome,
+      targetKind: 'workspace',
+      paneId: undefined,
+      busyCount: 2,
+      unknownCount: 1,
+      risks: [
+        paneOutcome.risks[0],
+        { paneId: 4, title: 'Deploy', classification: 'busy', reason: 'command-active' },
+        { paneId: 5, title: 'Build watcher', classification: 'unknown', reason: 'process-inspection-failed' },
+      ],
+      omittedRiskCount: 2,
+    } as CloseConfirmationRequiredOutcome,
+  },
+};

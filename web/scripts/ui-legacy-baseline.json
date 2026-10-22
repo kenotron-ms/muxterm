@@ -6,9 +6,9 @@
     "nativeControls": 0
   },
   "components/close-confirmation-modal.ts": {
-    "legacyTokens": 5,
+    "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 14,
+    "literalScale": 0,
     "nativeControls": 0
   },
   "components/launcher-menu.ts": {
