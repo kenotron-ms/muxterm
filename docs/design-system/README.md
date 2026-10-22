@@ -114,18 +114,20 @@ focus remain native browser behavior.
 
 Skills uses semantic page, surface, border, type and spacing tokens throughout. Storybook records search results, install success, empty results, load errors, recovery, phone and light states. A failed installed-list request now shows a readable error with Retry instead of a misleading empty-library message; the fixture's Retry action reloads the installed list.
 
-Connections, Skills, Scheduled Jobs and New Chat now use one Screen Header for the
-desktop section path above screen content. It owns the common height, surface,
-divider, truncation and window drag treatment; New Chat supplies the folder icon
-and live project name through its optional icon slot. It disappears on phones
-where the app title bar provides location. Storybook covers long names and
-light palette; each migrated screen has desktop and phone states. Chat keeps
-its workspace-aware row for a separate interaction review.
+Connections, Skills, Scheduled Jobs, New Chat and Chat now use one Screen Header
+for the section and title row. It owns the common height, surface, divider,
+truncation and window drag treatment. New Chat and Chat supply the workspace
+folder icon through its optional icon slot. Chat supplies its title or agent
+breadcrumb in the heading slot and keeps goal and utility controls in the
+actions slot. The other screens hide this duplicate strip on phones; Chat
+keeps its action row but hides the workspace section beneath the app title bar.
+Storybook covers long names, action rows, light palette and phone states.
 
 ## Main-based browser evidence
 
 Chromium verification uses Storybook for populated UI fixtures and isolated
-`make dev-local` on port 8313 for the real app and sessiond. Review screenshots
+`make dev-local` (port 8313 by default, or a named isolated dev port) for the
+real app and sessiond. Review screenshots
 live under `/home/ken/artifacts/`, outside the repository. The source stories
 and the notes below identify the states that were inspected.
 

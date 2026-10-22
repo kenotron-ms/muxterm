@@ -23,6 +23,7 @@ import '../ui/breadcrumb.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
 import '../ui/status-badge.js';
+import '../ui/screen-header.js';
 import type { StatusTone } from '../ui/status-badge.js';
 import { visuallyHidden } from '../ui/visually-hidden.js';
 import { listboxIndexForKey } from '../ui/listbox.js';
@@ -214,14 +215,10 @@ export class MuxSDKChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-content-font-size)/1.55 var(--ui-content-font-family); }
-    .topbar { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:var(--ui-space-4); padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
-    .topbar.with-utility { width:calc(100% - var(--utility-width)); padding-right:var(--ui-space-5); }
-    .workspace-crumb { display:inline-flex; align-items:center; gap:var(--ui-space-4); min-width:0; max-width:38%; color:var(--ui-text-muted); font:500 var(--ui-text-sm) var(--ui-font-sans); white-space:nowrap; }
-    .workspace-crumb span { overflow:hidden; text-overflow:ellipsis; }
-    .workspace-crumb .lucide-icon { flex:none; }
-    .workspace-divider { flex:none; color:var(--ui-text-muted); }
-    @media (display-mode: window-controls-overlay) { .topbar { -webkit-app-region:drag; } .topbar button,.topbar mux-ui-button { -webkit-app-region:no-drag; } }
-    .breadcrumbs { min-width:0; }
+    .chat-screen-header.with-utility { width:calc(100% - var(--utility-width)); --ui-screen-header-padding-right:var(--ui-space-5); }
+    .topbar-actions { display:flex; align-items:center; gap:var(--ui-space-4); }
+    @media (display-mode: window-controls-overlay) { .chat-screen-header mux-ui-button { -webkit-app-region:no-drag; } }
+    .breadcrumbs { min-width:0; flex:1; }
     .agent-history-error { align-self:center; width:calc(100% - 48px); max-width:760px; box-sizing:border-box; padding:var(--ui-space-4) 0; color:var(--ui-danger); font-size:var(--ui-content-font-size); }
     .delegate-card { display:block; width:100%; max-width:560px; }
     .delegate-card mux-ui-status-badge { min-height:0; padding:var(--ui-space-1) var(--ui-space-3); }
@@ -240,7 +237,7 @@ export class MuxSDKChat extends LitElement {
     h1 { font-size:var(--ui-content-font-size); margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     button { font:inherit; cursor:pointer; }
     .pane-controls { display:inline-flex; align-items:center; flex:none; }
-    .chat-title { display:flex; align-items:center; gap:var(--ui-space-3); min-width:0; overflow:hidden; }
+    .chat-title { display:flex; flex:1; align-items:center; gap:var(--ui-space-3); min-width:0; overflow:hidden; }
     .chat-title h1 { min-width:0; }
     :host([compact]) .chat-title { ${visuallyHidden} }
     .operator-crumb { display:inline-flex; flex:none; color:var(--ui-text-muted); }
@@ -469,7 +466,8 @@ export class MuxSDKChat extends LitElement {
     .drawer-resizer { position:absolute; z-index:var(--ui-z-local); left:-5px; top:0; bottom:0; width:10px; cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--ui-accent) 25%,transparent); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
-    @media(max-width:700px) { .body { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-9); } .composer-wrap { padding:0 var(--ui-space-5) var(--ui-space-5); } .drawer { box-sizing:border-box; position:absolute; right:0; top:0; bottom:0; width:100%; height:100%; margin-top:0; box-shadow:var(--ui-shadow-side-strong); } .drawer-resizer { display:none; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar,.topbar.with-utility { width:100%; padding-left:var(--ui-space-5); padding-right:var(--ui-space-5); gap:var(--ui-space-3); } .workspace-crumb,.workspace-divider { display:none; } .chat-title,.breadcrumbs { flex:1; } }
+    @media(max-width:767.98px) { .chat-screen-header,.chat-screen-header.with-utility { width:100%; --ui-screen-header-padding-right:var(--ui-space-5); } }
+    @media(max-width:700px) { .body { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-9); } .composer-wrap { padding:0 var(--ui-space-5) var(--ui-space-5); } .drawer { box-sizing:border-box; position:absolute; right:0; top:0; bottom:0; width:100%; height:100%; margin-top:0; box-shadow:var(--ui-shadow-side-strong); } .drawer-resizer { display:none; } .layout.preview-focused .drawer { left:0; box-shadow:none; } .topbar-actions { gap:var(--ui-space-3); } }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -1655,7 +1653,7 @@ export class MuxSDKChat extends LitElement {
       chain.unshift(current);
       current = byId.get(current.parentId);
     }
-    return html`<mux-ui-breadcrumb class="breadcrumbs" label="Agent lineage" .items=${[
+    return html`<mux-ui-breadcrumb slot="heading" class="breadcrumbs" label="Agent lineage" .items=${[
       {id:this.sessionId,label:this.chat?.title || 'Root session',actionLabel:'Return to root chat'},
       ...chain.map(agent => ({id:agent.id,label:agent.name,actionLabel:`Open ${agent.name} work`}))
     ]} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => event.detail.id === this.sessionId ? this.returnToParent() : this.openAgent(event.detail.id)}></mux-ui-breadcrumb>`;
@@ -2333,9 +2331,13 @@ export class MuxSDKChat extends LitElement {
     const parentOperator = sdkChats.chats.find(chat => chat.operator && chat.operatorLanes?.includes(this.sessionId));
     const workspaceName = sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped';
     return html`
-    <div class="topbar ${this.drawerOpen ? 'with-utility' : ''}" style=${this.drawerOpen ? `--utility-width:${this.drawerWidth}px` : ''}><div class="workspace-crumb" title=${workspaceName}>${icon(Folder,{size:14})}<span>${workspaceName}</span></div><span class="workspace-divider" aria-hidden="true">›</span>${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div class="chat-title">${parentOperator && !this.compact ? html`<mux-ui-button class="operator-parent" variant="quiet" size="small" icon-only accessible-label=${`Open operator chat: ${parentOperator.title}`} tooltip=${`Open operator chat: ${parentOperator.title}`} @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:parentOperator.id},bubbles:true,composed:true}))}>${icon(Network,{size:15})}</mux-ui-button><span class="operator-crumb" aria-hidden="true">${icon(ChevronRight,{size:13})}</span>` : nothing}<h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}
+    <mux-ui-screen-header class="chat-screen-header ${this.drawerOpen ? 'with-utility' : ''}" style=${this.drawerOpen ? `--utility-width:${this.drawerWidth}px` : ''} .section=${workspaceName} .heading=${this.scheduledJob?.name || this.chat?.title || 'Chat'} .label=${this.chat?.title || 'Chat'} with-section-icon with-actions show-on-phone>
+      <span slot="section-icon">${icon(Folder,{size:14})}</span>
+      ${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div slot="heading" class="chat-title">${parentOperator && !this.compact ? html`<mux-ui-button class="operator-parent" variant="quiet" size="small" icon-only accessible-label=${`Open operator chat: ${parentOperator.title}`} tooltip=${`Open operator chat: ${parentOperator.title}`} @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:parentOperator.id},bubbles:true,composed:true}))}>${icon(Network,{size:15})}</mux-ui-button><span class="operator-crumb" aria-hidden="true">${icon(ChevronRight,{size:13})}</span>` : nothing}<h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}
+      <div slot="actions" class="topbar-actions">
       <mux-ui-button class="goal-icon" variant="quiet" size="small" icon-only expandable .expanded=${this.goalLedgerOpen} accessible-label="Open goal ledger" tooltip="Open goal ledger" @click=${() => { this.goalLedgerOpen = !this.goalLedgerOpen; void this.refreshGoal(); }}>${icon(NotebookTabs,{size:16})}</mux-ui-button>
       <div class="pane-controls"><mux-ui-button variant="quiet" size="small" icon-only toggle .pressed=${this.drawerOpen} accessible-label=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} tooltip=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} @click=${() => this.setPaneMode(this.drawerOpen ? 'chat' : 'split')}>${icon(PanelRight,{size:17})}</mux-ui-button></div></div>
+    </mux-ui-screen-header>
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.recoveryRequired ? html`<mux-ui-feedback class="recovery" kind="warning" appearance="panel"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><mux-ui-button slot="action" variant="secondary" size="small" @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</mux-ui-button></mux-ui-feedback>` : nothing}
