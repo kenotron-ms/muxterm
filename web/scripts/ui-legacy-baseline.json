@@ -156,9 +156,9 @@
     "nativeControls": 0
   },
   "components/title-bar.ts": {
-    "legacyTokens": 1,
+    "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 5,
-    "nativeControls": 3
+    "literalScale": 1,
+    "nativeControls": 0
   }
 }

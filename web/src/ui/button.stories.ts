@@ -60,6 +60,9 @@ export const PhoneSmall: Story = {
 export const MenuTrigger: Story = {
   render:() => html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Project options" tooltip="Project options" haspopup="menu" @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.expanded = !button.expanded; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>`,
 };
+export const Disclosure: Story = {
+  render:() => html`<mux-ui-button variant="quiet" expandable @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.expanded = !button.expanded; }}>Open navigation</mux-ui-button>`,
+};
 export const ToggleIcon: Story = {
   render:() => html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" toggle accessible-label="Show file browser" tooltip="Show file browser" @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.pressed = !button.pressed; }}>${icon(Paperclip,{size:16})}</mux-ui-button>`,
 };

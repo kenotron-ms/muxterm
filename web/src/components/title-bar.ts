@@ -4,6 +4,7 @@ import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import './mux-pane-picker.js';
 import './mic-button.js';
+import '../ui/button.js';
 import { icon } from '../lib/icons.js';
 import { Folder, FolderOpen, Menu, Settings } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
@@ -49,13 +50,13 @@ export class MuxTitleBar extends LitElement {
       left: env(titlebar-area-x, 0px);
       width: env(titlebar-area-width, 100%);
       height: env(titlebar-area-height, 44px);
-      padding: 0 8px;
+      padding: 0 var(--ui-space-4);
       border: 0;
       z-index: 50;
       -webkit-app-region: drag;
       app-region: drag;
     }
-    :host([window-chrome]) button,
+    :host([window-chrome]) mux-ui-button,
     :host([window-chrome]) mux-pane-picker,
     :host([window-chrome]) mux-mic-button,
     :host([window-chrome]) mux-launcher-menu {
@@ -67,14 +68,7 @@ export class MuxTitleBar extends LitElement {
     :host([window-chrome]) .brand-sha { display: none; }
     @media (display-mode: window-controls-overlay) {
       :host { -webkit-app-region: drag; }
-      button, mux-pane-picker, mux-mic-button, mux-launcher-menu {
-        -webkit-app-region: no-drag;
-      }
-    }
-
-    @media (display-mode: window-controls-overlay) {
-      :host { -webkit-app-region: drag; }
-      button, mux-pane-picker, mux-mic-button, mux-launcher-menu {
+      mux-ui-button, mux-pane-picker, mux-mic-button, mux-launcher-menu {
         -webkit-app-region: no-drag;
       }
     }
@@ -101,9 +95,9 @@ export class MuxTitleBar extends LitElement {
     }
 
     .brand-logo {
-      width: 20px;
-      height: 20px;
-      border-radius: 5px;
+      width: var(--ui-space-7);
+      height: var(--ui-space-7);
+      border-radius: var(--ui-radius-sm);
       flex-shrink: 0;
     }
 
@@ -121,9 +115,9 @@ export class MuxTitleBar extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      padding: 0 6px;
-      color: var(--chrome-text-bright);
-      font-size: 13.5px;
+      padding: 0 var(--ui-space-3);
+      color: var(--ui-text);
+      font-size: var(--ui-text-lg);
       font-weight: 600;
     }
 
@@ -151,37 +145,7 @@ export class MuxTitleBar extends LitElement {
       position: relative;
     }
 
-    .launcher-btn,
-    .side-chat-btn,
-    .drawer-btn {
-      position: relative;
-      width: var(--ui-nav-height);
-      height: var(--ui-nav-height);
-      flex: none;
-      background: transparent;
-      border: none;
-      border-radius: var(--ui-radius-sm);
-      color: var(--ui-text);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      font-family: inherit;
-    }
-
-    .launcher-btn:hover,
-    .side-chat-btn:hover,
-    .drawer-btn:hover {
-      background: var(--ui-surface-hover);
-    }
-    .side-chat-btn[aria-pressed="true"] { color:var(--ui-accent); background:var(--ui-surface-hover); }
-    .launcher-btn:focus-visible,
-    .side-chat-btn:focus-visible,
-    .drawer-btn:focus-visible {
-      outline: 2px solid var(--ui-focus);
-      outline-offset: -2px;
-    }
+    .drawer-action { position: relative; }
 
     /* Show an attention dot only when a session needs input. */
     .needs-dot {
@@ -208,9 +172,6 @@ export class MuxTitleBar extends LitElement {
       flex-shrink: 0;
     }
 
-    button .lucide-icon {
-      pointer-events: none;
-    }
   `;
 
   /**
@@ -277,19 +238,18 @@ export class MuxTitleBar extends LitElement {
     return html`
       ${this.desktop
         ? ''
-        : html`<button
-            class="drawer-btn"
-            type="button"
-            title="Navigation"
-            aria-label="${needs
+        : html`<mux-ui-button
+            class="drawer-action"
+            icon-only size="large" variant="quiet"
+            accessible-label="${needs
               ? 'Sessions need input. Open navigation.'
               : 'Open navigation'}"
-            aria-expanded="${this.drawerOpen ? 'true' : 'false'}"
-            @click="${this._toggleDrawer}"
+            tooltip="Navigation" expandable .expanded=${this.drawerOpen}
+            @click=${this._toggleDrawer}
           >
             ${icon(Menu, { size: 20 })}
             ${needs ? html`<span class="needs-dot" aria-hidden="true"></span>` : ''}
-          </button>`}
+          </mux-ui-button>`}
       ${this.chatTitle
         ? html`<span class="chat-title">${this.chatTitle}</span>`
         : html`<div class="brand">
@@ -298,24 +258,20 @@ export class MuxTitleBar extends LitElement {
             <span class="brand-sha">${__GIT_SHA__}</span>
           </div><mux-pane-picker .paneStore=${this.paneStore}></mux-pane-picker>`}
       <div class="right">
-        ${!this.desktop && !this.chatTitle && this.terminalActive ? html`<button
-          class="launcher-btn"
-          type="button"
-          title="${this.filesOpen ? 'Hide file explorer' : 'Show file explorer'}"
-          aria-label="${this.filesOpen ? 'Hide file explorer' : 'Show file explorer'}"
-          aria-pressed="${this.filesOpen}"
+        ${!this.desktop && !this.chatTitle && this.terminalActive ? html`<mux-ui-button
+          icon-only size="large" variant="quiet" toggle .pressed=${this.filesOpen}
+          tooltip="${this.filesOpen ? 'Hide file explorer' : 'Show file explorer'}"
+          accessible-label="${this.filesOpen ? 'Hide file explorer' : 'Show file explorer'}"
           @click=${() => this.dispatchEvent(new CustomEvent('file-explorer-toggle', { bubbles:true, composed:true }))}
-        >${icon(this.filesOpen ? FolderOpen : Folder, { size:17 })}</button>` : ''}
+        >${icon(this.filesOpen ? FolderOpen : Folder, { size:17 })}</mux-ui-button>` : ''}
         ${this.desktop || this.chatTitle ? '' : html`<mux-mic-button .paneStore=${this.paneStore} .voiceController=${this.voiceController}></mux-mic-button>`}
         ${!this.showLauncher || (this.desktop && this.dockActionsVisible)
           ? ''
-          : html`<button
-                class="launcher-btn"
-                type="button"
-                title="Settings"
-                aria-label="Open settings"
+          : html`<mux-ui-button
+                icon-only size="large" variant="quiet"
+                tooltip="Settings" accessible-label="Open settings"
                 @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action: 'settings' }, bubbles: true, composed: true }))}
-              >${icon(Settings, { size: 16 })}</button>`}
+              >${icon(Settings, { size: 16 })}</mux-ui-button>`}
       </div>
     `;
   }

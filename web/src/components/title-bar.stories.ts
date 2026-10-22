@@ -67,11 +67,12 @@ export const MobileWorkspace: Story = {};
 export const DrawerOpen: Story = { render: () => view({ drawerOpen: true }) };
 export const NeedsAttention: Story = { render: () => view({ attention: true }) };
 export const FilesOpen: Story = { render: () => view({ filesOpen: true }) };
+export const LightWorkspace: Story = { globals: { palette: 'github-light' } };
 export const ChatTitle: Story = { render: () => view({ chatTitle: 'Build pipeline notes' }) };
 export const NewChatTitle: Story = { render: () => view({ chatTitle: 'New Chat', showLauncher: false }) };
 export const SettingsAction: Story = {
   play: async ({ canvasElement }) => {
-    canvasElement.querySelector('mux-title-bar')?.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Open settings"]')?.focus();
+    canvasElement.querySelector('mux-title-bar')?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Open settings"]')?.focus();
   },
 };
 export const DesktopEmptyWorkspace: Story = {

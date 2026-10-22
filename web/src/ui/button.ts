@@ -21,6 +21,7 @@ export class MuxUIButton extends LitElement {
   @property({ reflect: true }) tone: 'default' | 'muted' | 'danger' = 'default';
   @property({ reflect: true }) appearance: ButtonAppearance = 'app';
   @property() haspopup = '';
+  @property({ type: Boolean }) expandable = false;
   @property({ type: Boolean }) expanded = false;
   @property({ type: Boolean }) toggle = false;
   @property({ type: Boolean, reflect: true }) pressed = false;
@@ -104,7 +105,7 @@ export class MuxUIButton extends LitElement {
     return html`<button part="button" type="button" ?disabled=${this.disabled || this.busy}
       title=${this.tooltip || nothing}
       aria-label=${this.accessibleLabel || nothing} aria-keyshortcuts=${this.keyshortcuts || nothing} aria-busy=${String(this.busy)}
-      aria-haspopup=${this.haspopup || nothing} aria-expanded=${this.haspopup ? String(this.expanded) : nothing}
+      aria-haspopup=${this.haspopup || nothing} aria-expanded=${this.haspopup || this.expandable ? String(this.expanded) : nothing}
       aria-pressed=${this.toggle ? String(this.pressed) : nothing}>
       ${this.busy ? html`<span class="spinner" aria-hidden="true"></span>` : html`<slot name="leading"></slot>`}
       <slot></slot><slot name="trailing"></slot>
