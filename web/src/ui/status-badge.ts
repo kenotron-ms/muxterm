@@ -11,6 +11,7 @@ export class MuxUIStatusBadge extends LitElement {
   @property({ reflect: true }) tone: StatusTone = 'neutral';
   @property({ reflect: true }) appearance: StatusBadgeAppearance = 'pill';
   @property({ type: Boolean, reflect: true }) dot = false;
+  @property({ type: Boolean, reflect: true }) wrap = false;
 
   static override styles = css`
     :host {
@@ -41,6 +42,7 @@ export class MuxUIStatusBadge extends LitElement {
       color: var(--badge-tone);
       font: inherit;
     }
+    :host([wrap]) { white-space: normal; overflow-wrap: anywhere; }
     .dot { display: none; flex: none; width: var(--ui-status-dot-size); height: var(--ui-status-dot-size); border-radius: 50%; background: var(--badge-tone); }
     :host([dot]) .dot { display: block; }
   `;

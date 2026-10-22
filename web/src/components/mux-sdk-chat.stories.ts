@@ -313,10 +313,7 @@ export const PhoneCommandSuggestions: Story = {
   parameters:{apiFixture:chatFixture('storybook-chat-phone-commands')},
   play:showCommandSuggestions,
 };
-export const FileAttached: Story = {
-  args:{sessionId:'storybook-chat-attachment'},
-  parameters:{apiFixture:chatFixture('storybook-chat-attachment')},
-  play:async ({canvasElement}) => {
+const attachFile = async ({canvasElement}:{canvasElement:HTMLElement}, expectedState:'ready'|'error' = 'ready') => {
     await sdkChats.refresh();
     const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
     await chat?.updateComplete;
@@ -327,13 +324,34 @@ export const FileAttached: Story = {
       input.files = files.files;
       input.dispatchEvent(new Event('change',{bubbles:true,composed:true}));
     }
-  },
+    for (let attempt=0; attempt<30; attempt++) {
+      await chat?.updateComplete;
+      if (chat?.shadowRoot?.querySelector('mux-ui-attachment')?.getAttribute('state') === expectedState) return;
+      await new Promise(resolve => setTimeout(resolve,50));
+    }
+    throw new Error(`Attachment did not reach ${expectedState}`);
+};
+const failedAttachmentFixture = (id:string):ApiFixture => {
+  const fixture = chatFixture(id);
+  return request => request.method === 'POST' && request.url.pathname.endsWith('/api/sdk-chat-attachments')
+    ? fixtureJSON({reason:'The file could not be uploaded. Try attaching it again.'},413)
+    : fixture(request);
+};
+export const FileAttached: Story = {
+  args:{sessionId:'storybook-chat-attachment'},
+  parameters:{apiFixture:chatFixture('storybook-chat-attachment')},
+  play:attachFile,
 };
 export const PhoneFileAttached: Story = {
   args:{sessionId:'storybook-chat-phone-attachment'},
   globals:{viewport:{value:'phone390',isRotated:false}},
   parameters:{apiFixture:chatFixture('storybook-chat-phone-attachment')},
   play:FileAttached.play,
+};
+export const FileUploadFailed: Story = {
+  args:{sessionId:'storybook-chat-attachment-error'},
+  parameters:{apiFixture:failedAttachmentFixture('storybook-chat-attachment-error')},
+  play:context => attachFile(context,'error'),
 };
 const showVoiceSpeaking = async ({canvasElement}: {canvasElement:HTMLElement}) => {
   await sdkChats.refresh();

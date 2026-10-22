@@ -50,6 +50,10 @@ const fixture: ApiFixture = ({ url, method, init }) => {
   }
   return fixtureJSON({ error:`No New Chat fixture for ${method} ${url.pathname}` }, 501);
 };
+const failedUploadFixture: ApiFixture = request =>
+  request.method === 'POST' && request.url.pathname.endsWith('/api/sdk-chat-attachments')
+    ? fixtureJSON({ reason: 'The file could not be uploaded. Try attaching it again.' }, 413)
+    : fixture(request);
 
 interface NewChatArgs {
   project: string;
@@ -117,7 +121,7 @@ export const WorktreeSelected: Story = {
 };
 export const PhoneWorktree: Story = { args:{project:'atlas'}, globals:{viewport:{value:'phone390',isRotated:false}}, play:WorktreeSelected.play };
 export const DraftMessage: Story = { args: { project:'atlas', prompt:'Summarize the open tasks in this project.' } };
-const attachFile = async ({canvasElement}:{canvasElement:HTMLElement}) => {
+const attachFile = async ({canvasElement}:{canvasElement:HTMLElement}, expectedState:'ready'|'error' = 'ready') => {
   const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
   if (!screen) throw new Error('New Chat did not mount');
   let input:HTMLInputElement | null | undefined;
@@ -132,13 +136,14 @@ const attachFile = async ({canvasElement}:{canvasElement:HTMLElement}) => {
   input.dispatchEvent(new Event('change', {bubbles:true,composed:true}));
   for (let attempt=0; attempt<30; attempt++) {
     await screen.updateComplete;
-    if (screen.shadowRoot?.querySelector('.attachment .status')?.textContent === 'Ready') return;
+    if (screen.shadowRoot?.querySelector('mux-ui-attachment')?.getAttribute('state') === expectedState) return;
     await new Promise(resolve => setTimeout(resolve,50));
   }
   throw new Error('Attachment did not become ready');
 };
 export const AttachmentReady: Story = { args:{project:'atlas'},play:attachFile };
 export const PhoneAttachment: Story = { args:{project:'atlas'},globals:{viewport:{value:'phone390',isRotated:false}},play:attachFile };
+export const AttachmentUploadFailed: Story = { args:{project:'atlas'},parameters:{apiFixture:failedUploadFixture},play:context => attachFile(context,'error') };
 export const Compact: Story = { args: { compact:true } };
 export const NewProject: Story = {
   play: async ({ canvasElement }) => {

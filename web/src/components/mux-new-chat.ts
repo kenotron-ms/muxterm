@@ -6,6 +6,7 @@ import { apiPath } from '../lib/base-path.js';
 import { ArrowUp, Folder, Paperclip, Plus, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import '../ui/button.js';
+import '../ui/attachment.js';
 import '../ui/choice-item.js';
 import '../ui/choice-list.js';
 import '../ui/choice-picker.js';
@@ -128,12 +129,6 @@ export class MuxNewChat extends LitElement {
     .native-textarea-sizing .textarea-mirror { display:none; }
     textarea::placeholder { color:var(--ui-text-muted); opacity:.8; }
     .attachments { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); }
-    .attachment { position:relative; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; max-width:min(100%,var(--ui-attachment-card-width)); padding:var(--ui-space-2) var(--ui-control-lg) var(--ui-space-2) var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
-    .attachment img { flex:none; width:var(--ui-attachment-preview-size); height:var(--ui-attachment-preview-size); object-fit:cover; border-radius:var(--ui-radius-md); background:var(--ui-surface-base); }
-    .attachment .filename { min-width:0; max-width:var(--ui-attachment-name-width); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ui-text-sm); }
-    .attachment .status { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    .attachment .status.failed { color:var(--ui-danger-text); }
-    .attachment mux-ui-button { position:absolute; top:var(--ui-space-2); right:var(--ui-space-2); }
     .file-input { display:none; }
     .drop-overlay { position:absolute; inset:var(--ui-space-4); z-index:var(--ui-z-drag-overlay); display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb, var(--ui-surface-base) 92%, transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
     .main > .content > mux-ui-feedback { margin:var(--ui-space-5) 0; }
@@ -482,7 +477,7 @@ export class MuxNewChat extends LitElement {
         ${this.catalogLoading ? html`<mux-ui-feedback kind="loading" density="compact">Loading models…</mux-ui-feedback>` : nothing}
         <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
         </div>
-        ${this.attachments.length ? html`<div class="attachments" aria-label="Attached files">${this.attachments.map(a => html`<div class="attachment">${a.preview ? html`<img src=${a.preview} alt="">` : nothing}<span class="filename">${a.file.name}</span><span class="status ${a.error ? 'failed' : ''}">${a.error || (a.uploading ? 'Uploading…' : 'Ready')}</span><mux-ui-button icon-only size="small" variant="quiet" accessible-label=${`Remove ${a.file.name}`} @click=${() => this.removeAttachment(a.localId)}>${icon(X,{size:14})}</mux-ui-button></div>`)}</div>` : nothing}
+        ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
         <div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${this.onPromptInput} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div>
         <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><mux-ui-button icon-only variant="quiet" accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:18})}</mux-ui-button><mux-ui-button class="send" icon-only variant="primary" accessible-label="Send message" ?disabled=${(!this.promptHasContent && !this.attachments.length) || this.busy || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>${icon(ArrowUp,{size:18})}</mux-ui-button></div>
 
