@@ -73,6 +73,6 @@ export const CloseIntent: Story = {
   play:({canvasElement}) => {
     const picker = canvasElement.querySelector('mux-pane-picker');
     picker?.shadowRoot?.querySelector<HTMLButtonElement>('.breadcrumb')?.click();
-    picker?.shadowRoot?.querySelector<HTMLButtonElement>('.pane-close')?.click();
+    picker?.shadowRoot?.querySelector<HTMLElement>('.pane-close')?.click();
   },
 };

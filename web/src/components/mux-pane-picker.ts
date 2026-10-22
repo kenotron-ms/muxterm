@@ -25,11 +25,12 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
  * kept here at all.
  */
 
-import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
+import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { store, type MuxStore } from '../state.js';
 import { icon } from '../lib/icons.js';
 import { Plus, X } from 'lucide';
+import '../ui/button.js';
 
 /** DESIGN.md: U+25CF attention mark in the semantic attention color. */
 const BELL_DOT = '●';
@@ -67,7 +68,7 @@ export class MuxPanePicker extends LitElement {
       }
     }
 
-    button {
+    .breadcrumb {
       background: transparent;
       border: none;
       color: inherit;
@@ -75,7 +76,7 @@ export class MuxPanePicker extends LitElement {
       cursor: pointer;
       padding: 0;
     }
-    button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
+    .breadcrumb:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
 
     /* ── the breadcrumb ─────────────────────────────────────────────────── */
 
@@ -196,25 +197,25 @@ export class MuxPanePicker extends LitElement {
 
     /* "+ New pane" — the shared 56px action row. */
     .rowbtn {
-      display: flex;
-      align-items: center;
-      gap: var(--ui-space-4);
+      display: block;
       width: 100%;
+    }
+
+    .rowbtn::part(button) {
+      justify-content: flex-start;
+      gap: var(--ui-space-4);
       min-height: var(--ui-row-touch);
       padding: 0 var(--ui-space-5);
-      font-size: var(--ui-text-md);
+      border: 0;
+      border-radius: 0;
       text-align: left;
       background: color-mix(in srgb, var(--ui-accent) 10%, transparent);
       color: var(--ui-accent);
     }
 
-    .rowbtn:hover,
-    .rowbtn:active {
+    .rowbtn::part(button):hover,
+    .rowbtn::part(button):active {
       background: color-mix(in srgb, var(--ui-accent) 18%, transparent);
-    }
-
-    .rowbtn .lucide-icon {
-      color: var(--ui-accent);
     }
 
     .pane-list {
@@ -246,19 +247,29 @@ export class MuxPanePicker extends LitElement {
 
     .pane-item {
       min-width: 0;
-      min-height: var(--ui-row-touch);
       display: flex;
+      width: 100%;
+    }
+
+    .pane-item::part(button) {
+      min-width: 0;
+      min-height: var(--ui-row-touch);
+      justify-content: flex-start;
       align-items: center;
       gap: var(--ui-space-2);
+      padding: 0;
+      border: 0;
+      border-radius: 0;
       text-align: left;
       font-size: var(--ui-text-md);
+      font-weight: 400;
       color: var(--ui-text);
     }
 
-    .pane-item.active { background:color-mix(in srgb,var(--ui-accent) 10%,transparent); }
+    .pane-item.active::part(button) { background:color-mix(in srgb,var(--ui-accent) 10%,transparent); }
 
-    .pane-item:hover,
-    .pane-item:active {
+    .pane-item::part(button):hover,
+    .pane-item::part(button):active {
       background: var(--ui-surface-hover);
     }
 
@@ -280,15 +291,15 @@ export class MuxPanePicker extends LitElement {
     .row-close {
       width: var(--ui-control-lg);
       height: var(--ui-control-lg);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+    }
+
+    .row-close::part(button) {
       border-radius: var(--ui-radius-lg);
       color: var(--ui-text-muted);
     }
 
-    .row-close:hover,
-    .row-close:active {
+    .row-close::part(button):hover,
+    .row-close::part(button):active {
       color: var(--ui-danger-text);
       background: var(--ui-surface-hover);
     }
@@ -299,9 +310,6 @@ export class MuxPanePicker extends LitElement {
       flex-shrink: 0;
     }
 
-    button .lucide-icon {
-      pointer-events: none;
-    }
   `;
 
   @state() private _version = 0;
@@ -412,9 +420,9 @@ export class MuxPanePicker extends LitElement {
         <div class="sheet-head">
           <div class="grab"></div>
           <div class="sheet-title">Panes</div>
-          <button class="rowbtn" type="button" @click="${this._createPane}">
-            ${icon(Plus, { size: 18 })}<span>New pane</span>
-          </button>
+          <mux-ui-button class="rowbtn" variant="quiet" full-width @click="${this._createPane}">
+            <span slot="leading">${icon(Plus, { size: 18 })}</span>New pane
+          </mux-ui-button>
         </div>
         <div class="pane-list">
           ${validPanes.map((p) => {
@@ -423,25 +431,22 @@ export class MuxPanePicker extends LitElement {
             const label = p.title ?? `Pane ${p.paneId}`;
             return html`
               <div class="pane-row">
-                <button
-                  type="button"
+                <mux-ui-button
                   class="pane-item ${isActive ? 'active' : ''}"
-                  aria-label="Switch to pane ${label}${hasBell ? ', needs attention' : ''}"
-                  aria-current=${isActive ? 'true' : nothing}
+                  variant="quiet" full-width toggle .pressed=${isActive}
+                  accessible-label="Switch to pane ${label}${hasBell ? ', needs attention' : ''}"
                   @click="${() => this._selectPane(p.paneId)}"
                 >
                   <span class="check" aria-hidden="true">${isActive ? CHECK_MARK : ''}</span>
                   ${hasBell ? html`<span class="bell-dot" aria-hidden="true">${BELL_DOT}</span>` : ''}
                   <span class="pane-label">${label}</span>
-                </button>
+                </mux-ui-button>
                 <span></span>
-                <button
-                  type="button"
-                  class="row-close pane-close"
-                  aria-label="Close pane ${label}"
-                  title="Close pane"
+                <mux-ui-button
+                  class="row-close pane-close" icon-only size="large" variant="quiet" tone="muted"
+                  accessible-label="Close pane ${label}" tooltip="Close pane"
                   @click="${(e: Event) => this._closePane(e, attached, p.paneId)}"
-                >${icon(X, { size: 16 })}</button>
+                >${icon(X, { size: 16 })}</mux-ui-button>
               </div>
             `;
           })}

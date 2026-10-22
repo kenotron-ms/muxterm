@@ -81,7 +81,7 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "nativeControls": 4
+    "nativeControls": 1
   },
   "components/mux-scheduled-jobs.ts": {
     "legacyTokens": 0,
