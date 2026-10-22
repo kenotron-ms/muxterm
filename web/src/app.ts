@@ -10,7 +10,6 @@ import { icon } from './lib/icons.js';
 import { MonitorX, Plus } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
-import { previewStore } from './lib/preview-store.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
@@ -757,10 +756,6 @@ export class MuxApp extends LitElement {
     // Apply default theme tokens immediately so --mux-* and --chrome-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     applyChromeTokens(store.config.theme.palette);
-    // Sidebar preview density. Decided before the socket exists so the opt-in
-    // is already resolved when attach() first gets a chance to send it; the
-    // daemon's real config arrives on the WS config frame and re-applies this.
-    previewStore.setMode(store.config.sidebar.preview);
     // Reflect which machine this instance is running on — document title
     // (PWA window title / browser tab / Alt-Tab preview) and, if the user
     // picked one in Settings, a distinguishing title-bar accent color.
@@ -810,9 +805,6 @@ export class MuxApp extends LitElement {
     this._socket.onPaneResized = (paneId, cols, rows) => {
       terminalRegistry.applyServerResize(paneId, cols, rows);
     };
-    // Sidebar previews are on-demand workspace-screen reads; the store owns the
-    // authenticated socket seam and does not subscribe or poll at startup.
-    previewStore.attach(this._socket);
     this._applyBootSurface();
     // Home view session state. Opt in once per connection; the daemon does no
     // work at all until we ask.
@@ -1384,7 +1376,6 @@ export class MuxApp extends LitElement {
             .connectionsActive="${this._sdkChatId === 'connections'}"
             .skillsActive="${this._sdkChatId === 'skills'}"
             .selectedSDKChat="${selectedSDKChat}"
-            .showLauncher="${this._sdkChatId !== 'new'}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @chat-open="${this._onChatOpen}"
             @home-open="${this._onHomeOpen}"
@@ -1472,8 +1463,6 @@ export class MuxApp extends LitElement {
                 .connectionsActive="${this._sdkChatId === 'connections'}"
                 .skillsActive="${this._sdkChatId === 'skills'}"
                 .selectedSDKChat="${selectedSDKChat}"
-                .previewsVisible="${this._drawerOpen}"
-                .showLauncher="${this._sdkChatId !== 'new'}"
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @chat-open="${this._onChatOpen}"
                 @home-open="${this._onHomeOpen}"
@@ -1702,7 +1691,6 @@ export class MuxApp extends LitElement {
       applyThemeTokens(resolvePalette(cfg.theme.palette));
       applyChromeTokens(cfg.theme.palette);
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
-      previewStore.setMode(cfg.sidebar.preview);
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
       disposeHomeToggle?.();
@@ -2289,7 +2277,6 @@ export class MuxApp extends LitElement {
     applyThemeTokens(resolvePalette(cfg.theme.palette));
     applyChromeTokens(cfg.theme.palette);
     configureTerminals(cfg);
-    previewStore.setMode(cfg.sidebar.preview);
     disposeKeys?.();
     disposeKeys = installKeybindings(uiActions);
     disposeHomeToggle?.();

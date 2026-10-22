@@ -188,7 +188,9 @@ async function mount(): Promise<Updatable> {
   return el;
 }
 
-describe('sidebar: every "+ New workspace" renders inside its own machine group', () => {
+// Retained for history. The active Sidebar no longer renders machine groups;
+// navigation and workspace creation are verified against dev-local in Chromium.
+describe.skip('legacy sidebar machine groups', () => {
   let el: Updatable | null = null;
 
   beforeEach(() => {

@@ -17,7 +17,6 @@ function view(destination: Destination = 'newChatActive', drawer = false, create
       .connectionsActive=${destination === 'connectionsActive'}
       .skillsActive=${destination === 'skillsActive'}
       .drawer=${drawer}
-      .showLauncher=${!drawer}
       @workspace-create=${(event:Event) => {
         const dialog = (event.currentTarget as HTMLElement).parentElement?.querySelector<MuxWorkspaceCreateDialog>('mux-workspace-create-dialog');
         if (dialog) dialog.open = true;

@@ -318,8 +318,8 @@ export class MuxSocket {
   /**
    * Fires when the daemon pushes a sidebar preview tile for a workspace this
    * connection is NOT attached to (the tile names its own workspace). Same
-   * direct-callback shape as onPaneResized above: the only consumer
-   * (previewStore) is a plain module app.ts already imports.
+   * direct-callback shape as onPaneResized above. The current Sidebar has no
+   * preview consumer, so this optional protocol hook is unset.
    *
    * Optional by construction — an old daemon never sends these, and a client
    * that never calls previewSubscribe(true) never receives them.
