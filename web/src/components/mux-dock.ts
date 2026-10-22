@@ -1463,7 +1463,7 @@ export class MuxDock extends LitElement {
       // just restored is a brand-new set of group elements -- so the bar has to
       // be re-decided and re-homed, not left pointing at the old DOM.
       this._syncDropState();
-      if (!this.narrow && !workspaceChanged) this._scheduleLayoutSave();
+      if (!this.narrow && !workspaceChanged && !remounted) this._scheduleLayoutSave();
       return;
     }
 

@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 
 export type EmptyStateAppearance = 'app' | 'document';
@@ -55,7 +55,7 @@ export class MuxUIEmptyState extends LitElement {
   }
 
   override render() {
-    return html`<section class="content" aria-label=${this.heading}>
+    return html`<section class="content" aria-label=${this.heading || nothing}>
       <div class="icon" aria-hidden="true"><slot name="icon"></slot></div>
       <h2>${this.heading}</h2>
       <div class="description"><slot></slot></div>

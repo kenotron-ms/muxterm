@@ -89,7 +89,7 @@ export class MuxUISelectCombobox extends LitElement {
   }
   override render() {
     const selected = this.options.find(option => option.value === this.value);
-    return html`<button type="button" role="combobox" aria-label=${this.label} aria-haspopup="listbox" aria-expanded=${this.open}
+    return html`<button type="button" role="combobox" aria-label=${this.label || nothing} aria-haspopup="listbox" aria-expanded=${this.open}
       aria-controls=${this.open ? this.listboxId : nothing}
       aria-activedescendant=${this.open ? `${this.listboxId}-option-${this.activeIndex}` : nothing}
       ?disabled=${this.disabled}

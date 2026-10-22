@@ -50,11 +50,16 @@ export class MuxUIListbox extends LitElement {
     }
   `;
 
-  override updated(): void {
+  override connectedCallback(): void {
+    super.connectedCallback();
     this.setAttribute('role', 'listbox');
+    this.syncLabel();
+  }
+  private syncLabel(): void {
     if (this.label) this.setAttribute('aria-label', this.label);
     else this.removeAttribute('aria-label');
   }
+  override updated(): void { this.syncLabel(); }
   override render() { return html`<slot></slot>`; }
 }
 

@@ -38,8 +38,9 @@ export class MuxUIListboxOption extends LitElement {
     super.connectedCallback();
     this.setAttribute('role', 'option');
     this.tabIndex = -1;
+    this.syncAccessibility();
   }
-  override updated(): void {
+  private syncAccessibility(): void {
     this.setAttribute('aria-selected', String(this.selected));
     // The option host and its description span live in different shadow trees.
     // Include both in the stable accessible name instead of an ID reference.
@@ -47,6 +48,7 @@ export class MuxUIListboxOption extends LitElement {
     if (accessibleName) this.setAttribute('aria-label', accessibleName);
     else this.removeAttribute('aria-label');
   }
+  override updated(): void { this.syncAccessibility(); }
   override render() {
     return html`<div class="row" part="row"><slot name="icon"></slot><span class="copy"><span class="label">${this.label}</span>${this.description ? html`<span class="description">${this.description}</span>` : nothing}</span><slot name="detail"></slot>${this.selected && this.showCheck ? html`<span class="check" aria-hidden="true">✓</span>` : nothing}</div>`;
   }

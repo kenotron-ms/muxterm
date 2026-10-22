@@ -1,11 +1,11 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 
 /** An action menu for slotted native buttons and links with role="menuitem". */
 @customElement('mux-ui-menu')
 export class MuxUIMenu extends LitElement {
-  @property() label = '';
+  @property() label = 'Actions';
 
   static override styles = css`
     ${subtleScrollbars}
@@ -51,7 +51,7 @@ export class MuxUIMenu extends LitElement {
     const current = items.indexOf(event.composedPath()[0] as HTMLElement);
     let next = current;
     if (event.key === 'ArrowDown') next = (current + 1) % items.length;
-    else if (event.key === 'ArrowUp') next = (current - 1 + items.length) % items.length;
+    else if (event.key === 'ArrowUp') next = current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length;
     else if (event.key === 'Home') next = 0;
     else if (event.key === 'End') next = items.length - 1;
     else if (event.key === 'Escape' || event.key === 'Tab') {
@@ -65,7 +65,7 @@ export class MuxUIMenu extends LitElement {
   }
 
   override render() {
-    return html`<div role="menu" aria-label=${this.label} @keydown=${this.onKeyDown}><slot @slotchange=${this.focusFirst}></slot></div>`;
+    return html`<div role="menu" aria-label=${this.label || nothing} @keydown=${this.onKeyDown}><slot @slotchange=${this.focusFirst}></slot></div>`;
   }
 }
 

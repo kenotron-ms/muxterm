@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 
@@ -110,8 +110,8 @@ export class MuxUIChoicePicker extends LitElement {
   }
 
   override render() {
-    return html`<details aria-label=${this.label} ?open=${this.open} @toggle=${this.onToggle}>
-      <summary><span class="summary-label">${this.summary}</span><span class="chevron" aria-hidden="true">⌄</span></summary>
+    return html`<details ?open=${this.open} @toggle=${this.onToggle}>
+      <summary aria-label=${this.label ? `${this.label}${this.summary ? `: ${this.summary}` : ''}` : nothing}><span class="summary-label">${this.summary}</span><span class="chevron" aria-hidden="true">⌄</span></summary>
       <div class="panel"><slot></slot></div>
     </details>`;
   }
