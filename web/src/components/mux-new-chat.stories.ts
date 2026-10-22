@@ -5,6 +5,7 @@ import { sdkChats, type SDKHarnessName } from '../lib/sdk-chats.js';
 import './mux-new-chat.js';
 import type { MuxNewChat } from './mux-new-chat.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
+import type { MuxUISelectCombobox } from '../ui/select-combobox.js';
 
 const projects = [
   { id:'atlas', name:'Atlas', path:'/home/demo/atlas', sourceFolders:['/home/demo/notes'] },
@@ -81,7 +82,7 @@ const openProjectPicker = async ({canvasElement}: {canvasElement: HTMLElement}) 
   const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
   await sdkChats.refresh();
   await screen?.updateComplete;
-  screen?.shadowRoot?.querySelector<HTMLButtonElement>('.project-trigger')?.click();
+  screen?.shadowRoot?.querySelector<MuxUISelectCombobox>('mux-ui-select-combobox')?.click();
 };
 export const ProjectPicker: Story = { args:{project:'atlas'}, play:openProjectPicker };
 export const PhoneProjectPicker: Story = { args:{project:'atlas'},globals:{viewport:{value:'phone390',isRotated:false}},play:openProjectPicker };
@@ -107,9 +108,10 @@ export const NewProject: Story = {
     if (!screen) return;
     await sdkChats.refresh();
     await screen.updateComplete;
-    screen.shadowRoot?.querySelector<HTMLButtonElement>('.project-trigger')?.click();
-    await screen.updateComplete;
-    screen.shadowRoot?.querySelectorAll<HTMLElement>('mux-ui-listbox-option').item(3)?.click();
+    const picker = screen.shadowRoot?.querySelector<MuxUISelectCombobox>('mux-ui-select-combobox');
+    picker?.click();
+    await picker?.updateComplete;
+    picker?.shadowRoot?.querySelectorAll<HTMLElement>('mux-ui-listbox-option').item(3)?.click();
   },
 };
 export const PhoneNewProject: Story = {

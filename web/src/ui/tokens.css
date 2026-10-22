@@ -81,6 +81,7 @@
   --ui-surface-raised: var(--chrome-bar);
   --ui-surface-nav: var(--mux-titlebar-bg, var(--chrome-bar));
   --ui-surface-hover: var(--chrome-hover);
+  --ui-surface-tinted: color-mix(in srgb, var(--ui-accent) 9%, var(--ui-surface-raised));
   --ui-nav-selected: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface-raised));
   --ui-surface-overlay: var(--chrome-body);
   --ui-border: var(--chrome-border);
