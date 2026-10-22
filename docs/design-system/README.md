@@ -97,12 +97,13 @@ Connections uses the shared Confirmation composite for GitHub disable, Microsoft
 
 Skills uses semantic page, surface, border, type and spacing tokens throughout. Storybook records search results, install success, empty results, load errors, recovery, phone and light states. A failed installed-list request now shows a readable error with Retry instead of a misleading empty-library message; the fixture's Retry action reloads the installed list.
 
-Connections, Skills and Scheduled Jobs now use one Screen Header for the
-desktop section path above Page Intro. It owns the common height, surface,
-divider, truncation and window drag treatment, and it disappears on phones
+Connections, Skills, Scheduled Jobs and New Chat now use one Screen Header for the
+desktop section path above screen content. It owns the common height, surface,
+divider, truncation and window drag treatment; New Chat supplies the folder icon
+and live project name through its optional icon slot. It disappears on phones
 where the app title bar provides location. Storybook covers long names and
-light palette; each migrated screen has desktop and phone states. New Chat and
-Chat keep their workspace-aware rows for a separate interaction review.
+light palette; each migrated screen has desktop and phone states. Chat keeps
+its workspace-aware row for a separate interaction review.
 
 ## Main-based browser evidence
 

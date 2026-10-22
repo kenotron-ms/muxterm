@@ -12,6 +12,7 @@ import '../ui/choice-picker.js';
 import '../ui/choice-section.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
+import '../ui/screen-header.js';
 import '../ui/folder-browser.js';
 import type { SelectComboboxOption } from '../ui/select-combobox.js';
 import '../ui/select-combobox.js';
@@ -98,13 +99,6 @@ export class MuxNewChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
-    .topbar { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; padding:0 max(var(--ui-space-5),var(--wco-right-inset,0)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
-    .topbar .project { display:inline-flex; align-items:center; gap:var(--ui-space-3); min-width:0; max-width:38%; color:var(--ui-text-muted); font:500 var(--ui-text-sm) var(--ui-font-sans); white-space:nowrap; }
-    .topbar .project span { overflow:hidden; text-overflow:ellipsis; }
-    .topbar .divider { flex:none; color:var(--ui-text-muted); }
-    .topbar strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
-    @media (max-width:767.98px) { .topbar { display:none; } }
-    @media (display-mode: window-controls-overlay) { .topbar { -webkit-app-region:drag; } }
     .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:var(--ui-space-8); overflow:auto; }
     .main.setup { justify-content:flex-start; }
     .content { width:min(100%,var(--ui-chat-content-width)); }
@@ -439,7 +433,7 @@ export class MuxNewChat extends LitElement {
     finally { this.busy = false; }
   }
   private renderTopbar(projectName: string) {
-    return html`<header class="topbar" aria-label="New chat"><span class="project">${icon(Folder, { size: 14 })}<span>${projectName}</span></span><span class="divider" aria-hidden="true">›</span><strong>New chat</strong></header>`;
+    return html`<mux-ui-screen-header .section=${projectName} heading="New chat" label="New chat" with-section-icon><span slot="section-icon">${icon(Folder,{size:14})}</span></mux-ui-screen-header>`;
   }
 
   override render() {
