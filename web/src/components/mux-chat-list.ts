@@ -13,6 +13,7 @@ import '../ui/text-field.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/folder-browser.js';
+import '../ui/list-row.js';
 import '../ui/menu.js';
 import codexMark from '../assets/harness/codex.svg?url';
 import claudeMark from '../assets/harness/claude.svg?url';
@@ -27,7 +28,7 @@ const harnessMarks: Record<SDKHarnessName, string> = {
 };
 
 function harnessMark(chat: SDKChat, className = 'chat-icon') {
-  return html`<span class="${className} harness-mark ${chat.state}" style=${`--harness-mark:url("${harnessMarks[chat.harness]}")`} title=${`${sdkHarnessLabel(chat.harness)} · ${chat.state}`}></span>`;
+  return html`<span slot="icon" class="${className} harness-mark ${chat.state}" style=${`--harness-mark:url("${harnessMarks[chat.harness]}")`} title=${`${sdkHarnessLabel(chat.harness)} · ${chat.state}`}></span>`;
 }
 
 interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean }
@@ -105,31 +106,25 @@ export class MuxChatWorkspace extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; margin:0 0 var(--ui-space-5); font:var(--sidebar-item-font-size,var(--ui-text-sm))/1.35 var(--ui-font-sans); color:var(--ui-text); }
+    :host { display:block; margin:0 0 var(--ui-space-5); font:var(--ui-text-sm)/1.35 var(--ui-font-sans); color:var(--ui-text); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
     .row,.chat-row { display:flex; align-items:center; min-height:var(--ui-control-md); border-radius:var(--ui-radius-md); position:relative; }
     .row:hover,.chat-row:hover { background:var(--ui-surface-hover); }
-    .group { display:flex; align-items:center; gap:var(--ui-space-4); flex:1; min-width:0; min-height:var(--ui-control-md); padding:0 var(--ui-space-3); text-align:left; }
     .folder { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
     .folder { width:var(--ui-space-6); color:var(--ui-text-muted); }
-    .name,.title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .name { font-weight:500; }
-    .archived .name { color:var(--ui-text-muted); }
     .action { flex:none; opacity:0; }
     .row:hover .action,.row:focus-within .action { opacity:1; }
     .chat-row .action { display:none; opacity:1; }
     .chat-row .action.more { display:none; }
-    .chat-row:hover .action,.chat-row:has(.chat:focus-visible) .action { display:inline-flex; }
+    .chat-row:hover .action,.chat-row:has(.chat:focus-within) .action { display:inline-flex; }
     .row:has(mux-ui-menu) .action.more,.chat-row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
     mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-space-8); }
-    button.chat { flex:1; min-width:0; min-height:var(--ui-control-sm); padding:var(--ui-space-1) var(--ui-space-2); text-align:left; border-radius:var(--ui-radius-md); display:flex; align-items:center; gap:var(--ui-space-4); }
     .chat-row[selected] { background:var(--ui-nav-selected); }
     .chat-icon { width:var(--ui-space-6); height:var(--ui-space-6); display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
     .harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
     .harness-mark.working { color:var(--ui-success); }
     .harness-mark.blocked,.harness-mark.failed { color:var(--ui-danger); }
-    .row:has(.group:focus-visible),.chat-row:has(.chat:focus-visible) { outline:2px solid var(--ui-focus); outline-offset:-2px; }
     .row:has(.rename-input):focus-within,.chat-row:has(.rename-input):focus-within { outline:none; }
     .status { width:6px; height:6px; border-radius:50%; background:var(--ui-text-muted); flex:none; }
     .status.working { background:var(--ui-success); }
@@ -143,7 +138,6 @@ export class MuxChatWorkspace extends LitElement {
     .status.chat { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:0; background:none; color:var(--ui-text-muted); }
     .status.chat.working { color:var(--ui-success); }
     .status.chat.failed,.status.chat.uncertain { color:var(--ui-danger); }
-    .title { font-weight:550; }
     .rename-input { flex:1; min-width:0; margin:var(--ui-space-1) var(--ui-space-2); }
     .rename-save { flex:none; margin-right:var(--ui-space-2); }
     .editor { box-sizing:border-box; width:100%; max-height:calc(80dvh - var(--ui-space-8)); overflow:auto; padding:var(--ui-space-6); display:grid; gap:var(--ui-space-4); background:var(--ui-surface-overlay); }
@@ -163,7 +157,7 @@ export class MuxChatWorkspace extends LitElement {
     @media(max-width:550px) {
       .row .action,.chat-row .action { display:none; opacity:1; }
       .row .action.more,.chat-row .action.more,.row:not(:has(.action.more)) .action.new-chat { display:inline-flex; }
-      .chat-row:hover .action:not(.more),.chat-row:has(.chat:focus-visible) .action:not(.more) { display:none; }
+      .chat-row:hover .action:not(.more),.chat-row:has(.chat:focus-within) .action:not(.more) { display:none; }
     }
     @media(max-width:700px) { .editor { max-height:calc(100dvh - env(safe-area-inset-top) - var(--ui-space-8)); padding:var(--ui-space-5) var(--ui-space-5) calc(var(--ui-space-5) + env(safe-area-inset-bottom)); } }
   `;
@@ -316,10 +310,9 @@ export class MuxChatWorkspace extends LitElement {
     const group = this.model;
     return html`
       <div class="row ${group.archived ? 'archived' : ''}" @contextmenu=${(e:MouseEvent) => { if (group.project) this.showContext(e, 'project'); }}>
-        <button class="group" title=${group.project?.path || group.name} aria-expanded=${this.open} @click=${() => { this.open = !this.open; this.closeMenu(); }}>
-            <span class="folder">${icon(this.open ? FolderOpen : Folder, { size: 16 })}</span>
-            <span class="name">${group.name}</span>
-          </button>
+        <mux-ui-list-row class="group" variant="group" label=${group.name} tooltip=${group.project?.path || group.name} expandable .expanded=${this.open} ?muted=${group.archived} @click=${() => { this.open = !this.open; this.closeMenu(); }}>
+          <span slot="icon" class="folder">${icon(this.open ? FolderOpen : Folder, { size: 16 })}</span>
+        </mux-ui-list-row>
           ${!group.archived ? html`<mux-ui-button class="action new-chat" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`New chat in ${group.name}`} tooltip=${`New chat in ${group.name}`} @click=${() => this.newProjectChat()}>${icon(Plus,{size:15})}</mux-ui-button>` : nothing}
           ${group.project ? html`
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${group.project.pinned ? 'Unpin' : 'Pin'} ${group.name}`} tooltip=${group.project.pinned ? 'Unpin project' : 'Pin project'} @click=${() => void this.pinProject()}>${icon(group.project.pinned ? PinOff : Pin,{size:14})}</mux-ui-button>
@@ -350,9 +343,9 @@ export class MuxChatWorkspace extends LitElement {
       ${this.open ? html`<div class="chats">${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<mux-ui-text-field class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}></mux-ui-text-field><mux-ui-button class="rename-save" variant="quiet" size="small" icon-only accessible-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</mux-ui-button>` : html`
-            <button class="chat" title=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${chat.projectPath || 'Folder unknown'}`} @click=${() => this.openChat(chat)}>
-              ${chat.operator || group.laneIds.has(chat.id) ? html`<span class="status ${chat.operator ? 'operator' : 'lane'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : `Lane · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : laneIcon(14)}</span>` : harnessMark(chat)}<span class="title">${chat.title}</span>
-            </button>
+            <mux-ui-list-row class="chat" label=${chat.title} tooltip=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${chat.projectPath || 'Folder unknown'}`} ?selected=${this.selectedSession === chat.id} @click=${() => this.openChat(chat)}>
+              ${chat.operator || group.laneIds.has(chat.id) ? html`<span slot="icon" class="status ${chat.operator ? 'operator' : 'lane'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : `Lane · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : laneIcon(14)}</span>` : harnessMark(chat)}
+            </mux-ui-list-row>
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} tooltip=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</mux-ui-button>
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} tooltip=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</mux-ui-button>`}
           ${this.renamingId === chat.id ? nothing : html`<mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" data-chat-id=${chat.id} accessible-label=${`Options for ${chat.title}`} tooltip="Chat options" haspopup="menu" .expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>`}
@@ -375,14 +368,12 @@ export class MuxChatList extends LitElement {
   };
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; color:var(--ui-text-muted); font:var(--sidebar-item-font-size,var(--ui-text-sm))/1.35 var(--ui-font-sans); }
+    :host { display:block; color:var(--ui-text-muted); font:var(--ui-text-sm)/1.35 var(--ui-font-sans); }
     .heading { padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-1); font-size:inherit; font-weight:600; letter-spacing:0; text-transform:none; }
     .pinned { margin-bottom:var(--ui-space-4); padding-bottom:var(--ui-space-4); border-bottom:1px solid var(--ui-border); }
     .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border-radius:var(--ui-radius-md); color:var(--ui-text); }
     .pin-row:hover,.pin-row:focus-within { background:var(--ui-surface-hover); }
     .pin-row[selected] { background:var(--ui-nav-selected); }
-    .pin-link { display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; flex:1; min-height:var(--ui-control-sm); border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-1); background:transparent; color:inherit; text-align:left; font:inherit; cursor:pointer; }
-    .pin-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pin-icon { display:flex; flex:none; width:var(--ui-space-6); height:var(--ui-space-6); align-items:center; justify-content:center; color:var(--ui-text-muted); }
     .pin-icon.harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
     .pin-icon.harness-mark.working { color:var(--ui-success); }
@@ -392,7 +383,6 @@ export class MuxChatList extends LitElement {
     .pin-icon.lane.failed,.pin-icon.lane.uncertain { color:var(--ui-danger); }
     .pin-unpin { flex:none; opacity:0; }
     .pin-row:hover .pin-unpin,.pin-row:focus-within .pin-unpin { opacity:1; }
-    .pin-link:focus-visible { outline:2px solid var(--ui-focus); outline-offset:1px; }
     .pin-error { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); color:var(--ui-danger); }
     @media(hover:none), (max-width:550px) { .pin-unpin { opacity:1; } }
   `;
@@ -428,7 +418,7 @@ export class MuxChatList extends LitElement {
       ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, operator:!!chat.operator, lane:laneIds.has(chat.id), state:chat.state, chat })),
     ];
     return html`
-      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><button class="pin-link" title=${item.name} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}<span class="pin-name">${item.name}</span></button><mux-ui-button class="pin-unpin" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Unpin ${item.kind} ${item.name}`} tooltip=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</mux-ui-button></div>`)}</div>` : nothing}
+      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><mux-ui-list-row class="pin-link" label=${item.name} tooltip=${item.name} ?selected=${item.kind === 'chat' && this.selectedSession === item.id} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span slot="icon" class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span slot="icon" class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}</mux-ui-list-row><mux-ui-button class="pin-unpin" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Unpin ${item.kind} ${item.name}`} tooltip=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</mux-ui-button></div>`)}</div>` : nothing}
       ${this.pinError ? html`<div class="pin-error" role="alert">${this.pinError}</div>` : nothing}
       ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
     `;

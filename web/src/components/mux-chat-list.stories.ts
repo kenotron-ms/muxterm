@@ -4,6 +4,7 @@ import { chatListFixture, resetChatListFixture } from '../stories/chat-list-fixt
 import type { MuxChatList, MuxChatWorkspace } from './mux-chat-list.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIButton } from '../ui/button.js';
+import type { MuxUIListRow } from '../ui/list-row.js';
 import './mux-chat-list.js';
 
 function view(selectedSession = 'chat-editor', phone = false, empty = false, linkedLane = false) {
@@ -46,13 +47,13 @@ export const ArchivedExpanded: Story = { play:async ({canvasElement}) => {
   const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
   await list?.updateComplete;
   const archived = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'archived');
-  archived?.shadowRoot?.querySelector<HTMLButtonElement>('.group')?.click();
+  archived?.shadowRoot?.querySelector<MuxUIListRow>('.group')?.click();
 } };
 export const ArchivedChatMenu: Story = { play:async ({canvasElement}) => {
   const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
   await list?.updateComplete;
   const archived = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'archived');
-  archived?.shadowRoot?.querySelector<HTMLButtonElement>('.group')?.click();
+  archived?.shadowRoot?.querySelector<MuxUIListRow>('.group')?.click();
   await archived?.updateComplete;
   archived?.shadowRoot?.querySelector<MuxUIButton>('.chat-row .action.more')?.click();
 } };

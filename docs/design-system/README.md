@@ -27,7 +27,7 @@ instance on port 8313 and a real browser for that verification.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
    text, controls, spacing, focus, and status. `--mux-*` remains the terminal
    palette; `--chrome-*` remains as a compatibility input during migration.
-3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
+3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Tab Strip, Rail Row, List Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
@@ -111,10 +111,16 @@ through its native inner button. On phones, project and chat options remain
 visible without hover, while their secondary actions live in the menu; the
 Ungrouped new-chat action and pinned unpin actions also stay visible. Storybook
 verified the phone project sheet and Escape focus restoration, and touch
-emulation measured a 44 px target. The isolated live app verified the phone
-Ungrouped action opens New Chat in a fresh sessiond workspace; it had no chat
-or project row available for live menu activation. Screenshots remain outside
-git.
+emulation measured a 44 px target. A later isolated live pass opened a real
+chat action menu in the phone drawer. Screenshots remain outside git.
+
+Project disclosure, chat destinations and pinned entries now use the shared
+List Row. Its native inner button owns focus, selected and expanded semantics;
+the chat list keeps its actions and chat routing. Storybook catalogs group,
+selected, pinned, archived, focus, light and phone states. In a fresh dev-local
+workspace, Chromium expanded Ungrouped by click and Enter, opened a real chat,
+and saw `aria-current` follow the selected row. Touch-enabled Chromium measured
+44 px project, Archived and options targets with no horizontal overflow.
 
 Connections has three primary destinations: Google, Microsoft and GitHub.
 Google preview services sit inside its provider view; Microsoft mail, calendar
