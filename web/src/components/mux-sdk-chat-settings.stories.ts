@@ -73,7 +73,7 @@ export const OperatorOn: Story = {
   play:async ({canvasElement}) => {
     const picker = canvasElement.querySelector('mux-sdk-chat-settings');
     for (let attempt = 0; attempt < 20; attempt++) {
-      const summary = picker?.shadowRoot?.querySelector<HTMLElement>('.permission-picker summary');
+      const summary = picker?.shadowRoot?.querySelector('mux-ui-choice-picker.permission-picker')?.shadowRoot?.querySelector<HTMLElement>('summary');
       if (summary) { summary.click(); return; }
       await new Promise(resolve => setTimeout(resolve, 50));
     }

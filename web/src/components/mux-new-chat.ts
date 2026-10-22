@@ -7,7 +7,7 @@ import { ArrowUp, ChevronDown, Folder, Paperclip, Plus, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import '../ui/button.js';
 import '../ui/choice-item.js';
-import { choicePickerSheetStyles, closeChoicePickerOnEscape } from '../ui/choice-picker-pattern.js';
+import '../ui/choice-picker.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
@@ -86,9 +86,6 @@ export class MuxNewChat extends LitElement {
     };
     if (this.projectPickerOpen && !inside('.project-picker')) this.projectPickerOpen = false;
     if (this.pickerOpen && !inside('.location-settings')) this.pickerOpen = false;
-    this.renderRoot.querySelectorAll<HTMLDetailsElement>('.chat-picker[open]').forEach(picker => {
-      if (!path.includes(picker)) picker.open = false;
-    });
   };
 
   static styles = css`
@@ -110,14 +107,6 @@ export class MuxNewChat extends LitElement {
     .controls label { display:block; }
     .controls .project { min-width:0; }
     .controls .harness { min-width:0; }
-    .chat-picker { position:relative; min-width:0; }
-    .chat-picker summary { display:flex; align-items:center; box-sizing:border-box; height:31px; max-width:170px; padding:0 29px 0 9px; border:1px solid var(--ui-border); border-radius:8px; background:var(--ui-surface-raised); color:var(--ui-text); cursor:pointer; font-size:12px; list-style:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .chat-picker summary::-webkit-details-marker { display:none; }
-    .chat-picker summary::after { content:'⌄'; position:absolute; right:10px; color:var(--ui-text-muted); }
-    .chat-picker summary:hover,.chat-picker[open] summary { border-color:var(--ui-accent); }
-    .chat-picker .panel { position:absolute; z-index:30; top:37px; width:min(350px,calc(100vw - 44px)); max-height:min(48vh,340px); overflow:auto; box-sizing:border-box; padding:8px; border:1px solid var(--ui-border); border-radius:14px; background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-overlay); }
-    .bundle-picker .panel { left:0; }
-    .settings-picker .panel { right:0; }
     .chat-picker .heading { padding:8px 10px 5px; color:var(--ui-text-muted); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }
     .chat-picker .divider { height:1px; margin:7px 5px; background:var(--ui-border); }
     .chat-picker .hint { color:var(--ui-text-muted); font-size:11px; }
@@ -208,7 +197,6 @@ export class MuxNewChat extends LitElement {
       .project-trigger { max-width:135px; }
       .location-fields { padding-bottom:max(var(--ui-space-6),env(safe-area-inset-bottom)); }
     }
-    ${choicePickerSheetStyles}
   `;
 
   override connectedCallback() {
@@ -358,16 +346,16 @@ export class MuxNewChat extends LitElement {
     return html`<mux-ui-choice-item .label=${name} .description=${hint} ?selected=${selected} ?disabled=${this.catalogLoading} @click=${action}></mux-ui-choice-item>`;
   }
   private renderBundlePicker() {
-    return html`<details class="chat-picker choice-picker-sheet bundle-picker" aria-label="Bundle" @keydown=${closeChoicePickerOnEscape}><summary>${this.bundle || 'Bundle'}</summary><div class="panel">
+    return html`<mux-ui-choice-picker class="chat-picker bundle-picker" label="Bundle" .summary=${this.bundle || 'Bundle'} placement="below" panel-align="left">
       <div class="heading">Bundle</div>
       ${(this.catalog?.bundles || []).map(value => this.pickerChoice(value, '', this.bundle === value, () => { this.bundle = value; this.provider = 'configured'; void this.loadCatalog(); }))}
       ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
-    </div></details>`;
+    </mux-ui-choice-picker>`;
   }
   private renderModelPicker(models: ModelOption[], selectedModel: ModelOption | undefined, efforts: string[]) {
     const effortIndex = Math.max(0, efforts.indexOf(this.effort || selectedModel?.defaultEffort || efforts[0]));
     const modelLabel = selectedModel?.label || this.model || (this.catalog?.defaultModel ? `Default (${this.catalog.defaultModel})` : 'Model');
-    return html`<details class="chat-picker choice-picker-sheet settings-picker" aria-label="Provider, model and thinking" @keydown=${closeChoicePickerOnEscape}><summary>${modelLabel}${this.effort ? ` · ${this.effort}` : ''}</summary><div class="panel">
+    return html`<mux-ui-choice-picker class="chat-picker settings-picker" label="Provider, model and thinking" .summary=${`${modelLabel}${this.effort ? ` · ${this.effort}` : ''}`} placement="below" panel-align="right">
       <div class="heading">Provider</div>
       ${this.harness === 'amplifier' ? (this.catalog?.providers || []).map(value => this.pickerChoice(providerLabel(value), '', this.provider === value, () => { this.provider = value; void this.loadCatalog(); })) : html`<div class="hint">${this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent'} · managed by ${sdkHarnessLabel(this.harness)}</div>`}
       <div class="divider"></div><div class="heading">Model</div>
@@ -380,7 +368,7 @@ export class MuxNewChat extends LitElement {
       ${this.customModel ? html`<mux-ui-text-field class="custom-model" aria-label="Model ID" placeholder="Model ID" .value=${this.model} @input=${(event:Event) => { this.model = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
       ${efforts.length > 1 ? html`<div class="divider"></div><mux-ui-range-field label="Thinking" accessible-label="Thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} @input=${(event:Event) => { this.effort = efforts[(event.target as MuxUIRangeField).value]; }}></mux-ui-range-field>` : nothing}
       ${this.catalogLoading ? html`<div class="catalog-status" role="status">Loading models…</div>` : nothing}
-    </div></details>`;
+    </mux-ui-choice-picker>`;
   }
   private async loadStartOptions() {
     try {
