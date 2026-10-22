@@ -59,6 +59,9 @@ remain native or keyboard-operable buttons, while BlockNote owns editing.
 3. Use the shared Button, Action Tile, Breadcrumb, Action Menu, Menu Item, Tab Strip, Rail Row, List Row, Listbox, Listbox Option, Select Combobox, Folder Browser, Choice Item, Choice List, Choice Picker, Choice Section, Filter Chip, Switch, Radio Group, Theme Choice, Color Picker, Range Field, Dialog, Confirmation, Text Field, Text Area, Select,
    Feedback, Empty State, Screen Header, Page Intro, Navigation Item, and Status Badge where their semantics fit. Keep native controls for
    form submission and browser behavior that a custom element would weaken.
+   Set Button's `href` for a button-shaped navigation action: it renders a native
+   link, keeps link keyboard behavior and new-tab attributes, and uses the same
+   visual states. Ordinary inline text links remain native anchors.
 4. Add a story for every new shared Lit element. Show keyboard, focus, busy,
    disabled, error, and narrow-screen states where relevant.
 5. Record specialized controls in [the inventory](inventory.md), including the
@@ -94,6 +97,11 @@ The Sidebar's active chrome and spacing now use semantic tokens. Destinations an
 Destructive pane and workspace close uses the same adaptive Dialog and semantic tokens. Its risk summary is the dialog's accessible description, Cancel receives initial focus, and an in-flight confirmation blocks dismissal. Sessiond alone decides whether the close requires confirmation and when a pane or workspace actually disappears. Storybook records pane, workspace, multi-risk, phone, busy and light states; a real dev-local pane verified the close path.
 
 Connections uses the shared Confirmation composite for GitHub disable, Microsoft disconnect, old Work IQ authorization removal, and Google connection removal. Its three provider destinations stay visible while each provider owns its setup details. Google's manual setup is a sequence of divided sections instead of nested cards, and Connections spacing uses semantic scales. Storybook shows account and confirmation states at desktop and phone widths. The isolated live app rendered all three providers at both widths without horizontal overflow; authentication and destructive API calls were not exercised there.
+
+Connections' three external setup and sign-in calls to action now use Button's
+native-link mode. Storybook records each provider's link state plus desktop and
+touch-sized Button links; the provider URLs, new-tab behavior and keyboard
+focus remain native browser behavior.
 
 Skills uses semantic page, surface, border, type and spacing tokens throughout. Storybook records search results, install success, empty results, load errors, recovery, phone and light states. A failed installed-list request now shows a readable error with Retry instead of a misleading empty-library message; the fixture's Retry action reloads the installed list.
 

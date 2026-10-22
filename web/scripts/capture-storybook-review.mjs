@@ -15,6 +15,8 @@ const captures = [
   { file: 'breadcrumb-phone.png', id: 'primitives-breadcrumb--phone-path', width: 390, height: 844, ready: 'mux-ui-breadcrumb' },
   { file: 'navigation-status-desktop.png', id: 'primitives-navigation-item--descriptions-and-status', width: 1200, height: 800, ready: 'mux-ui-nav-item' },
   { file: 'status-badges-desktop.png', id: 'foundations-status-badge--all-states', width: 1200, height: 800, ready: 'mux-ui-status-badge' },
+  { file: 'button-links-desktop.png', id: 'foundations-actions-button--navigation-links', width: 1200, height: 600, ready: 'mux-ui-button[href]' },
+  { file: 'button-links-phone.png', id: 'foundations-actions-button--phone-navigation-links', width: 390, height: 844, ready: 'mux-ui-button[href]' },
   { file: 'command-search-phone.png', id: 'primitives-command-search--phone-results', width: 390, height: 844, ready: 'mux-ui-command-search' },
   { file: 'choice-picker-phone.png', id: 'components-choice-picker--phone-sheet', width: 390, height: 844, ready: 'mux-ui-choice-picker[open]', readyText: 'GPT-6-Astra' },
   { file: 'choice-picker-pending-summary.png', id: 'components-choice-picker--pending-summary', width: 900, height: 400, ready: 'mux-ui-choice-picker', readyText: 'Choose an option' },
@@ -40,6 +42,9 @@ const captures = [
   { file: 'skills-desktop.png', id: 'screens-skills--installed', width: 1200, height: 800, ready: 'mux-skills' },
   { file: 'skills-phone.png', id: 'screens-skills--phone-installed', width: 390, height: 844, ready: 'mux-skills' },
   { file: 'connections-google-desktop.png', id: 'screens-connections--google-tool-selection', width: 1200, height: 800, ready: 'mux-connections', readyText: 'Choose a Google service' },
+  { file: 'connections-google-guide-desktop.png', id: 'screens-connections--google-manual-entry', width: 1200, height: 800, ready: 'mux-ui-button[href]' },
+  { file: 'connections-github-sign-in-desktop.png', id: 'screens-connections--git-hub-device-code', width: 1200, height: 800, ready: 'mux-ui-button[href]' },
+  { file: 'connections-microsoft-sign-in-phone.png', id: 'screens-connections--phone-microsoft-pending', width: 390, height: 844, ready: 'mux-ui-button[href]' },
   { file: 'connections-microsoft-phone.png', id: 'screens-connections--phone-microsoft-ready', width: 390, height: 844, ready: 'mux-connections', readyText: 'Personal Microsoft account' },
   { file: 'settings-appearance-phone.png', id: 'screens-settings--phone-appearance', width: 390, height: 844, ready: 'mux-settings-surface', readyText: 'Appearance' },
   { file: 'settings-remotes-error-desktop.png', id: 'screens-settings--remotes-load-error', width: 1200, height: 800, ready: 'mux-ui-feedback[kind="error"]', readyText: 'Retry' },
@@ -60,7 +65,7 @@ await mkdir(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true, ...(chromePath ? { executablePath: chromePath } : {}) });
 try {
   for (const capture of captures) {
-    const page = await browser.newPage({ viewport: { width: capture.width, height: capture.height }, deviceScaleFactor: 1 });
+    const page = await browser.newPage({ viewport: { width: capture.width, height: capture.height }, deviceScaleFactor: 1, hasTouch: capture.width <= 430 });
     try {
       const url = `${baseURL}/iframe.html?id=${capture.id}&viewMode=story`;
       await page.goto(url, { waitUntil: 'domcontentloaded' });

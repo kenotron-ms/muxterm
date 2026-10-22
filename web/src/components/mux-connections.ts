@@ -64,9 +64,7 @@ export class MuxConnections extends LitElement {
     mux-ui-text-field { margin:var(--ui-space-5) 0; --ui-surface-raised:var(--ui-surface-base); }
     .tool-choices { display:grid; gap:var(--ui-space-2); margin:var(--ui-space-5) 0; }
     .actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); margin-top:var(--ui-space-6); }
-    a.action { display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); padding:var(--ui-space-4) var(--ui-space-5); color:var(--ui-text); background:var(--ui-surface-hover); text-decoration:none; }
-    a.action.primary { background:var(--ui-accent); border-color:var(--ui-accent); color:var(--ui-on-accent); font-weight:700; }
-    a.action:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; } a { color:var(--ui-accent); }
+    a { color:var(--ui-accent); }
     .detail > mux-ui-feedback { margin:var(--ui-space-5) 0; }
     .note { margin-top:var(--ui-space-5); font-size:var(--ui-text-xs); } code { overflow-wrap:anywhere; }
     .device-code { display:inline-block; margin-top:var(--ui-space-5); padding:var(--ui-space-4) var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); color:var(--ui-text); font:700 var(--ui-text-2xl) var(--ui-font-mono); letter-spacing:.12em; user-select:all; }
@@ -255,7 +253,7 @@ If I already have a connection, check its status first. Do not remove or replace
         <p class="note">Muxterm requests these read-only scopes. Google may classify access to mail or files as sensitive or restricted, requiring additional review:</p>
         <ul>${service.scopes?.map(scope=>html`<li><code>${scope}</code></li>`)}</ul>
         <p class="note">Only these read tools can be enabled after a successful check: ${service.readTools?.join(', ')}. Newly discovered tools stay off. Google still controls the account grant, and data returned by tools can contain untrusted instructions.</p>
-        <div class="actions"><a class="action" href=${service.docsUrl} target="_blank" rel="noopener noreferrer">Google setup guide</a></div></section>
+        <div class="actions"><mux-ui-button href=${service.docsUrl} target="_blank" variant="secondary">Google setup guide</mux-ui-button></div></section>
       <section class="setup-section"><strong>Add ${service.name} manually</strong><p class="note">Enter the client ID and secret from the Web OAuth client registered with the callback URL above. Authorization and a live tool check are required before this connection is ready.</p>
         <mux-ui-text-field label="Client ID" aria-label="Google client ID" autocomplete="off" .value=${this.googleClientID} @input=${(e:Event)=>this.googleClientID=(e.target as MuxUITextField).value}></mux-ui-text-field>
         <mux-ui-text-field label="Client secret" aria-label="Google client secret" type="password" autocomplete="off" .value=${this.googleClientSecret} @input=${(e:Event)=>this.googleClientSecret=(e.target as MuxUITextField).value}></mux-ui-text-field>
@@ -278,7 +276,7 @@ If I already have a connection, check its status first. Do not remove or replace
         <p class="note">Muxterm installs the official GitHub service and GitHub CLI for your account when needed. Downloads are pinned and verified before use. Nothing is installed system-wide. First setup may take a few minutes.</p>
         <p class="note">GitHub service: ${g.serverInstalled?'available':'needed'} · Sign-in helper: ${g.ghInstalled?'available':'needed'} · GitHub account: ${g.signedIn?'signed in':'sign in required'}</p>
         ${g.state!=='ready'?html`<div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy||g.installing||g.loginState==='waiting'||g.loginState==='pending'} @click=${this.connectGitHub}>${this.busy==='github-connect'||g.installing?'Setting up GitHub…':g.loginState==='waiting'||g.loginState==='pending'?'Waiting for GitHub…':'Connect GitHub'}</mux-ui-button></div>`:nothing}
-        ${g.loginState==='pending'&&g.loginCode?html`<p class="note">Open GitHub’s sign-in page and enter this one-time code: <strong><code>${g.loginCode}</code></strong></p><div class="actions"><a class="action" href="https://github.com/login/device" target="_blank" rel="noopener noreferrer">Open GitHub sign-in ↗</a></div>`:nothing}
+        ${g.loginState==='pending'&&g.loginCode?html`<p class="note">Open GitHub’s sign-in page and enter this one-time code: <strong><code>${g.loginCode}</code></strong></p><div class="actions"><mux-ui-button href="https://github.com/login/device" target="_blank" variant="secondary">Open GitHub sign-in ↗</mux-ui-button></div>`:nothing}
         ${g.loginState==='waiting'?html`<p class="note">Preparing a sign-in code…</p>`:nothing}
         ${g.loginState==='waiting'||g.loginState==='pending'?html`<div class="actions"><mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${this.cancelGitHubLogin}>Cancel sign-in</mux-ui-button></div>`:nothing}
         ${g.loginState==='error'?html`<p class="note">${g.loginError}</p>`:nothing}
@@ -302,7 +300,7 @@ If I already have a connection, check its status first. Do not remove or replace
       ${pending?html`<p class="note">Enter this one-time code at Microsoft’s sign-in page:</p>
         ${profile.userCode?html`<code class="device-code" aria-label="Microsoft sign-in code">${profile.userCode}</code>`:html`<p class="note">${profile.loginState==='installing'?'Installing the connection…':'Preparing a sign-in code…'}</p>`}
         <p class="note">This page updates when sign-in completes.</p>
-        <div class="actions">${profile.userCode&&profile.verificationUrl?html`<a class="action primary" href=${profile.verificationUrl} target="_blank" rel="noopener noreferrer">Open Microsoft sign-in ↗</a>`:nothing}<mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${this.cancelMicrosoft}>Cancel sign-in</mux-ui-button></div>`:nothing}
+        <div class="actions">${profile.userCode&&profile.verificationUrl?html`<mux-ui-button href=${profile.verificationUrl} target="_blank" variant="primary">Open Microsoft sign-in ↗</mux-ui-button>`:nothing}<mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${this.cancelMicrosoft}>Cancel sign-in</mux-ui-button></div>`:nothing}
       ${attention?html`<p class="note">${profile.error}</p>`:nothing}
       ${ready?html`<p class="note">${profile.toolCount>0?`${profile.toolCount} read-only tools are available`:'Read-only tools are enabled'} for new Codex, Claude, and Amplifier chats.</p>`:nothing}
       ${!pending?html`<div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy} @click=${this.connectMicrosoft}>${ready?'Sign in again':this.busy==='microsoft-personal'?'Installing…':attention?'Try sign-in again':'Connect account'}</mux-ui-button>

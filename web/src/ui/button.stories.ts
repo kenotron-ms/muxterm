@@ -34,6 +34,16 @@ export const Quiet: Story = { args: { variant: 'quiet', label: 'Cancel' } };
 export const Danger: Story = { args: { variant: 'danger', label: 'Close pane' } };
 export const Busy: Story = { args: { variant: 'primary', label: 'Saving changes', busy: true } };
 export const Disabled: Story = { args: { label: 'Unavailable', disabled: true } };
+export const NavigationLinks: Story = {
+  render:() => html`<div style="display:flex;flex-wrap:wrap;gap:var(--ui-space-4)">
+    <mux-ui-button href="#link-destination" variant="secondary">Go to details</mux-ui-button>
+    <mux-ui-button href="https://example.com/sign-in" target="_blank" variant="primary">Open sign-in ↗</mux-ui-button>
+    <mux-ui-button href="https://example.com/unavailable" disabled>Unavailable</mux-ui-button>
+    <div id="link-destination" style="width:100%;color:var(--ui-text-muted)">Details destination</div>
+  </div>`,
+};
+export const PhoneNavigationLinks: Story = { globals:{viewport:{value:'phone390',isRotated:false}}, render:NavigationLinks.render };
+export const FocusedLink: Story = { render:NavigationLinks.render, play:async ({canvasElement}) => { canvasElement.querySelector<MuxUIButton>('mux-ui-button[href="#link-destination"]')?.focus(); } };
 export const Sizes: Story = {
   render: () => html`<div style="display:flex;align-items:center;gap:var(--ui-space-6)">
     <mux-ui-button size="small">Small</mux-ui-button>

@@ -68,6 +68,7 @@ export const GitHubDisableConfirmation:Story = {parameters:GitHubReady.parameter
 export const GitHubDeviceCode:Story = {parameters:{apiFixture:fixtureFor({github:{state:'setup-required',loginState:'pending',loginCode:'ABCD-EFGH'}})}};
 export const MicrosoftDisconnected:Story = {args:{selection:'microsoft'}};
 export const MicrosoftPending:Story = {args:{selection:'microsoft'},parameters:{apiFixture:fixtureFor({microsoft:{state:'pending',loginState:'pending',userCode:'WXYZ-1234',verificationUrl:'https://microsoft.com/devicelogin'}})}};
+export const PhoneMicrosoftPending:Story = {args:{selection:'microsoft'},globals:{viewport:{value:'phone390',isRotated:false}},parameters:MicrosoftPending.parameters};
 export const MicrosoftReady:Story = {args:{selection:'microsoft'},parameters:{apiFixture:fixtureFor({microsoft:{state:'ready',toolCount:12}})}};
 export const MicrosoftDisconnectConfirmation:Story = {args:{selection:'microsoft'},parameters:MicrosoftReady.parameters,play:openConfirmation('Disconnect')};
 export const PhoneMicrosoftDisconnectConfirmation:Story = {args:{selection:'microsoft'},globals:{viewport:{value:'phone390',isRotated:false}},parameters:MicrosoftReady.parameters,play:openConfirmation('Disconnect')};
