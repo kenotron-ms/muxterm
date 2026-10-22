@@ -18,6 +18,12 @@ const colorTokens = [
   ['Success', '--ui-success'],
   ['Warning', '--ui-warning'],
   ['Attention', '--ui-attention'],
+  ['Document surface', '--ui-document-surface'],
+  ['Document text', '--ui-document-text'],
+  ['Document muted', '--ui-document-muted'],
+  ['Document accent', '--ui-document-accent'],
+  ['Document border', '--ui-document-border'],
+  ['Document hover', '--ui-document-hover'],
 ] as const;
 
 const meta = {

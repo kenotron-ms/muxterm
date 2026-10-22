@@ -166,8 +166,16 @@ search/refresh/collapse, and new page. The Button owns toggle and menu ARIA
 state, while the screen owns the action handlers. Browser review found that
 small text-and-icon Buttons were only 28 px tall under touch emulation; the
 shared coarse-pointer rule now raises them to 44 px. The phone file header and
-explorer toolbar fit without horizontal overflow. The remaining Utility page
-toolbar and inline editor treatments are recorded in the inventory.
+explorer toolbar fit without horizontal overflow.
+The Pages editor now uses the Button's document appearance for its list toggle,
+parent breadcrumb, delete action, new subpage action and empty-state action.
+`--ui-document-*` tokens keep paper controls separate from app chrome and
+include a document accent that themes can override. Storybook catalogs these
+tokens and the populated, empty, nested, phone and delete-confirmation page
+states. On narrow nested pages, the idle Saved label gives space to the
+breadcrumb; Saving remains visible. Icon-only Buttons do not shrink below
+their shared touch target when a breadcrumb is long. The title field and
+BlockNote content retain native editing semantics.
 
 The shared Switch also replaces the bespoke Operator toggle in chat settings.
 It has inline and described-row layouts, checked and disabled stories, native

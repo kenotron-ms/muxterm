@@ -3,6 +3,7 @@ import { customElement, property } from 'lit/decorators.js';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'quiet' | 'danger';
 export type ButtonSize = 'small' | 'medium' | 'large';
+export type ButtonAppearance = 'app' | 'document';
 
 /** Action button. It owns its visual and interaction states; the inner native
  * button retains keyboard, focus, and disabled semantics. Icon-only buttons
@@ -17,7 +18,8 @@ export class MuxUIButton extends LitElement {
   @property({ type: Boolean, reflect: true, attribute: 'full-width' }) fullWidth = false;
   @property({ type: Boolean, reflect: true, attribute: 'icon-only' }) iconOnly = false;
   @property({ attribute: 'accessible-label' }) accessibleLabel = '';
-  @property({ reflect: true }) tone: 'default' | 'muted' = 'default';
+  @property({ reflect: true }) tone: 'default' | 'muted' | 'danger' = 'default';
+  @property({ reflect: true }) appearance: ButtonAppearance = 'app';
   @property() haspopup = '';
   @property({ type: Boolean }) expanded = false;
   @property({ type: Boolean }) toggle = false;
@@ -28,7 +30,7 @@ export class MuxUIButton extends LitElement {
   static override styles = css`
     :host { display: inline-flex; vertical-align: middle; font-family: var(--ui-font-sans); }
     :host([full-width]) { display: flex; width: 100%; }
-    :host([icon-only]) { width: var(--ui-control-md); height: var(--ui-control-md); }
+    :host([icon-only]) { flex: none; width: var(--ui-control-md); height: var(--ui-control-md); }
     :host([icon-only][size='small']) { width: var(--ui-control-sm); height: var(--ui-control-sm); }
     :host([icon-only][size='large']) { width: var(--ui-control-lg); height: var(--ui-control-lg); }
     button {
@@ -57,10 +59,20 @@ export class MuxUIButton extends LitElement {
     :host([variant='quiet']) button { border-color: transparent; }
     :host([tone='muted']) button { color: var(--ui-text-muted); }
     :host([tone='muted']) button:hover:not(:disabled) { color: var(--ui-text); }
+    :host([tone='danger'][variant='quiet']) button { color: var(--ui-danger); }
     :host([toggle][pressed][variant='quiet']) button { color: var(--ui-accent); background: color-mix(in srgb, var(--ui-accent) 12%, var(--ui-surface-raised)); }
     button:hover:not(:disabled) { background: var(--ui-surface-hover); }
     :host([variant='primary']) button:hover:not(:disabled) { filter: brightness(1.1); background: var(--ui-accent); }
     :host([variant='danger']) button:hover:not(:disabled) { filter: brightness(1.1); background: var(--ui-danger); }
+    :host([tone='danger'][variant='quiet']) button:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-surface-raised)); }
+    :host([appearance='document']:not([variant='primary']):not([variant='danger'])) button { border-color: var(--ui-document-border); background: var(--ui-document-surface); color: var(--ui-document-text); }
+    :host([appearance='document'][variant='quiet']) button { border-color: transparent; }
+    :host([appearance='document'][tone='muted']) button { color: var(--ui-document-muted); }
+    :host([appearance='document'][tone='danger'][variant='quiet']) button { color: var(--ui-danger); }
+    :host([appearance='document']:not([variant='primary']):not([variant='danger'])) button:hover:not(:disabled) { background: var(--ui-document-hover); }
+    :host([appearance='document'][tone='muted']) button:hover:not(:disabled) { color: var(--ui-document-text); }
+    :host([appearance='document'][tone='danger'][variant='quiet']) button:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-document-surface)); }
+    :host([appearance='document'][toggle][pressed]) button { color: var(--ui-document-accent); background: color-mix(in srgb, var(--ui-document-accent) 12%, var(--ui-document-surface)); }
     button:active:not(:disabled) { transform: translateY(1px); }
     button:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
     button:disabled { cursor: default; opacity: 0.5; filter: none; }

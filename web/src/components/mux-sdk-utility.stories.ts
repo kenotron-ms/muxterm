@@ -28,7 +28,7 @@ const artifacts: Record<string, {kind:'markdown'|'text'; text:string}> = {
   'package.json': {kind:'text',text:'{"name":"muxterm-demo","scripts":{"storybook":"storybook dev"}}'},
 };
 
-function utilityFixture(id: string): ApiFixture {
+function utilityFixture(id: string, emptyPages = false): ApiFixture {
   return ({url,method}) => {
     const base = `/api/sdk-chats/${id}/utility/`;
     if (method === 'GET' && url.pathname === '/api/sdk-chats') return fixtureJSON([]);
@@ -48,7 +48,10 @@ function utilityFixture(id: string): ApiFixture {
     }
     if (method === 'GET' && url.pathname === `${base}changes`) return fixtureJSON({repos:[{root,name:'muxterm',branch:'design-system'}],changes:[{repo:root,path:'README.md',status:' M'},{repo:root,path:'src/app.ts',status:' M'}],truncated:false});
     if (method === 'GET' && url.pathname === `${base}change`) return fixtureJSON({repo:root,path:url.searchParams.get('path'),before:'# Muxterm\n',after:'# Muxterm component library\n',binary:false,tooLarge:false});
-    if (method === 'GET' && url.pathname === `${base}pages`) return fixtureJSON({version:1,pages:[{id:'review-page',title:'Component review',blocks:[],content:[{type:'paragraph',content:'Review the shared controls and phone layout.'}]}]});
+    if (method === 'GET' && url.pathname === `${base}pages`) return fixtureJSON({version:1,pages:emptyPages ? [] : [
+      {id:'review-page',title:id.endsWith('-subpage') ? 'Document actions review' : 'Component review',blocks:[],content:[{type:'paragraph',content:'Review the shared controls and phone layout.'}]},
+      ...(id.endsWith('-subpage') ? [{id:'child-page',parentId:'review-page',title:'Phone child review of document actions',blocks:[],content:[{type:'paragraph',content:'Check the page breadcrumb.'}]}] : []),
+    ]});
     if (method === 'PUT' && url.pathname === `${base}pages`) return fixtureJSON({version:2});
     return fixtureJSON({error:`No utility fixture for ${method} ${url.pathname}`},501);
   };
@@ -105,6 +108,10 @@ export const Pages: Story = {
   args:{sessionId:sessionId('pages')},parameters:{apiFixture:utilityFixture(sessionId('pages'))},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('pages'); },
 };
+export const EmptyPages: Story = {
+  args:{sessionId:sessionId('empty-pages')},parameters:{apiFixture:utilityFixture(sessionId('empty-pages'),true)},
+  play:async ({canvasElement}) => { target(canvasElement)?.showPanel('pages'); },
+};
 export const Status: Story = {
   args:{sessionId:sessionId('status')},parameters:{apiFixture:utilityFixture(sessionId('status'))},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('status'); },
@@ -128,14 +135,27 @@ export const PhonePages: Story = {
   globals:{viewport:{value:'phone390',isRotated:false}},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('pages'); },
 };
+export const PhoneSubpage: Story = {
+  args:{sessionId:sessionId('phone-subpage')},parameters:{apiFixture:utilityFixture(sessionId('phone-subpage'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  play:async ({canvasElement}) => {
+    target(canvasElement)?.showPanel('pages');
+    let row: HTMLElement | null = null;
+    for (let attempt=0; attempt<40 && !row; attempt++) {
+      row = target(canvasElement)?.querySelector<HTMLElement>('mux-ui-rail-row[label="Phone child review of document actions"]') || null;
+      if (!row) await new Promise(resolve=>window.setTimeout(resolve,50));
+    }
+    row?.click();
+  },
+};
 export const PhonePageDeleteConfirmation: Story = {
   args:{sessionId:sessionId('phone-page-delete')},parameters:{apiFixture:utilityFixture(sessionId('phone-page-delete'))},
   globals:{viewport:{value:'phone390',isRotated:false}},
   play:async ({canvasElement}) => {
     target(canvasElement)?.showPanel('pages');
-    let button: HTMLButtonElement | null = null;
+    let button: MuxUIButton | null = null;
     for (let attempt=0; attempt<40 && !button; attempt++) {
-      button = target(canvasElement)?.querySelector<HTMLButtonElement>('button[aria-label="Delete page Component review"]') || null;
+      button = target(canvasElement)?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Delete page Component review"]') || null;
       if (!button) await new Promise(resolve=>window.setTimeout(resolve,50));
     }
     button?.click();

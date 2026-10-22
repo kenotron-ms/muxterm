@@ -135,6 +135,7 @@
   --ui-document-surface: #fff;
   --ui-document-text: #202124;
   --ui-document-muted: #646b70;
+  --ui-document-accent: var(--ui-accent);
   --ui-document-border: #e4e6e8;
   --ui-document-hover: #f2f3f5;
 

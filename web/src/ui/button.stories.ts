@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
-import { ArrowUp, Ellipsis, Paperclip, Trash2 } from 'lucide';
+import { ArrowUp, Ellipsis, NotebookPen, Paperclip, Trash2 } from 'lucide';
 import { icon } from '../lib/icons.js';
 import './button.js';
 import type { ButtonSize, ButtonVariant, MuxUIButton } from './button.js';
@@ -62,4 +62,11 @@ export const MenuTrigger: Story = {
 };
 export const ToggleIcon: Story = {
   render:() => html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" toggle accessible-label="Show file browser" tooltip="Show file browser" @click=${(event:Event) => { const button = event.currentTarget as MuxUIButton; button.pressed = !button.pressed; }}>${icon(Paperclip,{size:16})}</mux-ui-button>`,
+};
+export const DocumentActions: Story = {
+  render:() => html`<div style="display:flex;align-items:center;gap:var(--ui-space-4);padding:var(--ui-space-6);background:var(--ui-document-surface)">
+    <mux-ui-button appearance="document" icon-only size="small" variant="quiet" tone="muted" toggle pressed accessible-label="Hide pages list">${icon(NotebookPen,{size:16})}</mux-ui-button>
+    <mux-ui-button appearance="document" size="small" variant="secondary">New page</mux-ui-button>
+    <mux-ui-button appearance="document" icon-only size="small" variant="quiet" tone="danger" accessible-label="Delete page">${icon(Trash2,{size:16})}</mux-ui-button>
+  </div>`,
 };
