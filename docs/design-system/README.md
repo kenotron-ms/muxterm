@@ -112,9 +112,14 @@ ledger actions use shared Buttons, Select and Feedback. Storybook shows an
 active goal, a pending proposal with separate approval actions, and the phone
 editor as a bottom sheet. Chromium confirmed the phone sheet accepts edits,
 Escape dismisses it, and the desktop transcript still shows work details.
+The chat stylesheet also uses shared spacing, radius and typography scales,
+and message copy/edit/fork actions plus the edit footer use shared Buttons.
+The Message Edit story shows the editor at desktop and phone widths; Chromium
+confirmed Cancel closes it without horizontal overflow. A light palette story
+confirmed the semantic surfaces resolve to the selected theme.
 These stories use synthetic read-only goal data and do not exercise live goal
-control. Transcript actions, disclosures and the auto-sizing composer still
-need shared-pattern review, as recorded in the inventory.
+control. Work disclosures, lane report toggles and the auto-sizing composer
+still need shared-pattern review, as recorded in the inventory.
 
 The Utility panel uses semantic tokens for chrome and document colors, plus
 shared compact Text Field and Select controls in the file rail. Storybook's

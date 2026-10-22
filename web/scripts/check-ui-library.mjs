@@ -54,7 +54,8 @@ for (const [name, url] of featureFiles) {
   const counts = {
     legacyTokens: [...styles.matchAll(/var\(--(?:chrome|mux)-[\w-]+/g)].length,
     literalColors: [...styles.matchAll(/#[\da-fA-F]{3,8}\b/g)].length,
-    literalScale: [...styles.matchAll(/(?:^|[;{])\s*(?:padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?|gap|row-gap|column-gap|border-radius|font-size)\s*:\s*([^;{}]+);/gm)]
+    // Keep the declaration separator available for the next match.
+    literalScale: [...styles.matchAll(/(?:(?<=;)|(?<=\{)|^)\s*(?:padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?|gap|row-gap|column-gap|border-radius|font-size)\s*:\s*([^;{}]+);/gm)]
       .filter(match => /\b\d+(?:\.\d+)?(?:px|rem|em)\b/.test(match[1])).length,
     nativeControls: [...source.matchAll(/<(?:button|input|select|textarea)\b/g)].length,
   };

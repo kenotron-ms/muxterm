@@ -56,7 +56,7 @@
   "components/mux-connections.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 11,
+    "literalScale": 16,
     "nativeControls": 2
   },
   "components/mux-dock.ts": {
@@ -80,13 +80,13 @@
   "components/mux-new-chat.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 80,
+    "literalScale": 92,
     "nativeControls": 14
   },
   "components/mux-operator-status.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 0,
+    "literalScale": 1,
     "nativeControls": 1
   },
   "components/mux-pane-picker.ts": {
@@ -104,14 +104,14 @@
   "components/mux-sdk-chat-settings.ts": {
     "legacyTokens": 6,
     "literalColors": 5,
-    "literalScale": 16,
+    "literalScale": 18,
     "nativeControls": 3
   },
   "components/mux-sdk-chat.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
-    "literalScale": 149,
-    "nativeControls": 28
+    "literalScale": 0,
+    "nativeControls": 21
   },
   "components/mux-sdk-pdf-preview.ts": {
     "legacyTokens": 0,
@@ -128,13 +128,13 @@
   "components/mux-sidebar.ts": {
     "legacyTokens": 135,
     "literalColors": 1,
-    "literalScale": 93,
+    "literalScale": 95,
     "nativeControls": 6
   },
   "components/mux-skills.ts": {
     "legacyTokens": 11,
     "literalColors": 0,
-    "literalScale": 16,
+    "literalScale": 19,
     "nativeControls": 0
   },
   "components/page-visualization.ts": {

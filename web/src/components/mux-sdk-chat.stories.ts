@@ -105,6 +105,26 @@ export default meta;
 type Story = StoryObj<ChatArgs>;
 
 export const Conversation: Story = {};
+export const MessageEdit: Story = {
+  args:{sessionId:'storybook-chat-message-edit'},
+  parameters:{apiFixture:chatFixture('storybook-chat-message-edit')},
+  play:async ({canvasElement}) => {
+    await sdkChats.refresh();
+    const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const edit = chat?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Edit message in a new chat"]');
+      if (edit) {
+        edit.click();
+        await chat?.updateComplete;
+        await new Promise(resolve => setTimeout(resolve, 100));
+        chat?.shadowRoot?.querySelector<HTMLElement>('.body')?.scrollTo({top:0});
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw new Error('The message edit action did not render');
+  },
+};
 export const WorkDetails: Story = {
   args:{sessionId:'storybook-chat-work'},
   parameters:{apiFixture:chatFixture('storybook-chat-work')},
