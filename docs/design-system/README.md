@@ -268,6 +268,12 @@ parent navigation, subfolders, and choosing a path. The optional new-folder
 field only proposes a path; it does not create a directory. Navigation in New
 Chat leaves the chosen path unchanged until the user selects a folder. Storybook
 contains populated, empty, project-editor, phone, and light-theme states.
+The New Chat location trigger uses the shared Button. It exposes the full path
+as its accessible name, announces dialog popup state, and regains focus after
+Done, Close, or Escape. Storybook covers ungrouped and project locations on
+desktop and phone; the project fixture passes the selected project's folder as
+the app does. The two remaining native New Chat controls are its auto-sizing
+composer and hidden file input.
 
 The Utility panel uses semantic tokens for chrome and document colors, plus
 shared compact Text Field and Select controls in the file rail. Storybook's

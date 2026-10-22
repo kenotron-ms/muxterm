@@ -69,6 +69,7 @@ const meta = {
   },
   render: (args: NewChatArgs) => html`<mux-new-chat
     .initialProject=${args.project}
+    .initialFolder=${projects.find(project => project.id === args.project)?.path || ''}
     .initialPrompt=${args.prompt}
     .initialHarness=${args.harness}
     .compact=${args.compact}
@@ -79,6 +80,20 @@ export default meta;
 type Story = StoryObj<NewChatArgs>;
 export const Ungrouped: Story = {};
 export const Project: Story = { args: { project:'atlas' } };
+const openLocationDialog = async ({canvasElement}:{canvasElement:HTMLElement}) => {
+  await sdkChats.refresh();
+  const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
+  await screen?.updateComplete;
+  const trigger = screen?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button.location-trigger');
+  if (!trigger) throw new Error('The Chat location action did not render');
+  trigger.click();
+  await screen?.updateComplete;
+};
+export const LocationDialog: Story = { play:openLocationDialog };
+export const PhoneLocationDialog: Story = {
+  globals:{viewport:{value:'phone390',isRotated:false}},play:openLocationDialog,
+};
+export const ProjectLocationDialog: Story = { args:{project:'atlas'},play:openLocationDialog };
 const openProjectPicker = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
   await sdkChats.refresh();

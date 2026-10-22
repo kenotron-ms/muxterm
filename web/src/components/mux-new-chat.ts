@@ -88,6 +88,11 @@ export class MuxNewChat extends LitElement {
     };
     if (this.pickerOpen && !inside('.location-settings')) this.pickerOpen = false;
   };
+  private closeLocation() {
+    this.locationOpen = false;
+    this.pickerOpen = false;
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLElement>('.location-trigger')?.focus());
+  }
 
   static styles = css`
     ${subtleScrollbars}
@@ -119,7 +124,6 @@ export class MuxNewChat extends LitElement {
     .folder { display:grid; gap:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .folder-line { display:flex; align-items:center; gap:var(--ui-space-3); }
     .folder-line mux-ui-text-field { flex:1; min-width:0; }
-    button { cursor:pointer; font:inherit; }
     mux-ui-folder-browser { margin-bottom:var(--ui-space-4); }
     .composer { position:relative; display:flex; flex-direction:column; gap:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-2xl); background:var(--ui-surface-raised); padding:var(--ui-space-6) var(--ui-space-6) var(--ui-space-5); transition:border-color var(--ui-motion-fast),box-shadow var(--ui-motion-fast); }
     .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
@@ -155,11 +159,10 @@ export class MuxNewChat extends LitElement {
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
     @media (prefers-reduced-motion:reduce) { .receipt::before { animation:none; } }
     .location-settings { min-width:0; }
-    .location-trigger { display:flex; align-items:center; gap:var(--ui-space-3); box-sizing:border-box; max-width:var(--ui-new-chat-location-width); min-height:var(--ui-control-md); padding:0 var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); font-size:var(--ui-text-sm); white-space:nowrap; }
+    .location-trigger { min-width:0; max-width:var(--ui-new-chat-location-width); }
+    .location-trigger::part(button) { min-width:0; justify-content:flex-start; }
     .location-settings .folder-symbol { display:flex; flex:none; color:var(--ui-accent); }
-    .location-settings .folder-label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-    .location-trigger:hover,.location-trigger[aria-expanded="true"] { border-color:var(--ui-accent); }
-    .location-trigger:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .location-settings .folder-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .location-fields { display:grid; gap:var(--ui-space-5); box-sizing:border-box; max-height:min(80dvh,var(--ui-dialog-compact-max-height)); overflow:auto; padding:var(--ui-space-6); }
     .location-head { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); }
     .location-head h2 { margin:0; color:var(--ui-text); font-size:var(--ui-text-xl); }
@@ -170,7 +173,7 @@ export class MuxNewChat extends LitElement {
       h1 { font-size:var(--ui-text-3xl); }
       .controls { position:relative; gap:var(--ui-space-3); }
       .controls mux-ui-select { max-width:var(--ui-new-chat-harness-phone-width); }
-      .location-trigger { min-height:var(--ui-control-lg); }
+      .location-trigger::part(button) { min-height:var(--ui-control-lg); }
       .location-fields { padding-bottom:max(var(--ui-space-6),env(safe-area-inset-bottom)); }
     }
   `;
@@ -468,15 +471,15 @@ export class MuxNewChat extends LitElement {
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
         <div class="controls">
         <div class="project"><mux-ui-select-combobox label="Project" appearance="tinted" .value=${this.projectId} .options=${this.projectOptions()} @change=${(event:CustomEvent<{value:string}>) => this.onProjectChange(event.detail.value)}></mux-ui-select-combobox></div>
-        <div class="location-settings"><button class="location-trigger" type="button" aria-haspopup="dialog" aria-expanded=${this.locationOpen} aria-label="Chat location" title=${this.folder} @click=${() => { this.locationOpen = true; }}><span class="folder-symbol">${icon(Folder,{size:14})}</span><span class="folder-label">${this.locationLabel()}</span></button>
-          ${this.locationOpen ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Chat location" open @dismiss=${() => { this.locationOpen = false; this.pickerOpen = false; }}>
+        <div class="location-settings"><mux-ui-button class="location-trigger" variant="secondary" haspopup="dialog" .expanded=${this.locationOpen} accessible-label=${`Chat location: ${this.folder || 'Choose folder'}`} tooltip=${this.folder} @click=${() => { this.locationOpen = true; }}><span slot="leading" class="folder-symbol">${icon(Folder,{size:14})}</span><span class="folder-label">${this.locationLabel()}</span></mux-ui-button>
+          ${this.locationOpen ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Chat location" open @dismiss=${this.closeLocation}>
           <div class="location-fields">
-            <div class="location-head"><h2>Chat location</h2><mux-ui-button icon-only variant="quiet" size="small" accessible-label="Close chat location" @click=${() => { this.locationOpen = false; this.pickerOpen = false; }}>${icon(X,{size:17})}</mux-ui-button></div>
+            <div class="location-head"><h2>Chat location</h2><mux-ui-button icon-only variant="quiet" size="small" accessible-label="Close chat location" @click=${this.closeLocation}>${icon(X,{size:17})}</mux-ui-button></div>
             <div class="folder"><span>${this.projectId === 'ungrouped' ? 'Folder' : 'Primary folder'}</span><div class="folder-line"><mux-ui-text-field aria-label="Primary folder" .value=${this.folder} ?readonly=${this.projectId !== 'ungrouped' && this.projectId !== 'new'} @input=${(e:Event) => { this.folder = (e.target as MuxUITextField).value; this.onFolderChanged(); }}></mux-ui-text-field>${this.projectId === 'ungrouped' || this.projectId === 'new' ? html`<mux-ui-button size="small" accessible-label="Browse server folders" @click=${() => void this.browse()}>Browse</mux-ui-button>` : nothing}</div></div>
             ${this.projectId === 'new' ? html`<mux-ui-text-field label="Project name" aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
             ${this.pickerOpen && this.listing ? html`<mux-ui-folder-browser aria-label="Server folder picker" .listing=${this.listing} allow-new-folder @folder-navigate=${(event:CustomEvent<{path:string}>) => void this.browse(event.detail.path)} @folder-choose=${(event:CustomEvent<{path:string}>) => { this.folder = event.detail.path; this.onFolderChanged(); this.pickerOpen = false; }} @folder-use-new=${(event:CustomEvent<{path:string}>) => { this.folder = event.detail.path; this.onFolderChanged(); this.pickerOpen = false; }}></mux-ui-folder-browser>` : nothing}
             <p class="location-note">${this.workMode === 'worktree' ? 'A separate Git worktree will be created from this project’s primary folder.' : this.projectId === 'ungrouped' ? 'This chat will use the chosen folder.' : 'This chat will use the project’s primary folder.'}${selectedProject?.sourceFolders?.length ? ` ${selectedProject.sourceFolders.length} additional source ${selectedProject.sourceFolders.length === 1 ? 'folder is' : 'folders are'} available at their existing paths.` : ''}</p>
-            <div class="location-actions"><mux-ui-button variant="primary" @click=${() => { this.locationOpen = false; this.pickerOpen = false; }}>Done</mux-ui-button></div>
+            <div class="location-actions"><mux-ui-button variant="primary" @click=${this.closeLocation}>Done</mux-ui-button></div>
           </div>
           </mux-ui-dialog>` : nothing}
         </div>
