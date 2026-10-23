@@ -18,7 +18,8 @@ export class MuxUIScreenHeader extends LitElement {
     header { box-sizing:border-box; height:var(--ui-nav-height); display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; padding:0 var(--ui-screen-header-padding-right,max(var(--ui-space-5),var(--wco-right-inset,0))) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
     .section { display:inline-flex; align-items:center; gap:var(--ui-space-3); min-width:0; max-width:38%; overflow:hidden; white-space:nowrap; color:var(--ui-text-muted); }
     :host([with-section-icon]) .section { font-size:var(--ui-text-sm); font-weight:500; }
-    .section-icon { display:inline-flex; flex:none; }
+    .section-icon { display:inline-flex; align-items:center; flex:none; }
+    slot[name='section-icon']::slotted(*) { display:inline-flex; align-items:center; line-height:0; }
     .section-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .divider { flex:none; color:var(--ui-text-muted); }
     .heading { display:flex; align-items:center; flex:1; min-width:0; overflow:hidden; }
