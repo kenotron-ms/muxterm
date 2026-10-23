@@ -77,6 +77,7 @@ type sdkProject struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
 	Path          string   `json:"path"`
+	ManagedFolder bool     `json:"managedFolder,omitempty"`
 	SourceFolders []string `json:"sourceFolders,omitempty"`
 	Pinned        bool     `json:"pinned,omitempty"`
 }
@@ -1121,12 +1122,27 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 		Name, Path    string
 		SourceFolders []string
 		CreateFolder  bool
+		ManagedFolder bool
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil || !filepath.IsAbs(req.Path) {
+	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+	if req.ManagedFolder {
+		if req.Path != "" || req.CreateFolder {
+			http.Error(w, "managed projects cannot specify a folder", 400)
+			return
+		}
+	} else if !filepath.IsAbs(req.Path) {
 		http.Error(w, "absolute project path required", 400)
 		return
 	}
-	req.Path = filepath.Clean(req.Path)
+	id := sdkID()
+	if req.ManagedFolder {
+		req.Path = filepath.Join(h.dir, "project-folders", id)
+	} else {
+		req.Path = filepath.Clean(req.Path)
+	}
 	folders, err := sdkProjectFolders(req.Path, req.SourceFolders)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -1138,15 +1154,24 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Name == "" {
+		if req.ManagedFolder {
+			http.Error(w, "project name required", 400)
+			return
+		}
 		req.Name = filepath.Base(req.Path)
 	}
-	if req.CreateFolder {
-		if err := os.Mkdir(req.Path, 0755); err != nil {
+	if req.CreateFolder || req.ManagedFolder {
+		if req.ManagedFolder {
+			err = os.MkdirAll(req.Path, 0700)
+		} else {
+			err = os.Mkdir(req.Path, 0755)
+		}
+		if err != nil {
 			http.Error(w, "cannot create project folder: "+err.Error(), 400)
 			return
 		}
 	}
-	p := &sdkProject{ID: sdkID(), Name: req.Name, Path: req.Path, SourceFolders: folders}
+	p := &sdkProject{ID: id, Name: req.Name, Path: req.Path, ManagedFolder: req.ManagedFolder, SourceFolders: folders}
 	h.mu.Lock()
 	h.projects[p.ID] = p
 	err = h.saveProjectsLocked()
@@ -1155,7 +1180,7 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 	if err != nil {
-		if req.CreateFolder {
+		if req.CreateFolder || req.ManagedFolder {
 			_ = os.Remove(req.Path)
 		}
 		http.Error(w, err.Error(), 500)
@@ -1222,6 +1247,9 @@ func (s *Server) handleSDKProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p.Path, p.SourceFolders = primary, folders
+		if req.Path != nil && *req.Path != previous.Path {
+			p.ManagedFolder = false
+		}
 		if req.Name != nil {
 			p.Name = *req.Name
 		}
@@ -1486,7 +1514,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, OperatorID string
-		Attachments                                                                               []string `json:"attachments"`
+		Attachments                                                                                                      []string `json:"attachments"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -1553,11 +1581,13 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 	}
 	sourceFolders := []string{}
+	managedFolder := false
 	if req.WorkspaceID != "" {
 		h.mu.Lock()
 		p := h.projects[req.WorkspaceID]
 		if p != nil {
 			sourceFolders = append(sourceFolders, p.SourceFolders...)
+			managedFolder = p.ManagedFolder
 		}
 		h.mu.Unlock()
 		if p == nil {
@@ -1572,6 +1602,10 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.WorkMode == "worktree" && req.WorkspaceID == "" {
 		http.Error(w, "choose a project to create a worktree", 400)
+		return
+	}
+	if req.WorkMode == "worktree" && managedFolder {
+		http.Error(w, "managed project folders cannot create worktrees", 400)
 		return
 	}
 	if req.ProjectPath == "" {

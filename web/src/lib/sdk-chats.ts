@@ -5,7 +5,7 @@ export function sdkHarnessLabel(harness: SDKHarnessName): string {
 }
 export interface SDKLaneTiming { category: 'review' | 'focused' | 'cross_stack' | 'operational'; classification: 'openai_decisions' | 'anthropic' | 'historical_only'; sampleSize: number; broadHistory?: boolean; effortLowSeconds?: number; effortHighSeconds?: number; elapsedSeconds?: number; remainingLowSeconds?: number; remainingHighSeconds?: number; survivorCount?: number; actualSeconds?: number }
 export interface SDKChat { id: string; workspaceId?: string; terminalWorkspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: SDKHarnessName; provider?: string; nativeId?: string; state: string; createdAt: string; updatedAt?: string; lastActivity?: string; lastOutput?: string; lastTurnOutcome?: 'completed' | 'cancelled'; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string; operator?: boolean; operatorLanes?: string[]; laneTodos?: {text:string;status:string}[]; laneReport?: string; timing?: SDKLaneTiming; branchPending?: boolean }
-export interface SDKProject { id: string; name: string; path: string; sourceFolders?: string[]; pinned?: boolean }
+export interface SDKProject { id: string; name: string; path: string; managedFolder?: boolean; sourceFolders?: string[]; pinned?: boolean }
 export interface FolderListing { path: string; base: string; parent: string; folders: string[] }
 class SDKChatStore {
   chats: SDKChat[] = [];
@@ -76,8 +76,8 @@ class SDKChatStore {
     await this.refresh();
     return operator;
   }
-  async createProject(path: string, name = '', sourceFolders: string[] = [], createFolder = false) {
-    const response = await fetch(apiPath('/api/sdk-projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name, sourceFolders, createFolder }) });
+  async createProject(path: string, name = '', sourceFolders: string[] = [], createFolder = false, managedFolder = false) {
+    const response = await fetch(apiPath('/api/sdk-projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name, sourceFolders, createFolder, managedFolder }) });
     if (!response.ok) throw new Error(await response.text());
     const project = await response.json() as SDKProject;
     await this.refresh();

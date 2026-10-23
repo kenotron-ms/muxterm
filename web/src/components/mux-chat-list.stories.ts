@@ -4,6 +4,7 @@ import { chatListFixture, resetChatListFixture } from '../stories/chat-list-fixt
 import type { MuxChatList, MuxChatWorkspace } from './mux-chat-list.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIButton } from '../ui/button.js';
+import type { MuxUISwitch } from '../ui/switch.js';
 import type { MuxUIListRow } from '../ui/list-row.js';
 import type { MuxUIMenuItem } from '../ui/menu-item.js';
 import './mux-chat-list.js';
@@ -31,6 +32,14 @@ const openNewProjectFolder = async ({canvasElement}: {canvasElement: HTMLElement
 };
 export const NewProjectFolder: Story = { play:openNewProjectFolder };
 export const PhoneNewProjectFolder: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openNewProjectFolder };
+const openProjectWithoutFolder = async (context: {canvasElement: HTMLElement}) => {
+  await openNewProjectFolder(context);
+  const list = context.canvasElement.querySelector<MuxChatList>('mux-chat-list');
+  await list?.updateComplete;
+  list?.shadowRoot?.querySelector<MuxUISwitch>('mux-ui-switch[label="No folder"]')?.click();
+};
+export const NewProjectWithoutFolder: Story = { play:openProjectWithoutFolder };
+export const PhoneNewProjectWithoutFolder: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openProjectWithoutFolder };
 export const OperatorAndLaneStatus: Story = { render:() => view('chat-operator',false,false,true) };
 export const PhoneOperatorAndLaneStatus: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-operator',true,false,true) };
 const openProjectActions = async ({canvasElement}: {canvasElement: HTMLElement}) => {
