@@ -35,6 +35,12 @@ const running: ChatEvent[] = [
   {at:at(25),type:'input.accepted',kind:'user',source:'browser',inputId:'message-3',text:'Now inspect the phone composer and report any seams.'},
   {at:at(26),type:'commentary.delta',itemId:'progress-3',text:'I’m comparing the phone composer with the shared controls.',complete:true},
 ];
+const goalify: ChatEvent[] = [
+  ...transcript,
+  {at:at(24),type:'input.accepted',kind:'user',source:'goalify',inputId:'goalify-1',text:'Refine goal with goalify'},
+  {at:at(25),type:'assistant.delta',text:'# Component review\n\nCatalog every shared control, then stop after browser review.'},
+  {at:at(26),type:'turn.completed',inputIds:['goalify-1']},
+];
 
 const delegated: ChatEvent[] = [
   {at:at(1),type:'input.accepted',kind:'user',source:'browser',inputId:'delegation-1',text:'Ask the design agent to review the chat controls.'},
@@ -66,7 +72,7 @@ const settings = {
   ],
 };
 
-function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal' = 'none', scenario:'default'|'delegated'|'reports'|'failed-report' = 'default'): ApiFixture {
+function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal'|'cleared' = 'none', scenario:'default'|'delegated'|'reports'|'failed-report'|'goalify' = 'default'): ApiFixture {
   let historyRequests = 0;
   const chat: SDKChat = {
     id, title:'Component library review', workspaceId:'project-1',
@@ -83,17 +89,18 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     controlVersion:goalState === 'none' ? 0 : 3,
     requestedRevision:goalState === 'none' ? 0 : 1,
     appliedRevision:goalState === 'none' ? 0 : 1,
-    humanPaused:false, state:goalState === 'none' ? 'not-set' : 'active',
+    humanPaused:false, state:goalState === 'none' ? 'not-set' : goalState === 'cleared' ? 'cleared' : 'active',
     ...(goalState === 'proposal' ? {operatorId:operator.id} : {}),
     gap:'',
     revisions:goalState === 'none' ? [] : [{revision:1,condition:'Catalog every shared control, then stop after browser review.',provenance:'human',at:at(1)}],
     receipts:goalState === 'none' ? [] : [
       {id:'goal-start',action:'set',revision:1,actor:'human',status:'recorded',at:at(2)},
       ...(goalState === 'proposal' ? [{id:'goal-proposal',action:'propose',revision:2,actor:'agent',status:'recorded',objective:'Review and replace remaining chat one-offs.',at:at(3)}] : []),
+      ...(goalState === 'cleared' ? [{id:'goal-clear',action:'clear',revision:1,actor:'human',status:'acknowledged',at:at(3)}] : []),
     ],
     observations:goalState === 'none' ? [] : [{at:at(4),event:{type:'goal.started',goalState:'active',goalSummary:'The native harness acknowledged revision 1.'}}],
   };
-  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : state === 'working' ? running : transcript;
+  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : scenario === 'goalify' ? goalify : state === 'working' ? running : transcript;
   const messages = events.filter(event => event.type !== 'tool.started' && event.type !== 'tool.completed');
   return ({url,method,init}) => {
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON(goalState === 'proposal' ? [chat,operator] : [chat]);
@@ -420,30 +427,36 @@ export const EmbeddedPhoneChat: Story = {
     <div style="position:relative;flex:1;min-height:0"><mux-sdk-chat .sessionId=${args.sessionId} .compact=${args.compact}></mux-sdk-chat></div>
   </div>`,
 };
-const openLedger = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+const openGoalTab = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   await sdkChats.refresh();
   const chat = canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
   await chat?.updateComplete;
-  chat?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Open goal ledger"]')?.click();
+  await chat?.navigateUI('tab',undefined,'goal');
 };
-export const GoalLedger: Story = {
-  args:{sessionId:'storybook-chat-goal'},
-  parameters:{apiFixture:chatFixture('storybook-chat-goal','ready','active')},
-  play:openLedger,
+export const GoalRail: Story = {
+  args:{sessionId:'storybook-chat-goal-rail'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goal-rail','ready','active')},
 };
-export const GoalPendingProposal: Story = {
-  args:{sessionId:'storybook-chat-proposal'},
-  parameters:{apiFixture:chatFixture('storybook-chat-proposal','ready','proposal')},
-  play:openLedger,
+export const GoalInlineResponse: Story = {
+  args:{sessionId:'storybook-chat-goal-inline'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goal-inline','ready','active')},
 };
-export const PhoneGoalEditor: Story = {
+export const GoalifyChoice: Story = {
+  args:{sessionId:'storybook-chat-goalify-choice'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goalify-choice','ready','active','goalify')},
+};
+export const GoalTab: Story = {
+  args:{sessionId:'storybook-chat-goal-tab'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goal-tab','ready','active')},
+  play:openGoalTab,
+};
+export const GoalRailCleared: Story = {
+  args:{sessionId:'storybook-chat-goal-rail-cleared'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goal-rail-cleared','ready','cleared')},
+};
+export const PhoneGoalTab: Story = {
   args:{sessionId:'storybook-chat-phone-goal'},
   globals:{viewport:{value:'phone390',isRotated:false}},
   parameters:{apiFixture:chatFixture('storybook-chat-phone-goal','ready','active')},
-  play:async (context) => {
-    await openLedger(context);
-    const chat = context.canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
-    await chat?.updateComplete;
-    chat?.shadowRoot?.querySelector<HTMLElement>('.goal-edit-action')?.click();
-  },
+  play:openGoalTab,
 };

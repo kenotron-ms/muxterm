@@ -1,9 +1,15 @@
 # Goals and the shared ledger
 
-The composer has a single-line goal banner. Its icon controls open the human
-editor, request pause/resume or native clear, and open the shared ledger utility.
+The composer has a single-line goal rail. Selecting it opens the Goal utility
+tab, which renders the current stop condition as markdown with controls to
+refine, pause, resume or reset, and clear it. The `/goal` command sets, inspects,
+pauses, resumes, and clears the goal. Its result appears as an inline card in
+the chat pane that opens the Goal tab. A human can keep the condition as-is or
+ask the goalify skill for a refined draft in the Goal tab, then choose whether
+to apply that draft in chat. Reset restarts the current approved condition after
+the native goal has finished.
 Ordinary messages do not revise the stop condition. Standalone chats need no
-operator. Full conditions are available in the editor and banner tooltip.
+operator. The shared ledger stays behind the UI as the authority and history store.
 
 ## Native capability boundaries
 
@@ -24,6 +30,8 @@ are retained verbatim, including blocked, usage/budget limits, and clear.
 Native clear is not rollback or proof that the current turn was interrupted.
 Clear retains human revisions; explicit resume can recreate the saved condition
 as a new native goal. Completed goals likewise require explicit resume.
+The composer goal banner disappears when the native goal is cleared; its
+revision and control history remain in the shared ledger.
 
 ## Storage and receipts
 
@@ -57,7 +65,7 @@ Nothing is replayed. Human pause holds survive restart, including failed or
 uncertain native acknowledgements. Reconcile before making another request.
 Passive settings/title loads and queued operator reports cannot restart an
 uncertain goal. Legacy native conditions without a human ledger revision require
-explicit adoption in the human editor, not inferred provenance.
+explicit adoption through the `/goal` command, not inferred provenance.
 
 ## Authority
 
@@ -80,7 +88,7 @@ Keep that exclusion list and the server authority boundary aligned.
 ## Proposals and changeable policy
 
 Proposing and authorizing are separate typed operations. An agent proposal is an
-inert receipt. In the shared ledger, a human may approve and start it, or approve
+inert receipt. Through authorized goal control, a human may approve and start it, or approve
 its exact condition and authorize the direct operator to start that revision.
 The authorization is a JSON policy record scoped to operator identity and human
 revision, consumed on one admitted start, and explicitly revocable. Relinking or

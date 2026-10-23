@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Plus, RefreshCw, Search, Trash2, X, type IconNode } from 'lucide';
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
@@ -63,10 +63,10 @@ function legacyPageContent(blocks: PageBlock[]): PartialBlock[] {
   });
   return converted.length ? converted : [{type:'paragraph'}];
 }
-type UtilityTabId = 'new' | 'files' | 'status' | 'changes' | 'pages';
+type UtilityTabId = 'new' | 'files' | 'status' | 'changes' | 'pages' | 'goal';
 type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string };
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
-const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, pages:NotebookPen };
+const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, pages:NotebookPen, goal:Target };
 
 function readableSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -115,6 +115,14 @@ function tableRows(source: string, separator: string): { rows: string[][]; trunc
 export class MuxSDKUtility extends LitElement {
   @property() sessionId = '';
   @property() projectPath = '';
+  @property() goalText = '';
+  @property() goalState = '';
+  @property({ type:Boolean }) goalHumanPaused = false;
+  @property({ type:Boolean }) goalControlPending = false;
+  @property({ type:Boolean }) goalRefinePending = false;
+  @property({ type:Boolean }) goalRefineDisabled = false;
+  @property() goalFeedback = '';
+  @property({ type:Boolean }) goalFeedbackError = false;
   @property({ type: Boolean, reflect: true, attribute: 'terminal-mode' }) terminalMode = false;
   @property({ type: Boolean }) focused = false;
   @property({ attribute: false }) touched: string[] = [];
@@ -187,7 +195,7 @@ export class MuxSDKUtility extends LitElement {
     }
     try {
       const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string }[]; activeTabId?: string } | null;
-      const valid = new Set<string>(['new','files','status','changes','terminal','pages','web']);
+      const valid = new Set<string>(['new','files','status','changes','terminal','pages','web','goal']);
       if (saved?.tabs?.length && saved.tabs.length <= 30 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
         this.tabs = saved.tabs.map(tab => ({ id:tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath }));
         this.activeTabId = this.tabs.some(tab => tab.id === saved.activeTabId) ? saved.activeTabId! : this.tabs[0].id;
@@ -220,13 +228,13 @@ export class MuxSDKUtility extends LitElement {
   override render() {
     if (this.terminalMode) return html`<style>${this.surfaceCSS}</style><div class="terminal-files-header"><strong>Files</strong><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Close file explorer" tooltip="Close file explorer" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(X,{size:16})}</mux-ui-button></div><div class="utility-body" aria-label="Files">${this.filesView()}</div>`;
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style><mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style><mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : this.pagesView()}</div>`;
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
     if (tab.kind === 'files') return tab.filePath?.split('/').pop() || 'Files';
     if (tab.kind === 'pages') return this.pages?.find(page => page.id === tab.pageId)?.title || 'Page';
-    return ({ status:'Status', changes:'Changes' } as Record<string,string>)[tab.kind] || 'Tab';
+    return ({ status:'Status', changes:'Changes', goal:'Goal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { if (this.terminalMode) return; try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
   private migrateLegacyFile(): boolean {
@@ -284,7 +292,7 @@ export class MuxSDKUtility extends LitElement {
     if (existing) this.selectTab(existing.id);
     else this.addTab(id);
   }
-  private chooseTool(kind: 'files' | 'status' | 'changes' | 'pages') {
+  private chooseTool(kind: 'files' | 'status' | 'changes' | 'pages' | 'goal') {
     const current = this.currentTab;
     current.kind = kind;
     if (kind === 'pages') {
@@ -295,11 +303,30 @@ export class MuxSDKUtility extends LitElement {
   }
   private newTabView(): TemplateResult {
     return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Open a tool</h2><div class="new-tab-tools">
+      <mux-ui-action-tile label="Goal" description="Read and control the current goal" @click=${() => this.chooseTool('goal')}><span slot="icon">${icon(Target,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Files" description="Browse and preview project files" @click=${() => this.chooseTool('files')}><span slot="icon">${icon(Folder,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Status" description="See agent activity" @click=${() => this.chooseTool('status')}><span slot="icon">${icon(Network,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Changes" description="Review edits in this project" @click=${() => this.chooseTool('changes')}><span slot="icon">${icon(GitCompare,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="New page" description="Write notes for this chat" @click=${() => this.chooseTool('pages')}><span slot="icon">${icon(NotebookPen,{size:18})}</span></mux-ui-action-tile>
     </div></div></section>`;
+  }
+  private goalView(): TemplateResult {
+    const paused = this.goalHumanPaused || this.goalState === 'paused';
+    const finished = ['complete','achieved','ended','stalled','cap_hit','cancelled','error','uncertain'].includes(this.goalState);
+    const action = paused ? 'resume' : finished ? 'resume' : 'pause';
+    const label = paused ? 'Resume' : finished ? 'Reset' : 'Pause';
+    const glyph = paused ? Play : finished ? RotateCcw : Pause;
+    return html`<div class="viewer goal-viewer">
+      <div class="goal-toolbar"><div class="goal-toolbar-title"><strong>Goal</strong><span>${paused ? 'Paused' : finished ? this.goalState === 'achieved' || this.goalState === 'complete' ? 'Achieved' : 'Needs review' : this.goalText ? 'Current condition' : 'No active goal'}</span></div>
+        ${this.goalText ? html`<div class="goal-toolbar-actions" role="group" aria-label="Goal actions">
+          <mux-ui-button size="small" variant="secondary" ?busy=${this.goalRefinePending} ?disabled=${this.goalRefineDisabled || this.goalRefinePending || this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-refine',{bubbles:true,composed:true}))}>${icon(Sparkles,{size:14})} Refine with AI</mux-ui-button>
+          <mux-ui-button size="small" variant="secondary" ?disabled=${this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-control',{detail:{action},bubbles:true,composed:true}))}>${icon(glyph,{size:14})} ${label}</mux-ui-button>
+          <mux-ui-button size="small" variant="danger" ?disabled=${this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-control',{detail:{action:'clear'},bubbles:true,composed:true}))}>${icon(Trash2,{size:14})} Clear</mux-ui-button>
+        </div>` : nothing}
+      </div>
+      ${this.goalFeedback ? html`<mux-ui-feedback class="goal-feedback" .kind=${this.goalFeedbackError ? 'error' : 'info'} density="compact">${this.goalFeedback}</mux-ui-feedback>` : nothing}
+      <div class="viewer-body"><article class="document-view" aria-label="Goal text">${this.goalText ? renderSegments(parseMarkdown(this.goalText)) : html`<p>No goal is set. Use <code>/goal</code> in chat to add one.</p>`}</article></div>
+    </div>`;
   }
   private async loadChanges() {
     this.changesError = '';
@@ -927,6 +954,13 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .touched-files h3 { display:flex; justify-content:space-between; margin:0 var(--ui-space-5) var(--ui-space-3); font:600 var(--ui-text-xs) var(--ui-font-sans); color:var(--ui-text-muted); }
     mux-sdk-utility mux-ui-feedback.rail-feedback { margin:var(--ui-space-1) var(--ui-space-2); }
     mux-sdk-utility .viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--ui-surface-base); }
+    mux-sdk-utility .goal-viewer { height:100%; }
+    mux-sdk-utility .goal-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--ui-space-3) var(--ui-space-5); padding:var(--ui-space-4) var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-raised); }
+    mux-sdk-utility .goal-toolbar-title { display:flex; align-items:baseline; gap:var(--ui-space-3); min-width:0; }
+    mux-sdk-utility .goal-toolbar-title strong { font:650 var(--ui-text-sm) var(--ui-font-sans); }
+    mux-sdk-utility .goal-toolbar-title span { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
+    mux-sdk-utility .goal-toolbar-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
+    mux-sdk-utility mux-ui-feedback.goal-feedback { margin:var(--ui-space-3) var(--ui-space-6) 0; }
     mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:var(--ui-surface-raised); }
     mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; }
     mux-sdk-utility .file-open-wrap { position:relative; }
