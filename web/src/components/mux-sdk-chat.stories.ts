@@ -35,6 +35,12 @@ const running: ChatEvent[] = [
   {at:at(25),type:'input.accepted',kind:'user',source:'browser',inputId:'message-3',text:'Now inspect the phone composer and report any seams.'},
   {at:at(26),type:'commentary.delta',itemId:'progress-3',text:'I’m comparing the phone composer with the shared controls.',complete:true},
 ];
+const goalify: ChatEvent[] = [
+  ...transcript,
+  {at:at(24),type:'input.accepted',kind:'user',source:'goalify',inputId:'goalify-1',text:'Refine goal with goalify'},
+  {at:at(25),type:'assistant.delta',text:'# Component review\n\nCatalog every shared control, then stop after browser review.'},
+  {at:at(26),type:'turn.completed',inputIds:['goalify-1']},
+];
 
 const delegated: ChatEvent[] = [
   {at:at(1),type:'input.accepted',kind:'user',source:'browser',inputId:'delegation-1',text:'Ask the design agent to review the chat controls.'},
@@ -66,7 +72,7 @@ const settings = {
   ],
 };
 
-function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal'|'cleared' = 'none', scenario:'default'|'delegated'|'reports'|'failed-report' = 'default'): ApiFixture {
+function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal'|'cleared' = 'none', scenario:'default'|'delegated'|'reports'|'failed-report'|'goalify' = 'default'): ApiFixture {
   let historyRequests = 0;
   const chat: SDKChat = {
     id, title:'Component library review', workspaceId:'project-1',
@@ -94,7 +100,7 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     ],
     observations:goalState === 'none' ? [] : [{at:at(4),event:{type:'goal.started',goalState:'active',goalSummary:'The native harness acknowledged revision 1.'}}],
   };
-  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : state === 'working' ? running : transcript;
+  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : scenario === 'goalify' ? goalify : state === 'working' ? running : transcript;
   const messages = events.filter(event => event.type !== 'tool.started' && event.type !== 'tool.completed');
   return ({url,method,init}) => {
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON(goalState === 'proposal' ? [chat,operator] : [chat]);
@@ -409,6 +415,14 @@ export const GoalRail: Story = {
   args:{sessionId:'storybook-chat-goal-rail'},
   parameters:{apiFixture:chatFixture('storybook-chat-goal-rail','ready','active')},
 };
+export const GoalInlineResponse: Story = {
+  args:{sessionId:'storybook-chat-goal-inline'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goal-inline','ready','active')},
+};
+export const GoalifyChoice: Story = {
+  args:{sessionId:'storybook-chat-goalify-choice'},
+  parameters:{apiFixture:chatFixture('storybook-chat-goalify-choice','ready','active','goalify')},
+};
 export const GoalTab: Story = {
   args:{sessionId:'storybook-chat-goal-tab'},
   parameters:{apiFixture:chatFixture('storybook-chat-goal-tab','ready','active')},
@@ -417,10 +431,6 @@ export const GoalTab: Story = {
 export const GoalRailCleared: Story = {
   args:{sessionId:'storybook-chat-goal-rail-cleared'},
   parameters:{apiFixture:chatFixture('storybook-chat-goal-rail-cleared','ready','cleared')},
-};
-export const GoalProposal: Story = {
-  args:{sessionId:'storybook-chat-goal-proposal'},
-  parameters:{apiFixture:chatFixture('storybook-chat-goal-proposal','ready','proposal')},
 };
 export const PhoneGoalTab: Story = {
   args:{sessionId:'storybook-chat-phone-goal'},

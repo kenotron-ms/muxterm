@@ -2,11 +2,11 @@
 
 The composer has a single-line goal rail. Selecting it opens the Goal utility
 tab, which renders only the current stop condition as markdown. The `/goal`
-command sets, inspects, pauses, resumes, and clears the goal. Ordinary messages
-do not revise the stop condition. Standalone chats need no operator. The shared
-ledger stays behind the UI as the authority and history store.
-Pending proposals appear beside the chat composer for human approval. Operators
-link chats as lanes from their Status tab.
+command sets, inspects, pauses, resumes, and clears the goal. Its result appears
+as an inline card in the chat pane. A human can keep the condition as-is or ask
+the goalify skill for a refined draft, then choose whether to apply that draft.
+Ordinary messages do not revise the stop condition. Standalone chats need no
+operator. The shared ledger stays behind the UI as the authority and history store.
 
 ## Native capability boundaries
 
