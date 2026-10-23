@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,8 +65,8 @@ type Companion struct {
 	activeMuxtermURL string
 	forwards         map[int]*runningForward
 	browserSeq       int
-	browserTabs      map[int]*browserTab
-	activeBrowser    int
+	browserTabs      map[string]*browserTab
+	activeBrowser    string
 	browserRect      browserRect
 	browserVisible   bool
 }
@@ -199,6 +200,7 @@ func (c *Companion) openMuxtermURL(rawURL string) error {
 	c.activeMuxtermURL = rawURL
 	c.mu.Unlock()
 	if window, ok := c.app.Window.GetByName("muxterm"); ok {
+		c.browserLayout(browserRect{}, false)
 		window.SetURL(rawURL)
 		window.Show()
 		window.Focus()
@@ -207,6 +209,14 @@ func (c *Companion) openMuxtermURL(rawURL string) error {
 	shellStyle, err := assets.ReadFile("assets/shell.css")
 	if err != nil {
 		return err
+	}
+	browserBridge, err := assets.ReadFile("assets/browser.js")
+	if err != nil {
+		return err
+	}
+	browserJS := ""
+	if runtime.GOOS == "darwin" {
+		browserJS = string(browserBridge)
 	}
 	c.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: "muxterm", Title: "Muxterm", URL: rawURL,
@@ -234,7 +244,7 @@ func (c *Companion) openMuxtermURL(rawURL string) error {
 			"styleSidebar(); customElements.whenDefined('mux-sidebar').then(styleSidebar);" +
 			"new MutationObserver(styleSidebar).observe(root, {childList:true, subtree:true});" +
 			"});" +
-			"})()",
+			"})();" + browserJS,
 		BackgroundColour: application.NewRGB(232, 232, 237),
 		Mac: application.MacWindow{
 			TitleBar:                application.MacTitleBarHidden,
@@ -266,19 +276,24 @@ func (c *Companion) OpenBrowserTab(token, rawURL string) (int, error) {
 	if err := c.authorize(token); err != nil {
 		return 0, err
 	}
-	return c.openBrowserTab(rawURL)
-}
-
-func (c *Companion) openBrowserTab(rawURL string) (int, error) {
 	u, err := c.prepareBrowserURL(rawURL)
 	if err != nil {
 		return 0, err
 	}
-	id, err := c.browserOpen(u.String())
-	if err == nil {
-		c.evalMuxtermJS("window.__muxtermDesktopOpenPanel?.()")
+	c.mu.Lock()
+	c.browserSeq++
+	seq := c.browserSeq
+	c.mu.Unlock()
+	id := fmt.Sprintf("browser-%d", seq)
+	if err := c.browserOpen(id, u.String()); err != nil {
+		return 0, err
 	}
-	return id, err
+	payload, _ := json.Marshal(struct {
+		ID  string `json:"id"`
+		URL string `json:"url"`
+	}{id, rawURL})
+	c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-browser-open', {detail:" + string(payload) + "}))")
+	return seq, nil
 }
 
 func (c *Companion) prepareBrowserURL(rawURL string) (*url.URL, error) {
