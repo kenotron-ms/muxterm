@@ -15,7 +15,7 @@ export class MuxUIScreenHeader extends LitElement {
 
   static override styles = css`
     :host { box-sizing:border-box; display:block; flex:none; min-width:0; color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
-    header { box-sizing:border-box; height:var(--ui-nav-height); display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; padding:0 var(--ui-screen-header-padding-right,max(var(--ui-space-5),var(--wco-right-inset,0))) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
+    header { box-sizing:border-box; height:var(--ui-nav-height); display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; padding:0 var(--ui-screen-header-padding-right,max(var(--ui-space-5),var(--wco-right-inset,0px))) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); }
     .section { display:inline-flex; align-items:center; gap:var(--ui-space-3); min-width:0; max-width:38%; overflow:hidden; white-space:nowrap; color:var(--ui-text-muted); }
     :host([with-section-icon]) .section { font-size:var(--ui-text-sm); font-weight:500; }
     .section-icon { display:flex; align-items:center; justify-content:center; flex:none; width:var(--ui-icon-xs); height:var(--ui-icon-xs); }
