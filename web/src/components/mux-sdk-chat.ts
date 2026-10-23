@@ -1870,7 +1870,7 @@ export class MuxSDKChat extends LitElement {
     return this.withGoalResponse(rows);
   }
   private withGoalResponse(rows: TranscriptRow[]): TranscriptRow[] {
-    if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice && !this.goalifyError) return rows;
+    if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice) return rows;
     const receipt = this.goalDocument?.receipts.findLast(item => ['set','approve','clear','pause','resume','start'].includes(item.action));
     const at = receipt?.at;
     const stamp = Date.parse(at || '');
@@ -2059,14 +2059,13 @@ export class MuxSDKChat extends LitElement {
   private goalResponse(rowKey?: string, rowIndex?: number) {
     const condition = this.currentGoalText();
     const cleared = this.goalDocument?.state === 'cleared' && !condition;
-    if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice && !this.goalifyError) return nothing;
+    if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice) return nothing;
     const title = this.commandFailed ? 'Goal command failed' : cleared ? 'Goal cleared' : 'Goal';
     return html`<section class="block goal-response" aria-label="Goal response" data-row-key=${rowKey || ''} data-row-index=${rowIndex ?? ''}><header>${icon(Target,{size:16})}<strong>${title}</strong></header>
       ${condition ? html`<div class="text">${renderSegments(parseMarkdown(condition),chatMarkdownPolicy)}</div>` : nothing}
       ${this.commandNotice ? html`<p class="goal-response-note" role=${this.commandFailed ? 'alert' : 'status'}>${this.commandNotice}</p>` : nothing}
       ${this.goalNotice ? html`<p class="goal-response-note" role="alert">${this.goalNotice}</p>` : nothing}
-      ${this.goalifyError ? html`<p class="goal-response-note" role="alert">${this.goalifyError}</p>` : nothing}
-      ${condition && !cleared ? html`<div class="goal-response-actions"><mux-ui-button size="small" variant="secondary" ?busy=${this.goalifyPending} ?disabled=${this.goalifyPending || this.busy || this.commandPending} @click=${() => void this.refineGoal(condition)}>Refine with goalify</mux-ui-button></div>` : nothing}
+      <div class="goal-response-actions"><mux-ui-button size="small" variant="secondary" @click=${this.openGoalTab}>Open Goal tab ${icon(ChevronRight,{size:13})}</mux-ui-button></div>
     </section>`;
   }
   private async refineGoal(condition:string) {
@@ -2118,7 +2117,8 @@ export class MuxSDKChat extends LitElement {
         this.goalDocument = record;
         this.commandFailed = false;
         this.commandNotice = command.action === 'set' ? 'Goal condition saved.' :
-          command.action === 'pause' ? 'Pause requested.' : command.action === 'resume' ? 'Resume requested.' : 'Goal cleared.';
+          command.action === 'pause' ? 'Pause requested.' : command.action === 'resume' ?
+            ['complete','achieved','ended','stalled','cap_hit','cancelled','error','uncertain'].includes(current.state) ? 'Goal reset requested.' : 'Resume requested.' : 'Goal cleared.';
       }
       if (generation === this.commandGeneration && sessionId === this.activeSession && originalDraft !== undefined && this.flushDraft() === originalDraft) this.setDraft('');
       if (generation === this.commandGeneration && sessionId === this.activeSession) void this.scrollToBottom();
@@ -2330,7 +2330,7 @@ export class MuxSDKChat extends LitElement {
       <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><mux-ui-button variant="quiet" icon-only accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:18})}</mux-ui-button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
-      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}
+      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`;
   }
 }

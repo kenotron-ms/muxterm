@@ -1,10 +1,13 @@
 # Goals and the shared ledger
 
 The composer has a single-line goal rail. Selecting it opens the Goal utility
-tab, which renders only the current stop condition as markdown. The `/goal`
-command sets, inspects, pauses, resumes, and clears the goal. Its result appears
-as an inline card in the chat pane. A human can keep the condition as-is or ask
-the goalify skill for a refined draft, then choose whether to apply that draft.
+tab, which renders the current stop condition as markdown with controls to
+refine, pause, resume or reset, and clear it. The `/goal` command sets, inspects,
+pauses, resumes, and clears the goal. Its result appears as an inline card in
+the chat pane that opens the Goal tab. A human can keep the condition as-is or
+ask the goalify skill for a refined draft in the Goal tab, then choose whether
+to apply that draft in chat. Reset restarts the current approved condition after
+the native goal has finished.
 Ordinary messages do not revise the stop condition. Standalone chats need no
 operator. The shared ledger stays behind the UI as the authority and history store.
 

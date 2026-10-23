@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Plus, RefreshCw, Search, Target, Trash2, X, type IconNode } from 'lucide';
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
@@ -116,6 +116,13 @@ export class MuxSDKUtility extends LitElement {
   @property() sessionId = '';
   @property() projectPath = '';
   @property() goalText = '';
+  @property() goalState = '';
+  @property({ type:Boolean }) goalHumanPaused = false;
+  @property({ type:Boolean }) goalControlPending = false;
+  @property({ type:Boolean }) goalRefinePending = false;
+  @property({ type:Boolean }) goalRefineDisabled = false;
+  @property() goalFeedback = '';
+  @property({ type:Boolean }) goalFeedbackError = false;
   @property({ type: Boolean, reflect: true, attribute: 'terminal-mode' }) terminalMode = false;
   @property({ type: Boolean }) focused = false;
   @property({ attribute: false }) touched: string[] = [];
@@ -296,7 +303,7 @@ export class MuxSDKUtility extends LitElement {
   }
   private newTabView(): TemplateResult {
     return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Open a tool</h2><div class="new-tab-tools">
-      <mux-ui-action-tile label="Goal" description="Read the current goal" @click=${() => this.chooseTool('goal')}><span slot="icon">${icon(Target,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="Goal" description="Read and control the current goal" @click=${() => this.chooseTool('goal')}><span slot="icon">${icon(Target,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Files" description="Browse and preview project files" @click=${() => this.chooseTool('files')}><span slot="icon">${icon(Folder,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Status" description="See agent activity" @click=${() => this.chooseTool('status')}><span slot="icon">${icon(Network,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Changes" description="Review edits in this project" @click=${() => this.chooseTool('changes')}><span slot="icon">${icon(GitCompare,{size:18})}</span></mux-ui-action-tile>
@@ -304,7 +311,22 @@ export class MuxSDKUtility extends LitElement {
     </div></div></section>`;
   }
   private goalView(): TemplateResult {
-    return html`<div class="viewer goal-viewer"><div class="viewer-body"><article class="document-view" aria-label="Goal text">${this.goalText ? renderSegments(parseMarkdown(this.goalText)) : nothing}</article></div></div>`;
+    const paused = this.goalHumanPaused || this.goalState === 'paused';
+    const finished = ['complete','achieved','ended','stalled','cap_hit','cancelled','error','uncertain'].includes(this.goalState);
+    const action = paused ? 'resume' : finished ? 'resume' : 'pause';
+    const label = paused ? 'Resume' : finished ? 'Reset' : 'Pause';
+    const glyph = paused ? Play : finished ? RotateCcw : Pause;
+    return html`<div class="viewer goal-viewer">
+      <div class="goal-toolbar"><div class="goal-toolbar-title"><strong>Goal</strong><span>${paused ? 'Paused' : finished ? this.goalState === 'achieved' || this.goalState === 'complete' ? 'Achieved' : 'Needs review' : this.goalText ? 'Current condition' : 'No active goal'}</span></div>
+        ${this.goalText ? html`<div class="goal-toolbar-actions" role="group" aria-label="Goal actions">
+          <mux-ui-button size="small" variant="secondary" ?busy=${this.goalRefinePending} ?disabled=${this.goalRefineDisabled || this.goalRefinePending || this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-refine',{bubbles:true,composed:true}))}>${icon(Sparkles,{size:14})} Refine with AI</mux-ui-button>
+          <mux-ui-button size="small" variant="secondary" ?disabled=${this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-control',{detail:{action},bubbles:true,composed:true}))}>${icon(glyph,{size:14})} ${label}</mux-ui-button>
+          <mux-ui-button size="small" variant="danger" ?disabled=${this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-control',{detail:{action:'clear'},bubbles:true,composed:true}))}>${icon(Trash2,{size:14})} Clear</mux-ui-button>
+        </div>` : nothing}
+      </div>
+      ${this.goalFeedback ? html`<mux-ui-feedback class="goal-feedback" .kind=${this.goalFeedbackError ? 'error' : 'info'} density="compact">${this.goalFeedback}</mux-ui-feedback>` : nothing}
+      <div class="viewer-body"><article class="document-view" aria-label="Goal text">${this.goalText ? renderSegments(parseMarkdown(this.goalText)) : html`<p>No goal is set. Use <code>/goal</code> in chat to add one.</p>`}</article></div>
+    </div>`;
   }
   private async loadChanges() {
     this.changesError = '';
@@ -933,6 +955,12 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility mux-ui-feedback.rail-feedback { margin:var(--ui-space-1) var(--ui-space-2); }
     mux-sdk-utility .viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--ui-surface-base); }
     mux-sdk-utility .goal-viewer { height:100%; }
+    mux-sdk-utility .goal-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--ui-space-3) var(--ui-space-5); padding:var(--ui-space-4) var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-raised); }
+    mux-sdk-utility .goal-toolbar-title { display:flex; align-items:baseline; gap:var(--ui-space-3); min-width:0; }
+    mux-sdk-utility .goal-toolbar-title strong { font:650 var(--ui-text-sm) var(--ui-font-sans); }
+    mux-sdk-utility .goal-toolbar-title span { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
+    mux-sdk-utility .goal-toolbar-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
+    mux-sdk-utility mux-ui-feedback.goal-feedback { margin:var(--ui-space-3) var(--ui-space-6) 0; }
     mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:var(--ui-surface-raised); }
     mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; }
     mux-sdk-utility .file-open-wrap { position:relative; }
