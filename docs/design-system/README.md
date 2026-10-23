@@ -130,7 +130,7 @@ and phone states; the app still owns when a notice appears and is dismissed.
 Dev-local browser review injected the two error states into the running app to
 inspect their placement and dismissal without sending a failed close request.
 
-The Sidebar's active chrome and spacing now use semantic tokens. Destinations and Settings use the same Navigation Item, with the version shown as Settings detail; the footer's New workspace action uses the shared Button. The phone drawer omits the brand row already present in the mobile title bar. Storybook records reachable destinations, the creation action and dialog, phone and light states. The unreachable workspace chooser, workspace preview and machine-group code was removed.
+The Sidebar's active chrome and spacing now use semantic tokens. Destinations and Settings use the same Navigation Item, with the version shown as Settings detail. The phone drawer omits the brand row already present in the mobile title bar. Storybook records reachable destinations, phone and light states; the workspace dialog has its own stories. The unreachable workspace chooser, workspace preview and machine-group code was removed.
 
 Destructive pane and workspace close uses the same adaptive Dialog and semantic tokens. Its risk summary is the dialog's accessible description, Cancel receives initial focus, and an in-flight confirmation blocks dismissal. Sessiond alone decides whether the close requires confirmation and when a pane or workspace actually disappears. Storybook records pane, workspace, multi-risk, phone, busy and light states; a real dev-local pane verified the close path.
 
