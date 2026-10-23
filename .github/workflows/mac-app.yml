@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   build:
-    if: inputs.resolve_desktop_asset_id == ''
+    if: inputs.resolve_desktop_asset_id == '' && github.ref != 'refs/heads/codex/resolve-desktop-signing'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
