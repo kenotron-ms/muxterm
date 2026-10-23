@@ -95,6 +95,9 @@ jobs:
           if-no-files-found: error
 
   resolve-desktop:
+    # GitHub requires write-level release access even to read a draft asset.
+    permissions:
+      contents: write
     if: github.event_name == 'workflow_dispatch' && inputs.resolve_desktop_asset_id != ''
     runs-on: macos-15
     timeout-minutes: 90
