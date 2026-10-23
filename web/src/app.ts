@@ -1334,7 +1334,7 @@ export class MuxApp extends LitElement {
       : '';
 
     return html`
-      <div class="window-chrome ${isWide && (this._sdkChatId === 'new' || selectedSDKChat || (!this._sdkChatId && panes.length > 0)) ? 'integrated' : ''}">
+      <div class="window-chrome ${isWide ? 'integrated' : ''}">
         <mux-title-bar window-chrome .desktop=${isWide}
           .drawerOpen=${this._drawerOpen}
           .chatTitle=${chatTitle}
