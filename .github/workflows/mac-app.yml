@@ -16,11 +16,21 @@ on:
         type: boolean
         default: false
 
+      resolve_desktop_asset_id:
+        description: Exact draft release asset ID containing Resolve Desktop source
+        type: string
+        default: ''
+      resolve_desktop_sha256:
+        description: SHA256 of the authorized Resolve Desktop source archive
+        type: string
+        default: ''
+
 permissions:
   contents: read
 
 jobs:
   build:
+    if: inputs.resolve_desktop_asset_id == ''
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -83,3 +93,51 @@ jobs:
           name: muxterm-signed-macos-arm64
           path: desktop/bin/Muxterm-0.1.0-macos-arm64.dmg
           if-no-files-found: error
+
+  resolve-desktop:
+    if: github.event_name == 'workflow_dispatch' && inputs.resolve_desktop_asset_id != ''
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Fetch exact authorized source bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_ASSET_ID: ${{ inputs.resolve_desktop_asset_id }}
+          SOURCE_SHA256: ${{ inputs.resolve_desktop_sha256 }}
+        run: |
+          [[ "$SOURCE_ASSET_ID" =~ ^[0-9]+$ ]]
+          [[ "$SOURCE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$SOURCE_ASSET_ID" -H 'Accept: application/octet-stream' > source.tar.gz
+          printf '%s  source.tar.gz\n' "$SOURCE_SHA256" | shasum -a 256 --check
+          mkdir desktop-source
+          tar -xzf source.tar.gz -C desktop-source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop-source/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.13'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install exact packaged dependency set
+        working-directory: desktop-source
+        run: |
+          uv venv --python 3.13
+          uv pip install --python .venv/bin/python -r build-requirements.txt vendor/*.whl
+          npm ci
+      - name: Build, sign, notarize and verify Resolve Desktop
+        working-directory: desktop-source
+        env:
+          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_NOTARY_APPLE_ID: ${{ vars.APPLE_NOTARY_APPLE_ID }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: bash scripts/release_macos.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resolve-desktop-signed-macos-arm64
+          path: desktop-source/build/release/
+          if-no-files-found: warn
