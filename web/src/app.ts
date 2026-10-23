@@ -349,13 +349,15 @@ export class MuxApp extends LitElement {
       transition: background 0.15s;
     }
 
-    /* Carry the shared 44px header rule across the resize target. */
+    /* Carry the shared header rule across the full resize target. */
     .sidebar-gutter::after {
       content: '';
       position: absolute;
-      top: calc(var(--ui-nav-height) - var(--ui-space-px));
+      top: 0;
       left: 0;
       right: 0;
+      box-sizing: border-box;
+      height: var(--ui-nav-height);
       border-bottom: 1px solid var(--ui-border);
       pointer-events: none;
     }
