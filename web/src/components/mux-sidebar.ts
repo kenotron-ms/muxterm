@@ -37,7 +37,7 @@ export class MuxSidebar extends LitElement {
       align-items: center;
       flex: none;
       height: var(--ui-nav-height);
-      padding: 0 var(--ui-space-5);
+      padding: 0 var(--ui-space-5) 0 max(var(--ui-space-5), var(--wco-left-inset, 0px));
       border-bottom: 1px solid var(--ui-border);
       background: var(--ui-surface-nav);
       color: var(--ui-text);
