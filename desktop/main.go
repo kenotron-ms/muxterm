@@ -27,10 +27,11 @@ func main() {
 	}
 	companion.token = hex.EncodeToString(tokenBytes[:])
 	app := application.New(application.Options{
-		Name:        "Muxterm",
-		Description: "Muxterm for Mac",
-		Services:    []application.Service{application.NewService(companion)},
-		Assets:      application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
+		Name:              "Muxterm",
+		Description:       "Muxterm for Mac",
+		Services:          []application.Service{application.NewService(companion)},
+		Assets:            application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
+		RawMessageHandler: companion.browserMessage,
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},

@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Plus, RefreshCw, Search, Trash2, X, type IconNode } from 'lucide';
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Plus, RefreshCw, Search, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
@@ -63,10 +63,14 @@ function legacyPageContent(blocks: PageBlock[]): PartialBlock[] {
   });
   return converted.length ? converted : [{type:'paragraph'}];
 }
-type UtilityTabId = 'new' | 'files' | 'status' | 'changes' | 'pages';
-type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string };
+type UtilityTabId = 'new' | 'files' | 'status' | 'changes' | 'pages' | 'browser';
+type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string; url?: string; title?: string };
+type BrowserState = { tabs?: { id:string; url:string; title:string; canGoBack:boolean; canGoForward:boolean }[]; error?:string };
+type BrowserBridge = { send: (message: Record<string, unknown>) => void };
+declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge } }
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
-const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, pages:NotebookPen };
+const BROWSER_RECENT_KEY = 'muxterm.desktop.browser.recent';
+const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, pages:NotebookPen, browser:Globe2 };
 
 function readableSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -167,6 +171,14 @@ export class MuxSDKUtility extends LitElement {
   private pageSaveQueue: Promise<void> = Promise.resolve();
   private pageSaving = false;
   private pagesConflict = false;
+  private browserOpened = new Set<string>();
+  private browserStates = new Map<string, { canGoBack:boolean; canGoForward:boolean }>();
+  private browserError = '';
+  private browserMenuOpen = false;
+  private browserPollTimer?: number;
+  private browserObserver?: ResizeObserver;
+  private browserRecent: {url:string; title:string}[] = [];
+  private browserReady = false;
   private pagesRailOpen = true;
   private pendingPageDeletion?: { id:string; message:string };
   private error = '';
@@ -186,10 +198,10 @@ export class MuxSDKUtility extends LitElement {
       return;
     }
     try {
-      const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string }[]; activeTabId?: string } | null;
-      const valid = new Set<string>(['new','files','status','changes','terminal','pages','web']);
+      const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string }[]; activeTabId?: string } | null;
+      const valid = new Set<string>(['new','files','status','changes','terminal','pages','web','browser']);
       if (saved?.tabs?.length && saved.tabs.length <= 30 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
-        this.tabs = saved.tabs.map(tab => ({ id:tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath }));
+        this.tabs = saved.tabs.map(tab => ({ id:tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title }));
         this.activeTabId = this.tabs.some(tab => tab.id === saved.activeTabId) ? saved.activeTabId! : this.tabs[0].id;
         if (saved.tabs.some(tab => tab.kind === 'web' || tab.kind === 'terminal')) this.saveTabs();
       }
@@ -205,6 +217,8 @@ export class MuxSDKUtility extends LitElement {
     if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
     if (this.activeTab === 'changes') void this.loadChanges();
     if (this.activeTab === 'pages') void this.loadPages();
+    window.addEventListener('muxterm-browser-ready', this.enableBrowser);
+    this.enableBrowser();
     this.pagesPollTimer = window.setInterval(() => { if (this.activeTab === 'pages' && this.pages && !this.pageSaving && !this.pagesConflict) void this.refreshPages(); }, 2500);
   }
   override disconnectedCallback() {
@@ -215,17 +229,25 @@ export class MuxSDKUtility extends LitElement {
     if (this.pageSaveTimer) { window.clearTimeout(this.pageSaveTimer); void this.savePages(); }
     if (this.pagesPollTimer) window.clearInterval(this.pagesPollTimer);
     if (this.fileActionTimer) window.clearTimeout(this.fileActionTimer);
+    if (this.browserPollTimer) window.clearInterval(this.browserPollTimer);
+    this.browserReady = false;
+    window.removeEventListener('muxterm-browser-ready', this.enableBrowser);
+    window.removeEventListener('muxterm-browser-state', this.receiveBrowserState);
+    window.removeEventListener('muxterm-browser-open', this.receiveBrowserOpen as EventListener);
+    this.browserObserver?.disconnect();
+    this.browserSend({type:'layout', visible:false, rect:{X:0,Y:0,Width:0,Height:0}});
     super.disconnectedCallback();
   }
   override render() {
     if (this.terminalMode) return html`<style>${this.surfaceCSS}</style><div class="terminal-files-header"><strong>Files</strong><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Close file explorer" tooltip="Close file explorer" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(X,{size:16})}</mux-ui-button></div><div class="utility-body" aria-label="Files">${this.filesView()}</div>`;
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style><mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style><mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}</div>`;
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
     if (tab.kind === 'files') return tab.filePath?.split('/').pop() || 'Files';
     if (tab.kind === 'pages') return this.pages?.find(page => page.id === tab.pageId)?.title || 'Page';
+    if (tab.kind === 'browser') return tab.title || (tab.url ? new URL(tab.url).hostname : 'Browser');
     return ({ status:'Status', changes:'Changes' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { if (this.terminalMode) return; try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
@@ -251,16 +273,22 @@ export class MuxSDKUtility extends LitElement {
     return inserted;
   }
   private addTab(kind: UtilityTabId = 'new'): UtilityTab {
+    if (this.activeTab === 'browser') this.hideBrowser();
     const tab: UtilityTab = { id:crypto.randomUUID(), kind };
     this.tabs = [...this.tabs,tab]; this.activeTabId = tab.id; this.saveTabs();
     void this.activateTab(tab); this.paintAll(); return tab;
   }
   private selectTab(id: string) {
     const tab = this.tabs.find(item => item.id === id); if (!tab) return;
+    if (this.activeTab === 'browser' && id !== this.activeTabId) this.hideBrowser();
     this.activeTabId = id; this.saveTabs(); void this.activateTab(tab); this.paintAll();
   }
   private closeTab(id: string) {
     const index = this.tabs.findIndex(tab => tab.id === id); if (index < 0) return;
+    if (this.tabs[index].kind === 'browser') {
+      if (this.activeTabId === id) this.hideBrowser();
+      if (this.browserOpened.delete(id)) this.browserSend({type:'close', id});
+    }
     const wasActive = this.activeTabId === id;
     this.tabs = this.tabs.filter(tab => tab.id !== id);
     if (!this.tabs.length) this.tabs = [{ id:crypto.randomUUID(), kind:'new' }];
@@ -273,6 +301,7 @@ export class MuxSDKUtility extends LitElement {
     if (tab.kind === 'pages' && tab.pageId) this.pageId = tab.pageId;
     if (tab.kind === 'changes' && !this.changes) void this.loadChanges();
     if (tab.kind === 'pages' && !this.pages) void this.loadPages();
+    if (tab.kind === 'browser') this.activateBrowser(tab);
     return fileLoad;
   }
   private endpoint(kind: string, path?: string) {
@@ -280,12 +309,14 @@ export class MuxSDKUtility extends LitElement {
     return apiPath(base) + (path ? `?${new URLSearchParams({path})}` : '');
   }
   showPanel(id: UtilityTabId): void {
+    if (id === 'browser' && !window.__muxtermDesktopBrowser) return;
     const existing = this.tabs.find(tab => tab.kind === id);
     if (existing) this.selectTab(existing.id);
     else this.addTab(id);
   }
-  private chooseTool(kind: 'files' | 'status' | 'changes' | 'pages') {
+  private chooseTool(kind: 'files' | 'status' | 'changes' | 'pages' | 'browser') {
     const current = this.currentTab;
+    if (current.kind === 'browser' && kind !== 'browser') { this.hideBrowser(); if (this.browserOpened.delete(current.id)) this.browserSend({type:'close',id:current.id}); }
     current.kind = kind;
     if (kind === 'pages') {
       if (!this.pages) { void this.loadPages().then(() => { const page = this.newPage(); current.pageId = page.id; this.saveTabs(); }); }
@@ -299,7 +330,105 @@ export class MuxSDKUtility extends LitElement {
       <mux-ui-action-tile label="Status" description="See agent activity" @click=${() => this.chooseTool('status')}><span slot="icon">${icon(Network,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Changes" description="Review edits in this project" @click=${() => this.chooseTool('changes')}><span slot="icon">${icon(GitCompare,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="New page" description="Write notes for this chat" @click=${() => this.chooseTool('pages')}><span slot="icon">${icon(NotebookPen,{size:18})}</span></mux-ui-action-tile>
+      ${window.__muxtermDesktopBrowser ? html`<mux-ui-action-tile label="Browser" description="Open a page in the Mac app" @click=${() => this.chooseTool('browser')}><span slot="icon">${icon(Globe2,{size:18})}</span></mux-ui-action-tile>` : nothing}
     </div></div></section>`;
+  }
+  private browserSend(message: Record<string, unknown>) { window.__muxtermDesktopBrowser?.send(message); }
+  private enableBrowser = () => {
+    if (!window.__muxtermDesktopBrowser || this.browserReady || !this.isConnected) return;
+    this.browserReady = true;
+    try { this.browserRecent = JSON.parse(localStorage.getItem(BROWSER_RECENT_KEY) || '[]').filter((entry: {url?:string;title?:string}) => typeof entry.url === 'string' && typeof entry.title === 'string').slice(0, 8); } catch { /* storage unavailable */ }
+    window.addEventListener('muxterm-browser-state', this.receiveBrowserState);
+    window.addEventListener('muxterm-browser-open', this.receiveBrowserOpen as EventListener);
+    this.browserPollTimer = window.setInterval(() => { if (this.activeTab === 'browser') { this.layoutBrowser(); this.browserSend({type:'status'}); } }, 800);
+    if (this.activeTab === 'browser') this.activateBrowser(this.currentTab);
+    this.paintAll();
+  };
+  private hideBrowser() { this.browserSend({type:'layout', visible:false, rect:{X:0,Y:0,Width:0,Height:0}}); }
+  private activateBrowser(tab: UtilityTab) {
+    this.browserError = '';
+    if (!this.browserOpened.has(tab.id)) {
+      this.browserOpened.add(tab.id);
+      this.browserSend({type:'open', id:tab.id, url:tab.url || ''});
+    } else this.browserSend({type:'select', id:tab.id});
+    void this.updateComplete.then(() => this.layoutBrowser());
+  }
+  private layoutBrowser() {
+    if (this.activeTab !== 'browser' || !this.isConnected) return;
+    const viewport = this.querySelector<HTMLElement>('.native-browser-viewport');
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    this.browserSend({type:'layout', visible:!!this.currentTab.url, rect:{X:rect.x,Y:rect.y,Width:rect.width,Height:rect.height}});
+  }
+  private receiveBrowserState = (event: Event) => {
+    const state = (event as CustomEvent<BrowserState>).detail;
+    let changed = false;
+    for (const native of state.tabs || []) {
+      const tab = this.tabs.find(item => item.id === native.id && item.kind === 'browser');
+      if (!tab) continue;
+      if (native.url && tab.url !== native.url) { tab.url = native.url; changed = true; }
+      if (native.title && tab.title !== native.title) { tab.title = native.title; changed = true; }
+      const previous = this.browserStates.get(native.id);
+      if (!previous || previous.canGoBack !== native.canGoBack || previous.canGoForward !== native.canGoForward) {
+        this.browserStates.set(native.id, {canGoBack:native.canGoBack,canGoForward:native.canGoForward}); changed = true;
+      }
+      if (native.url) this.rememberBrowserPage(native.url, native.title || tab.title || native.url, false);
+    }
+    if (state.error && state.error !== this.browserError) { this.browserError = state.error; changed = true; }
+    if (changed) { this.saveTabs(); this.paintAll(); }
+  };
+  private receiveBrowserOpen = (event: CustomEvent<{id:string;url:string}>) => {
+    if (this.activeTab === 'browser') this.hideBrowser();
+    const tab: UtilityTab = {id:event.detail.id, kind:'browser', url:event.detail.url};
+    this.tabs = [...this.tabs, tab]; this.activeTabId = tab.id;
+    this.browserOpened.add(tab.id);
+    this.saveTabs(); this.paintAll();
+    this.browserSend({type:'select',id:tab.id});
+  };
+  private rememberBrowserPage(url: string, title: string, repaint = true) {
+    if (!/^https?:\/\//.test(url)) return;
+    const previous = this.browserRecent.find(entry => entry.url === url);
+    if (previous && previous.title === title && this.browserRecent[0] === previous) return;
+    this.browserRecent = [{url,title}, ...this.browserRecent.filter(entry => entry.url !== url)].slice(0,8);
+    try { localStorage.setItem(BROWSER_RECENT_KEY, JSON.stringify(this.browserRecent)); } catch { /* private browsing */ }
+    if (repaint) this.paintAll();
+  }
+  private browserAddress(raw: string): string {
+    const value = raw.trim();
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    if (/^(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(value)) return `http://${value}`;
+    if (/^[\w-]+(\.[\w-]+)+(\/|:|$)/.test(value)) return `https://${value}`;
+    return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+  }
+  private navigateBrowser(tab: UtilityTab, raw: string) {
+    const url = this.browserAddress(raw);
+    if (!url) return;
+    tab.url = url; tab.title = '';
+    this.browserError = ''; this.browserMenuOpen = false;
+    this.saveTabs(); this.paintAll();
+    this.browserSend({type:'navigate',id:tab.id,url});
+    this.rememberBrowserPage(url, url);
+    void this.updateComplete.then(() => this.layoutBrowser());
+  }
+  private async copyBrowserURL(url: string) {
+    this.browserMenuOpen = false;
+    try { await navigator.clipboard.writeText(url); }
+    catch { this.browserError = 'Could not copy the URL'; }
+    this.paintAll();
+  }
+  private browserView(tab: UtilityTab): TemplateResult {
+    const state = this.browserStates.get(tab.id);
+    return html`<section class="native-browser"><div class="native-browser-toolbar">
+      <div class="native-browser-history"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back" tooltip="Back" ?disabled=${!state?.canGoBack} @click=${() => this.browserSend({type:'back',id:tab.id})}>${icon(ArrowLeft,{size:16})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Forward" tooltip="Forward" ?disabled=${!state?.canGoForward} @click=${() => this.browserSend({type:'forward',id:tab.id})}>${icon(ChevronRight,{size:16})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Reload" tooltip="Reload" ?disabled=${!tab.url} @click=${() => this.browserSend({type:'reload',id:tab.id})}>${icon(RefreshCw,{size:15})}</mux-ui-button></div>
+      <mux-ui-text-field class="native-browser-address" size="small" type="text" aria-label="Search or enter a URL" placeholder="Search or enter a URL" .value=${tab.url || ''} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') { this.navigateBrowser(tab, (event.target as MuxUITextField).liveValue); (event.target as MuxUITextField).blur(); } }}></mux-ui-text-field>
+      <div class="native-browser-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Open in default browser" tooltip="Open in default browser" ?disabled=${!tab.url} @click=${() => this.browserSend({type:'external',url:tab.url})}>${icon(ExternalLink,{size:15})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Browser options" tooltip="Browser options" haspopup="menu" .expanded=${this.browserMenuOpen} @click=${() => { this.browserMenuOpen = !this.browserMenuOpen; this.paintAll(); }}>${icon(Ellipsis,{size:17})}</mux-ui-button>${this.browserMenuOpen ? html`<mux-ui-menu class="native-browser-menu" label="Browser options" @menu-dismiss=${() => { this.browserMenuOpen = false; this.paintAll(); }}><mux-ui-menu-item @click=${() => { this.browserMenuOpen = false; this.addTab('browser'); }}>New browser tab</mux-ui-menu-item>${tab.url ? html`<mux-ui-menu-item @click=${() => void this.copyBrowserURL(tab.url || '')}>Copy URL</mux-ui-menu-item>` : nothing}</mux-ui-menu>` : nothing}</div>
+    </div>${this.browserError ? html`<div class="native-browser-error" role="alert">${this.browserError}</div>` : nothing}<div class="native-browser-viewport">${!tab.url ? html`<div class="native-browser-home"><h2>Tools</h2><div class="native-browser-tool-grid">
+      <mux-ui-button size="small" variant="secondary" full-width @click=${() => this.chooseTool('changes')}>${icon(GitCompare,{size:16})}<span>Changes</span></mux-ui-button>
+      <mux-ui-button size="small" variant="secondary" full-width @click=${() => this.chooseTool('files')}>${icon(Folder,{size:16})}<span>Files</span></mux-ui-button>
+      <mux-ui-button size="small" variant="secondary" full-width @click=${() => this.chooseTool('status')}>${icon(Network,{size:16})}<span>Status</span></mux-ui-button>
+      <mux-ui-button size="small" variant="secondary" full-width @click=${() => this.chooseTool('pages')}>${icon(NotebookPen,{size:16})}<span>New page</span></mux-ui-button>
+    </div>${this.browserRecent.length ? html`<h2>Recent pages</h2><div class="native-browser-recent">${this.browserRecent.slice(0,4).map(entry => html`<mux-ui-button variant="quiet" full-width tooltip=${entry.url} @click=${() => this.navigateBrowser(tab,entry.url)}>${icon(Globe2,{size:23})}<span>${entry.title}</span></mux-ui-button>`)}</div>` : nothing}</div>` : nothing}</div></section>`;
   }
   private async loadChanges() {
     this.changesError = '';
@@ -864,6 +993,15 @@ export class MuxSDKUtility extends LitElement {
       if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
       this.paintAll();
     }
+    this.browserObserver?.disconnect();
+    if (this.activeTab === 'browser') {
+      const viewport = this.querySelector<HTMLElement>('.native-browser-viewport');
+      if (viewport) {
+        this.browserObserver ??= new ResizeObserver(() => this.layoutBrowser());
+        this.browserObserver.observe(viewport);
+        this.layoutBrowser();
+      }
+    }
     if (this.activeTab !== 'pages') return;
     for (const field of this.querySelectorAll<HTMLTextAreaElement>('.page-title')) {
       this.sizePageTitle(field);
@@ -903,6 +1041,25 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .new-tab-home h2 { margin:0 0 var(--ui-space-6); color:var(--ui-text); font:600 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
     mux-sdk-utility .new-tab-tools { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--ui-space-4); }
     @container(max-width:560px) { mux-sdk-utility .new-tab-tools { grid-template-columns:minmax(0,1fr); } }
+    mux-sdk-utility .native-browser { display:flex; flex-direction:column; height:100%; min-width:0; background:var(--ui-surface-base); }
+    mux-sdk-utility .native-browser-toolbar { position:relative; z-index:var(--ui-z-local); display:flex; align-items:center; gap:var(--ui-space-3); box-sizing:border-box; min-height:var(--ui-control-lg); padding:var(--ui-space-2) var(--ui-space-4); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-raised); }
+    mux-sdk-utility .native-browser-history, mux-sdk-utility .native-browser-actions { display:flex; align-items:center; flex:none; gap:var(--ui-space-1); }
+    mux-sdk-utility .native-browser-address { flex:1; min-width:0; }
+    mux-sdk-utility .native-browser-address::part(input) { border-radius:var(--ui-radius-pill); background:var(--ui-surface-base); }
+    mux-sdk-utility .native-browser-menu { --ui-menu-offset-y:calc(var(--ui-control-lg) - var(--ui-space-1)); }
+    mux-sdk-utility .native-browser-viewport { flex:1; min-width:0; min-height:0; overflow:auto; background:var(--ui-surface-base); }
+    mux-sdk-utility .native-browser-error { padding:var(--ui-space-3) var(--ui-space-5); color:var(--ui-danger); border-bottom:1px solid var(--ui-border); font-size:var(--ui-text-sm); }
+    mux-sdk-utility .native-browser-home { box-sizing:border-box; max-width:var(--ui-utility-home-width); margin:0 auto; padding:var(--ui-space-9) var(--ui-space-7); }
+    mux-sdk-utility .native-browser-home h2 { margin:0 0 var(--ui-space-5); font:600 var(--ui-text-sm)/1.4 var(--ui-font-sans); color:var(--ui-text-muted); }
+    mux-sdk-utility .native-browser-home h2:not(:first-child) { margin-top:var(--ui-space-9); }
+    mux-sdk-utility .native-browser-tool-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--ui-space-3); }
+    mux-sdk-utility .native-browser-tool-grid mux-ui-button { min-width:0; }
+    mux-sdk-utility .native-browser-recent { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--ui-space-4); }
+    mux-sdk-utility .native-browser-recent mux-ui-button { min-width:0; }
+    mux-sdk-utility .native-browser-recent mux-ui-button svg { color:var(--ui-text-muted); }
+    mux-sdk-utility .native-browser-recent mux-ui-button span { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    @container(max-width:570px) { mux-sdk-utility .native-browser-toolbar { gap:var(--ui-space-1); padding-inline:var(--ui-space-2); } mux-sdk-utility .native-browser-home { padding:var(--ui-space-7) var(--ui-space-5); } mux-sdk-utility .native-browser-recent { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @container(max-width:390px) { mux-sdk-utility .native-browser-tool-grid { grid-template-columns:1fr; } mux-sdk-utility .native-browser-actions mux-ui-button:first-child { display:none; } }
     mux-sdk-utility .utility-body { flex:1; min-height:0; min-width:0; overflow:hidden; container-type:inline-size; }
     mux-sdk-utility .utility-placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--ui-text-muted); }
     mux-sdk-utility .empty { color:var(--ui-text-muted); line-height:1.6; } mux-sdk-utility a { color:var(--ui-accent); }
