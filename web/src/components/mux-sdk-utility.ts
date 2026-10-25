@@ -201,9 +201,10 @@ export class MuxSDKUtility extends LitElement {
       const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string }[]; activeTabId?: string } | null;
       const valid = new Set<string>(['new','files','status','changes','terminal','pages','web','browser']);
       if (saved?.tabs?.length && saved.tabs.length <= 30 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
-        this.tabs = saved.tabs.map(tab => ({ id:tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title }));
-        this.activeTabId = this.tabs.some(tab => tab.id === saved.activeTabId) ? saved.activeTabId! : this.tabs[0].id;
-        if (saved.tabs.some(tab => tab.kind === 'web' || tab.kind === 'terminal')) this.saveTabs();
+        this.tabs = saved.tabs.map(tab => ({ id:tab.kind === 'browser' ? crypto.randomUUID() : tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title }));
+        const activeIndex = saved.tabs.findIndex(tab => tab.id === saved.activeTabId);
+        this.activeTabId = activeIndex >= 0 ? this.tabs[activeIndex].id : this.tabs[0].id;
+        if (saved.tabs.some(tab => tab.kind === 'web' || tab.kind === 'terminal' || tab.kind === 'browser')) this.saveTabs();
       }
       for (const key of ['files','changes','pages'] as const) {
         const width = Number(localStorage.getItem(`muxterm.sdk.utility.rail.${key}.${this.sessionId}`));
