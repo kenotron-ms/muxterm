@@ -494,9 +494,29 @@ func (h *sdkChatHost) sidecarPath() (string, error) {
 	}
 	return sdkchat.Prepare()
 }
+func sdkAgentExecutable(harness string) (string, error) {
+	name, override := "codex", "MUXTERM_CODEX_COMMAND"
+	if harness == "claude" {
+		name, override = "claude", "MUXTERM_CLAUDE_COMMAND"
+	}
+	command := strings.TrimSpace(os.Getenv(override))
+	if command == "" {
+		command = name
+	}
+	path, err := exec.LookPath(command)
+	if err != nil {
+		return "", fmt.Errorf("%s CLI is unavailable (%s); install it, sign in, then refresh installed agents: %w", name, command, err)
+	}
+	return path, nil
+}
 func (h *sdkChatHost) ensure(harness string) error {
 	if harness == "amplifier" {
 		return h.ensureAmplifier()
+	}
+	if harness == "codex" || harness == "claude" {
+		if _, err := sdkAgentExecutable(harness); err != nil {
+			return err
+		}
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1387,12 +1407,21 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		Provider string `json:"provider"`
 	}
 	options := make([]option, 0, 6)
-	sdkReady := s.sdkChats.ensure("codex") == nil // Codex and Claude share one Node sidecar.
+	codexPath, codexErr := sdkAgentExecutable("codex")
+	claudePath, claudeErr := sdkAgentExecutable("claude")
+	hasACP := false
+	for _, harness := range []string{"pi", "opencode", "deepseek"} {
+		if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
+			hasACP = true
+			break
+		}
+	}
+	sdkReady := (codexErr == nil || claudeErr == nil || hasACP) && s.sdkChats.ensure("") == nil
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	home, _ := os.UserHomeDir()
-	if sdkReady {
-		cmd := exec.CommandContext(ctx, "codex", "login", "status")
+	if sdkReady && codexErr == nil {
+		cmd := exec.CommandContext(ctx, codexPath, "login", "status")
 		if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "" || cmd.Run() == nil {
 			options = append(options, option{Harness: "codex", Provider: "openai"})
 		}
@@ -1409,7 +1438,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
-	if sdkReady {
+	if sdkReady && claudeErr == nil {
 		ready := os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
 		if !ready && home != "" {
 			data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
@@ -1421,7 +1450,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		if !ready {
-			cmd := exec.CommandContext(ctx, "claude", "auth", "status")
+			cmd := exec.CommandContext(ctx, claudePath, "auth", "status")
 			ready = cmd.Run() == nil
 		}
 		if ready {

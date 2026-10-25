@@ -11,10 +11,16 @@ import (
 
 type browserMessage struct {
 	Type    string      `json:"type"`
-	ID      int         `json:"id"`
+	ID      string      `json:"id"`
 	URL     string      `json:"url"`
 	Visible bool        `json:"visible"`
 	Rect    browserRect `json:"rect"`
+}
+
+func (c *Companion) evalMuxtermJS(script string) {
+	if window, ok := c.app.Window.GetByName("muxterm"); ok {
+		window.ExecJS(script)
+	}
 }
 
 func (c *Companion) browserMessage(window application.Window, raw string, origin *application.OriginInfo) {
@@ -43,7 +49,20 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 				c.browserLayout(message.Rect, message.Visible)
 			}
 		case "open":
-			_, actionErr = c.openBrowserTab(message.URL)
+			if message.ID == "" {
+				return
+			}
+			address := ""
+			if message.URL != "" {
+				u, err := c.prepareBrowserURL(message.URL)
+				actionErr = err
+				if err == nil {
+					address = u.String()
+				}
+			}
+			if actionErr == nil {
+				actionErr = c.browserOpen(message.ID, address)
+			}
 		case "navigate":
 			address, err := c.prepareBrowserURL(message.URL)
 			actionErr = err
@@ -69,7 +88,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 		active, tabs := c.browserState()
 		sort.Slice(tabs, func(i, j int) bool { return tabs[i].ID < tabs[j].ID })
 		state := struct {
-			Active int               `json:"active"`
+			Active string            `json:"active"`
 			Tabs   []browserTabState `json:"tabs"`
 			Error  string            `json:"error,omitempty"`
 		}{Active: active, Tabs: tabs}

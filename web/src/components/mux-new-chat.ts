@@ -32,7 +32,7 @@ type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort
 type ChatCatalog = { model: string; effort: string; defaultModel?: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[] };
 const providerLabel = (value: string) => value === 'provider-openai' ? 'OpenAI' : value === 'provider-anthropic' ? 'Anthropic' : value.replace(/^provider-/, '');
 const SETUP_AGENTS = [
-  { name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
+  { name:'Codex', command:'npm install -g @openai/codex@latest', login:'codex login', docs:'https://developers.openai.com/codex/cli/' },
   { name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
   { name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
   { name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
@@ -76,6 +76,7 @@ export class MuxNewChat extends LitElement {
   @state() private busy = false;
   @state() private error = '';
   @state() private copiedSetup = '';
+  @state() private setupOpen = false;
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   private dragDepth = 0;
@@ -142,6 +143,7 @@ export class MuxNewChat extends LitElement {
     .setup-actions a { color:var(--ui-accent); text-decoration:none; }
     .setup-refresh { margin-top:var(--ui-space-6); }
     .setup-terminal { margin-bottom:var(--ui-space-6); }
+    .setup-back { margin-bottom:var(--ui-space-6); }
     .receipt { display:flex; align-items:center; gap:var(--ui-space-4); margin:var(--ui-space-5) var(--ui-space-1) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .receipt::before { content:''; width:var(--ui-attention-mark-size); height:var(--ui-attention-mark-size); border-radius:50%; background:var(--ui-accent); animation:receipt-pulse var(--ui-motion-pulse) ease-in-out infinite; }
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
@@ -356,7 +358,7 @@ export class MuxNewChat extends LitElement {
       if (!this.isConnected) return;
       this.startOptions = options;
       const selected = options.find(item => item.harness === this.initialHarness) || options[0];
-      if (selected) this.onHarnessChange(selected.harness);
+      if (selected) { this.setupOpen = false; this.onHarnessChange(selected.harness); }
       else this.error = '';
     } catch (error) {
       if (this.isConnected) this.error = error instanceof Error ? error.message : String(error);
@@ -438,11 +440,12 @@ export class MuxNewChat extends LitElement {
     const models = this.catalog?.models || [];
     const selectedModel = models.find(item => item.id === this.model);
     const efforts = selectedModel?.efforts?.length ? selectedModel.efforts : this.harness === 'codex' && this.model ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : [];
-    if (this.startOptions?.length === 0) return html`
+    if (this.startOptions?.length === 0 || this.setupOpen) return html`
       ${this.renderTopbar(projectName)}
       <div class="main setup"><div class="content">
-        <h1>Choose your coding agent</h1>
-        <p class="setup-intro">Install an agent in a terminal, sign in to its provider, then refresh this list. Muxterm will use the agent already on your computer.</p>
+        ${this.startOptions?.length ? html`<mux-ui-button class="setup-back" variant="quiet" @click=${() => { this.setupOpen = false; }}>Back to chat</mux-ui-button>` : nothing}
+        <h1>${this.startOptions?.length ? 'Add a coding agent' : 'Choose your coding agent'}</h1>
+        <p class="setup-intro">Install or update an agent in a terminal, sign in to its provider, then refresh this list. Muxterm uses the agent installed on your computer, including its version.</p>
         <mux-ui-button class="setup-terminal" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open a terminal in muxterm</mux-ui-button>
         <div class="setup-list">${SETUP_AGENTS.map(agent => html`
           <section class="setup-card"><h2>${agent.name}</h2>
@@ -473,6 +476,7 @@ export class MuxNewChat extends LitElement {
           </mux-ui-dialog>` : nothing}
         </div>
         ${this.startOptions?.length ? html`<mux-ui-select class="harness" aria-label="Harness" .value=${this.harness} .options=${this.startOptions.map(option => ({ value:option.harness, label:sdkHarnessLabel(option.harness) }))} @change=${(e:Event) => this.onHarnessChange((e.target as MuxUISelect).value as SDKHarnessName)}></mux-ui-select>` : nothing}
+        <mux-ui-button size="small" variant="quiet" @click=${() => { this.setupOpen = true; }}>Add agent</mux-ui-button>
         ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
         ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
         ${this.catalogLoading ? html`<mux-ui-feedback kind="loading" density="compact">Loading models…</mux-ui-feedback>` : nothing}

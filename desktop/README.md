@@ -7,6 +7,15 @@ The native title bar shares muxterm's colors, including when the theme changes.
 Remote muxterm URLs and SSH port forwarding remain available in **Connection
 and ports…**; they are optional. The app does not install a system service.
 
+The download contains no Node.js, npm, Python interpreter, or coding agent SDK
+packages. Terminal workspaces and the browser work without them. Codex, Claude,
+and ACP chats require Node.js 22 and npm installed on the Mac. Install Codex or
+Claude Code separately and sign in; New Chat shows setup commands and uses the
+installed CLI version. On the first such chat, muxterm downloads only the locked
+SDK support libraries into its versioned user cache. Finder launches search
+Homebrew, mise, asdf, Volta, and common user tool locations for the commands.
+Amplifier uses an existing Python environment.
+
 ## CI build
 
 The **Mac App** GitHub Actions workflow builds and ad hoc signs an Apple

@@ -1,19 +1,25 @@
 # SDK chat sidecar
 
 The muxterm binary embeds this sidecar, `package.json`, and the exact npm lockfile.
-On first use it extracts them to a versioned cache and runs `npm ci --ignore-scripts`
-there. Node.js and npm are required; dependency installation errors stop chat
+On first use it extracts them to a versioned cache and runs
+`npm ci --omit=optional --ignore-scripts` there. Node.js and npm are required;
+dependency installation errors stop chat
 creation with a clear error. Go starts the sidecar lazily and supervises it
 through a versioned NDJSON Unix socket. It uses the existing Codex and Claude login state; no settings file is
 written. The sidecar accepts `start`, `resume`, `send`, `interrupt`,
 `capabilities`, and `close` operations. Unsupported service attribution and
 busy Codex input return explicit errors.
 
-Codex uses the CLI binary bundled by `@openai/codex-sdk` through its app-server
-protocol. The SDK's `runStreamed()` wraps `codex exec --experimental-json`, which
-emits complete assistant messages but no incremental text events. The
-app-server's `item/agentMessage/delta` notifications provide live text for the
-existing SSE renderer. Native Codex thread IDs still resume chats.
+Codex uses the user's `codex` command through its app-server protocol. Muxterm
+does not pin a Codex version or download a second CLI. The app-server's
+`item/agentMessage/delta` notifications provide live text for the existing SSE
+renderer. Native Codex thread IDs still resume chats.
+
+Claude uses the user's `claude` command through the Agent SDK's
+`pathToClaudeCodeExecutable` option. The SDK is a small protocol client; its
+optional platform packages, which contain another Claude executable, are not
+installed. Set `MUXTERM_CODEX_COMMAND` or `MUXTERM_CLAUDE_COMMAND` to an absolute
+path before starting muxterm if the corresponding command is outside `PATH`.
 
 The sidecar path defaults to the extracted copy embedded in the binary.
 `MUXTERM_SDK_CHAT_SIDECAR` can point to an explicit copy.
