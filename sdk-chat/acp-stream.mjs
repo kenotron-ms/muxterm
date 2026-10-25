@@ -103,6 +103,8 @@ export class ACPStream {
       this.loading = true;
       try {
         if (this.agentCapabilities.sessionCapabilities?.resume) session = await this.withExit(this.connection.resumeSession({ ...params, sessionId: this.session.nativeId }));
+        // Gemini CLI advertises the legacy load capability and uses its raw
+        // session/load RPC here; revisit this when its ACP shape changes.
         else if (this.agentCapabilities.loadSession) session = await this.withExit(this.session.harness === 'gemini'
           ? this.connection.request('session/load', { ...params, sessionId: this.session.nativeId })
           : this.connection.loadSession({ ...params, sessionId: this.session.nativeId }));

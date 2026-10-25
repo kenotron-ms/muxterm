@@ -267,21 +267,23 @@ func (s *Server) readGeminiLogin(login *geminiLogin) {
 						}
 					}()
 				}
-				if match := geminiAuthURL.FindString(login.output); match != "" {
-					match = strings.TrimRight(match, ").,;]")
-					if target, parseErr := url.Parse(match); parseErr == nil && target.Scheme == "https" && target.Host == "accounts.google.com" {
-						login.url = match
-						login.state = "awaiting_code"
-						time.AfterFunc(10*time.Minute, func() {
-							s.geminiLoginMu.Lock()
-							if s.geminiLogin == login && login.state == "awaiting_code" {
-								login.state = "error"
-								login.message = "The Google sign-in link expired. Start again."
-								_ = login.tty.Close()
-								_ = login.cmd.Process.Kill()
-							}
-							s.geminiLoginMu.Unlock()
-						})
+				if login.state == "starting" {
+					if match := geminiAuthURL.FindString(login.output); match != "" {
+						match = strings.TrimRight(match, ").,;]")
+						if target, parseErr := url.Parse(match); parseErr == nil && target.Scheme == "https" && target.Host == "accounts.google.com" {
+							login.url = match
+							login.state = "awaiting_code"
+							time.AfterFunc(10*time.Minute, func() {
+								s.geminiLoginMu.Lock()
+								if s.geminiLogin == login && login.state == "awaiting_code" {
+									login.state = "error"
+									login.message = "The Google sign-in link expired. Start again."
+									_ = login.tty.Close()
+									_ = login.cmd.Process.Kill()
+								}
+								s.geminiLoginMu.Unlock()
+							})
+						}
 					}
 				}
 			}
