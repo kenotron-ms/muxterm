@@ -235,6 +235,8 @@ export class MuxSDKUtility extends LitElement {
     window.removeEventListener('muxterm-browser-state', this.receiveBrowserState);
     window.removeEventListener('muxterm-browser-open', this.receiveBrowserOpen as EventListener);
     this.browserObserver?.disconnect();
+    for (const id of this.browserOpened) this.browserSend({type:'close', id});
+    this.browserOpened.clear();
     this.browserSend({type:'layout', visible:false, rect:{X:0,Y:0,Width:0,Height:0}});
     super.disconnectedCallback();
   }
@@ -340,7 +342,7 @@ export class MuxSDKUtility extends LitElement {
     try { this.browserRecent = JSON.parse(localStorage.getItem(BROWSER_RECENT_KEY) || '[]').filter((entry: {url?:string;title?:string}) => typeof entry.url === 'string' && typeof entry.title === 'string').slice(0, 8); } catch { /* storage unavailable */ }
     window.addEventListener('muxterm-browser-state', this.receiveBrowserState);
     window.addEventListener('muxterm-browser-open', this.receiveBrowserOpen as EventListener);
-    this.browserPollTimer = window.setInterval(() => { if (this.activeTab === 'browser') { this.layoutBrowser(); this.browserSend({type:'status'}); } }, 800);
+    this.browserPollTimer = window.setInterval(() => { if (this.activeTab === 'browser') this.layoutBrowser(); }, 800);
     if (this.activeTab === 'browser') this.activateBrowser(this.currentTab);
     this.paintAll();
   };
@@ -384,6 +386,7 @@ export class MuxSDKUtility extends LitElement {
     this.browserOpened.add(tab.id);
     this.saveTabs(); this.paintAll();
     this.browserSend({type:'select',id:tab.id});
+    void this.updateComplete.then(() => this.layoutBrowser());
   };
   private rememberBrowserPage(url: string, title: string, repaint = true) {
     if (!/^https?:\/\//.test(url)) return;

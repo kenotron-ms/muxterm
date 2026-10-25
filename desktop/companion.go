@@ -196,11 +196,13 @@ func (c *Companion) OpenRemoteMuxtermWindow(token string) error {
 }
 
 func (c *Companion) openMuxtermURL(rawURL string) error {
+	c.bridgeMu.Lock()
 	c.mu.Lock()
 	c.activeMuxtermURL = rawURL
 	c.mu.Unlock()
+	c.browserCloseAll()
+	c.bridgeMu.Unlock()
 	if window, ok := c.app.Window.GetByName("muxterm"); ok {
-		c.browserLayout(browserRect{}, false)
 		window.SetURL(rawURL)
 		window.Show()
 		window.Focus()
@@ -272,28 +274,30 @@ func (c *Companion) OpenMuxtermBrowser(token string) error {
 	return c.app.Browser.OpenURL(localURL)
 }
 
-func (c *Companion) OpenBrowserTab(token, rawURL string) (int, error) {
+func (c *Companion) OpenBrowserTab(token, rawURL string) (string, error) {
 	if err := c.authorize(token); err != nil {
-		return 0, err
+		return "", err
 	}
 	u, err := c.prepareBrowserURL(rawURL)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
+	c.bridgeMu.Lock()
+	defer c.bridgeMu.Unlock()
 	c.mu.Lock()
 	c.browserSeq++
 	seq := c.browserSeq
 	c.mu.Unlock()
 	id := fmt.Sprintf("browser-%d", seq)
 	if err := c.browserOpen(id, u.String()); err != nil {
-		return 0, err
+		return "", err
 	}
 	payload, _ := json.Marshal(struct {
 		ID  string `json:"id"`
 		URL string `json:"url"`
 	}{id, rawURL})
 	c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-browser-open', {detail:" + string(payload) + "}))")
-	return seq, nil
+	return id, nil
 }
 
 func (c *Companion) prepareBrowserURL(rawURL string) (*url.URL, error) {
