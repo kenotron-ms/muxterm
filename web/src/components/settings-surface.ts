@@ -701,6 +701,7 @@ export class MuxSettingsSurface extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.clearTimeout(this._geminiPollTimer);
+    ++this._geminiLoginEpoch;
     this._unsubRemotes?.();
     this._unsubRemotes = null;
   }
@@ -1133,7 +1134,7 @@ export class MuxSettingsSurface extends LitElement {
           this._geminiLogin = { state:'complete' };
         }
       }
-      if (this._section === 'ai' && ['starting', 'awaiting_code', 'verifying'].includes(this._geminiLogin.state))
+      if (this.isConnected && this._section === 'ai' && ['starting', 'awaiting_code', 'verifying'].includes(this._geminiLogin.state))
         this._geminiPollTimer = window.setTimeout(() => void this._readGeminiLogin(), 2500);
     } catch { /* The terminal sign-in path remains available. */ }
   }

@@ -36,6 +36,18 @@ type geminiLoginStatus struct {
 var geminiAuthURL = regexp.MustCompile(`https://accounts\.google\.com/o/oauth2/v2/auth\?[^\s\x00-\x20\x1b<>]+`)
 var geminiANSI = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
 
+func stopGeminiLoginProcess(login *geminiLogin) {
+	if login == nil {
+		return
+	}
+	if login.tty != nil {
+		_ = login.tty.Close()
+	}
+	if login.cmd != nil && login.cmd.Process != nil {
+		_ = login.cmd.Process.Kill()
+	}
+}
+
 func geminiAuthModePath() (string, error) {
 	dataHome := os.Getenv("XDG_DATA_HOME")
 	if dataHome == "" {
@@ -133,13 +145,17 @@ func (s *Server) handleGeminiLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		old := s.geminiLogin
-		s.geminiLogin = nil
-		if old != nil {
-			_ = old.tty.Close()
-			_ = old.cmd.Process.Kill()
-		}
+		login := &geminiLogin{state: "starting"}
+		s.geminiLogin = login // Reserve the slot before launching the CLI.
+		s.geminiLoginMu.Unlock()
+		stopGeminiLoginProcess(old)
 		command := sdkACPExecutable("gemini")
 		if _, err := exec.LookPath(command); err != nil {
+			s.geminiLoginMu.Lock()
+			if s.geminiLogin == login {
+				login.state = "error"
+				login.message = "Gemini CLI is not installed"
+			}
 			s.geminiLoginMu.Unlock()
 			http.Error(w, "Gemini CLI is not installed", http.StatusConflict)
 			return
@@ -148,24 +164,40 @@ func (s *Server) handleGeminiLogin(w http.ResponseWriter, r *http.Request) {
 		cmd.Env = append(os.Environ(), "NO_BROWSER=true")
 		tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 40, Cols: 2048})
 		if err != nil {
+			s.geminiLoginMu.Lock()
+			if s.geminiLogin == login {
+				login.state = "error"
+				login.message = "Could not start Gemini CLI login"
+			}
 			s.geminiLoginMu.Unlock()
 			http.Error(w, "Could not start Gemini CLI login", http.StatusBadGateway)
 			return
 		}
-		login := &geminiLogin{cmd: cmd, tty: tty, state: "starting"}
-		s.geminiLogin = login
+		s.geminiLoginMu.Lock()
+		active := s.geminiLogin == login && login.state == "starting"
+		if active {
+			login.cmd = cmd
+			login.tty = tty
+		}
 		s.geminiLoginMu.Unlock()
+		if !active {
+			stopGeminiLoginProcess(&geminiLogin{cmd: cmd, tty: tty})
+			http.Error(w, "Gemini CLI sign-in was cancelled", http.StatusConflict)
+			return
+		}
 		go s.readGeminiLogin(login)
 		go s.waitGeminiLogin(login)
 		time.AfterFunc(time.Minute, func() {
 			s.geminiLoginMu.Lock()
-			if s.geminiLogin == login && login.state == "starting" {
+			expired := s.geminiLogin == login && login.state == "starting"
+			if expired {
 				login.state = "error"
 				login.message = "Gemini CLI did not show a Google sign-in link. Use the terminal login instead."
-				_ = login.tty.Close()
-				_ = login.cmd.Process.Kill()
 			}
 			s.geminiLoginMu.Unlock()
+			if expired {
+				stopGeminiLoginProcess(login)
+			}
 		})
 		writeSDKJSON(w, http.StatusAccepted, geminiLoginStatus{State: "starting"})
 	case http.MethodDelete:
@@ -173,10 +205,7 @@ func (s *Server) handleGeminiLogin(w http.ResponseWriter, r *http.Request) {
 		login := s.geminiLogin
 		s.geminiLogin = nil
 		s.geminiLoginMu.Unlock()
-		if login != nil {
-			_ = login.tty.Close()
-			_ = login.cmd.Process.Kill()
-		}
+		stopGeminiLoginProcess(login)
 		writeSDKJSON(w, http.StatusOK, geminiLoginStatus{State: "idle"})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -219,13 +248,15 @@ func (s *Server) handleGeminiLoginCode(w http.ResponseWriter, r *http.Request) {
 	if active && err == nil {
 		time.AfterFunc(time.Minute, func() {
 			s.geminiLoginMu.Lock()
-			if s.geminiLogin == login && login.state == "verifying" {
+			expired := s.geminiLogin == login && login.state == "verifying"
+			if expired {
 				login.state = "error"
 				login.message = "Gemini CLI did not confirm sign-in. Try again or use a terminal."
-				_ = login.tty.Close()
-				_ = login.cmd.Process.Kill()
 			}
 			s.geminiLoginMu.Unlock()
+			if expired {
+				stopGeminiLoginProcess(login)
+			}
 		})
 	} else if active {
 		login.state = "error"
@@ -275,13 +306,15 @@ func (s *Server) readGeminiLogin(login *geminiLogin) {
 							login.state = "awaiting_code"
 							time.AfterFunc(10*time.Minute, func() {
 								s.geminiLoginMu.Lock()
-								if s.geminiLogin == login && login.state == "awaiting_code" {
+								expired := s.geminiLogin == login && login.state == "awaiting_code"
+								if expired {
 									login.state = "error"
 									login.message = "The Google sign-in link expired. Start again."
-									_ = login.tty.Close()
-									_ = login.cmd.Process.Kill()
 								}
 								s.geminiLoginMu.Unlock()
+								if expired {
+									stopGeminiLoginProcess(login)
+								}
 							})
 						}
 					}
