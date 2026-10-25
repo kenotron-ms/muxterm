@@ -17,11 +17,12 @@ type browserTabState struct {
 func (c *Companion) browserOpen(string, string) error {
 	return errors.New("native browser view requires macOS")
 }
-func (c *Companion) browserLayout(browserRect, bool) {}
+func (c *Companion) browserLayout() {}
 func (c *Companion) browserSelect(string) error {
 	return errors.New("native browser view requires macOS")
 }
 func (c *Companion) browserClose(string) {}
+func (c *Companion) browserCloseAll()    {}
 func (c *Companion) browserAction(string, string, string) error {
 	return errors.New("native browser view requires macOS")
 }

@@ -27,26 +27,30 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 	if !strings.HasPrefix(raw, "muxterm.desktop:") || window.Name() != "muxterm" || origin == nil || !origin.IsMainFrame {
 		return
 	}
-	c.mu.Lock()
-	serverURL := c.activeMuxtermURL
-	c.mu.Unlock()
-	server, serverErr := url.Parse(serverURL)
-	messageURL, messageErr := url.Parse(origin.Origin)
-	if serverErr != nil || messageErr != nil || server.Scheme != messageURL.Scheme || !strings.EqualFold(server.Host, messageURL.Host) {
-		return
-	}
 	var message browserMessage
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(raw, "muxterm.desktop:")), &message); err != nil {
 		return
 	}
+	originURL := origin.Origin
 	go func() {
 		c.bridgeMu.Lock()
 		defer c.bridgeMu.Unlock()
+		c.mu.Lock()
+		serverURL := c.activeMuxtermURL
+		c.mu.Unlock()
+		server, serverErr := url.Parse(serverURL)
+		messageURL, messageErr := url.Parse(originURL)
+		if serverErr != nil || messageErr != nil || server.Scheme != messageURL.Scheme || !strings.EqualFold(server.Host, messageURL.Host) {
+			return
+		}
 		var actionErr error
 		switch message.Type {
 		case "layout":
 			if message.Rect.Width >= 0 && message.Rect.Height >= 0 && message.Rect.Width < 10000 && message.Rect.Height < 10000 {
-				c.browserLayout(message.Rect, message.Visible)
+				c.mu.Lock()
+				c.browserRect, c.browserVisible = message.Rect, message.Visible
+				c.mu.Unlock()
+				c.browserLayout()
 			}
 		case "open":
 			if message.ID == "" {

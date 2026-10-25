@@ -201,9 +201,10 @@ export class MuxSDKUtility extends LitElement {
       const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string }[]; activeTabId?: string } | null;
       const valid = new Set<string>(['new','files','status','changes','terminal','pages','web','browser']);
       if (saved?.tabs?.length && saved.tabs.length <= 30 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
-        this.tabs = saved.tabs.map(tab => ({ id:tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title }));
-        this.activeTabId = this.tabs.some(tab => tab.id === saved.activeTabId) ? saved.activeTabId! : this.tabs[0].id;
-        if (saved.tabs.some(tab => tab.kind === 'web' || tab.kind === 'terminal')) this.saveTabs();
+        this.tabs = saved.tabs.map(tab => ({ id:tab.kind === 'browser' ? crypto.randomUUID() : tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title }));
+        const activeIndex = saved.tabs.findIndex(tab => tab.id === saved.activeTabId);
+        this.activeTabId = activeIndex >= 0 ? this.tabs[activeIndex].id : this.tabs[0].id;
+        if (saved.tabs.some(tab => tab.kind === 'web' || tab.kind === 'terminal' || tab.kind === 'browser')) this.saveTabs();
       }
       for (const key of ['files','changes','pages'] as const) {
         const width = Number(localStorage.getItem(`muxterm.sdk.utility.rail.${key}.${this.sessionId}`));
@@ -235,6 +236,8 @@ export class MuxSDKUtility extends LitElement {
     window.removeEventListener('muxterm-browser-state', this.receiveBrowserState);
     window.removeEventListener('muxterm-browser-open', this.receiveBrowserOpen as EventListener);
     this.browserObserver?.disconnect();
+    for (const id of this.browserOpened) this.browserSend({type:'close', id});
+    this.browserOpened.clear();
     this.browserSend({type:'layout', visible:false, rect:{X:0,Y:0,Width:0,Height:0}});
     super.disconnectedCallback();
   }
@@ -340,7 +343,7 @@ export class MuxSDKUtility extends LitElement {
     try { this.browserRecent = JSON.parse(localStorage.getItem(BROWSER_RECENT_KEY) || '[]').filter((entry: {url?:string;title?:string}) => typeof entry.url === 'string' && typeof entry.title === 'string').slice(0, 8); } catch { /* storage unavailable */ }
     window.addEventListener('muxterm-browser-state', this.receiveBrowserState);
     window.addEventListener('muxterm-browser-open', this.receiveBrowserOpen as EventListener);
-    this.browserPollTimer = window.setInterval(() => { if (this.activeTab === 'browser') { this.layoutBrowser(); this.browserSend({type:'status'}); } }, 800);
+    this.browserPollTimer = window.setInterval(() => { if (this.activeTab === 'browser') this.layoutBrowser(); }, 800);
     if (this.activeTab === 'browser') this.activateBrowser(this.currentTab);
     this.paintAll();
   };
@@ -384,6 +387,7 @@ export class MuxSDKUtility extends LitElement {
     this.browserOpened.add(tab.id);
     this.saveTabs(); this.paintAll();
     this.browserSend({type:'select',id:tab.id});
+    void this.updateComplete.then(() => this.layoutBrowser());
   };
   private rememberBrowserPage(url: string, title: string, repaint = true) {
     if (!/^https?:\/\//.test(url)) return;
