@@ -58,6 +58,7 @@ export class ACPStream {
     this.onProcessExit = onProcessExit;
     this.tools = new Map();
     this.busy = false;
+    this.preparingPrompt = false;
     this.closed = false;
     this.loading = false;
     this.configOptions = [];
@@ -246,6 +247,7 @@ export class ACPStream {
             sessionId: this.session.nativeId, prompt, _meta: { steering: { idleBehavior: 'promptRequired' } },
           }));
           if (result.outcome === 'injected') {
+            if (this.stopDuringSteer) throw new Error('Turn stopped before the steer was delivered');
             this.turnInputIds.push(input.id);
             this.emitAccepted(input);
             this.emit(this.session.id, 'turn.continued');
@@ -276,8 +278,14 @@ export class ACPStream {
         this.stopDuringSteer = false;
       }
     }
-    if (this.busy) throw new Error('Finish the current ACP turn before sending another message');
-    return this.startPrompt(input, await this.promptBlocks(input));
+    if (this.busy || this.preparingPrompt || this.steerPending)
+      throw new Error('Finish the current ACP turn before sending another message');
+    this.preparingPrompt = true;
+    try {
+      return await this.startPrompt(input, await this.promptBlocks(input));
+    } finally {
+      this.preparingPrompt = false;
+    }
   }
 
   async startPrompt(input, prompt) {
@@ -316,6 +324,7 @@ export class ACPStream {
     }).finally(() => {
       this.busy = false;
       this.session.busy = false;
+      this.session.cancelRequested = false;
       this.confirmAccepted = null;
     });
     await evidence;

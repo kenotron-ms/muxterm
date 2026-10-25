@@ -264,6 +264,7 @@ func (s *Server) handleGeminiLoginCode(w http.ResponseWriter, r *http.Request) {
 	s.geminiLoginMu.Unlock()
 	_, err := io.WriteString(tty, code+"\r")
 	s.geminiLoginMu.Lock()
+	completed := s.geminiLogin == login && login.state == "complete"
 	active := s.geminiLogin == login && login.state == "verifying"
 	if active && err == nil {
 		time.AfterFunc(time.Minute, func() {
@@ -283,6 +284,10 @@ func (s *Server) handleGeminiLoginCode(w http.ResponseWriter, r *http.Request) {
 		login.message = "Could not send the authorization code to Gemini CLI. Try again."
 	}
 	s.geminiLoginMu.Unlock()
+	if completed {
+		writeSDKJSON(w, http.StatusOK, geminiLoginStatus{State: "complete"})
+		return
+	}
 	if active && err != nil {
 		stopGeminiLoginProcess(login)
 	}
@@ -364,9 +369,9 @@ func (s *Server) waitGeminiLogin(login *geminiLogin) {
 		login.message = "Gemini CLI finished signing in. Check the connection."
 		return
 	}
-	if err == nil && login.state == "starting" {
+	if err == nil && (login.state == "starting" || login.state == "awaiting_code") {
 		login.state = "complete"
-		login.message = "Gemini CLI exited without asking for a code. Check the connection."
+		login.message = "Gemini CLI exited cleanly. Check the connection."
 		return
 	}
 	login.state = "error"

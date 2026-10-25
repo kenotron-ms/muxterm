@@ -697,6 +697,7 @@ export class MuxSettingsSurface extends LitElement {
     this._unsubRemotes = remotesStore.subscribe(() => {
       if (this._section === 'remotes') void this._loadRemotes();
     });
+    if (this._section === 'ai') void this._loadGemini();
   }
 
   override disconnectedCallback(): void {
@@ -1091,6 +1092,7 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private async _loadGemini(): Promise<void> {
+    if (!this.isConnected || this._section !== 'ai') return;
     const epoch = ++this._geminiLoadEpoch;
     this._geminiStatus = 'checking';
     void this._readGeminiLogin();
@@ -1120,16 +1122,22 @@ export class MuxSettingsSurface extends LitElement {
 
   private async _setGeminiAuth(mode: GeminiAuth['mode']): Promise<void> {
     if (this._geminiAuthBusy || this._geminiAuth.mode === mode) return;
+    const epoch = ++this._geminiLoadEpoch;
+    window.clearTimeout(this._geminiPollTimer);
+    ++this._geminiLoginEpoch;
     this._geminiAuthBusy = true;
     this._geminiAuthError = '';
     try {
       const response = await fetch(apiPath('/api/ai/gemini/auth'), {
         method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode}),
       });
+      if (epoch !== this._geminiLoadEpoch || !this.isConnected || this._section !== 'ai') return;
       if (!response.ok) throw new Error((await response.text()).trim());
-      this._geminiAuth = await response.json() as GeminiAuth;
+      const selection = await response.json() as GeminiAuth;
+      if (epoch !== this._geminiLoadEpoch || !this.isConnected || this._section !== 'ai') return;
+      this._geminiAuth = selection;
       await this._loadGemini();
-    } catch (error) { this._geminiAuthError = error instanceof Error ? error.message : String(error); }
+    } catch (error) { if (epoch === this._geminiLoadEpoch && this.isConnected) this._geminiAuthError = error instanceof Error ? error.message : String(error); }
     finally { this._geminiAuthBusy = false; }
   }
 
@@ -1146,6 +1154,7 @@ export class MuxSettingsSurface extends LitElement {
         const catalog = await fetch(apiPath('/api/sdk-chat-catalog?harness=gemini'));
         if (epoch !== this._geminiLoginEpoch) return;
         if (catalog.ok) {
+          ++this._geminiLoadEpoch;
           this._geminiStatus = 'connected';
           this._geminiLogin = { state:'complete' };
         }
@@ -1157,7 +1166,7 @@ export class MuxSettingsSurface extends LitElement {
 
   private async _geminiLoginRequest(method: 'POST' | 'DELETE', code?: string): Promise<void> {
     if (this._geminiLoginBusy) return;
-    ++this._geminiLoginEpoch;
+    const epoch = ++this._geminiLoginEpoch;
     window.clearTimeout(this._geminiPollTimer);
     this._geminiLoginBusy = true;
     this._geminiLoginError = '';
@@ -1165,11 +1174,14 @@ export class MuxSettingsSurface extends LitElement {
       const response = await fetch(apiPath(`/api/ai/gemini/login${code === undefined ? '' : '/code'}`), {
         method, ...(code === undefined ? {} : { headers:{'Content-Type':'application/json'}, body:JSON.stringify({code}) }),
       });
+      if (epoch !== this._geminiLoginEpoch || !this.isConnected || this._section !== 'ai') return;
       if (!response.ok) throw new Error((await response.text()).trim());
-      this._geminiLogin = await response.json() as GeminiLoginStatus;
+      const login = await response.json() as GeminiLoginStatus;
+      if (epoch !== this._geminiLoginEpoch || !this.isConnected || this._section !== 'ai') return;
+      this._geminiLogin = login;
       if (code !== undefined) this._geminiCode = '';
       void this._readGeminiLogin();
-    } catch (error) { this._geminiLoginError = error instanceof Error ? error.message : String(error); }
+    } catch (error) { if (epoch === this._geminiLoginEpoch && this.isConnected) this._geminiLoginError = error instanceof Error ? error.message : String(error); }
     finally { this._geminiLoginBusy = false; }
   }
 
