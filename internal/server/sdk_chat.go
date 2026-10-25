@@ -1818,6 +1818,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	h.mu.Lock()
 	c := h.chats[id]
+	chatState := ""
+	if c != nil {
+		chatState = c.State
+	}
 	h.mu.Unlock()
 	if c == nil {
 		http.NotFound(w, r)
@@ -1978,7 +1982,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "attachments require a user message", 422)
 			return
 		}
-		if req.Kind == "steer" && c.State != "working" {
+		if req.Kind == "steer" && chatState != "working" {
 			http.Error(w, "No active turn to steer", 409)
 			return
 		}
