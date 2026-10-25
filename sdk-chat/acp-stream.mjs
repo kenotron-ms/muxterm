@@ -6,6 +6,7 @@ const profiles = {
   pi: { command: 'pi-acp', args: [], env: 'MUXTERM_ACP_PI_COMMAND' },
   opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
   deepseek: { command: 'dsh', args: ['--profile', 'acp'], env: 'MUXTERM_ACP_DEEPSEEK_COMMAND', mcp: true },
+  gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
 };
 
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
@@ -55,7 +56,9 @@ export class ACPStream {
       this.loading = true;
       try {
         if (this.agentCapabilities.sessionCapabilities?.resume) session = await this.withExit(this.connection.resumeSession({ ...params, sessionId: this.session.nativeId }));
-        else if (this.agentCapabilities.loadSession) session = await this.withExit(this.connection.loadSession({ ...params, sessionId: this.session.nativeId }));
+        else if (this.agentCapabilities.loadSession) session = await this.withExit(this.session.harness === 'gemini'
+          ? this.connection.request('session/load', { ...params, sessionId: this.session.nativeId })
+          : this.connection.loadSession({ ...params, sessionId: this.session.nativeId }));
         else throw new Error(`${this.session.harness} does not advertise ACP session recovery`);
       } finally { this.loading = false; }
     } else {
@@ -65,6 +68,9 @@ export class ACPStream {
     }
     this.configOptions = session.configOptions || [];
     this.modes = session.modes || null;
+    // Gemini CLI still publishes its model selector in the older ACP `models`
+    // response field, which the generic config-option picker does not read.
+    this.legacyModels = this.session.harness === 'gemini' ? session.models || null : null;
     this.startupInfo = session._meta?.piAcp?.startupInfo || '';
     this.startupBuffer = '';
     // A resumed ACP process starts with the agent's own defaults. Restore the
@@ -160,7 +166,7 @@ export class ACPStream {
     if (input.kind !== 'user') throw new Error(`${this.session.harness} ACP does not support ${input.kind} input yet`);
     const prompt = [{ type: 'text', text: input.content || 'Please inspect the attached files.' }];
     for (const attachment of input.attachments || []) {
-      // Local file references are usable by all three local harnesses. Images
+      // Local file references are usable by all local harnesses. Images
       // use ACP image blocks only when the agent actually advertises them.
       const ext = attachment.name.split('.').at(-1)?.toLowerCase();
       if (attachment.kind === 'image' && this.agentCapabilities.promptCapabilities?.image && ['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
@@ -216,6 +222,9 @@ export class ACPStream {
     const effort = this.configOptions.find(item => item.type === 'select' && item.category === 'thought_level');
     const entries = model?.options?.flatMap(item => item.options || [item]) || [];
     const effortEntries = effort?.options?.flatMap(item => item.options || [item]) || [];
+    if (!model && this.legacyModels) return { provider: 'configured', model: this.legacyModels.currentModelId || '', effort: '',
+      models: (this.legacyModels.availableModels || []).map(item => ({ id: item.modelId, label: item.name || item.modelId,
+        efforts: [], defaultEffort: '' })) };
     return { provider: 'configured', model: model?.currentValue || '', effort: effort?.currentValue || '',
       models: entries.map(item => ({ id: item.value, label: item.name,
         efforts: effortEntries.map(value => value.value), defaultEffort: effort?.currentValue || '' })) };
@@ -223,6 +232,14 @@ export class ACPStream {
 
   async applySelection(model, effort) {
     if (this.busy) throw new Error('Finish the current turn before changing settings');
+    if (model && this.legacyModels && !this.configOptions.some(item => item.type === 'select' && item.category === 'model')) {
+      if (!(this.legacyModels.availableModels || []).some(item => item.modelId === model)) throw new Error('Unsupported Gemini model');
+      if (model !== this.legacyModels.currentModelId) {
+        await this.withExit(this.connection.request('session/set_model', { sessionId: this.session.nativeId, modelId: model }));
+        this.legacyModels.currentModelId = model;
+      }
+      model = '';
+    }
     for (const [category, value] of [['model', model], ['thought_level', effort]]) {
       const option = this.configOptions.find(item => item.type === 'select' && item.category === category);
       if (value && option && value !== option.currentValue) {

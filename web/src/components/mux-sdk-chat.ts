@@ -2283,7 +2283,7 @@ export class MuxSDKChat extends LitElement {
       </section>
     </mux-ui-dialog>` : nothing}`;
   }
-  private isACPChat() { return this.chat?.harness === 'pi' || this.chat?.harness === 'opencode' || this.chat?.harness === 'deepseek'; }
+  private isACPChat() { return this.chat?.harness === 'pi' || this.chat?.harness === 'opencode' || this.chat?.harness === 'deepseek' || this.chat?.harness === 'gemini'; }
   private laneCard(block: Block) {
     const name = sdkChats.chats.find(chat => chat.id === block.id)?.title || block.name || 'Linked lane';
     const state = block.laneState === 'failed' ? 'Failed' : block.laneState === 'uncertain' ? 'Uncertain' : block.laneState === 'stopped' ? 'Stopped' : block.laneState === 'starting' ? 'Starting' : block.laneState === 'ready' ? 'Ready' : 'Working';

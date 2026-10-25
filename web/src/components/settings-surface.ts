@@ -37,6 +37,7 @@ import {
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft } from 'lucide';
+import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
@@ -385,6 +386,13 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     /* ── AI section ── */
+    .ai-harness { border-bottom:1px solid var(--ui-border); padding-bottom:var(--ui-space-7); margin-bottom:var(--ui-space-7); }
+    .ai-harness-head { display:flex; align-items:center; gap:var(--ui-space-4); flex-wrap:wrap; }
+    .ai-harness-mark { display:block; width:24px; height:24px; flex:none; background:var(--ui-text); mask:var(--gemini-mark) center/contain no-repeat; }
+    .ai-harness-name { margin:0; font-size:var(--ui-text-lg); font-weight:600; flex:1; }
+    .ai-harness p { color:var(--ui-text-muted); line-height:1.5; margin:var(--ui-space-4) 0 0; }
+    .ai-harness code { color:var(--ui-text); overflow-wrap:anywhere; }
+    .ai-harness-actions { display:flex; gap:var(--ui-space-3); flex-wrap:wrap; margin-top:var(--ui-space-5); }
     .ai-status {
       margin: 0 0 var(--ui-space-5);
       color: var(--ui-text);
@@ -618,6 +626,8 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _aiBusy = false;
   @state() private _aiMessage = '';
   @state() private _aiMessageKind: FeedbackKind = 'info';
+  @state() private _geminiStatus: 'checking' | 'missing' | 'sign-in' | 'connected' | 'error' = 'checking';
+  @state() private _geminiCopied = '';
 
   // ── Voice credentials ──────────────────────────────────────────────────
   // _voice is what the SERVER says. The _v* fields are the form's own edits,
@@ -686,6 +696,7 @@ export class MuxSettingsSurface extends LitElement {
       const changedSection = this._setSection(this.openSection);
       if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
       if (changedSection && this.openSection === 'voice') void this._loadVoice();
+      if (changedSection && this.openSection === 'ai') void this._loadGemini();
     }
   }
 
@@ -718,6 +729,7 @@ export class MuxSettingsSurface extends LitElement {
   private _selectSection(section: SettingsSection): void {
     if (!this._setSection(section)) return;
     if (section === 'voice') void this._loadVoice();
+    if (section === 'ai') void this._loadGemini();
     if (section === 'remotes') void this._loadRemotes();
   }
 
@@ -1055,6 +1067,42 @@ export class MuxSettingsSurface extends LitElement {
     }));
   }
 
+  private async _loadGemini(): Promise<void> {
+    this._geminiStatus = 'checking';
+    try {
+      const choices = await fetch(apiPath('/api/sdk-chat-start-options'));
+      if (!choices.ok) throw new Error('Could not check installed agents');
+      const options = await choices.json() as Array<{ harness: string }>;
+      if (!options.some(option => option.harness === 'gemini')) { this._geminiStatus = 'missing'; return; }
+      const catalog = await fetch(apiPath('/api/sdk-chat-catalog?harness=gemini'));
+      if (catalog.ok) { this._geminiStatus = 'connected'; return; }
+      const detail = await catalog.text();
+      this._geminiStatus = /auth|sign.?in|credential|login|api key|not configured/i.test(detail) ? 'sign-in' : 'error';
+    } catch { this._geminiStatus = 'error'; }
+  }
+
+  private async _copyGemini(command: string): Promise<void> {
+    try { await navigator.clipboard.writeText(command); this._geminiCopied = command; }
+    catch { this._geminiCopied = ''; }
+  }
+
+  private _renderGemini() {
+    const status = this._geminiStatus;
+    const command = status === 'missing' ? 'npm install -g @google/gemini-cli' : 'NO_BROWSER=true gemini';
+    const label = status === 'connected' ? 'Ready' : status === 'missing' ? 'Not installed'
+      : status === 'sign-in' ? 'Sign in needed' : status === 'checking' ? 'Checking' : 'Check unavailable';
+    const tone = status === 'connected' ? 'success' : status === 'sign-in' ? 'warning' : 'neutral';
+    return html`<div class="ai-harness">
+      <div class="ai-harness-head"><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><h3 class="ai-harness-name">Gemini CLI</h3><mux-ui-status-badge tone=${tone} dot>${label}</mux-ui-status-badge></div>
+      <p>Use the Google account linked to your Google AI subscription for Gemini chats. Gemini CLI keeps the sign-in; muxterm does not store your Google credentials.</p>
+      ${status === 'connected' ? html`<p>Gemini is ready in New Chat.</p>` : html`<p>${status === 'missing' ? 'Install Gemini CLI on this machine first.' : 'In a muxterm terminal, run the command below. Choose Sign in with Google, open the link, and paste the authorization code into the terminal.'}</p><p><code>${command}</code></p>`}
+      <div class="ai-harness-actions">
+        ${status === 'connected' ? '' : html`<mux-ui-button size="small" variant="secondary" @click=${() => void this._copyGemini(command)}>${this._geminiCopied === command ? 'Copied' : 'Copy command'}</mux-ui-button><mux-ui-button size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('terminal-open', { bubbles:true, composed:true }))}>Open terminal</mux-ui-button>`}
+        <mux-ui-button size="small" variant="secondary" ?disabled=${status === 'checking'} @click=${() => void this._loadGemini()}>Check connection</mux-ui-button>
+      </div>
+    </div>`;
+  }
+
   private async _saveAIKey(): Promise<void> {
     const key = this._aiKeyInput.trim();
     if (!key || this._aiBusy) return;
@@ -1116,11 +1164,13 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAI() {
     const st = this.aiStatus;
     return html`
-      <p class="section-title">Anthropic</p>
+      <p class="section-title">Coding harnesses</p>
+      ${this._renderGemini()}
+      <p class="section-title">Built-in Anthropic AI</p>
       <p class="ai-status">
         ${st.enabled
-          ? `AI enabled -- key ending ${st.keyHint} (from ${st.source}).`
-          : 'AI features are off -- add an Anthropic API key to enable.'}
+          ? `Anthropic features enabled -- key ending ${st.keyHint} (from ${st.source}).`
+          : 'Anthropic features are off -- add an API key to enable them.'}
       </p>
       <mux-ui-text-field
         label="API key"

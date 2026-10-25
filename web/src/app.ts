@@ -1321,6 +1321,7 @@ export class MuxApp extends LitElement {
       @launcher-action=${this._onLauncherAction}
       @config-change=${this._onConfigChange}
       @ai-status-change=${this._onAIStatusChange}
+      @terminal-open=${this._onSettingsTerminalOpen}
     ></mux-settings-surface>`;
   }
 
@@ -2072,6 +2073,10 @@ export class MuxApp extends LitElement {
     if (this._terminalCreateRef) return;
     const clientRef = mintClientRef();
     if (this._socket?.createWorkspace('Terminal', clientRef)) this._terminalCreateRef = clientRef;
+  };
+  private _onSettingsTerminalOpen = (): void => {
+    this._overlayPanel = null;
+    this._onTerminalOpen();
   };
   private _onConnectionSetupChat = (event: CustomEvent<{prompt:string}>): void => {
     this._onChatNew();

@@ -1043,7 +1043,7 @@ func sdkModeNames(value any) []string {
 
 func isSDKACPHarness(harness string) bool {
 	switch harness {
-	case "pi", "opencode", "deepseek":
+	case "pi", "opencode", "deepseek", "gemini":
 		return true
 	}
 	return false
@@ -1066,6 +1066,11 @@ func sdkACPExecutable(harness string) string {
 			return value
 		}
 		return "dsh"
+	case "gemini":
+		if value := os.Getenv("MUXTERM_ACP_GEMINI_COMMAND"); value != "" {
+			return value
+		}
+		return "gemini"
 	}
 	return ""
 }
@@ -1398,7 +1403,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if sdkReady {
-		for _, harness := range []string{"pi", "opencode", "deepseek"} {
+		for _, harness := range []string{"pi", "opencode", "deepseek", "gemini"} {
 			if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
 				if harness == "pi" {
 					if _, err := exec.LookPath("pi"); err != nil {
@@ -1555,7 +1560,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "anthropic"
 		case "amplifier":
 			req.Provider = "configured"
-		case "pi", "opencode", "deepseek":
+		case "pi", "opencode", "deepseek", "gemini":
 			req.Provider = "configured"
 		}
 	}
