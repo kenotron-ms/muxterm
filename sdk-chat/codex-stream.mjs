@@ -1,11 +1,10 @@
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import readline from 'node:readline';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const codexCLI = createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js');
+import { agentCommand } from './agent-command.mjs';
 function toolDetails(item) {
   if (item.type === 'commandExecution') return {
     name: 'Command', input: { command: item.command, cwd: item.cwd },
@@ -66,7 +65,7 @@ export class CodexStream {
     if (githubEnabled) for (const key of ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
       if (process.env[key]) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${JSON.stringify(process.env[key])}`);
     }
-    this.process = spawn(process.execPath, [codexCLI, 'app-server', '--stdio', '-c', 'model_reasoning_summary="none"', '-c', 'tools.update_plan.enabled=true', ...mcpConfig], {
+    this.process = spawn(agentCommand('codex', 'MUXTERM_CODEX_COMMAND'), ['app-server', '--stdio', '-c', 'model_reasoning_summary="none"', '-c', 'tools.update_plan.enabled=true', ...mcpConfig], {
       cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.stderr = '';
@@ -114,25 +113,23 @@ export class CodexStream {
     await this.ready;
     const models = [];
     let cursor = null;
-    do {
-      const page = await this.request('model/list', { cursor, includeHidden: false, limit: 100 });
-      for (const model of page.data || []) if (!model.hidden) models.push({
-        id: model.model || model.id, label: model.displayName || model.model || model.id,
-        efforts: (model.supportedReasoningEfforts || []).map(option => option.reasoningEffort),
-        defaultEffort: model.defaultReasoningEffort || '',
-      });
-      cursor = page.nextCursor;
-    } while (cursor);
+    try {
+      do {
+        const page = await this.request('model/list', { cursor, includeHidden: false, limit: 100 });
+        for (const model of page.data || []) if (!model.hidden) models.push({
+          id: model.model || model.id, label: model.displayName || model.model || model.id,
+          efforts: (model.supportedReasoningEfforts || []).map(option => option.reasoningEffort),
+          defaultEffort: model.defaultReasoningEffort || '',
+        });
+        cursor = page.nextCursor;
+      } while (cursor);
+    } catch { /* Older app-server builds may not provide a model catalog. */ }
     let configuredModel = '';
     const unlistedEfforts = ['low', 'medium', 'high', 'xhigh'];
     try {
       const settings = await this.request('config/read', { includeLayers: false });
       configuredModel = settings.config?.model || '';
     } catch { /* Older Codex builds may not expose config/read. */ }
-    // The installed app-server can lag behind the models accepted by Codex.
-    // Keep this supported model selectable with its documented effort range.
-    if (!models.some(model => model.id === 'gpt-6.1-sol'))
-      models.unshift({ id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' });
     if (configuredModel && !models.some(model => model.id === configuredModel))
       models.unshift({ id: configuredModel, label: configuredModel, efforts: unlistedEfforts, defaultEffort: '' });
     if (this.session.model && !models.some(model => model.id === this.session.model))

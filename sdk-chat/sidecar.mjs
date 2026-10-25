@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CodexStream } from './codex-stream.mjs';
+import { agentCommand } from './agent-command.mjs';
 import { ACPStream, isACPHarness } from './acp-stream.mjs';
 import { query, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 
@@ -70,7 +71,8 @@ function inputMessage(input) {
 async function suggestClaudeTitle(inputs, cwd) {
   const prompt = 'Give this conversation a specific, sentence-case sidebar title of 3–5 words, at most 28 characters. Use a concrete action and object. Describe the actual task or purpose, not a greeting or the first line. Output the title only.\n\nHuman messages, oldest first:\n' +
     inputs.map(input => `- ${input}`).join('\n');
-  const titleQuery = query({ prompt, options: { cwd, tools: [], maxTurns: 1, persistSession: false } });
+  const titleQuery = query({ prompt, options: { cwd, tools: [], maxTurns: 1, persistSession: false,
+    pathToClaudeCodeExecutable: agentCommand('claude', 'MUXTERM_CLAUDE_COMMAND') } });
   let answer = '';
   for await (const msg of titleQuery) {
     if (msg.type === 'assistant') answer = (msg.message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('');
@@ -101,7 +103,9 @@ async function* claudeInputs(s) {
 async function runClaude(s) {
   const toolNames = new Map();
   const agentTools = new Set();
-  const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, additionalDirectories: s.sourceFolders, resume: s.nativeId || undefined,
+  try {
+    const q = query({ prompt: claudeInputs(s), options: { cwd: s.cwd, additionalDirectories: s.sourceFolders, resume: s.nativeId || undefined,
+    pathToClaudeCodeExecutable: agentCommand('claude', 'MUXTERM_CLAUDE_COMMAND'),
     model: s.model || undefined,
     systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Before your first tool call for a user request, give the user one brief, concrete progress update describing your next action. During longer work, give further updates at meaningful milestones. Keep private reasoning private.' },
     mcpServers: { muxterm: { command: process.env.MUXTERM_CHAT_MCP_BIN, args: ['mcp'], env: { ...muxtermMcpEnv, MUXTERM_CHAT_ORIGIN_FILE: s.originFile } },
@@ -117,8 +121,7 @@ async function runClaude(s) {
         permissionDecisionReason: 'Proposal recorded in muxterm. A human must approve it or authorize the direct operator to start it. Do not start or replace the goal yourself.' } };
     }] }] },
     thinking: { type: 'adaptive', display: 'summarized' }, effort: s.effort || 'high', maxTurns: 20 } });
-  s.query = q;
-  try {
+    s.query = q;
     for await (const msg of q) {
       if (msg.type === 'system' && msg.subtype === 'init') {
         s.nativeId = msg.session_id;

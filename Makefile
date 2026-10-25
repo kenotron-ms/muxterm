@@ -61,7 +61,7 @@ endef
 
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
 sdk-chat-deps:
-	@test -d sdk-chat/node_modules/@openai/codex-sdk -a -d sdk-chat/node_modules/@anthropic-ai/claude-agent-sdk || npm ci --ignore-scripts --prefix sdk-chat
+	@test -d sdk-chat/node_modules/@anthropic-ai/claude-agent-sdk -a -d sdk-chat/node_modules/@agentclientprotocol/sdk || npm ci --omit=optional --ignore-scripts --prefix sdk-chat
 
 build: web sdk-chat-deps
 	go build -ldflags "-X main.version=$(DEV_VERSION)" -o bin/muxterm ./cmd/muxterm
