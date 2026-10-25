@@ -263,6 +263,9 @@ func (s *Server) handleGeminiLoginCode(w http.ResponseWriter, r *http.Request) {
 		login.message = "Could not send the authorization code to Gemini CLI. Try again."
 	}
 	s.geminiLoginMu.Unlock()
+	if active && err != nil {
+		stopGeminiLoginProcess(login)
+	}
 	if !active {
 		http.Error(w, "Gemini CLI sign-in was cancelled", http.StatusConflict)
 		return

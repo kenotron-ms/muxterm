@@ -744,6 +744,10 @@ export class MuxSettingsSurface extends LitElement {
 
   private _selectSection(section: SettingsSection): void {
     if (!this._setSection(section)) return;
+    if (section !== 'ai') {
+      window.clearTimeout(this._geminiPollTimer);
+      ++this._geminiLoginEpoch;
+    }
     if (section === 'voice') void this._loadVoice();
     if (section === 'ai') void this._loadGemini();
     if (section === 'remotes') void this._loadRemotes();
