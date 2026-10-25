@@ -185,7 +185,7 @@ func (c *Companion) browserCloseAll() {
 	for _, tab := range c.browserTabs {
 		tabs = append(tabs, *tab)
 	}
-	c.browserTabs = nil
+	c.browserTabs = make(map[string]*browserTab)
 	c.activeBrowser = ""
 	c.browserRect, c.browserVisible = browserRect{}, false
 	c.mu.Unlock()

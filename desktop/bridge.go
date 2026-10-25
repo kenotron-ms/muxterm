@@ -31,6 +31,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(raw, "muxterm.desktop:")), &message); err != nil {
 		return
 	}
+	originURL := origin.Origin
 	go func() {
 		c.bridgeMu.Lock()
 		defer c.bridgeMu.Unlock()
@@ -38,7 +39,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 		serverURL := c.activeMuxtermURL
 		c.mu.Unlock()
 		server, serverErr := url.Parse(serverURL)
-		messageURL, messageErr := url.Parse(origin.Origin)
+		messageURL, messageErr := url.Parse(originURL)
 		if serverErr != nil || messageErr != nil || server.Scheme != messageURL.Scheme || !strings.EqualFold(server.Host, messageURL.Host) {
 			return
 		}
