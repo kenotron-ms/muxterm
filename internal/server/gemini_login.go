@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/creack/pty"
@@ -18,13 +19,14 @@ import (
 // Gemini CLI owns the OAuth exchange and credential file. This PTY only makes
 // its headless authorization-code prompt usable from the browser.
 type geminiLogin struct {
-	cmd     *exec.Cmd
-	tty     *os.File
-	state   string
-	url     string
-	message string
-	output  string
-	entered bool
+	cmd      *exec.Cmd
+	tty      *os.File
+	state    string
+	url      string
+	message  string
+	output   string
+	entered  bool
+	closeTTY sync.Once
 }
 
 type geminiLoginStatus struct {
@@ -35,14 +37,24 @@ type geminiLoginStatus struct {
 
 var geminiAuthURL = regexp.MustCompile(`https://accounts\.google\.com/o/oauth2/v2/auth\?[^\s\x00-\x20\x1b<>]+`)
 var geminiANSI = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+var geminiAuthCode = regexp.MustCompile(`^[A-Za-z0-9/+_.=-]+$`)
+
+func (login *geminiLogin) closeTerminal() {
+	if login == nil {
+		return
+	}
+	login.closeTTY.Do(func() {
+		if login.tty != nil {
+			_ = login.tty.Close()
+		}
+	})
+}
 
 func stopGeminiLoginProcess(login *geminiLogin) {
 	if login == nil {
 		return
 	}
-	if login.tty != nil {
-		_ = login.tty.Close()
-	}
+	login.closeTerminal()
 	if login.cmd != nil && login.cmd.Process != nil {
 		_ = login.cmd.Process.Kill()
 	}
@@ -226,7 +238,7 @@ func (s *Server) handleGeminiLoginCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := strings.TrimSpace(input.Code)
-	if code == "" || len(code) > 2048 || strings.ContainsAny(code, "\r\n\x00") {
+	if len(code) == 0 || len(code) > 2048 || !geminiAuthCode.MatchString(code) {
 		http.Error(w, "Invalid authorization code", http.StatusBadRequest)
 		return
 	}
@@ -333,7 +345,7 @@ func (s *Server) readGeminiLogin(login *geminiLogin) {
 
 func (s *Server) waitGeminiLogin(login *geminiLogin) {
 	err := login.cmd.Wait()
-	_ = login.tty.Close()
+	login.closeTerminal()
 	s.geminiLoginMu.Lock()
 	defer s.geminiLoginMu.Unlock()
 	if s.geminiLogin != login || login.state == "error" {
