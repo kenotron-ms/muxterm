@@ -13,6 +13,7 @@ import '../ui/range-field.js';
 import '../ui/select.js';
 import '../ui/status-badge.js';
 import type { MuxUISelect } from '../ui/select.js';
+import type { MuxUITextField } from '../ui/text-field.js';
 import '../ui/switch.js';
 import '../ui/text-field.js';
 import '../ui/theme-choice.js';
@@ -390,13 +391,13 @@ export class MuxSettingsSurface extends LitElement {
     /* ── AI section ── */
     .ai-harness { border-bottom:1px solid var(--ui-border); padding-bottom:var(--ui-space-7); margin-bottom:var(--ui-space-7); }
     .ai-harness-head { display:flex; align-items:center; gap:var(--ui-space-4); flex-wrap:wrap; }
-    .ai-harness-mark { display:block; width:24px; height:24px; flex:none; background:var(--ui-text); mask:var(--gemini-mark) center/contain no-repeat; }
+    .ai-harness-mark { display:block; width:var(--ui-icon-lg); height:var(--ui-icon-lg); flex:none; background:var(--ui-text); mask:var(--gemini-mark) center/contain no-repeat; }
     .ai-harness-name { margin:0; font-size:var(--ui-text-lg); font-weight:600; flex:1; }
     .ai-harness p { color:var(--ui-text-muted); line-height:1.5; margin:var(--ui-space-4) 0 0; }
     .ai-harness code { color:var(--ui-text); overflow-wrap:anywhere; }
     .ai-harness-actions { display:flex; gap:var(--ui-space-3); flex-wrap:wrap; margin-top:var(--ui-space-5); }
     .ai-login-link { display:inline-block; margin-top:var(--ui-space-4); color:var(--ui-accent); overflow-wrap:anywhere; }
-    .ai-login-code { display:block; width:min(100%, 32rem); margin-top:var(--ui-space-4); box-sizing:border-box; padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; }
+    .ai-login-code { display:block; width:100%; margin-top:var(--ui-space-4); }
     .ai-status {
       margin: 0 0 var(--ui-space-5);
       color: var(--ui-text);
@@ -1085,9 +1086,11 @@ export class MuxSettingsSurface extends LitElement {
     this._geminiStatus = 'checking';
     void this._readGeminiLogin();
     try {
-      const auth = await fetch(apiPath('/api/ai/gemini/auth'));
+      const [auth, choices] = await Promise.all([
+        fetch(apiPath('/api/ai/gemini/auth')),
+        fetch(apiPath('/api/sdk-chat-start-options')),
+      ]);
       if (auth.ok) this._geminiAuth = await auth.json() as GeminiAuth;
-      const choices = await fetch(apiPath('/api/sdk-chat-start-options'));
       if (!choices.ok) throw new Error('Could not check installed agents');
       const options = await choices.json() as Array<{ harness: string }>;
       if (!options.some(option => option.harness === 'gemini')) { this._geminiStatus = 'missing'; return; }
@@ -1127,7 +1130,6 @@ export class MuxSettingsSurface extends LitElement {
         if (epoch !== this._geminiLoginEpoch) return;
         if (catalog.ok) {
           this._geminiStatus = 'connected';
-          await fetch(apiPath('/api/ai/gemini/login'), { method:'DELETE' });
           this._geminiLogin = { state:'complete' };
         }
       }
@@ -1179,7 +1181,7 @@ export class MuxSettingsSurface extends LitElement {
       ${this._geminiAuthError ? html`<mux-ui-feedback kind="error" density="compact">${this._geminiAuthError}</mux-ui-feedback>` : ''}
       ${status === 'connected' ? html`<p>Gemini is ready in New Chat.</p>` : status === 'missing' ? html`<p>Install Gemini CLI on this machine first.</p><p><code>${command}</code></p>` : html`
         ${login.state === 'starting' ? html`<p>Starting Google sign-in in Gemini CLI…</p>` : ''}
-        ${login.state === 'awaiting_code' ? html`<p>Open Google's sign-in page, approve access, then paste the authorization code here.</p><a class="ai-login-link" href=${login.url || ''} target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><input class="ai-login-code" aria-label="Google authorization code" autocomplete="one-time-code" placeholder="Authorization code" .value=${this._geminiCode} @input=${(event: Event) => { this._geminiCode = (event.target as HTMLInputElement).value; }}>` : ''}
+        ${login.state === 'awaiting_code' ? html`<p>Open Google's sign-in page, approve access, then paste the authorization code here.</p><a class="ai-login-link" href=${login.url || ''} target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><mux-ui-text-field class="ai-login-code" aria-label="Google authorization code" autocomplete="one-time-code" placeholder="Authorization code" .value=${this._geminiCode} @input=${(event: Event) => { this._geminiCode = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : ''}
         ${login.state === 'verifying' ? html`<p>Checking your Google sign-in…</p>` : ''}
         ${login.state === 'error' ? html`<p>${login.message || 'Gemini CLI sign-in ended. Try again.'}</p>` : ''}
         ${login.state === 'complete' ? html`<p>Gemini CLI finished signing in. Check the connection.</p>` : ''}

@@ -40,7 +40,11 @@ function geminiEnvironment() {
   mkdirSync(join(root, '.gemini'), { recursive: true, mode: 0o700 });
   const settings = join(root, '.gemini', 'settings.json');
   try { readFileSync(settings); }
-  catch { writeFileSync(settings, '{"security":{"auth":{"selectedType":"gemini-api-key"}}}\n', { flag: 'wx', mode: 0o600 }); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    try { writeFileSync(settings, '{"security":{"auth":{"selectedType":"gemini-api-key"}}}\n', { flag: 'wx', mode: 0o600 }); }
+    catch (createError) { if (createError.code !== 'EEXIST') throw createError; }
+  }
   env.GEMINI_CLI_HOME = root;
   env.GEMINI_API_KEY = key;
   delete env.GOOGLE_API_KEY;
@@ -112,7 +116,7 @@ export class ACPStream {
     this.configOptions = session.configOptions || [];
     this.modes = session.modes || null;
     // Gemini CLI still publishes its model selector in the older ACP `models`
-    // response field, which the generic config-option picker does not read.
+    // response field. Remove this shim when Gemini publishes configOptions.
     this.legacyModels = this.session.harness === 'gemini' ? session.models || null : null;
     this.startupInfo = session._meta?.piAcp?.startupInfo || '';
     this.startupBuffer = '';
@@ -254,6 +258,7 @@ export class ACPStream {
           this.session.cancelRequested = true;
           await this.connection.cancel({ sessionId: this.session.nativeId });
           await this.turnPromise;
+          // The next prompt is a normal turn; clear this before it can resolve.
           this.interruptForSteer = false;
         }
         if (this.stopDuringSteer) throw new Error('Turn stopped before the steer was delivered');

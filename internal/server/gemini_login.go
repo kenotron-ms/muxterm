@@ -208,11 +208,15 @@ func (s *Server) handleGeminiLoginCode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Gemini CLI is not waiting for an authorization code", http.StatusConflict)
 		return
 	}
-	_, err := io.WriteString(login.tty, code+"\r")
-	if err == nil {
-		login.state = "verifying"
-		login.url = ""
-		login.output = "" // The PTY may echo the code; never keep it in memory.
+	login.state = "verifying"
+	login.url = ""
+	login.output = "" // Do not retain the authorization code if the PTY echoes it.
+	tty := login.tty
+	s.geminiLoginMu.Unlock()
+	_, err := io.WriteString(tty, code+"\r")
+	s.geminiLoginMu.Lock()
+	active := s.geminiLogin == login && login.state == "verifying"
+	if active && err == nil {
 		time.AfterFunc(time.Minute, func() {
 			s.geminiLoginMu.Lock()
 			if s.geminiLogin == login && login.state == "verifying" {
@@ -223,8 +227,15 @@ func (s *Server) handleGeminiLoginCode(w http.ResponseWriter, r *http.Request) {
 			}
 			s.geminiLoginMu.Unlock()
 		})
+	} else if active {
+		login.state = "error"
+		login.message = "Could not send the authorization code to Gemini CLI. Try again."
 	}
 	s.geminiLoginMu.Unlock()
+	if !active {
+		http.Error(w, "Gemini CLI sign-in was cancelled", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, "Could not send the authorization code to Gemini CLI", http.StatusBadGateway)
 		return
@@ -248,10 +259,12 @@ func (s *Server) readGeminiLogin(login *geminiLogin) {
 					go func() {
 						time.Sleep(300 * time.Millisecond)
 						s.geminiLoginMu.Lock()
-						if s.geminiLogin == login && login.state == "starting" {
-							_, _ = io.WriteString(login.tty, "\r")
-						}
+						active := s.geminiLogin == login && login.state == "starting"
+						tty := login.tty
 						s.geminiLoginMu.Unlock()
+						if active {
+							_, _ = io.WriteString(tty, "\r")
+						}
 					}()
 				}
 				if match := geminiAuthURL.FindString(login.output); match != "" {
