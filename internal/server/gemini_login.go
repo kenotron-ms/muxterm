@@ -173,7 +173,14 @@ func (s *Server) handleGeminiLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cmd := exec.Command(command, "--skip-trust")
-		cmd.Env = append(os.Environ(), "NO_BROWSER=true")
+		// This process always performs Google sign-in, even when chat uses an API key.
+		cmd.Env = make([]string, 0, len(os.Environ())+1)
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, "GEMINI_API_KEY=") && !strings.HasPrefix(entry, "GOOGLE_API_KEY=") {
+				cmd.Env = append(cmd.Env, entry)
+			}
+		}
+		cmd.Env = append(cmd.Env, "NO_BROWSER=true")
 		tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 40, Cols: 2048})
 		if err != nil {
 			s.geminiLoginMu.Lock()

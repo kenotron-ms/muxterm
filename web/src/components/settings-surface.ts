@@ -642,6 +642,7 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _geminiAuthError = '';
   private _geminiPollTimer?: number;
   private _geminiLoginEpoch = 0;
+  private _geminiLoadEpoch = 0;
 
   // ── Voice credentials ──────────────────────────────────────────────────
   // _voice is what the SERVER says. The _v* fields are the form's own edits,
@@ -702,6 +703,7 @@ export class MuxSettingsSurface extends LitElement {
     super.disconnectedCallback();
     window.clearTimeout(this._geminiPollTimer);
     ++this._geminiLoginEpoch;
+    ++this._geminiLoadEpoch;
     this._unsubRemotes?.();
     this._unsubRemotes = null;
   }
@@ -747,6 +749,7 @@ export class MuxSettingsSurface extends LitElement {
     if (section !== 'ai') {
       window.clearTimeout(this._geminiPollTimer);
       ++this._geminiLoginEpoch;
+      ++this._geminiLoadEpoch;
     }
     if (section === 'voice') void this._loadVoice();
     if (section === 'ai') void this._loadGemini();
@@ -1088,6 +1091,7 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private async _loadGemini(): Promise<void> {
+    const epoch = ++this._geminiLoadEpoch;
     this._geminiStatus = 'checking';
     void this._readGeminiLogin();
     try {
@@ -1095,15 +1099,19 @@ export class MuxSettingsSurface extends LitElement {
         fetch(apiPath('/api/ai/gemini/auth')),
         fetch(apiPath('/api/sdk-chat-start-options')),
       ]);
+      if (epoch !== this._geminiLoadEpoch) return;
       if (auth.ok) this._geminiAuth = await auth.json() as GeminiAuth;
       if (!choices.ok) throw new Error('Could not check installed agents');
       const options = await choices.json() as Array<{ harness: string }>;
+      if (epoch !== this._geminiLoadEpoch) return;
       if (!options.some(option => option.harness === 'gemini')) { this._geminiStatus = 'missing'; return; }
       const catalog = await fetch(apiPath('/api/sdk-chat-catalog?harness=gemini'));
+      if (epoch !== this._geminiLoadEpoch) return;
       if (catalog.ok) { this._geminiStatus = 'connected'; return; }
       const detail = await catalog.text();
+      if (epoch !== this._geminiLoadEpoch) return;
       this._geminiStatus = /auth|sign.?in|credential|login|api key|not configured/i.test(detail) ? 'sign-in' : 'error';
-    } catch { this._geminiStatus = 'error'; }
+    } catch { if (epoch === this._geminiLoadEpoch) this._geminiStatus = 'error'; }
   }
 
   private async _setGeminiAuth(mode: GeminiAuth['mode']): Promise<void> {
