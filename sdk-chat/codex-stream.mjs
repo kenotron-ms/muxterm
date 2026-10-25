@@ -113,17 +113,15 @@ export class CodexStream {
     await this.ready;
     const models = [];
     let cursor = null;
-    try {
-      do {
-        const page = await this.request('model/list', { cursor, includeHidden: false, limit: 100 });
-        for (const model of page.data || []) if (!model.hidden) models.push({
-          id: model.model || model.id, label: model.displayName || model.model || model.id,
-          efforts: (model.supportedReasoningEfforts || []).map(option => option.reasoningEffort),
-          defaultEffort: model.defaultReasoningEffort || '',
-        });
-        cursor = page.nextCursor;
-      } while (cursor);
-    } catch { /* Older app-server builds may not provide a model catalog. */ }
+    do {
+      const page = await this.request('model/list', { cursor, includeHidden: false, limit: 100 });
+      for (const model of page.data || []) if (!model.hidden) models.push({
+        id: model.model || model.id, label: model.displayName || model.model || model.id,
+        efforts: (model.supportedReasoningEfforts || []).map(option => option.reasoningEffort),
+        defaultEffort: model.defaultReasoningEffort || '',
+      });
+      cursor = page.nextCursor;
+    } while (cursor);
     let configuredModel = '';
     const unlistedEfforts = ['low', 'medium', 'high', 'xhigh'];
     try {

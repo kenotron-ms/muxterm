@@ -13,8 +13,7 @@ busy Codex input return explicit errors.
 Codex uses the user's `codex` command through its app-server protocol. Muxterm
 does not pin a Codex version or download a second CLI. The app-server's
 `item/agentMessage/delta` notifications provide live text for the existing SSE
-renderer. Native Codex thread IDs still resume chats. Older CLI versions without
-the required app-server methods may need updating.
+renderer. Native Codex thread IDs still resume chats.
 
 Claude uses the user's `claude` command through the Agent SDK's
 `pathToClaudeCodeExecutable` option. The SDK is a small protocol client; its
