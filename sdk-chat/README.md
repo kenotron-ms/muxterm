@@ -62,11 +62,13 @@ not prove that a provider is ready. To use a binary outside `PATH`, set
 muxterm. For Pi, `pi` itself must also be on `PATH` because `pi-acp` launches it.
 
 Gemini CLI uses the Google account associated with a Google AI Pro or Ultra
-subscription. To sign in from a remote muxterm browser, run `NO_BROWSER=true gemini`
-in a muxterm terminal, choose **Sign in with Google**, open the URL it shows, and
-paste the authorization code into that terminal. Gemini CLI stores its own
-credentials for later ACP chats. An API key uses a separate billing path and is
-not needed for this sign-in. After signing in, refresh the New Chat model list.
+subscription. In **Settings → AI**, choose **Sign in with Google**. Muxterm
+starts Gemini CLI's interactive login in a managed PTY, shows the Google link,
+and sends the one-time authorization code back to Gemini CLI. Gemini CLI stores
+its own credentials for later ACP chats; muxterm does not exchange or store its
+OAuth token. `NO_BROWSER=true gemini` in a muxterm terminal remains a fallback.
+An API key uses a separate billing path and is not needed for this sign-in.
+After signing in, check the connection and refresh the New Chat model list.
 
 The client keeps one ACP process per chat and saves the native ACP session ID.
 On reconnect it uses `session/resume` where advertised, then `session/load`.
