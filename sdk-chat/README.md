@@ -76,9 +76,13 @@ DeepSeek Harness, and Gemini CLI receive muxterm's local MCP server through ACP.
 adapter currently accepts MCP server definitions but does not connect them to
 Pi, so muxterm does not advertise that integration for Pi.
 
-ACP v1 has no general live input method for steering an active prompt. The
-composer holds a draft while a turn runs; Stop sends `session/cancel`, and the
-next prompt can be sent after the turn ends. ACP chats currently use muxterm's
+ACP v1 has no general live input method for steering an active prompt. When an
+agent advertises the ACP steering extension, muxterm sends an injected steer.
+Otherwise, a steer cancels the current prompt and immediately sends the new
+instruction in the same ACP session, keeping the partial answer visible. Gemini
+CLI currently uses this cancel-and-continue behavior. Image uploads use their
+detected MIME type in ACP image blocks when the agent advertises image prompts;
+the filename extension does not determine the type. ACP chats currently use muxterm's
 existing `approval=never` policy: one-shot agent permission options may be
 selected, while requests without one are cancelled. The generic ACP path does
 not yet implement muxterm goals or voice-mode handoff.

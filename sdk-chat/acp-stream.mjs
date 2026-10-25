@@ -22,6 +22,12 @@ export class ACPStream {
     this.loading = false;
     this.configOptions = [];
     this.modes = null;
+    this.steeringExtension = false;
+    this.steerPending = false;
+    this.interruptForSteer = false;
+    this.stopDuringSteer = false;
+    this.turnInputIds = [];
+    this.continuedInputIds = [];
     const profile = profiles[session.harness];
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
     const command = process.env[profile.env] || profile.command;
@@ -44,6 +50,7 @@ export class ACPStream {
     const result = await this.withExit(this.connection.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} }));
     if (result.protocolVersion !== acp.PROTOCOL_VERSION) throw new Error(`Unsupported ACP version: ${result.protocolVersion}`);
     this.agentCapabilities = result.agentCapabilities || {};
+    this.steeringExtension = result._meta?.steering?.supported === true;
     let session;
     const mcpBin = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpServers = this.profile.mcp && mcpBin ? [{ name: 'muxterm', command: mcpBin, args: ['mcp'],
@@ -81,7 +88,7 @@ export class ACPStream {
 
   capabilities() {
     return { approvals: false, transcript_read: false, interrupt: true, live_input: false,
-      attributed_service_input: false, native_steering: false };
+      attributed_service_input: false, native_steering: this.steeringExtension };
   }
 
   withExit(promise) {
@@ -160,46 +167,104 @@ export class ACPStream {
 
   async start() { await this.ready; }
 
-  async send(input) {
-    await this.ready;
-    if (this.busy) throw new Error('Finish the current ACP turn before sending another message');
-    if (input.kind !== 'user') throw new Error(`${this.session.harness} ACP does not support ${input.kind} input yet`);
+  async promptBlocks(input) {
     const prompt = [{ type: 'text', text: input.content || 'Please inspect the attached files.' }];
     for (const attachment of input.attachments || []) {
-      // Local file references are usable by all local harnesses. Images
-      // use ACP image blocks only when the agent actually advertises them.
-      const ext = attachment.name.split('.').at(-1)?.toLowerCase();
-      if (attachment.kind === 'image' && this.agentCapabilities.promptCapabilities?.image && ['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+      // The upload store sniffs image bytes; filenames do not establish MIME type.
+      const imageType = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(attachment.contentType)
+        ? attachment.contentType : '';
+      if (attachment.kind === 'image' && this.agentCapabilities.promptCapabilities?.image && imageType) {
         const { readFile } = await import('node:fs/promises');
         const data = await readFile(attachment.path);
-        const mimeType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
-        prompt.push({ type: 'image', data: data.toString('base64'), mimeType });
+        prompt.push({ type: 'image', data: data.toString('base64'), mimeType: imageType });
       } else prompt.push({ type: 'text', text: `\nAttached file: ${attachment.name} (${attachment.path})` });
     }
+    return prompt;
+  }
+
+  emitAccepted(input) {
+    this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source,
+      text: input.displayContent || input.content,
+      attachments: (input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
+  }
+
+  async send(input) {
+    await this.ready;
+    if (input.kind !== 'user' && input.kind !== 'steer')
+      throw new Error(`${this.session.harness} ACP does not support ${input.kind} input`);
+    if (input.kind === 'steer') {
+      if (!this.busy) throw new Error('No active ACP turn to steer');
+      if (this.steerPending) throw new Error('A steer is already being delivered');
+      this.steerPending = true;
+      this.stopDuringSteer = false;
+      try {
+        const prompt = await this.promptBlocks(input);
+        if (this.steeringExtension) {
+          const result = await this.withExit(this.connection.request('_session/steering', {
+            sessionId: this.session.nativeId, prompt, _meta: { steering: { idleBehavior: 'promptRequired' } },
+          }));
+          if (result.outcome === 'injected') {
+            this.turnInputIds.push(input.id);
+            this.emitAccepted(input);
+            this.emit(this.session.id, 'turn.continued');
+            return { status: 'accepted', inputId: input.id };
+          }
+          if (result.outcome !== 'promptRequired') throw new Error(`Unsupported ACP steering outcome: ${result.outcome}`);
+          await this.turnPromise;
+        } else {
+          // ACP v1 has no standard mid-turn injection. Stop the active prompt,
+          // keep its partial output, and immediately continue with the steer.
+          this.interruptForSteer = true;
+          this.session.cancelRequested = true;
+          await this.connection.cancel({ sessionId: this.session.nativeId });
+          await this.turnPromise;
+          this.interruptForSteer = false;
+        }
+        if (this.stopDuringSteer) throw new Error('Turn stopped before the steer was delivered');
+        if (this.exitError || this.closed) throw new Error('ACP session ended before the steer was delivered');
+        return await this.startPrompt(input, prompt);
+      } finally {
+        this.steerPending = false;
+        this.interruptForSteer = false;
+        this.stopDuringSteer = false;
+      }
+    }
+    if (this.busy) throw new Error('Finish the current ACP turn before sending another message');
+    return this.startPrompt(input, await this.promptBlocks(input));
+  }
+
+  async startPrompt(input, prompt) {
     this.busy = true;
     this.session.busy = true;
     this.session.cancelRequested = false;
     this.turnActivity = false;
+    this.turnInputIds = [...this.continuedInputIds, input.id];
+    this.continuedInputIds = [];
     let accepted = false;
     let resolveEvidence, rejectEvidence;
     const evidence = new Promise((resolve, reject) => { resolveEvidence = resolve; rejectEvidence = reject; });
     this.confirmAccepted = () => {
       if (accepted) return;
       accepted = true;
-      this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source,
-        text: input.displayContent || input.content,
-        attachments: (input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
+      this.emitAccepted(input);
       resolveEvidence();
     };
-    void this.withExit(this.connection.prompt({ sessionId: this.session.nativeId, prompt })).then(result => {
+    this.turnPromise = this.withExit(this.connection.prompt({ sessionId: this.session.nativeId, prompt })).then(result => {
       this.confirmAccepted();
-      if (result.stopReason === 'cancelled') this.emit(this.session.id, 'turn.cancelled', { inputIds: [input.id], message: result.stopReason });
+      if (this.interruptForSteer) {
+        this.continuedInputIds = this.turnInputIds;
+        this.emit(this.session.id, 'turn.continued');
+      } else if (result.stopReason === 'cancelled') this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: result.stopReason });
       else if (result.stopReason === 'end_turn' && !this.turnActivity)
-        this.emit(this.session.id, 'error', { inputIds: [input.id], message: `${this.session.harness} ended the ACP turn without an answer or tool activity. Check its provider credentials and agent logs.` });
-      else if (result.stopReason === 'end_turn') this.emit(this.session.id, 'turn.completed', { inputIds: [input.id], message: result.stopReason });
-      else this.emit(this.session.id, 'error', { inputIds: [input.id], message: `ACP turn stopped: ${result.stopReason}` });
+        this.emit(this.session.id, 'error', { inputIds: this.turnInputIds, message: `${this.session.harness} ended the ACP turn without an answer or tool activity. Check its provider credentials and agent logs.` });
+      else if (result.stopReason === 'end_turn') this.emit(this.session.id, 'turn.completed', { inputIds: this.turnInputIds, message: result.stopReason });
+      else this.emit(this.session.id, 'error', { inputIds: this.turnInputIds, message: `ACP turn stopped: ${result.stopReason}` });
     }).catch(error => {
       if (!accepted) rejectEvidence(error);
+      else if (this.interruptForSteer && !this.exitError && !this.closed) {
+        this.continuedInputIds = this.turnInputIds;
+        this.emit(this.session.id, 'turn.continued');
+      }
       else if (!this.exitError && !this.closed) this.emit(this.session.id, 'error', { message: String(error) });
     }).finally(() => {
       this.busy = false;
@@ -212,6 +277,7 @@ export class ACPStream {
 
   async interrupt() {
     if (!this.busy) throw new Error('No active turn to stop');
+    if (this.steerPending) this.stopDuringSteer = true;
     this.session.cancelRequested = true;
     await this.connection.cancel({ sessionId: this.session.nativeId });
     return { status: 'accepted' };

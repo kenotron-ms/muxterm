@@ -129,10 +129,11 @@ type sdkDisplayAttachment struct {
 	Kind string `json:"kind"`
 }
 type sdkInputAttachment struct {
-	ID   string `json:"id"`
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	ID          string `json:"id"`
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	ContentType string `json:"contentType"`
 }
 
 func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, error) {
@@ -150,7 +151,7 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 		if err != nil {
 			return nil, fmt.Errorf("attachment %q cannot be read: %w", id, err)
 		}
-		items = append(items, sdkInputAttachment{ID: id, Path: path, Name: meta.Filename, Kind: meta.Kind})
+		items = append(items, sdkInputAttachment{ID: id, Path: path, Name: meta.Filename, Kind: meta.Kind, ContentType: meta.ContentType})
 	}
 	return items, nil
 }
