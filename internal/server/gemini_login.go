@@ -201,6 +201,7 @@ func (s *Server) handleGeminiLogin(w http.ResponseWriter, r *http.Request) {
 		s.geminiLoginMu.Unlock()
 		if !active {
 			stopGeminiLoginProcess(&geminiLogin{cmd: cmd, tty: tty})
+			go func() { _ = cmd.Wait() }() // No active login owns the normal reaper.
 			http.Error(w, "Gemini CLI sign-in was cancelled", http.StatusConflict)
 			return
 		}
@@ -361,6 +362,11 @@ func (s *Server) waitGeminiLogin(login *geminiLogin) {
 	if err == nil && login.state == "verifying" {
 		login.state = "complete"
 		login.message = "Gemini CLI finished signing in. Check the connection."
+		return
+	}
+	if err == nil && login.state == "starting" {
+		login.state = "complete"
+		login.message = "Gemini CLI exited without asking for a code. Check the connection."
 		return
 	}
 	login.state = "error"

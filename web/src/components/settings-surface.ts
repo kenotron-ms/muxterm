@@ -1100,7 +1100,11 @@ export class MuxSettingsSurface extends LitElement {
         fetch(apiPath('/api/sdk-chat-start-options')),
       ]);
       if (epoch !== this._geminiLoadEpoch) return;
-      if (auth.ok) this._geminiAuth = await auth.json() as GeminiAuth;
+      if (auth.ok) {
+        const selection = await auth.json() as GeminiAuth;
+        if (epoch !== this._geminiLoadEpoch) return;
+        this._geminiAuth = selection;
+      }
       if (!choices.ok) throw new Error('Could not check installed agents');
       const options = await choices.json() as Array<{ harness: string }>;
       if (epoch !== this._geminiLoadEpoch) return;

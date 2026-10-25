@@ -252,7 +252,9 @@ export class ACPStream {
             return { status: 'accepted', inputId: input.id };
           }
           if (result.outcome !== 'promptRequired') throw new Error(`Unsupported ACP steering outcome: ${result.outcome}`);
+          this.interruptForSteer = true;
           await this.turnPromise;
+          this.interruptForSteer = false;
         } else {
           // ACP v1 has no standard mid-turn injection. Stop the active prompt,
           // keep its partial output, and immediately continue with the steer.
@@ -269,6 +271,8 @@ export class ACPStream {
       } finally {
         this.steerPending = false;
         this.interruptForSteer = false;
+        // Keep a concurrent user stop pending until its active turn settles.
+        if (!this.stopDuringSteer || !this.busy) this.session.cancelRequested = false;
         this.stopDuringSteer = false;
       }
     }
