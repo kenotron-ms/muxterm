@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 
 const profiles = {
@@ -10,6 +13,39 @@ const profiles = {
 };
 
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
+
+function geminiEnvironment() {
+  const env = { ...process.env };
+  const dataHome = env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  let mode = 'google';
+  try { mode = readFileSync(join(dataHome, 'muxterm', 'gemini-auth-mode'), 'utf8').trim(); } catch { /* Google sign-in is the default. */ }
+  if (mode !== 'api-key') {
+    // A key intended for another CLI session must not override Google sign-in.
+    delete env.GEMINI_API_KEY;
+    delete env.GOOGLE_API_KEY;
+    return env;
+  }
+  let key = env.GEMINI_API_KEY?.trim();
+  if (!key) {
+    for (const name of ['keys.env', 'key.env']) {
+      try {
+        const data = readFileSync(join(homedir(), '.amplifier', name), 'utf8').slice(0, 65536);
+        const line = data.split('\n').find(line => /^\s*(?:export\s+)?GEMINI_API_KEY\s*=/.test(line));
+        if (line) { key = line.replace(/^\s*(?:export\s+)?GEMINI_API_KEY\s*=\s*/, '').trim().replace(/^(['"])(.*)\1$/, '$2'); break; }
+      } catch { /* Try the next standard key file. */ }
+    }
+  }
+  if (!key) throw new Error('GEMINI_API_KEY is not configured');
+  const root = join(dataHome, 'muxterm', 'gemini-api-key');
+  mkdirSync(join(root, '.gemini'), { recursive: true, mode: 0o700 });
+  const settings = join(root, '.gemini', 'settings.json');
+  try { readFileSync(settings); }
+  catch { writeFileSync(settings, '{"security":{"auth":{"selectedType":"gemini-api-key"}}}\n', { flag: 'wx', mode: 0o600 }); }
+  env.GEMINI_CLI_HOME = root;
+  env.GEMINI_API_KEY = key;
+  delete env.GOOGLE_API_KEY;
+  return env;
+}
 
 export class ACPStream {
   constructor(session, emit, onProcessExit) {
@@ -32,7 +68,7 @@ export class ACPStream {
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
     const command = process.env[profile.env] || profile.command;
     this.profile = profile;
-    this.process = spawn(command, profile.args, { cwd: session.cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.process = spawn(command, profile.args, { cwd: session.cwd, env: session.harness === 'gemini' ? geminiEnvironment() : process.env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.exited = new Promise(resolve => { this.resolveExit = resolve; });
     this.stderr = '';
     this.process.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk).slice(-4000); });

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -34,6 +35,79 @@ type geminiLoginStatus struct {
 
 var geminiAuthURL = regexp.MustCompile(`https://accounts\.google\.com/o/oauth2/v2/auth\?[^\s\x00-\x20\x1b<>]+`)
 var geminiANSI = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+
+func geminiAuthModePath() (string, error) {
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if dataHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dataHome, "muxterm", "gemini-auth-mode"), nil
+}
+
+func geminiAuthMode() string {
+	path, err := geminiAuthModePath()
+	if err != nil {
+		return "google"
+	}
+	data, err := os.ReadFile(path)
+	if err == nil && strings.TrimSpace(string(data)) == "api-key" {
+		return "api-key"
+	}
+	return "google"
+}
+
+func (s *Server) handleGeminiAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeSDKJSON(w, http.StatusOK, map[string]any{
+			"mode": geminiAuthMode(), "apiKeyDetected": sdkAmplifierProviderKey("GEMINI_API_KEY") != "",
+		})
+		return
+	}
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&input); err != nil || (input.Mode != "google" && input.Mode != "api-key") {
+		http.Error(w, "Choose Google sign-in or a detected API key", http.StatusBadRequest)
+		return
+	}
+	if input.Mode == "api-key" && sdkAmplifierProviderKey("GEMINI_API_KEY") == "" {
+		http.Error(w, "GEMINI_API_KEY is not configured", http.StatusConflict)
+		return
+	}
+	path, err := geminiAuthModePath()
+	if err == nil {
+		err = os.MkdirAll(filepath.Dir(path), 0700)
+	}
+	if err == nil {
+		var file *os.File
+		file, err = os.CreateTemp(filepath.Dir(path), ".gemini-auth-*")
+		if err == nil {
+			defer os.Remove(file.Name())
+			_, err = file.WriteString(input.Mode + "\n")
+			if closeErr := file.Close(); err == nil {
+				err = closeErr
+			}
+			if err == nil {
+				err = os.Rename(file.Name(), path)
+			}
+		}
+	}
+	if err != nil {
+		http.Error(w, "Could not save Gemini authentication choice", http.StatusInternalServerError)
+		return
+	}
+	writeSDKJSON(w, http.StatusOK, map[string]any{
+		"mode": input.Mode, "apiKeyDetected": sdkAmplifierProviderKey("GEMINI_API_KEY") != "",
+	})
+}
 
 func (s *Server) geminiLoginStatusLocked() geminiLoginStatus {
 	if s.geminiLogin == nil {

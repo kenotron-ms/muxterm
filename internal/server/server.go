@@ -275,6 +275,8 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/ai/gemini/login", protect(http.HandlerFunc(s.handleGeminiLogin)))
 	s.mux.Handle("DELETE /api/ai/gemini/login", protect(http.HandlerFunc(s.handleGeminiLogin)))
 	s.mux.Handle("POST /api/ai/gemini/login/code", protect(http.HandlerFunc(s.handleGeminiLoginCode)))
+	s.mux.Handle("GET /api/ai/gemini/auth", protect(http.HandlerFunc(s.handleGeminiAuth)))
+	s.mux.Handle("PUT /api/ai/gemini/auth", protect(http.HandlerFunc(s.handleGeminiAuth)))
 
 	// Opt-in realtime voice for SDK chats.
 	if s.cfg.Voice.Enabled {

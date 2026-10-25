@@ -485,7 +485,7 @@ export class MuxNewChat extends LitElement {
 
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
-      ${this.harness === 'gemini' ? html`<mux-ui-feedback kind="info" appearance="panel">Use your Google AI account with Gemini CLI. To sign in, run <code>NO_BROWSER=true gemini</code> in a muxterm terminal, choose “Sign in with Google,” open its link, and paste the authorization code back into the terminal. Then retry loading models.<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open terminal</mux-ui-button></mux-ui-feedback>` : nothing}
+      ${this.harness === 'gemini' ? html`<mux-ui-feedback kind="info" appearance="panel">Choose Google sign-in or a detected GEMINI_API_KEY in Settings → AI, then retry loading models. For terminal sign-in, run <code>NO_BROWSER=true gemini</code> and follow Gemini CLI's prompts.<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open terminal</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.catalogError ? html`<mux-ui-feedback kind="error" appearance="panel">Could not load models: ${this.catalogError}<mux-ui-button slot="action" size="small" @click=${() => void this.loadCatalog()}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
