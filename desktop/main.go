@@ -27,10 +27,11 @@ func main() {
 	}
 	companion.token = hex.EncodeToString(tokenBytes[:])
 	app := application.New(application.Options{
-		Name:        "Muxterm",
-		Description: "Muxterm for Mac",
-		Services:    []application.Service{application.NewService(companion)},
-		Assets:      application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
+		Name:              "Muxterm",
+		Description:       "Muxterm for Mac",
+		Services:          []application.Service{application.NewService(companion)},
+		Assets:            application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
+		RawMessageHandler: companion.browserMessage,
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
@@ -48,6 +49,18 @@ func main() {
 	muxMenu.Add("Connection and ports…").OnClick(func(*application.Context) {
 		companion.showSettings()
 	})
+	if runtime.GOOS == "darwin" {
+		// WebKit routes Command editing shortcuts through the native responder
+		// chain. Keep bare Backspace out of the menu so terminal input receives it.
+		editMenu := menu.AddSubmenu("Edit")
+		editMenu.AddRole(application.Undo)
+		editMenu.AddRole(application.Redo)
+		editMenu.AddSeparator()
+		editMenu.AddRole(application.Cut)
+		editMenu.AddRole(application.Copy)
+		editMenu.AddRole(application.Paste)
+		editMenu.AddRole(application.SelectAll)
+	}
 	menu.AddRole(application.WindowMenu)
 	app.Menu.Set(menu)
 	app.Window.NewWithOptions(application.WebviewWindowOptions{

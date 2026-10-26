@@ -105,7 +105,7 @@ export class MuxUITextField extends LitElement {
     const describedBy = [this.description && 'description', this.error && 'error'].filter(Boolean).join(' ');
     return html`
       ${this.label ? html`<label for="input">${this.label}${this.required ? ' *' : ''}</label>` : nothing}
-      <input id="input" .value=${this.value} type=${this.type} placeholder=${this.placeholder}
+      <input id="input" part="input" .value=${this.value} type=${this.type} placeholder=${this.placeholder}
         autocomplete=${this.autocomplete || nothing} ?disabled=${this.disabled} ?readonly=${this.readonly}
         ?required=${this.required} aria-label=${this.accessibleLabel || nothing}
         aria-invalid=${String(Boolean(this.error))} aria-describedby=${describedBy || nothing}

@@ -11,39 +11,62 @@ import (
 
 type browserMessage struct {
 	Type    string      `json:"type"`
-	ID      int         `json:"id"`
+	ID      string      `json:"id"`
 	URL     string      `json:"url"`
 	Visible bool        `json:"visible"`
 	Rect    browserRect `json:"rect"`
+}
+
+func (c *Companion) evalMuxtermJS(script string) {
+	if window, ok := c.app.Window.GetByName("muxterm"); ok {
+		window.ExecJS(script)
+	}
 }
 
 func (c *Companion) browserMessage(window application.Window, raw string, origin *application.OriginInfo) {
 	if !strings.HasPrefix(raw, "muxterm.desktop:") || window.Name() != "muxterm" || origin == nil || !origin.IsMainFrame {
 		return
 	}
-	c.mu.Lock()
-	serverURL := c.activeMuxtermURL
-	c.mu.Unlock()
-	server, serverErr := url.Parse(serverURL)
-	messageURL, messageErr := url.Parse(origin.Origin)
-	if serverErr != nil || messageErr != nil || server.Scheme != messageURL.Scheme || !strings.EqualFold(server.Host, messageURL.Host) {
-		return
-	}
 	var message browserMessage
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(raw, "muxterm.desktop:")), &message); err != nil {
 		return
 	}
+	originURL := origin.Origin
 	go func() {
 		c.bridgeMu.Lock()
 		defer c.bridgeMu.Unlock()
+		c.mu.Lock()
+		serverURL := c.activeMuxtermURL
+		c.mu.Unlock()
+		server, serverErr := url.Parse(serverURL)
+		messageURL, messageErr := url.Parse(originURL)
+		if serverErr != nil || messageErr != nil || server.Scheme != messageURL.Scheme || !strings.EqualFold(server.Host, messageURL.Host) {
+			return
+		}
 		var actionErr error
 		switch message.Type {
 		case "layout":
 			if message.Rect.Width >= 0 && message.Rect.Height >= 0 && message.Rect.Width < 10000 && message.Rect.Height < 10000 {
-				c.browserLayout(message.Rect, message.Visible)
+				c.mu.Lock()
+				c.browserRect, c.browserVisible = message.Rect, message.Visible
+				c.mu.Unlock()
+				c.browserLayout()
 			}
 		case "open":
-			_, actionErr = c.openBrowserTab(message.URL)
+			if message.ID == "" {
+				return
+			}
+			address := ""
+			if message.URL != "" {
+				u, err := c.prepareBrowserURL(message.URL)
+				actionErr = err
+				if err == nil {
+					address = u.String()
+				}
+			}
+			if actionErr == nil {
+				actionErr = c.browserOpen(message.ID, address)
+			}
 		case "navigate":
 			address, err := c.prepareBrowserURL(message.URL)
 			actionErr = err
@@ -69,7 +92,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 		active, tabs := c.browserState()
 		sort.Slice(tabs, func(i, j int) bool { return tabs[i].ID < tabs[j].ID })
 		state := struct {
-			Active int               `json:"active"`
+			Active string            `json:"active"`
 			Tabs   []browserTabState `json:"tabs"`
 			Error  string            `json:"error,omitempty"`
 		}{Active: active, Tabs: tabs}
