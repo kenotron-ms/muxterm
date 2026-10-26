@@ -1433,7 +1433,7 @@ export class MuxApp extends LitElement {
               </div>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal} @launcher-action=${this._onLauncherAction}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
@@ -1525,7 +1525,7 @@ export class MuxApp extends LitElement {
         @workspace-create-cancel=${this._cancelCreate}
         @workspace-create-submit=${this._submitCreate}></mux-workspace-create-dialog>` : ''}
       ${settingsPage ? html`<section class="settings-page" aria-label="Settings">${this._renderSettings(true)}</section>` : this._overlayPanel ? html`
-        <mux-ui-dialog open size="standard" label="Settings" @dismiss=${this._closeOverlayPanel}>
+        <mux-ui-dialog open size="wide" label="Settings" @dismiss=${this._closeOverlayPanel}>
           <div class="overlay-body">${this._renderSettings()}</div>
         </mux-ui-dialog>
       ` : ''}

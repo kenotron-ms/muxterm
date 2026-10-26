@@ -116,7 +116,7 @@ export class MuxUIChoicePicker extends LitElement {
   override render() {
     const summary = this.summary.trim() || this.label.trim() || 'Choose an option';
     return html`<details ?open=${this.open} @toggle=${this.onToggle}>
-      <summary aria-label=${this.label ? `${this.label}: ${this.summary.trim() || 'Choose an option'}` : summary}><span class="summary-label">${summary}</span><span class="chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <summary part="summary" aria-label=${this.label ? `${this.label}: ${this.summary.trim() || 'Choose an option'}` : summary}><span class="summary-label">${summary}</span><span class="chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="panel"><slot></slot></div>
     </details>`;
   }

@@ -95,7 +95,7 @@ const captures = [
   { file: 'settings-remotes-error-desktop.png', id: 'screens-settings--remotes-load-error', width: 1200, height: 800, ready: 'mux-ui-feedback[kind="error"]', readyText: 'Retry' },
   { file: 'settings-remotes-error-phone.png', id: 'screens-settings--phone-remotes-load-error', width: 390, height: 844, ready: 'mux-ui-feedback[kind="error"]', readyText: 'Retry' },
   { file: 'settings-add-host-error-phone.png', id: 'screens-settings--phone-remotes-add-error', width: 390, height: 844, ready: 'mux-ui-feedback[kind="error"]', readyText: 'That host address could not be added.' },
-  { file: 'settings-ai-error-desktop.png', id: 'screens-settings--ai-connection-error', width: 1200, height: 800, ready: 'mux-ui-feedback[kind="error"]', readyText: 'Could not reach Anthropic. Check your connection.' },
+  { file: 'settings-ai-error-desktop.png', id: 'screens-settings--ai-connection-error', width: 1200, height: 800, ready: 'mux-settings-surface mux-ui-feedback.settings-feedback[kind="error"]', readyText: 'Could not reach Anthropic. Check your connection.' },
   { file: 'settings-version-error-desktop.png', id: 'screens-settings--about-check-error', width: 1200, height: 800, ready: 'mux-ui-feedback[kind="error"]', readyText: 'Could not check the version. Try again.' },
   { file: 'project-editor-phone.png', id: 'composites-chat-list--phone-edit-project', width: 390, height: 844, ready: 'mux-ui-dialog[open]' },
   { file: 'operator-lane-phone.png', id: 'composites-operator-status--phone-expanded-lane', width: 390, height: 844, ready: 'mux-operator-status .detail' },

@@ -37,7 +37,7 @@ import {
 } from '../lib/ai.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
-import { ArrowLeft } from 'lucide';
+import { ArrowLeft, ChevronDown } from 'lucide';
 import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { macAppVersion, openMacDownloads } from '../lib/mac-app.js';
@@ -96,6 +96,14 @@ const LIGHT_THEMES: ThemeCard[] = [
  * rather than sitting empty or, worse, editable and ignored.
  */
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
+const SETUP_AGENTS = [
+  { harness:'codex', name:'Codex', description:'OpenAI coding agent', login:'codex login', docs:'https://developers.openai.com/codex/cli/' },
+  { harness:'claude', name:'Claude Code', description:'Anthropic coding agent', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
+  { harness:'opencode', name:'OpenCode · ACP', description:'Open source coding agent', login:'opencode', docs:'https://opencode.ai/docs/' },
+  { harness:'pi', name:'Pi · ACP', description:'Lightweight coding agent', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
+  { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
+  { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
+] as const;
 
 /**
  * The status markers. A glyph in a fixed gutter, not a coloured slab: colour
@@ -389,12 +397,26 @@ export class MuxSettingsSurface extends LitElement {
       margin: var(--ui-space-4) 0 0;
     }
 
+    /* ── Coding agent guides in AI settings ── */
+    .agent-intro { margin:0 0 var(--ui-space-6); color:var(--ui-text-muted); line-height:1.5; }
+    .agent-list { display:grid; gap:var(--ui-space-2); }
+    .agent-card { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); overflow:hidden; }
+    .agent-card summary { display:flex; align-items:center; gap:var(--ui-space-3); min-height:var(--ui-control-lg); padding:var(--ui-space-3) var(--ui-space-4); cursor:pointer; list-style:none; }
+    .agent-card summary::-webkit-details-marker { display:none; }
+    .agent-card summary:hover { background:var(--ui-surface-hover); }
+    .agent-card summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
+    .agent-identity { display:grid; flex:1; min-width:0; gap:var(--ui-space-1); }
+    .agent-title { font-size:var(--ui-text-md); font-weight:600; }
+    .agent-description { color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .agent-chevron { display:flex; color:var(--ui-text-muted); transition:transform .15s ease; }
+    .agent-card[open] .agent-chevron { transform:rotate(180deg); }
+    .agent-body { padding:var(--ui-space-2) var(--ui-space-5) var(--ui-space-5); border-top:1px solid var(--ui-border); }
+    .agent-card p { margin:var(--ui-space-3) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .agent-card-actions { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-4); }
+    .agent-card-actions a { color:var(--ui-accent); font-size:var(--ui-text-sm); text-decoration:none; }
     /* ── AI section ── */
-    .ai-harness { border-bottom:1px solid var(--ui-border); padding-bottom:var(--ui-space-7); margin-bottom:var(--ui-space-7); }
-    .ai-harness-head { display:flex; align-items:center; gap:var(--ui-space-4); flex-wrap:wrap; }
     .ai-harness-mark { display:block; width:var(--ui-icon-lg); height:var(--ui-icon-lg); flex:none; background:var(--ui-text); mask:var(--gemini-mark) center/contain no-repeat; }
-    .ai-harness-name { margin:0; font-size:var(--ui-text-lg); font-weight:600; flex:1; }
-    .ai-harness p { color:var(--ui-text-muted); line-height:1.5; margin:var(--ui-space-4) 0 0; }
+    .ai-harness p { line-height:1.5; }
     .ai-harness code { color:var(--ui-text); overflow-wrap:anywhere; }
     .ai-harness-actions { display:flex; gap:var(--ui-space-3); flex-wrap:wrap; margin-top:var(--ui-space-5); }
     .ai-auth-switch { display:block; margin-top:var(--ui-space-4); }
@@ -633,6 +655,13 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _aiBusy = false;
   @state() private _aiMessage = '';
   @state() private _aiMessageKind: FeedbackKind = 'info';
+  @state() private _installingAgent = '';
+  @state() private _installedAgent = '';
+  @state() private _agentInstallError = '';
+  @state() private _agentInstallErrorMessage = '';
+  @state() private _readyAgents: ReadonlySet<string> | null = null;
+  @state() private _agentStatusError = false;
+  private _agentStatusEpoch = 0;
   @state() private _antigravityAuth: AntigravityAuth = { mode:'google', apiKeyDetected:false, installed:false, installSupported:false };
   @state() private _antigravityLogin: AntigravityLoginStatus = { state:'idle' };
   @state() private _antigravityStatus: 'checking' | 'missing' | 'sign-in' | 'connected' | 'error' = 'checking';
@@ -696,13 +725,14 @@ export class MuxSettingsSurface extends LitElement {
     this._unsubRemotes = remotesStore.subscribe(() => {
       if (this._section === 'remotes') void this._loadRemotes();
     });
-    if (this._section === 'ai') void this._loadAntigravity();
+    if (this._section === 'ai') this._loadAIConnections();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.clearTimeout(this._antigravityPollTimer);
     ++this._antigravityEpoch;
+    ++this._agentStatusEpoch;
     this._unsubRemotes?.();
     this._unsubRemotes = null;
   }
@@ -713,7 +743,7 @@ export class MuxSettingsSurface extends LitElement {
       const changedSection = this._setSection(this.openSection);
       if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
       if (changedSection && this.openSection === 'voice') void this._loadVoice();
-      if (changedSection && this.openSection === 'ai') void this._loadAntigravity();
+      if (changedSection && this.openSection === 'ai') this._loadAIConnections();
     }
   }
 
@@ -738,6 +768,7 @@ export class MuxSettingsSurface extends LitElement {
 
   private _setSection(section: SettingsSection): boolean {
     if (this._section === section) return false;
+    if (this._section === 'ai') ++this._agentStatusEpoch;
     this._section = section;
     if (section === 'about') void this._checkVersion();
     return true;
@@ -750,7 +781,7 @@ export class MuxSettingsSurface extends LitElement {
       ++this._antigravityEpoch;
     }
     if (section === 'voice') void this._loadVoice();
-    if (section === 'ai') void this._loadAntigravity();
+    if (section === 'ai') this._loadAIConnections();
     if (section === 'remotes') void this._loadRemotes();
   }
 
@@ -1091,6 +1122,30 @@ export class MuxSettingsSurface extends LitElement {
     }));
   }
 
+  private _loadAIConnections(): void {
+    void this._loadAntigravity();
+    void this._loadAgentAvailability();
+  }
+
+  private async _loadAgentAvailability(): Promise<void> {
+    const epoch = ++this._agentStatusEpoch;
+    this._agentStatusError = false;
+    try {
+      const response = await fetch(apiPath('/api/sdk-chat-start-options'));
+      if (!response.ok) throw new Error('Could not load agent status');
+      const options = await response.json() as Array<{harness:string}>;
+      if (epoch === this._agentStatusEpoch && this.isConnected) this._readyAgents = new Set(options.map(option => option.harness));
+    } catch {
+      if (epoch === this._agentStatusEpoch && this.isConnected) { this._readyAgents = null; this._agentStatusError = true; }
+    }
+  }
+
+  private _agentStatus(harness: string) {
+    const ready = this._readyAgents?.has(harness) ?? false;
+    const label = this._agentStatusError ? 'Status unavailable' : this._readyAgents === null ? 'Checking' : ready ? 'Ready' : 'Set up';
+    return html`<mux-ui-status-badge appearance="plain" tone=${ready ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge>`;
+  }
+
   private async _loadAntigravity(): Promise<void> {
     const epoch = ++this._antigravityEpoch;
     window.clearTimeout(this._antigravityPollTimer);
@@ -1195,8 +1250,9 @@ export class MuxSettingsSurface extends LitElement {
     const label = this._antigravityStatus === 'connected' ? 'Ready'
       : this._antigravityStatus === 'missing' ? 'Not installed'
       : signingIn ? 'Signing in' : this._antigravityStatus === 'checking' ? 'Checking' : 'Sign in needed';
-    return html`<div class="ai-harness">
-      <div class="ai-harness-head"><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><h3 class="ai-harness-name">Google Antigravity · ACP</h3><mux-ui-status-badge tone=${this._antigravityStatus === 'connected' ? 'success' : 'warning'} dot>${label}</mux-ui-status-badge></div>
+    return html`<details class="agent-card ai-harness">
+      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Google Antigravity · ACP</span><span class="agent-description">Google coding agent</span></span><mux-ui-status-badge appearance="plain" tone=${this._antigravityStatus === 'connected' ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <div class="agent-body">
       <p>Connect Google's Antigravity ACP agent. It handles Google sign-in and stores its own credentials. A detected API key uses Google AI Studio quota.</p>
       <mux-ui-switch class="ai-auth-switch" layout="row" label="Use API key"
         description=${mode === 'api-key' ? 'API key selected' : 'Google sign-in selected'}
@@ -1216,7 +1272,8 @@ export class MuxSettingsSurface extends LitElement {
         ${signingIn ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this._antigravityBusy} @click=${() => void this._antigravityLoginRequest('DELETE')}>Cancel</mux-ui-button>` : nothing}
         <mux-ui-button size="small" variant="secondary" @click=${() => void this._loadAntigravity()}>Check connection</mux-ui-button>
       </div>
-    </div>`;
+      </div>
+    </details>`;
   }
 
   private async _saveAIKey(): Promise<void> {
@@ -1280,9 +1337,13 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAI() {
     const st = this.aiStatus;
     return html`
-      <p class="section-title">Coding harnesses</p>
-      ${this._renderAntigravity()}
-      <p class="section-title">Built-in Anthropic AI</p>
+      <p class="section-title">Coding agents</p>
+      <p class="agent-intro">Choose an agent to see its setup. Ready agents are available in New chat.</p>
+      <div class="agent-list">
+        ${this._renderAntigravity()}
+        ${SETUP_AGENTS.map(agent => html`<details class="agent-card"><summary><span class="agent-identity"><span class="agent-title">${agent.name}</span><span class="agent-description">${agent.description}</span></span>${this._agentStatus(agent.harness)}<span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary><div class="agent-body"><p>Install ${agent.name} on this computer, then run <strong>${agent.login}</strong> in a terminal to connect your account.</p><div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${!!this._installingAgent} @click=${() => void this._installAgent(agent.harness)}>${this._installingAgent === agent.harness ? 'Installing…' : 'Install'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>${this._installedAgent === agent.harness ? html`<mux-ui-feedback kind="success" density="compact">Installed. Connect your account, then refresh New chat.</mux-ui-feedback>` : nothing}${this._agentInstallError === agent.harness ? html`<mux-ui-feedback kind="error" density="compact">${this._agentInstallErrorMessage}</mux-ui-feedback>` : nothing}</div></details>`)}
+      </div>
+      <p class="section-title section-gap">Built-in Anthropic AI</p>
       <p class="ai-status">
         ${st.enabled
           ? `Anthropic features enabled -- key ending ${st.keyHint} (from ${st.source}).`
@@ -1314,6 +1375,25 @@ export class MuxSettingsSurface extends LitElement {
         never returned by the server, and is sent only to Anthropic.
       </p>
     `;
+  }
+
+  private async _installAgent(harness: string): Promise<void> {
+    if (this._installingAgent) return;
+    this._installingAgent = harness;
+    this._installedAgent = '';
+    this._agentInstallError = '';
+    this._agentInstallErrorMessage = '';
+    try {
+      const response = await fetch(apiPath(`/api/ai/agents/${harness}/install`), {method:'POST'});
+      if (!response.ok) throw new Error((await response.text()).trim() || 'Installation failed.');
+      this._installedAgent = harness;
+      await this._loadAgentAvailability();
+    } catch (error) {
+      this._agentInstallError = harness;
+      this._agentInstallErrorMessage = error instanceof Error ? error.message : 'Installation failed.';
+    } finally {
+      this._installingAgent = '';
+    }
   }
 
   // ── Voice ───────────────────────────────────────────────────────────────────

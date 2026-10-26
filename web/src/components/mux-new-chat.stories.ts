@@ -81,6 +81,16 @@ const meta = {
 export default meta;
 type Story = StoryObj<NewChatArgs>;
 export const Chat: Story = {};
+export const AgentMenu: Story = { play:async ({canvasElement}) => {
+  const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
+  for (let attempt=0; attempt<30; attempt++) {
+    await screen?.updateComplete;
+    const picker = screen?.shadowRoot?.querySelector<HTMLElement>('.agent-picker');
+    if (picker) { picker.shadowRoot?.querySelector<HTMLElement>('summary')?.click(); return; }
+    await new Promise(resolve => setTimeout(resolve,50));
+  }
+  throw new Error('Agent picker did not render');
+} };
 export const Folder: Story = { args: { project:'atlas' } };
 const openLocationMenu = async ({canvasElement}:{canvasElement:HTMLElement}) => {
   await sdkChats.refresh();

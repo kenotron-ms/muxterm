@@ -17,11 +17,9 @@ import '../ui/screen-header.js';
 import '../ui/folder-browser.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import '../ui/range-field.js';
-import '../ui/select.js';
 import '../ui/switch.js';
 import '../ui/text-field.js';
 import '../ui/menu-item.js';
-import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
 import './mux-folder-picker.js';
@@ -31,14 +29,6 @@ type StartOption = { harness: SDKHarnessName; provider: ProviderName };
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
 type ChatCatalog = { model: string; effort: string; defaultModel?: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[] };
 const providerLabel = (value: string) => value === 'provider-openai' ? 'OpenAI' : value === 'provider-anthropic' ? 'Anthropic' : value.replace(/^provider-/, '');
-const SETUP_AGENTS = [
-  { name:'Codex', command:'npm install -g @openai/codex@latest', login:'codex login', docs:'https://developers.openai.com/codex/cli/' },
-  { name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
-  { name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
-  { name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
-  { name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
-  { name:'Amplifier', command:'uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
-] as const;
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; uploading: boolean; error?: string };
 
 @customElement('mux-new-chat')
@@ -80,8 +70,6 @@ export class MuxNewChat extends LitElement {
   @state() private pickerOpen = false;
   @state() private busy = false;
   @state() private error = '';
-  @state() private copiedSetup = '';
-  @state() private setupOpen = false;
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   private dragDepth = 0;
@@ -114,7 +102,6 @@ export class MuxNewChat extends LitElement {
     .controls mux-ui-switch { margin-left:auto; }
     .composer-actions { display:flex; align-items:center; gap:var(--ui-space-3); padding-top:var(--ui-space-4); border-top:1px solid var(--ui-border); }
     .composer-actions .send { margin-left:auto; }
-    .controls mux-ui-select { max-width:var(--ui-new-chat-harness-width); }
     .project mux-ui-select-combobox { max-width:var(--ui-picker-trigger-compact-width); }
     .folder { display:grid; gap:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .folder-line { display:flex; align-items:center; gap:var(--ui-space-3); }
@@ -134,16 +121,7 @@ export class MuxNewChat extends LitElement {
     .drop-overlay { position:absolute; inset:var(--ui-space-4); z-index:var(--ui-z-drag-overlay); display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb, var(--ui-surface-base) 92%, transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
     .main > .content > mux-ui-feedback { margin:var(--ui-space-5) 0; }
     .setup-intro { margin:0 0 var(--ui-space-7); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
-    .setup-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(var(--ui-new-chat-setup-card-width),1fr)); gap:var(--ui-space-5); }
-    .setup-card { padding:var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background:var(--ui-surface-raised); }
-    .setup-card h2 { margin:0 0 var(--ui-space-4); font-size:var(--ui-text-xl); }
-    .setup-card code { display:block; min-height:var(--ui-control-lg); padding:var(--ui-space-4); border-radius:var(--ui-radius-md); overflow-wrap:anywhere; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-sm)/1.45 var(--ui-font-mono); }
-    .setup-card p { margin:var(--ui-space-4) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
-    .setup-actions { display:flex; align-items:center; gap:var(--ui-space-5); margin-top:var(--ui-space-5); }
-    .setup-actions a { color:var(--ui-accent); text-decoration:none; }
     .setup-refresh { margin-top:var(--ui-space-6); }
-    .setup-terminal { margin-bottom:var(--ui-space-6); }
-    .setup-back { margin-bottom:var(--ui-space-6); }
     .receipt { display:flex; align-items:center; gap:var(--ui-space-4); margin:var(--ui-space-5) var(--ui-space-1) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .receipt::before { content:''; width:var(--ui-attention-mark-size); height:var(--ui-attention-mark-size); border-radius:50%; background:var(--ui-accent); animation:receipt-pulse var(--ui-motion-pulse) ease-in-out infinite; }
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
@@ -162,7 +140,6 @@ export class MuxNewChat extends LitElement {
       .main { padding:var(--ui-space-6); }
       h1 { font-size:var(--ui-text-3xl); }
       .controls { position:relative; gap:var(--ui-space-3); }
-      .controls mux-ui-select { max-width:var(--ui-new-chat-harness-phone-width); }
       .location-trigger::part(button) { min-height:var(--ui-control-lg); }
       .location-fields { padding-bottom:max(var(--ui-space-6),env(safe-area-inset-bottom)); }
     }
@@ -172,10 +149,10 @@ export class MuxNewChat extends LitElement {
     .composer-actions { gap:var(--ui-space-2); min-height:var(--ui-control-sm); padding:0; border:0; }
     .composer-actions mux-ui-button[icon-only] { width:var(--ui-control-sm); height:var(--ui-control-sm); }
     .composer-actions .send::part(button) { border-radius:50%; }
-    .composer-actions .harness { min-width:0; max-width:var(--ui-new-chat-harness-width); }
-    .composer-actions .harness::part(select) { min-height:var(--ui-control-sm); }
+    .composer-actions .agent-picker { max-width:var(--ui-new-chat-harness-width); }
+    .composer-actions .agent-picker::part(summary) { min-height:var(--ui-control-sm); }
     .composer-actions .chat-picker { max-width:var(--ui-picker-trigger-compact-width); }
-    .composer-actions .agent-add { flex:none; }
+    .composer-actions .chat-picker::part(summary) { min-height:var(--ui-control-sm); }
     .composer-actions .loading-models { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .context-bar { display:flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border:1px solid var(--ui-border); border-top:0; border-radius:0 0 var(--ui-radius-xl) var(--ui-radius-xl); background:var(--ui-surface-raised); }
     .context-bar .spacer { flex:1; }
@@ -402,15 +379,14 @@ export class MuxNewChat extends LitElement {
       if (!this.isConnected) return;
       this.startOptions = options;
       const selected = options.find(item => item.harness === this.initialHarness) || options[0];
-      if (selected) { this.setupOpen = false; this.onHarnessChange(selected.harness); }
+      if (selected) this.onHarnessChange(selected.harness);
       else this.error = '';
     } catch (error) {
       if (this.isConnected) this.error = error instanceof Error ? error.message : String(error);
     }
   }
-  private async copySetup(command: string, name: string) {
-    try { await navigator.clipboard.writeText(command); this.copiedSetup = name; this.error = ''; }
-    catch { this.error = 'Could not copy the command. Select it above and copy it manually.'; }
+  private openAgentSettings() {
+    this.dispatchEvent(new CustomEvent('launcher-action', { detail:{action:'settings',section:'ai'}, bubbles:true, composed:true }));
   }
   private onDragEnter(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth++; this.dropActive = true; }
   private onDragOver(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; this.dropActive = true; }
@@ -480,19 +456,12 @@ export class MuxNewChat extends LitElement {
     const models = this.catalog?.models || [];
     const selectedModel = models.find(item => item.id === this.model);
     const efforts = selectedModel?.efforts?.length ? selectedModel.efforts : this.harness === 'codex' && this.model ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : [];
-    if (this.startOptions?.length === 0 || this.setupOpen) return html`
+    if (this.startOptions?.length === 0) return html`
       ${this.renderTopbar(projectName)}
       <div class="main setup"><div class="content">
-        ${this.startOptions?.length ? html`<mux-ui-button class="setup-back" variant="quiet" @click=${() => { this.setupOpen = false; }}>Back to chat</mux-ui-button>` : nothing}
-        <h1>${this.startOptions?.length ? 'Add a coding agent' : 'Choose your coding agent'}</h1>
-        <p class="setup-intro">Install or update an agent in a terminal, sign in to its provider, then refresh this list. Muxterm uses the agent installed on your computer, including its version.</p>
-        <mux-ui-button class="setup-terminal" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open a terminal in muxterm</mux-ui-button>
-        <div class="setup-list"><section class="setup-card"><h2>Google Antigravity · ACP</h2><p>Install Google's ACP agent and choose Google sign-in or a detected API key in Settings → AI.</p><div class="setup-actions"><mux-ui-button size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail:{action:'settings',section:'ai'}, bubbles:true, composed:true }))}>Open AI settings</mux-ui-button><a href="https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp" target="_blank" rel="noopener noreferrer">ACP registry ↗</a></div></section>${SETUP_AGENTS.map(agent => html`
-          <section class="setup-card"><h2>${agent.name}</h2>
-            <code>${agent.command}</code>
-            <p>After installing, run <strong>${agent.login}</strong> to connect your account.</p>
-            <div class="setup-actions"><mux-ui-button size="small" variant="secondary" @click=${() => void this.copySetup(agent.command, agent.name)}>${this.copiedSetup === agent.name ? 'Copied' : 'Copy install command'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
-          </section>`)}</div>
+        <h1>Choose your coding agent</h1>
+        <p class="setup-intro">Set up an agent in Settings, then refresh this list to start a chat.</p>
+        <mux-ui-button variant="primary" @click=${this.openAgentSettings}>Open agent settings</mux-ui-button>
         <mux-ui-button class="setup-refresh" variant="secondary" @click=${() => void this.loadStartOptions()}>Refresh installed agents</mux-ui-button>
         ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
       </div></div>`;
@@ -506,8 +475,10 @@ export class MuxNewChat extends LitElement {
         <div class="composer-actions">
           <input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}>
           <mux-ui-button icon-only size="small" variant="quiet" accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:16})}</mux-ui-button>
-          ${this.startOptions?.length ? html`<mux-ui-select class="harness" aria-label="Agent" .value=${this.harness} .options=${this.startOptions.map(option => ({ value:option.harness, label:sdkHarnessLabel(option.harness) }))} @change=${(e:Event) => this.onHarnessChange((e.target as MuxUISelect).value as SDKHarnessName)}></mux-ui-select>` : nothing}
-          <mux-ui-button class="agent-add" size="small" variant="quiet" @click=${() => { this.setupOpen = true; }}>Add agent</mux-ui-button>
+          ${this.startOptions?.length ? html`<mux-ui-choice-picker class="agent-picker" label="Agent" .summary=${sdkHarnessLabel(this.harness)} placement="above" appearance="plain" panel-align="left">
+            <mux-ui-choice-section heading="Available agents"><mux-ui-choice-list>${this.startOptions.map(option => html`<mux-ui-choice-item .label=${sdkHarnessLabel(option.harness)} ?selected=${this.harness === option.harness} @click=${(event:Event) => { this.onHarnessChange(option.harness); (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); }}></mux-ui-choice-item>`)}</mux-ui-choice-list></mux-ui-choice-section>
+            <mux-ui-choice-section separated><mux-ui-choice-item label="Add or manage agents…" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); this.openAgentSettings(); }}></mux-ui-choice-item><mux-ui-choice-item label="Refresh installed agents" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); void this.loadStartOptions(); }}></mux-ui-choice-item></mux-ui-choice-section>
+          </mux-ui-choice-picker>` : nothing}
           ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
           ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
           ${this.catalogLoading ? html`<span class="loading-models" role="status">Loading models…</span>` : nothing}
@@ -538,7 +509,6 @@ export class MuxNewChat extends LitElement {
         ${this.projectError ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.projectError}</mux-ui-feedback>` : nothing}
         <div class="actions"><mux-ui-button variant="quiet" ?disabled=${this.projectCreating} @click=${this.closeProjectDialog}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${this.projectCreating || !this.projectParent || !this.validNewFolderName(this.projectFolderName.trim())} @click=${() => void this.createProject()}>${this.projectCreating ? 'Creating…' : 'Create folder'}</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
-      ${this.harness === 'antigravity' ? html`<mux-ui-feedback kind="info" appearance="panel">Connect Google Antigravity in Settings → AI, then retry loading models.<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail:{action:'settings',section:'ai'}, bubbles:true, composed:true }))}>Open AI settings</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.catalogError ? html`<mux-ui-feedback kind="error" appearance="panel">Could not load models: ${this.catalogError}<mux-ui-button slot="action" size="small" @click=${() => void this.loadCatalog()}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}

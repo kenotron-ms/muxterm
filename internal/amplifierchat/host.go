@@ -68,7 +68,13 @@ func ResolveInterpreter() (string, error) {
 	if name := os.Getenv("MUXTERM_AMPLIFIER_PYTHON"); name != "" {
 		return exec.LookPath(name)
 	}
-	if amp, err := exec.LookPath("amplifier"); err == nil {
+	amp, err := exec.LookPath("amplifier")
+	if err != nil {
+		if home, homeErr := os.UserHomeDir(); homeErr == nil {
+			amp, err = exec.LookPath(filepath.Join(home, ".local", "bin", "amplifier"))
+		}
+	}
+	if err == nil {
 		if real, e := filepath.EvalSymlinks(amp); e == nil {
 			amp = real
 		}
@@ -96,7 +102,7 @@ func CheckAmplifierCLI(ctx context.Context) error {
 	}
 	cmd := exec.CommandContext(ctx, python, "-c", "import amplifier_app_cli")
 	if err := cmd.Run(); err != nil {
-		return errors.New("Amplifier CLI is unavailable in the selected Python interpreter; install Amplifier, run amplifier init, then restart muxterm")
+		return errors.New("Amplifier CLI is unavailable in the selected Python interpreter; install Amplifier and run amplifier init")
 	}
 	return nil
 }

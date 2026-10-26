@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { visuallyHidden } from './visually-hidden.js';
 
-export type DialogSize = 'standard' | 'compact';
+export type DialogSize = 'standard' | 'compact' | 'wide';
 export type DialogPresentation = 'centered' | 'adaptive';
 
 /** A modal shell for content owned by a feature. Native dialog provides the
@@ -47,6 +47,10 @@ export class MuxUIDialog extends LitElement {
       max-height: min(80dvh, var(--ui-dialog-compact-max-height));
     }
     :host([size='compact']) dialog[open] { display: block; }
+    :host([size='wide']) dialog {
+      width: min(var(--ui-dialog-wide-width), calc(100vw - var(--ui-space-9)));
+      height: min(92dvh, var(--ui-dialog-wide-height));
+    }
     @media (max-width: 700px) {
       :host([presentation='adaptive']) dialog {
         width: 100vw;

@@ -504,11 +504,25 @@ func sdkAgentExecutable(harness string) (string, error) {
 	if command == "" {
 		command = name
 	}
-	path, err := exec.LookPath(command)
+	path, err := sdkExecutablePath(command)
 	if err != nil {
 		return "", fmt.Errorf("%s CLI is unavailable (%s); install it, sign in, then refresh installed agents: %w", name, command, err)
 	}
 	return path, nil
+}
+func sdkExecutablePath(command string) (string, error) {
+	if path, err := exec.LookPath(command); err == nil {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && !filepath.IsAbs(command) {
+		for _, dir := range []string{".local/bin", ".npm-global/bin", ".opencode/bin"} {
+			if path, err := exec.LookPath(filepath.Join(home, dir, command)); err == nil {
+				return path, nil
+			}
+		}
+	}
+	return "", exec.ErrNotFound
 }
 func (h *sdkChatHost) ensure(harness string) error {
 	if harness == "amplifier" {
@@ -1076,15 +1090,24 @@ func sdkACPExecutable(harness string) string {
 		if value := os.Getenv("MUXTERM_ACP_PI_COMMAND"); value != "" {
 			return value
 		}
+		if path, err := sdkExecutablePath("pi-acp"); err == nil {
+			return path
+		}
 		return "pi-acp"
 	case "opencode":
 		if value := os.Getenv("MUXTERM_ACP_OPENCODE_COMMAND"); value != "" {
 			return value
 		}
+		if path, err := sdkExecutablePath("opencode"); err == nil {
+			return path
+		}
 		return "opencode"
 	case "deepseek":
 		if value := os.Getenv("MUXTERM_ACP_DEEPSEEK_COMMAND"); value != "" {
 			return value
+		}
+		if path, err := sdkExecutablePath("dsh"); err == nil {
+			return path
 		}
 		return "dsh"
 	case "gemini":
@@ -1470,7 +1493,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	if sdkReady {
 		for _, harness := range availableACP {
 			if harness == "pi" {
-				if _, err := exec.LookPath("pi"); err != nil {
+				if _, err := sdkExecutablePath("pi"); err != nil {
 					continue
 				}
 			}
@@ -1601,11 +1624,17 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			total := len(rows)
 			const size = 25
 			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-			if page < 0 || page > total/size+1 { page = 0 }
+			if page < 0 || page > total/size+1 {
+				page = 0
+			}
 			start := page * size
-			if start > total { start = total }
+			if start > total {
+				start = total
+			}
 			end := start + size
-			if end > total { end = total }
+			if end > total {
+				end = total
+			}
 			writeSDKJSON(w, 200, map[string]any{"chats": rows[start:end], "total": total})
 			return
 		}
@@ -1747,7 +1776,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Harness == "pi" {
-			if _, err := exec.LookPath("pi"); err != nil {
+			if _, err := sdkExecutablePath("pi"); err != nil {
 				http.Error(w, "Pi executable unavailable: pi", 503)
 				return
 			}
