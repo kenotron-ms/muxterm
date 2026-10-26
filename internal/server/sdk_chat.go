@@ -1431,14 +1431,13 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	options := make([]option, 0, 6)
 	codexPath, codexErr := sdkAgentExecutable("codex")
 	claudePath, claudeErr := sdkAgentExecutable("claude")
-	hasACP := false
+	availableACP := make([]string, 0, 4)
 	for _, harness := range []string{"pi", "opencode", "deepseek", "gemini"} {
 		if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
-			hasACP = true
-			break
+			availableACP = append(availableACP, harness)
 		}
 	}
-	sdkReady := (codexErr == nil || claudeErr == nil || hasACP) && s.sdkChats.ensure("") == nil
+	sdkReady := (codexErr == nil || claudeErr == nil || len(availableACP) > 0) && s.sdkChats.ensure("") == nil
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	home, _ := os.UserHomeDir()
@@ -1449,15 +1448,13 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if sdkReady {
-		for _, harness := range []string{"pi", "opencode", "deepseek", "gemini"} {
-			if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
-				if harness == "pi" {
-					if _, err := exec.LookPath("pi"); err != nil {
-						continue
-					}
+		for _, harness := range availableACP {
+			if harness == "pi" {
+				if _, err := exec.LookPath("pi"); err != nil {
+					continue
 				}
-				options = append(options, option{Harness: harness, Provider: "configured"})
 			}
+			options = append(options, option{Harness: harness, Provider: "configured"})
 		}
 	}
 	if sdkReady && claudeErr == nil {
@@ -1685,8 +1682,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	// A missing runtime is a setup failure, not a conversation. Check before
 	// writing a chat record or creating a worktree.
 	if isSDKACPHarness(req.Harness) {
-		if _, err := exec.LookPath(sdkACPExecutable(req.Harness)); err != nil {
-			http.Error(w, "ACP harness executable unavailable: "+sdkACPExecutable(req.Harness), 503)
+		command := sdkACPExecutable(req.Harness)
+		if _, err := exec.LookPath(command); err != nil {
+			http.Error(w, "ACP harness executable unavailable: "+command, 503)
 			return
 		}
 		if req.Harness == "pi" {
