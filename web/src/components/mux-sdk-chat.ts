@@ -2247,6 +2247,9 @@ export class MuxSDKChat extends LitElement {
   }
   private currentGoalText(record = this.goalDocument): string {
     const latestControl = record?.receipts.findLast(receipt => ['set','approve','start','resume','clear'].includes(receipt.action));
+    // The ledger accepts a clear before the harness reports its new state.
+    // Keep the old condition available if native delivery later becomes uncertain.
+    if (latestControl?.action === 'clear' && latestControl.status !== 'uncertain' && latestControl.status !== 'unsupported') return '';
     if (record?.state === 'cleared' && (!latestControl || latestControl.action === 'clear')) return '';
     return record?.revisions.at(-1)?.condition || this.chat?.goal || '';
   }
