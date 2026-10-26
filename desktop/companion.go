@@ -229,28 +229,11 @@ func (c *Companion) openMuxtermURL(rawURL string) error {
 			"let style = document.getElementById('muxterm-native-shell-style');" +
 			"if (!style) { style = document.createElement('style'); style.id = 'muxterm-native-shell-style'; document.head.appendChild(style); }" +
 			"style.textContent = " + strconv.Quote(string(shellStyle)) + ";" +
-			"if (!document.getElementById('muxterm-native-titlebar')) {" +
-			"const bar = document.createElement('div'); bar.id = 'muxterm-native-titlebar';" +
-			"const logo = document.createElement('img'); logo.src = new URL('icons/icon.svg', document.baseURI).href; logo.alt = ''; bar.appendChild(logo);" +
-			"const label = document.createElement('span'); label.textContent = 'Muxterm'; bar.appendChild(label); document.body.appendChild(bar); }" +
-			"customElements.whenDefined('mux-app').then(() => {" +
-			"const root = document.querySelector('mux-app')?.shadowRoot; if (!root) return;" +
-			"if (!root.getElementById('muxterm-native-gutter-style')) {" +
-			"const style = document.createElement('style'); style.id = 'muxterm-native-gutter-style';" +
-			"style.textContent = '.sidebar-gutter::after { content: none !important; }'; root.appendChild(style); }" +
-			"const styleSidebar = () => { const shadow = root.querySelector('mux-sidebar')?.shadowRoot;" +
-			"if (!shadow || shadow.getElementById('muxterm-native-sidebar-style')) return;" +
-			"const style = document.createElement('style'); style.id = 'muxterm-native-sidebar-style';" +
-			"style.textContent = '.terminal-heading { border-top: 0 !important; } .hg-head { border-bottom: 0 !important; }';" +
-			"shadow.appendChild(style); };" +
-			"styleSidebar(); customElements.whenDefined('mux-sidebar').then(styleSidebar);" +
-			"new MutationObserver(styleSidebar).observe(root, {childList:true, subtree:true});" +
-			"});" +
+			"window.muxtermDesktopVersion = " + strconv.Quote(desktopBundleVersion()) + ";" +
 			"})();" + browserJS,
 		BackgroundColour: application.NewRGB(232, 232, 237),
 		Mac: application.MacWindow{
 			TitleBar:                application.MacTitleBarHidden,
-			InvisibleTitleBarHeight: 42,
 		},
 	})
 	return nil

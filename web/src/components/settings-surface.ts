@@ -40,6 +40,7 @@ import { icon } from '../lib/icons.js';
 import { ArrowLeft } from 'lucide';
 import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
+import { macAppVersion, openMacDownloads } from '../lib/mac-app.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
   DEFAULT_VOICE_STATUS,
@@ -798,7 +799,9 @@ export class MuxSettingsSurface extends LitElement {
 
   private _renderAbout() {
     const status = this._updateStatus;
-    const message = this._installingUpdate ? 'Installing update. Muxterm will reconnect when it is ready.'
+    const macVersion = macAppVersion();
+    const message = macVersion ? 'Open the latest Mac release to download and install the app update.'
+      : this._installingUpdate ? 'Installing update. Muxterm will reconnect when it is ready.'
       : this._checkingVersion ? 'Checking version…'
       : this._updateError || (status?.error ? `Could not check: ${status.error}`
       : status?.devBuild ? 'Development build. Updates are managed by your build.'
@@ -807,12 +810,13 @@ export class MuxSettingsSurface extends LitElement {
     return html`
       <h3>About muxterm</h3>
       <p>muxterm brings your terminals and agent chats into one workspace.</p>
-      <div class="application-version">${status?.currentVersion ? `v${status.currentVersion.startsWith('v') ? status.currentVersion.slice(1) : status.currentVersion}` : 'Version unavailable'}</div>
+      <div class="application-version">${macVersion ? `Mac app v${macVersion}` : status?.currentVersion ? `v${status.currentVersion.startsWith('v') ? status.currentVersion.slice(1) : status.currentVersion}` : 'Version unavailable'}</div>
       <div class="application-actions">
-        <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
-        <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>
+        ${macVersion ? html`<mux-ui-button variant="primary" @click=${openMacDownloads}>Open Mac downloads</mux-ui-button>` : html`
+          <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
+          <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>`}
       </div>
-      <mux-ui-feedback class="settings-feedback" kind=${this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
+      <mux-ui-feedback class="settings-feedback" kind=${macVersion ? 'info' : this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
       <p>Build <code>${__GIT_SHA__}</code></p>
       <p>Config file: <code>~/.config/muxterm/config.toml</code></p>`;
   }
