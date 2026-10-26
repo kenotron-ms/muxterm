@@ -96,6 +96,14 @@ const LIGHT_THEMES: ThemeCard[] = [
  * rather than sitting empty or, worse, editable and ignored.
  */
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
+const SETUP_AGENTS = [
+  { name:'Codex', command:'npm install -g @openai/codex@latest', login:'codex login', docs:'https://developers.openai.com/codex/cli/' },
+  { name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
+  { name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
+  { name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
+  { name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
+  { name:'Amplifier', command:'uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
+] as const;
 
 /**
  * The status markers. A glyph in a fixed gutter, not a coloured slab: colour
@@ -389,6 +397,15 @@ export class MuxSettingsSurface extends LitElement {
       margin: var(--ui-space-4) 0 0;
     }
 
+    /* ── Coding agent guides in AI settings ── */
+    .agent-intro { margin:0 0 var(--ui-space-6); color:var(--ui-text-muted); line-height:1.5; }
+    .agent-list { display:grid; gap:var(--ui-space-4); }
+    .agent-card { padding:var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
+    .agent-card h3 { margin:0 0 var(--ui-space-3); font-size:var(--ui-text-lg); }
+    .agent-card code { display:block; padding:var(--ui-space-3); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); overflow-wrap:anywhere; font:var(--ui-text-sm)/1.5 var(--ui-font-mono); }
+    .agent-card p { margin:var(--ui-space-3) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .agent-card-actions { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-4); }
+    .agent-card-actions a { color:var(--ui-accent); font-size:var(--ui-text-sm); text-decoration:none; }
     /* ── AI section ── */
     .ai-harness { border-bottom:1px solid var(--ui-border); padding-bottom:var(--ui-space-7); margin-bottom:var(--ui-space-7); }
     .ai-harness-head { display:flex; align-items:center; gap:var(--ui-space-4); flex-wrap:wrap; }
@@ -633,6 +650,7 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _aiBusy = false;
   @state() private _aiMessage = '';
   @state() private _aiMessageKind: FeedbackKind = 'info';
+  @state() private _copiedAgent = '';
   @state() private _antigravityAuth: AntigravityAuth = { mode:'google', apiKeyDetected:false, installed:false, installSupported:false };
   @state() private _antigravityLogin: AntigravityLoginStatus = { state:'idle' };
   @state() private _antigravityStatus: 'checking' | 'missing' | 'sign-in' | 'connected' | 'error' = 'checking';
@@ -1280,9 +1298,13 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAI() {
     const st = this.aiStatus;
     return html`
-      <p class="section-title">Coding harnesses</p>
+      <p class="section-title">Coding agents</p>
+      <p class="agent-intro">Install an agent in a terminal and sign in to its provider. Then return to New chat to select it.</p>
       ${this._renderAntigravity()}
-      <p class="section-title">Built-in Anthropic AI</p>
+      <div class="agent-list">
+        ${SETUP_AGENTS.map(agent => html`<section class="agent-card"><h3>${agent.name}</h3><code>${agent.command}</code><p>After installing, run <strong>${agent.login}</strong> to connect your account.</p><div class="agent-card-actions"><mux-ui-button size="small" variant="secondary" @click=${() => void this._copyAgentCommand(agent.command, agent.name)}>${this._copiedAgent === agent.name ? 'Copied' : 'Copy install command'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div></section>`)}
+      </div>
+      <p class="section-title section-gap">Built-in Anthropic AI</p>
       <p class="ai-status">
         ${st.enabled
           ? `Anthropic features enabled -- key ending ${st.keyHint} (from ${st.source}).`
@@ -1314,6 +1336,11 @@ export class MuxSettingsSurface extends LitElement {
         never returned by the server, and is sent only to Anthropic.
       </p>
     `;
+  }
+
+  private async _copyAgentCommand(command: string, name: string): Promise<void> {
+    try { await navigator.clipboard.writeText(command); this._copiedAgent = name; }
+    catch { this._copiedAgent = ''; }
   }
 
   // ── Voice ───────────────────────────────────────────────────────────────────

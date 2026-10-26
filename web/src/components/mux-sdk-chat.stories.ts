@@ -294,6 +294,18 @@ export const RunningTurn: Story = {
   parameters:{apiFixture:chatFixture('storybook-chat-running','working')},
   play:showRunningTurn,
 };
+export const RunningSteer: Story = {
+  args:{sessionId:'storybook-chat-running-steer'},
+  parameters:{apiFixture:chatFixture('storybook-chat-running-steer','working')},
+  play:async context => {
+    await showRunningTurn(context);
+    const chat = context.canvasElement.querySelector<MuxSDKChat>('mux-sdk-chat');
+    const field = chat?.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea');
+    if (!field) throw new Error('Chat composer did not render');
+    field.value = 'Steer this turn toward the latest changes.';
+    field.dispatchEvent(new InputEvent('input',{bubbles:true,composed:true}));
+  },
+};
 export const PhoneRunningTurn: Story = {
   args:{sessionId:'storybook-chat-phone-running'},
   globals:{viewport:{value:'phone390',isRotated:false}},

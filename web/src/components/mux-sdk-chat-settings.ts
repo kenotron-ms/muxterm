@@ -37,6 +37,7 @@ export class MuxSDKChatSettings extends LitElement {
     ${subtleScrollbars}
     :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:var(--ui-space-4); font:var(--ui-text-sm)/1.4 var(--ui-font-sans); }
     .picker { min-width:0; }
+    .picker::part(summary) { min-height:var(--ui-control-sm); }
     .model-picker { margin-left:auto; }
     .group { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
     .load-feedback { flex:1; }
