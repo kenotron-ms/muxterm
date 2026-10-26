@@ -1599,9 +1599,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 				return rows[i].CreatedAt.After(rows[j].CreatedAt)
 			})
 			total := len(rows)
-			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-			if page < 0 { page = 0 }
 			const size = 25
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			if page < 0 || page > total/size+1 { page = 0 }
 			start := page * size
 			if start > total { start = total }
 			end := start + size
@@ -1692,6 +1692,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		p := h.projects[req.WorkspaceID]
 		if p != nil {
 			managedFolder = p.ManagedFolder
+			// Existing projects may still have additional source folders. Keep
+			// their execution context even though new projects expose one folder.
+			sourceFolders = append(sourceFolders, p.SourceFolders...)
 		}
 		h.mu.Unlock()
 		if p == nil {

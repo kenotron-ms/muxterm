@@ -210,7 +210,7 @@ export class MuxChatWorkspace extends LitElement {
   }
   private async saveProject() {
     try {
-      await sdkChats.updateProject(this.model.id, { name:this.editName.trim(), ...(this.model.project?.managedFolder ? {} : {path:this.editPath.trim()}), sourceFolders:[] });
+      await sdkChats.updateProject(this.model.id, { name:this.editName.trim(), ...(this.model.project?.managedFolder ? {} : {path:this.editPath.trim()}) });
       this.editing = false; this.error = '';
     } catch (error) { this.error = errorMessage(error); }
   }
@@ -269,7 +269,6 @@ export class MuxChatWorkspace extends LitElement {
     return html`<mux-ui-menu class=${this.contextMenu ? 'context' : ''} label="Project actions" @menu-dismiss=${this.dismissMenu}>
       <mux-ui-menu-item @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit folder</mux-ui-menu-item>
-      <mux-ui-menu-item @click=${() => this.startEdit()}>${icon(Pencil,{size:14})} Rename project</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => void this.pinProject()}>${icon(p.pinned ? PinOff : Pin,{size:14})} ${p.pinned ? 'Unpin project' : 'Pin project'}</mux-ui-menu-item>
       <mux-ui-menu-item tone="danger" @click=${() => this.requestRemoveProject()}>${icon(Trash2,{size:14})} Remove from Sessions</mux-ui-menu-item>
     </mux-ui-menu>`;
@@ -350,6 +349,7 @@ export class MuxChatList extends LitElement {
   private archiveAnchorPage = 0;
   private archivePages = new Map<number, SDKChat[]>();
   private archivePending = new Set<number>();
+  private lastArchivedCount = 0;
   @state() private projectDialogOpen = false;
   @state() private projectName = '';
   @state() private projectFolderName = '';
@@ -393,7 +393,12 @@ export class MuxChatList extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.addEventListener('chat-open', this.onChatOpen);
-    this.unsub=sdkChats.subscribe(() => { this.version++; if (this.archiveExpanded) this.refreshArchive(); });
+    this.lastArchivedCount = sdkChats.archivedCount;
+    this.unsub=sdkChats.subscribe(() => {
+      this.version++;
+      if (this.archiveExpanded && sdkChats.archivedCount !== this.lastArchivedCount) this.refreshArchive();
+      this.lastArchivedCount = sdkChats.archivedCount;
+    });
     void sdkChats.refresh();
   }
   override disconnectedCallback() { this.removeEventListener('chat-open', this.onChatOpen); this.unsub?.(); super.disconnectedCallback(); }
