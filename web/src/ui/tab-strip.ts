@@ -86,7 +86,9 @@ export class MuxUITabStrip extends LitElement {
 
   override render() {
     return html`<div class="tabs" role="tablist" aria-label=${this.accessibleLabel}>
-      ${this.tabs.map(tab => html`<div class="tab ${tab.id === this.activeId ? 'active' : ''}">
+      ${this.tabs.map(tab => html`<div class="tab ${tab.id === this.activeId ? 'active' : ''}"
+        @mousedown=${(event:MouseEvent) => { if (event.button === 1) event.preventDefault(); }}
+        @auxclick=${(event:MouseEvent) => { if (event.button !== 1) return; event.preventDefault(); this.emit('tab-close',tab.id); this.focusSelectedAfterChange(); }}>
         <button class="select" type="button" role="tab" data-id=${tab.id} title=${tab.title || tab.label}
           aria-selected=${String(tab.id === this.activeId)} tabindex=${tab.id === this.activeId ? 0 : -1}
           @click=${() => this.emit('tab-select',tab.id)} @keydown=${(event:KeyboardEvent) => this.onTabKeydown(event,tab.id)}>

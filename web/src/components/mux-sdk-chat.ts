@@ -428,11 +428,11 @@ export class MuxSDKChat extends LitElement {
     .goal-banner:hover .goal-condition { text-decoration:underline; text-underline-offset:3px; }
     .goal-condition { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:0; }
     .goal-state { flex-shrink:0; color:var(--ui-text-muted); font-size:var(--ui-text-xs); max-width:36%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-2); margin-top:var(--ui-space-3); min-height:var(--ui-control-sm); }
-    .composer-controls mux-ui-button[icon-only] { width:var(--ui-control-sm); height:var(--ui-control-sm); }
-    .composer-controls .send::part(button),.voice-compose-row .send::part(button) { border-radius:50%; }
-    .voice-compose-row mux-ui-button[icon-only] { width:var(--ui-control-sm); height:var(--ui-control-sm); }
-    .composer-controls .send, .composer-controls .stop { margin-left:auto; }
+    .composer-controls { display:flex; align-items:center; gap:var(--ui-space-1); margin-top:var(--ui-space-2); min-height:var(--ui-control-md); }
+    .composer-controls .attach-picker,.voice-compose-row .attach-picker { width:var(--ui-control-md); height:var(--ui-control-md); }
+    .composer-controls mux-sdk-chat-settings { flex:0 1 auto; }
+    .composer-controls .send,.voice-compose-row .send { width:var(--ui-control-md); height:var(--ui-control-md); margin-left:auto; }
+    .composer-controls .send::part(button),.voice-compose-row .send::part(button) { width:var(--ui-control-sm); height:var(--ui-control-sm); min-height:var(--ui-control-sm); margin:auto; border-radius:50%; }
     .textarea-sizing { position:relative; flex:1; min-width:0; min-height:var(--ui-chat-composer-min-height); max-height:var(--ui-composer-input-max-height); font:var(--ui-text-lg)/1.55 var(--ui-content-font-family); }
     textarea { display:block; width:100%; min-width:0; resize:none; border:0; outline:none; background:transparent; color:inherit; font:inherit; min-height:var(--ui-chat-composer-min-height); max-height:var(--ui-composer-input-max-height); padding:var(--ui-space-2) 0; box-sizing:border-box; overflow-y:auto; }
     .native-textarea-sizing textarea { field-sizing:content; height:auto; }
@@ -443,10 +443,14 @@ export class MuxSDKChat extends LitElement {
     .voice-text { white-space:pre-wrap; overflow-wrap:anywhere; }
     .send-icon { display:grid; place-items:center; animation:send-icon-in .18s ease-out both; }
     @keyframes send-icon-in { from { opacity:0; } to { opacity:1; } }
-    .voice-compose-row { min-height:var(--ui-control-md); display:flex; align-items:center; gap:var(--ui-space-4); color:var(--ui-text-muted); }
+    .voice-compose-row { min-height:var(--ui-control-md); display:flex; align-items:center; gap:var(--ui-space-1); color:var(--ui-text-muted); }
     .voice-compose-row .voice-label { flex:1; font-size:var(--ui-content-font-size); }
     .voice-compose-row .voice-meter { display:flex; align-items:center; }
-    @media(pointer:coarse) { .composer-controls,.voice-compose-row { min-height:var(--ui-control-lg); } .composer-controls mux-ui-button[icon-only],.voice-compose-row mux-ui-button[icon-only] { width:var(--ui-control-lg); height:var(--ui-control-lg); } }
+    @media(pointer:coarse) {
+      .composer-controls,.voice-compose-row { min-height:var(--ui-control-lg); }
+      .composer-controls .attach-picker,.voice-compose-row .attach-picker,.composer-controls .send,.voice-compose-row .send { width:var(--ui-control-lg); height:var(--ui-control-lg); }
+      .composer-controls .send::part(button),.voice-compose-row .send::part(button) { width:var(--ui-control-md); height:var(--ui-control-md); min-height:var(--ui-control-md); }
+    }
     @media (prefers-reduced-motion:reduce) { .send-icon { animation:none; } }
     .status { color:color-mix(in srgb,var(--ui-warning) 70%,var(--ui-text)); font-size:var(--ui-content-font-size); }
     .drawer { position:relative; z-index:var(--ui-z-drawer); flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); border-left:1px solid var(--ui-border); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
