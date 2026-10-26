@@ -22,6 +22,7 @@ import '../ui/text-field.js';
 import '../ui/menu-item.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
+import { pastedImageFiles, readClipboardImageFiles } from '../lib/clipboard-images.js';
 import './mux-folder-picker.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
@@ -70,6 +71,7 @@ export class MuxNewChat extends LitElement {
   @state() private pickerOpen = false;
   @state() private busy = false;
   @state() private error = '';
+  @state() private clipboardError = '';
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   private dragDepth = 0;
@@ -146,14 +148,21 @@ export class MuxNewChat extends LitElement {
     .content { width:min(100%,var(--ui-chat-transcript-width)); }
     h1 { margin-bottom:var(--ui-space-6); }
     .composer { gap:var(--ui-space-3); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); border-radius:var(--ui-radius-xl) var(--ui-radius-xl) 0 0; }
-    .composer-actions { gap:var(--ui-space-2); min-height:var(--ui-control-sm); padding:0; border:0; }
-    .composer-actions mux-ui-button[icon-only] { width:var(--ui-control-sm); height:var(--ui-control-sm); }
+    .composer-actions { gap:var(--ui-space-2); min-height:var(--ui-control-lg); padding:0; border:0; }
+    .composer-actions mux-ui-button[icon-only] { width:var(--ui-control-lg); height:var(--ui-control-lg); }
     .composer-actions .send::part(button) { border-radius:50%; }
     .composer-actions .agent-picker { max-width:var(--ui-new-chat-harness-width); }
-    .composer-actions .agent-picker::part(summary) { min-height:var(--ui-control-sm); }
-    .composer-actions .chat-picker { max-width:var(--ui-picker-trigger-compact-width); }
-    .composer-actions .chat-picker::part(summary) { min-height:var(--ui-control-sm); }
+    .composer-actions .agent-picker::part(summary) { min-height:var(--ui-control-lg); }
+    .composer-actions .chat-picker { flex:1 1 0; min-width:var(--ui-control-lg); max-width:var(--ui-picker-trigger-compact-width); }
+    .composer-actions .chat-picker::part(summary) { width:100%; min-height:var(--ui-control-lg); }
     .composer-actions .loading-models { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .composer-actions.has-bundle { display:grid; grid-template-columns:var(--ui-control-lg) minmax(0,1fr) minmax(0,1fr) var(--ui-control-lg); }
+    .composer-actions.has-bundle .attach-picker { grid-column:1; grid-row:1; }
+    .composer-actions.has-bundle .agent-picker { grid-column:2/4; grid-row:1; }
+    .composer-actions.has-bundle .send { grid-column:4; grid-row:1; margin-left:0; }
+    .composer-actions.has-bundle .bundle-picker { grid-column:1/3; grid-row:2; }
+    .composer-actions.has-bundle .settings-picker { grid-column:3/5; grid-row:2; }
+    .composer-actions.has-bundle .chat-picker { width:100%; max-width:none; }
     .context-bar { display:flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border:1px solid var(--ui-border); border-top:0; border-radius:0 0 var(--ui-radius-xl) var(--ui-radius-xl); background:var(--ui-surface-raised); }
     .context-bar .spacer { flex:1; }
     .project-picker { position:relative; min-width:0; }
@@ -179,6 +188,8 @@ export class MuxNewChat extends LitElement {
     @media(max-width:550px) {
       .composer-actions { flex-wrap:wrap; }
       .composer-actions .chat-picker { max-width:var(--ui-dock-rename-max-width); }
+      .context-bar { min-height:var(--ui-control-lg); }
+      .project-trigger,.project-option { min-height:var(--ui-control-lg); }
     }
   `;
 
@@ -394,14 +405,16 @@ export class MuxNewChat extends LitElement {
   private onDrop(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); event.stopPropagation(); this.resetDrop(); this.addFiles(Array.from(event.dataTransfer?.files || [])); }
   private onPick(event: Event) { const input = event.target as HTMLInputElement; this.addFiles(Array.from(input.files || [])); input.value = ''; }
   private onPaste(event: ClipboardEvent) {
-    const images = Array.from(event.clipboardData?.items || [])
-      .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
-      .map(item => item.getAsFile()).filter((file): file is File => file !== null);
+    const images = pastedImageFiles(event);
     if (!images.length) return;
     event.preventDefault();
-    this.addFiles(images.map((file, index) => new File([file],
-      `Pasted image ${new Date().toISOString().replace(/[:.]/g, '-')}${images.length > 1 ? `-${index + 1}` : ''}.${file.type.split('/')[1] || 'png'}`,
-      { type: file.type })));
+    this.clipboardError = '';
+    this.addFiles(images);
+  }
+  private async pasteImageFromClipboard() {
+    this.clipboardError = '';
+    try { this.addFiles(await readClipboardImageFiles()); }
+    catch (error) { this.clipboardError = error instanceof Error ? error.message : String(error); }
   }
   private addFiles(files: File[]) {
     for (const file of files) {
@@ -471,10 +484,11 @@ export class MuxNewChat extends LitElement {
       <h1>What would you like to do?</h1>
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
         ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
+        ${this.clipboardError ? html`<mux-ui-feedback kind="error" density="compact">${this.clipboardError}</mux-ui-feedback>` : nothing}
         <div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${this.onPromptInput} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div>
-        <div class="composer-actions">
+        <div class="composer-actions ${this.harness === 'amplifier' ? 'has-bundle' : ''}">
           <input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}>
-          <mux-ui-button icon-only size="small" variant="quiet" accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:16})}</mux-ui-button>
+          <mux-ui-choice-picker class="attach-picker" icon-only label="Add attachment" placement="above" appearance="plain" panel-align="left"><span slot="summary-icon">${icon(Paperclip,{size:16})}</span><mux-ui-choice-section heading="Add to message"><mux-ui-choice-list><mux-ui-choice-item label="Choose files or images" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click(); }}></mux-ui-choice-item><mux-ui-choice-item label="Paste image from clipboard" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); void this.pasteImageFromClipboard(); }}></mux-ui-choice-item></mux-ui-choice-list></mux-ui-choice-section></mux-ui-choice-picker>
           ${this.startOptions?.length ? html`<mux-ui-choice-picker class="agent-picker" label="Agent" .summary=${sdkHarnessLabel(this.harness)} placement="above" appearance="plain" panel-align="left">
             <mux-ui-choice-section heading="Available agents"><mux-ui-choice-list>${this.startOptions.map(option => html`<mux-ui-choice-item .label=${sdkHarnessLabel(option.harness)} ?selected=${this.harness === option.harness} @click=${(event:Event) => { this.onHarnessChange(option.harness); (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); }}></mux-ui-choice-item>`)}</mux-ui-choice-list></mux-ui-choice-section>
             <mux-ui-choice-section separated><mux-ui-choice-item label="Add or manage agents…" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); this.openAgentSettings(); }}></mux-ui-choice-item><mux-ui-choice-item label="Refresh installed agents" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); void this.loadStartOptions(); }}></mux-ui-choice-item></mux-ui-choice-section>

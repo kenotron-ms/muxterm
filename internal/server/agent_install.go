@@ -82,6 +82,8 @@ func installAgentScript(ctx context.Context, url string) error {
 
 func installCodingAgent(ctx context.Context, harness string) error {
 	switch harness {
+	case "copilot":
+		return runAgentInstaller(ctx, "npm", []string{"install", "-g", "@github/copilot"}, nil)
 	case "codex":
 		return runAgentInstaller(ctx, "npm", []string{"install", "-g", "@openai/codex@latest"}, nil)
 	case "claude":
@@ -102,7 +104,7 @@ func installCodingAgent(ctx context.Context, harness string) error {
 func (s *Server) handleCodingAgentInstall(w http.ResponseWriter, r *http.Request) {
 	harness := r.PathValue("harness")
 	switch harness {
-	case "codex", "claude", "opencode", "pi", "deepseek", "amplifier":
+	case "copilot", "codex", "claude", "opencode", "pi", "deepseek", "amplifier":
 	default:
 		http.Error(w, "unsupported coding agent", http.StatusBadRequest)
 		return

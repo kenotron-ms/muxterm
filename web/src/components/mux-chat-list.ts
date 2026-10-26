@@ -18,6 +18,7 @@ import '../ui/menu.js';
 import './mux-folder-picker.js';
 import codexMark from '../assets/harness/codex.svg?url';
 import claudeMark from '../assets/harness/claude.svg?url';
+import copilotMark from '../assets/harness/copilot.svg?url';
 import amplifierMark from '../assets/harness/amplifier.png?url';
 import piMark from '../assets/harness/pi.svg?url';
 import opencodeMark from '../assets/harness/opencode.svg?url';
@@ -25,7 +26,7 @@ import deepseekMark from '../assets/harness/deepseek.svg?url';
 import geminiMark from '../assets/harness/gemini.svg?url';
 
 const harnessMarks: Record<SDKHarnessName, string> = {
-  codex: codexMark, claude: claudeMark, amplifier: amplifierMark,
+  codex: codexMark, claude: claudeMark, copilot: copilotMark, amplifier: amplifierMark,
   pi: piMark, opencode: opencodeMark, deepseek: deepseekMark, gemini: geminiMark, antigravity: geminiMark,
 };
 

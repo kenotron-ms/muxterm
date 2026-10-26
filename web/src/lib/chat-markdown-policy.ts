@@ -81,6 +81,7 @@ function localImage(raw: string): string | null {
 
 export const chatMarkdownPolicy: MdLinkPolicy = {
   draggable: false,
+  diagrams: true,
   image: localImage,
   remoteImages: true,
   reference: (href, label) => {

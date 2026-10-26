@@ -15,12 +15,13 @@ const fixture: ApiFixture = ({ url, method, init }) => {
     return fixtureJSON([
       { harness:'codex', provider:'openai' },
       { harness:'claude', provider:'anthropic' },
+      { harness:'copilot', provider:'configured' },
       { harness:'pi', provider:'openai' },
     ]);
   }
   if (method === 'GET' && url.pathname.endsWith('/api/sdk-chat-catalog')) {
     const harness = url.searchParams.get('harness');
-    const model = harness === 'claude' ? 'claude-sonnet' : 'gpt-6-sol';
+    const model = harness === 'claude' ? 'claude-sonnet' : harness === 'copilot' ? 'claude-sonnet-5.5' : 'gpt-6-sol';
     return fixtureJSON({
       model:'', effort:'', defaultModel:model,
       models:[{ id:model, label:model, efforts:['low','medium','high'], defaultEffort:'medium' }],
@@ -67,7 +68,7 @@ const meta = {
   args: { project:'', prompt:'', harness:'codex' as SDKHarnessName, compact:false },
   argTypes: {
     project: { control:'select', options:['', 'atlas', 'research'] },
-    harness: { control:'select', options:['codex', 'claude', 'pi'] },
+    harness: { control:'select', options:['codex', 'claude', 'copilot', 'pi'] },
   },
   render: (args: NewChatArgs) => html`<mux-new-chat
     .initialProject=${args.project}
@@ -81,6 +82,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<NewChatArgs>;
 export const Chat: Story = {};
+export const Copilot: Story = { args:{harness:'copilot'} };
 export const AgentMenu: Story = { play:async ({canvasElement}) => {
   const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
   for (let attempt=0; attempt<30; attempt++) {

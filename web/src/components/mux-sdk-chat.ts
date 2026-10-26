@@ -5,6 +5,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { MarkdownStream, parseMarkdown } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { chatMarkdownPolicy } from '../lib/chat-markdown-policy.js';
+import { pastedImageFiles, readClipboardImageFiles } from '../lib/clipboard-images.js';
 import '../lib/mermaid-diagram.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
@@ -19,6 +20,10 @@ import './mux-sdk-utility.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
 import '../ui/button.js';
 import '../ui/attachment.js';
+import '../ui/choice-item.js';
+import '../ui/choice-list.js';
+import '../ui/choice-picker.js';
+import '../ui/choice-section.js';
 import '../ui/action-tile.js';
 import '../ui/breadcrumb.js';
 import '../ui/feedback.js';
@@ -112,6 +117,7 @@ export class MuxSDKChat extends LitElement {
   @state() private draft = '';
   @state() private draftHasContent = false;
   @state() private error = '';
+  @state() private clipboardError = '';
   @state() private editingKey = 0;
   @state() private editDraft = '';
   @state() private editDraftHasContent = false;
@@ -440,6 +446,7 @@ export class MuxSDKChat extends LitElement {
     .voice-compose-row { min-height:var(--ui-control-md); display:flex; align-items:center; gap:var(--ui-space-4); color:var(--ui-text-muted); }
     .voice-compose-row .voice-label { flex:1; font-size:var(--ui-content-font-size); }
     .voice-compose-row .voice-meter { display:flex; align-items:center; }
+    @media(pointer:coarse) { .composer-controls,.voice-compose-row { min-height:var(--ui-control-lg); } .composer-controls mux-ui-button[icon-only],.voice-compose-row mux-ui-button[icon-only] { width:var(--ui-control-lg); height:var(--ui-control-lg); } }
     @media (prefers-reduced-motion:reduce) { .send-icon { animation:none; } }
     .status { color:color-mix(in srgb,var(--ui-warning) 70%,var(--ui-text)); font-size:var(--ui-content-font-size); }
     .drawer { position:relative; z-index:var(--ui-z-drawer); flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); border-left:1px solid var(--ui-border); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
@@ -1462,14 +1469,19 @@ export class MuxSDKChat extends LitElement {
   }
   private onPaste(event: ClipboardEvent) {
     if (this.voiceState !== 'idle') return;
-    const images = Array.from(event.clipboardData?.items || [])
-      .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
-      .map(item => item.getAsFile()).filter((file): file is File => file !== null);
+    const images = pastedImageFiles(event);
     if (!images.length) return;
     event.preventDefault();
-    this.addFiles(images.map((file, index) => new File([file],
-      `Pasted image ${new Date().toISOString().replace(/[:.]/g, '-')}${images.length > 1 ? `-${index + 1}` : ''}.${file.type.split('/')[1] || 'png'}`,
-      { type: file.type })));
+    this.clipboardError = '';
+    this.addFiles(images);
+  }
+  private async pasteImageFromClipboard() {
+    this.clipboardError = '';
+    try { this.addFiles(await readClipboardImageFiles()); }
+    catch (error) { this.clipboardError = error instanceof Error ? error.message : String(error); }
+  }
+  private attachmentPicker() {
+    return html`<input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><mux-ui-choice-picker class="attach-picker" icon-only label="Add attachment" placement="above" appearance="plain" panel-align="left"><span slot="summary-icon">${icon(Paperclip,{size:16})}</span><mux-ui-choice-section heading="Add to message"><mux-ui-choice-list><mux-ui-choice-item label="Choose files or images" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click(); }}></mux-ui-choice-item><mux-ui-choice-item label="Paste image from clipboard" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); void this.pasteImageFromClipboard(); }}></mux-ui-choice-item></mux-ui-choice-list></mux-ui-choice-section></mux-ui-choice-picker>`;
   }
   private addFiles(files: File[]) {
     for (const file of files) {
@@ -2332,10 +2344,11 @@ export class MuxSDKChat extends LitElement {
       ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions">${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
       <div class="composer" @paste=${this.onPaste}>
       ${this.goalBanner()}
-      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Attach files for later" tooltip="Attach files for later" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:16})}</mux-ui-button><span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-meter" aria-hidden="true"><mux-ui-voice-bars></mux-ui-voice-bars></span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.sendAgentButton()}</div>` : html`
+      ${this.clipboardError ? html`<mux-ui-feedback kind="error" density="compact">${this.clipboardError}</mux-ui-feedback>` : nothing}
+      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row">${this.attachmentPicker()}<span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-meter" aria-hidden="true"><mux-ui-voice-bars></mux-ui-voice-bars></span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.sendAgentButton()}</div>` : html`
       ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
       <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-haspopup="listbox" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
-      <div class="composer-controls"><input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:16})}</mux-ui-button><mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
+      <div class="composer-controls">${this.attachmentPicker()}<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}

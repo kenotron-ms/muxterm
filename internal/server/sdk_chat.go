@@ -1078,7 +1078,7 @@ func sdkModeNames(value any) []string {
 
 func isSDKACPHarness(harness string) bool {
 	switch harness {
-	case "pi", "opencode", "deepseek", "gemini", "antigravity":
+	case "copilot", "pi", "opencode", "deepseek", "gemini", "antigravity":
 		return true
 	}
 	return false
@@ -1086,6 +1086,14 @@ func isSDKACPHarness(harness string) bool {
 
 func sdkACPExecutable(harness string) string {
 	switch harness {
+	case "copilot":
+		if value := os.Getenv("MUXTERM_ACP_COPILOT_COMMAND"); value != "" {
+			return value
+		}
+		if path, err := sdkExecutablePath("copilot"); err == nil {
+			return path
+		}
+		return "copilot"
 	case "pi":
 		if value := os.Getenv("MUXTERM_ACP_PI_COMMAND"); value != "" {
 			return value
@@ -1469,7 +1477,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	codexPath, codexErr := sdkAgentExecutable("codex")
 	claudePath, claudeErr := sdkAgentExecutable("claude")
 	availableACP := make([]string, 0, 4)
-	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity"} {
+	for _, harness := range []string{"copilot", "pi", "opencode", "deepseek", "antigravity"} {
 		if harness == "antigravity" {
 			if antigravityAvailable() {
 				availableACP = append(availableACP, harness)
@@ -1689,7 +1697,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "anthropic"
 		case "amplifier":
 			req.Provider = "configured"
-		case "pi", "opencode", "deepseek", "gemini", "antigravity":
+		case "copilot", "pi", "opencode", "deepseek", "gemini", "antigravity":
 			req.Provider = "configured"
 		}
 	}
