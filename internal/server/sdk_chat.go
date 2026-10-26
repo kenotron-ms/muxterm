@@ -1571,12 +1571,44 @@ func (s *Server) handleSDKChatCatalog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == "GET" {
+		filtering := r.URL.Query().Has("archived")
+		archived := r.URL.Query().Get("archived") == "true"
+		query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+		if len(query) > 512 {
+			http.Error(w, "query too long", http.StatusBadRequest)
+			return
+		}
 		h.mu.Lock()
 		rows := make([]sdkChat, 0, len(h.chats))
+		archivedCount := 0
 		for _, c := range h.chats {
-			rows = append(rows, *c)
+			if c.Archived {
+				archivedCount++
+			}
+			if (!filtering || c.Archived == archived) && (query == "" || strings.Contains(strings.ToLower(c.Title), query) || strings.Contains(strings.ToLower(c.ProjectPath), query)) {
+				rows = append(rows, *c)
+			}
 		}
 		h.mu.Unlock()
+		w.Header().Set("X-Archived-Count", strconv.Itoa(archivedCount))
+		if filtering && archived {
+			sort.Slice(rows, func(i, j int) bool {
+				if rows[i].CreatedAt.Equal(rows[j].CreatedAt) {
+					return rows[i].ID < rows[j].ID
+				}
+				return rows[i].CreatedAt.After(rows[j].CreatedAt)
+			})
+			total := len(rows)
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			if page < 0 { page = 0 }
+			const size = 25
+			start := page * size
+			if start > total { start = total }
+			end := start + size
+			if end > total { end = total }
+			writeSDKJSON(w, 200, map[string]any{"chats": rows[start:end], "total": total})
+			return
+		}
 		writeSDKJSON(w, 200, rows)
 		return
 	}
@@ -1659,7 +1691,6 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		p := h.projects[req.WorkspaceID]
 		if p != nil {
-			sourceFolders = append(sourceFolders, p.SourceFolders...)
 			managedFolder = p.ManagedFolder
 		}
 		h.mu.Unlock()

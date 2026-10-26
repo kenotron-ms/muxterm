@@ -2,10 +2,10 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
+import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageCircle, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { laneIcon } from '../lib/lane-icon.js';
-import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
+import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIMenu } from '../ui/menu.js';
@@ -13,10 +13,9 @@ import '../ui/text-field.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
-import '../ui/folder-browser.js';
 import '../ui/list-row.js';
 import '../ui/menu.js';
-import '../ui/switch.js';
+import './mux-folder-picker.js';
 import codexMark from '../assets/harness/codex.svg?url';
 import claudeMark from '../assets/harness/claude.svg?url';
 import amplifierMark from '../assets/harness/amplifier.png?url';
@@ -34,7 +33,9 @@ function harnessMark(chat: SDKChat, className = 'chat-icon') {
   return html`<span slot="icon" class="${className} harness-mark ${chat.state}" style=${`--harness-mark:url("${harnessMarks[chat.harness]}")`} title=${`${sdkHarnessLabel(chat.harness)} · ${chat.state}`}></span>`;
 }
 
-interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean }
+const ARCHIVE_PAGE_SIZE = 25;
+const ARCHIVE_ROW_HEIGHT = 32;
+interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean; archiveStart?: number; total?: number; loading?: boolean; archiveError?: string }
 type PendingConfirmation =
   | { kind:'remove-project'; id:string; name:string }
   | { kind:'archive-linked-chat'; id:string; name:string };
@@ -64,10 +65,6 @@ export class MuxChatWorkspace extends LitElement {
   @state() private editing = false;
   @state() private editName = '';
   @state() private editPath = '';
-  @state() private editFolders: string[] = [];
-  @state() private newSource = '';
-  @state() private editListing?: FolderListing;
-  @state() private browseTarget: 'primary' | 'source' = 'source';
   @state() private error = '';
   @state() private renamingId = '';
   @state() private renameDraft = '';
@@ -78,11 +75,6 @@ export class MuxChatWorkspace extends LitElement {
     const menu = this.renderRoot.querySelector('mux-ui-menu');
     const trigger = this.menuFor === 'project' ? this.renderRoot.querySelector('.row .action.more') : this.renderRoot.querySelector(`.chat-row .action.more[data-chat-id="${CSS.escape(this.menuFor)}"]`);
     if (this.menuFor && ![menu, trigger].some(el => el !== null && path.includes(el))) this.closeMenu();
-    const browser = this.renderRoot.querySelector('mux-ui-folder-browser');
-    const browseButtons = this.renderRoot.querySelectorAll('mux-ui-button[accessible-label="Browse primary folders"], mux-ui-button[accessible-label="Browse source folders"]');
-    if (this.editListing && !(browser && path.includes(browser)) && ![...browseButtons].some(el => path.includes(el))) {
-      this.editListing = undefined;
-    }
   };
   private readonly onEscape = (event: KeyboardEvent) => {
     if (event.key === 'Escape') { this.menuFor = ''; this.contextMenu = false; this.renamingId = ''; }
@@ -127,6 +119,10 @@ export class MuxChatWorkspace extends LitElement {
     .row:has(mux-ui-menu) .action.more,.chat-row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
     mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-space-8); }
+    .archive-list { box-sizing:border-box; max-height:320px; overflow-y:auto; overscroll-behavior:contain; }
+    .archive-list .chat-row { height:32px; min-height:32px; }
+    .archive-spacer { pointer-events:none; }
+    .archive-status { padding:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .chat-row[selected] { background:var(--ui-nav-selected); }
     .chat-icon { width:var(--ui-space-6); height:var(--ui-space-6); display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
     .harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
@@ -205,9 +201,6 @@ export class MuxChatWorkspace extends LitElement {
     this.closeMenu();
     this.editName = project.name;
     this.editPath = project.path;
-    this.editFolders = [...(project.sourceFolders ?? [])];
-    this.newSource = '';
-    this.editListing = undefined;
     this.error = '';
     this.editing = true;
     void this.updateComplete.then(async () => {
@@ -215,26 +208,9 @@ export class MuxChatWorkspace extends LitElement {
       this.renderRoot.querySelector<MuxUITextField>('.editor mux-ui-text-field')?.focus();
     });
   }
-  private async browseFolder(target: 'primary' | 'source', path: string) {
-    try { this.editListing = await sdkChats.folders(path); this.browseTarget = target; this.error = ''; }
-    catch (error) { this.error = errorMessage(error); }
-  }
-  private selectFolder() {
-    if (!this.editListing) return;
-    if (this.browseTarget === 'primary') this.editPath = this.editListing.path;
-    else this.newSource = this.editListing.path;
-    this.editListing = undefined;
-  }
-  private addSource() {
-    const path = this.newSource.trim();
-    if (!path) return;
-    if (!this.editFolders.includes(path) && path !== this.editPath) this.editFolders = [...this.editFolders, path];
-    this.newSource = '';
-  }
   private async saveProject() {
-    this.addSource();
     try {
-      await sdkChats.updateProject(this.model.id, { name:this.editName.trim(), ...(this.model.project?.managedFolder ? {} : {path:this.editPath.trim()}), sourceFolders:this.editFolders });
+      await sdkChats.updateProject(this.model.id, { name:this.editName.trim(), ...(this.model.project?.managedFolder ? {} : {path:this.editPath.trim()}), sourceFolders:[] });
       this.editing = false; this.error = '';
     } catch (error) { this.error = errorMessage(error); }
   }
@@ -292,16 +268,16 @@ export class MuxChatWorkspace extends LitElement {
     const p = this.model.project!;
     return html`<mux-ui-menu class=${this.contextMenu ? 'context' : ''} label="Project actions" @menu-dismiss=${this.dismissMenu}>
       <mux-ui-menu-item @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</mux-ui-menu-item>
-      <mux-ui-menu-item @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit project and folders</mux-ui-menu-item>
+      <mux-ui-menu-item @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit folder</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => this.startEdit()}>${icon(Pencil,{size:14})} Rename project</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => void this.pinProject()}>${icon(p.pinned ? PinOff : Pin,{size:14})} ${p.pinned ? 'Unpin project' : 'Pin project'}</mux-ui-menu-item>
-      <mux-ui-menu-item tone="danger" @click=${() => this.requestRemoveProject()}>${icon(Trash2,{size:14})} Remove project</mux-ui-menu-item>
+      <mux-ui-menu-item tone="danger" @click=${() => this.requestRemoveProject()}>${icon(Trash2,{size:14})} Remove from Sessions</mux-ui-menu-item>
     </mux-ui-menu>`;
   }
   private chatMenu(chat: SDKChat) {
     if (this.movingChatId === chat.id) return html`<mux-ui-menu class="context" label="Move chat to project" @menu-dismiss=${this.dismissMenu}>
       <mux-ui-menu-item @click=${() => { this.movingChatId = ''; }}>← Back</mux-ui-menu-item>
-      ${chat.workspaceId ? html`<mux-ui-menu-item @click=${() => void this.moveChat(chat, '')}>Move to Ungrouped</mux-ui-menu-item>` : nothing}
+      ${chat.workspaceId ? html`<mux-ui-menu-item @click=${() => void this.moveChat(chat, '')}>Move to Chat</mux-ui-menu-item>` : nothing}
       ${sdkChats.projects.filter(project => project.id !== chat.workspaceId).map(project => html`<mux-ui-menu-item @click=${() => void this.moveChat(chat, project.id)}>Move to ${project.name}</mux-ui-menu-item>`)}
     </mux-ui-menu>`;
     return html`<mux-ui-menu class="context" label="Chat actions" @menu-dismiss=${this.dismissMenu}>
@@ -316,8 +292,8 @@ export class MuxChatWorkspace extends LitElement {
     const group = this.model;
     return html`
       <div class="row ${group.archived ? 'archived' : ''}" @contextmenu=${(e:MouseEvent) => { if (group.project) this.showContext(e, 'project'); }}>
-        <mux-ui-list-row class="group" variant="group" label=${group.name} tooltip=${group.project?.managedFolder ? group.name : group.project?.path || group.name} expandable .expanded=${this.open} ?muted=${group.archived} @click=${() => { this.open = !this.open; this.closeMenu(); }}>
-          <span slot="icon" class="folder">${icon(this.open ? FolderOpen : Folder, { size: 16 })}</span>
+        <mux-ui-list-row class="group" variant="group" label=${group.name} tooltip=${group.project?.managedFolder ? group.name : group.project?.path || group.name} expandable .expanded=${this.open} ?muted=${group.archived} @click=${() => { this.open = !this.open; this.closeMenu(); if (group.archived) this.dispatchEvent(new CustomEvent(this.open ? 'archive-open' : 'archive-close', { bubbles:true, composed:true })); }}>
+          <span slot="icon" class="folder">${icon(group.archived ? Archive : group.id === 'ungrouped' ? MessageCircle : this.open ? FolderOpen : Folder, { size: 16 })}</span>
         </mux-ui-list-row>
           ${!group.archived ? html`<mux-ui-button class="action new-chat" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`New chat in ${group.name}`} tooltip=${`New chat in ${group.name}`} @click=${() => this.newProjectChat()}>${icon(Plus,{size:15})}</mux-ui-button>` : nothing}
           ${group.project ? html`
@@ -326,27 +302,24 @@ export class MuxChatWorkspace extends LitElement {
             <mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Project options for ${group.name}`} tooltip="Project options" haspopup="menu" .expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>` : nothing}
         ${this.menuFor === 'project' && group.project ? this.projectMenu() : nothing}
       </div>
-      ${this.editing && group.project ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Edit project" open @dismiss=${() => { this.editing=false; this.error=''; this.editListing=undefined; }}><div class="editor">
-        <div class="editor-head"><h2>Edit project</h2><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Close project editor" @click=${() => { this.editing=false; this.error=''; }}>${icon(X,{size:18})}</mux-ui-button></div>
-        <p class="editor-intro">Set the name and folders used by chats in this project.</p>
+      ${this.editing && group.project ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Edit folder" open @dismiss=${() => { this.editing=false; this.error=''; }}><div class="editor">
+        <div class="editor-head"><h2>Edit folder</h2><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Close folder editor" @click=${() => { this.editing=false; this.error=''; }}>${icon(X,{size:18})}</mux-ui-button></div>
         <mux-ui-text-field label="Project name" aria-label="Edit project name" .value=${this.editName} @input=${(e:Event) => { this.editName = (e.target as MuxUITextField).value; }}></mux-ui-text-field>
-        ${group.project.managedFolder ? html`<span class="field-label">Folder</span><p class="editor-intro">No visible folder. Chats use Muxterm’s private project storage.</p>` : html`<span class="field-label">Primary folder</span><div class="source"><mux-ui-text-field aria-label="Primary source folder" .value=${this.editPath} @input=${(e:Event) => { this.editPath = (e.target as MuxUITextField).value; }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Browse primary folders" tooltip="Browse folders" @click=${() => void this.browseFolder('primary',this.editPath)}>${icon(Folder,{size:15})}</mux-ui-button></div>`}
-        <span class="field-label">Additional source folders</span>
-        ${this.editFolders.map((folder,index) => html`<div class="source"><mux-ui-text-field aria-label=${`Source folder ${index+1}`} .value=${folder} @input=${(e:Event) => { const next=[...this.editFolders]; next[index]=(e.target as MuxUITextField).value; this.editFolders=next; }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label=${`Remove source folder ${index+1}`} @click=${() => { this.editFolders=this.editFolders.filter((_,i)=>i!==index); }}>${icon(X,{size:14})}</mux-ui-button></div>`)}
-        <div class="source"><mux-ui-text-field aria-label="Add source folder path" placeholder="/absolute/path/to/source" .value=${this.newSource} @input=${(e:Event) => { this.newSource=(e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') this.addSource(); }}></mux-ui-text-field><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Browse source folders" tooltip="Browse folders" @click=${() => void this.browseFolder('source',this.newSource || this.editPath)}>${icon(Folder,{size:15})}</mux-ui-button><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Add source folder" tooltip="Add source folder" @click=${() => this.addSource()}>${icon(FolderPlus,{size:15})}</mux-ui-button></div>
-        ${this.editListing ? html`<mux-ui-folder-browser aria-label="Folder browser" .listing=${this.editListing} choose-label="Choose" @folder-navigate=${(event:CustomEvent<{path:string}>) => void this.browseFolder(this.browseTarget,event.detail.path)} @folder-choose=${() => this.selectFolder()}></mux-ui-folder-browser>` : nothing}
+        ${group.project.managedFolder ? html`<p class="editor-intro">This project uses Muxterm’s private storage.</p>` : html`<label class="field-label">Project folder<mux-folder-picker field label="Project folder" .value=${this.editPath} .base=${this.editPath} @folder-selected=${(event:CustomEvent<{path:string}>) => { this.editPath = event.detail.path; }}></mux-folder-picker></label>`}
         ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.error}</mux-ui-feedback>` : nothing}
-        <div class="editor-actions"><mux-ui-button size="small" variant="quiet" @click=${() => { this.editing=false; this.error=''; }}>Cancel</mux-ui-button><mux-ui-button size="small" variant="primary" ?disabled=${!this.editName.trim() || (!group.project.managedFolder && !this.editPath.trim())} @click=${() => void this.saveProject()}>Save project</mux-ui-button></div>
+        <div class="editor-actions"><mux-ui-button size="small" variant="quiet" @click=${() => { this.editing=false; this.error=''; }}>Cancel</mux-ui-button><mux-ui-button size="small" variant="primary" ?disabled=${!this.editName.trim() || (!group.project.managedFolder && !this.editPath.trim())} @click=${() => void this.saveProject()}>Save folder</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
       ${this.pendingConfirmation ? html`<mux-ui-dialog size="compact" presentation="adaptive" label=${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project' : 'Archive linked chat'} open @dismiss=${() => { this.pendingConfirmation=undefined; }}><div class="confirmation">
         <h2>${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project?' : 'Archive chat?'}</h2>
         <p>${this.pendingConfirmation.kind === 'remove-project'
-          ? `Remove “${this.pendingConfirmation.name}”? Its chats will stay in Ungrouped.`
+          ? `Remove “${this.pendingConfirmation.name}” from Sessions? Its chats will move to Chat. The folder stays on disk.`
           : `Archive “${this.pendingConfirmation.name}”? It will be removed from its operator's lanes.`}</p>
         <div class="confirmation-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingConfirmation=undefined; }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => void this.confirmPendingAction()}>${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project' : 'Archive chat'}</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
       ${this.error && !this.editing ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.error}</mux-ui-feedback>` : nothing}
-      ${this.open ? html`<div class="chats">${repeat(group.chats, chat => chat.id, chat => html`
+      ${this.open ? html`<div class=${group.archived ? 'chats archive-list' : 'chats'} role=${group.archived ? 'region' : nothing} aria-label=${group.archived ? 'Archived sessions' : nothing} @scroll=${group.archived ? (event:Event) => this.dispatchEvent(new CustomEvent('archive-visible', {detail:{index:Math.floor((event.target as HTMLElement).scrollTop / ARCHIVE_ROW_HEIGHT)},bubbles:true,composed:true})) : nothing}>
+        ${group.archived ? html`<div class="archive-spacer" style=${`height:${(group.archiveStart || 0) * ARCHIVE_ROW_HEIGHT}px`}></div>` : nothing}
+        ${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<mux-ui-text-field class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}></mux-ui-text-field><mux-ui-button class="rename-save" variant="quiet" size="small" icon-only accessible-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</mux-ui-button>` : html`
             <mux-ui-list-row class="chat" label=${chat.title} tooltip=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${group.project?.managedFolder ? 'No folder' : chat.projectPath || 'Folder unknown'}`} ?selected=${this.selectedSession === chat.id} @click=${() => this.openChat(chat)}>
@@ -357,6 +330,7 @@ export class MuxChatWorkspace extends LitElement {
           ${this.renamingId === chat.id ? nothing : html`<mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" data-chat-id=${chat.id} accessible-label=${`Options for ${chat.title}`} tooltip="Chat options" haspopup="menu" .expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>`}
           ${this.menuFor === chat.id ? this.chatMenu(chat) : nothing}
         </div>`)}
+        ${group.archived ? html`<div class="archive-spacer" style=${`height:${Math.max(0,(group.total || 0) - (group.archiveStart || 0) - group.chats.length) * ARCHIVE_ROW_HEIGHT}px`}></div>${group.loading ? html`<div class="archive-status" role="status">Loading archived sessions…</div>` : group.archiveError ? html`<div class="archive-status" role="alert">${group.archiveError}</div>` : !group.total ? html`<div class="archive-status">No archived sessions</div>` : nothing}` : nothing}
       </div>` : nothing}
     `;
   }
@@ -366,12 +340,22 @@ export class MuxChatWorkspace extends LitElement {
 export class MuxChatList extends LitElement {
   @state() private version = 0;
   @state() private pinError = '';
+  @state() private archiveRows: SDKChat[] = [];
+  @state() private archiveStart = 0;
+  @state() private archiveTotal = 0;
+  @state() private archiveLoading = false;
+  @state() private archiveError = '';
+  private archiveGeneration = 0;
+  private archiveExpanded = false;
+  private archiveAnchorPage = 0;
+  private archivePages = new Map<number, SDKChat[]>();
+  private archivePending = new Set<number>();
   @state() private projectDialogOpen = false;
   @state() private projectName = '';
+  @state() private projectFolderName = '';
   @state() private projectParent = '';
   @state() private projectError = '';
   @state() private projectCreating = false;
-  @state() private projectNoFolder = false;
   @property() selectedSession = '';
   private unsub?: () => void;
   private readonly onChatOpen = (event: Event) => {
@@ -400,6 +384,8 @@ export class MuxChatList extends LitElement {
     .pin-feedback { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
     .project-form { display:grid; gap:var(--ui-space-5); padding:var(--ui-space-6); color:var(--ui-text); }
     .project-form h2 { margin:0; font-size:var(--ui-text-xl); }
+    .project-form .field-label { display:grid; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .project-form mux-folder-picker { --folder-list-height:155px; }
     .project-preview { overflow-wrap:anywhere; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .project-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-3); }
     @media(hover:none), (max-width:550px) { .pin-unpin { opacity:1; } }
@@ -407,10 +393,65 @@ export class MuxChatList extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.addEventListener('chat-open', this.onChatOpen);
-    this.unsub=sdkChats.subscribe(() => this.version++);
+    this.unsub=sdkChats.subscribe(() => { this.version++; if (this.archiveExpanded) this.refreshArchive(); });
     void sdkChats.refresh();
   }
   override disconnectedCallback() { this.removeEventListener('chat-open', this.onChatOpen); this.unsub?.(); super.disconnectedCallback(); }
+  private openArchive() {
+    this.archiveExpanded = true;
+    this.archiveAnchorPage = 0;
+    this.refreshArchive();
+  }
+  private refreshArchive() {
+    this.archiveGeneration++;
+    this.archivePages.clear();
+    this.archivePending.clear();
+    this.archiveRows = [];
+    this.archiveStart = this.archiveAnchorPage * ARCHIVE_PAGE_SIZE;
+    this.archiveError = '';
+    void this.ensureArchivePage(this.archiveAnchorPage);
+  }
+  private showArchiveWindow() {
+    for (const page of this.archivePages.keys()) if (Math.abs(page - this.archiveAnchorPage) > 1) this.archivePages.delete(page);
+    const page = this.archivePages.has(this.archiveAnchorPage) ? this.archiveAnchorPage
+      : this.archivePages.has(this.archiveAnchorPage - 1) ? this.archiveAnchorPage - 1
+      : this.archivePages.has(this.archiveAnchorPage + 1) ? this.archiveAnchorPage + 1 : -1;
+    if (page < 0) { this.archiveRows = []; this.archiveStart = this.archiveAnchorPage * ARCHIVE_PAGE_SIZE; }
+    else {
+      let first = page, last = page;
+      while (this.archivePages.has(first - 1) && first > this.archiveAnchorPage - 1) first--;
+      while (this.archivePages.has(last + 1) && last < this.archiveAnchorPage + 1) last++;
+      this.archiveStart = first * ARCHIVE_PAGE_SIZE;
+      this.archiveRows = Array.from({length:last-first+1}, (_,i) => this.archivePages.get(first+i) || []).flat();
+    }
+    this.archiveLoading = !this.archivePages.has(this.archiveAnchorPage) && this.archivePending.has(this.archiveAnchorPage);
+  }
+  private async ensureArchivePage(page:number) {
+    if (!this.archiveExpanded || page < 0 || (this.archiveTotal > 0 && page * ARCHIVE_PAGE_SIZE >= this.archiveTotal) || this.archivePages.has(page) || this.archivePending.has(page)) return;
+    const generation = this.archiveGeneration;
+    this.archivePending.add(page);
+    this.showArchiveWindow();
+    try {
+      const result = await sdkChats.archived(page);
+      if (generation !== this.archiveGeneration || !this.archiveExpanded) return;
+      this.archiveTotal = result.total;
+      this.archivePages.set(page, result.chats);
+      this.archiveError = '';
+    } catch (error) { if (generation === this.archiveGeneration) this.archiveError = error instanceof Error ? error.message : String(error); }
+    finally { if (generation === this.archiveGeneration) { this.archivePending.delete(page); this.showArchiveWindow(); } }
+  }
+  private onArchiveVisible(index:number) {
+    const page = Math.floor(index / ARCHIVE_PAGE_SIZE);
+    if (page !== this.archiveAnchorPage) { this.archiveAnchorPage = page; this.showArchiveWindow(); }
+    void this.ensureArchivePage(page);
+    if (index % ARCHIVE_PAGE_SIZE >= 8) void this.ensureArchivePage(page + 1);
+    if (index % ARCHIVE_PAGE_SIZE <= 5) void this.ensureArchivePage(page - 1);
+  }
+  private closeArchive() {
+    this.archiveExpanded = false; this.archiveGeneration++;
+    this.archivePages.clear(); this.archivePending.clear();
+    this.archiveRows = []; this.archiveStart = 0; this.archiveTotal = 0; this.archiveAnchorPage = 0; this.archiveLoading = false; this.archiveError = '';
+  }
   private locateProject(id: string) {
     this.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace').forEach(row => { if (row.model.id === id) row.reveal(); });
   }
@@ -423,7 +464,7 @@ export class MuxChatList extends LitElement {
   }
   private async openProjectDialog() {
     this.projectName = '';
-    this.projectNoFolder = false;
+    this.projectFolderName = '';
     this.projectError = '';
     this.projectDialogOpen = true;
     try { this.projectParent = (await sdkChats.folders()).base; }
@@ -435,21 +476,21 @@ export class MuxChatList extends LitElement {
   }
   private async createProject() {
     if (this.projectCreating) return;
-    const name = this.projectName.trim();
+    const name = this.projectFolderName.trim();
     const parent = this.projectParent.trim().replace(/\/+$/, '') || '/';
-    if (!name || name.length > 80 || (!this.projectNoFolder && (name === '.' || name === '..' || name.includes('/') || name.includes('\\')))) {
-      this.projectError = this.projectNoFolder ? 'Choose a project name of at most 80 characters.' : 'Choose a folder name without slashes.';
+    if (!name || name.length > 80 || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+      this.projectError = 'Choose a folder name without slashes.';
       return;
     }
-    if (!this.projectNoFolder && !parent.startsWith('/')) {
+    if (!parent.startsWith('/')) {
       this.projectError = 'Enter an absolute parent folder path.';
       return;
     }
     this.projectCreating = true;
     this.projectError = '';
     try {
-      const path = this.projectNoFolder ? '' : `${parent === '/' ? '' : parent}/${name}`;
-      const project = await sdkChats.createProject(path, name, [], !this.projectNoFolder, this.projectNoFolder);
+      const path = `${parent === '/' ? '' : parent}/${name}`;
+      const project = await sdkChats.createProject(path, this.projectName.trim() || name, [], true);
       this.projectDialogOpen = false;
       this.dispatchEvent(new CustomEvent('chat-new-project', { detail:{projectId:project.id}, bubbles:true, composed:true }));
     } catch (error) { this.projectError = errorMessage(error); }
@@ -463,25 +504,24 @@ export class MuxChatList extends LitElement {
     const laneIds = new Set(chats.filter(chat => chat.operator).flatMap(chat => chat.operatorLanes || []));
     const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, chats:chatsByRole(active.filter(chat => chat.workspaceId === project.id), laneIds), laneIds }));
     const ungrouped = chatsByRole(active.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)), laneIds);
-    if (ungrouped.length) groups.push({ id:'ungrouped', name:'Ungrouped', chats:ungrouped, laneIds });
-    groups.push({ id:'archived', name:'Archived', archived:true, chats:chats.filter(chat => chat.archived), laneIds });
+    groups.unshift({ id:'ungrouped', name:'Chat', chats:ungrouped, laneIds });
+    groups.push({ id:'archived', name:'Archived', archived:true, chats:this.archiveRows, laneIds, archiveStart:this.archiveStart, total:this.archiveTotal, loading:this.archiveLoading, archiveError:this.archiveError });
     const pinned = [
       ...projects.filter(project => project.pinned).map(project => ({ kind:'project' as const, id:project.id, name:project.name, operator:false, lane:false, state:'' })),
       ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, operator:!!chat.operator, lane:laneIds.has(chat.id), state:chat.state, chat })),
     ];
     return html`
       ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>${pinned.map(item => html`<div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id}><mux-ui-list-row class="pin-link" label=${item.name} tooltip=${item.name} ?selected=${item.kind === 'chat' && this.selectedSession === item.id} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>${item.kind === 'project' ? html`<span slot="icon" class="pin-icon">${icon(Folder,{size:15})}</span>` : item.operator || item.lane ? html`<span slot="icon" class="pin-icon ${item.lane && !item.operator ? `lane ${item.state}` : ''}">${item.lane && !item.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}</mux-ui-list-row><mux-ui-button class="pin-unpin" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Unpin ${item.kind} ${item.name}`} tooltip=${`Unpin ${item.kind}`} @click=${() => void this.unpin(item.kind,item.id,item.name)}>${icon(PinOff,{size:14})}</mux-ui-button></div>`)}</div>` : nothing}
-      <div class="heading-row"><div class="heading">Chats</div><div class="heading-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="New folder" tooltip="New folder" @click=${() => void this.openProjectDialog()}>${icon(FolderPlus,{size:16})}</mux-ui-button></div></div>
+      <div class="heading-row"><div class="heading">Sessions</div><div class="heading-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="New folder" tooltip="New folder" @click=${() => void this.openProjectDialog()}>${icon(FolderPlus,{size:16})}</mux-ui-button></div></div>
       ${this.pinError ? html`<mux-ui-feedback class="pin-feedback" kind="error" appearance="panel" density="compact">${this.pinError}</mux-ui-feedback>` : nothing}
-      ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession}></mux-chat-workspace>`)}
-      ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New project" .dismissable=${!this.projectCreating} @dismiss=${() => this.closeProjectDialog()}><div class="project-form">
-        <h2>New project</h2>
-        <mux-ui-text-field label=${this.projectNoFolder ? 'Project name' : 'Folder name'} aria-label=${this.projectNoFolder ? 'Project name' : 'Folder name'} autocomplete="off" .value=${this.projectName} @input=${(event:Event) => { this.projectName=(event.target as MuxUITextField).value; }} @keydown=${(event:KeyboardEvent) => { if (event.key === 'Enter') void this.createProject(); }}></mux-ui-text-field>
-        <mux-ui-switch layout="row" label="No folder" description="Keep this project in Muxterm’s private storage instead of creating a visible folder." .checked=${this.projectNoFolder} @change=${(event:CustomEvent<{checked:boolean}>) => { this.projectNoFolder=event.detail.checked; }}></mux-ui-switch>
-        ${this.projectNoFolder ? nothing : html`<mux-ui-text-field label="Inside folder" aria-label="Inside folder" .value=${this.projectParent} @input=${(event:Event) => { this.projectParent=(event.target as MuxUITextField).value; }} @keydown=${(event:KeyboardEvent) => { if (event.key === 'Enter') void this.createProject(); }}></mux-ui-text-field>
-        <div class="project-preview">${this.projectName.trim() ? `${this.projectParent.replace(/\/+$/, '')}/${this.projectName.trim()}` : 'Enter a name to create a folder and project.'}</div>`}
+      ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession} @archive-open=${() => this.openArchive()} @archive-visible=${(event:CustomEvent<{index:number}>) => this.onArchiveVisible(event.detail.index)} @archive-close=${() => this.closeArchive()}></mux-chat-workspace>`)}
+      ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New folder" .dismissable=${!this.projectCreating} @dismiss=${() => this.closeProjectDialog()}><div class="project-form">
+        <h2>New folder</h2>
+        <label class="field-label">Parent folder<mux-folder-picker inline label="Parent folder" .value=${this.projectParent} .base=${this.projectParent} @folder-selected=${(event:CustomEvent<{path:string}>) => { this.projectParent=event.detail.path; }}></mux-folder-picker></label>
+        <mux-ui-text-field label="New folder name" aria-label="New folder name" autocomplete="off" placeholder="Folder name" .value=${this.projectFolderName} @input=${(event:Event) => { this.projectFolderName=(event.target as MuxUITextField).value; }} @keydown=${(event:KeyboardEvent) => { if (event.key === 'Enter') void this.createProject(); }}></mux-ui-text-field>
+        <mux-ui-text-field label="Project name (optional)" aria-label="Project name" placeholder="Use folder name" .value=${this.projectName} @input=${(event:Event) => { this.projectName=(event.target as MuxUITextField).value; }}></mux-ui-text-field>
         ${this.projectError ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.projectError}</mux-ui-feedback>` : nothing}
-        <div class="project-actions"><mux-ui-button variant="quiet" ?disabled=${this.projectCreating} @click=${() => this.closeProjectDialog()}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${this.projectCreating || !this.projectName.trim() || (!this.projectNoFolder && !this.projectParent.trim())} @click=${() => void this.createProject()}>${this.projectCreating ? 'Creating…' : this.projectNoFolder ? 'Create project' : 'Create folder'}</mux-ui-button></div>
+        <div class="project-actions"><mux-ui-button variant="quiet" ?disabled=${this.projectCreating} @click=${() => this.closeProjectDialog()}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${this.projectCreating || !this.projectFolderName.trim() || !this.projectParent.trim()} @click=${() => void this.createProject()}>${this.projectCreating ? 'Creating…' : 'Create folder'}</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
     `;
   }
