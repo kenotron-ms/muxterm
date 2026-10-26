@@ -1447,6 +1447,12 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	claudePath, claudeErr := sdkAgentExecutable("claude")
 	availableACP := make([]string, 0, 4)
 	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity"} {
+		if harness == "antigravity" {
+			if antigravityAvailable() {
+				availableACP = append(availableACP, harness)
+			}
+			continue
+		}
 		if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
 			availableACP = append(availableACP, harness)
 		}
