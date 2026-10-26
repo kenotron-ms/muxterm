@@ -10,6 +10,8 @@ export interface FolderListing { path: string; base: string; parent: string; fol
 class SDKChatStore {
   chats: SDKChat[] = [];
   projects: SDKProject[] = [];
+  archivedCount = 0;
+  private archivedCache = new Map<string, SDKChat>();
   private listeners = new Set<() => void>();
   private nameEvents?: EventSource;
   private refreshGeneration = 0;
@@ -27,13 +29,28 @@ class SDKChatStore {
   }
   async refresh() {
     const generation = ++this.refreshGeneration;
-    const [response, projects] = await Promise.all([fetch(apiPath('/api/sdk-chats')), fetch(apiPath('/api/sdk-projects'))]);
+    const [response, projects] = await Promise.all([fetch(apiPath('/api/sdk-chats?archived=false')), fetch(apiPath('/api/sdk-projects'))]);
     if (!response.ok || !projects.ok) return;
     const [chats, projectRows] = await Promise.all([response.json() as Promise<SDKChat[]>, projects.json() as Promise<SDKProject[]>]);
     if (generation !== this.refreshGeneration) return;
-    this.chats = chats;
+    this.archivedCount = Number(response.headers.get('X-Archived-Count') || 0);
+    for (const chat of chats) this.archivedCache.delete(chat.id);
+    this.chats = [...chats, ...this.archivedCache.values()];
     this.projects = projectRows;
     for (const fn of this.listeners) fn();
+  }
+  async archived(page = 0, query = ''): Promise<{ chats: SDKChat[]; total: number }> {
+    const params = new URLSearchParams({ archived:'true', page:String(page), q:query });
+    const response = await fetch(apiPath(`/api/sdk-chats?${params}`));
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json() as { chats: SDKChat[]; total: number };
+    for (const chat of result.chats) {
+      this.archivedCache.delete(chat.id);
+      this.archivedCache.set(chat.id, chat);
+    }
+    while (this.archivedCache.size > 75) this.archivedCache.delete(this.archivedCache.keys().next().value!);
+    this.chats = [...this.chats.filter(chat => !chat.archived), ...this.archivedCache.values()];
+    return result;
   }
   async create(request: { workspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; bundle?: string; model?: string; effort?: string; prompt: string; attachments?: string[]; operatorId?: string }) {
     const response = await fetch(apiPath('/api/sdk-chats'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });

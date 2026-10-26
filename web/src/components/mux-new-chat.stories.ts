@@ -4,11 +4,9 @@ import { fixtureJSON, type ApiFixture } from '../stories/api-fixture.js';
 import { sdkChats, type SDKHarnessName } from '../lib/sdk-chats.js';
 import './mux-new-chat.js';
 import type { MuxNewChat } from './mux-new-chat.js';
-import type { MuxUIDialog } from '../ui/dialog.js';
-import type { MuxUISelectCombobox } from '../ui/select-combobox.js';
 
 const projects = [
-  { id:'atlas', name:'Atlas', path:'/home/demo/atlas', sourceFolders:['/home/demo/notes'] },
+  { id:'atlas', name:'Atlas', path:'/home/demo/atlas', sourceFolders:[] },
   { id:'research', name:'Research', path:'/home/demo/research', sourceFolders:[] },
 ];
 
@@ -82,30 +80,28 @@ const meta = {
 
 export default meta;
 type Story = StoryObj<NewChatArgs>;
-export const Ungrouped: Story = {};
-export const Project: Story = { args: { project:'atlas' } };
-const openLocationDialog = async ({canvasElement}:{canvasElement:HTMLElement}) => {
+export const Chat: Story = {};
+export const Folder: Story = { args: { project:'atlas' } };
+const openLocationMenu = async ({canvasElement}:{canvasElement:HTMLElement}) => {
   await sdkChats.refresh();
   const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
   await screen?.updateComplete;
-  const trigger = screen?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button.location-trigger');
-  if (!trigger) throw new Error('The Chat location action did not render');
+  const trigger = screen?.shadowRoot?.querySelector<HTMLElement>('.project-trigger');
+  if (!trigger) throw new Error('The session location action did not render');
   trigger.click();
   await screen?.updateComplete;
 };
-export const LocationDialog: Story = { play:openLocationDialog };
-export const PhoneLocationDialog: Story = {
-  globals:{viewport:{value:'phone390',isRotated:false}},play:openLocationDialog,
+export const LocationMenu: Story = { play:openLocationMenu };
+export const PhoneLocationMenu: Story = {
+  globals:{viewport:{value:'phone390',isRotated:false}},play:openLocationMenu,
 };
-export const ProjectLocationDialog: Story = { args:{project:'atlas'},play:openLocationDialog };
-const openProjectPicker = async ({canvasElement}: {canvasElement: HTMLElement}) => {
-  const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
-  await sdkChats.refresh();
+export const FolderLocationMenu: Story = { args:{project:'atlas'},play:openLocationMenu };
+export const NewFolderDialog: Story = { play:async (context) => {
+  await openLocationMenu(context);
+  const screen = context.canvasElement.querySelector<MuxNewChat>('mux-new-chat');
+  screen?.shadowRoot?.querySelector<HTMLElement>('.project-options mux-ui-menu-item')?.click();
   await screen?.updateComplete;
-  screen?.shadowRoot?.querySelector<MuxUISelectCombobox>('mux-ui-select-combobox')?.click();
-};
-export const ProjectPicker: Story = { args:{project:'atlas'}, play:openProjectPicker };
-export const PhoneProjectPicker: Story = { args:{project:'atlas'},globals:{viewport:{value:'phone390',isRotated:false}},play:openProjectPicker };
+} };
 export const WorktreeSelected: Story = {
   args:{project:'atlas'},
   play:async ({canvasElement}) => {
@@ -145,39 +141,6 @@ export const AttachmentReady: Story = { args:{project:'atlas'},play:attachFile }
 export const PhoneAttachment: Story = { args:{project:'atlas'},globals:{viewport:{value:'phone390',isRotated:false}},play:attachFile };
 export const AttachmentUploadFailed: Story = { args:{project:'atlas'},parameters:{apiFixture:failedUploadFixture},play:context => attachFile(context,'error') };
 export const Compact: Story = { args: { compact:true } };
-export const NewProject: Story = {
-  play: async ({ canvasElement }) => {
-    const screen = canvasElement.querySelector<MuxNewChat>('mux-new-chat');
-    if (!screen) return;
-    await sdkChats.refresh();
-    await screen.updateComplete;
-    const picker = screen.shadowRoot?.querySelector<MuxUISelectCombobox>('mux-ui-select-combobox');
-    picker?.click();
-    await picker?.updateComplete;
-    picker?.shadowRoot?.querySelectorAll<HTMLElement>('mux-ui-listbox-option').item(3)?.click();
-  },
-};
-export const PhoneNewProject: Story = {
-  globals: { viewport:{ value:'phone390', isRotated:false } },
-  play: NewProject.play,
-};
-const openFolderBrowser = async (context: {canvasElement:HTMLElement}) => {
-  await NewProject.play?.(context as Parameters<NonNullable<typeof NewProject.play>>[0]);
-  const screen = context.canvasElement.querySelector<MuxNewChat>('mux-new-chat');
-  await screen?.updateComplete;
-  screen?.shadowRoot?.querySelector<HTMLElement>('.location-trigger')?.click();
-  await screen?.updateComplete;
-  await screen?.shadowRoot?.querySelector<MuxUIDialog>('mux-ui-dialog')?.updateComplete;
-  screen?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Browse server folders"]')?.click();
-  for (let attempt=0; attempt<20; attempt++) {
-    await screen?.updateComplete;
-    if (screen?.shadowRoot?.querySelector('mux-ui-folder-browser')) return;
-    await new Promise(resolve => setTimeout(resolve,50));
-  }
-  throw new Error('The New Chat folder browser did not open');
-};
-export const NewProjectFolderBrowser: Story = { play:openFolderBrowser };
-export const PhoneNewProjectFolderBrowser: Story = { globals:{viewport:{value:'phone390',isRotated:false}},play:openFolderBrowser };
 export const SetupRequired: Story = {
   parameters: {
     apiFixture: ((request: Parameters<ApiFixture>[0]) => request.method === 'GET' && request.url.pathname.endsWith('/api/sdk-chat-start-options')

@@ -4,7 +4,6 @@ import { chatListFixture, resetChatListFixture } from '../stories/chat-list-fixt
 import type { MuxChatList, MuxChatWorkspace } from './mux-chat-list.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIButton } from '../ui/button.js';
-import type { MuxUISwitch } from '../ui/switch.js';
 import type { MuxUIListRow } from '../ui/list-row.js';
 import type { MuxUIMenuItem } from '../ui/menu-item.js';
 import './mux-chat-list.js';
@@ -32,14 +31,6 @@ const openNewProjectFolder = async ({canvasElement}: {canvasElement: HTMLElement
 };
 export const NewProjectFolder: Story = { play:openNewProjectFolder };
 export const PhoneNewProjectFolder: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openNewProjectFolder };
-const openProjectWithoutFolder = async (context: {canvasElement: HTMLElement}) => {
-  await openNewProjectFolder(context);
-  const list = context.canvasElement.querySelector<MuxChatList>('mux-chat-list');
-  await list?.updateComplete;
-  list?.shadowRoot?.querySelector<MuxUISwitch>('mux-ui-switch[label="No folder"]')?.click();
-};
-export const NewProjectWithoutFolder: Story = { play:openProjectWithoutFolder };
-export const PhoneNewProjectWithoutFolder: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openProjectWithoutFolder };
 export const OperatorAndLaneStatus: Story = { render:() => view('chat-operator',false,false,true) };
 export const PhoneOperatorAndLaneStatus: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-operator',true,false,true) };
 const openProjectActions = async ({canvasElement}: {canvasElement: HTMLElement}) => {
@@ -112,29 +103,30 @@ const showEditProjectError = async (context: {canvasElement: HTMLElement}) => {
 };
 export const EditProjectError: Story = { render:() => view('chat-editor',false,false,false,true), play:showEditProjectError };
 export const PhoneEditProjectError: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true,false,false,true), play:showEditProjectError };
-const openProjectFolderBrowser = async (context: {canvasElement:HTMLElement}) => {
+const openProjectFolderPicker = async (context: {canvasElement:HTMLElement}) => {
   await openProjectEditor(context);
   const list = context.canvasElement.querySelector<MuxChatList>('mux-chat-list');
   const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
   await project?.updateComplete;
   await project?.shadowRoot?.querySelector<MuxUIDialog>('mux-ui-dialog')?.updateComplete;
-  project?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Browse primary folders"]')?.click();
+  const picker = project?.shadowRoot?.querySelector<HTMLElement>('mux-folder-picker');
+  picker?.shadowRoot?.querySelector<HTMLElement>('.trigger')?.click();
   for (let attempt=0; attempt<20; attempt++) {
     await project?.updateComplete;
-    if (project?.shadowRoot?.querySelector('mux-ui-folder-browser')) return;
+    if (picker?.shadowRoot?.querySelector('.menu')) return;
     await new Promise(resolve => setTimeout(resolve,50));
   }
-  throw new Error('The project folder browser did not open');
+  throw new Error('The project folder picker did not open');
 };
-export const EditProjectFolderBrowser: Story = { play:openProjectFolderBrowser };
-export const PhoneEditProjectFolderBrowser: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openProjectFolderBrowser };
+export const EditProjectFolderPicker: Story = { play:openProjectFolderPicker };
+export const PhoneEditProjectFolderPicker: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:openProjectFolderPicker };
 const openProjectRemoval = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
   await list?.updateComplete;
   const project = [...(list?.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace') ?? [])].find(row => row.model.id === 'atlas');
   project?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Project options for Atlas"]')?.click();
   await project?.updateComplete;
-  [...(project?.shadowRoot?.querySelectorAll<MuxUIMenuItem>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Remove project'))?.click();
+  [...(project?.shadowRoot?.querySelectorAll<MuxUIMenuItem>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Remove from Sessions'))?.click();
 };
 export const RemoveProjectConfirmation: Story = { play:openProjectRemoval };
 export const PhoneRemoveProjectConfirmation: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true), play:openProjectRemoval };

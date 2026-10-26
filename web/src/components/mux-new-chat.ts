@@ -3,7 +3,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
-import { ArrowUp, Folder, Paperclip, Plus, X } from 'lucide';
+import { ArrowUp, Check, ChevronDown, Folder, MessageCircle, Paperclip, Plus } from 'lucide';
 import { icon } from '../lib/icons.js';
 import '../ui/button.js';
 import '../ui/attachment.js';
@@ -15,16 +15,16 @@ import '../ui/dialog.js';
 import '../ui/feedback.js';
 import '../ui/screen-header.js';
 import '../ui/folder-browser.js';
-import type { SelectComboboxOption } from '../ui/select-combobox.js';
-import '../ui/select-combobox.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import '../ui/range-field.js';
 import '../ui/select.js';
 import '../ui/switch.js';
 import '../ui/text-field.js';
+import '../ui/menu-item.js';
 import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
+import './mux-folder-picker.js';
 
 type ProviderName = 'openai' | 'anthropic' | 'configured';
 type StartOption = { harness: SDKHarnessName; provider: ProviderName };
@@ -52,6 +52,12 @@ export class MuxNewChat extends LitElement {
   @state() private folder = '';
   @state() private workMode: 'local' | 'worktree' = 'local';
   @state() private projectName = '';
+  @state() private projectParent = '';
+  @state() private projectFolderName = '';
+  @state() private projectDialogOpen = false;
+  @state() private projectCreating = false;
+  @state() private projectError = '';
+  @state() private folderSelecting = false;
   @state() private harness: SDKHarnessName = 'codex';
   @state() private provider = 'openai';
   @state() private bundle = '';
@@ -72,7 +78,6 @@ export class MuxNewChat extends LitElement {
   private pendingPrompt?: string;
   @state() private listing?: FolderListing;
   @state() private pickerOpen = false;
-  @state() private locationOpen = false;
   @state() private busy = false;
   @state() private error = '';
   @state() private copiedSetup = '';
@@ -90,13 +95,8 @@ export class MuxNewChat extends LitElement {
       const element = this.renderRoot.querySelector(selector);
       return element !== null && path.includes(element);
     };
-    if (this.pickerOpen && !inside('.location-settings')) this.pickerOpen = false;
+    if (this.pickerOpen && !inside('.project-picker')) this.pickerOpen = false;
   };
-  private closeLocation() {
-    this.locationOpen = false;
-    this.pickerOpen = false;
-    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLElement>('.location-trigger')?.focus());
-  }
 
   static styles = css`
     ${subtleScrollbars}
@@ -166,6 +166,43 @@ export class MuxNewChat extends LitElement {
       .location-trigger::part(button) { min-height:var(--ui-control-lg); }
       .location-fields { padding-bottom:max(var(--ui-space-6),env(safe-area-inset-bottom)); }
     }
+    .content { width:min(100%,var(--ui-chat-transcript-width)); }
+    h1 { margin-bottom:var(--ui-space-6); }
+    .composer { gap:var(--ui-space-3); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); border-radius:var(--ui-radius-xl) var(--ui-radius-xl) 0 0; }
+    .composer-actions { gap:var(--ui-space-2); min-height:var(--ui-control-sm); padding:0; border:0; }
+    .composer-actions mux-ui-button[icon-only] { width:var(--ui-control-sm); height:var(--ui-control-sm); }
+    .composer-actions .send::part(button) { border-radius:50%; }
+    .composer-actions .harness { min-width:0; max-width:var(--ui-new-chat-harness-width); }
+    .composer-actions .harness::part(select) { min-height:var(--ui-control-sm); }
+    .composer-actions .chat-picker { max-width:var(--ui-picker-trigger-compact-width); }
+    .composer-actions .agent-add { flex:none; }
+    .composer-actions .loading-models { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .context-bar { display:flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border:1px solid var(--ui-border); border-top:0; border-radius:0 0 var(--ui-radius-xl) var(--ui-radius-xl); background:var(--ui-surface-raised); }
+    .context-bar .spacer { flex:1; }
+    .project-picker { position:relative; min-width:0; }
+    .project-trigger { display:flex; align-items:center; gap:var(--ui-space-2); max-width:var(--ui-new-chat-location-width); min-height:var(--ui-control-sm); padding:0 var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text-muted); font:inherit; font-size:var(--ui-text-sm); cursor:pointer; }
+    .project-trigger:hover,.project-trigger[aria-expanded="true"] { background:var(--ui-surface-hover); color:var(--ui-text); }
+    .project-trigger:focus-visible { outline:2px solid var(--ui-focus); }
+    .project-trigger span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .project-options { position:absolute; z-index:var(--ui-z-menu); bottom:calc(100% + var(--ui-space-2)); left:0; box-sizing:border-box; width:min(var(--ui-mobile-drawer-width),calc(100vw - var(--ui-control-lg))); max-height:min(var(--ui-dialog-height),75dvh); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-overlay); box-shadow:var(--ui-shadow-menu); --folder-list-height:var(--ui-new-chat-location-width); }
+    .project-options mux-folder-picker { display:block; width:100%; }
+    .project-options mux-folder-picker::part(menu) { border:0; }
+    .project-option { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-height:var(--ui-control-md); padding:var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); text-align:left; font:inherit; cursor:pointer; }
+    .project-option:hover,.project-option[selected] { background:var(--ui-surface-hover); }
+    .project-option .option-copy { display:grid; gap:var(--ui-space-px); flex:1; min-width:0; }
+    .project-option .option-copy small { color:var(--ui-text-muted); }
+    .project-option .selected-icon { margin-left:auto; color:var(--ui-accent); }
+    .project-divider { height:var(--ui-divider-thickness); margin:var(--ui-space-2) 0; background:var(--ui-border); }
+    .new-folder-form { display:grid; gap:var(--ui-space-5); padding:var(--ui-space-6); color:var(--ui-text); }
+    .new-folder-form h2 { margin:0; font-size:var(--ui-text-xl); }
+    .new-folder-form .field-label { display:grid; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .new-folder-form .optional { color:var(--ui-text-muted); font-weight:400; }
+    .new-folder-form .actions { display:flex; justify-content:flex-end; gap:var(--ui-space-3); }
+    .context-bar mux-ui-switch { margin-left:auto; }
+    @media(max-width:550px) {
+      .composer-actions { flex-wrap:wrap; }
+      .composer-actions .chat-picker { max-width:var(--ui-dock-rename-max-width); }
+    }
   `;
 
   override connectedCallback() {
@@ -221,49 +258,56 @@ export class MuxNewChat extends LitElement {
     this.prompt = value;
     return value;
   }
-  private async browse(path = this.folder) {
-    try { this.listing = await sdkChats.folders(path); this.pickerOpen = true; this.error = ''; }
-    catch (error) { this.error = String(error); }
-  }
-  private onFolderChanged() {
-    const selected = sdkChats.projects.find(p => p.id === this.projectId);
-    if (selected && selected.path !== this.folder) this.projectId = 'new';
-    if (this.catalogTimer) window.clearTimeout(this.catalogTimer);
-    this.catalogTimer = window.setTimeout(() => { this.catalogTimer = undefined; void this.loadCatalog(); }, 400);
-  }
-  private locationLabel() {
-    if (sdkChats.projects.find(project => project.id === this.projectId)?.managedFolder) return 'No folder';
-    if (!this.folder) return 'Choose a folder';
-    const clean = (path: string) => {
-      if (!path.startsWith('/')) return path;
-      const parts: string[] = [];
-      for (const part of path.split('/')) {
-        if (part === '..') parts.pop();
-        else if (part && part !== '.') parts.push(part);
-      }
-      return `/${parts.join('/')}`;
-    };
-    const folder = clean(this.folder);
-    const base = this.listing?.base ? clean(this.listing.base) : '';
-    if (base && folder === base) return base.split('/').filter(Boolean).at(-1) || '/';
-    if (base && folder.startsWith(base === '/' ? '/' : `${base}/`)) return folder.slice(base === '/' ? 1 : base.length + 1);
-    return folder;
-  }
-  private projectOptions(): SelectComboboxOption[] {
-    return [
-      {value:'ungrouped',label:'Ungrouped',description:'Choose a folder for this chat',icon:icon(Folder,{size:16})},
-      ...sdkChats.projects.map(project => ({value:project.id,label:project.name,description:project.managedFolder ? 'No folder' : project.path,icon:icon(Folder,{size:16})})),
-      {value:'new',label:'New project',description:'Choose its primary folder',icon:icon(Plus,{size:16}),separatorBefore:true},
-    ];
-  }
-  private onProjectChange(value: string) {
-    this.projectId = value;
-    if (value === 'new') this.locationOpen = true;
-    const project = sdkChats.projects.find(p => p.id === value);
-    if (project) this.folder = project.path;
-    else if (value === 'ungrouped' && this.listing) this.folder = this.listing.base;
-    if (value === 'ungrouped' || value === 'new' || project?.managedFolder) this.workMode = 'local';
+  private selectChat() {
+    this.projectId = 'ungrouped';
+    this.folder = this.listing?.base || '';
+    this.workMode = 'local';
+    this.pickerOpen = false;
     void this.loadCatalog();
+  }
+  private async selectFolder(path: string) {
+    if (this.folderSelecting) return;
+    this.folderSelecting = true;
+    this.error = '';
+    try {
+      let project = sdkChats.projects.find(item => !item.managedFolder && item.path === path);
+      if (!project) project = await sdkChats.createProject(path);
+      this.projectId = project.id;
+      this.folder = project.path;
+      this.pickerOpen = false;
+      void this.loadCatalog();
+    } catch (error) { this.error = error instanceof Error ? error.message : String(error); }
+    finally { this.folderSelecting = false; }
+  }
+  private openProjectDialog() {
+    this.pickerOpen = false;
+    this.projectParent = this.listing?.base || this.folder || '';
+    this.projectFolderName = '';
+    this.projectName = '';
+    this.projectError = '';
+    this.projectDialogOpen = true;
+  }
+  private closeProjectDialog() { if (!this.projectCreating) this.projectDialogOpen = false; }
+  private validNewFolderName(name: string) { return !!name && name.length <= 80 && name !== '.' && name !== '..' && !/[\\/]/.test(name); }
+  private async createProject() {
+    if (this.projectCreating) return;
+    const name = this.projectFolderName.trim();
+    if (!this.validNewFolderName(name) || !this.projectParent.startsWith('/')) {
+      this.projectError = 'Choose a parent folder and a folder name without slashes.';
+      return;
+    }
+    this.projectCreating = true;
+    this.projectError = '';
+    try {
+      const parent = this.projectParent.replace(/\/+$/, '') || '/';
+      const path = `${parent === '/' ? '' : parent}/${name}`;
+      const project = await sdkChats.createProject(path, this.projectName.trim() || name, [], true);
+      this.projectId = project.id;
+      this.folder = project.path;
+      this.projectDialogOpen = false;
+      void this.loadCatalog();
+    } catch (error) { this.projectError = error instanceof Error ? error.message : String(error); }
+    finally { this.projectCreating = false; }
   }
   private onHarnessChange(value: SDKHarnessName) {
     const option = this.startOptions?.find(item => item.harness === value);
@@ -322,7 +366,7 @@ export class MuxNewChat extends LitElement {
     return html`<mux-ui-choice-item .label=${name} .description=${hint} ?selected=${selected} ?disabled=${this.catalogLoading} @click=${action}></mux-ui-choice-item>`;
   }
   private renderBundlePicker() {
-    return html`<mux-ui-choice-picker class="chat-picker bundle-picker" label="Bundle" .summary=${this.bundle || 'Bundle'} placement="below" panel-align="left">
+    return html`<mux-ui-choice-picker class="chat-picker bundle-picker" label="Bundle" .summary=${this.bundle || 'Bundle'} placement="above" panel-align="left">
       <mux-ui-choice-section heading="Bundle">
         ${(this.catalog?.bundles || []).map(value => this.pickerChoice(value, '', this.bundle === value, () => { this.bundle = value; this.provider = 'configured'; void this.loadCatalog(); }))}
         ${this.catalogLoading ? html`<mux-ui-feedback kind="loading" density="compact">Loading models…</mux-ui-feedback>` : nothing}
@@ -333,7 +377,7 @@ export class MuxNewChat extends LitElement {
     const effortIndex = Math.max(0, efforts.indexOf(this.effort || selectedModel?.defaultEffort || efforts[0]));
     const modelLabel = selectedModel?.label || this.model || (this.catalog?.defaultModel ? `Default (${this.catalog.defaultModel})` : 'Model');
     const providerDescription = this.harness === 'codex' ? 'OpenAI' : this.harness === 'claude' ? 'Anthropic' : 'Configured in agent';
-    return html`<mux-ui-choice-picker class="chat-picker settings-picker" label="Provider, model and thinking" .summary=${`${modelLabel}${this.effort ? ` · ${this.effort}` : ''}`} placement="below" panel-align="right">
+    return html`<mux-ui-choice-picker class="chat-picker settings-picker" label="Provider, model and thinking" .summary=${`${modelLabel}${this.effort ? ` · ${this.effort}` : ''}`} placement="above" panel-align="right">
       <mux-ui-choice-section heading="Provider" .description=${this.harness === 'amplifier' ? '' : `${providerDescription} · managed by ${sdkHarnessLabel(this.harness)}`}>
         ${this.harness === 'amplifier' ? (this.catalog?.providers || []).map(value => this.pickerChoice(providerLabel(value), '', this.provider === value, () => { this.provider = value; void this.loadCatalog(); })) : nothing}
       </mux-ui-choice-section>
@@ -416,27 +460,23 @@ export class MuxNewChat extends LitElement {
   }
   private async send() {
     const prompt = this.flushPrompt().trim();
-    if ((!prompt && !this.attachments.length) || this.busy || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || a.error)) return;
+    if ((!prompt && !this.attachments.length) || this.busy || this.folderSelecting || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || a.error)) return;
     this.busy = true; this.error = '';
     try {
       await this.updateComplete;
-      let workspaceId: string | undefined;
-      if (this.projectId === 'new') {
-        if (!this.folder.startsWith('/')) throw new Error('Choose an absolute folder for the new project.');
-        workspaceId = (await sdkChats.createProject(this.folder, this.projectName.trim())).id;
-      } else if (this.projectId !== 'ungrouped') workspaceId = this.projectId;
+      const workspaceId = this.projectId === 'ungrouped' ? undefined : this.projectId;
       const chat = await sdkChats.create({ workspaceId, projectPath:this.folder, workMode:this.workMode, harness:this.harness, provider:this.provider, bundle:this.bundle, model:this.model.trim(), effort:this.effort, prompt, attachments:this.attachments.map(a => a.id!) });
       this.dispatchEvent(new CustomEvent('chat-created', { detail:{sessionId:chat.id}, bubbles:true, composed:true }));
     } catch (error) { this.error = error instanceof Error ? error.message.trim() : String(error); }
     finally { this.busy = false; }
   }
   private renderTopbar(projectName: string) {
-    return html`<mux-ui-screen-header .section=${projectName} heading="New chat" label="New chat" with-section-icon><span slot="section-icon">${icon(Folder,{size:14})}</span></mux-ui-screen-header>`;
+    return html`<mux-ui-screen-header .section=${projectName} heading="New chat" label="New chat" with-section-icon><span slot="section-icon">${icon(this.projectId === 'ungrouped' ? MessageCircle : Folder,{size:14})}</span></mux-ui-screen-header>`;
   }
 
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
-    const projectName = selectedProject?.name || (this.projectId === 'new' ? this.projectName || 'New project' : 'Ungrouped');
+    const projectName = selectedProject?.name || 'Chat';
     const models = this.catalog?.models || [];
     const selectedModel = models.find(item => item.id === this.model);
     const efforts = selectedModel?.efforts?.length ? selectedModel.efforts : this.harness === 'codex' && this.model ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : [];
@@ -461,33 +501,43 @@ export class MuxNewChat extends LitElement {
     <div class="main"><div class="content">
       <h1>What would you like to do?</h1>
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
-        <div class="controls">
-        <div class="project"><mux-ui-select-combobox label="Project" appearance="tinted" .value=${this.projectId} .options=${this.projectOptions()} @change=${(event:CustomEvent<{value:string}>) => this.onProjectChange(event.detail.value)}></mux-ui-select-combobox></div>
-        <div class="location-settings"><mux-ui-button class="location-trigger" variant="secondary" haspopup="dialog" .expanded=${this.locationOpen} accessible-label=${`Chat location: ${this.locationLabel()}`} tooltip=${selectedProject?.managedFolder ? 'Stored privately by Muxterm' : this.folder} @click=${() => { this.locationOpen = true; }}><span slot="leading" class="folder-symbol">${icon(Folder,{size:14})}</span><span class="folder-label">${this.locationLabel()}</span></mux-ui-button>
-          ${this.locationOpen ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Chat location" open @dismiss=${this.closeLocation}>
-          <div class="location-fields">
-            <div class="location-head"><h2>Chat location</h2><mux-ui-button icon-only variant="quiet" size="small" accessible-label="Close chat location" @click=${this.closeLocation}>${icon(X,{size:17})}</mux-ui-button></div>
-            ${selectedProject?.managedFolder ? nothing : html`<div class="folder"><span>${this.projectId === 'ungrouped' ? 'Folder' : 'Primary folder'}</span><div class="folder-line"><mux-ui-text-field aria-label="Primary folder" .value=${this.folder} ?readonly=${this.projectId !== 'ungrouped' && this.projectId !== 'new'} @input=${(e:Event) => { this.folder = (e.target as MuxUITextField).value; this.onFolderChanged(); }}></mux-ui-text-field>${this.projectId === 'ungrouped' || this.projectId === 'new' ? html`<mux-ui-button size="small" accessible-label="Browse server folders" @click=${() => void this.browse()}>Browse</mux-ui-button>` : nothing}</div></div>`}
-            ${this.projectId === 'new' ? html`<mux-ui-text-field label="Project name" aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
-            ${this.pickerOpen && this.listing ? html`<mux-ui-folder-browser aria-label="Server folder picker" .listing=${this.listing} allow-new-folder @folder-navigate=${(event:CustomEvent<{path:string}>) => void this.browse(event.detail.path)} @folder-choose=${(event:CustomEvent<{path:string}>) => { this.folder = event.detail.path; this.onFolderChanged(); this.pickerOpen = false; }} @folder-use-new=${(event:CustomEvent<{path:string}>) => { this.folder = event.detail.path; this.onFolderChanged(); this.pickerOpen = false; }}></mux-ui-folder-browser>` : nothing}
-            <p class="location-note">${this.workMode === 'worktree' ? 'A separate Git worktree will be created from this project’s primary folder.' : selectedProject?.managedFolder ? 'No visible folder. New chats use this project’s private Muxterm storage.' : this.projectId === 'ungrouped' ? 'This chat will use the chosen folder.' : 'This chat will use the project’s primary folder.'}${selectedProject?.sourceFolders?.length ? ` ${selectedProject.sourceFolders.length} additional source ${selectedProject.sourceFolders.length === 1 ? 'folder is' : 'folders are'} available at their existing paths.` : ''}</p>
-            <div class="location-actions"><mux-ui-button variant="primary" @click=${this.closeLocation}>Done</mux-ui-button></div>
-          </div>
-          </mux-ui-dialog>` : nothing}
-        </div>
-        ${this.startOptions?.length ? html`<mux-ui-select class="harness" aria-label="Harness" .value=${this.harness} .options=${this.startOptions.map(option => ({ value:option.harness, label:sdkHarnessLabel(option.harness) }))} @change=${(e:Event) => this.onHarnessChange((e.target as MuxUISelect).value as SDKHarnessName)}></mux-ui-select>` : nothing}
-        <mux-ui-button size="small" variant="quiet" @click=${() => { this.setupOpen = true; }}>Add agent</mux-ui-button>
-        ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
-        ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
-        ${this.catalogLoading ? html`<mux-ui-feedback kind="loading" density="compact">Loading models…</mux-ui-feedback>` : nothing}
-        <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || this.projectId === 'new' || selectedProject?.managedFolder ? 'Choose a project with a Git folder to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new' || !!selectedProject?.managedFolder} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
-        </div>
         ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
         <div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${this.onPromptInput} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div>
-        <div class="composer-actions"><input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}><mux-ui-button icon-only variant="quiet" accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:18})}</mux-ui-button><mux-ui-button class="send" icon-only variant="primary" accessible-label="Send message" ?disabled=${(!this.promptHasContent && !this.attachments.length) || this.busy || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>${icon(ArrowUp,{size:18})}</mux-ui-button></div>
+        <div class="composer-actions">
+          <input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}>
+          <mux-ui-button icon-only size="small" variant="quiet" accessible-label="Attach files or images" tooltip="Attach files or images" @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click()}>${icon(Paperclip,{size:16})}</mux-ui-button>
+          ${this.startOptions?.length ? html`<mux-ui-select class="harness" aria-label="Agent" .value=${this.harness} .options=${this.startOptions.map(option => ({ value:option.harness, label:sdkHarnessLabel(option.harness) }))} @change=${(e:Event) => this.onHarnessChange((e.target as MuxUISelect).value as SDKHarnessName)}></mux-ui-select>` : nothing}
+          <mux-ui-button class="agent-add" size="small" variant="quiet" @click=${() => { this.setupOpen = true; }}>Add agent</mux-ui-button>
+          ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
+          ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
+          ${this.catalogLoading ? html`<span class="loading-models" role="status">Loading models…</span>` : nothing}
+          <mux-ui-button class="send" size="small" icon-only variant="primary" accessible-label="Send message" ?disabled=${(!this.promptHasContent && !this.attachments.length) || this.busy || this.folderSelecting || this.catalogLoading || !this.catalog || (this.customModel && !this.model.trim()) || !this.startOptions?.some(item => item.harness === this.harness) || this.attachments.some(a => a.uploading || !!a.error)} @click=${() => void this.send()}>${icon(ArrowUp,{size:16})}</mux-ui-button>
+        </div>
 
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
+      <div class="context-bar">
+        <div class="project-picker"><button class="project-trigger" type="button" aria-label="Session location" aria-haspopup="menu" aria-expanded=${this.pickerOpen} @click=${() => { this.pickerOpen = !this.pickerOpen; }}>
+          ${icon(this.projectId === 'ungrouped' ? MessageCircle : Folder,{size:15})}<span>${selectedProject?.name || 'Chat'}</span>${icon(ChevronDown,{size:14})}
+        </button>
+        ${this.pickerOpen ? html`<div class="project-options" role="menu" aria-label="Session location">
+          <button class="project-option" role="menuitemradio" aria-checked=${this.projectId === 'ungrouped'} ?selected=${this.projectId === 'ungrouped'} @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy"><strong>Chat</strong><small>No project folder</small></span>${this.projectId === 'ungrouped' ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>
+          <div class="project-divider"></div>
+          <mux-folder-picker inline label="Folders" .value=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? '' : this.folder} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => void this.selectFolder(event.detail.path)}></mux-folder-picker>
+          <div class="project-divider"></div>
+          <mux-ui-menu-item @click=${this.openProjectDialog}>${icon(Plus,{size:16})}<strong>New folder</strong></mux-ui-menu-item>
+        </div>` : nothing}</div>
+        <div class="spacer"></div>
+        <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? 'Choose a project with a Git folder to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || !!selectedProject?.managedFolder} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
+      </div>
+      ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New folder" .dismissable=${!this.projectCreating} @dismiss=${this.closeProjectDialog}><div class="new-folder-form">
+        <h2>New folder</h2>
+        <label class="field-label">Parent folder<mux-folder-picker inline label="Parent folder" .value=${this.projectParent} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => { this.projectParent = event.detail.path; }}></mux-folder-picker></label>
+        <mux-ui-text-field label="New folder name" aria-label="New folder name" placeholder="Folder name" .value=${this.projectFolderName} @input=${(event:Event) => { this.projectFolderName = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
+        <mux-ui-text-field label="Project name (optional)" aria-label="Project name" placeholder="Use folder name" .value=${this.projectName} @input=${(event:Event) => { this.projectName = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
+        ${this.projectError ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.projectError}</mux-ui-feedback>` : nothing}
+        <div class="actions"><mux-ui-button variant="quiet" ?disabled=${this.projectCreating} @click=${this.closeProjectDialog}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${this.projectCreating || !this.projectParent || !this.validNewFolderName(this.projectFolderName.trim())} @click=${() => void this.createProject()}>${this.projectCreating ? 'Creating…' : 'Create folder'}</mux-ui-button></div>
+      </div></mux-ui-dialog>` : nothing}
       ${this.harness === 'antigravity' ? html`<mux-ui-feedback kind="info" appearance="panel">Connect Google Antigravity in Settings → AI, then retry loading models.<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail:{action:'settings',section:'ai'}, bubbles:true, composed:true }))}>Open AI settings</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.catalogError ? html`<mux-ui-feedback kind="error" appearance="panel">Could not load models: ${this.catalogError}<mux-ui-button slot="action" size="small" @click=${() => void this.loadCatalog()}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
