@@ -1105,6 +1105,7 @@ export class MuxSettingsSurface extends LitElement {
     const epoch = ++this._geminiLoadEpoch;
     const statusEpoch = ++this._geminiStatusEpoch;
     this._geminiStatus = 'checking';
+    this._geminiConnectionError = '';
     void this._readGeminiLogin();
     try {
       const [auth, choices] = await Promise.all([
@@ -1198,6 +1199,7 @@ export class MuxSettingsSurface extends LitElement {
             ++this._geminiStatusEpoch;
             this._geminiStatus = 'unsupported';
             this._geminiConnectionError = connectionError;
+            this._geminiLogin = { state:'error' };
           }
         }
       }
