@@ -1130,11 +1130,15 @@ export class MuxSettingsSurface extends LitElement {
       const login = await response.json() as AntigravityLoginStatus;
       if (epoch !== this._antigravityEpoch || !this.isConnected || this._section !== 'ai') return;
       this._antigravityLogin = login;
+      this._antigravityError = '';
       if (login.state === 'complete') { void this._loadAntigravity(); return; }
       if (login.state === 'error') { this._antigravityStatus = 'sign-in'; return; }
-      this._antigravityPollTimer = window.setTimeout(() => void this._pollAntigravity(), 2000);
     } catch (error) {
       if (epoch === this._antigravityEpoch) this._antigravityError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (epoch === this._antigravityEpoch && this.isConnected && this._section === 'ai' &&
+          ['starting', 'awaiting_code', 'verifying'].includes(this._antigravityLogin.state))
+        this._antigravityPollTimer = window.setTimeout(() => void this._pollAntigravity(), 2000);
     }
   }
 

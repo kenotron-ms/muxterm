@@ -18,6 +18,7 @@ export const isACPHarness = harness => Object.hasOwn(profiles, harness);
 export function antigravityCommand() {
   if (process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND) return process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND;
   const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  // Keep this version in sync with antigravityACPVersion in internal/server/antigravity_install.go.
   const managed = join(dataHome, 'muxterm', 'antigravity-acp', '1.4.3', 'agy_acp_server.par');
   try { accessSync(managed, constants.X_OK); return managed; } catch { return 'agy_acp_server.par'; }
 }
