@@ -40,7 +40,7 @@ const captures = [
   { file: 'choice-picker-pending-summary.png', id: 'components-choice-picker--pending-summary', width: 900, height: 400, ready: 'mux-ui-choice-picker', readyText: 'Choose an option' },
   { file: 'action-menu-phone.png', id: 'components-action-menu--phone-sheet', width: 390, height: 844, ready: 'mux-ui-menu' },
   { file: 'menu-item-desktop.png', id: 'components-menu-item--actions', width: 1200, height: 800, ready: 'mux-ui-menu-item', readyText: 'Remove project' },
-  { file: 'chat-project-actions-phone.png', id: 'composites-chat-list--phone-project-actions', width: 390, height: 844, ready: 'mux-ui-menu-item', readyText: 'Remove project' },
+  { file: 'chat-project-actions-phone.png', id: 'composites-chat-list--phone-project-actions', width: 390, height: 844, ready: 'mux-ui-menu-item', readyText: 'Remove from Sessions' },
   { file: 'chat-operator-lane-status-desktop.png', id: 'composites-chat-list--operator-and-lane-status', width: 1200, height: 800, ready: 'mux-chat-list .status.operator' },
   { file: 'chat-operator-lane-status-phone.png', id: 'composites-chat-list--phone-operator-and-lane-status', width: 390, height: 844, ready: 'mux-chat-list .status.operator' },
   { file: 'chat-project-error-desktop.png', id: 'composites-chat-list--project-action-error', width: 1200, height: 800, ready: 'mux-ui-feedback[kind="error"]', readyText: 'Could not update this project. Try again.' },

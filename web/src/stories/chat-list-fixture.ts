@@ -2,7 +2,7 @@ import { sdkChats, type SDKChat, type SDKProject } from '../lib/sdk-chats.js';
 import { fixtureJSON, type ApiFixture } from './api-fixture.js';
 
 const initialProjects: SDKProject[] = [
-  { id:'atlas', name:'Atlas', path:'/home/demo/atlas', sourceFolders:['/home/demo/notes'], pinned:true },
+  { id:'atlas', name:'Atlas', path:'/home/demo/atlas', sourceFolders:[], pinned:true },
   { id:'research', name:'Research', path:'/home/demo/research', sourceFolders:[] },
 ];
 
@@ -39,11 +39,14 @@ export function chatListStoryModel(projectId = 'atlas') {
 }
 
 export const chatListFixture: ApiFixture = ({url,method,init}) => {
-  if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats') && url.searchParams.has('archived')) {
+  if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats') && url.searchParams.get('archived') === 'true') {
     const query = (url.searchParams.get('q') ?? '').toLowerCase();
     const found = archived.filter(chat => `${chat.title} ${chat.projectPath}`.toLowerCase().includes(query));
-    return fixtureJSON({chats:found,total:found.length});
+    const page = Math.max(0,Number(url.searchParams.get('page') || 0));
+    return fixtureJSON({chats:found.slice(page * 25,(page + 1) * 25),total:found.length});
   }
+  if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats') && url.searchParams.get('archived') === 'false')
+    return new Response(JSON.stringify(chats), { headers:{'Content-Type':'application/json','X-Archived-Count':String(archived.length)} });
   if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON([...chats, ...archived]);
   if (method === 'GET' && url.pathname.endsWith('/api/sdk-projects')) return fixtureJSON(projects);
   if (method === 'GET' && url.pathname.endsWith('/api/sdk-folders')) {
