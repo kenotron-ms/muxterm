@@ -56,9 +56,6 @@ func installAntigravityACP(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
 		return err
 	}
-	if _, err := os.Stat(dest); err == nil {
-		return errors.New("incomplete Antigravity installation already exists")
-	}
 	tmp, err := os.MkdirTemp(filepath.Dir(dest), ".download-*")
 	if err != nil {
 		return err
@@ -137,6 +134,10 @@ func installAntigravityACP(ctx context.Context) error {
 	}
 	if err := os.Remove(filepath.Join(tmp, "agent.zip")); err != nil {
 		return err
+	}
+	// Replace a partial managed install only after the new archive is verified.
+	if err := os.RemoveAll(dest); err != nil {
+		return fmt.Errorf("replace incomplete Antigravity installation: %w", err)
 	}
 	if err := os.Rename(tmp, dest); err != nil {
 		return err

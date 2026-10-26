@@ -36,12 +36,24 @@ func antigravityMode() string {
 	return "google"
 }
 
+func antigravityAvailable() bool {
+	path, err := exec.LookPath(sdkACPExecutable("antigravity"))
+	if err != nil {
+		return false
+	}
+	dir, err := antigravityManagedDir()
+	if err == nil && path == filepath.Join(dir, "agy_acp_server.par") {
+		return antigravityInstalled(dir)
+	}
+	// A separately installed agent or command override is managed by its owner.
+	return true
+}
+
 func (s *Server) handleAntigravityAuth(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		_, installedErr := exec.LookPath(sdkACPExecutable("antigravity"))
 		writeSDKJSON(w, http.StatusOK, map[string]any{
 			"mode": antigravityMode(), "apiKeyDetected": sdkAmplifierProviderKey("GEMINI_API_KEY") != "",
-			"installed":        installedErr == nil,
+			"installed":        antigravityAvailable(),
 			"installSupported": runtime.GOOS == "linux" && runtime.GOARCH == "amd64",
 		})
 		return
@@ -93,7 +105,7 @@ func (s *Server) handleAntigravityLogin(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodGet:
 	case http.MethodPost:
-		if _, err := exec.LookPath(sdkACPExecutable("antigravity")); err != nil {
+		if !antigravityAvailable() {
 			http.Error(w, "Antigravity ACP is not installed", http.StatusConflict)
 			return
 		}
