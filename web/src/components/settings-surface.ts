@@ -816,7 +816,7 @@ export class MuxSettingsSurface extends LitElement {
           <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
           <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>`}
       </div>
-      <mux-ui-feedback class="settings-feedback" kind=${this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
+      <mux-ui-feedback class="settings-feedback" kind=${macVersion ? 'info' : this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
       <p>Build <code>${__GIT_SHA__}</code></p>
       <p>Config file: <code>~/.config/muxterm/config.toml</code></p>`;
   }

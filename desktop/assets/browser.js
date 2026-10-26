@@ -29,6 +29,7 @@
     if (!dragStart || !(event.buttons & 1)) return;
     if (Math.hypot(event.screenX - dragStart.x, event.screenY - dragStart.y) < 3) return;
     dragStart = null;
+    // Wails handles this raw message before the muxterm.desktop: bridge.
     window.webkit.messageHandlers.external.postMessage('wails:drag');
   }, true);
   document.addEventListener('mouseup', () => { dragStart = null; }, true);
