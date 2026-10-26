@@ -84,12 +84,12 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
   };
 }
 
-interface UtilityArgs { sessionId:string }
+interface UtilityArgs { sessionId:string; goalText:string; goalState:string; goalHumanPaused:boolean }
 const meta = {
   title:'Screens/Utility', tags:['autodocs'],
   parameters:{layout:'fullscreen',fullBleed:true,apiFixture:utilityFixture(sessionId('files'))},
-  args:{sessionId:sessionId('files')},
-  render:(args:UtilityArgs) => html`<div style="width:100%;height:100vh"><mux-sdk-utility .sessionId=${args.sessionId} .projectPath=${root} .touched=${['docs/design-system.md']}></mux-sdk-utility></div>`,
+  args:{sessionId:sessionId('files'),goalText:'',goalState:'',goalHumanPaused:false},
+  render:(args:UtilityArgs) => html`<div style="width:100%;height:100vh"><mux-sdk-utility .sessionId=${args.sessionId} .projectPath=${root} .goalText=${args.goalText} .goalState=${args.goalState} .goalHumanPaused=${args.goalHumanPaused} .touched=${['docs/design-system.md']}></mux-sdk-utility></div>`,
 } satisfies Meta<UtilityArgs>;
 export default meta;
 type Story = StoryObj<UtilityArgs>;
@@ -97,6 +97,21 @@ type Story = StoryObj<UtilityArgs>;
 function target(canvasElement: HTMLElement): MuxSDKUtility | null { return canvasElement.querySelector('mux-sdk-utility'); }
 
 export const Files: Story = {};
+export const Goal: Story = {
+  args:{sessionId:sessionId('goal'),goalState:'active',goalText:'# Goal\n\nCatalog every shared control, then stop after browser review.\n\n- Check the chat and utility layouts.\n- Record any remaining gaps.'},
+  parameters:{apiFixture:utilityFixture(sessionId('goal'))},
+  play:async ({canvasElement}) => { target(canvasElement)?.showPanel('goal'); },
+};
+export const GoalPaused: Story = {
+  ...Goal,
+  args:{...Goal.args,sessionId:sessionId('goal-paused'),goalState:'paused',goalHumanPaused:true},
+  parameters:{apiFixture:utilityFixture(sessionId('goal-paused'))},
+};
+export const GoalAchieved: Story = {
+  ...Goal,
+  args:{...Goal.args,sessionId:sessionId('goal-achieved'),goalState:'achieved'},
+  parameters:{apiFixture:utilityFixture(sessionId('goal-achieved'))},
+};
 export const FileTreeUnavailable: Story = {
   args:{sessionId:sessionId('tree-error')},parameters:{apiFixture:utilityFixture(sessionId('tree-error'))},
 };

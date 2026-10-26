@@ -2005,6 +2005,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "chat origin source is reserved for server messages", 422)
 			return
 		}
+		if req.Source == "goalify" && (!humanBrowserRequest(r) || req.Kind != "user" || len(req.Attachments) != 0) {
+			http.Error(w, "goalify requires a human browser message without attachments", http.StatusForbidden)
+			return
+		}
 		if req.Kind == "service" && c.Harness == "codex" {
 			http.Error(w, "unsupported: attributed service input", 422)
 			return
@@ -2048,6 +2052,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content := req.Content
+		displayContent := req.Content
+		if req.Source == "goalify" {
+			displayContent = "Refine goal with goalify"
+		}
 		h.mu.Lock()
 		branchPending, branchContext := c.BranchPending, c.BranchContext
 		h.mu.Unlock()
@@ -2069,7 +2077,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			content = h.operatorInput(id, content)
 			content = h.laneInput(id, content)
 		}
-		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": content, "displayContent": req.Content, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
+		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": content, "displayContent": displayContent, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
 		if err != nil {
 			http.Error(w, err.Error(), 422)
 			return

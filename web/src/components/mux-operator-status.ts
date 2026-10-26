@@ -303,6 +303,6 @@ export class MuxOperatorStatus extends LitElement {
                 <mux-ui-button class="archive-action" variant="quiet" size="small" accessible-label=${`${lane.archived ? 'Restore' : 'Archive'} chat ${lane.title}`} ?disabled=${!!this.pendingLane} @click=${() => void this.setArchived(lane, !lane.archived)}>${icon(lane.archived ? ArchiveRestore : Archive,{size:13})} ${lane.archived ? 'Restore chat' : 'Archive chat'}</mux-ui-button></div>
             </td></tr>` : nothing}`;
           })}</tbody>
-        </table></div>` : html`<mux-ui-feedback align="center">${this.filter === 'attention' ? 'No lanes need attention.' : this.filter === 'running' ? 'No lanes are running.' : 'No lanes are done yet.'}</mux-ui-feedback>`}` : html`<mux-ui-feedback appearance="panel" align="center"><strong>No lanes yet.</strong><p class="hint">Open a chat’s goal ledger to link it to this operator. Goal proposals need human approval or explicit operator start authorization.</p></mux-ui-feedback>`}`}`;
+        </table></div>` : html`<mux-ui-feedback align="center">${this.filter === 'attention' ? 'No lanes need attention.' : this.filter === 'running' ? 'No lanes are running.' : 'No lanes are done yet.'}</mux-ui-feedback>`}` : html`<mux-ui-feedback appearance="panel" align="center"><strong>No lanes yet.</strong></mux-ui-feedback>`}`}`;
   }
 }
