@@ -306,7 +306,7 @@ export class ACPStream {
     };
     this.turnPromise = this.withExit(this.connection.prompt({ sessionId: this.session.nativeId, prompt })).then(result => {
       this.confirmAccepted();
-      if (this.interruptForSteer) {
+      if (this.interruptForSteer && !this.stopDuringSteer) {
         this.continuedInputIds = this.turnInputIds;
         this.emit(this.session.id, 'turn.continued');
       } else if (result.stopReason === 'cancelled') this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: result.stopReason });
@@ -316,6 +316,8 @@ export class ACPStream {
       else this.emit(this.session.id, 'error', { inputIds: this.turnInputIds, message: `ACP turn stopped: ${result.stopReason}` });
     }).catch(error => {
       if (!accepted) rejectEvidence(error);
+      else if (this.interruptForSteer && this.stopDuringSteer && !this.exitError && !this.closed)
+        this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: 'cancelled' });
       else if (this.interruptForSteer && !this.exitError && !this.closed) {
         this.continuedInputIds = this.turnInputIds;
         this.emit(this.session.id, 'turn.continued');
