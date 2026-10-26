@@ -57,6 +57,12 @@ function fixtureForVoice(initialVoice: VoiceStatus): ApiFixture {
   let voice = initialVoice;
   return ({ url, method, init }) => {
     if (url.pathname.endsWith('/api/remotes') && method === 'GET') return fixtureJSON(remotes);
+    if (url.pathname.endsWith('/api/sdk-chat-start-options') && method === 'GET') return fixtureJSON([
+      {harness:'codex',provider:'openai'}, {harness:'amplifier',provider:'configured'},
+    ]);
+    if (url.pathname.endsWith('/api/ai/antigravity/auth') && method === 'GET') return fixtureJSON({mode:'google',apiKeyDetected:false,installed:false,installSupported:true});
+    if (url.pathname.endsWith('/api/ai/antigravity/login') && method === 'GET') return fixtureJSON({state:'idle'});
+    if (url.pathname.includes('/api/ai/agents/') && url.pathname.endsWith('/install') && method === 'POST') return fixtureJSON({installed:true});
     if (url.pathname.endsWith('/api/update/status') && method === 'GET') return fixtureJSON({
       currentVersion:'0.14.0', latestVersion:'0.14.0', updateAvailable:false,
       canUpdate:false, devBuild:true, method:'unsupported', reason:'Development build',
@@ -177,7 +183,7 @@ const meta = {
     aiStatus: { control:false },
   },
   render: (args: SettingsArgs) => html`
-    <mux-ui-dialog open label="Settings">
+    <mux-ui-dialog open size="wide" label="Settings">
       <div style="flex:1;min-height:0;overflow:hidden">
         <mux-settings-surface
           .config=${DEFAULT_RESOLVED_CONFIG}
@@ -237,6 +243,17 @@ export const NotificationsUnsupported: Story = {
   play:({canvasElement}) => showNotificationPermission(canvasElement, 'unsupported'),
 };
 export const AIOff: Story = { args: { section:'ai' } };
+export const AIAgentInstall: Story = {
+  args:{section:'ai'},
+  play:async ({canvasElement}) => {
+    const settings = canvasElement.querySelector<MuxSettingsSurface>('mux-settings-surface');
+    await settings?.updateComplete;
+    const claude = [...(settings?.shadowRoot?.querySelectorAll('details.agent-card summary') ?? [])]
+      .find(summary => summary.textContent?.includes('Claude Code'));
+    if (!claude) throw new Error('Claude Code row is missing');
+    (claude as HTMLElement).click();
+  },
+};
 export const AIConfigured: Story = {
   args: { section:'ai', aiStatus:{ enabled:true, source:'settings', keyHint:'demo' } },
 };

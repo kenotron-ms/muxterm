@@ -105,8 +105,10 @@
   --ui-terminal-utility-min-width: 270px;
   --ui-mobile-drawer-width: 340px;
   --ui-dialog-width: 600px;
+  --ui-dialog-wide-width: 960px;
   --ui-dialog-compact-width: 520px;
   --ui-dialog-height: 640px;
+  --ui-dialog-wide-height: 820px;
   --ui-dialog-compact-max-height: 600px;
   --ui-menu-min-width: 180px;
   --ui-menu-max-height: 280px;

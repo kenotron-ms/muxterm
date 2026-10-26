@@ -1525,7 +1525,7 @@ export class MuxApp extends LitElement {
         @workspace-create-cancel=${this._cancelCreate}
         @workspace-create-submit=${this._submitCreate}></mux-workspace-create-dialog>` : ''}
       ${settingsPage ? html`<section class="settings-page" aria-label="Settings">${this._renderSettings(true)}</section>` : this._overlayPanel ? html`
-        <mux-ui-dialog open size="standard" label="Settings" @dismiss=${this._closeOverlayPanel}>
+        <mux-ui-dialog open size="wide" label="Settings" @dismiss=${this._closeOverlayPanel}>
           <div class="overlay-body">${this._renderSettings()}</div>
         </mux-ui-dialog>
       ` : ''}
