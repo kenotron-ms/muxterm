@@ -242,6 +242,8 @@ export class ACPStream {
       this.stopDuringSteer = false;
       try {
         const prompt = await this.promptBlocks(input);
+        if (!this.busy || this.stopDuringSteer)
+          throw new Error('Turn ended before the steer could be delivered');
         if (this.steeringExtension) {
           const result = await this.withExit(this.connection.request('_session/steering', {
             sessionId: this.session.nativeId, prompt, _meta: { steering: { idleBehavior: 'promptRequired' } },

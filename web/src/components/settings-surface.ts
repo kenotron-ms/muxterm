@@ -1150,7 +1150,13 @@ export class MuxSettingsSurface extends LitElement {
       if (epoch !== this._geminiLoadEpoch || !this.isConnected || this._section !== 'ai') return;
       this._geminiAuth = selection;
       await this._loadGemini();
-    } catch (error) { if (epoch === this._geminiLoadEpoch && this.isConnected) this._geminiAuthError = error instanceof Error ? error.message : String(error); }
+    } catch (error) {
+      if (epoch === this._geminiLoadEpoch && this.isConnected && this._section === 'ai') {
+        this._geminiAuthError = error instanceof Error ? error.message : String(error);
+        if (['starting', 'awaiting_code', 'verifying'].includes(this._geminiLogin.state))
+          void this._readGeminiLogin();
+      }
+    }
     finally { this._geminiAuthBusy = false; }
   }
 
