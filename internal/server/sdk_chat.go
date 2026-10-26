@@ -1397,7 +1397,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	home, _ := os.UserHomeDir()
-	if sdkReady {
+	if _, err := exec.LookPath("codex"); sdkReady && err == nil {
 		cmd := exec.CommandContext(ctx, "codex", "login", "status")
 		if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "" || cmd.Run() == nil {
 			options = append(options, option{Harness: "codex", Provider: "openai"})
@@ -1415,7 +1415,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
-	if sdkReady {
+	if _, err := exec.LookPath("claude"); sdkReady && err == nil {
 		ready := os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
 		if !ready && home != "" {
 			data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
