@@ -188,6 +188,8 @@ export class MuxNewChat extends LitElement {
     @media(max-width:550px) {
       .composer-actions { flex-wrap:wrap; }
       .composer-actions .chat-picker { max-width:var(--ui-dock-rename-max-width); }
+      .context-bar { min-height:var(--ui-control-lg); }
+      .project-trigger,.project-option { min-height:var(--ui-control-lg); }
     }
   `;
 

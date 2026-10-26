@@ -218,7 +218,7 @@ function renderBlockToken(t: AnyToken, streaming: boolean, policy?: MdLinkPolicy
     }
 
     case 'code':
-      if (t.lang?.trim().toLowerCase() === 'mermaid' && (!policy || policy.diagrams)) {
+      if (t.lang?.trim().toLowerCase() === 'mermaid' && policy?.diagrams) {
         return html`<mux-mermaid-diagram
           .source=${t.text ?? ''}
           .streaming=${streaming}
@@ -259,9 +259,10 @@ function renderBlockToken(t: AnyToken, streaming: boolean, policy?: MdLinkPolicy
       const align = t.align ?? [];
       const cell = (c: TableCell, i: number, head: boolean): TemplateResult => {
         const a = c.align ?? align[i] ?? '';
+        const safeAlign = a === 'left' || a === 'right' || a === 'center' ? a : '';
         return head
-          ? html`<th class="md-th" style="${a ? `text-align:${a}` : ''}">${renderInline(c.tokens, policy)}</th>`
-          : html`<td class="md-td" style="${a ? `text-align:${a}` : ''}">${renderInline(c.tokens, policy)}</td>`;
+          ? html`<th class="md-th" style="${safeAlign ? `text-align:${safeAlign}` : ''}">${renderInline(c.tokens, policy)}</th>`
+          : html`<td class="md-td" style="${safeAlign ? `text-align:${safeAlign}` : ''}">${renderInline(c.tokens, policy)}</td>`;
       };
       return html`<div class="md-tablewrap" ?data-streaming="${streaming}">
         <table class="md-table">
