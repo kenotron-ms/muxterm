@@ -408,7 +408,7 @@ export class MuxSDKChat extends LitElement {
     .goal-response-note { margin:var(--ui-space-4) 0 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .goal-response-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-5); }
     .goal-refinement-choice { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-4); padding:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); font-size:var(--ui-text-sm); }
-    .goal-refinement-choice span { flex:1; min-width:11rem; }
+    .goal-refinement-choice span { flex:1; min-width:0; }
     .attachments { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); padding:0 0 var(--ui-space-5); }
     .file-input { display:none; }
     .drop-overlay { position:absolute; inset:8px; z-index:var(--ui-z-drag-overlay); display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb,var(--ui-surface-base) 92%,transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
@@ -416,9 +416,9 @@ export class MuxSDKChat extends LitElement {
     .composer { box-sizing:border-box; max-width:var(--ui-chat-content-width); margin:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-2xl); background:var(--ui-surface-raised); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); box-shadow:var(--ui-shadow-control); transition:border-color .15s,box-shadow .15s; }
     .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
     .composer-row { display:flex; }
-    .goal-banner { display:flex; align-items:center; gap:var(--ui-space-4); box-sizing:border-box; width:100%; min-width:0; min-height:var(--ui-control-md); margin-bottom:var(--ui-space-4); border:0; border-bottom:1px solid var(--ui-border); padding:0 0 var(--ui-space-3); background:transparent; color:var(--ui-text); text-align:left; font:var(--ui-text-sm)/1.5 var(--ui-font-sans); cursor:pointer; }
+    .goal-banner { display:flex; min-width:0; margin-bottom:var(--ui-space-4); }
+    .goal-banner::part(button) { justify-content:flex-start; min-width:0; border:0; border-bottom:1px solid var(--ui-border); border-radius:0; padding:0 0 var(--ui-space-3); text-align:left; font:var(--ui-text-sm)/1.5 var(--ui-font-sans); }
     .goal-banner:hover .goal-condition { text-decoration:underline; text-underline-offset:3px; }
-    .goal-banner:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; border-radius:var(--ui-radius-sm); }
     .goal-condition { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:0; }
     .goal-state { flex-shrink:0; color:var(--ui-text-muted); font-size:var(--ui-text-xs); max-width:36%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .composer-controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-4); min-height:var(--ui-control-md); }
@@ -2271,7 +2271,7 @@ export class MuxSDKChat extends LitElement {
       : record?.state === 'ended' ? 'Goal ended · outcome unknown'
       : record?.state === 'paused' ? 'Paused goal'
       : 'Goal';
-    return html`<button class="goal-banner" type="button" aria-label="View goal" @click=${this.openGoalTab}><span aria-hidden="true">${icon(Target,{size:14})}</span><span class="goal-condition" title=${condition}>${condition}</span><span class="goal-state">${state}</span></button>`;
+    return html`<mux-ui-button class="goal-banner" variant="quiet" full-width accessible-label="View goal" @click=${this.openGoalTab}><span aria-hidden="true">${icon(Target,{size:14})}</span><span class="goal-condition" title=${condition}>${condition}</span><span class="goal-state">${state}</span></mux-ui-button>`;
   }
   private laneCard(block: Block) {
     const name = sdkChats.chats.find(chat => chat.id === block.id)?.title || block.name || 'Linked lane';
