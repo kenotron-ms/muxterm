@@ -56,8 +56,8 @@ type GeminiLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verif
 type GeminiAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean };
 
 function geminiConnectionError(detail: string): string {
-  if (/This client is no longer supported for Gemini Code Assist for individuals|UNSUPPORTED_CLIENT/i.test(detail))
-    return 'Google no longer supports individual Google AI accounts in Gemini CLI. Use a detected API key here, or use Antigravity CLI for subscription access.';
+  if (/This client is no longer supported for Gemini Code Assist for individuals/i.test(detail))
+    return 'Google no longer supports individual Google AI accounts in Gemini CLI. Use a detected API key here, or see Google\'s announcement for subscription options.';
   return '';
 }
 
@@ -1245,7 +1245,7 @@ export class MuxSettingsSurface extends LitElement {
     const command = status === 'missing' ? 'npm install -g @google/gemini-cli' : 'NO_BROWSER=true gemini';
     const label = status === 'connected' ? 'Ready' : status === 'missing' ? 'Not installed'
       : status === 'unsupported' ? 'Account unsupported' : signingIn ? 'Signing in' : status === 'sign-in' ? 'Sign in needed' : status === 'checking' ? 'Checking' : 'Check unavailable';
-    const tone = status === 'connected' ? 'success' : status === 'sign-in' || signingIn ? 'warning' : 'neutral';
+    const tone = status === 'connected' ? 'success' : status === 'sign-in' || status === 'unsupported' || signingIn ? 'warning' : 'neutral';
     return html`<div class="ai-harness">
       <div class="ai-harness-head"><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><h3 class="ai-harness-name">Gemini CLI</h3><mux-ui-status-badge tone=${tone} dot>${label}</mux-ui-status-badge></div>
       <p>Choose how Gemini CLI connects. Google sign-in requires a supported organization account; an API key uses its own Google AI Studio quota.</p>
