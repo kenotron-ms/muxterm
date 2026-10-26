@@ -16,7 +16,7 @@ import '../ui/switch.js';
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
 type ModeOption = { name: string; description?: string; source?: string };
 type Settings = { model: string; effort: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[]; permission: string; mode: string; permissions: string[]; modes: string[]; modeOptions?: ModeOption[] };
-const permissionLabels: Record<string, string> = { 'read-only':'Read only', 'workspace-write':'Workspace write', 'full-permission':'Full permission' };
+const permissionLabels: Record<string, string> = { 'read-only':'Read only', 'workspace-write':'Workspace write', 'full-permission':'Full access' };
 const permissionHints: Record<string, string> = { 'read-only':'Inspect and plan without writing files', 'workspace-write':'Edit files in this workspace', 'full-permission':'Access the full environment' };
 // Amplifier mode names are file stems (plan, careful, explore), so they arrive
 // lowercase and are capitalised here to sit alongside the other picker entries.
@@ -35,10 +35,10 @@ export class MuxSDKChatSettings extends LitElement {
   private requestVersion = 0;
   static styles = css`
     ${subtleScrollbars}
-    :host { display:flex; align-items:center; flex:1; min-width:0; justify-content:space-between; gap:var(--ui-space-4); font:var(--ui-text-sm)/1.4 var(--ui-font-sans); }
-    .picker { min-width:0; }
-    .picker::part(summary) { min-height:var(--ui-control-sm); }
-    .model-picker { margin-left:auto; }
+    :host { display:flex; align-items:center; flex:0 1 auto; min-width:0; justify-content:flex-start; gap:var(--ui-space-1); font:var(--ui-text-sm)/1.4 var(--ui-font-sans); }
+    .picker { flex:0 1 auto; min-width:0; }
+    .picker::part(summary) { min-height:var(--ui-control-md); padding:0 var(--ui-space-4); gap:var(--ui-space-2); }
+    @media(pointer:coarse) { .picker::part(summary) { min-height:var(--ui-control-lg); } }
     .group { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
     .load-feedback { flex:1; }
   `;
@@ -110,7 +110,7 @@ export class MuxSDKChatSettings extends LitElement {
     const mode = s.mode || 'agent';
     return html`
       ${this.harness === 'amplifier' ? this.modePicker(s) : html`
-      <mux-ui-choice-picker class="picker permission-picker" label="Permission, mode and operator" .summary=${`${permissionLabels[permission]} · ${mode === 'plan' ? 'Plan' : 'Agent'}${this.operator ? ' · Operator' : ''}`} placement="above" appearance="plain" panel-align="left">
+      <mux-ui-choice-picker class="picker permission-picker" label="Permission, mode and operator" .summary=${`${permissionLabels[permission]}${mode === 'plan' ? ' · Plan' : ''}${this.operator ? ' · Operator' : ''}`} placement="above" appearance="plain" panel-align="left">
         <mux-ui-choice-section heading="Permission">
           ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
         </mux-ui-choice-section>
