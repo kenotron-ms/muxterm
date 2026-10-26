@@ -1064,7 +1064,7 @@ func sdkModeNames(value any) []string {
 
 func isSDKACPHarness(harness string) bool {
 	switch harness {
-	case "pi", "opencode", "deepseek", "gemini":
+	case "pi", "opencode", "deepseek", "gemini", "antigravity":
 		return true
 	}
 	return false
@@ -1108,6 +1108,20 @@ func sdkACPExecutable(harness string) string {
 			}
 		}
 		return "gemini"
+	case "antigravity":
+		if value := os.Getenv("MUXTERM_ACP_ANTIGRAVITY_COMMAND"); value != "" {
+			return value
+		}
+		dataHome := os.Getenv("XDG_DATA_HOME")
+		if dataHome == "" {
+			home, _ := os.UserHomeDir()
+			dataHome = filepath.Join(home, ".local", "share")
+		}
+		managed := filepath.Join(dataHome, "muxterm", "antigravity-acp", "1.4.3", "agy_acp_server.par")
+		if _, err := exec.LookPath(managed); err == nil {
+			return managed
+		}
+		return "agy_acp_server.par"
 	}
 	return ""
 }
@@ -1432,7 +1446,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	codexPath, codexErr := sdkAgentExecutable("codex")
 	claudePath, claudeErr := sdkAgentExecutable("claude")
 	availableACP := make([]string, 0, 4)
-	for _, harness := range []string{"pi", "opencode", "deepseek", "gemini"} {
+	for _, harness := range []string{"pi", "opencode", "deepseek", "gemini", "antigravity"} {
 		if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
 			availableACP = append(availableACP, harness)
 		}
@@ -1603,7 +1617,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "anthropic"
 		case "amplifier":
 			req.Provider = "configured"
-		case "pi", "opencode", "deepseek", "gemini":
+		case "pi", "opencode", "deepseek", "gemini", "antigravity":
 			req.Provider = "configured"
 		}
 	}
