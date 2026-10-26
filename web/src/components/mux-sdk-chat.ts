@@ -244,7 +244,8 @@ export class MuxSDKChat extends LitElement {
     .layout.preview-focused .drawer { width:100%; flex:1; border-left:0; }
     .layout.preview-focused .drawer-resizer { display:none; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
-    .body { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-10) var(--ui-space-8) var(--ui-space-11); display:flex; flex-direction:column; scrollbar-gutter:stable both-edges; overflow-anchor:none; }
+    .body { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-10) var(--ui-space-8) var(--ui-space-11); display:flex; flex-direction:column; scrollbar-width:none; overflow-anchor:none; }
+    .body::-webkit-scrollbar { display:none; }
     .scroll-bottom-row { position:relative; z-index:var(--ui-z-local); height:0; }
     .scroll-bottom { position:absolute; left:50%; bottom:var(--ui-space-5); transform:translateX(-50%); }
     .scroll-bottom::part(button) { border-radius:var(--ui-radius-pill); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-menu); }

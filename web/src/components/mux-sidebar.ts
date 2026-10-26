@@ -6,6 +6,7 @@ import { icon } from '../lib/icons.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { fetchUpdateStatus, type UpdateStatus } from '../lib/update.js';
+import { macAppVersion } from '../lib/mac-app.js';
 import '../ui/nav-item.js';
 import './mux-chat-list.js';
 
@@ -93,7 +94,7 @@ export class MuxSidebar extends LitElement {
   };
 
   private renderFooter() {
-    const version = this.updateStatus?.currentVersion;
+    const version = macAppVersion() || this.updateStatus?.currentVersion;
     const description = version ? version.startsWith('v') ? version : `v${version}` : '';
     return html`<div class="footer"><mux-ui-nav-item label="Settings" description=${description}
       @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action: 'settings' }, bubbles: true, composed: true }))}>

@@ -81,6 +81,8 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			if actionErr == nil {
 				actionErr = c.app.Browser.OpenURL(address.String())
 			}
+		case "mac-release":
+			actionErr = c.app.Browser.OpenURL("https://github.com/kenotron-ms/muxterm/releases/latest")
 		case "select":
 			actionErr = c.browserSelect(message.ID)
 		case "close":
