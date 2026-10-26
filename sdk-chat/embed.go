@@ -16,10 +16,10 @@ import (
 // The installed binary carries the sidecar and the exact npm dependency lock.
 // Node packages are installed into a versioned cache before the sidecar starts.
 //
-//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs agent-command.mjs package.json package-lock.json
+//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs antigravity-login.mjs agent-command.mjs package.json package-lock.json
 var files embed.FS
 
-var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "agent-command.mjs", "package.json", "package-lock.json"}
+var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "antigravity-login.mjs", "agent-command.mjs", "package.json", "package-lock.json"}
 var prepareMu sync.Mutex
 
 func ready(dir string) bool {
@@ -27,6 +27,7 @@ func ready(dir string) bool {
 		"sidecar.mjs",
 		"codex-stream.mjs",
 		"acp-stream.mjs",
+		"antigravity-login.mjs",
 		"agent-command.mjs",
 		"node_modules/@anthropic-ai/claude-agent-sdk/package.json",
 		"node_modules/@agentclientprotocol/sdk/package.json",

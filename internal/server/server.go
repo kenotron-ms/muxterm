@@ -277,6 +277,13 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/ai/gemini/login/code", protect(http.HandlerFunc(s.handleGeminiLoginCode)))
 	s.mux.Handle("GET /api/ai/gemini/auth", protect(http.HandlerFunc(s.handleGeminiAuth)))
 	s.mux.Handle("PUT /api/ai/gemini/auth", protect(http.HandlerFunc(s.handleGeminiAuth)))
+	s.mux.Handle("GET /api/ai/antigravity/auth", protect(http.HandlerFunc(s.handleAntigravityAuth)))
+	s.mux.Handle("PUT /api/ai/antigravity/auth", protect(http.HandlerFunc(s.handleAntigravityAuth)))
+	s.mux.Handle("GET /api/ai/antigravity/login", protect(http.HandlerFunc(s.handleAntigravityLogin)))
+	s.mux.Handle("POST /api/ai/antigravity/login", protect(http.HandlerFunc(s.handleAntigravityLogin)))
+	s.mux.Handle("DELETE /api/ai/antigravity/login", protect(http.HandlerFunc(s.handleAntigravityLogin)))
+	s.mux.Handle("POST /api/ai/antigravity/login/callback", protect(http.HandlerFunc(s.handleAntigravityLoginCallback)))
+	s.mux.Handle("POST /api/ai/antigravity/install", protect(http.HandlerFunc(s.handleAntigravityInstall)))
 
 	// Opt-in realtime voice for SDK chats.
 	if s.cfg.Voice.Enabled {
