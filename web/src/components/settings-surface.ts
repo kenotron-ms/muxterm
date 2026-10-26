@@ -37,7 +37,7 @@ import {
 } from '../lib/ai.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
-import { ArrowLeft } from 'lucide';
+import { ArrowLeft, ChevronDown } from 'lucide';
 import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { macAppVersion, openMacDownloads } from '../lib/mac-app.js';
@@ -97,12 +97,12 @@ const LIGHT_THEMES: ThemeCard[] = [
  */
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
 const SETUP_AGENTS = [
-  { name:'Codex', command:'npm install -g @openai/codex@latest', login:'codex login', docs:'https://developers.openai.com/codex/cli/' },
-  { name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
-  { name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
-  { name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
-  { name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
-  { name:'Amplifier', command:'uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
+  { harness:'codex', name:'Codex', description:'OpenAI coding agent', command:'npm install -g @openai/codex@latest', login:'codex login', docs:'https://developers.openai.com/codex/cli/' },
+  { harness:'claude', name:'Claude Code', description:'Anthropic coding agent', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
+  { harness:'opencode', name:'OpenCode · ACP', description:'Open source coding agent', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
+  { harness:'pi', name:'Pi · ACP', description:'Lightweight coding agent', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
+  { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
+  { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', command:'uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
 
 /**
@@ -399,19 +399,25 @@ export class MuxSettingsSurface extends LitElement {
 
     /* ── Coding agent guides in AI settings ── */
     .agent-intro { margin:0 0 var(--ui-space-6); color:var(--ui-text-muted); line-height:1.5; }
-    .agent-list { display:grid; gap:var(--ui-space-4); }
-    .agent-card { padding:var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
-    .agent-card h3 { margin:0 0 var(--ui-space-3); font-size:var(--ui-text-lg); }
+    .agent-list { display:grid; gap:var(--ui-space-2); }
+    .agent-card { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); overflow:hidden; }
+    .agent-card summary { display:flex; align-items:center; gap:var(--ui-space-3); min-height:var(--ui-control-lg); padding:var(--ui-space-3) var(--ui-space-4); cursor:pointer; list-style:none; }
+    .agent-card summary::-webkit-details-marker { display:none; }
+    .agent-card summary:hover { background:var(--ui-surface-hover); }
+    .agent-card summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
+    .agent-identity { display:grid; flex:1; min-width:0; gap:var(--ui-space-1); }
+    .agent-title { font-size:var(--ui-text-md); font-weight:600; }
+    .agent-description { color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .agent-chevron { display:flex; color:var(--ui-text-muted); transition:transform .15s ease; }
+    .agent-card[open] .agent-chevron { transform:rotate(180deg); }
+    .agent-body { padding:var(--ui-space-2) var(--ui-space-5) var(--ui-space-5); border-top:1px solid var(--ui-border); }
     .agent-card code { display:block; padding:var(--ui-space-3); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); overflow-wrap:anywhere; font:var(--ui-text-sm)/1.5 var(--ui-font-mono); }
     .agent-card p { margin:var(--ui-space-3) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .agent-card-actions { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-4); }
     .agent-card-actions a { color:var(--ui-accent); font-size:var(--ui-text-sm); text-decoration:none; }
     /* ── AI section ── */
-    .ai-harness { border-bottom:1px solid var(--ui-border); padding-bottom:var(--ui-space-7); margin-bottom:var(--ui-space-7); }
-    .ai-harness-head { display:flex; align-items:center; gap:var(--ui-space-4); flex-wrap:wrap; }
     .ai-harness-mark { display:block; width:var(--ui-icon-lg); height:var(--ui-icon-lg); flex:none; background:var(--ui-text); mask:var(--gemini-mark) center/contain no-repeat; }
-    .ai-harness-name { margin:0; font-size:var(--ui-text-lg); font-weight:600; flex:1; }
-    .ai-harness p { color:var(--ui-text-muted); line-height:1.5; margin:var(--ui-space-4) 0 0; }
+    .ai-harness p { line-height:1.5; }
     .ai-harness code { color:var(--ui-text); overflow-wrap:anywhere; }
     .ai-harness-actions { display:flex; gap:var(--ui-space-3); flex-wrap:wrap; margin-top:var(--ui-space-5); }
     .ai-auth-switch { display:block; margin-top:var(--ui-space-4); }
@@ -651,6 +657,9 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _aiMessage = '';
   @state() private _aiMessageKind: FeedbackKind = 'info';
   @state() private _copiedAgent = '';
+  @state() private _agentCopyError = '';
+  @state() private _readyAgents: ReadonlySet<string> | null = null;
+  @state() private _agentStatusError = false;
   @state() private _antigravityAuth: AntigravityAuth = { mode:'google', apiKeyDetected:false, installed:false, installSupported:false };
   @state() private _antigravityLogin: AntigravityLoginStatus = { state:'idle' };
   @state() private _antigravityStatus: 'checking' | 'missing' | 'sign-in' | 'connected' | 'error' = 'checking';
@@ -714,7 +723,7 @@ export class MuxSettingsSurface extends LitElement {
     this._unsubRemotes = remotesStore.subscribe(() => {
       if (this._section === 'remotes') void this._loadRemotes();
     });
-    if (this._section === 'ai') void this._loadAntigravity();
+    if (this._section === 'ai') this._loadAIConnections();
   }
 
   override disconnectedCallback(): void {
@@ -731,7 +740,7 @@ export class MuxSettingsSurface extends LitElement {
       const changedSection = this._setSection(this.openSection);
       if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
       if (changedSection && this.openSection === 'voice') void this._loadVoice();
-      if (changedSection && this.openSection === 'ai') void this._loadAntigravity();
+      if (changedSection && this.openSection === 'ai') this._loadAIConnections();
     }
   }
 
@@ -768,7 +777,7 @@ export class MuxSettingsSurface extends LitElement {
       ++this._antigravityEpoch;
     }
     if (section === 'voice') void this._loadVoice();
-    if (section === 'ai') void this._loadAntigravity();
+    if (section === 'ai') this._loadAIConnections();
     if (section === 'remotes') void this._loadRemotes();
   }
 
@@ -1109,6 +1118,29 @@ export class MuxSettingsSurface extends LitElement {
     }));
   }
 
+  private _loadAIConnections(): void {
+    void this._loadAntigravity();
+    void this._loadAgentAvailability();
+  }
+
+  private async _loadAgentAvailability(): Promise<void> {
+    this._agentStatusError = false;
+    try {
+      const response = await fetch(apiPath('/api/sdk-chat-start-options'));
+      if (!response.ok) throw new Error('Could not load agent status');
+      const options = await response.json() as Array<{harness:string}>;
+      if (this.isConnected) this._readyAgents = new Set(options.map(option => option.harness));
+    } catch {
+      if (this.isConnected) { this._readyAgents = null; this._agentStatusError = true; }
+    }
+  }
+
+  private _agentStatus(harness: string) {
+    const ready = this._readyAgents?.has(harness) ?? false;
+    const label = this._agentStatusError ? 'Status unavailable' : this._readyAgents === null ? 'Checking' : ready ? 'Ready' : 'Set up';
+    return html`<mux-ui-status-badge appearance="plain" tone=${ready ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge>`;
+  }
+
   private async _loadAntigravity(): Promise<void> {
     const epoch = ++this._antigravityEpoch;
     window.clearTimeout(this._antigravityPollTimer);
@@ -1213,8 +1245,9 @@ export class MuxSettingsSurface extends LitElement {
     const label = this._antigravityStatus === 'connected' ? 'Ready'
       : this._antigravityStatus === 'missing' ? 'Not installed'
       : signingIn ? 'Signing in' : this._antigravityStatus === 'checking' ? 'Checking' : 'Sign in needed';
-    return html`<div class="ai-harness">
-      <div class="ai-harness-head"><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><h3 class="ai-harness-name">Google Antigravity · ACP</h3><mux-ui-status-badge tone=${this._antigravityStatus === 'connected' ? 'success' : 'warning'} dot>${label}</mux-ui-status-badge></div>
+    return html`<details class="agent-card ai-harness">
+      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Google Antigravity · ACP</span><span class="agent-description">Google coding agent</span></span><mux-ui-status-badge appearance="plain" tone=${this._antigravityStatus === 'connected' ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <div class="agent-body">
       <p>Connect Google's Antigravity ACP agent. It handles Google sign-in and stores its own credentials. A detected API key uses Google AI Studio quota.</p>
       <mux-ui-switch class="ai-auth-switch" layout="row" label="Use API key"
         description=${mode === 'api-key' ? 'API key selected' : 'Google sign-in selected'}
@@ -1234,7 +1267,8 @@ export class MuxSettingsSurface extends LitElement {
         ${signingIn ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this._antigravityBusy} @click=${() => void this._antigravityLoginRequest('DELETE')}>Cancel</mux-ui-button>` : nothing}
         <mux-ui-button size="small" variant="secondary" @click=${() => void this._loadAntigravity()}>Check connection</mux-ui-button>
       </div>
-    </div>`;
+      </div>
+    </details>`;
   }
 
   private async _saveAIKey(): Promise<void> {
@@ -1299,10 +1333,10 @@ export class MuxSettingsSurface extends LitElement {
     const st = this.aiStatus;
     return html`
       <p class="section-title">Coding agents</p>
-      <p class="agent-intro">Install an agent in a terminal and sign in to its provider. Then return to New chat to select it.</p>
-      ${this._renderAntigravity()}
+      <p class="agent-intro">Choose an agent to see its setup. Ready agents are available in New chat.</p>
       <div class="agent-list">
-        ${SETUP_AGENTS.map(agent => html`<section class="agent-card"><h3>${agent.name}</h3><code>${agent.command}</code><p>After installing, run <strong>${agent.login}</strong> to connect your account.</p><div class="agent-card-actions"><mux-ui-button size="small" variant="secondary" @click=${() => void this._copyAgentCommand(agent.command, agent.name)}>${this._copiedAgent === agent.name ? 'Copied' : 'Copy install command'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div></section>`)}
+        ${this._renderAntigravity()}
+        ${SETUP_AGENTS.map(agent => html`<details class="agent-card"><summary><span class="agent-identity"><span class="agent-title">${agent.name}</span><span class="agent-description">${agent.description}</span></span>${this._agentStatus(agent.harness)}<span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary><div class="agent-body"><code>${agent.command}</code><p>After installing, run <strong>${agent.login}</strong> to connect your account.</p><div class="agent-card-actions"><mux-ui-button size="small" variant="secondary" @click=${() => void this._copyAgentCommand(agent.command, agent.name)}>${this._copiedAgent === agent.name ? 'Copied' : 'Copy install command'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>${this._agentCopyError === agent.name ? html`<mux-ui-feedback kind="error" density="compact">Could not copy. Select the command above and copy it manually.</mux-ui-feedback>` : nothing}</div></details>`)}
       </div>
       <p class="section-title section-gap">Built-in Anthropic AI</p>
       <p class="ai-status">
@@ -1339,8 +1373,8 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private async _copyAgentCommand(command: string, name: string): Promise<void> {
-    try { await navigator.clipboard.writeText(command); this._copiedAgent = name; }
-    catch { this._copiedAgent = ''; }
+    try { await navigator.clipboard.writeText(command); this._copiedAgent = name; this._agentCopyError = ''; }
+    catch { this._copiedAgent = ''; this._agentCopyError = name; }
   }
 
   // ── Voice ───────────────────────────────────────────────────────────────────
