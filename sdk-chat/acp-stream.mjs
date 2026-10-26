@@ -6,6 +6,7 @@ import { join, dirname, delimiter, isAbsolute } from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 
 const profiles = {
+  copilot: { command: 'copilot', args: ['--acp', '--stdio'], env: 'MUXTERM_ACP_COPILOT_COMMAND', mcp: true },
   pi: { command: 'pi-acp', args: [], env: 'MUXTERM_ACP_PI_COMMAND' },
   opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
   deepseek: { command: 'dsh', args: ['--profile', 'acp'], env: 'MUXTERM_ACP_DEEPSEEK_COMMAND', mcp: true },
@@ -101,6 +102,24 @@ function geminiCommand() {
   return 'gemini';
 }
 
+function copilotCommand() {
+  if (process.env.MUXTERM_ACP_COPILOT_COMMAND) return process.env.MUXTERM_ACP_COPILOT_COMMAND;
+  for (const directory of [...(process.env.PATH || '').split(delimiter), join(homedir(), '.local', 'bin'), join(homedir(), '.npm-global', 'bin')]) {
+    if (!isAbsolute(directory)) continue;
+    const command = join(directory, 'copilot');
+    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
+    catch { /* Look in npm's global prefix next. */ }
+  }
+  const prefix = spawnSync('npm', ['config', 'get', 'prefix'], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
+  const root = prefix.stdout?.trim();
+  if (prefix.status === 0 && isAbsolute(root || '')) {
+    const command = join(root, 'bin', 'copilot');
+    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
+    catch { /* Let spawn report the unavailable CLI. */ }
+  }
+  return 'copilot';
+}
+
 function geminiEnvironment() {
   const env = { ...process.env };
   const dataHome = env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
@@ -163,6 +182,7 @@ export class ACPStream {
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
     const launch = session.harness === 'antigravity' ? antigravityLaunch() : null;
     const command = session.harness === 'gemini' ? geminiCommand()
+      : session.harness === 'copilot' ? copilotCommand()
       : launch?.command || process.env[profile.env] || profile.command;
     this.profile = profile;
     this.process = spawn(command, launch?.args || profile.args, { cwd: session.cwd,

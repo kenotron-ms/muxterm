@@ -14,6 +14,7 @@ export class MuxUIChoicePicker extends LitElement {
   private static readonly openPickers = new Set<MuxUIChoicePicker>();
   @property() label = '';
   @property() summary = '';
+  @property({ type:Boolean, reflect:true, attribute:'icon-only' }) iconOnly = false;
   @property({ reflect:true }) placement: ChoicePickerPlacement = 'below';
   @property({ reflect:true }) appearance: ChoicePickerAppearance = 'outlined';
   @property({ attribute:'panel-align', reflect:true }) panelAlign: 'left' | 'right' = 'left';
@@ -22,6 +23,8 @@ export class MuxUIChoicePicker extends LitElement {
   static override styles = css`
     ${subtleScrollbars}
     :host { position:relative; display:block; min-width:0; font-family:var(--ui-font-sans); }
+    :host([icon-only]) { flex:none; width:var(--ui-control-sm); height:var(--ui-control-sm); }
+    :host([icon-only]) details { height:100%; }
     :host([open]) { z-index:var(--ui-z-sheet); }
     details { min-width:0; }
     summary {
@@ -35,6 +38,9 @@ export class MuxUIChoicePicker extends LitElement {
     summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
     .summary-label { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
     .chevron { display:inline-flex; flex:none; margin-left:auto; color:var(--ui-text-muted); transition:transform var(--ui-motion-fast) ease; }
+    :host([icon-only]) summary { width:100%; height:100%; min-height:0; max-width:none; justify-content:center; padding:0; }
+    :host([icon-only]) .summary-label,:host([icon-only]) .chevron { display:none; }
+    .summary-icon { display:inline-flex; align-items:center; justify-content:center; }
     :host([open]) .chevron { transform:rotate(180deg); }
     :host([appearance='outlined']) summary { max-width:var(--ui-picker-trigger-compact-width); border-color:var(--ui-border); background:var(--ui-surface-raised); }
     :host([appearance='outlined']) summary:hover,:host([appearance='outlined'][open]) summary { border-color:var(--ui-accent); }
@@ -63,6 +69,7 @@ export class MuxUIChoicePicker extends LitElement {
       }
     }
     @media(prefers-reduced-motion:reduce) { .chevron { transition:none; } }
+    @media(pointer:coarse) { :host([icon-only]) { width:var(--ui-control-lg); height:var(--ui-control-lg); } }
   `;
 
   private readonly closeOnOutsidePointer = (event: PointerEvent): void => {
@@ -116,7 +123,7 @@ export class MuxUIChoicePicker extends LitElement {
   override render() {
     const summary = this.summary.trim() || this.label.trim() || 'Choose an option';
     return html`<details ?open=${this.open} @toggle=${this.onToggle}>
-      <summary part="summary" aria-label=${this.label ? `${this.label}: ${this.summary.trim() || 'Choose an option'}` : summary}><span class="summary-label">${summary}</span><span class="chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <summary part="summary" aria-label=${this.iconOnly ? this.label : this.label ? `${this.label}: ${this.summary.trim() || 'Choose an option'}` : summary}>${this.iconOnly ? html`<span class="summary-icon"><slot name="summary-icon"></slot></span>` : ''}<span class="summary-label">${summary}</span><span class="chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="panel"><slot></slot></div>
     </details>`;
   }

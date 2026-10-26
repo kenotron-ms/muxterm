@@ -50,11 +50,12 @@ protocol](https://developers.openai.com/codex/app-server#items) and
 
 ## ACP agents
 
-Pi, OpenCode, DeepSeek Harness, and Gemini CLI run as local ACP agents through the official
+GitHub Copilot, Pi, OpenCode, DeepSeek Harness, and Gemini CLI run as local ACP agents through the official
 `@agentclientprotocol/sdk` client. Install and configure each harness separately:
 
 | Chat choice | Required command | ACP launch |
 | --- | --- | --- |
+| GitHub Copilot | `copilot` | `copilot --acp --stdio` |
 | Pi | `pi` and `pi-acp` | `pi-acp` |
 | OpenCode | `opencode` | `opencode acp` |
 | DeepSeek Harness | `dsh` | `dsh --profile acp` |
@@ -63,7 +64,7 @@ Pi, OpenCode, DeepSeek Harness, and Gemini CLI run as local ACP agents through t
 Muxterm offers a choice when its command is on the server's `PATH`. The agent
 uses its own provider credentials and model configuration; command presence does
 not prove that a provider is ready. To use a binary outside `PATH`, set
-`MUXTERM_ACP_PI_COMMAND`, `MUXTERM_ACP_OPENCODE_COMMAND`, or
+`MUXTERM_ACP_COPILOT_COMMAND`, `MUXTERM_ACP_PI_COMMAND`, `MUXTERM_ACP_OPENCODE_COMMAND`, or
 `MUXTERM_ACP_DEEPSEEK_COMMAND`, or `MUXTERM_ACP_GEMINI_COMMAND` to its absolute executable path before starting
 muxterm. For Pi, `pi` itself must also be on `PATH` because `pi-acp` launches it.
 
@@ -85,8 +86,8 @@ use the current choice; chats already running keep their existing connection.
 The client keeps one ACP process per chat and saves the native ACP session ID.
 On reconnect it uses `session/resume` where advertised, then `session/load`.
 Streaming text, tool activity, cancellation, image prompts, and
-advertised model and thinking controls flow into the existing chat UI. OpenCode,
-DeepSeek Harness, and Gemini CLI receive muxterm's local MCP server through ACP. The Pi ACP
+advertised model and thinking controls flow into the existing chat UI. GitHub Copilot,
+OpenCode, DeepSeek Harness, and Gemini CLI receive muxterm's local MCP server through ACP. The Pi ACP
 adapter currently accepts MCP server definitions but does not connect them to
 Pi, so muxterm does not advertise that integration for Pi.
 
