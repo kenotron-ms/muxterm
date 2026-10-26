@@ -24,31 +24,31 @@ export class MuxFolderPicker extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:inline-block; position:relative; min-width:0; font:12px/1.4 var(--ui-font-sans); color:var(--ui-text); }
+    :host { display:inline-block; position:relative; min-width:0; font:var(--ui-text-sm)/1.4 var(--ui-font-sans); color:var(--ui-text); }
     :host([field]) { display:block; width:100%; }
     :host([inline]) { display:block; width:100%; }
     button { font:inherit; cursor:pointer; }
-    .trigger { box-sizing:border-box; display:flex; align-items:center; gap:6px; width:100%; max-width:230px; height:29px; padding:0 8px; border:1px solid transparent; border-radius:7px; background:transparent; color:var(--ui-text-muted); text-align:left; }
+    .trigger { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:100%; max-width:var(--ui-new-chat-location-width); height:var(--ui-control-sm); padding:0 var(--ui-space-4); border:1px solid transparent; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text-muted); text-align:left; }
     .trigger:hover,.trigger[aria-expanded='true'] { background:var(--ui-surface-hover); color:var(--ui-text); }
     .trigger:focus-visible,.row:focus-visible,.browse:focus-visible,.up:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
     .trigger svg { flex:none; }
     .trigger .path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     :host([field]) .trigger { max-width:none; height:var(--ui-control-md); border-color:var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); }
-    .menu { position:absolute; z-index:30; top:calc(100% + 5px); left:0; box-sizing:border-box; width:min(330px,calc(100vw - 42px)); max-height:min(360px,60dvh); overflow:auto; padding:6px; border:1px solid var(--ui-border); border-radius:12px; background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-menu); }
-    .menu.above { top:auto; bottom:calc(100% + 5px); }
+    .menu { position:absolute; z-index:var(--ui-z-menu); top:calc(100% + var(--ui-space-3)); left:0; box-sizing:border-box; width:min(var(--ui-mobile-drawer-width),calc(100vw - var(--ui-control-lg))); max-height:min(var(--ui-menu-max-height),60dvh); overflow:auto; padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-menu); }
+    .menu.above { top:auto; bottom:calc(100% + var(--ui-space-3)); }
     :host([field]) .menu { width:100%; }
-    :host([inline]) .menu { position:static; width:100%; max-height:min(var(--folder-list-height,245px),40dvh); box-shadow:none; }
-    .head { position:sticky; top:-6px; z-index:1; display:flex; align-items:center; gap:5px; min-height:34px; padding:0 4px 5px; border-bottom:1px solid var(--ui-border); background:var(--ui-surface-raised); color:var(--ui-text-muted); }
-    .head span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
-    .up,.browse { display:grid; place-items:center; flex:none; width:28px; height:28px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--ui-text-muted); }
+    :host([inline]) .menu { position:static; width:100%; max-height:min(var(--folder-list-height,var(--ui-menu-max-height)),40dvh); box-shadow:none; }
+    .head { position:sticky; top:calc(-1 * var(--ui-space-3)); z-index:var(--ui-z-local); display:flex; align-items:center; gap:var(--ui-space-3); min-height:var(--ui-control-md); padding:0 var(--ui-space-2) var(--ui-space-3); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-raised); color:var(--ui-text-muted); }
+    .head span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ui-text-xs); }
+    .up,.browse { display:grid; place-items:center; flex:none; width:var(--ui-control-sm); height:var(--ui-control-sm); padding:0; border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text-muted); }
     .up:hover,.browse:hover { background:var(--ui-surface-hover); color:var(--ui-text); }
     .row-line { display:flex; align-items:center; }
-    .row { display:flex; align-items:center; gap:8px; flex:1; min-width:0; min-height:34px; padding:5px 7px; border:0; border-radius:7px; background:transparent; color:var(--ui-text); text-align:left; }
+    .row { display:flex; align-items:center; gap:var(--ui-space-4); flex:1; min-width:0; min-height:var(--ui-control-md); padding:var(--ui-space-3) var(--ui-space-4); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); text-align:left; }
     .row:hover,.row[selected] { background:var(--ui-surface-hover); }
     .row .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .row svg { flex:none; color:var(--ui-text-muted); }
     .row .check svg { color:var(--ui-accent); }
-    .empty,.error { padding:8px; color:var(--ui-text-muted); font-size:11px; }
+    .empty,.error { padding:var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .error { color:var(--ui-danger-text); }
     @media (max-width:550px) { .menu { left:0; } }
   `;

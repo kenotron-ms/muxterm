@@ -119,8 +119,8 @@ export class MuxChatWorkspace extends LitElement {
     .row:has(mux-ui-menu) .action.more,.chat-row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
     mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-space-8); }
-    .archive-list { box-sizing:border-box; max-height:320px; overflow-y:auto; overscroll-behavior:contain; }
-    .archive-list .chat-row { height:32px; min-height:32px; }
+    .archive-list { box-sizing:border-box; max-height:var(--ui-chat-edit-max-height); overflow-y:auto; overscroll-behavior:contain; }
+    .archive-list .chat-row { height:var(--ui-space-9); min-height:var(--ui-space-9); }
     .archive-spacer { pointer-events:none; }
     .archive-status { padding:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .chat-row[selected] { background:var(--ui-nav-selected); }
@@ -385,7 +385,7 @@ export class MuxChatList extends LitElement {
     .project-form { display:grid; gap:var(--ui-space-5); padding:var(--ui-space-6); color:var(--ui-text); }
     .project-form h2 { margin:0; font-size:var(--ui-text-xl); }
     .project-form .field-label { display:grid; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
-    .project-form mux-folder-picker { --folder-list-height:155px; }
+    .project-form mux-folder-picker { --folder-list-height:var(--ui-picker-trigger-compact-width); }
     .project-preview { overflow-wrap:anywhere; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .project-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-3); }
     @media(hover:none), (max-width:550px) { .pin-unpin { opacity:1; } }

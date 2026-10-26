@@ -53,6 +53,13 @@
     "literalScale": 0,
     "nativeControls": 0
   },
+  "components/mux-folder-picker.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "literalDimensions": 0,
+    "nativeControls": 5
+  },
   "components/mux-monaco-diff.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
@@ -69,7 +76,7 @@
     "legacyTokens": 0,
     "literalColors": 0,
     "literalScale": 0,
-    "nativeControls": 2
+    "nativeControls": 4
   },
   "components/mux-operator-status.ts": {
     "legacyTokens": 0,

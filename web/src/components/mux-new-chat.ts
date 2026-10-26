@@ -20,6 +20,7 @@ import '../ui/range-field.js';
 import '../ui/select.js';
 import '../ui/switch.js';
 import '../ui/text-field.js';
+import '../ui/menu-item.js';
 import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
@@ -165,7 +166,7 @@ export class MuxNewChat extends LitElement {
       .location-trigger::part(button) { min-height:var(--ui-control-lg); }
       .location-fields { padding-bottom:max(var(--ui-space-6),env(safe-area-inset-bottom)); }
     }
-    .content { width:min(100%,760px); }
+    .content { width:min(100%,var(--ui-chat-transcript-width)); }
     h1 { margin-bottom:var(--ui-space-6); }
     .composer { gap:var(--ui-space-3); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); border-radius:var(--ui-radius-xl) var(--ui-radius-xl) 0 0; }
     .composer-actions { gap:var(--ui-space-2); min-height:var(--ui-control-sm); padding:0; border:0; }
@@ -173,25 +174,25 @@ export class MuxNewChat extends LitElement {
     .composer-actions .send::part(button) { border-radius:50%; }
     .composer-actions .harness { min-width:0; max-width:var(--ui-new-chat-harness-width); }
     .composer-actions .harness::part(select) { min-height:var(--ui-control-sm); }
-    .composer-actions .chat-picker { max-width:190px; }
+    .composer-actions .chat-picker { max-width:var(--ui-picker-trigger-compact-width); }
     .composer-actions .agent-add { flex:none; }
     .composer-actions .loading-models { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .context-bar { display:flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border:1px solid var(--ui-border); border-top:0; border-radius:0 0 var(--ui-radius-xl) var(--ui-radius-xl); background:var(--ui-surface-raised); }
     .context-bar .spacer { flex:1; }
     .project-picker { position:relative; min-width:0; }
-    .project-trigger { display:flex; align-items:center; gap:var(--ui-space-2); max-width:230px; min-height:var(--ui-control-sm); padding:0 var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text-muted); font:inherit; font-size:var(--ui-text-sm); cursor:pointer; }
+    .project-trigger { display:flex; align-items:center; gap:var(--ui-space-2); max-width:var(--ui-new-chat-location-width); min-height:var(--ui-control-sm); padding:0 var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text-muted); font:inherit; font-size:var(--ui-text-sm); cursor:pointer; }
     .project-trigger:hover,.project-trigger[aria-expanded="true"] { background:var(--ui-surface-hover); color:var(--ui-text); }
     .project-trigger:focus-visible { outline:2px solid var(--ui-focus); }
     .project-trigger span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .project-options { position:absolute; z-index:var(--ui-z-menu); bottom:calc(100% + var(--ui-space-2)); left:0; box-sizing:border-box; width:min(340px,calc(100vw - 42px)); max-height:min(440px,75dvh); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-overlay); box-shadow:var(--ui-shadow-menu); --folder-list-height:215px; }
+    .project-options { position:absolute; z-index:var(--ui-z-menu); bottom:calc(100% + var(--ui-space-2)); left:0; box-sizing:border-box; width:min(var(--ui-mobile-drawer-width),calc(100vw - var(--ui-control-lg))); max-height:min(var(--ui-dialog-height),75dvh); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-overlay); box-shadow:var(--ui-shadow-menu); --folder-list-height:var(--ui-new-chat-location-width); }
     .project-options mux-folder-picker { display:block; width:100%; }
     .project-options mux-folder-picker::part(menu) { border:0; }
     .project-option { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-height:var(--ui-control-md); padding:var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); text-align:left; font:inherit; cursor:pointer; }
     .project-option:hover,.project-option[selected] { background:var(--ui-surface-hover); }
-    .project-option .option-copy { display:grid; gap:1px; flex:1; min-width:0; }
+    .project-option .option-copy { display:grid; gap:var(--ui-space-px); flex:1; min-width:0; }
     .project-option .option-copy small { color:var(--ui-text-muted); }
     .project-option .selected-icon { margin-left:auto; color:var(--ui-accent); }
-    .project-divider { height:1px; margin:var(--ui-space-2) 0; background:var(--ui-border); }
+    .project-divider { height:var(--ui-divider-thickness); margin:var(--ui-space-2) 0; background:var(--ui-border); }
     .new-folder-form { display:grid; gap:var(--ui-space-5); padding:var(--ui-space-6); color:var(--ui-text); }
     .new-folder-form h2 { margin:0; font-size:var(--ui-text-xl); }
     .new-folder-form .field-label { display:grid; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
@@ -200,7 +201,7 @@ export class MuxNewChat extends LitElement {
     .context-bar mux-ui-switch { margin-left:auto; }
     @media(max-width:550px) {
       .composer-actions { flex-wrap:wrap; }
-      .composer-actions .chat-picker { max-width:160px; }
+      .composer-actions .chat-picker { max-width:var(--ui-dock-rename-max-width); }
     }
   `;
 
@@ -524,7 +525,7 @@ export class MuxNewChat extends LitElement {
           <div class="project-divider"></div>
           <mux-folder-picker inline label="Folders" .value=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? '' : this.folder} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => void this.selectFolder(event.detail.path)}></mux-folder-picker>
           <div class="project-divider"></div>
-          <button class="project-option" role="menuitem" @click=${this.openProjectDialog}>${icon(Plus,{size:16})}<span class="option-copy"><strong>New folder</strong></span></button>
+          <mux-ui-menu-item @click=${this.openProjectDialog}>${icon(Plus,{size:16})}<strong>New folder</strong></mux-ui-menu-item>
         </div>` : nothing}</div>
         <div class="spacer"></div>
         <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? 'Choose a project with a Git folder to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || !!selectedProject?.managedFolder} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
