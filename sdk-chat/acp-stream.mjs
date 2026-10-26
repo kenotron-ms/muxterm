@@ -104,7 +104,7 @@ function geminiCommand() {
 
 function copilotCommand() {
   if (process.env.MUXTERM_ACP_COPILOT_COMMAND) return process.env.MUXTERM_ACP_COPILOT_COMMAND;
-  for (const directory of [...(process.env.PATH || '').split(delimiter), join(homedir(), '.local', 'bin'), join(homedir(), '.npm-global', 'bin')]) {
+  for (const directory of [...(process.env.PATH || '').split(delimiter), join(homedir(), '.local', 'bin'), join(homedir(), '.npm-global', 'bin'), join(homedir(), '.opencode', 'bin')]) {
     if (!isAbsolute(directory)) continue;
     const command = join(directory, 'copilot');
     try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
