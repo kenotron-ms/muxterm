@@ -1446,7 +1446,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	codexPath, codexErr := sdkAgentExecutable("codex")
 	claudePath, claudeErr := sdkAgentExecutable("claude")
 	availableACP := make([]string, 0, 4)
-	for _, harness := range []string{"pi", "opencode", "deepseek", "gemini", "antigravity"} {
+	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity"} {
 		if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
 			availableACP = append(availableACP, harness)
 		}
@@ -1584,6 +1584,11 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness) {
 		http.Error(w, "unsupported harness", 400)
+		return
+	}
+	// Existing Gemini CLI chats can still resume, but new chats use Antigravity.
+	if req.Harness == "gemini" {
+		http.Error(w, "Gemini CLI is no longer offered for new chats; choose Antigravity", 400)
 		return
 	}
 	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" && len(req.Attachments) == 0 {
