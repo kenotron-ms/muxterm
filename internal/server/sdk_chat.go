@@ -1091,6 +1091,22 @@ func sdkACPExecutable(harness string) string {
 		if value := os.Getenv("MUXTERM_ACP_GEMINI_COMMAND"); value != "" {
 			return value
 		}
+		if path, err := exec.LookPath("gemini"); err == nil {
+			return path
+		}
+		// User-level npm installs may be absent from a service's PATH.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if npm, err := exec.LookPath("npm"); err == nil {
+			if prefix, err := exec.CommandContext(ctx, npm, "config", "get", "prefix").Output(); err == nil {
+				root := strings.TrimSpace(string(prefix))
+				if filepath.IsAbs(root) {
+					if path, err := exec.LookPath(filepath.Join(root, "bin", "gemini")); err == nil {
+						return path
+					}
+				}
+			}
+		}
 		return "gemini"
 	}
 	return ""

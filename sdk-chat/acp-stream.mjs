@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, delimiter, isAbsolute } from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 
 const profiles = {
@@ -13,6 +13,24 @@ const profiles = {
 };
 
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
+
+function geminiCommand() {
+  if (process.env.MUXTERM_ACP_GEMINI_COMMAND) return process.env.MUXTERM_ACP_GEMINI_COMMAND;
+  for (const directory of (process.env.PATH || '').split(delimiter)) {
+    if (!isAbsolute(directory)) continue;
+    const command = join(directory, 'gemini');
+    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
+    catch { /* Look in npm's global prefix next. */ }
+  }
+  const prefix = spawnSync('npm', ['config', 'get', 'prefix'], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
+  const root = prefix.stdout?.trim();
+  if (prefix.status === 0 && isAbsolute(root || '')) {
+    const command = join(root, 'bin', 'gemini');
+    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
+    catch { /* Let spawn report the unavailable CLI. */ }
+  }
+  return 'gemini';
+}
 
 function geminiEnvironment() {
   const env = { ...process.env };
@@ -74,7 +92,7 @@ export class ACPStream {
     this.continuedInputIds = [];
     const profile = profiles[session.harness];
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
-    const command = process.env[profile.env] || profile.command;
+    const command = session.harness === 'gemini' ? geminiCommand() : process.env[profile.env] || profile.command;
     this.profile = profile;
     this.process = spawn(command, profile.args, { cwd: session.cwd, env: session.harness === 'gemini' ? geminiEnvironment() : process.env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.exited = new Promise(resolve => { this.resolveExit = resolve; });
