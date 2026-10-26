@@ -1,7 +1,7 @@
 function namedImages(files: File[]): File[] {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return files.map((file, index) => new File([file],
-    `Pasted image ${stamp}${files.length > 1 ? `-${index + 1}` : ''}.${file.type.split('/')[1] || 'png'}`,
+    `Pasted image ${stamp}${files.length > 1 ? `-${index + 1}` : ''}.${file.type.split('/')[1]?.split('+')[0] || 'png'}`,
     { type: file.type }));
 }
 

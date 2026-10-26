@@ -90,7 +90,7 @@ function geminiCommand() {
     if (!isAbsolute(directory)) continue;
     const command = join(directory, 'gemini');
     try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
-    catch { /* Look in npm's global prefix next. */ }
+    catch { /* Try the next directory. */ }
   }
   const prefix = spawnSync('npm', ['config', 'get', 'prefix'], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
   const root = prefix.stdout?.trim();
@@ -108,7 +108,7 @@ function copilotCommand() {
     if (!isAbsolute(directory)) continue;
     const command = join(directory, 'copilot');
     try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
-    catch { /* Look in npm's global prefix next. */ }
+    catch { /* Try the next directory. */ }
   }
   const prefix = spawnSync('npm', ['config', 'get', 'prefix'], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
   const root = prefix.stdout?.trim();
