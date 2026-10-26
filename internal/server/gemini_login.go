@@ -25,7 +25,6 @@ type geminiLogin struct {
 	url      string
 	message  string
 	output   string
-	entered  bool
 	closeTTY sync.Once
 }
 
@@ -174,13 +173,15 @@ func (s *Server) handleGeminiLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		cmd := exec.Command(command, "--skip-trust")
 		// This process always performs Google sign-in, even when chat uses an API key.
-		cmd.Env = make([]string, 0, len(os.Environ())+1)
+		cmd.Env = make([]string, 0, len(os.Environ())+2)
 		for _, entry := range os.Environ() {
-			if !strings.HasPrefix(entry, "GEMINI_API_KEY=") && !strings.HasPrefix(entry, "GOOGLE_API_KEY=") {
+			if !strings.HasPrefix(entry, "GEMINI_API_KEY=") && !strings.HasPrefix(entry, "GOOGLE_API_KEY=") && !strings.HasPrefix(entry, "GEMINI_CLI_AUTH_OVERRIDE=") {
 				cmd.Env = append(cmd.Env, entry)
 			}
 		}
-		cmd.Env = append(cmd.Env, "NO_BROWSER=true")
+		// Gemini CLI consumes this at settings load, even when its saved choice is API key.
+		// Sending Enter to its picker would select whichever option was highlighted.
+		cmd.Env = append(cmd.Env, "NO_BROWSER=true", "GEMINI_CLI_AUTH_OVERRIDE=oauth-personal")
 		tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 40, Cols: 2048})
 		if err != nil {
 			s.geminiLoginMu.Lock()
@@ -312,19 +313,6 @@ func (s *Server) readGeminiLogin(login *geminiLogin) {
 				login.output = (login.output + geminiANSI.ReplaceAllString(string(buffer[:n]), ""))
 				if len(login.output) > 32768 {
 					login.output = login.output[len(login.output)-32768:]
-				}
-				if login.state == "starting" && !login.entered && strings.Contains(login.output, "Sign in with Google") {
-					login.entered = true
-					go func() {
-						time.Sleep(300 * time.Millisecond)
-						s.geminiLoginMu.Lock()
-						active := s.geminiLogin == login && login.state == "starting"
-						tty := login.tty
-						s.geminiLoginMu.Unlock()
-						if active {
-							_, _ = io.WriteString(tty, "\r")
-						}
-					}()
 				}
 				if login.state == "starting" {
 					if match := geminiAuthURL.FindString(login.output); match != "" {

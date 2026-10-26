@@ -20,11 +20,14 @@ function geminiEnvironment() {
   let mode = 'google';
   try { mode = readFileSync(join(dataHome, 'muxterm', 'gemini-auth-mode'), 'utf8').trim(); } catch { /* Google sign-in is the default. */ }
   if (mode !== 'api-key') {
-    // A key intended for another CLI session must not override Google sign-in.
+    // The CLI may have saved API-key auth from a prior session. Force this
+    // launch to use the Google choice selected in muxterm without editing its settings.
     delete env.GEMINI_API_KEY;
     delete env.GOOGLE_API_KEY;
+    env.GEMINI_CLI_AUTH_OVERRIDE = 'oauth-personal';
     return env;
   }
+  delete env.GEMINI_CLI_AUTH_OVERRIDE;
   let key = env.GEMINI_API_KEY?.trim();
   if (!key) {
     for (const name of ['keys.env', 'key.env']) {
