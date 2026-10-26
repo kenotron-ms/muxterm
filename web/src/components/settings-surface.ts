@@ -13,6 +13,7 @@ import '../ui/range-field.js';
 import '../ui/select.js';
 import '../ui/status-badge.js';
 import type { MuxUISelect } from '../ui/select.js';
+import type { MuxUITextField } from '../ui/text-field.js';
 import '../ui/switch.js';
 import '../ui/text-field.js';
 import '../ui/theme-choice.js';
@@ -37,6 +38,7 @@ import {
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft } from 'lucide';
+import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
@@ -50,6 +52,8 @@ import {
 } from '../lib/voice-settings.js';
 
 export type SettingsSection = 'appearance' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
+type GeminiLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
+type GeminiAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean };
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> = [
   { id: 'appearance', label: 'Appearance' },
@@ -385,6 +389,15 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     /* ── AI section ── */
+    .ai-harness { border-bottom:1px solid var(--ui-border); padding-bottom:var(--ui-space-7); margin-bottom:var(--ui-space-7); }
+    .ai-harness-head { display:flex; align-items:center; gap:var(--ui-space-4); flex-wrap:wrap; }
+    .ai-harness-mark { display:block; width:var(--ui-icon-lg); height:var(--ui-icon-lg); flex:none; background:var(--ui-text); mask:var(--gemini-mark) center/contain no-repeat; }
+    .ai-harness-name { margin:0; font-size:var(--ui-text-lg); font-weight:600; flex:1; }
+    .ai-harness p { color:var(--ui-text-muted); line-height:1.5; margin:var(--ui-space-4) 0 0; }
+    .ai-harness code { color:var(--ui-text); overflow-wrap:anywhere; }
+    .ai-harness-actions { display:flex; gap:var(--ui-space-3); flex-wrap:wrap; margin-top:var(--ui-space-5); }
+    .ai-login-link { display:inline-block; margin-top:var(--ui-space-4); color:var(--ui-accent); overflow-wrap:anywhere; }
+    .ai-login-code { display:block; width:100%; margin-top:var(--ui-space-4); }
     .ai-status {
       margin: 0 0 var(--ui-space-5);
       color: var(--ui-text);
@@ -618,6 +631,20 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _aiBusy = false;
   @state() private _aiMessage = '';
   @state() private _aiMessageKind: FeedbackKind = 'info';
+  @state() private _geminiStatus: 'checking' | 'missing' | 'sign-in' | 'connected' | 'error' = 'checking';
+  @state() private _geminiCopied = '';
+  @state() private _geminiLogin: GeminiLoginStatus = { state:'idle' };
+  @state() private _geminiCode = '';
+  @state() private _geminiLoginBusy = false;
+  @state() private _geminiLoginError = '';
+  @state() private _geminiAuth: GeminiAuth = { mode:'google', apiKeyDetected:false };
+  @state() private _geminiAuthBusy = false;
+  @state() private _geminiAuthError = '';
+  private _geminiPollTimer?: number;
+  private _geminiLoginEpoch = 0;
+  private _geminiLoadEpoch = 0;
+  // A successful login poll supersedes older connection checks, not auth-mode saves.
+  private _geminiStatusEpoch = 0;
 
   // ── Voice credentials ──────────────────────────────────────────────────
   // _voice is what the SERVER says. The _v* fields are the form's own edits,
@@ -672,10 +699,14 @@ export class MuxSettingsSurface extends LitElement {
     this._unsubRemotes = remotesStore.subscribe(() => {
       if (this._section === 'remotes') void this._loadRemotes();
     });
+    if (this._section === 'ai') void this._loadGemini();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    window.clearTimeout(this._geminiPollTimer);
+    ++this._geminiLoginEpoch;
+    ++this._geminiLoadEpoch;
     this._unsubRemotes?.();
     this._unsubRemotes = null;
   }
@@ -686,6 +717,7 @@ export class MuxSettingsSurface extends LitElement {
       const changedSection = this._setSection(this.openSection);
       if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
       if (changedSection && this.openSection === 'voice') void this._loadVoice();
+      if (changedSection && this.openSection === 'ai') void this._loadGemini();
     }
   }
 
@@ -717,7 +749,13 @@ export class MuxSettingsSurface extends LitElement {
 
   private _selectSection(section: SettingsSection): void {
     if (!this._setSection(section)) return;
+    if (section !== 'ai') {
+      window.clearTimeout(this._geminiPollTimer);
+      ++this._geminiLoginEpoch;
+      ++this._geminiLoadEpoch;
+    }
     if (section === 'voice') void this._loadVoice();
+    if (section === 'ai') void this._loadGemini();
     if (section === 'remotes') void this._loadRemotes();
   }
 
@@ -1055,6 +1093,165 @@ export class MuxSettingsSurface extends LitElement {
     }));
   }
 
+  private async _loadGemini(): Promise<void> {
+    if (!this.isConnected || this._section !== 'ai') return;
+    const epoch = ++this._geminiLoadEpoch;
+    const statusEpoch = ++this._geminiStatusEpoch;
+    this._geminiStatus = 'checking';
+    void this._readGeminiLogin();
+    try {
+      const [auth, choices] = await Promise.all([
+        fetch(apiPath('/api/ai/gemini/auth')),
+        fetch(apiPath('/api/sdk-chat-start-options')),
+      ]);
+      if (epoch !== this._geminiLoadEpoch) return;
+      if (auth.ok) {
+        const selection = await auth.json() as GeminiAuth;
+        if (epoch !== this._geminiLoadEpoch) return;
+        this._geminiAuth = selection;
+      }
+      if (!choices.ok) throw new Error('Could not check installed agents');
+      const options = await choices.json() as Array<{ harness: string }>;
+      if (epoch !== this._geminiLoadEpoch) return;
+      if (!options.some(option => option.harness === 'gemini')) {
+        if (statusEpoch === this._geminiStatusEpoch) this._geminiStatus = 'missing';
+        return;
+      }
+      const catalog = await fetch(apiPath('/api/sdk-chat-catalog?harness=gemini'));
+      if (epoch !== this._geminiLoadEpoch) return;
+      if (catalog.ok) {
+        if (statusEpoch === this._geminiStatusEpoch) {
+          this._geminiStatus = 'connected';
+          this._geminiLoginError = '';
+        }
+        return;
+      }
+      const detail = await catalog.text();
+      if (epoch !== this._geminiLoadEpoch) return;
+      if (statusEpoch === this._geminiStatusEpoch)
+        this._geminiStatus = /auth|sign.?in|credential|login|api key|not configured/i.test(detail) ? 'sign-in' : 'error';
+    } catch { if (epoch === this._geminiLoadEpoch && statusEpoch === this._geminiStatusEpoch) this._geminiStatus = 'error'; }
+  }
+
+  private async _setGeminiAuth(mode: GeminiAuth['mode']): Promise<void> {
+    if (this._geminiAuthBusy || this._geminiAuth.mode === mode) return;
+    const epoch = ++this._geminiLoadEpoch;
+    window.clearTimeout(this._geminiPollTimer);
+    ++this._geminiLoginEpoch;
+    this._geminiAuthBusy = true;
+    this._geminiAuthError = '';
+    try {
+      const response = await fetch(apiPath('/api/ai/gemini/auth'), {
+        method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode}),
+      });
+      if (epoch !== this._geminiLoadEpoch || !this.isConnected || this._section !== 'ai') return;
+      if (!response.ok) throw new Error((await response.text()).trim());
+      const selection = await response.json() as GeminiAuth;
+      if (epoch !== this._geminiLoadEpoch || !this.isConnected || this._section !== 'ai') return;
+      this._geminiAuth = selection;
+      await this._loadGemini();
+    } catch (error) {
+      if (epoch === this._geminiLoadEpoch && this.isConnected && this._section === 'ai') {
+        this._geminiAuthError = error instanceof Error ? error.message : String(error);
+        if (['starting', 'awaiting_code', 'verifying'].includes(this._geminiLogin.state))
+          void this._readGeminiLogin();
+      }
+    }
+    finally { this._geminiAuthBusy = false; }
+  }
+
+  private async _readGeminiLogin(): Promise<void> {
+    window.clearTimeout(this._geminiPollTimer);
+    const epoch = ++this._geminiLoginEpoch;
+    try {
+      const response = await fetch(apiPath('/api/ai/gemini/login'));
+      if (!response.ok) return;
+      const login = await response.json() as GeminiLoginStatus;
+      if (epoch !== this._geminiLoginEpoch) return;
+      this._geminiLogin = login;
+      if (this._geminiLogin.state === 'verifying' || this._geminiLogin.state === 'complete') {
+        const catalog = await fetch(apiPath('/api/sdk-chat-catalog?harness=gemini'));
+        if (epoch !== this._geminiLoginEpoch) return;
+        if (catalog.ok) {
+          ++this._geminiStatusEpoch;
+          this._geminiStatus = 'connected';
+          this._geminiLoginError = '';
+          this._geminiLogin = { state:'complete' };
+        }
+      }
+    } catch { /* The terminal sign-in path remains available. */ }
+    finally {
+      if (epoch === this._geminiLoginEpoch && this.isConnected && this._section === 'ai' &&
+          ['starting', 'awaiting_code', 'verifying'].includes(this._geminiLogin.state))
+        this._geminiPollTimer = window.setTimeout(() => void this._readGeminiLogin(), 2500);
+    }
+  }
+
+  private async _geminiLoginRequest(method: 'POST' | 'DELETE', code?: string): Promise<void> {
+    if (this._geminiLoginBusy) return;
+    const epoch = ++this._geminiLoginEpoch;
+    window.clearTimeout(this._geminiPollTimer);
+    this._geminiLoginBusy = true;
+    this._geminiLoginError = '';
+    try {
+      const response = await fetch(apiPath(`/api/ai/gemini/login${code === undefined ? '' : '/code'}`), {
+        method, ...(code === undefined ? {} : { headers:{'Content-Type':'application/json'}, body:JSON.stringify({code}) }),
+      });
+      if (epoch !== this._geminiLoginEpoch || !this.isConnected || this._section !== 'ai') return;
+      if (!response.ok) throw new Error((await response.text()).trim());
+      const login = await response.json() as GeminiLoginStatus;
+      if (epoch !== this._geminiLoginEpoch || !this.isConnected || this._section !== 'ai') return;
+      this._geminiLogin = login;
+      if (code !== undefined) this._geminiCode = '';
+      void this._readGeminiLogin();
+    } catch (error) { if (epoch === this._geminiLoginEpoch && this.isConnected) this._geminiLoginError = error instanceof Error ? error.message : String(error); }
+    finally { this._geminiLoginBusy = false; }
+  }
+
+  private async _copyGemini(command: string): Promise<void> {
+    try { await navigator.clipboard.writeText(command); this._geminiCopied = command; }
+    catch { this._geminiCopied = ''; }
+  }
+
+  private _renderGemini() {
+    const status = this._geminiStatus;
+    const login = this._geminiLogin;
+    const auth = this._geminiAuth;
+    const signingIn = ['starting', 'awaiting_code', 'verifying'].includes(login.state);
+    const command = status === 'missing' ? 'npm install -g @google/gemini-cli' : 'NO_BROWSER=true gemini';
+    const label = status === 'connected' ? 'Ready' : status === 'missing' ? 'Not installed'
+      : signingIn ? 'Signing in' : status === 'sign-in' ? 'Sign in needed' : status === 'checking' ? 'Checking' : 'Check unavailable';
+    const tone = status === 'connected' ? 'success' : status === 'sign-in' || signingIn ? 'warning' : 'neutral';
+    return html`<div class="ai-harness">
+      <div class="ai-harness-head"><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><h3 class="ai-harness-name">Gemini CLI</h3><mux-ui-status-badge tone=${tone} dot>${label}</mux-ui-status-badge></div>
+      <p>Choose how Gemini CLI connects. Google sign-in uses your account; an API key uses its own Google AI Studio quota.</p>
+      <div class="ai-harness-actions" role="group" aria-label="Gemini authentication method">
+        <mux-ui-button size="small" variant=${auth.mode === 'google' ? 'primary' : 'secondary'} ?disabled=${this._geminiAuthBusy || signingIn} @click=${() => void this._setGeminiAuth('google')}>${auth.mode === 'google' ? '✓ ' : ''}Google sign-in</mux-ui-button>
+        <mux-ui-button size="small" variant=${auth.mode === 'api-key' ? 'primary' : 'secondary'} ?disabled=${this._geminiAuthBusy || signingIn || !auth.apiKeyDetected} @click=${() => void this._setGeminiAuth('api-key')}>${auth.mode === 'api-key' ? '✓ ' : ''}Detected API key</mux-ui-button>
+      </div>
+      <p>${auth.apiKeyDetected ? 'GEMINI_API_KEY detected; its value stays hidden.' : 'No GEMINI_API_KEY found in the server environment or ~/.amplifier/keys.env.'}</p>
+      ${this._geminiAuthError ? html`<mux-ui-feedback kind="error" density="compact">${this._geminiAuthError}</mux-ui-feedback>` : ''}
+      ${status === 'connected' ? html`<p>Gemini is ready in New Chat.</p>` : status === 'missing' ? html`<p>Install Gemini CLI on this machine first.</p><p><code>${command}</code></p>` : html`
+        ${login.state === 'starting' ? html`<p>Starting Google sign-in in Gemini CLI…</p>` : ''}
+        ${login.state === 'awaiting_code' ? html`<p>Open Google's sign-in page, approve access, then paste the authorization code here.</p><a class="ai-login-link" href=${login.url || ''} target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><mux-ui-text-field class="ai-login-code" aria-label="Google authorization code" autocomplete="one-time-code" placeholder="Authorization code" .value=${this._geminiCode} @input=${(event: Event) => { this._geminiCode = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : ''}
+        ${login.state === 'verifying' ? html`<p>Checking your Google sign-in…</p>` : ''}
+        ${login.state === 'error' ? html`<p>${login.message || 'Gemini CLI sign-in ended. Try again.'}</p>` : ''}
+        ${login.state === 'complete' ? html`<p>Gemini CLI finished signing in. Check the connection.</p>` : ''}
+        ${login.state === 'idle' && auth.mode === 'google' ? html`<p>Sign in with the Google account linked to your subscription.</p>` : ''}
+        ${auth.mode === 'api-key' ? html`<p>Check the detected API key connection.</p>` : ''}
+      `}
+      ${this._geminiLoginError ? html`<mux-ui-feedback kind="error" density="compact">${this._geminiLoginError}</mux-ui-feedback>` : ''}
+      <div class="ai-harness-actions">
+        ${auth.mode === 'google' && status !== 'connected' && status !== 'missing' && ['idle', 'error', 'complete'].includes(login.state) ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._geminiLoginBusy} @click=${() => void this._geminiLoginRequest('POST')}>Sign in with Google</mux-ui-button>` : ''}
+        ${status !== 'connected' && login.state === 'awaiting_code' ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._geminiLoginBusy || !this._geminiCode.trim()} @click=${() => void this._geminiLoginRequest('POST', this._geminiCode.trim())}>Finish sign-in</mux-ui-button>` : ''}
+        ${['starting', 'awaiting_code', 'verifying'].includes(login.state) ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this._geminiLoginBusy} @click=${() => void this._geminiLoginRequest('DELETE')}>Cancel</mux-ui-button>` : ''}
+        ${auth.mode === 'google' && status !== 'connected' ? html`<mux-ui-button size="small" variant="secondary" @click=${() => void this._copyGemini(command)}>${this._geminiCopied === command ? 'Copied' : 'Copy terminal command'}</mux-ui-button><mux-ui-button size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('terminal-open', { bubbles:true, composed:true }))}>Open terminal</mux-ui-button>` : ''}
+        <mux-ui-button size="small" variant="secondary" ?disabled=${status === 'checking'} @click=${() => void this._loadGemini()}>Check connection</mux-ui-button>
+      </div>
+      ${auth.mode === 'google' && status !== 'connected' && status !== 'missing' ? html`<p>Terminal fallback: <code>${command}</code></p>` : ''}
+    </div>`;
+  }
+
   private async _saveAIKey(): Promise<void> {
     const key = this._aiKeyInput.trim();
     if (!key || this._aiBusy) return;
@@ -1116,11 +1313,13 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAI() {
     const st = this.aiStatus;
     return html`
-      <p class="section-title">Anthropic</p>
+      <p class="section-title">Coding harnesses</p>
+      ${this._renderGemini()}
+      <p class="section-title">Built-in Anthropic AI</p>
       <p class="ai-status">
         ${st.enabled
-          ? `AI enabled -- key ending ${st.keyHint} (from ${st.source}).`
-          : 'AI features are off -- add an Anthropic API key to enable.'}
+          ? `Anthropic features enabled -- key ending ${st.keyHint} (from ${st.source}).`
+          : 'Anthropic features are off -- add an API key to enable them.'}
       </p>
       <mux-ui-text-field
         label="API key"

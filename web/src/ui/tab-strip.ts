@@ -19,15 +19,15 @@ export class MuxUITabStrip extends LitElement {
   @property({ attribute: 'accessible-label' }) accessibleLabel = 'Tabs';
 
   static override styles = css`
-    :host { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-width:0; min-height:var(--ui-nav-height); padding:var(--ui-space-2) max(var(--ui-space-4),var(--wco-right-inset,0)) var(--ui-space-2) var(--ui-space-4); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); color:var(--ui-text); font:var(--ui-text-xs) var(--ui-font-sans); }
+    :host { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-width:0; height:var(--ui-nav-height); padding:0 max(var(--ui-space-4),var(--wco-right-inset,0px)) 0 var(--ui-space-4); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); color:var(--ui-text); font:var(--ui-text-sm) var(--ui-font-sans); }
     .tabs { display:flex; align-items:center; flex:1; min-width:0; gap:var(--ui-space-2); overflow-x:auto; }
-    .tab { box-sizing:border-box; display:flex; align-items:center; flex:0 1 var(--ui-tab-max-width); min-width:var(--ui-tab-min-width); min-height:var(--ui-control-md); border:1px solid transparent; border-radius:var(--ui-radius-lg); color:var(--ui-text-muted); }
-    .tab:not(:first-child):not(.active) { border-left-color:var(--ui-border); border-radius:0; }
-    .tab:hover { background:var(--ui-surface-hover); color:var(--ui-text); }
-    .tab.active { border-color:var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); box-shadow:0 var(--ui-space-1) var(--ui-space-3) color-mix(in srgb,var(--ui-text) 7%,transparent); }
-    button { box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; flex:none; min-height:var(--ui-control-sm); padding:0; border:0; border-radius:var(--ui-radius-md); background:transparent; color:inherit; cursor:pointer; }
+    .tab { box-sizing:border-box; display:flex; align-items:center; flex:0 1 var(--ui-tab-max-width); min-width:var(--ui-tab-min-width); min-height:var(--ui-control-md); color:var(--ui-text-muted); }
+    .tab:not(:first-child) { border-left:1px solid var(--ui-border); }
+    .tab:hover,.tab.active { color:var(--ui-text); }
+    .tab.active .select { font-weight:600; }
+    button { box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; flex:none; min-height:var(--ui-control-sm); padding:0; border:0; border-radius:var(--ui-radius-md); background:transparent; color:inherit; font:inherit; cursor:pointer; }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
-    button:hover { background:var(--ui-surface-hover); }
+    .add:hover { background:var(--ui-surface-hover); }
     .select { flex:1; justify-content:flex-start; gap:var(--ui-space-4); min-width:0; min-height:var(--ui-control-md); padding:0 var(--ui-space-3) 0 var(--ui-space-5); font-weight:500; }
     .select svg { flex:none; }
     .select span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -36,6 +36,7 @@ export class MuxUITabStrip extends LitElement {
     .add { width:var(--ui-control-md); min-height:var(--ui-control-md); }
     @media (display-mode:window-controls-overlay) { :host { -webkit-app-region:no-drag; app-region:no-drag; } }
     @media (pointer:coarse) {
+      :host { height:auto; min-height:var(--ui-control-lg); }
       .tab,.select,.close,.add { min-height:var(--ui-control-lg); }
       .close,.add { width:var(--ui-control-lg); }
       .close { visibility:visible; }

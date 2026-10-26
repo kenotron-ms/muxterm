@@ -1,6 +1,8 @@
 import { LitElement, css, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { ChevronDown } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { icon } from '../lib/icons.js';
 
 export type ChoicePickerPlacement = 'below' | 'above';
 export type ChoicePickerAppearance = 'outlined' | 'plain';
@@ -26,13 +28,14 @@ export class MuxUIChoicePicker extends LitElement {
       box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3);
       max-width:var(--ui-picker-trigger-width); min-height:var(--ui-control-md);
       padding:0 var(--ui-space-5); border:1px solid transparent;
-      border-radius:var(--ui-radius-lg); color:var(--ui-text);
+      border-radius:var(--ui-radius-md); color:var(--ui-text);
       font:var(--ui-text-sm)/1.4 var(--ui-font-sans); cursor:pointer; list-style:none;
     }
     summary::-webkit-details-marker { display:none; }
     summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
     .summary-label { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-    .chevron { flex:none; margin-left:auto; color:var(--ui-text-muted); }
+    .chevron { display:inline-flex; flex:none; margin-left:auto; color:var(--ui-text-muted); transition:transform var(--ui-motion-fast) ease; }
+    :host([open]) .chevron { transform:rotate(180deg); }
     :host([appearance='outlined']) summary { max-width:var(--ui-picker-trigger-compact-width); border-color:var(--ui-border); background:var(--ui-surface-raised); }
     :host([appearance='outlined']) summary:hover,:host([appearance='outlined'][open]) summary { border-color:var(--ui-accent); }
     :host([appearance='plain']) summary:hover,:host([appearance='plain'][open]) summary { background:var(--ui-surface-hover); border-color:var(--ui-border); }
@@ -59,6 +62,7 @@ export class MuxUIChoicePicker extends LitElement {
         background:var(--ui-border);
       }
     }
+    @media(prefers-reduced-motion:reduce) { .chevron { transition:none; } }
   `;
 
   private readonly closeOnOutsidePointer = (event: PointerEvent): void => {
@@ -112,7 +116,7 @@ export class MuxUIChoicePicker extends LitElement {
   override render() {
     const summary = this.summary.trim() || this.label.trim() || 'Choose an option';
     return html`<details ?open=${this.open} @toggle=${this.onToggle}>
-      <summary aria-label=${this.label ? `${this.label}: ${this.summary.trim() || 'Choose an option'}` : summary}><span class="summary-label">${summary}</span><span class="chevron" aria-hidden="true">⌄</span></summary>
+      <summary aria-label=${this.label ? `${this.label}: ${this.summary.trim() || 'Choose an option'}` : summary}><span class="summary-label">${summary}</span><span class="chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="panel"><slot></slot></div>
     </details>`;
   }

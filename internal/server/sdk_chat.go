@@ -77,6 +77,7 @@ type sdkProject struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
 	Path          string   `json:"path"`
+	ManagedFolder bool     `json:"managedFolder,omitempty"`
 	SourceFolders []string `json:"sourceFolders,omitempty"`
 	Pinned        bool     `json:"pinned,omitempty"`
 }
@@ -128,10 +129,11 @@ type sdkDisplayAttachment struct {
 	Kind string `json:"kind"`
 }
 type sdkInputAttachment struct {
-	ID   string `json:"id"`
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	ID          string `json:"id"`
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	ContentType string `json:"contentType"`
 }
 
 func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, error) {
@@ -149,7 +151,7 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 		if err != nil {
 			return nil, fmt.Errorf("attachment %q cannot be read: %w", id, err)
 		}
-		items = append(items, sdkInputAttachment{ID: id, Path: path, Name: meta.Filename, Kind: meta.Kind})
+		items = append(items, sdkInputAttachment{ID: id, Path: path, Name: meta.Filename, Kind: meta.Kind, ContentType: meta.ContentType})
 	}
 	return items, nil
 }
@@ -493,9 +495,29 @@ func (h *sdkChatHost) sidecarPath() (string, error) {
 	}
 	return sdkchat.Prepare()
 }
+func sdkAgentExecutable(harness string) (string, error) {
+	name, override := "codex", "MUXTERM_CODEX_COMMAND"
+	if harness == "claude" {
+		name, override = "claude", "MUXTERM_CLAUDE_COMMAND"
+	}
+	command := strings.TrimSpace(os.Getenv(override))
+	if command == "" {
+		command = name
+	}
+	path, err := exec.LookPath(command)
+	if err != nil {
+		return "", fmt.Errorf("%s CLI is unavailable (%s); install it, sign in, then refresh installed agents: %w", name, command, err)
+	}
+	return path, nil
+}
 func (h *sdkChatHost) ensure(harness string) error {
 	if harness == "amplifier" {
 		return h.ensureAmplifier()
+	}
+	if harness == "codex" || harness == "claude" {
+		if _, err := sdkAgentExecutable(harness); err != nil {
+			return err
+		}
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1042,7 +1064,7 @@ func sdkModeNames(value any) []string {
 
 func isSDKACPHarness(harness string) bool {
 	switch harness {
-	case "pi", "opencode", "deepseek":
+	case "pi", "opencode", "deepseek", "gemini":
 		return true
 	}
 	return false
@@ -1065,6 +1087,11 @@ func sdkACPExecutable(harness string) string {
 			return value
 		}
 		return "dsh"
+	case "gemini":
+		if value := os.Getenv("MUXTERM_ACP_GEMINI_COMMAND"); value != "" {
+			return value
+		}
+		return "gemini"
 	}
 	return ""
 }
@@ -1120,12 +1147,28 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name, Path    string
 		SourceFolders []string
+		CreateFolder  bool
+		ManagedFolder bool
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil || !filepath.IsAbs(req.Path) {
+	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+	if req.ManagedFolder {
+		if req.Path != "" || req.CreateFolder {
+			http.Error(w, "managed projects cannot specify a folder", 400)
+			return
+		}
+	} else if !filepath.IsAbs(req.Path) {
 		http.Error(w, "absolute project path required", 400)
 		return
 	}
-	req.Path = filepath.Clean(req.Path)
+	id := sdkID()
+	if req.ManagedFolder {
+		req.Path = filepath.Join(h.dir, "project-folders", id)
+	} else {
+		req.Path = filepath.Clean(req.Path)
+	}
 	folders, err := sdkProjectFolders(req.Path, req.SourceFolders)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -1137,9 +1180,24 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Name == "" {
+		if req.ManagedFolder {
+			http.Error(w, "project name required", 400)
+			return
+		}
 		req.Name = filepath.Base(req.Path)
 	}
-	p := &sdkProject{ID: sdkID(), Name: req.Name, Path: req.Path, SourceFolders: folders}
+	if req.CreateFolder || req.ManagedFolder {
+		if req.ManagedFolder {
+			err = os.MkdirAll(req.Path, 0700)
+		} else {
+			err = os.Mkdir(req.Path, 0755)
+		}
+		if err != nil {
+			http.Error(w, "cannot create project folder: "+err.Error(), 400)
+			return
+		}
+	}
+	p := &sdkProject{ID: id, Name: req.Name, Path: req.Path, ManagedFolder: req.ManagedFolder, SourceFolders: folders}
 	h.mu.Lock()
 	h.projects[p.ID] = p
 	err = h.saveProjectsLocked()
@@ -1148,6 +1206,9 @@ func (s *Server) handleSDKProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 	if err != nil {
+		if req.CreateFolder || req.ManagedFolder {
+			_ = os.Remove(req.Path)
+		}
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -1212,6 +1273,9 @@ func (s *Server) handleSDKProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p.Path, p.SourceFolders = primary, folders
+		if req.Path != nil && *req.Path != previous.Path {
+			p.ManagedFolder = false
+		}
 		if req.Name != nil {
 			p.Name = *req.Name
 		}
@@ -1349,18 +1413,27 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		Provider string `json:"provider"`
 	}
 	options := make([]option, 0, 6)
-	sdkReady := s.sdkChats.ensure("codex") == nil // Codex and Claude share one Node sidecar.
+	codexPath, codexErr := sdkAgentExecutable("codex")
+	claudePath, claudeErr := sdkAgentExecutable("claude")
+	hasACP := false
+	for _, harness := range []string{"pi", "opencode", "deepseek", "gemini"} {
+		if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
+			hasACP = true
+			break
+		}
+	}
+	sdkReady := (codexErr == nil || claudeErr == nil || hasACP) && s.sdkChats.ensure("") == nil
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	home, _ := os.UserHomeDir()
-	if sdkReady {
-		cmd := exec.CommandContext(ctx, "codex", "login", "status")
+	if sdkReady && codexErr == nil {
+		cmd := exec.CommandContext(ctx, codexPath, "login", "status")
 		if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "" || cmd.Run() == nil {
 			options = append(options, option{Harness: "codex", Provider: "openai"})
 		}
 	}
 	if sdkReady {
-		for _, harness := range []string{"pi", "opencode", "deepseek"} {
+		for _, harness := range []string{"pi", "opencode", "deepseek", "gemini"} {
 			if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
 				if harness == "pi" {
 					if _, err := exec.LookPath("pi"); err != nil {
@@ -1371,7 +1444,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
-	if sdkReady {
+	if sdkReady && claudeErr == nil {
 		ready := os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
 		if !ready && home != "" {
 			data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
@@ -1383,7 +1456,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		if !ready {
-			cmd := exec.CommandContext(ctx, "claude", "auth", "status")
+			cmd := exec.CommandContext(ctx, claudePath, "auth", "status")
 			ready = cmd.Run() == nil
 		}
 		if ready {
@@ -1476,7 +1549,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, OperatorID string
-		Attachments                                                                               []string `json:"attachments"`
+		Attachments                                                                                                      []string `json:"attachments"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -1517,7 +1590,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "anthropic"
 		case "amplifier":
 			req.Provider = "configured"
-		case "pi", "opencode", "deepseek":
+		case "pi", "opencode", "deepseek", "gemini":
 			req.Provider = "configured"
 		}
 	}
@@ -1543,11 +1616,13 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 	}
 	sourceFolders := []string{}
+	managedFolder := false
 	if req.WorkspaceID != "" {
 		h.mu.Lock()
 		p := h.projects[req.WorkspaceID]
 		if p != nil {
 			sourceFolders = append(sourceFolders, p.SourceFolders...)
+			managedFolder = p.ManagedFolder
 		}
 		h.mu.Unlock()
 		if p == nil {
@@ -1562,6 +1637,10 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.WorkMode == "worktree" && req.WorkspaceID == "" {
 		http.Error(w, "choose a project to create a worktree", 400)
+		return
+	}
+	if req.WorkMode == "worktree" && managedFolder {
+		http.Error(w, "managed project folders cannot create worktrees", 400)
 		return
 	}
 	if req.ProjectPath == "" {
@@ -1768,6 +1847,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	h.mu.Lock()
 	c := h.chats[id]
+	chatState := ""
+	if c != nil {
+		chatState = c.State
+	}
 	h.mu.Unlock()
 	if c == nil {
 		http.NotFound(w, r)
@@ -1932,7 +2015,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "attachments require a user message", 422)
 			return
 		}
-		if req.Kind == "steer" && c.State != "working" {
+		if req.Kind == "steer" && chatState != "working" {
 			http.Error(w, "No active turn to steer", 409)
 			return
 		}

@@ -32,11 +32,12 @@ type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort
 type ChatCatalog = { model: string; effort: string; defaultModel?: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[] };
 const providerLabel = (value: string) => value === 'provider-openai' ? 'OpenAI' : value === 'provider-anthropic' ? 'Anthropic' : value.replace(/^provider-/, '');
 const SETUP_AGENTS = [
-  { name:'Codex', command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', login:'codex login', docs:'https://learn.chatgpt.com/docs/codex/cli' },
+  { name:'Codex', command:'npm install -g @openai/codex@latest', login:'codex login', docs:'https://developers.openai.com/codex/cli/' },
   { name:'Claude Code', command:'curl -fsSL https://claude.ai/install.sh | bash', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
   { name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
   { name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
   { name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
+  { name:'Gemini CLI · ACP', command:'npm install -g @google/gemini-cli', login:'NO_BROWSER=true gemini', docs:'https://geminicli.com/docs/get-started/authentication/' },
   { name:'Amplifier', command:'uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; uploading: boolean; error?: string };
@@ -76,6 +77,7 @@ export class MuxNewChat extends LitElement {
   @state() private busy = false;
   @state() private error = '';
   @state() private copiedSetup = '';
+  @state() private setupOpen = false;
   @state() private attachments: Attachment[] = [];
   @state() private dropActive = false;
   private dragDepth = 0;
@@ -142,6 +144,7 @@ export class MuxNewChat extends LitElement {
     .setup-actions a { color:var(--ui-accent); text-decoration:none; }
     .setup-refresh { margin-top:var(--ui-space-6); }
     .setup-terminal { margin-bottom:var(--ui-space-6); }
+    .setup-back { margin-bottom:var(--ui-space-6); }
     .receipt { display:flex; align-items:center; gap:var(--ui-space-4); margin:var(--ui-space-5) var(--ui-space-1) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .receipt::before { content:''; width:var(--ui-attention-mark-size); height:var(--ui-attention-mark-size); border-radius:50%; background:var(--ui-accent); animation:receipt-pulse var(--ui-motion-pulse) ease-in-out infinite; }
     @keyframes receipt-pulse { 50% { opacity:.35; transform:scale(.7); } }
@@ -230,6 +233,7 @@ export class MuxNewChat extends LitElement {
     this.catalogTimer = window.setTimeout(() => { this.catalogTimer = undefined; void this.loadCatalog(); }, 400);
   }
   private locationLabel() {
+    if (sdkChats.projects.find(project => project.id === this.projectId)?.managedFolder) return 'No folder';
     if (!this.folder) return 'Choose a folder';
     const clean = (path: string) => {
       if (!path.startsWith('/')) return path;
@@ -249,7 +253,7 @@ export class MuxNewChat extends LitElement {
   private projectOptions(): SelectComboboxOption[] {
     return [
       {value:'ungrouped',label:'Ungrouped',description:'Choose a folder for this chat',icon:icon(Folder,{size:16})},
-      ...sdkChats.projects.map(project => ({value:project.id,label:project.name,description:project.path,icon:icon(Folder,{size:16})})),
+      ...sdkChats.projects.map(project => ({value:project.id,label:project.name,description:project.managedFolder ? 'No folder' : project.path,icon:icon(Folder,{size:16})})),
       {value:'new',label:'New project',description:'Choose its primary folder',icon:icon(Plus,{size:16}),separatorBefore:true},
     ];
   }
@@ -259,7 +263,7 @@ export class MuxNewChat extends LitElement {
     const project = sdkChats.projects.find(p => p.id === value);
     if (project) this.folder = project.path;
     else if (value === 'ungrouped' && this.listing) this.folder = this.listing.base;
-    if (value === 'ungrouped' || value === 'new') this.workMode = 'local';
+    if (value === 'ungrouped' || value === 'new' || project?.managedFolder) this.workMode = 'local';
     void this.loadCatalog();
   }
   private onHarnessChange(value: SDKHarnessName) {
@@ -355,7 +359,7 @@ export class MuxNewChat extends LitElement {
       if (!this.isConnected) return;
       this.startOptions = options;
       const selected = options.find(item => item.harness === this.initialHarness) || options[0];
-      if (selected) this.onHarnessChange(selected.harness);
+      if (selected) { this.setupOpen = false; this.onHarnessChange(selected.harness); }
       else this.error = '';
     } catch (error) {
       if (this.isConnected) this.error = error instanceof Error ? error.message : String(error);
@@ -437,11 +441,12 @@ export class MuxNewChat extends LitElement {
     const models = this.catalog?.models || [];
     const selectedModel = models.find(item => item.id === this.model);
     const efforts = selectedModel?.efforts?.length ? selectedModel.efforts : this.harness === 'codex' && this.model ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : [];
-    if (this.startOptions?.length === 0) return html`
+    if (this.startOptions?.length === 0 || this.setupOpen) return html`
       ${this.renderTopbar(projectName)}
       <div class="main setup"><div class="content">
-        <h1>Choose your coding agent</h1>
-        <p class="setup-intro">Install an agent in a terminal, sign in to its provider, then refresh this list. Muxterm will use the agent already on your computer.</p>
+        ${this.startOptions?.length ? html`<mux-ui-button class="setup-back" variant="quiet" @click=${() => { this.setupOpen = false; }}>Back to chat</mux-ui-button>` : nothing}
+        <h1>${this.startOptions?.length ? 'Add a coding agent' : 'Choose your coding agent'}</h1>
+        <p class="setup-intro">Install or update an agent in a terminal, sign in to its provider, then refresh this list. Muxterm uses the agent installed on your computer, including its version.</p>
         <mux-ui-button class="setup-terminal" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open a terminal in muxterm</mux-ui-button>
         <div class="setup-list">${SETUP_AGENTS.map(agent => html`
           <section class="setup-card"><h2>${agent.name}</h2>
@@ -459,23 +464,24 @@ export class MuxNewChat extends LitElement {
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
         <div class="controls">
         <div class="project"><mux-ui-select-combobox label="Project" appearance="tinted" .value=${this.projectId} .options=${this.projectOptions()} @change=${(event:CustomEvent<{value:string}>) => this.onProjectChange(event.detail.value)}></mux-ui-select-combobox></div>
-        <div class="location-settings"><mux-ui-button class="location-trigger" variant="secondary" haspopup="dialog" .expanded=${this.locationOpen} accessible-label=${`Chat location: ${this.folder || 'Choose folder'}`} tooltip=${this.folder} @click=${() => { this.locationOpen = true; }}><span slot="leading" class="folder-symbol">${icon(Folder,{size:14})}</span><span class="folder-label">${this.locationLabel()}</span></mux-ui-button>
+        <div class="location-settings"><mux-ui-button class="location-trigger" variant="secondary" haspopup="dialog" .expanded=${this.locationOpen} accessible-label=${`Chat location: ${this.locationLabel()}`} tooltip=${selectedProject?.managedFolder ? 'Stored privately by Muxterm' : this.folder} @click=${() => { this.locationOpen = true; }}><span slot="leading" class="folder-symbol">${icon(Folder,{size:14})}</span><span class="folder-label">${this.locationLabel()}</span></mux-ui-button>
           ${this.locationOpen ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Chat location" open @dismiss=${this.closeLocation}>
           <div class="location-fields">
             <div class="location-head"><h2>Chat location</h2><mux-ui-button icon-only variant="quiet" size="small" accessible-label="Close chat location" @click=${this.closeLocation}>${icon(X,{size:17})}</mux-ui-button></div>
-            <div class="folder"><span>${this.projectId === 'ungrouped' ? 'Folder' : 'Primary folder'}</span><div class="folder-line"><mux-ui-text-field aria-label="Primary folder" .value=${this.folder} ?readonly=${this.projectId !== 'ungrouped' && this.projectId !== 'new'} @input=${(e:Event) => { this.folder = (e.target as MuxUITextField).value; this.onFolderChanged(); }}></mux-ui-text-field>${this.projectId === 'ungrouped' || this.projectId === 'new' ? html`<mux-ui-button size="small" accessible-label="Browse server folders" @click=${() => void this.browse()}>Browse</mux-ui-button>` : nothing}</div></div>
+            ${selectedProject?.managedFolder ? nothing : html`<div class="folder"><span>${this.projectId === 'ungrouped' ? 'Folder' : 'Primary folder'}</span><div class="folder-line"><mux-ui-text-field aria-label="Primary folder" .value=${this.folder} ?readonly=${this.projectId !== 'ungrouped' && this.projectId !== 'new'} @input=${(e:Event) => { this.folder = (e.target as MuxUITextField).value; this.onFolderChanged(); }}></mux-ui-text-field>${this.projectId === 'ungrouped' || this.projectId === 'new' ? html`<mux-ui-button size="small" accessible-label="Browse server folders" @click=${() => void this.browse()}>Browse</mux-ui-button>` : nothing}</div></div>`}
             ${this.projectId === 'new' ? html`<mux-ui-text-field label="Project name" aria-label="Project name" placeholder="Defaults to the folder name" .value=${this.projectName} @input=${(e:Event) => { this.projectName = (e.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
             ${this.pickerOpen && this.listing ? html`<mux-ui-folder-browser aria-label="Server folder picker" .listing=${this.listing} allow-new-folder @folder-navigate=${(event:CustomEvent<{path:string}>) => void this.browse(event.detail.path)} @folder-choose=${(event:CustomEvent<{path:string}>) => { this.folder = event.detail.path; this.onFolderChanged(); this.pickerOpen = false; }} @folder-use-new=${(event:CustomEvent<{path:string}>) => { this.folder = event.detail.path; this.onFolderChanged(); this.pickerOpen = false; }}></mux-ui-folder-browser>` : nothing}
-            <p class="location-note">${this.workMode === 'worktree' ? 'A separate Git worktree will be created from this project’s primary folder.' : this.projectId === 'ungrouped' ? 'This chat will use the chosen folder.' : 'This chat will use the project’s primary folder.'}${selectedProject?.sourceFolders?.length ? ` ${selectedProject.sourceFolders.length} additional source ${selectedProject.sourceFolders.length === 1 ? 'folder is' : 'folders are'} available at their existing paths.` : ''}</p>
+            <p class="location-note">${this.workMode === 'worktree' ? 'A separate Git worktree will be created from this project’s primary folder.' : selectedProject?.managedFolder ? 'No visible folder. New chats use this project’s private Muxterm storage.' : this.projectId === 'ungrouped' ? 'This chat will use the chosen folder.' : 'This chat will use the project’s primary folder.'}${selectedProject?.sourceFolders?.length ? ` ${selectedProject.sourceFolders.length} additional source ${selectedProject.sourceFolders.length === 1 ? 'folder is' : 'folders are'} available at their existing paths.` : ''}</p>
             <div class="location-actions"><mux-ui-button variant="primary" @click=${this.closeLocation}>Done</mux-ui-button></div>
           </div>
           </mux-ui-dialog>` : nothing}
         </div>
         ${this.startOptions?.length ? html`<mux-ui-select class="harness" aria-label="Harness" .value=${this.harness} .options=${this.startOptions.map(option => ({ value:option.harness, label:sdkHarnessLabel(option.harness) }))} @change=${(e:Event) => this.onHarnessChange((e.target as MuxUISelect).value as SDKHarnessName)}></mux-ui-select>` : nothing}
+        <mux-ui-button size="small" variant="quiet" @click=${() => { this.setupOpen = true; }}>Add agent</mux-ui-button>
         ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}
         ${this.catalog ? this.renderModelPicker(models, selectedModel, efforts) : nothing}
         ${this.catalogLoading ? html`<mux-ui-feedback kind="loading" density="compact">Loading models…</mux-ui-feedback>` : nothing}
-        <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || this.projectId === 'new' ? 'Choose an existing project to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new'} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
+        <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || this.projectId === 'new' || selectedProject?.managedFolder ? 'Choose a project with a Git folder to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || this.projectId === 'new' || !!selectedProject?.managedFolder} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
         </div>
         ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
         <div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="First message" placeholder="Describe what you want to work on…" .value=${this.prompt} @input=${this.onPromptInput} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.send(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div>
@@ -483,6 +489,7 @@ export class MuxNewChat extends LitElement {
 
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
+      ${this.harness === 'gemini' ? html`<mux-ui-feedback kind="info" appearance="panel">Choose Google sign-in or a detected GEMINI_API_KEY in Settings → AI, then retry loading models. For terminal sign-in, run <code>NO_BROWSER=true gemini</code> and follow Gemini CLI's prompts.<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open terminal</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.catalogError ? html`<mux-ui-feedback kind="error" appearance="panel">Could not load models: ${this.catalogError}<mux-ui-button slot="action" size="small" @click=${() => void this.loadCatalog()}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}

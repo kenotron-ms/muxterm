@@ -21,7 +21,7 @@ static void* browserCreate(void* windowPtr, const char* address) {
     [window.contentView addSubview:browser];
     NSString* raw = [NSString stringWithUTF8String:address];
     NSURL* url = [NSURL URLWithString:raw];
-    if (url != nil) [browser loadRequest:[NSURLRequest requestWithURL:url]];
+    if (url != nil && raw.length > 0) [browser loadRequest:[NSURLRequest requestWithURL:url]];
     return browser;
 }
 
@@ -52,15 +52,6 @@ static void browserNavigate(void* pointer, const char* address) {
 static void browserGoBack(void* pointer) { [(WKWebView*)pointer goBack]; }
 static void browserGoForward(void* pointer) { [(WKWebView*)pointer goForward]; }
 static void browserReload(void* pointer) { [(WKWebView*)pointer reload]; }
-static void muxtermEvalJS(void* windowPtr, const char* script) {
-    NSWindow* window = (NSWindow*)windowPtr;
-    for (NSView* view in window.contentView.subviews) {
-        if ([view isKindOfClass:[WKWebView class]]) {
-            [(WKWebView*)view evaluateJavaScript:[NSString stringWithUTF8String:script] completionHandler:nil];
-            return;
-        }
-    }
-}
 static bool browserCanGoBack(void* pointer) { return [(WKWebView*)pointer canGoBack]; }
 static bool browserCanGoForward(void* pointer) { return [(WKWebView*)pointer canGoForward]; }
 static const char* browserURL(void* pointer) {
@@ -88,32 +79,25 @@ import (
 )
 
 type browserTab struct {
-	id   int
-	view unsafe.Pointer
+	id      string
+	view    unsafe.Pointer
+	started bool
 }
 
 type browserRect struct{ X, Y, Width, Height float64 }
 
-func (c *Companion) evalMuxtermJS(script string) {
+func (c *Companion) browserOpen(id, address string) error {
 	window, ok := c.app.Window.GetByName("muxterm")
 	if !ok {
-		return
-	}
-	application.InvokeSync(func() {
-		value := C.CString(script)
-		C.muxtermEvalJS(window.NativeWindow(), value)
-		C.free(unsafe.Pointer(value))
-	})
-}
-
-func (c *Companion) browserOpen(address string) (int, error) {
-	window, ok := c.app.Window.GetByName("muxterm")
-	if !ok {
-		return 0, errors.New("muxterm window is not open")
+		return errors.New("muxterm window is not open")
 	}
 	c.mu.Lock()
-	c.browserSeq++
-	id := c.browserSeq
+	if c.browserTabs[id] != nil {
+		c.activeBrowser = id
+		c.mu.Unlock()
+		c.browserLayout()
+		return nil
+	}
 	c.mu.Unlock()
 	var pointer unsafe.Pointer
 	application.InvokeSync(func() {
@@ -124,37 +108,36 @@ func (c *Companion) browserOpen(address string) (int, error) {
 		}
 	})
 	if pointer == nil {
-		return 0, errors.New("could not create native browser view")
+		return errors.New("could not create native browser view")
 	}
 	c.mu.Lock()
 	if c.browserTabs == nil {
-		c.browserTabs = make(map[int]*browserTab)
+		c.browserTabs = make(map[string]*browserTab)
 	}
-	c.browserTabs[id] = &browserTab{id: id, view: pointer}
+	c.browserTabs[id] = &browserTab{id: id, view: pointer, started: address != ""}
 	c.activeBrowser = id
-	rect, visible := c.browserRect, c.browserVisible
 	c.mu.Unlock()
-	c.browserLayout(rect, visible)
-	return id, nil
+	c.browserLayout()
+	return nil
 }
 
-func (c *Companion) browserLayout(rect browserRect, visible bool) {
+// Callers hold bridgeMu so a native view cannot be removed during this snapshot.
+func (c *Companion) browserLayout() {
 	window, ok := c.app.Window.GetByName("muxterm")
 	if !ok {
 		return
 	}
 	c.mu.Lock()
-	c.browserRect = rect
-	c.browserVisible = visible
+	rect, visible := c.browserRect, c.browserVisible
 	active := c.activeBrowser
-	tabs := make([]*browserTab, 0, len(c.browserTabs))
+	tabs := make([]browserTab, 0, len(c.browserTabs))
 	for _, tab := range c.browserTabs {
-		tabs = append(tabs, tab)
+		tabs = append(tabs, *tab)
 	}
 	c.mu.Unlock()
 	application.InvokeSync(func() {
 		for _, tab := range tabs {
-			show := visible && tab.id == active && rect.Width > 0 && rect.Height > 0
+			show := visible && tab.started && tab.id == active && rect.Width > 0 && rect.Height > 0
 			C.browserShow(tab.view, C.bool(show))
 			if show {
 				C.browserFrame(tab.view, window.NativeWindow(), C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height))
@@ -163,45 +146,70 @@ func (c *Companion) browserLayout(rect browserRect, visible bool) {
 	})
 }
 
-func (c *Companion) browserSelect(id int) error {
+func (c *Companion) browserSelect(id string) error {
 	c.mu.Lock()
 	if c.browserTabs[id] == nil {
 		c.mu.Unlock()
 		return errors.New("browser tab not found")
 	}
 	c.activeBrowser = id
-	rect, visible := c.browserRect, c.browserVisible
 	c.mu.Unlock()
-	c.browserLayout(rect, visible)
+	c.browserLayout()
 	return nil
 }
 
-func (c *Companion) browserClose(id int) {
+func (c *Companion) browserClose(id string) {
 	c.mu.Lock()
 	tab := c.browserTabs[id]
 	delete(c.browserTabs, id)
 	if c.activeBrowser == id {
-		c.activeBrowser = 0
+		c.activeBrowser = ""
 		for next := range c.browserTabs {
-			if c.activeBrowser == 0 || next < c.activeBrowser {
+			if c.activeBrowser == "" || next < c.activeBrowser {
 				c.activeBrowser = next
 			}
 		}
 	}
-	rect, visible := c.browserRect, c.browserVisible
 	c.mu.Unlock()
 	if tab != nil {
 		application.InvokeSync(func() { C.browserRemove(tab.view) })
 	}
-	c.browserLayout(rect, visible)
+	c.browserLayout()
 }
 
-func (c *Companion) browserAction(id int, action string, address string) error {
+// Reset native views when the muxterm page changes: the old page can no longer
+// send close messages once its origin stops matching activeMuxtermURL.
+func (c *Companion) browserCloseAll() {
+	c.mu.Lock()
+	tabs := make([]browserTab, 0, len(c.browserTabs))
+	for _, tab := range c.browserTabs {
+		tabs = append(tabs, *tab)
+	}
+	c.browserTabs = make(map[string]*browserTab)
+	c.activeBrowser = ""
+	c.browserRect, c.browserVisible = browserRect{}, false
+	c.mu.Unlock()
+	if len(tabs) > 0 {
+		application.InvokeSync(func() {
+			for _, tab := range tabs {
+				C.browserRemove(tab.view)
+			}
+		})
+	}
+}
+
+func (c *Companion) browserAction(id string, action string, address string) error {
 	c.mu.Lock()
 	tab := c.browserTabs[id]
 	c.mu.Unlock()
 	if tab == nil {
 		return errors.New("browser tab not found")
+	}
+	if action == "navigate" {
+		c.mu.Lock()
+		tab.started = true
+		c.mu.Unlock()
+		defer c.browserLayout()
 	}
 	application.InvokeSync(func() {
 		switch action {
@@ -221,19 +229,19 @@ func (c *Companion) browserAction(id int, action string, address string) error {
 }
 
 type browserTabState struct {
-	ID           int    `json:"id"`
+	ID           string `json:"id"`
 	URL          string `json:"url"`
 	Title        string `json:"title"`
 	CanGoBack    bool   `json:"canGoBack"`
 	CanGoForward bool   `json:"canGoForward"`
 }
 
-func (c *Companion) browserState() (int, []browserTabState) {
+func (c *Companion) browserState() (string, []browserTabState) {
 	c.mu.Lock()
 	active := c.activeBrowser
-	tabs := make([]*browserTab, 0, len(c.browserTabs))
+	tabs := make([]browserTab, 0, len(c.browserTabs))
 	for _, tab := range c.browserTabs {
-		tabs = append(tabs, tab)
+		tabs = append(tabs, *tab)
 	}
 	c.mu.Unlock()
 	states := make([]browserTabState, 0, len(tabs))

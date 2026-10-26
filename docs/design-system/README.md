@@ -60,6 +60,26 @@ remain native or keyboard-operable buttons, while BlockNote owns editing.
 
 ## Rules for new interface work
 
+Use [shadcn/ui](https://ui.shadcn.com/docs/components) as the visual and
+interaction reference when refining shared controls. Check its current
+[Button](https://ui.shadcn.com/docs/components/radix/button),
+[Select](https://ui.shadcn.com/docs/components/radix/select), and
+[theming](https://ui.shadcn.com/docs/theming) patterns for consistent shape,
+icon treatment, states, and semantic surfaces. Implement the resulting pattern
+in Muxterm's Lit components and `--ui-*` tokens, then record it in Storybook.
+
+For AI-facing screens, use [shadcn/ui AI Elements](https://ui.shadcn.com/docs/ai-elements)
+as the companion reference. Compare [Prompt Input](https://ui.shadcn.com/docs/ai-elements/base/prompt-input)
+for the composer, attachments, and send action;
+[Chat](https://ui.shadcn.com/docs/ai-elements/base/chat) and
+[Message](https://ui.shadcn.com/docs/ai-elements/base/message) for the
+transcript; [Model Selector](https://ui.shadcn.com/docs/ai-elements/base/model-selector)
+for model controls; and [Tool](https://ui.shadcn.com/docs/ai-elements/base/tool)
+and [Reasoning](https://ui.shadcn.com/docs/ai-elements/base/reasoning) for
+agent activity. Apply the relevant composition, interaction, and visual states
+through Muxterm's Lit components and Storybook, while preserving the app's
+sessiond and chat behavior.
+
 1. Start with a pattern in Storybook. Add missing states to the shared
    component and its stories before adding a screen-specific treatment.
 2. Use `--ui-*` semantic tokens from `web/src/ui/tokens.css` for app surfaces,
@@ -110,7 +130,7 @@ and phone states; the app still owns when a notice appears and is dismissed.
 Dev-local browser review injected the two error states into the running app to
 inspect their placement and dismissal without sending a failed close request.
 
-The Sidebar's active chrome and spacing now use semantic tokens. Destinations and Settings use the same Navigation Item, with the version shown as Settings detail; the footer's New workspace action uses the shared Button. The phone drawer omits the brand row already present in the mobile title bar. Storybook records reachable destinations, the creation action and dialog, phone and light states. The unreachable workspace chooser, workspace preview and machine-group code was removed.
+The Sidebar's active chrome and spacing now use semantic tokens. Destinations and Settings use the same Navigation Item, with the version shown as Settings detail. The phone drawer omits the brand row already present in the mobile title bar. Storybook records reachable destinations, phone and light states; the workspace dialog has its own stories. The unreachable workspace chooser, workspace preview and machine-group code was removed.
 
 Destructive pane and workspace close uses the same adaptive Dialog and semantic tokens. Its risk summary is the dialog's accessible description, Cancel receives initial focus, and an in-flight confirmation blocks dismissal. Sessiond alone decides whether the close requires confirmation and when a pane or workspace actually disappears. Storybook records pane, workspace, multi-risk, phone, busy and light states; a real dev-local pane verified the close path.
 

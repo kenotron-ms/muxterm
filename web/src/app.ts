@@ -349,13 +349,15 @@ export class MuxApp extends LitElement {
       transition: background 0.15s;
     }
 
-    /* Carry the shared 44px header rule across the resize target. */
+    /* Carry the shared header rule across the full resize target. */
     .sidebar-gutter::after {
       content: '';
       position: absolute;
-      top: calc(var(--ui-nav-height) - var(--ui-space-px));
+      top: 0;
       left: 0;
       right: 0;
+      box-sizing: border-box;
+      height: var(--ui-nav-height);
       border-bottom: 1px solid var(--ui-border);
       pointer-events: none;
     }
@@ -1319,6 +1321,7 @@ export class MuxApp extends LitElement {
       @launcher-action=${this._onLauncherAction}
       @config-change=${this._onConfigChange}
       @ai-status-change=${this._onAIStatusChange}
+      @terminal-open=${this._onSettingsTerminalOpen}
     ></mux-settings-surface>`;
   }
 
@@ -1334,7 +1337,7 @@ export class MuxApp extends LitElement {
       : '';
 
     return html`
-      <div class="window-chrome ${isWide && (this._sdkChatId === 'new' || selectedSDKChat || (!this._sdkChatId && panes.length > 0)) ? 'integrated' : ''}">
+      <div class="window-chrome ${isWide ? 'integrated' : ''}">
         <mux-title-bar window-chrome .desktop=${isWide}
           .drawerOpen=${this._drawerOpen}
           .chatTitle=${chatTitle}
@@ -2070,6 +2073,10 @@ export class MuxApp extends LitElement {
     if (this._terminalCreateRef) return;
     const clientRef = mintClientRef();
     if (this._socket?.createWorkspace('Terminal', clientRef)) this._terminalCreateRef = clientRef;
+  };
+  private _onSettingsTerminalOpen = (): void => {
+    this._overlayPanel = null;
+    this._onTerminalOpen();
   };
   private _onConnectionSetupChat = (event: CustomEvent<{prompt:string}>): void => {
     this._onChatNew();

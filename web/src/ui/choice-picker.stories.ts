@@ -1,5 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
+import { Settings2 } from 'lucide';
+import { icon } from '../lib/icons.js';
+import './button.js';
 import './choice-picker.js';
 import './choice-item.js';
 import './choice-list.js';
@@ -24,6 +27,13 @@ const meta = {
 export default meta;
 type Story = StoryObj<PickerArgs>;
 export const Closed: Story = {};
+export const BesideButtons: Story = {
+  render:() => html`<div style="display:flex;align-items:center;flex-wrap:wrap;gap:var(--ui-space-4);padding:var(--ui-space-8)">
+    <mux-ui-button>Choose project</mux-ui-button>
+    <mux-ui-choice-picker label="Model" summary="GPT-6-Sol"><mux-ui-choice-item label="GPT-6-Sol" selected></mux-ui-choice-item></mux-ui-choice-picker>
+    <mux-ui-button icon-only accessible-label="Settings">${icon(Settings2,{size:16})}</mux-ui-button>
+  </div>`,
+};
 export const OpenBelow: Story = { args:{open:true} };
 export const OpenAbove: Story = { args:{open:true,placement:'above',appearance:'plain',panelAlign:'right'} };
 export const PhoneSheet: Story = { args:{open:true}, globals:{viewport:{value:'phone390',isRotated:false}} };

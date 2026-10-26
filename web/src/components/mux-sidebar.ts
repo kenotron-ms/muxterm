@@ -6,7 +6,6 @@ import { icon } from '../lib/icons.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { fetchUpdateStatus, type UpdateStatus } from '../lib/update.js';
-import '../ui/button.js';
 import '../ui/nav-item.js';
 import './mux-chat-list.js';
 
@@ -37,7 +36,7 @@ export class MuxSidebar extends LitElement {
       align-items: center;
       flex: none;
       height: var(--ui-nav-height);
-      padding: 0 var(--ui-space-5);
+      padding: 0 var(--ui-space-5) 0 max(var(--ui-space-5), var(--wco-left-inset, 0px));
       border-bottom: 1px solid var(--ui-border);
       background: var(--ui-surface-nav);
       color: var(--ui-text);
@@ -60,10 +59,7 @@ export class MuxSidebar extends LitElement {
     .footer {
       flex: none;
       padding: var(--ui-space-4) var(--ui-space-3) var(--ui-space-5);
-      border-top: 1px solid var(--ui-border);
     }
-    .workspace-create-action { margin-bottom: var(--ui-space-3); }
-    .workspace-create-action::part(button) { justify-content: flex-start; }
   `;
 
   @property({ type: Boolean }) newChatActive = false;
@@ -99,10 +95,7 @@ export class MuxSidebar extends LitElement {
   private renderFooter() {
     const version = this.updateStatus?.currentVersion;
     const description = version ? version.startsWith('v') ? version : `v${version}` : '';
-    return html`<div class="footer"><mux-ui-button class="workspace-create-action" variant="secondary" full-width
-      @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail: { host: '' }, bubbles: true, composed: true }))}>
-      <span slot="leading">${icon(Plus, { size: 16 })}</span>New workspace
-    </mux-ui-button><mux-ui-nav-item label="Settings" description=${description}
+    return html`<div class="footer"><mux-ui-nav-item label="Settings" description=${description}
       @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action: 'settings' }, bubbles: true, composed: true }))}>
       <span slot="icon">${icon(Settings, { size: 16 })}</span>
     </mux-ui-nav-item></div>`;
