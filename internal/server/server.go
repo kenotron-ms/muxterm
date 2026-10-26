@@ -129,7 +129,9 @@ type Server struct {
 	cfgMu      sync.RWMutex
 	cfg        muxcfg.Config
 
-	sdkVoice *sdkVoiceHost
+	sdkVoice      *sdkVoiceHost
+	geminiLoginMu sync.Mutex
+	geminiLogin   *geminiLogin
 
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
@@ -269,6 +271,12 @@ func New(cfg Config) *Server {
 	s.mux.Handle("PUT /api/ai/key", protect(http.HandlerFunc(s.handleAIPutKey)))
 	s.mux.Handle("DELETE /api/ai/key", protect(http.HandlerFunc(s.handleAIDeleteKey)))
 	s.mux.Handle("POST /api/ai/ping", protect(http.HandlerFunc(s.handleAIPing)))
+	s.mux.Handle("GET /api/ai/gemini/login", protect(http.HandlerFunc(s.handleGeminiLogin)))
+	s.mux.Handle("POST /api/ai/gemini/login", protect(http.HandlerFunc(s.handleGeminiLogin)))
+	s.mux.Handle("DELETE /api/ai/gemini/login", protect(http.HandlerFunc(s.handleGeminiLogin)))
+	s.mux.Handle("POST /api/ai/gemini/login/code", protect(http.HandlerFunc(s.handleGeminiLoginCode)))
+	s.mux.Handle("GET /api/ai/gemini/auth", protect(http.HandlerFunc(s.handleGeminiAuth)))
+	s.mux.Handle("PUT /api/ai/gemini/auth", protect(http.HandlerFunc(s.handleGeminiAuth)))
 
 	// Opt-in realtime voice for SDK chats.
 	if s.cfg.Voice.Enabled {

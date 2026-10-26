@@ -23,10 +23,11 @@ import amplifierMark from '../assets/harness/amplifier.png?url';
 import piMark from '../assets/harness/pi.svg?url';
 import opencodeMark from '../assets/harness/opencode.svg?url';
 import deepseekMark from '../assets/harness/deepseek.svg?url';
+import geminiMark from '../assets/harness/gemini.svg?url';
 
 const harnessMarks: Record<SDKHarnessName, string> = {
   codex: codexMark, claude: claudeMark, amplifier: amplifierMark,
-  pi: piMark, opencode: opencodeMark, deepseek: deepseekMark,
+  pi: piMark, opencode: opencodeMark, deepseek: deepseekMark, gemini: geminiMark,
 };
 
 function harnessMark(chat: SDKChat, className = 'chat-icon') {

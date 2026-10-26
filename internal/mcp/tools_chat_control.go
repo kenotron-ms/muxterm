@@ -146,7 +146,7 @@ func registerChatControlTools(srv *Server) {
 	srv.Register("spawn_operator_lane", "Start a new Chat as a lane of an operator. It inherits the operator's project unless a project is specified, and reporting is active before its opening turn. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"operator_id": map[string]any{"type": "string"},
-			"harness":     map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex", "pi", "opencode", "deepseek"}},
+			"harness":     map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex", "pi", "opencode", "deepseek", "gemini"}},
 			"prompt":      map[string]any{"type": "string", "description": "opening task"},
 			"goal":        map[string]any{"type": "string", "description": "Amplifier full-goal stop condition; supersedes prompt"},
 			"project":     map[string]any{"type": "string", "description": "optional exact name of a different project"},
@@ -299,7 +299,7 @@ func registerChatControlTools(srv *Server) {
 	srv.Register("spawn_chat", "Delegate work to a project Chat by default. Optional goal starts an Amplifier stop-condition loop. Chats run with unattended approvals. Returns its stable session ID. Local machine only.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"project":     map[string]any{"type": "string", "description": "exact name of an existing project; omit for Ungrouped"},
-			"harness":     map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex", "pi", "opencode", "deepseek"}},
+			"harness":     map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex", "pi", "opencode", "deepseek", "gemini"}},
 			"prompt":      map[string]any{"type": "string", "description": "opening user turn"},
 			"goal":        map[string]any{"type": "string", "description": "Amplifier stop condition; starts a real goal loop and supersedes prompt"},
 			"operator_id": map[string]any{"type": "string", "description": "operator chat ID; links this lane before its opening turn and activates reporting"},
@@ -313,7 +313,7 @@ func registerChatControlTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
-			if harness != "amplifier" && harness != "claude" && harness != "codex" && harness != "pi" && harness != "opencode" && harness != "deepseek" {
+			if harness != "amplifier" && harness != "claude" && harness != "codex" && harness != "pi" && harness != "opencode" && harness != "deepseek" && harness != "gemini" {
 				return "", fmt.Errorf("unsupported harness %q", harness)
 			}
 			prompt, err := argString(args, "prompt")

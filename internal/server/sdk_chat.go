@@ -129,10 +129,11 @@ type sdkDisplayAttachment struct {
 	Kind string `json:"kind"`
 }
 type sdkInputAttachment struct {
-	ID   string `json:"id"`
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	ID          string `json:"id"`
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	ContentType string `json:"contentType"`
 }
 
 func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, error) {
@@ -150,7 +151,7 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 		if err != nil {
 			return nil, fmt.Errorf("attachment %q cannot be read: %w", id, err)
 		}
-		items = append(items, sdkInputAttachment{ID: id, Path: path, Name: meta.Filename, Kind: meta.Kind})
+		items = append(items, sdkInputAttachment{ID: id, Path: path, Name: meta.Filename, Kind: meta.Kind, ContentType: meta.ContentType})
 	}
 	return items, nil
 }
@@ -1063,7 +1064,7 @@ func sdkModeNames(value any) []string {
 
 func isSDKACPHarness(harness string) bool {
 	switch harness {
-	case "pi", "opencode", "deepseek":
+	case "pi", "opencode", "deepseek", "gemini":
 		return true
 	}
 	return false
@@ -1086,6 +1087,11 @@ func sdkACPExecutable(harness string) string {
 			return value
 		}
 		return "dsh"
+	case "gemini":
+		if value := os.Getenv("MUXTERM_ACP_GEMINI_COMMAND"); value != "" {
+			return value
+		}
+		return "gemini"
 	}
 	return ""
 }
@@ -1410,7 +1416,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	codexPath, codexErr := sdkAgentExecutable("codex")
 	claudePath, claudeErr := sdkAgentExecutable("claude")
 	hasACP := false
-	for _, harness := range []string{"pi", "opencode", "deepseek"} {
+	for _, harness := range []string{"pi", "opencode", "deepseek", "gemini"} {
 		if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
 			hasACP = true
 			break
@@ -1427,7 +1433,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if sdkReady {
-		for _, harness := range []string{"pi", "opencode", "deepseek"} {
+		for _, harness := range []string{"pi", "opencode", "deepseek", "gemini"} {
 			if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
 				if harness == "pi" {
 					if _, err := exec.LookPath("pi"); err != nil {
@@ -1584,7 +1590,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "anthropic"
 		case "amplifier":
 			req.Provider = "configured"
-		case "pi", "opencode", "deepseek":
+		case "pi", "opencode", "deepseek", "gemini":
 			req.Provider = "configured"
 		}
 	}
@@ -1841,6 +1847,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	h.mu.Lock()
 	c := h.chats[id]
+	chatState := ""
+	if c != nil {
+		chatState = c.State
+	}
 	h.mu.Unlock()
 	if c == nil {
 		http.NotFound(w, r)
@@ -2001,7 +2011,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "attachments require a user message", 422)
 			return
 		}
-		if req.Kind == "steer" && c.State != "working" {
+		if req.Kind == "steer" && chatState != "working" {
 			http.Error(w, "No active turn to steer", 409)
 			return
 		}
