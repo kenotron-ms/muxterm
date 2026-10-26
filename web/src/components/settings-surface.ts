@@ -1,5 +1,5 @@
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
-import { LitElement, html, css, type PropertyValues } from 'lit';
+import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
 import '../ui/button.js';
@@ -53,14 +53,8 @@ import {
 } from '../lib/voice-settings.js';
 
 export type SettingsSection = 'appearance' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
-type GeminiLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
-type GeminiAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean };
-
-function geminiConnectionError(detail: string): string {
-  if (/This client is no longer supported for Gemini Code Assist for individuals/i.test(detail))
-    return 'Google no longer supports individual Google AI accounts in Gemini CLI. Use a detected API key here, or see Google\'s announcement for subscription options.';
-  return '';
-}
+type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean };
+type AntigravityLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> = [
   { id: 'appearance', label: 'Appearance' },
@@ -403,6 +397,7 @@ export class MuxSettingsSurface extends LitElement {
     .ai-harness p { color:var(--ui-text-muted); line-height:1.5; margin:var(--ui-space-4) 0 0; }
     .ai-harness code { color:var(--ui-text); overflow-wrap:anywhere; }
     .ai-harness-actions { display:flex; gap:var(--ui-space-3); flex-wrap:wrap; margin-top:var(--ui-space-5); }
+    .ai-auth-switch { display:block; margin-top:var(--ui-space-4); }
     .ai-login-link { display:inline-block; margin-top:var(--ui-space-4); color:var(--ui-accent); overflow-wrap:anywhere; }
     .ai-login-code { display:block; width:100%; margin-top:var(--ui-space-4); }
     .ai-status {
@@ -638,21 +633,15 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _aiBusy = false;
   @state() private _aiMessage = '';
   @state() private _aiMessageKind: FeedbackKind = 'info';
-  @state() private _geminiStatus: 'checking' | 'missing' | 'sign-in' | 'connected' | 'unsupported' | 'error' = 'checking';
-  @state() private _geminiCopied = '';
-  @state() private _geminiLogin: GeminiLoginStatus = { state:'idle' };
-  @state() private _geminiCode = '';
-  @state() private _geminiLoginBusy = false;
-  @state() private _geminiLoginError = '';
-  @state() private _geminiConnectionError = '';
-  @state() private _geminiAuth: GeminiAuth = { mode:'google', apiKeyDetected:false };
-  @state() private _geminiAuthBusy = false;
-  @state() private _geminiAuthError = '';
-  private _geminiPollTimer?: number;
-  private _geminiLoginEpoch = 0;
-  private _geminiLoadEpoch = 0;
-  // A successful login poll supersedes older connection checks, not auth-mode saves.
-  private _geminiStatusEpoch = 0;
+  @state() private _antigravityAuth: AntigravityAuth = { mode:'google', apiKeyDetected:false, installed:false, installSupported:false };
+  @state() private _antigravityLogin: AntigravityLoginStatus = { state:'idle' };
+  @state() private _antigravityStatus: 'checking' | 'missing' | 'sign-in' | 'connected' | 'error' = 'checking';
+  @state() private _antigravityCallback = '';
+  @state() private _antigravityError = '';
+  @state() private _antigravityBusy = false;
+  @state() private _antigravityInstalling = false;
+  private _antigravityPollTimer?: number;
+  private _antigravityEpoch = 0;
 
   // ── Voice credentials ──────────────────────────────────────────────────
   // _voice is what the SERVER says. The _v* fields are the form's own edits,
@@ -707,14 +696,13 @@ export class MuxSettingsSurface extends LitElement {
     this._unsubRemotes = remotesStore.subscribe(() => {
       if (this._section === 'remotes') void this._loadRemotes();
     });
-    if (this._section === 'ai') void this._loadGemini();
+    if (this._section === 'ai') void this._loadAntigravity();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.clearTimeout(this._geminiPollTimer);
-    ++this._geminiLoginEpoch;
-    ++this._geminiLoadEpoch;
+    window.clearTimeout(this._antigravityPollTimer);
+    ++this._antigravityEpoch;
     this._unsubRemotes?.();
     this._unsubRemotes = null;
   }
@@ -725,7 +713,7 @@ export class MuxSettingsSurface extends LitElement {
       const changedSection = this._setSection(this.openSection);
       if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
       if (changedSection && this.openSection === 'voice') void this._loadVoice();
-      if (changedSection && this.openSection === 'ai') void this._loadGemini();
+      if (changedSection && this.openSection === 'ai') void this._loadAntigravity();
     }
   }
 
@@ -758,12 +746,11 @@ export class MuxSettingsSurface extends LitElement {
   private _selectSection(section: SettingsSection): void {
     if (!this._setSection(section)) return;
     if (section !== 'ai') {
-      window.clearTimeout(this._geminiPollTimer);
-      ++this._geminiLoginEpoch;
-      ++this._geminiLoadEpoch;
+      window.clearTimeout(this._antigravityPollTimer);
+      ++this._antigravityEpoch;
     }
     if (section === 'voice') void this._loadVoice();
-    if (section === 'ai') void this._loadGemini();
+    if (section === 'ai') void this._loadAntigravity();
     if (section === 'remotes') void this._loadRemotes();
   }
 
@@ -1104,181 +1091,131 @@ export class MuxSettingsSurface extends LitElement {
     }));
   }
 
-  private async _loadGemini(): Promise<void> {
-    if (!this.isConnected || this._section !== 'ai') return;
-    const epoch = ++this._geminiLoadEpoch;
-    const statusEpoch = ++this._geminiStatusEpoch;
-    this._geminiStatus = 'checking';
-    this._geminiConnectionError = '';
-    void this._readGeminiLogin();
+  private async _loadAntigravity(): Promise<void> {
+    const epoch = ++this._antigravityEpoch;
+    window.clearTimeout(this._antigravityPollTimer);
+    this._antigravityStatus = 'checking';
     try {
-      const [auth, choices] = await Promise.all([
-        fetch(apiPath('/api/ai/gemini/auth')),
-        fetch(apiPath('/api/sdk-chat-start-options')),
+      const [authResponse, loginResponse] = await Promise.all([
+        fetch(apiPath('/api/ai/antigravity/auth')),
+        fetch(apiPath('/api/ai/antigravity/login')),
       ]);
-      if (epoch !== this._geminiLoadEpoch) return;
-      if (auth.ok) {
-        const selection = await auth.json() as GeminiAuth;
-        if (epoch !== this._geminiLoadEpoch) return;
-        this._geminiAuth = selection;
-      }
-      if (!choices.ok) throw new Error('Could not check installed agents');
-      const options = await choices.json() as Array<{ harness: string }>;
-      if (epoch !== this._geminiLoadEpoch) return;
-      if (!options.some(option => option.harness === 'gemini')) {
-        if (statusEpoch === this._geminiStatusEpoch) this._geminiStatus = 'missing';
+      if (!authResponse.ok || !loginResponse.ok) throw new Error('Could not read Antigravity connection status');
+      const [auth, login] = await Promise.all([authResponse.json(), loginResponse.json()]) as [AntigravityAuth, AntigravityLoginStatus];
+      if (epoch !== this._antigravityEpoch) return;
+      this._antigravityAuth = auth;
+      this._antigravityLogin = login;
+      if (!auth.installed) { this._antigravityStatus = 'missing'; return; }
+      if (['starting', 'awaiting_code', 'verifying'].includes(login.state)) {
+        this._antigravityStatus = 'sign-in';
+        this._antigravityPollTimer = window.setTimeout(() => void this._pollAntigravity(), 2000);
         return;
       }
-      const catalog = await fetch(apiPath('/api/sdk-chat-catalog?harness=gemini'));
-      if (epoch !== this._geminiLoadEpoch) return;
-      if (catalog.ok) {
-        if (statusEpoch === this._geminiStatusEpoch) {
-          this._geminiStatus = 'connected';
-          this._geminiLoginError = '';
-          this._geminiConnectionError = '';
-        }
-        return;
+      const catalog = await fetch(apiPath('/api/sdk-chat-catalog?harness=antigravity'));
+      if (epoch !== this._antigravityEpoch) return;
+      this._antigravityStatus = catalog.ok ? 'connected' : 'sign-in';
+    } catch (error) {
+      if (epoch === this._antigravityEpoch) {
+        this._antigravityStatus = 'error';
+        this._antigravityError = error instanceof Error ? error.message : String(error);
       }
-      const detail = await catalog.text();
-      if (epoch !== this._geminiLoadEpoch) return;
-      if (statusEpoch === this._geminiStatusEpoch) {
-        this._geminiConnectionError = geminiConnectionError(detail);
-        this._geminiStatus = this._geminiConnectionError ? 'unsupported'
-          : /auth|sign.?in|credential|login|api key|not configured/i.test(detail) ? 'sign-in' : 'error';
-      }
-    } catch { if (epoch === this._geminiLoadEpoch && statusEpoch === this._geminiStatusEpoch) this._geminiStatus = 'error'; }
+    }
   }
 
-  private async _setGeminiAuth(mode: GeminiAuth['mode']): Promise<void> {
-    if (this._geminiAuthBusy || this._geminiAuth.mode === mode) return;
-    const epoch = ++this._geminiLoadEpoch;
-    window.clearTimeout(this._geminiPollTimer);
-    ++this._geminiLoginEpoch;
-    this._geminiAuthBusy = true;
-    this._geminiAuthError = '';
-    this._geminiConnectionError = '';
+  private async _pollAntigravity(): Promise<void> {
+    const epoch = this._antigravityEpoch;
     try {
-      const response = await fetch(apiPath('/api/ai/gemini/auth'), {
+      const response = await fetch(apiPath('/api/ai/antigravity/login'));
+      if (!response.ok) throw new Error((await response.text()).trim());
+      const login = await response.json() as AntigravityLoginStatus;
+      if (epoch !== this._antigravityEpoch || !this.isConnected || this._section !== 'ai') return;
+      this._antigravityLogin = login;
+      this._antigravityError = '';
+      if (login.state === 'complete') { void this._loadAntigravity(); return; }
+      if (login.state === 'error') { this._antigravityStatus = 'sign-in'; return; }
+    } catch (error) {
+      if (epoch === this._antigravityEpoch) this._antigravityError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (epoch === this._antigravityEpoch && this.isConnected && this._section === 'ai' &&
+          ['starting', 'awaiting_code', 'verifying'].includes(this._antigravityLogin.state))
+        this._antigravityPollTimer = window.setTimeout(() => void this._pollAntigravity(), 2000);
+    }
+  }
+
+  private async _setAntigravityAuth(mode: 'google' | 'api-key'): Promise<void> {
+    if (this._antigravityBusy || mode === this._antigravityAuth.mode) return;
+    this._antigravityBusy = true;
+    this._antigravityError = '';
+    try {
+      const response = await fetch(apiPath('/api/ai/antigravity/auth'), {
         method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode}),
       });
-      if (epoch !== this._geminiLoadEpoch || !this.isConnected || this._section !== 'ai') return;
       if (!response.ok) throw new Error((await response.text()).trim());
-      const selection = await response.json() as GeminiAuth;
-      if (epoch !== this._geminiLoadEpoch || !this.isConnected || this._section !== 'ai') return;
-      this._geminiAuth = selection;
-      await this._loadGemini();
-    } catch (error) {
-      if (epoch === this._geminiLoadEpoch && this.isConnected && this._section === 'ai') {
-        this._geminiAuthError = error instanceof Error ? error.message : String(error);
-        if (['starting', 'awaiting_code', 'verifying'].includes(this._geminiLogin.state))
-          void this._readGeminiLogin();
-      }
-    }
-    finally { this._geminiAuthBusy = false; }
+      this._antigravityAuth = { ...this._antigravityAuth, mode };
+      this._antigravityLogin = { state:'idle' };
+      void this._loadAntigravity();
+    } catch (error) { this._antigravityError = error instanceof Error ? error.message : String(error); }
+    finally { this._antigravityBusy = false; }
   }
 
-  private async _readGeminiLogin(): Promise<void> {
-    window.clearTimeout(this._geminiPollTimer);
-    const epoch = ++this._geminiLoginEpoch;
+  private async _installAntigravity(): Promise<void> {
+    if (this._antigravityInstalling) return;
+    this._antigravityInstalling = true;
+    this._antigravityError = '';
     try {
-      const response = await fetch(apiPath('/api/ai/gemini/login'));
-      if (!response.ok) return;
-      const login = await response.json() as GeminiLoginStatus;
-      if (epoch !== this._geminiLoginEpoch) return;
-      this._geminiLogin = login;
-      if (this._geminiLogin.state === 'verifying' || this._geminiLogin.state === 'complete') {
-        const catalog = await fetch(apiPath('/api/sdk-chat-catalog?harness=gemini'));
-        if (epoch !== this._geminiLoginEpoch) return;
-        if (catalog.ok) {
-          ++this._geminiStatusEpoch;
-          this._geminiStatus = 'connected';
-          this._geminiLoginError = '';
-          this._geminiConnectionError = '';
-          this._geminiLogin = { state:'complete' };
-        } else {
-          const detail = await catalog.text();
-          if (epoch !== this._geminiLoginEpoch) return;
-          const connectionError = geminiConnectionError(detail);
-          if (connectionError) {
-            ++this._geminiStatusEpoch;
-            this._geminiStatus = 'unsupported';
-            this._geminiConnectionError = connectionError;
-            this._geminiLogin = { state:'error' };
-          }
-        }
-      }
-    } catch { /* The terminal sign-in path remains available. */ }
-    finally {
-      if (epoch === this._geminiLoginEpoch && this.isConnected && this._section === 'ai' &&
-          ['starting', 'awaiting_code', 'verifying'].includes(this._geminiLogin.state))
-        this._geminiPollTimer = window.setTimeout(() => void this._readGeminiLogin(), 2500);
-    }
+      const response = await fetch(apiPath('/api/ai/antigravity/install'), { method:'POST' });
+      if (!response.ok) throw new Error((await response.text()).trim());
+      void this._loadAntigravity();
+    } catch (error) { this._antigravityError = error instanceof Error ? error.message : String(error); }
+    finally { this._antigravityInstalling = false; }
   }
 
-  private async _geminiLoginRequest(method: 'POST' | 'DELETE', code?: string): Promise<void> {
-    if (this._geminiLoginBusy) return;
-    const epoch = ++this._geminiLoginEpoch;
-    window.clearTimeout(this._geminiPollTimer);
-    this._geminiLoginBusy = true;
-    this._geminiLoginError = '';
+  private async _antigravityLoginRequest(method: 'POST' | 'DELETE', callbackURL?: string): Promise<void> {
+    if (this._antigravityBusy) return;
+    this._antigravityBusy = true;
+    this._antigravityError = '';
     try {
-      const response = await fetch(apiPath(`/api/ai/gemini/login${code === undefined ? '' : '/code'}`), {
-        method, ...(code === undefined ? {} : { headers:{'Content-Type':'application/json'}, body:JSON.stringify({code}) }),
+      const response = await fetch(apiPath(`/api/ai/antigravity/login${callbackURL === undefined ? '' : '/callback'}`), {
+        method, ...(callbackURL === undefined ? {} : {
+          headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:callbackURL}),
+        }),
       });
-      if (epoch !== this._geminiLoginEpoch || !this.isConnected || this._section !== 'ai') return;
       if (!response.ok) throw new Error((await response.text()).trim());
-      const login = await response.json() as GeminiLoginStatus;
-      if (epoch !== this._geminiLoginEpoch || !this.isConnected || this._section !== 'ai') return;
-      this._geminiLogin = login;
-      if (code !== undefined) this._geminiCode = '';
-      void this._readGeminiLogin();
-    } catch (error) { if (epoch === this._geminiLoginEpoch && this.isConnected) this._geminiLoginError = error instanceof Error ? error.message : String(error); }
-    finally { this._geminiLoginBusy = false; }
+      this._antigravityLogin = await response.json() as AntigravityLoginStatus;
+      if (callbackURL !== undefined) this._antigravityCallback = '';
+      void this._loadAntigravity();
+    } catch (error) { this._antigravityError = error instanceof Error ? error.message : String(error); }
+    finally { this._antigravityBusy = false; }
   }
 
-  private async _copyGemini(command: string): Promise<void> {
-    try { await navigator.clipboard.writeText(command); this._geminiCopied = command; }
-    catch { this._geminiCopied = ''; }
-  }
-
-  private _renderGemini() {
-    const status = this._geminiStatus;
-    const login = this._geminiLogin;
-    const auth = this._geminiAuth;
+  private _renderAntigravity() {
+    const { mode, apiKeyDetected, installed, installSupported } = this._antigravityAuth;
+    const login = this._antigravityLogin;
     const signingIn = ['starting', 'awaiting_code', 'verifying'].includes(login.state);
-    const command = status === 'missing' ? 'npm install -g @google/gemini-cli' : 'NO_BROWSER=true gemini';
-    const label = status === 'connected' ? 'Ready' : status === 'missing' ? 'Not installed'
-      : status === 'unsupported' ? 'Account unsupported' : signingIn ? 'Signing in' : status === 'sign-in' ? 'Sign in needed' : status === 'checking' ? 'Checking' : 'Check unavailable';
-    const tone = status === 'connected' ? 'success' : status === 'sign-in' || status === 'unsupported' || signingIn ? 'warning' : 'neutral';
+    const label = this._antigravityStatus === 'connected' ? 'Ready'
+      : this._antigravityStatus === 'missing' ? 'Not installed'
+      : signingIn ? 'Signing in' : this._antigravityStatus === 'checking' ? 'Checking' : 'Sign in needed';
     return html`<div class="ai-harness">
-      <div class="ai-harness-head"><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><h3 class="ai-harness-name">Gemini CLI</h3><mux-ui-status-badge tone=${tone} dot>${label}</mux-ui-status-badge></div>
-      <p>Choose how Gemini CLI connects. Google sign-in requires a supported organization account; an API key uses its own Google AI Studio quota.</p>
-      <div class="ai-harness-actions" role="group" aria-label="Gemini authentication method">
-        <mux-ui-button size="small" variant=${auth.mode === 'google' ? 'primary' : 'secondary'} ?disabled=${this._geminiAuthBusy || signingIn} @click=${() => void this._setGeminiAuth('google')}>${auth.mode === 'google' ? '✓ ' : ''}Google sign-in</mux-ui-button>
-        <mux-ui-button size="small" variant=${auth.mode === 'api-key' ? 'primary' : 'secondary'} ?disabled=${this._geminiAuthBusy || signingIn || !auth.apiKeyDetected} @click=${() => void this._setGeminiAuth('api-key')}>${auth.mode === 'api-key' ? '✓ ' : ''}Detected API key</mux-ui-button>
-      </div>
-      <p>${auth.apiKeyDetected ? 'GEMINI_API_KEY detected; its value stays hidden.' : 'No GEMINI_API_KEY found in the server environment or ~/.amplifier/keys.env.'}</p>
-      ${this._geminiAuthError ? html`<mux-ui-feedback kind="error" density="compact">${this._geminiAuthError}</mux-ui-feedback>` : ''}
-      ${this._geminiConnectionError ? html`<mux-ui-feedback kind="error" density="compact">${this._geminiConnectionError}</mux-ui-feedback>` : ''}
-      ${status === 'unsupported' ? html`<p><a href="https://github.com/google-gemini/gemini-cli/discussions/28017" target="_blank" rel="noopener noreferrer">Google's Gemini CLI announcement ↗</a></p>` : ''}
-      ${status === 'connected' ? html`<p>Gemini is ready in New Chat.</p>` : status === 'missing' ? html`<p>Install Gemini CLI on this machine first.</p><p><code>${command}</code></p>` : html`
-        ${login.state === 'starting' ? html`<p>Starting Google sign-in in Gemini CLI…</p>` : ''}
-        ${login.state === 'awaiting_code' ? html`<p>Open Google's sign-in page, approve access, then paste the authorization code here.</p><a class="ai-login-link" href=${login.url || ''} target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><mux-ui-text-field class="ai-login-code" aria-label="Google authorization code" autocomplete="one-time-code" placeholder="Authorization code" .value=${this._geminiCode} @input=${(event: Event) => { this._geminiCode = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : ''}
-        ${login.state === 'verifying' && status !== 'unsupported' ? html`<p>Checking your Google sign-in…</p>` : ''}
-        ${login.state === 'error' && status !== 'unsupported' ? html`<p>${login.message || 'Gemini CLI sign-in ended. Try again.'}</p>` : ''}
-        ${login.state === 'complete' && status !== 'unsupported' ? html`<p>Gemini CLI finished signing in. Check the connection.</p>` : ''}
-        ${login.state === 'idle' && auth.mode === 'google' && status !== 'unsupported' ? html`<p>Sign in with a supported organization account.</p>` : ''}
-        ${auth.mode === 'api-key' ? html`<p>Check the detected API key connection.</p>` : ''}
-      `}
-      ${this._geminiLoginError ? html`<mux-ui-feedback kind="error" density="compact">${this._geminiLoginError}</mux-ui-feedback>` : ''}
+      <div class="ai-harness-head"><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><h3 class="ai-harness-name">Google Antigravity · ACP</h3><mux-ui-status-badge tone=${this._antigravityStatus === 'connected' ? 'success' : 'warning'} dot>${label}</mux-ui-status-badge></div>
+      <p>Connect Google's Antigravity ACP agent. It handles Google sign-in and stores its own credentials. A detected API key uses Google AI Studio quota.</p>
+      <mux-ui-switch class="ai-auth-switch" layout="row" label="Use API key"
+        description=${mode === 'api-key' ? 'API key selected' : 'Google sign-in selected'}
+        .checked=${mode === 'api-key'}
+        ?disabled=${this._antigravityBusy || signingIn || (!apiKeyDetected && mode !== 'api-key')}
+        @change=${(event: CustomEvent<{checked:boolean}>) => void this._setAntigravityAuth(event.detail.checked ? 'api-key' : 'google')}></mux-ui-switch>
+      <p>${apiKeyDetected ? 'GEMINI_API_KEY detected; its value stays hidden.' : 'No GEMINI_API_KEY detected.'}</p>
+      ${!installed ? html`<p>Install Google's Antigravity ACP agent from the <a href="https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp" target="_blank" rel="noopener noreferrer">ACP registry ↗</a>.</p>${installSupported ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityInstalling} @click=${() => void this._installAntigravity()}>${this._antigravityInstalling ? 'Installing…' : 'Install Antigravity'}</mux-ui-button>` : html`<p>Automatic installation currently supports Linux x86-64. Install the registry agent for this platform and refresh the connection.</p>`}` : nothing}
+      ${login.state === 'starting' ? html`<p>Starting Antigravity sign-in…</p>` : nothing}
+      ${login.state === 'awaiting_code' && login.url ? html`<p>Open Google's sign-in page. If the browser cannot reach the final localhost page, copy its complete address into the field below.</p><a class="ai-login-link" href=${login.url} target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><mux-ui-text-field class="ai-login-code" aria-label="Google callback URL" placeholder="http://127.0.0.1:…/?code=…" .value=${this._antigravityCallback} @input=${(event: Event) => { this._antigravityCallback = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
+      ${login.state === 'verifying' ? html`<p>Checking Google sign-in…</p>` : nothing}
+      ${login.state === 'error' && this._antigravityStatus !== 'connected' ? html`<mux-ui-feedback kind="error" density="compact">${login.message || 'Antigravity sign-in failed.'}</mux-ui-feedback>` : nothing}
+      ${this._antigravityError && this._antigravityStatus !== 'connected' ? html`<mux-ui-feedback kind="error" density="compact">${this._antigravityError}</mux-ui-feedback>` : nothing}
       <div class="ai-harness-actions">
-        ${auth.mode === 'google' && status !== 'connected' && status !== 'missing' && status !== 'unsupported' && ['idle', 'error', 'complete'].includes(login.state) ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._geminiLoginBusy} @click=${() => void this._geminiLoginRequest('POST')}>Sign in with Google</mux-ui-button>` : ''}
-        ${status !== 'connected' && login.state === 'awaiting_code' ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._geminiLoginBusy || !this._geminiCode.trim()} @click=${() => void this._geminiLoginRequest('POST', this._geminiCode.trim())}>Finish sign-in</mux-ui-button>` : ''}
-        ${['starting', 'awaiting_code', 'verifying'].includes(login.state) ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this._geminiLoginBusy} @click=${() => void this._geminiLoginRequest('DELETE')}>Cancel</mux-ui-button>` : ''}
-        ${auth.mode === 'google' && status !== 'connected' && status !== 'unsupported' ? html`<mux-ui-button size="small" variant="secondary" @click=${() => void this._copyGemini(command)}>${this._geminiCopied === command ? 'Copied' : 'Copy terminal command'}</mux-ui-button><mux-ui-button size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('terminal-open', { bubbles:true, composed:true }))}>Open terminal</mux-ui-button>` : ''}
-        <mux-ui-button size="small" variant="secondary" ?disabled=${status === 'checking'} @click=${() => void this._loadGemini()}>Check connection</mux-ui-button>
+        ${installed && this._antigravityStatus !== 'connected' && !signingIn ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityBusy} @click=${() => void this._antigravityLoginRequest('POST')}>${mode === 'google' ? 'Sign in with Google' : 'Connect API key'}</mux-ui-button>` : nothing}
+        ${login.state === 'awaiting_code' ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityBusy || !this._antigravityCallback.trim()} @click=${() => void this._antigravityLoginRequest('POST', this._antigravityCallback.trim())}>Finish sign-in</mux-ui-button>` : nothing}
+        ${signingIn ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this._antigravityBusy} @click=${() => void this._antigravityLoginRequest('DELETE')}>Cancel</mux-ui-button>` : nothing}
+        <mux-ui-button size="small" variant="secondary" @click=${() => void this._loadAntigravity()}>Check connection</mux-ui-button>
       </div>
-      ${auth.mode === 'google' && status !== 'connected' && status !== 'missing' && status !== 'unsupported' ? html`<p>Terminal fallback: <code>${command}</code></p>` : ''}
     </div>`;
   }
 
@@ -1344,7 +1281,7 @@ export class MuxSettingsSurface extends LitElement {
     const st = this.aiStatus;
     return html`
       <p class="section-title">Coding harnesses</p>
-      ${this._renderGemini()}
+      ${this._renderAntigravity()}
       <p class="section-title">Built-in Anthropic AI</p>
       <p class="ai-status">
         ${st.enabled

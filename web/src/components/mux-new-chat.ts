@@ -37,7 +37,6 @@ const SETUP_AGENTS = [
   { name:'OpenCode · ACP', command:'curl -fsSL https://opencode.ai/install | bash', login:'opencode', docs:'https://opencode.ai/docs/' },
   { name:'Pi · ACP', command:'npm install -g @mariozechner/pi-coding-agent pi-acp', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
   { name:'DeepSeek Harness · ACP', command:'npm install -g @deepseek-ai/dsh', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
-  { name:'Gemini CLI · ACP', command:'npm install -g @google/gemini-cli', login:'NO_BROWSER=true gemini', docs:'https://geminicli.com/docs/get-started/authentication/' },
   { name:'Amplifier', command:'uv tool install git+https://github.com/microsoft/amplifier', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; uploading: boolean; error?: string };
@@ -448,7 +447,7 @@ export class MuxNewChat extends LitElement {
         <h1>${this.startOptions?.length ? 'Add a coding agent' : 'Choose your coding agent'}</h1>
         <p class="setup-intro">Install or update an agent in a terminal, sign in to its provider, then refresh this list. Muxterm uses the agent installed on your computer, including its version.</p>
         <mux-ui-button class="setup-terminal" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open a terminal in muxterm</mux-ui-button>
-        <div class="setup-list">${SETUP_AGENTS.map(agent => html`
+        <div class="setup-list"><section class="setup-card"><h2>Google Antigravity · ACP</h2><p>Install Google's ACP agent and choose Google sign-in or a detected API key in Settings → AI.</p><div class="setup-actions"><mux-ui-button size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail:{action:'settings',section:'ai'}, bubbles:true, composed:true }))}>Open AI settings</mux-ui-button><a href="https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp" target="_blank" rel="noopener noreferrer">ACP registry ↗</a></div></section>${SETUP_AGENTS.map(agent => html`
           <section class="setup-card"><h2>${agent.name}</h2>
             <code>${agent.command}</code>
             <p>After installing, run <strong>${agent.login}</strong> to connect your account.</p>
@@ -489,7 +488,7 @@ export class MuxNewChat extends LitElement {
 
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
-      ${this.harness === 'gemini' ? html`<mux-ui-feedback kind="info" appearance="panel">Choose Google sign-in or a detected GEMINI_API_KEY in Settings → AI, then retry loading models. For terminal sign-in, run <code>NO_BROWSER=true gemini</code> and follow Gemini CLI's prompts.<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('workspace-create', { detail:{host:''}, bubbles:true, composed:true }))}>Open terminal</mux-ui-button></mux-ui-feedback>` : nothing}
+      ${this.harness === 'antigravity' ? html`<mux-ui-feedback kind="info" appearance="panel">Connect Google Antigravity in Settings → AI, then retry loading models.<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail:{action:'settings',section:'ai'}, bubbles:true, composed:true }))}>Open AI settings</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.catalogError ? html`<mux-ui-feedback kind="error" appearance="panel">Could not load models: ${this.catalogError}<mux-ui-button slot="action" size="small" @click=${() => void this.loadCatalog()}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}

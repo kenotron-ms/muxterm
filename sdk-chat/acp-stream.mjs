@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, delimiter, isAbsolute } from 'node:path';
+import { join, dirname, delimiter, isAbsolute } from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 
 const profiles = {
@@ -10,9 +10,78 @@ const profiles = {
   opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
   deepseek: { command: 'dsh', args: ['--profile', 'acp'], env: 'MUXTERM_ACP_DEEPSEEK_COMMAND', mcp: true },
   gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
+  antigravity: { command: 'agy_acp_server.par', args: process.platform === 'linux' ? ['--uid='] : [], env: 'MUXTERM_ACP_ANTIGRAVITY_COMMAND', mcp: true },
 };
 
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
+
+export function antigravityCommand() {
+  if (process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND) return process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND;
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  // Keep this version in sync with antigravityACPVersion in internal/server/antigravity_install.go.
+  const managed = join(dataHome, 'muxterm', 'antigravity-acp', '1.4.3', 'agy_acp_server.par');
+  try { accessSync(managed, constants.X_OK); return managed; } catch { return 'agy_acp_server.par'; }
+}
+
+export function antigravityMode() {
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  try { return readFileSync(join(dataHome, 'muxterm', 'antigravity-auth-mode'), 'utf8').trim() === 'api-key' ? 'api-key' : 'google'; }
+  catch { return 'google'; }
+}
+
+export function antigravityEnvironment(mode = antigravityMode()) {
+  const env = { ...process.env };
+  const command = antigravityCommand();
+  if (!env.ANTIGRAVITY_HARNESS_PATH && isAbsolute(command))
+    env.ANTIGRAVITY_HARNESS_PATH = join(dirname(command), 'localharness_external');
+  if (mode === 'api-key') {
+    let key = env.GEMINI_API_KEY?.trim();
+    if (!key) for (const name of ['keys.env', 'key.env']) {
+      try {
+        const data = readFileSync(join(homedir(), '.amplifier', name), 'utf8').slice(0, 65536);
+        const line = data.split('\n').find(line => /^\s*(?:export\s+)?GEMINI_API_KEY\s*=/.test(line));
+        if (line) { key = line.replace(/^\s*(?:export\s+)?GEMINI_API_KEY\s*=\s*/, '').trim().replace(/^(['"])(.*)\1$/, '$2'); break; }
+      } catch { /* Try the next standard key file. */ }
+    }
+    if (!key) throw new Error('GEMINI_API_KEY is not configured');
+    env.GEMINI_API_KEY = key;
+    delete env.GOOGLE_API_KEY;
+  } else {
+    delete env.GEMINI_API_KEY;
+    delete env.GOOGLE_API_KEY;
+  }
+  return env;
+}
+
+function cpuList(spec) {
+  const values = new Set();
+  for (const part of spec.split(',')) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(part.trim());
+    if (!match) continue;
+    const first = Number(match[1]);
+    const last = Number(match[2] || match[1]);
+    if (last < first || last - first > 1024) continue;
+    for (let cpu = first; cpu <= last; cpu++) values.add(cpu);
+  }
+  return values;
+}
+
+export function antigravityLaunch(mode = antigravityMode()) {
+  const command = antigravityCommand();
+  const args = process.platform === 'linux' ? ['--uid='] : [];
+  const env = antigravityEnvironment(mode);
+  if (process.platform !== 'linux') return { command, args, env };
+  try {
+    const status = readFileSync('/proc/self/status', 'utf8');
+    const allowed = cpuList(/^Cpus_allowed_list:\s*([^\n]+)/m.exec(status)?.[1] || '');
+    const available = new Set([...readFileSync('/proc/cpuinfo', 'utf8').matchAll(/^processor\s*:\s*(\d+)/gm)]
+      .map(match => Number(match[1])));
+    const safe = [...allowed].filter(cpu => available.has(cpu));
+    if (safe.length && safe.length < allowed.size && spawnSync('taskset', ['--version'], { timeout: 1000 }).status === 0)
+      return { command: 'taskset', args: ['-c', safe.join(','), command, ...args], env };
+  } catch { /* Use the ordinary agent launch when CPU metadata is unavailable. */ }
+  return { command, args, env };
+}
 
 function geminiCommand() {
   if (process.env.MUXTERM_ACP_GEMINI_COMMAND) return process.env.MUXTERM_ACP_GEMINI_COMMAND;
@@ -92,9 +161,14 @@ export class ACPStream {
     this.continuedInputIds = [];
     const profile = profiles[session.harness];
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
-    const command = session.harness === 'gemini' ? geminiCommand() : process.env[profile.env] || profile.command;
+    const launch = session.harness === 'antigravity' ? antigravityLaunch() : null;
+    const command = session.harness === 'gemini' ? geminiCommand()
+      : launch?.command || process.env[profile.env] || profile.command;
     this.profile = profile;
-    this.process = spawn(command, profile.args, { cwd: session.cwd, env: session.harness === 'gemini' ? geminiEnvironment() : process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.process = spawn(command, launch?.args || profile.args, { cwd: session.cwd,
+      env: session.harness === 'gemini' ? geminiEnvironment()
+        : launch?.env || process.env,
+      stdio: ['pipe', 'pipe', 'pipe'] });
     this.exited = new Promise(resolve => { this.resolveExit = resolve; });
     this.stderr = '';
     this.process.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk).slice(-4000); });

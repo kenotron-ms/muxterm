@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { CodexStream } from './codex-stream.mjs';
 import { agentCommand } from './agent-command.mjs';
 import { ACPStream, isACPHarness } from './acp-stream.mjs';
+import { antigravityLoginStatus, startAntigravityLogin, cancelAntigravityLogin, finishAntigravityLogin } from './antigravity-login.mjs';
 import { query, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 
 const socketPath = process.argv[2];
@@ -200,6 +201,10 @@ async function runClaude(s) {
 }
 async function command(cmd) {
   const { op, sessionId, harness, cwd, nativeId, input } = cmd;
+  if (op === 'antigravity-login-status') return antigravityLoginStatus();
+  if (op === 'antigravity-login-start') return startAntigravityLogin();
+  if (op === 'antigravity-login-cancel') return cancelAntigravityLogin();
+  if (op === 'antigravity-login-finish') return await finishAntigravityLogin(cmd.callbackURL);
   if (op === 'capabilities') return { capabilities: capabilities(harness) };
   if (op === 'catalog' && harness === 'codex') {
     const catalog = new CodexStream({ cwd, sourceFolders: [], model: '', effort: '' }, () => {}, true);
@@ -400,6 +405,7 @@ const server = net.createServer(client => {
 server.listen(socketPath);
 
 async function shutdown() {
+  cancelAntigravityLogin();
   for (const s of sessions.values()) { s.closed = true; s.wake?.(); s.acp?.close(); s.codex?.close(); try { await s.query?.close?.(); } catch {} }
   server.close();
   try { await unlink(socketPath); } catch {}
