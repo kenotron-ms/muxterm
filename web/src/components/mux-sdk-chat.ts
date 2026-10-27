@@ -439,7 +439,8 @@ export class MuxSDKChat extends LitElement {
     .composer-controls mux-sdk-chat-settings { flex:0 1 auto; }
     .composer-controls .dictation { width:var(--ui-control-md); height:var(--ui-control-md); margin-left:auto; }
     .composer-controls .dictation svg { display:block; }
-    .composer-controls .dictation[pressed]::part(button) { color:var(--ui-accent); }
+    .composer-controls .dictation[pressed]::part(button) { color:var(--ui-accent); background:transparent; }
+    .composer-controls .dictation[pressed]:hover::part(button) { background:var(--ui-surface-hover); }
     .composer-controls .dictation + .send { margin-left:0; }
     .composer-controls .send,.voice-compose-row .send { width:var(--ui-control-md); height:var(--ui-control-md); margin-left:auto; }
     .composer-controls .send::part(button),.voice-compose-row .send::part(button) { width:var(--ui-control-sm); height:var(--ui-control-sm); min-height:var(--ui-control-sm); margin:auto; border-radius:50%; }

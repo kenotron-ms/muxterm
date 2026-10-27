@@ -165,9 +165,8 @@
   --ui-voice-meter-bar-width: var(--ui-space-1);
   --ui-voice-meter-rest-1: var(--ui-space-3);
   --ui-voice-meter-rest-2: 13px;
-  --ui-voice-meter-rest-3: var(--ui-space-4);
-  --ui-voice-meter-rest-4: var(--ui-space-6);
-  --ui-voice-meter-rest-5: 10px;
+  --ui-voice-meter-rest-3: var(--ui-space-6);
+  --ui-voice-meter-rest-4: 10px;
   --ui-lane-progress-column-width: 196px;
   --ui-lane-progress-column-phone-width: 112px;
   --ui-lane-action-column-width: 52px;
