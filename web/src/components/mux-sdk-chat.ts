@@ -1549,7 +1549,7 @@ export class MuxSDKChat extends LitElement {
     catch (error) { this.clipboardError = error instanceof Error ? error.message : String(error); }
   }
   private attachmentPicker() {
-    return chatComposerAttachment(event => this.onPick(event), () => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click(), () => void this.pasteImageFromClipboard());
+    return html`<input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach">${chatComposerAttachment(() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click(), () => void this.pasteImageFromClipboard())}`;
   }
   private addFiles(files: File[]) {
     for (const file of files) {
