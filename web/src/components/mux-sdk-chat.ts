@@ -486,7 +486,7 @@ export class MuxSDKChat extends LitElement {
     window.addEventListener('pagehide', this.onPageHide);
     window.addEventListener('muxterm-goal-changed', this.onGoalChanged);
     window.addEventListener('muxterm-goal-reconnected', this.onGoalReconnected);
-    this.unsubscribeDictation = voiceInputController.onTranscript(this.onDictationTranscript);
+    const unsubscribeTranscript = voiceInputController.onTranscript(this.onDictationTranscript);
     const unsubscribeState = voiceInputController.onStateChange(() => {
       if (this.dictationCapture && !voiceInputController.activeComposerCapture()) {
         this.dictationCapture = undefined;
@@ -501,7 +501,6 @@ export class MuxSDKChat extends LitElement {
         this.dictationActive = false;
       }
     });
-    const unsubscribeTranscript = this.unsubscribeDictation;
     this.unsubscribeDictation = () => { unsubscribeTranscript(); unsubscribeState(); unsubscribeError(); };
     this.unsubscribeChats = sdkChats.subscribe(() => {
       const updated = sdkChats.chats.find(chat => chat.id === this.sessionId);
