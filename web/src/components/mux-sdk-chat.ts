@@ -1339,6 +1339,8 @@ export class MuxSDKChat extends LitElement {
       if (index >= 0) blocks[index] = event.type === 'question.answered' && event.text
         ? { ...blocks[index], kind:'user', source:'question', id:undefined, input:undefined, text:event.text, at:event.at, done:true }
         : { ...blocks[index], done:true };
+      else if (event.type === 'question.answered' && event.text)
+        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'user', source:'question', text:event.text, at:event.at, done:true });
     }
     else if (event.type === 'turn.started') {
       this.busy = true;
