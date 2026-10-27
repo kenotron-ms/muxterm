@@ -35,6 +35,8 @@ import { visuallyHidden } from '../ui/visually-hidden.js';
 import { listboxIndexForKey } from '../ui/listbox.js';
 import '../ui/listbox-option.js';
 import '../ui/voice-bars.js';
+import '../ui/question-form.js';
+import type { QuestionPrompt } from '../ui/question-form.js';
 import type { MuxUIVoiceBars } from '../ui/voice-bars.js';
 import goalifySkill from '../../../skills/goalify/SKILL.md?raw';
 
@@ -44,7 +46,6 @@ type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; pare
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type CodexQuestion = { id:string; header:string; question:string; isOther:boolean; isSecret:boolean; options:{label:string;description:string}[]|null };
 type Block = { key: number; turn: number; kind: 'user' | 'interjection' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message' | 'goal' | 'question' | 'voice-input' | 'voice-output'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
@@ -109,6 +110,7 @@ export class MuxSDKChat extends LitElement {
   @state() private blocks: Block[] = [];
   @state() private answeringQuestion = '';
   @state() private questionError = '';
+  private questionErrorId = '';
   @state() private trajectory: SDKEvent[] = [];
   @state() private agentEvents: SDKEvent[] | null = null;
   @state() private agentHistoryError = '';
@@ -286,24 +288,9 @@ export class MuxSDKChat extends LitElement {
     .interjection-entry { margin:var(--ui-space-4) 0 var(--ui-space-5); }
     .work-item { margin-bottom:var(--ui-space-3); }
     .voice-work { display:flex; align-items:flex-start; gap:var(--ui-space-4); margin:var(--ui-space-3) 0; color:var(--ui-text-muted); font-size:var(--ui-text-lg); line-height:1.5; }
-    .voice-work .work-icon { margin-top:2px; }
+    .voice-work .work-icon { margin-top:var(--ui-space-1); }
     .voice-work strong { color:var(--ui-text); font-weight:600; }
     .voice-work span:last-child { min-width:0; overflow-wrap:anywhere; }
-    .question-card { box-sizing:border-box; padding:var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
-    .question-card h3 { margin:0 0 var(--ui-space-5); font-size:var(--ui-text-lg); font-weight:650; }
-    .question-card fieldset { min-width:0; margin:0 0 var(--ui-space-5); padding:0; border:0; }
-    .question-card legend { width:100%; margin-bottom:var(--ui-space-3); color:var(--ui-text); font-size:var(--ui-text-lg); line-height:1.5; }
-    .question-card .question-option { display:flex; align-items:flex-start; gap:var(--ui-space-3); margin:var(--ui-space-2) 0; padding:var(--ui-space-3) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); cursor:pointer; }
-    .question-card .question-option:has(input:checked) { border-color:var(--ui-accent); background:color-mix(in srgb,var(--ui-accent) 7%,var(--ui-surface-raised)); }
-    .question-card .question-option input { margin:3px 0 0; accent-color:var(--ui-accent); }
-    .question-card .question-option small { display:block; margin-top:var(--ui-space-1); color:var(--ui-text-muted); }
-    .question-card .question-text { box-sizing:border-box; width:100%; min-height:var(--ui-control-lg); padding:var(--ui-space-3) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); color:var(--ui-text); font:inherit; }
-    .question-card .question-actions { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); }
-    .question-card .question-submit { min-height:var(--ui-control-sm); padding:0 var(--ui-space-4); border:1px solid var(--ui-accent); border-radius:var(--ui-radius-md); background:var(--ui-accent); color:var(--ui-on-accent); font:600 var(--ui-text-sm) var(--ui-font-sans); cursor:pointer; }
-    .question-card .question-submit:focus-visible,.question-card .question-text:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
-    .question-card .question-submit:disabled { opacity:.5; cursor:default; }
-    .question-card .question-error { color:var(--ui-danger); font-size:var(--ui-text-sm); }
-    .question-card .question-done { color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .work-passage { margin:0 0 var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-lg); line-height:1.55; overflow-wrap:anywhere; }
     .work-passage > :first-child { margin-top:0; }
     .work-passage > :last-child { margin-bottom:0; }
@@ -1343,7 +1330,7 @@ export class MuxSDKChat extends LitElement {
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind, channel:'voice', text:event.text || '' });
     }
     else if (event.type === 'question.requested' || event.type === 'question.suggested') {
-      const questions = (event.raw as {questions?:CodexQuestion[]} | undefined)?.questions;
+      const questions = (event.raw as {questions?:QuestionPrompt[]} | undefined)?.questions;
       if (questions?.length) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'question', id:event.itemId, source:event.type, input:questions, text:'', at:event.at });
     }
     else if (event.type === 'question.answered' || event.type === 'question.resolved') {
@@ -2122,36 +2109,17 @@ export class MuxSDKChat extends LitElement {
     if (!this.commandFailed) this.dismissGoalifyChoice(key);
   }
   private questionCard(block: Block) {
-    const questions = block.input as CodexQuestion[];
-    const pending = this.answeringQuestion === block.id;
-    if (block.done) return html`<section class="question-card" aria-label="Question from Codex"><h3>Codex asked</h3>${questions.map(question => html`<p>${question.question}</p>`)}<span class="question-done">Answered</span></section>`;
-    return html`<form class="question-card" aria-label="Question from Codex" @submit=${(event:SubmitEvent) => void this.submitQuestion(event,block)}>
-      <h3>Codex asks</h3>
-      ${questions.map((question, index) => html`<fieldset ?disabled=${block.done || pending}>
-        <legend>${question.header ? html`<strong>${question.header}</strong> · ` : nothing}${question.question}</legend>
-        ${question.options?.map(option => html`<label class="question-option"><input type="radio" name=${`q-${index}`} value=${option.label}><span>${option.label}${option.description ? html`<small>${option.description}</small>` : nothing}</span></label>`)}
-        ${question.isOther && question.options?.length ? html`<label class="question-option"><input type="radio" name=${`q-${index}`} value="__other__"><span>Other answer</span></label>` : nothing}
-        ${!question.options?.length || question.isOther ? html`<input class="question-text" name=${`other-${index}`} type=${question.isSecret ? 'password' : 'text'} aria-label=${question.options?.length ? `Other answer for ${question.header || question.question}` : question.question} placeholder=${question.options?.length ? 'Type your answer…' : 'Type your answer…'} autocomplete="off">` : nothing}
-      </fieldset>`)}
-      <div class="question-actions"><span class=${block.done ? 'question-done' : 'question-error'} role=${this.questionError && !block.done ? 'alert' : nothing}>${block.done ? 'Answered' : this.questionError}</span>${!block.done ? html`<button class="question-submit" type="submit" ?disabled=${pending}>${pending ? 'Sending…' : 'Send answer'}</button>` : nothing}</div>
-    </form>`;
+    return html`<mux-ui-question-form agentLabel="Codex" .questions=${block.input as QuestionPrompt[]} .answered=${!!block.done}
+      .pending=${this.answeringQuestion === block.id} .error=${this.questionErrorId === block.id ? this.questionError : ''}
+      @question-submit=${(event:CustomEvent<Record<string,string>>) => void this.submitQuestion(event,block)}></mux-ui-question-form>`;
   }
-  private async submitQuestion(event: SubmitEvent, block: Block) {
-    event.preventDefault();
+  private async submitQuestion(event: CustomEvent<Record<string,string>>, block: Block) {
     if (block.done || !block.id || this.answeringQuestion) return;
-    const form = event.currentTarget as HTMLFormElement;
-    const data = new FormData(form);
-    const questions = block.input as CodexQuestion[];
-    const answers:Record<string,string> = {};
-    for (const [index, question] of questions.entries()) {
-      const choice = String(data.get(`q-${index}`) || '');
-      const typed = String(data.get(`other-${index}`) || '').trim();
-      const answer = choice === '__other__' || !question.options?.length ? typed : choice;
-      if (!answer) { this.questionError = `Answer ${question.header || index + 1} to continue.`; return; }
-      answers[question.id] = answer;
-    }
+    const questions = block.input as QuestionPrompt[];
+    const answers = event.detail;
     const sessionId = this.activeSession;
     this.answeringQuestion = block.id;
+    this.questionErrorId = block.id;
     this.questionError = '';
     try {
       const blocking = block.source === 'question.requested';
@@ -2159,9 +2127,9 @@ export class MuxSDKChat extends LitElement {
         method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(blocking ? {answers} : {kind:this.busy ? 'steer' : 'user',source:'question',id:crypto.randomUUID(),content:questions.map(question => `${question.question}\n${answers[question.id]}`).join('\n\n')})
       });
       if (!response.ok) throw new Error((await response.text()).trim() || 'Could not send answer');
-      if (this.activeSession === sessionId) { form.reset(); this.blocks = this.blocks.map(item => item.key === block.key ? {...item,done:true} : item); }
+      if (this.activeSession === sessionId) this.blocks = this.blocks.map(item => item.key === block.key ? {...item,done:true} : item);
     } catch (error) {
-      if (this.activeSession === sessionId) this.questionError = String(error instanceof Error ? error.message : error);
+      if (this.activeSession === sessionId) { this.questionErrorId = block.id; this.questionError = String(error instanceof Error ? error.message : error); }
     } finally { this.answeringQuestion = ''; }
   }
   private transcript(agents: AgentView[]) {
