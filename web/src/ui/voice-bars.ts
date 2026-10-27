@@ -11,18 +11,17 @@ export class MuxUIVoiceBars extends LitElement {
     i:nth-child(2) { height:var(--ui-voice-meter-rest-2); }
     i:nth-child(3) { height:var(--ui-voice-meter-rest-3); }
     i:nth-child(4) { height:var(--ui-voice-meter-rest-4); }
-    i:nth-child(5) { height:var(--ui-voice-meter-rest-5); }
     @media (prefers-reduced-motion:reduce) { i { transition:none; } }
   `;
 
   setLevels(levels: readonly number[]): void {
-    const resting = [4, 6, 4, 6, 5];
+    const resting = [4, 6, 6, 4];
     this.renderRoot.querySelectorAll<HTMLElement>('i').forEach((bar, index) => {
       bar.style.height = `${Math.round(resting[index] + Math.min(1, levels[index] || 0) * 10)}px`;
     });
   }
 
-  override render() { return html`<i></i><i></i><i></i><i></i><i></i>`; }
+  override render() { return html`<i></i><i></i><i></i><i></i>`; }
 }
 
 declare global { interface HTMLElementTagNameMap { 'mux-ui-voice-bars': MuxUIVoiceBars } }
