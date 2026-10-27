@@ -2278,10 +2278,6 @@ export class MuxSDKChat extends LitElement {
     const draft = text ? `${this.dictationBase}${this.dictationBase && !/\s$/.test(this.dictationBase) ? ' ' : ''}${text}` : this.dictationBase;
     if (this.selectedAgent) this.setAgentDraft(draft);
     else this.setDraft(draft);
-    if (payload.kind === 'final') {
-      this.dictationCapture = undefined;
-      this.dictationActive = false;
-    }
   };
   private toggleDictation() {
     if (this.dictationActive) { this.stopDictation(); return; }
