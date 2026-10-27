@@ -110,7 +110,11 @@ interface Session {
   readonly token: number;
   readonly target: VoiceTarget;
   readonly capture: CaptureIdentity;
-  readonly recognition: SpeechRecognitionLike;
+  recognition: SpeechRecognitionLike;
+  recognitionEnded: boolean;
+  committedText: string;
+  segmentText: string;
+  restartTimer?: ReturnType<typeof setTimeout>;
 }
 
 type StateListener = (state: VoiceState) => void;
@@ -161,12 +165,13 @@ function releaseCapture(session: Session): void {
 }
 
 /**
- * A final/error fences transcript delivery now until SpeechRecognition's own
- * end event confirms the browser capture ended.
+ * A terminal final or fatal error fences transcript delivery until the
+ * browser's end event confirms the capture ended.
  */
 function finishSession(token: number, waitForEnd = true): void {
   if (token !== tokenCounter || !current) return;
   const session = current;
+  if (session.restartTimer !== undefined) clearTimeout(session.restartTimer);
   current = null;
   if (waitForEnd) releasing.set(session.token, session);
   else releaseCapture(session);
@@ -209,21 +214,94 @@ function handleResult(token: number, kind: 'partial' | 'final', text: string): v
   if (kind === 'final') finishSession(token);
 }
 
+function joinTranscript(first: string, second: string): string {
+  return [first.trim(), second.trim()].filter(Boolean).join(' ');
+}
+
+function handleComposerResult(session: Session, event: SpeechRecognitionEventLike): void {
+  if (session.token !== tokenCounter || current !== session) return;
+  const parts: string[] = [];
+  let interim = false;
+  for (let index = 0; index < event.results.length; index++) {
+    const result = event.results[index];
+    if (!result?.length) continue;
+    parts.push(result[0]?.transcript ?? '');
+    if (result.isFinal === false) interim = true;
+  }
+  session.segmentText = parts.map(part => part.trim()).filter(Boolean).join(' ');
+  for (const listener of transcriptListeners) {
+    listener(transcriptPayload(session, interim ? 'partial' : 'final', joinTranscript(session.committedText, session.segmentText)));
+  }
+}
+
 function handleError(token: number, message: string): void {
   if (token !== tokenCounter || !current) return;
   emitError(message);
   finishSession(token);
 }
 
-function handleEnd(token: number, hadTerminalEvent: boolean): void {
+function handleEnd(token: number, recognition: SpeechRecognitionLike, hadTerminalEvent: boolean): void {
   const waiting = releasing.get(token);
-  if (waiting) {
+  if (waiting?.recognition === recognition) {
     releaseCapture(waiting);
     return;
   }
-  if (hadTerminalEvent || token !== tokenCounter || !current) return;
+  const session = current;
+  if (hadTerminalEvent || token !== tokenCounter || !session || session.recognition !== recognition || session.recognitionEnded) return;
+  session.recognitionEnded = true;
+  if (session.target.kind === 'composer') {
+    // Some browsers end even a continuous recognition after silence. Keep the
+    // same capture identity and draft, then resume only after hardware release.
+    session.committedText = joinTranscript(session.committedText, session.segmentText);
+    session.segmentText = '';
+    session.restartTimer = setTimeout(() => {
+      session.restartTimer = undefined;
+      if (current !== session || token !== tokenCounter) return;
+      session.recognition = new ctor!();
+      armRecognition(session);
+    }, 300);
+    return;
+  }
   // This event itself is the browser's hardware-release acknowledgement.
   finishSession(token, false);
+}
+
+function armRecognition(session: Session): void {
+  const { token, recognition, target } = session;
+  session.recognitionEnded = false;
+  recognition.continuous = target.kind === 'composer';
+  recognition.interimResults = true;
+  let terminalFired = false;
+  recognition.onresult = (event) => {
+    if (session.recognitionEnded || current?.recognition !== recognition) return;
+    if (target.kind === 'composer') {
+      handleComposerResult(session, event);
+      return;
+    }
+    const from = event.resultIndex ?? 0;
+    for (let index = from; index < event.results.length; index++) {
+      const result = event.results[index];
+      if (!result || result.length === 0) continue;
+      const kind = result.isFinal === false ? 'partial' : 'final';
+      if (kind === 'final') terminalFired = true;
+      handleResult(token, kind, result[0]?.transcript ?? '');
+      if (kind === 'final') break;
+    }
+  };
+  recognition.onerror = (event) => {
+    if (session.recognitionEnded || current?.recognition !== recognition) return;
+    if (target.kind === 'composer' && event.error === 'no-speech') return;
+    terminalFired = true;
+    handleError(token, messageForError(event.error));
+  };
+  recognition.onend = () => handleEnd(token, recognition, terminalFired);
+  try {
+    recognition.start();
+  } catch {
+    handleError(token, 'Microphone unavailable');
+    // start() failed before capture began, so no end event will release it.
+    releaseCapture(session);
+  }
 }
 
 function newCaptureId(): string | null {
@@ -250,36 +328,10 @@ function startFor(target: VoiceTarget): ComposerDictationCapture | null {
     captureId,
     sttEventGeneration: ++sttEventGeneration,
   });
-  const recognition = new ctor();
-  recognition.continuous = false;
-  recognition.interimResults = true;
-  let terminalFired = false;
-  recognition.onresult = (event) => {
-    const from = event.resultIndex ?? 0;
-    for (let index = from; index < event.results.length; index++) {
-      const result = event.results[index];
-      if (!result || result.length === 0) continue;
-      const kind = result.isFinal === false ? 'partial' : 'final';
-      if (kind === 'final') terminalFired = true;
-      handleResult(token, kind, result[0]?.transcript ?? '');
-      if (kind === 'final') break;
-    }
-  };
-  recognition.onerror = (event) => {
-    terminalFired = true;
-    handleError(token, messageForError(event.error));
-  };
-  recognition.onend = () => handleEnd(token, terminalFired);
-
-  current = { token, target, capture, recognition };
+  const session: Session = { token, target, capture, recognition: new ctor(), recognitionEnded: false, committedText: '', segmentText: '' };
+  current = session;
   setState('listening');
-  try {
-    recognition.start();
-  } catch {
-    handleError(token, 'Microphone unavailable');
-    const waiting = releasing.get(token);
-    if (waiting) releaseCapture(waiting);
-  }
+  armRecognition(session);
 
   return target.kind === 'composer'
     ? Object.freeze({
@@ -318,13 +370,16 @@ function invalidate(session: Session): void {
   // final/end callbacks in an implementation or a recognition API fixture.
   sttEventGeneration++;
   tokenCounter++;
-  releasing.set(session.token, session);
+  if (session.restartTimer !== undefined) clearTimeout(session.restartTimer);
+  if (!session.recognitionEnded) releasing.set(session.token, session);
   current = null;
-  try {
-    session.recognition.abort();
-  } catch {
-    // No end acknowledgement: retain arbitration rather than guessing that
-    // another capture may start. Transcript authority is already invalid.
+  if (!session.recognitionEnded) {
+    try {
+      session.recognition.abort();
+    } catch {
+      // No end acknowledgement: retain arbitration rather than guessing that
+      // another capture may start. Transcript authority is already invalid.
+    }
   }
   setState('idle');
 }
