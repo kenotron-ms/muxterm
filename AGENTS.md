@@ -191,6 +191,14 @@ results, limitations, and relevant output in the PR description. Do not rely on
 local artifact paths as evidence accessible to reviewers; paste the relevant output
 or attach durable evidence to the PR.
 
+For every PR that changes frontend behavior or appearance, capture the final UI
+in a real browser against `dev-local` and embed screenshots directly in the PR
+description before requesting review or merge. Show each affected state needed
+to judge the change, including mobile layouts or open menus when relevant. Use
+durable uploaded or committed image URLs that reviewers can open; local artifact
+paths are not sufficient. If the UI changes again, refresh the screenshots and
+the PR description before merging.
+
 Before committing, inspect the diff for verification residue and remove links to
 artifacts that are not committed. Leave existing `docs/verification/` history intact
 unless the owner explicitly requests its cleanup.
