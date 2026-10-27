@@ -11,6 +11,7 @@ import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName } from '..
 import { apiPath } from '../lib/base-path.js';
 import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
+import { voiceInputController, type ComposerDictationCapture, type VoiceTranscriptPayload } from '../lib/voice-input-controller.js';
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
@@ -134,6 +135,11 @@ export class MuxSDKChat extends LitElement {
   @state() private settingsPending = false;
   @state() private voiceAvailable = false;
   @state() private voiceState: SDKVoiceState = 'idle';
+  @state() private dictationActive = false;
+  @state() private dictationError = '';
+  private dictationCapture?: ComposerDictationCapture;
+  private dictationBase = '';
+  private unsubscribeDictation?: () => void;
   private voice?: SDKVoiceSession;
   @state() private showScrollBottom = false;
   private dragDepth = 0;
@@ -431,6 +437,10 @@ export class MuxSDKChat extends LitElement {
     .composer-controls { display:flex; align-items:center; gap:var(--ui-space-1); margin-top:var(--ui-space-2); min-height:var(--ui-control-md); }
     .composer-controls .attach-picker,.voice-compose-row .attach-picker { width:var(--ui-control-md); height:var(--ui-control-md); }
     .composer-controls mux-sdk-chat-settings { flex:0 1 auto; }
+    .composer-controls .dictation { width:var(--ui-control-md); height:var(--ui-control-md); margin-left:auto; }
+    .composer-controls .dictation svg { display:block; }
+    .composer-controls .dictation[pressed]::part(button) { color:var(--ui-accent); }
+    .composer-controls .dictation + .send { margin-left:0; }
     .composer-controls .send,.voice-compose-row .send { width:var(--ui-control-md); height:var(--ui-control-md); margin-left:auto; }
     .composer-controls .send::part(button),.voice-compose-row .send::part(button) { width:var(--ui-control-sm); height:var(--ui-control-sm); min-height:var(--ui-control-sm); margin:auto; border-radius:50%; }
     .textarea-sizing { position:relative; flex:1; min-width:0; min-height:var(--ui-chat-composer-min-height); max-height:var(--ui-composer-input-max-height); font:var(--ui-text-lg)/1.55 var(--ui-content-font-family); }
@@ -449,6 +459,7 @@ export class MuxSDKChat extends LitElement {
     @media(pointer:coarse) {
       .composer-controls,.voice-compose-row { min-height:var(--ui-control-lg); }
       .composer-controls .attach-picker,.voice-compose-row .attach-picker,.composer-controls .send,.voice-compose-row .send { width:var(--ui-control-lg); height:var(--ui-control-lg); }
+      .composer-controls .dictation { width:var(--ui-control-lg); height:var(--ui-control-lg); }
       .composer-controls .send::part(button),.voice-compose-row .send::part(button) { width:var(--ui-control-md); height:var(--ui-control-md); min-height:var(--ui-control-md); }
     }
     @media (prefers-reduced-motion:reduce) { .send-icon { animation:none; } }
@@ -475,6 +486,23 @@ export class MuxSDKChat extends LitElement {
     window.addEventListener('pagehide', this.onPageHide);
     window.addEventListener('muxterm-goal-changed', this.onGoalChanged);
     window.addEventListener('muxterm-goal-reconnected', this.onGoalReconnected);
+    this.unsubscribeDictation = voiceInputController.onTranscript(this.onDictationTranscript);
+    const unsubscribeState = voiceInputController.onStateChange(() => {
+      if (this.dictationCapture && !voiceInputController.activeComposerCapture()) {
+        this.dictationCapture = undefined;
+        this.dictationActive = false;
+      }
+      this.requestUpdate();
+    });
+    const unsubscribeError = voiceInputController.onError(message => {
+      if (this.dictationCapture) {
+        this.dictationError = message;
+        this.dictationCapture = undefined;
+        this.dictationActive = false;
+      }
+    });
+    const unsubscribeTranscript = this.unsubscribeDictation;
+    this.unsubscribeDictation = () => { unsubscribeTranscript(); unsubscribeState(); unsubscribeError(); };
     this.unsubscribeChats = sdkChats.subscribe(() => {
       const updated = sdkChats.chats.find(chat => chat.id === this.sessionId);
       if (updated) {
@@ -491,6 +519,8 @@ export class MuxSDKChat extends LitElement {
     window.removeEventListener('muxterm-goal-reconnected', this.onGoalReconnected);
     this.flushDraft();
     this.flushAgentDraft();
+    this.stopDictation();
+    this.unsubscribeDictation?.();
     this.retainChatView();
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     window.removeEventListener('focus', this.resumeConnection);
@@ -638,6 +668,7 @@ export class MuxSDKChat extends LitElement {
     this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('status');
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
+    this.stopDictation();
     this.flushDraft();
     const { path, selected } = event.detail;
     this.selectedAgent = '';
@@ -647,6 +678,7 @@ export class MuxSDKChat extends LitElement {
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
   }
   private stagePagePrompt(event: CustomEvent<{ pageId: string; title: string; kind: 'generate' | 'visualize' }>) {
+    this.stopDictation();
     this.flushDraft();
     this.selectedAgent = '';
     this.setPaneMode('split');
@@ -696,6 +728,7 @@ export class MuxSDKChat extends LitElement {
   }
   private connect() {
     if (!this.isConnected || !this.sessionId || this.activeSession === this.sessionId) return;
+    this.stopDictation();
     this.flushDraft();
     this.flushAgentDraft();
     this.retainChatView();
@@ -818,6 +851,7 @@ export class MuxSDKChat extends LitElement {
     }
   }
   private onDraftInput(event: InputEvent) {
+    this.stopDictation();
     const textarea = event.currentTarget as HTMLTextAreaElement;
     const value = textarea.value;
     this.pendingDraft = value;
@@ -899,6 +933,7 @@ export class MuxSDKChat extends LitElement {
     syncTextareaSizing(textarea);
   }
   private onAgentDraftInput(event: InputEvent) {
+    this.stopDictation();
     const textarea = event.currentTarget as HTMLTextAreaElement;
     const value = textarea.value;
     this.pendingAgentDraft = value;
@@ -1626,6 +1661,7 @@ export class MuxSDKChat extends LitElement {
     return [...byId.values()];
   }
   private openAgent(id: string) {
+    this.stopDictation();
     if (!this.selectedAgent) this.parentScrollTop = this.shadowRoot?.querySelector<HTMLElement>('.body')?.scrollTop || 0;
     this.selectedAgent = id;
     this.agentNotice = '';
@@ -1633,6 +1669,7 @@ export class MuxSDKChat extends LitElement {
     void this.updateComplete.then(() => { const body = this.shadowRoot?.querySelector<HTMLElement>('.body'); if (body) body.scrollTop = 0; this.fitComposer('agent'); });
   }
   private returnToParent() {
+    this.stopDictation();
     this.selectedAgent = '';
     this.agentNotice = '';
     void this.updateComplete.then(() => {
@@ -1701,6 +1738,7 @@ export class MuxSDKChat extends LitElement {
     </div>`;
   }
   private async steerAgent() {
+    this.stopDictation();
     if (this.voiceState !== 'idle') return;
     const agent = this.agents().find(item => item.id === this.selectedAgent);
     const originalDraft = this.flushAgentDraft();
@@ -2150,6 +2188,7 @@ export class MuxSDKChat extends LitElement {
     }
   }
   private async send() {
+    this.stopDictation();
     const originalDraft = this.flushDraft();
     const content = originalDraft.trim();
     const command = parseChatCommand(content);
@@ -2225,22 +2264,58 @@ export class MuxSDKChat extends LitElement {
     } catch (error) { this.error = String(error); }
     finally { this.stopping = false; }
   }
+  private stopDictation() {
+    const capture = this.dictationCapture;
+    this.dictationCapture = undefined;
+    this.dictationActive = false;
+    if (capture) voiceInputController.invalidateComposerChannel(capture.channelId);
+  }
+  private readonly onDictationTranscript = (payload: VoiceTranscriptPayload) => {
+    const capture = this.dictationCapture;
+    if (payload.target !== 'composer' || !capture || payload.channelId !== capture.channelId ||
+        payload.captureId !== capture.captureId || payload.sttEventGeneration !== capture.sttEventGeneration) return;
+    const text = payload.text.trim();
+    const draft = text ? `${this.dictationBase}${this.dictationBase && !/\s$/.test(this.dictationBase) ? ' ' : ''}${text}` : this.dictationBase;
+    if (this.selectedAgent) this.setAgentDraft(draft);
+    else this.setDraft(draft);
+    if (payload.kind === 'final') {
+      this.dictationCapture = undefined;
+      this.dictationActive = false;
+    }
+  };
+  private toggleDictation() {
+    if (this.dictationActive) { this.stopDictation(); return; }
+    if (this.voiceState !== 'idle' || !voiceInputController.isSupported()) return;
+    const channelId = `${this.activeSession}:${this.selectedAgent ? 'agent' : 'message'}`;
+    if (!this.activeSession || voiceInputController.getState() !== 'idle') return;
+    this.dictationError = '';
+    this.dictationBase = this.selectedAgent ? this.pendingAgentDraft ?? this.agentDraft : this.pendingDraft ?? this.draft;
+    const capture = voiceInputController.startComposer(channelId);
+    if (!capture || voiceInputController.activeComposerCapture()?.captureId !== capture.captureId) return;
+    this.dictationCapture = capture;
+    this.dictationActive = true;
+  }
+  private dictationButton() {
+    if (!voiceInputController.isSupported()) return nothing;
+    const label = this.dictationActive ? 'Stop voice input' : 'Start voice input';
+    return html`<mux-ui-button class="dictation" variant="quiet" size="small" icon-only toggle ?pressed=${this.dictationActive} accessible-label=${label} tooltip=${label} ?disabled=${!this.dictationActive && (this.voiceState !== 'idle' || voiceInputController.getState() !== 'idle')} @click=${this.toggleDictation}>${icon(Mic,{size:16})}</mux-ui-button>`;
+  }
   private async toggleVoice() {
     if (!this.voice || !this.voiceAvailable) return;
     if (this.voiceState !== 'idle') { this.voice.stop(); return; }
-    if (this.draftHasContent || this.attachments.length || this.settingsPending) return;
+    if (this.draftHasContent || this.attachments.length || this.settingsPending || this.dictationActive) return;
     try { await this.voice.start(); this.error = ''; }
     catch (error) { this.error = error instanceof Error ? error.message : 'Voice could not start.'; }
   }
   private sendVoiceButton() {
     const mode = this.voiceState !== 'idle' ? 'voice-stop' : this.draftHasContent || this.attachments.length ? this.busy ? 'steer' : 'send' : this.busy ? 'task-stop' : 'voice-start';
     const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'steer' ? 'Steer current task' : mode === 'send' ? 'Send message' : this.chat?.branchPending ? 'Send a text message to start this branch before using voice' : this.voiceAvailable ? 'Start voice mode' : 'Voice mode unavailable; check Voice settings';
-    const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending || !!this.chat?.branchPending
+    const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending || this.dictationActive || !!this.chat?.branchPending
       : mode === 'task-stop' ? this.stopping
       : mode === 'send' || mode === 'steer' ? this.stopping || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || !!a.error) || (this.busy && this.attachments.length > 0)
       : false;
-    const glyph = icon(mode === 'voice-start' ? Mic : mode === 'send' || mode === 'steer' ? ArrowUp : Square,{size:16});
-    return html`<mux-ui-button class="send" size="small" variant=${mode === 'task-stop' || mode === 'voice-stop' ? 'danger' : 'primary'} icon-only accessible-label=${label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</mux-ui-button>`;
+    const glyph = mode === 'voice-start' ? html`<mux-ui-voice-bars></mux-ui-voice-bars>` : icon(mode === 'send' || mode === 'steer' ? ArrowUp : Square,{size:16});
+    return html`<mux-ui-button class="send" size="small" variant="primary" icon-only accessible-label=${label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</mux-ui-button>`;
   }
   private updateVoiceLevels(levels: readonly number[]) {
     this.renderRoot.querySelector<MuxUIVoiceBars>('.voice-meter mux-ui-voice-bars')?.setLevels(levels);
@@ -2248,8 +2323,8 @@ export class MuxSDKChat extends LitElement {
   private sendAgentButton() {
     const mode = this.agentDraftHasContent ? 'steer' : this.busy ? 'task-stop' : 'voice-start';
     const label = mode === 'steer' ? 'Send to root' : mode === 'task-stop' ? 'Stop root turn and delegated agent' : this.voiceAvailable ? 'Start voice mode' : 'Voice mode unavailable; check Voice settings';
-    const disabled = mode === 'steer' ? this.stopping || this.submittingSessions.has(this.activeSession) : mode === 'task-stop' ? this.stopping : !this.voiceAvailable || this.settingsPending || !!this.chat?.branchPending;
-    return html`<mux-ui-button class="send" size="small" variant=${mode === 'task-stop' ? 'danger' : 'primary'} icon-only accessible-label=${label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'steer' ? void this.steerAgent() : mode === 'task-stop' ? void this.stop() : void this.toggleVoice()}>${icon(mode === 'steer' ? ArrowUp : mode === 'task-stop' ? Square : Mic,{size:16})}</mux-ui-button>`;
+    const disabled = mode === 'steer' ? this.stopping || this.submittingSessions.has(this.activeSession) : mode === 'task-stop' ? this.stopping : !this.voiceAvailable || this.settingsPending || this.dictationActive || !!this.chat?.branchPending;
+    return html`<mux-ui-button class="send" size="small" variant="primary" icon-only accessible-label=${label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'steer' ? void this.steerAgent() : mode === 'task-stop' ? void this.stop() : void this.toggleVoice()}>${mode === 'voice-start' ? html`<mux-ui-voice-bars></mux-ui-voice-bars>` : icon(mode === 'steer' ? ArrowUp : Square,{size:16})}</mux-ui-button>`;
   }
   private readonly onGoalChanged = (event: Event) => {
     if ((event as CustomEvent<string>).detail === this.activeSession) void this.refreshGoal();
@@ -2349,10 +2424,11 @@ export class MuxSDKChat extends LitElement {
       <div class="composer" @paste=${this.onPaste}>
       ${this.goalBanner()}
       ${this.clipboardError ? html`<mux-ui-feedback kind="error" density="compact">${this.clipboardError}</mux-ui-feedback>` : nothing}
-      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row">${this.attachmentPicker()}<span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-meter" aria-hidden="true"><mux-ui-voice-bars></mux-ui-voice-bars></span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.sendAgentButton()}</div>` : html`
+      ${this.dictationError ? html`<mux-ui-feedback kind="error" density="compact">${this.dictationError}</mux-ui-feedback>` : nothing}
+      ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row">${this.attachmentPicker()}<span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-meter" aria-hidden="true"><mux-ui-voice-bars></mux-ui-voice-bars></span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.dictationButton()}${this.sendAgentButton()}</div>` : html`
       ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
       <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-haspopup="listbox" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
-      <div class="composer-controls">${this.attachmentPicker()}<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.sendVoiceButton()}</div>`}
+      <div class="composer-controls">${this.attachmentPicker()}<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.dictationButton()}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')}></mux-sdk-utility></aside>`) : nothing}
