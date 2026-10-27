@@ -17,6 +17,6 @@ export const Speaking: Story = {
     const bars = canvasElement.querySelector<MuxUIVoiceBars>('mux-ui-voice-bars');
     if (!bars) return;
     await bars.updateComplete;
-    bars.setLevels([.2,.8,.35,1,.5]);
+    bars.setLevels([.2,.8,.35,1]);
   },
 };
