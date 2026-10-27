@@ -9,8 +9,9 @@ import (
 	"time"
 )
 
-// A Codex question is answered on its resident app-server request. The answer
-// is never copied into the chat event journal, including for secret questions.
+// A Codex question is answered on its resident app-server request. The sidecar
+// journals a display-safe answer for the transcript; secret values stay out of
+// the event journal.
 func (s *Server) handleSDKChatQuestion(w http.ResponseWriter, r *http.Request) {
 	id, questionID := r.PathValue("id"), r.PathValue("questionId")
 	if len(questionID) == 0 || len(questionID) > 128 {
