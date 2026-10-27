@@ -84,6 +84,21 @@ stapler_with_retry staple "$app"
 stapler_with_retry validate "$app"
 spctl --assess --type execute --verbose=2 "$app"
 
+# The Wails in-app updater consumes a single signed .app inside a zip.
+# Keep the DMG for manual installs and publish both artifacts from one build.
+zip="$root/desktop/bin/Muxterm-${version}-macos-arm64.zip"
+ditto -c -k --norsrc --keepParent "$app" "$zip"
+if [[ "$(unzip -Z -1 "$zip" | cut -d/ -f1 | sort -u)" != 'Muxterm.app' ]]; then
+  echo 'Updater ZIP must contain only Muxterm.app at its top level.' >&2
+  exit 1
+fi
+mkdir -p "$work/zip-check"
+ditto -x -k "$zip" "$work/zip-check"
+codesign --verify --deep --strict "$work/zip-check/Muxterm.app"
+spctl --assess --type execute "$work/zip-check/Muxterm.app"
+shasum -a 256 "$zip" | awk -v name="$(basename "$zip")" '{ print $1 "  " name }' \
+  > "$root/desktop/bin/macos-checksums.txt"
+
 mkdir -p "$work/dmg"
 ditto "$app" "$work/dmg/Muxterm.app"
 ln -s /Applications "$work/dmg/Applications"
@@ -92,3 +107,4 @@ hdiutil create -volname Muxterm -srcfolder "$work/dmg" \
 codesign --timestamp --sign "$identity" "$dmg"
 codesign --verify --verbose=2 "$dmg"
 echo "Created $dmg"
+echo "Created $zip"

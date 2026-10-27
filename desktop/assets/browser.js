@@ -33,5 +33,9 @@
     window.webkit.messageHandlers.external.postMessage('wails:drag');
   }, true);
   document.addEventListener('mouseup', () => { dragStart = null; }, true);
+  // This window loads muxterm's own origin, so it does not load Wails' web
+  // runtime. Tell Wails the page is ready so native ExecJS status events are
+  // delivered instead of remaining queued forever.
+  window.webkit.messageHandlers.external.postMessage('wails:runtime:ready');
   window.dispatchEvent(new Event('muxterm-browser-ready'));
 })();

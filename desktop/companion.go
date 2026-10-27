@@ -57,6 +57,7 @@ type Companion struct {
 	mu               sync.Mutex
 	localStartMu     sync.Mutex
 	bridgeMu         sync.Mutex
+	updateMu         sync.Mutex
 	app              *application.App
 	token            string
 	settings         Settings
@@ -233,7 +234,7 @@ func (c *Companion) openMuxtermURL(rawURL string) error {
 			"})();" + browserJS,
 		BackgroundColour: application.NewRGB(232, 232, 237),
 		Mac: application.MacWindow{
-			TitleBar:                application.MacTitleBarHidden,
+			TitleBar: application.MacTitleBarHidden,
 		},
 	})
 	return nil

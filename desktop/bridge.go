@@ -34,15 +34,30 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 	originURL := origin.Origin
 	go func() {
 		c.bridgeMu.Lock()
-		defer c.bridgeMu.Unlock()
 		c.mu.Lock()
 		serverURL := c.activeMuxtermURL
+		localURL := ""
+		if c.local != nil {
+			localURL = c.local.url
+		}
 		c.mu.Unlock()
 		server, serverErr := url.Parse(serverURL)
 		messageURL, messageErr := url.Parse(originURL)
 		if serverErr != nil || messageErr != nil || server.Scheme != messageURL.Scheme || !strings.EqualFold(server.Host, messageURL.Host) {
+			c.bridgeMu.Unlock()
 			return
 		}
+		if message.Type == "mac-update-check" || message.Type == "mac-update-install" {
+			allowed := serverURL == localURL && localURL != ""
+			c.bridgeMu.Unlock()
+			if allowed {
+				c.runMacUpdate(message.Type)
+			} else {
+				c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-mac-update', {detail:{phase:'error',error:'Mac updates require the local Muxterm workspace.'}}))")
+			}
+			return
+		}
+		defer c.bridgeMu.Unlock()
 		var actionErr error
 		switch message.Type {
 		case "layout":
@@ -81,8 +96,6 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			if actionErr == nil {
 				actionErr = c.app.Browser.OpenURL(address.String())
 			}
-		case "mac-release":
-			actionErr = c.app.Browser.OpenURL("https://github.com/kenotron-ms/muxterm/releases/latest")
 		case "select":
 			actionErr = c.browserSelect(message.ID)
 		case "close":

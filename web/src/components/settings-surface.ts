@@ -40,7 +40,7 @@ import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
 import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
-import { macAppVersion, openMacDownloads } from '../lib/mac-app.js';
+import { macAppVersion, checkMacUpdate, installMacUpdate, type MacUpdateStatus } from '../lib/mac-app.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
   DEFAULT_VOICE_STATUS,
@@ -647,6 +647,7 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _section: SettingsSection = 'appearance';
   private _lastScrolledSection: SettingsSection | null = null;
   @state() private _updateStatus: UpdateStatus | null = null;
+  @state() private _macUpdateStatus: MacUpdateStatus | null = null;
   @state() private _checkingVersion = false;
   @state() private _installingUpdate = false;
   @state() private _updateError = '';
@@ -791,21 +792,30 @@ export class MuxSettingsSurface extends LitElement {
     this._checkingVersion = true;
     this._updateError = '';
     try {
+      if (macAppVersion()) {
+        this._macUpdateStatus = await checkMacUpdate(status => { this._macUpdateStatus = status; });
+        return;
+      }
       this._updateStatus = await fetchUpdateStatus();
       window.dispatchEvent(new CustomEvent('muxterm-update-checked', { detail: this._updateStatus }));
-    } catch {
-      this._updateError = 'Could not check the version. Try again.';
+    } catch (error) {
+      this._updateError = macAppVersion() && error instanceof Error ? error.message : 'Could not check the version. Try again.';
     } finally {
       this._checkingVersion = false;
     }
   }
 
   private async _installUpdate(): Promise<void> {
-    if (this._checkingVersion || this._installingUpdate || !this._updateStatus?.canUpdate) return;
+    if (this._checkingVersion || this._installingUpdate || (macAppVersion() ? this._macUpdateStatus?.phase !== 'available' : !this._updateStatus?.canUpdate)) return;
     this._installingUpdate = true;
     this._updateError = '';
     try {
-      await installUpdate(this._updateStatus.currentVersion);
+      if (macAppVersion()) {
+        const result = await installMacUpdate(status => { this._macUpdateStatus = status; });
+        if (result.phase === 'up-to-date') this._installingUpdate = false;
+        return;
+      }
+      await installUpdate(this._updateStatus!.currentVersion);
     } catch (error) {
       this._updateError = error instanceof Error ? error.message : String(error);
       this._installingUpdate = false;
@@ -819,7 +829,14 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAbout() {
     const status = this._updateStatus;
     const macVersion = macAppVersion();
-    const message = macVersion ? 'Open the latest Mac release to download and install the app update.'
+    const macStatus = this._macUpdateStatus;
+    const message = macVersion ? this._updateError || (macStatus?.phase === 'checking' ? 'Checking Mac releases…'
+      : macStatus?.phase === 'available' ? `Mac app version ${macStatus.latestVersion} is available.`
+      : macStatus?.phase === 'downloading' ? 'Downloading the Mac app update…'
+      : macStatus?.phase === 'verifying' ? 'Verifying the Mac app update…'
+      : macStatus?.phase === 'restarting' ? 'Update ready. Muxterm is restarting…'
+      : macStatus?.phase === 'up-to-date' ? 'You’re up to date.'
+      : macStatus?.error || 'Check for the latest Mac app version.')
       : this._installingUpdate ? 'Installing update. Muxterm will reconnect when it is ready.'
       : this._checkingVersion ? 'Checking version…'
       : this._updateError || (status?.error ? `Could not check: ${status.error}`
@@ -831,11 +848,13 @@ export class MuxSettingsSurface extends LitElement {
       <p>muxterm brings your terminals and agent chats into one workspace.</p>
       <div class="application-version">${macVersion ? `Mac app v${macVersion}` : status?.currentVersion ? `v${status.currentVersion.startsWith('v') ? status.currentVersion.slice(1) : status.currentVersion}` : 'Version unavailable'}</div>
       <div class="application-actions">
-        ${macVersion ? html`<mux-ui-button variant="primary" @click=${openMacDownloads}>Open Mac downloads</mux-ui-button>` : html`
+        ${macVersion ? html`
+          <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
+          <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${this._checkingVersion || this._installingUpdate || macStatus?.phase !== 'available'} @click=${() => void this._installUpdate()}>Update and restart</mux-ui-button>` : html`
           <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
           <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>`}
       </div>
-      <mux-ui-feedback class="settings-feedback" kind=${macVersion ? 'info' : this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
+      <mux-ui-feedback class="settings-feedback" kind=${macVersion ? this._updateError || macStatus?.phase === 'error' ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : macStatus?.phase === 'available' ? 'info' : 'success' : this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
       <p>Build <code>${__GIT_SHA__}</code></p>
       <p>Config file: <code>~/.config/muxterm/config.toml</code></p>`;
   }

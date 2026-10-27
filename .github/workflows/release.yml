@@ -77,4 +77,4 @@ jobs:
       - name: Attach Mac app to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" desktop/bin/Muxterm-*-macos-arm64.dmg --clobber
+        run: gh release upload "$GITHUB_REF_NAME" desktop/bin/Muxterm-*-macos-arm64.dmg desktop/bin/Muxterm-*-macos-arm64.zip desktop/bin/macos-checksums.txt --clobber
