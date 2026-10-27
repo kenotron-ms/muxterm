@@ -5,6 +5,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { MarkdownStream, parseMarkdown } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { chatMarkdownPolicy } from '../lib/chat-markdown-policy.js';
+import { chatComposerAttachment } from './chat-composer-attachment.js';
 import { pastedImageFiles, readClipboardImageFiles } from '../lib/clipboard-images.js';
 import '../lib/mermaid-diagram.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName } from '../lib/sdk-chats.js';
@@ -85,7 +86,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, FilePenLine, Folder, GitFork, Globe, Mic, Network, PanelRight, Paperclip, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
+import { ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, FilePenLine, Folder, GitFork, Globe, Mic, Network, PanelRight, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
 
 type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
@@ -272,15 +273,15 @@ export class MuxSDKChat extends LitElement {
     .block { max-width:var(--ui-chat-transcript-width); width:100%; align-self:center; margin-bottom:var(--ui-space-9); box-sizing:border-box; }
     .block.work { margin-top:calc(-1 * var(--ui-space-5)); margin-bottom:var(--ui-space-7); }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
-    .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; animation:thinking-pulse 1.6s ease-in-out infinite; }
+    .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .work-stream .pulse { width:var(--ui-chat-pulse-size); height:var(--ui-chat-pulse-size); flex:none; border-radius:50%; background:var(--ui-accent); animation:activity-pulse 1.35s ease-in-out infinite; }
     .work-disclosure > summary { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); padding:0 0 var(--ui-space-4); border-bottom:1px solid color-mix(in srgb,var(--ui-border) 58%,transparent); color:var(--ui-text-muted); font-size:var(--ui-text-lg); list-style:none; cursor:pointer; }
     .work-disclosure .activity-label { flex:none; }
     .work-disclosure .activity-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .work-disclosure > summary > svg { flex:none; }
     .work-disclosure .pulse { width:var(--ui-chat-pulse-size); height:var(--ui-chat-pulse-size); flex:none; border-radius:50%; background:var(--ui-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 14%,transparent); animation:activity-pulse 1.35s ease-in-out infinite; }
     @keyframes activity-pulse { 50% { opacity:.35; transform:scale(.7); } }
-    @keyframes thinking-pulse { 50% { opacity:.4; } }
-    @media (prefers-reduced-motion:reduce) { .work-disclosure .pulse,.work-stream .activity-label { animation:none; } }
+    @media (prefers-reduced-motion:reduce) { .work-disclosure .pulse,.work-stream .pulse { animation:none; } }
     .work-disclosure > summary::-webkit-details-marker { display:none; }
     .work-disclosure > summary:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; border-radius:var(--ui-radius-sm); }
     .work-disclosure > summary svg { opacity:.7; transition:transform .15s ease; }
@@ -437,7 +438,6 @@ export class MuxSDKChat extends LitElement {
     .drop-overlay { position:absolute; inset:8px; z-index:var(--ui-z-drag-overlay); display:grid; place-items:center; border:2px dashed var(--ui-accent); border-radius:var(--ui-radius-xl); background:color-mix(in srgb,var(--ui-surface-base) 92%,transparent); color:var(--ui-text); font-size:var(--ui-text-2xl); pointer-events:none; }
     /* The border extends 15px beyond each 760px transcript edge so typed text aligns with replies. */
     .composer { box-sizing:border-box; width:min(100%,var(--ui-chat-transcript-width)); margin:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background:var(--ui-surface-raised); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); box-shadow:var(--ui-shadow-control); transition:border-color .15s,box-shadow .15s; }
-    .composer:focus-within { border-color:color-mix(in srgb,var(--ui-accent) 58%,var(--ui-border)); box-shadow:0 0 0 2px color-mix(in srgb,var(--ui-accent) 14%,transparent); }
     .composer-row { display:flex; }
     .goal-banner { display:flex; min-width:0; margin-bottom:var(--ui-space-4); }
     .goal-banner::part(button) { justify-content:flex-start; min-width:0; border:0; border-bottom:1px solid var(--ui-border); border-radius:0; padding:0 0 var(--ui-space-3); text-align:left; font:var(--ui-text-sm)/1.5 var(--ui-font-sans); }
@@ -1483,8 +1483,8 @@ export class MuxSDKChat extends LitElement {
     else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); this.workCollapsedWhileWorking.delete(this.currentTurn); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
     if (event.type === 'input.accepted' && event.source !== 'voice') {
       if (!blocks.some(block => block.turn === this.currentTurn && block.kind === 'progress'))
-        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Starting…', at:event.at });
-      for (const block of blocks) if (block.turn === this.currentTurn && block.kind === 'progress') block.text = 'Starting…';
+        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Message sent · Working…', at:event.at });
+      for (const block of blocks) if (block.turn === this.currentTurn && block.kind === 'progress') block.text = 'Message sent · Working…';
     }
     this.blocks = blocks;
     if (this.replaying) return;
@@ -1549,7 +1549,7 @@ export class MuxSDKChat extends LitElement {
     catch (error) { this.clipboardError = error instanceof Error ? error.message : String(error); }
   }
   private attachmentPicker() {
-    return html`<input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach"><mux-ui-choice-picker class="attach-picker" icon-only label="Add attachment" placement="above" appearance="plain" panel-align="left"><span slot="summary-icon">${icon(Paperclip,{size:16})}</span><mux-ui-choice-section heading="Add to message"><mux-ui-choice-list><mux-ui-choice-item label="Choose files or images" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click(); }}></mux-ui-choice-item><mux-ui-choice-item label="Paste image from clipboard" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); void this.pasteImageFromClipboard(); }}></mux-ui-choice-item></mux-ui-choice-list></mux-ui-choice-section></mux-ui-choice-picker>`;
+    return html`<input class="file-input" type="file" multiple @change=${this.onPick} aria-label="Choose files to attach">${chatComposerAttachment(() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click(), () => void this.pasteImageFromClipboard())}`;
   }
   private addFiles(files: File[]) {
     for (const file of files) {
@@ -1902,7 +1902,7 @@ export class MuxSDKChat extends LitElement {
     // Lightweight message history intentionally omits raw thought and tool
     // payloads. Do not display its flattened activity summary as a timeline.
     if (this.loadingDetails) return html`<div class="work-item">Loading work details…</div>`;
-    if (!this.turnFinished.has(turn)) return html`<div class="work-item">Waiting for work updates…</div>`;
+    if (!this.turnFinished.has(turn)) return html`<div class="work-item">Working on your request…</div>`;
     if (!this.detailsLoaded) return html`<div class="work-item">Work details are not loaded. <mux-ui-button size="small" variant="secondary" @click=${() => void this.loadDetails()}>Load work details</mux-ui-button></div>`;
     return html`<div class="work-item">No work details were reported.</div>`;
   }
@@ -1943,12 +1943,14 @@ export class MuxSDKChat extends LitElement {
       if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output') {
         if (shown.has(block.turn) || latestInput.has(block.turn)) continue;
         shown.add(block.turn);
-        rows.push({ key:`work-${block.turn}`, block, work:work.get(block.turn) });
+        const items = work.get(block.turn);
+        if (this.turnFinished.has(block.turn) && items?.every(item => item.kind === 'progress')) continue;
+        rows.push({ key:`work-${block.turn}`, block, work:items });
       } else {
         rows.push({ key:`block-${block.key}`, block });
         if (latestInput.get(block.turn) === block.key) {
           const items = work.get(block.turn);
-          if (items?.length) {
+          if (items?.length && (!this.turnFinished.has(block.turn) || items.some(item => item.kind !== 'progress'))) {
             shown.add(block.turn);
             rows.push({ key:`work-${block.turn}`, block:items[0], work:items });
           }
@@ -2148,7 +2150,7 @@ export class MuxSDKChat extends LitElement {
       if (row.work) {
         const working = !this.turnFinished.has(block.turn);
         const open = this.workDisclosureOpen(block.turn);
-        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}><span class="activity-label">${working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details></div>`;
+        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working}>${working && row.work.every(item => item.kind === 'progress') ? html`<div class="work-stream" role="status" aria-live="polite"><span class="pulse" aria-hidden="true"></span><span class="activity-label">${row.work.at(-1)?.text || 'Working…'}</span></div>` : html`<details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}><span class="activity-label">${working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details>`}</div>`;
       }
       if (block.kind === 'goal') return this.goalResponse(row.key,start + offset);
       return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
@@ -2268,7 +2270,7 @@ export class MuxSDKChat extends LitElement {
     const key = ++this.nextBlockKey;
     this.pendingInputs.set(id, key);
     this.blocks = [...this.blocks, { key, turn:this.currentTurn, kind:wasBusy ? 'interjection' : 'user', text:content, attachments:sent.filter(item => item.id).map(item => ({ id:item.id!, name:item.file.name, kind:item.kind || '' })) },
-      ...(!wasBusy ? [{ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress' as const, text:'Message received' }] : [])];
+      ...(!wasBusy ? [{ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress' as const, text:'Sending message…' }] : [])];
     if (wasBusy) this.workExpanded.add(this.currentTurn);
     if (!wasBusy) { this.busy = true; this.turnStarted.set(this.currentTurn, Date.now()); }
     // Keep the saved copy until the server accepts the message. A reload during
