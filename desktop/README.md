@@ -26,7 +26,13 @@ ad hoc signed for development, not notarized for public distribution.
 ## Downloadable release
 
 A `v*` tag builds a Developer ID signed, notarized, stapled Apple Silicon DMG
-and attaches it to the existing GitHub Release. This uses the same Apple ID
+and an updater ZIP, then attaches both to the existing GitHub Release. The
+signed app's **Settings → About → Update and restart** button downloads the ZIP,
+checks its SHA-256 digest and Apple signature, replaces the installed app, and
+reopens it. The app must be writable by the current user; a development or
+ad hoc signed build cannot update itself. Existing installs need one manual
+upgrade to a release containing this updater before that button appears. This
+uses the same Apple ID
 app-specific password method as SideHuddle; it does not publish to the Mac App
 Store. Configure these repository Actions secrets before tagging:
 

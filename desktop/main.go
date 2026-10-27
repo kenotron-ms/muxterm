@@ -8,12 +8,16 @@ import (
 	"runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/updater"
 )
 
 //go:embed assets/*
 var assets embed.FS
 
 func main() {
+	// The updater's detached helper must enter swap mode before this process
+	// starts a bundled server or opens any windows.
+	updater.HandleHelperMode()
 	companion := newCompanion()
 	// Wait for the local server before opening WebKit so the first window always
 	// contains muxterm instead of a transient connection or error page.
@@ -37,6 +41,9 @@ func main() {
 		},
 	})
 	companion.app = app
+	if err := companion.initMacUpdater(); err != nil {
+		log.Printf("Mac updater unavailable: %v", err)
+	}
 	app.OnShutdown(companion.close)
 	menu := app.NewMenu()
 	if runtime.GOOS == "darwin" {

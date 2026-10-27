@@ -81,5 +81,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: muxterm-signed-macos-arm64
-          path: desktop/bin/Muxterm-0.1.0-macos-arm64.dmg
+          path: |
+            desktop/bin/Muxterm-0.1.0-macos-arm64.dmg
+            desktop/bin/Muxterm-0.1.0-macos-arm64.zip
+            desktop/bin/macos-checksums.txt
           if-no-files-found: error
