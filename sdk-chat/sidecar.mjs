@@ -364,6 +364,10 @@ async function command(cmd) {
 
     return { status: 'accepted', inputId: input.id };
   }
+  if (op === 'answerQuestion') {
+    if (s.harness !== 'codex' || !s.codex) throw new Error('This chat has no pending Codex question');
+    return s.codex.answerUserInput(cmd.questionId, cmd.answers);
+  }
   if (op === 'interrupt') {
     if (!s.busy) throw new Error('No active turn to stop');
     if (s.acp) return await s.acp.interrupt();
