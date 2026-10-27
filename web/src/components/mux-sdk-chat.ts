@@ -100,6 +100,7 @@ export class MuxSDKChat extends LitElement {
   @state() private commandNotice = '';
   @state() private commandFailed = false;
   @state() private commandPending = false;
+  private commandAt = '';
   @state() private goalifyPending = false;
   @state() private goalifyError = '';
   private dismissedGoalifyKeys = new Set<string>();
@@ -746,7 +747,7 @@ export class MuxSDKChat extends LitElement {
     this.voice = new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; }, levels => this.updateVoiceLevels(levels));
     this.activeSession = this.sessionId;
     this.goalDocument = undefined; this.goalNotice = ''; this.goalifyPending = false; this.goalifyError = ''; this.dismissedGoalifyKeys.clear();
-    this.commandGeneration++; this.commandNotice = ''; this.commandFailed = false; this.commandPending = false; this.slashDismissedFor = ''; this.slashSelection = 0;
+    this.commandGeneration++; this.commandNotice = ''; this.commandFailed = false; this.commandPending = false; this.commandAt = ''; this.slashDismissedFor = ''; this.slashSelection = 0;
     void this.refreshGoal();
     this.draft = readDraft(this.activeSession, 'message');
     this.draftHasContent = !!this.draft.trim();
@@ -1340,7 +1341,7 @@ export class MuxSDKChat extends LitElement {
     else if (event.type === 'turn.started') {
       this.busy = true;
       markStart(this.currentTurn);
-      if (!blocks.some(block => block.turn === this.currentTurn && block.kind === 'progress')) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Working…' });
+      if (!blocks.some(block => block.turn === this.currentTurn && block.kind === 'progress')) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Working…', at:event.at });
     }
     else if (event.type === 'operator.lane.report') {
       this.upsertLaneCard(blocks, event, true);
@@ -1482,7 +1483,7 @@ export class MuxSDKChat extends LitElement {
     else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); this.workCollapsedWhileWorking.delete(this.currentTurn); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
     if (event.type === 'input.accepted' && event.source !== 'voice') {
       if (!blocks.some(block => block.turn === this.currentTurn && block.kind === 'progress'))
-        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Starting…' });
+        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Starting…', at:event.at });
       for (const block of blocks) if (block.turn === this.currentTurn && block.kind === 'progress') block.text = 'Starting…';
     }
     this.blocks = blocks;
@@ -1960,11 +1961,14 @@ export class MuxSDKChat extends LitElement {
   private withGoalResponse(rows: TranscriptRow[]): TranscriptRow[] {
     if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice) return rows;
     const receipt = this.goalDocument?.receipts.findLast(item => ['set','approve','clear','pause','resume','start'].includes(item.action));
-    const at = receipt?.at;
+    const at = this.commandNotice && this.commandAt ? this.commandAt : receipt?.at || this.goalDocument?.revisions.at(-1)?.at;
     const stamp = Date.parse(at || '');
     const index = Number.isFinite(stamp) ? rows.findIndex(row => {
-      const rowStamp = Date.parse(row.block.at || '');
-      return Number.isFinite(rowStamp) && rowStamp > stamp;
+      // Work rows use a synthetic progress block, which often has no `at`.
+      // Their turn start is the point where the next turn enters the timeline.
+      const blockStamp = Date.parse(row.block.at || '');
+      const rowStamp = row.work ? this.turnStarted.get(row.block.turn) ?? blockStamp : Number.isFinite(blockStamp) ? blockStamp : this.turnStarted.get(row.block.turn) ?? this.turnFinished.get(row.block.turn);
+      return rowStamp !== undefined && Number.isFinite(rowStamp) && rowStamp > stamp;
     }) : -1;
     const goal: TranscriptRow = {key:`goal-response-${receipt?.id || 'current'}`,block:{key:-1,turn:-1,kind:'goal',text:'',at}};
     const result = [...rows];
@@ -2209,6 +2213,7 @@ export class MuxSDKChat extends LitElement {
     this.commandPending = true;
     this.commandFailed = false;
     this.commandNotice = '';
+    this.commandAt = new Date().toISOString();
     try {
       const read = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/goal`), { cache:'no-store' });
       if (!read.ok) throw new Error((await read.text()).trim());
