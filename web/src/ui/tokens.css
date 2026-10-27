@@ -161,7 +161,7 @@
   --ui-utility-page-title-min-height: 75px;
   --ui-utility-page-title-compact-min-height: 42px;
   --ui-utility-page-toolbar-height: 42px;
-  --ui-voice-meter-height: var(--ui-space-6);
+  --ui-voice-meter-height: var(--ui-space-7);
   --ui-voice-meter-bar-width: var(--ui-space-1);
   --ui-voice-meter-rest-1: var(--ui-space-3);
   --ui-voice-meter-rest-2: 13px;

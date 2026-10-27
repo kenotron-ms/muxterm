@@ -138,7 +138,7 @@ export class SDKVoiceSession {
     this.endProvider(providerId);
     if (this.readyAudio) void this.readyAudio.close().catch(() => {});
     this.readyAudio = null;
-    this.onLevels([0, 0, 0, 0, 0]);
+    this.onLevels([0, 0, 0, 0]);
     this.setState('idle');
   }
 
@@ -155,10 +155,10 @@ export class SDKVoiceSession {
   }
 
   private meterLevels(meter: VoiceMeter | null): number[] {
-    if (!meter || !this.readyAudio || this.readyAudio.state !== 'running') return [0, 0, 0, 0, 0];
+    if (!meter || !this.readyAudio || this.readyAudio.state !== 'running') return [0, 0, 0, 0];
     meter.analyser.getByteFrequencyData(meter.bins);
     const hzPerBin = this.readyAudio.sampleRate / meter.analyser.fftSize;
-    const edges = [100, 300, 600, 1100, 1900, 3500];
+    const edges = [100, 400, 900, 2000, 4000];
     return edges.slice(0, -1).map((start, index) => {
       const first = Math.max(1, Math.floor(start / hzPerBin));
       const last = Math.min(meter.bins.length, Math.ceil(edges[index + 1] / hzPerBin));

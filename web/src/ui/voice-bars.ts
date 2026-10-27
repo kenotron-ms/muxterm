@@ -15,9 +15,9 @@ export class MuxUIVoiceBars extends LitElement {
   `;
 
   setLevels(levels: readonly number[]): void {
-    const resting = [4, 6, 6, 4];
+    const resting = [6, 13, 16, 10];
     this.renderRoot.querySelectorAll<HTMLElement>('i').forEach((bar, index) => {
-      bar.style.height = `${Math.round(resting[index] + Math.min(1, levels[index] || 0) * 10)}px`;
+      bar.style.height = `${Math.round(Math.min(20, resting[index] + Math.min(1, levels[index] || 0) * 8))}px`;
     });
   }
 
