@@ -3,6 +3,7 @@ import readline from 'node:readline';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import { agentCommand } from './agent-command.mjs';
 function toolDetails(item) {
@@ -25,6 +26,7 @@ export class CodexStream {
     this.session = session;
     this.emit = emit;
     this.pending = new Map();
+    this.userInputRequests = new Map();
     this.nextId = 0;
     this.textByItem = new Map();
     this.phaseByItem = new Map();
@@ -85,6 +87,24 @@ export class CodexStream {
       this.pending.set(id, { resolve, reject });
       this.process.stdin.write(JSON.stringify({ id, method, params }) + '\n');
     });
+  }
+
+  answerUserInput(questionId, answers) {
+    const pending = this.userInputRequests.get(questionId);
+    if (!pending) throw new Error('This question is no longer waiting for an answer');
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new Error('Invalid question answers');
+    const response = {};
+    for (const question of pending.questions) {
+      const answer = answers[question.id];
+      if (typeof answer !== 'string' || !answer.trim() || answer.length > 4096) throw new Error('Answer each question before sending');
+      if (question.options?.length && !question.isOther && !question.options.some(option => option.label === answer))
+        throw new Error('Choose one of the offered answers');
+      response[question.id] = { answers: [answer.trim()] };
+    }
+    this.userInputRequests.delete(questionId);
+    this.process.stdin.write(JSON.stringify({ id: pending.rpcId, result: { answers: response } }) + '\n');
+    this.emit(this.session.id, 'question.answered', { itemId: questionId });
+    return { status: 'accepted' };
   }
 
   async initialize() {
@@ -223,6 +243,21 @@ export class CodexStream {
     let message;
     try { message = JSON.parse(line); } catch { return; }
     if (message.id !== undefined) {
+      if (message.method) {
+        if (message.method === 'item/tool/requestUserInput' && message.params?.threadId === this.session.nativeId) {
+          const questions = message.params.questions;
+          if (!Array.isArray(questions) || !questions.length || questions.length > 3 ||
+              questions.some(question => typeof question.id !== 'string' || typeof question.question !== 'string')) {
+            this.process.stdin.write(JSON.stringify({ id: message.id, error: { code: -32602, message: 'Invalid questions' } }) + '\n');
+            return;
+          }
+          const questionId = randomUUID();
+          this.userInputRequests.set(questionId, { rpcId: message.id, questions, turnId: message.params.turnId });
+          this.emit(this.session.id, 'question.requested', { itemId: questionId,
+            raw: { questions, isBlocking: message.params.isBlocking !== false } });
+        } else this.process.stdin.write(JSON.stringify({ id: message.id, error: { code: -32601, message: 'Unsupported request' } }) + '\n');
+        return;
+      }
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
@@ -232,6 +267,15 @@ export class CodexStream {
     }
     const { method, params: p } = message;
     if (!p) return;
+    if (method === 'serverRequest/resolved' && p.threadId === this.session.nativeId) {
+      for (const [questionId, request] of this.userInputRequests) {
+        if (request.rpcId !== p.requestId) continue;
+        this.userInputRequests.delete(questionId);
+        this.emit(this.session.id, 'question.resolved', { itemId: questionId });
+        break;
+      }
+      return;
+    }
     const childId = this.childThreads.has(p.threadId) ? p.threadId : null;
     if (childId) {
       if (method === 'item/agentMessage/delta' && p.delta)
@@ -299,6 +343,12 @@ export class CodexStream {
       const rest = full.startsWith(sent) ? full.slice(sent.length) : full;
       const commentary = (p.item.phase || this.phaseByItem.get(p.item.id)) === 'commentary';
       if (rest || commentary) this.emit(this.session.id, commentary ? 'commentary.delta' : 'assistant.delta', { text: rest, itemId: p.item.id, complete: true });
+      if (Array.isArray(p.item.questions) && p.item.questions.length) {
+        this.emit(this.session.id, 'question.suggested', { itemId: p.item.id,
+          raw: { questions: p.item.questions.map((question, index) => ({ id: String(index), header: '',
+            question: question.title, isOther: true, isSecret: false,
+            options: (question.options || []).map(label => ({ label, description: '' })) })) } });
+      }
     } else if (method === 'item/started' && p.item?.type !== 'agentMessage' && p.item?.type !== 'reasoning' && p.item?.type !== 'userMessage') {
       const tool = toolDetails(p.item);
       this.emit(this.session.id, 'tool.started', { name: tool.name, toolId: p.item.id, raw: tool.input });
@@ -339,7 +389,7 @@ export class CodexStream {
     return { name, source: mode === 'manual' ? 'manual' : 'generated' };
   }
 
-  close() { this.process.kill('SIGTERM'); }
+  close() { this.userInputRequests.clear(); this.process.kill('SIGTERM'); }
 
   fail(error) {
     this.steeringResolve?.();
