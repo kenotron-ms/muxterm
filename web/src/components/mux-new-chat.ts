@@ -182,6 +182,8 @@ export class MuxNewChat extends LitElement {
     .project-option .option-copy { display:grid; gap:var(--ui-space-px); flex:1; min-width:0; }
     .project-option .option-copy small { color:var(--ui-text-muted); }
     .project-option .selected-icon { margin-left:auto; color:var(--ui-accent); }
+    .project-options mux-ui-menu-item .option-copy { display:grid; gap:var(--ui-space-px); flex:1; min-width:0; }
+    .project-options mux-ui-menu-item .option-copy small { color:var(--ui-text-muted); }
     .remote-status { width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); flex:none; border-radius:50%; background:var(--ui-text-muted); }
     .remote-status.connected { background:var(--ui-success); }
     .project-divider { height:var(--ui-divider-thickness); margin:var(--ui-space-2) 0; background:var(--ui-border); }
@@ -567,7 +569,7 @@ export class MuxNewChat extends LitElement {
         ${this.pickerOpen ? html`<div class="project-options" role="menu" aria-label="Session location">
           <button class="project-option" role="menuitemradio" aria-checked=${this.projectId === 'ungrouped' && !this.remoteHost} ?selected=${this.projectId === 'ungrouped' && !this.remoteHost} @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy"><strong>Chat</strong><small>No project folder</small></span>${this.projectId === 'ungrouped' && !this.remoteHost ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>
           <div class="project-divider"></div>
-          ${sdkChats.remoteHosts.map(host => html`<button class="project-option" role="menuitem" ?disabled=${host.state !== 'connected'} @click=${() => void this.chooseRemoteHost(host.id)}>${icon(Network,{size:16})}<span class="option-copy"><strong>${host.name}</strong><small>${host.state === 'connected' ? 'Browse folders on this machine' : host.state}</small></span><span class="remote-status ${host.state}" aria-label=${host.state}></span></button>${sdkChats.projects.filter(project => project.remoteHost === host.id).map(project => html`<button class="project-option" role="menuitem" @click=${() => this.chooseProject(project)}>${icon(Network,{size:16})}<span class="option-copy"><strong>${project.name}</strong><small>${project.path}</small></span></button>`)}`)}
+          ${sdkChats.remoteHosts.map(host => html`<mux-ui-menu-item ?disabled=${host.state !== 'connected'} @click=${() => void this.chooseRemoteHost(host.id)}>${icon(Network,{size:16})}<span class="option-copy"><strong>${host.name}</strong><small>${host.state === 'connected' ? 'Browse folders on this machine' : host.state}</small></span><span class="remote-status ${host.state}" aria-label=${host.state}></span></mux-ui-menu-item>${sdkChats.projects.filter(project => project.remoteHost === host.id).map(project => html`<mux-ui-menu-item @click=${() => this.chooseProject(project)}>${icon(Network,{size:16})}<span class="option-copy"><strong>${project.name}</strong><small>${project.path}</small></span></mux-ui-menu-item>`)}`)}
           ${sdkChats.remoteHosts.length ? html`<div class="project-divider"></div>` : nothing}
           <mux-folder-picker inline label="Folders" .remoteHost=${this.remoteHost} .value=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? '' : this.folder} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => void this.selectFolder(event.detail.path)}></mux-folder-picker>
           <div class="project-divider"></div>
