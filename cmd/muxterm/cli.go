@@ -196,6 +196,8 @@ func parseCommand(args []string) (Config, error) {
 		// reason "sessiond" is: it is invoked by muxterm itself (over a
 		// transport), not typed by a user.
 		return Config{Mode: "sessiond-connect"}, nil
+	case "chat-connect":
+		return Config{Mode: "chat-connect"}, nil
 	case "deploy":
 		return parseDeploy(args[1:])
 	case "version":

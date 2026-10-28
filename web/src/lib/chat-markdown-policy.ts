@@ -4,7 +4,7 @@ import type { MdLinkPolicy } from './markdown-view.js';
 import { sdkChats, type SDKChat } from './sdk-chats.js';
 
 const RASTER_IMAGE = /\.(?:png|jpe?g|gif|webp|avif)$/i;
-const CHAT_HASH = /^#chat=([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f-]{27,})$/i;
+const CHAT_HASH = /^#chat=([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f-]{27,})(?:&host=[^&#]+)?$/i;
 const CHAT_MENTION = /[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[“"][^”"]{1,160}[”"]/gi;
 
 function chatForSession(value: string): SDKChat | undefined {
@@ -35,7 +35,7 @@ function chatFromHref(href: string): SDKChat | undefined {
 }
 
 function chatLink(chat: SDKChat, label: string): TemplateResult {
-  return html`<a class="md-link md-chat-link" href=${`#chat=${encodeURIComponent(chat.id)}`}
+  return html`<a class="md-link md-chat-link" href=${`#chat=${encodeURIComponent(chat.id)}${chat.remoteHost ? `&host=${encodeURIComponent(chat.remoteHost)}` : ''}`}
     draggable="false"
     title=${`Open chat: ${chat.title}`} aria-label=${`Open chat: ${chat.title}`}
     @click=${(event: MouseEvent) => {

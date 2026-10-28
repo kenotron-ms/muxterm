@@ -74,6 +74,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "chat-connect":
+		if err := runChatConnect(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "deploy":
 		if err := runDeploy(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)

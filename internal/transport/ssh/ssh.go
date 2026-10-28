@@ -63,6 +63,20 @@ func (t *Transport) Identity() transport.IdentityModel {
 // There is no handshake to interrupt — the stream exists the moment ssh execs
 // — so ctx is checked before starting rather than tied to the child.
 func (t *Transport) Dial(ctx context.Context, host transport.HostRef) (net.Conn, error) {
+	return t.dialCommand(ctx, host, t.remoteCommand(), false)
+}
+
+// DialChat opens an authenticated HTTP bridge to the remote muxterm chat API.
+// The remote helper reads its own same-user server token; it never crosses SSH.
+func (t *Transport) DialChat(ctx context.Context, host transport.HostRef) (net.Conn, error) {
+	command := "bash -lc " + shellQuote("muxterm chat-connect")
+	if t.RemoteBinary != "" {
+		command = shellQuote(t.RemoteBinary) + " chat-connect"
+	}
+	return t.dialCommand(ctx, host, command, true)
+}
+
+func (t *Transport) dialCommand(ctx context.Context, host transport.HostRef, command string, chat bool) (net.Conn, error) {
 	target, err := targetOf(host)
 	if err != nil {
 		return nil, err
@@ -71,7 +85,11 @@ func (t *Transport) Dial(ctx context.Context, host transport.HostRef) (net.Conn,
 		return nil, err
 	}
 
-	cmd := exec.Command(sshBinary, append(baseArgs(target), t.remoteCommand())...) //nolint:gosec
+	args := baseArgs(target)
+	if chat {
+		args = append(append(args[:len(args)-2:len(args)-2], "-o", "ConnectTimeout=5"), args[len(args)-2:]...)
+	}
+	cmd := exec.Command(sshBinary, append(args, command)...) //nolint:gosec
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("ssh %s: stdin pipe: %w", target, err)

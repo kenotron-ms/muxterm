@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/kenotron-ms/muxterm/internal/deploy"
@@ -23,13 +24,22 @@ type sshRemoteTransport struct{ t *sshtransport.Transport }
 
 // newSSHRemoteTransport returns the SSH transport adapted for the server.
 func newSSHRemoteTransport() server.RemoteTransport {
-	return &sshRemoteTransport{t: sshtransport.New()}
+	t := sshtransport.New()
+	// An absolute remote binary path is useful when a login shell does not put
+	// muxterm on PATH; it also lets isolated dev stacks test the SSH bridge.
+	t.RemoteBinary = os.Getenv("MUXTERM_REMOTE_BINARY")
+	return &sshRemoteTransport{t: t}
 }
 
 func (s *sshRemoteTransport) Name() string { return s.t.Name() }
 
 func (s *sshRemoteTransport) Dial(ctx context.Context, h transport.HostRef) (net.Conn, error) {
 	return s.t.Dial(ctx, h)
+}
+
+// DialChat uses the same SSH target as terminal remotes, with a chat-only bridge.
+func (s *sshRemoteTransport) DialChat(ctx context.Context, h transport.HostRef) (net.Conn, error) {
+	return s.t.DialChat(ctx, h)
 }
 
 func (s *sshRemoteTransport) Discover(ctx context.Context) ([]transport.HostRef, error) {

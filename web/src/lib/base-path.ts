@@ -1,3 +1,5 @@
+import { routeChatPath } from './remote-chat-routes.js';
+
 // base-path.ts — the single source of truth for the URL prefix this app is
 // mounted under.
 //
@@ -50,7 +52,8 @@ function deriveBasePath(): string {
  *                          → '/t/abc/api/config'  behind a tunnel
  */
 export function apiPath(p: string): string {
-  return BASE_PATH + (p.startsWith('/') ? p.slice(1) : p);
+  const routed = routeChatPath(p.startsWith('/') ? p : '/' + p);
+  return BASE_PATH + routed.slice(1);
 }
 
 /**

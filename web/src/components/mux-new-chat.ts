@@ -3,7 +3,8 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
-import { ArrowUp, Check, ChevronDown, Folder, MessageCircle, Plus } from 'lucide';
+import { remoteChatPath } from '../lib/remote-chat-routes.js';
+import { ArrowLeft, ArrowUp, Check, ChevronDown, Folder, MessageCircle, Network, Plus } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { chatComposerAttachment } from './chat-composer-attachment.js';
 import '../ui/button.js';
@@ -39,8 +40,11 @@ export class MuxNewChat extends LitElement {
   @property() initialHarness: SDKHarnessName = 'codex';
   @property() initialFolder = '';
   @property() initialProject = '';
+  @property() initialRemoteHost = '';
   @property() initialPrompt = '';
   @state() private projectId = 'ungrouped';
+  @state() private remoteHost = '';
+  @state() private nodePickerOpen = false;
   @state() private folder = '';
   @state() private workMode: 'local' | 'worktree' = 'local';
   @state() private projectName = '';
@@ -60,6 +64,7 @@ export class MuxNewChat extends LitElement {
   @state() private catalogLoading = false;
   @state() private catalogError = '';
   private catalogVersion = 0;
+  private startOptionsVersion = 0;
   private catalogHarness = '';
   private catalogPath = '';
   private catalogTimer?: number;
@@ -178,6 +183,10 @@ export class MuxNewChat extends LitElement {
     .project-option .option-copy { display:grid; gap:var(--ui-space-px); flex:1; min-width:0; }
     .project-option .option-copy small { color:var(--ui-text-muted); }
     .project-option .selected-icon { margin-left:auto; color:var(--ui-accent); }
+    .project-options mux-ui-menu-item .option-copy { display:grid; gap:var(--ui-space-px); flex:1; min-width:0; }
+    .project-options mux-ui-menu-item .option-copy small { color:var(--ui-text-muted); }
+    .remote-status { width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); flex:none; border-radius:50%; background:var(--ui-text-muted); }
+    .remote-status.connected { background:var(--ui-success); }
     .project-divider { height:var(--ui-divider-thickness); margin:var(--ui-space-2) 0; background:var(--ui-border); }
     .new-folder-form { display:grid; gap:var(--ui-space-5); padding:var(--ui-space-6); color:var(--ui-text); }
     .new-folder-form h2 { margin:0; font-size:var(--ui-text-xl); }
@@ -204,13 +213,14 @@ export class MuxNewChat extends LitElement {
       this.prompt = this.initialPrompt;
       this.promptHasContent = !!this.initialPrompt.trim();
     }
+    this.remoteHost = this.initialRemoteHost;
     void this.loadStartOptions();
     if (this.initialFolder) this.folder = this.initialFolder;
     if (this.initialProject) this.projectId = this.initialProject;
     document.addEventListener('pointerdown', this.closeDropdowns);
     this.unsub = sdkChats.subscribe(() => this.requestUpdate());
-    void sdkChats.refresh().then(() => { const project = sdkChats.projects.find(p => p.id === this.projectId); if (project) this.folder = project.path; });
-    void sdkChats.folders().then(listing => { this.listing = listing; if (!this.folder) { this.folder = listing.base; void this.loadCatalog(); } }).catch(error => { this.error = String(error); });
+    void sdkChats.refresh().then(() => { const project = sdkChats.projects.find(p => p.id === this.projectId && (p.remoteHost || '') === this.remoteHost); if (project && this.folder !== project.path) { this.folder = project.path; void this.loadCatalog(); } });
+    void sdkChats.folders('', this.remoteHost).then(listing => { this.listing = listing; if (!this.folder) { this.folder = listing.base; void this.loadCatalog(); } }).catch(error => { this.error = String(error); });
   }
   override disconnectedCallback() {
     this.flushPrompt();
@@ -247,19 +257,30 @@ export class MuxNewChat extends LitElement {
     return value;
   }
   private selectChat() {
+    if (this.remoteHost) {
+      for (const item of this.attachments) if (item.preview) URL.revokeObjectURL(item.preview);
+      this.attachments = [];
+    }
+    this.catalogVersion++;
+    this.startOptionsVersion++;
+    this.catalog = undefined;
+    this.startOptions = undefined;
+    this.remoteHost = '';
     this.projectId = 'ungrouped';
-    this.folder = this.listing?.base || '';
+    this.folder = '';
+    this.listing = undefined;
     this.workMode = 'local';
     this.pickerOpen = false;
-    void this.loadCatalog();
+    this.nodePickerOpen = false;
+    void sdkChats.folders().then(listing => { if (!this.remoteHost) { this.listing = listing; this.folder = listing.base; void this.loadStartOptions(); } });
   }
   private async selectFolder(path: string) {
     if (this.folderSelecting) return;
     this.folderSelecting = true;
     this.error = '';
     try {
-      let project = sdkChats.projects.find(item => !item.managedFolder && item.path === path);
-      if (!project) project = await sdkChats.createProject(path);
+      let project = sdkChats.projects.find(item => !item.managedFolder && item.path === path && (item.remoteHost || '') === this.remoteHost);
+      if (!project) project = await sdkChats.createProject(path, '', [], false, false, this.remoteHost);
       this.projectId = project.id;
       this.folder = project.path;
       this.pickerOpen = false;
@@ -289,13 +310,41 @@ export class MuxNewChat extends LitElement {
     try {
       const parent = this.projectParent.replace(/\/+$/, '') || '/';
       const path = `${parent === '/' ? '' : parent}/${name}`;
-      const project = await sdkChats.createProject(path, this.projectName.trim() || name, [], true);
+      const project = await sdkChats.createProject(path, this.projectName.trim() || name, [], true, false, this.remoteHost);
       this.projectId = project.id;
       this.folder = project.path;
       this.projectDialogOpen = false;
       void this.loadCatalog();
     } catch (error) { this.projectError = error instanceof Error ? error.message : String(error); }
     finally { this.projectCreating = false; }
+  }
+  private async chooseRemoteHost(host: string) {
+    this.nodePickerOpen = false;
+    if (host === this.remoteHost) { this.pickerOpen = false; return; }
+    this.catalogVersion++;
+    this.startOptionsVersion++;
+    this.remoteHost = host;
+    this.projectId = 'ungrouped';
+    this.folder = '';
+    this.listing = undefined;
+    this.workMode = 'local';
+    this.pickerOpen = false;
+    for (const item of this.attachments) if (item.preview) URL.revokeObjectURL(item.preview);
+    this.attachments = [];
+    this.catalog = undefined;
+    this.startOptions = undefined;
+    try {
+      const listing = await sdkChats.folders('', host);
+      if (this.remoteHost !== host) return;
+      this.listing = listing;
+      this.folder = listing.base;
+      await this.loadStartOptions();
+    } catch (error) { if (this.remoteHost === host) this.error = error instanceof Error ? error.message : String(error); }
+  }
+  private openRemoteSettings() {
+    this.pickerOpen = false;
+    this.nodePickerOpen = false;
+    this.dispatchEvent(new CustomEvent('launcher-action', { detail:{action:'settings',section:'remotes'}, bubbles:true, composed:true }));
   }
   private onHarnessChange(value: SDKHarnessName) {
     const option = this.startOptions?.find(item => item.harness === value);
@@ -312,7 +361,7 @@ export class MuxNewChat extends LitElement {
     if (!this.startOptions?.some(item => item.harness === this.harness)) return;
     const version = ++this.catalogVersion;
     const path = this.folder || this.listing?.base || '';
-    const previous = this.catalogHarness === this.harness && this.catalogPath === path ? this.catalog : undefined;
+    const previous = this.catalogHarness === `${this.remoteHost}:${this.harness}` && this.catalogPath === path ? this.catalog : undefined;
     const previousModel = this.model;
     const previousEffort = this.effort;
     this.catalogLoading = true;
@@ -320,12 +369,12 @@ export class MuxNewChat extends LitElement {
     this.catalog = previous;
     const params = new URLSearchParams({ harness:this.harness, projectPath:path, bundle:this.bundle, provider:this.harness === 'amplifier' ? this.provider === 'configured' ? '' : this.provider : '' });
     try {
-      const response = await fetch(apiPath(`/api/sdk-chat-catalog?${params}`));
+      const response = await fetch(apiPath(remoteChatPath(this.remoteHost, `/api/sdk-chat-catalog?${params}`)));
       if (!response.ok) throw new Error((await response.text()).trim());
       const catalog = await response.json() as ChatCatalog;
       if (!this.isConnected || version !== this.catalogVersion) return;
       this.catalog = catalog;
-      this.catalogHarness = this.harness;
+      this.catalogHarness = `${this.remoteHost}:${this.harness}`;
       this.catalogPath = path;
       this.bundle = catalog.bundle || '';
       this.provider = this.harness === 'amplifier' ? catalog.provider || 'configured' : this.provider;
@@ -383,17 +432,19 @@ export class MuxNewChat extends LitElement {
     </mux-ui-choice-picker>`;
   }
   private async loadStartOptions() {
+    const version = ++this.startOptionsVersion;
+    const host = this.remoteHost;
     try {
-      const response = await fetch(apiPath('/api/sdk-chat-start-options'));
+      const response = await fetch(apiPath(remoteChatPath(this.remoteHost, '/api/sdk-chat-start-options')));
       if (!response.ok) throw new Error(await response.text());
       const options = await response.json() as StartOption[];
-      if (!this.isConnected) return;
+      if (!this.isConnected || version !== this.startOptionsVersion || host !== this.remoteHost) return;
       this.startOptions = options;
       const selected = options.find(item => item.harness === this.initialHarness) || options[0];
       if (selected) this.onHarnessChange(selected.harness);
       else this.error = '';
     } catch (error) {
-      if (this.isConnected) this.error = error instanceof Error ? error.message : String(error);
+      if (this.isConnected && version === this.startOptionsVersion && host === this.remoteHost) this.error = error instanceof Error ? error.message : String(error);
     }
   }
   private openAgentSettings() {
@@ -426,7 +477,7 @@ export class MuxNewChat extends LitElement {
   private async upload(item: Attachment) {
     const form = new FormData(); form.append('file', item.file);
     try {
-      const response = await fetch(apiPath('/api/sdk-chat-attachments'), { method:'POST', headers:{'X-Muxterm-Chat-Attachment':'1'}, body:form });
+      const response = await fetch(apiPath(remoteChatPath(this.remoteHost, '/api/sdk-chat-attachments')), { method:'POST', headers:{'X-Muxterm-Chat-Attachment':'1'}, body:form });
       const body = await response.text();
       let payload: { id?: string; kind?: string; reason?: string } = {};
       try { payload = JSON.parse(body) as typeof payload; } catch { /* Preserve server text for errors. */ }
@@ -454,18 +505,18 @@ export class MuxNewChat extends LitElement {
     try {
       await this.updateComplete;
       const workspaceId = this.projectId === 'ungrouped' ? undefined : this.projectId;
-      const chat = await sdkChats.create({ workspaceId, projectPath:this.folder, workMode:this.workMode, harness:this.harness, provider:this.provider, bundle:this.bundle, model:this.model.trim(), effort:this.effort, prompt, attachments:this.attachments.map(a => a.id!) });
+      const chat = await sdkChats.create({ remoteHost:this.remoteHost, workspaceId, projectPath:this.folder, workMode:this.workMode, harness:this.harness, provider:this.provider, bundle:this.bundle, model:this.model.trim(), effort:this.effort, prompt, attachments:this.attachments.map(a => a.id!) });
       this.dispatchEvent(new CustomEvent('chat-created', { detail:{sessionId:chat.id}, bubbles:true, composed:true }));
     } catch (error) { this.error = error instanceof Error ? error.message.trim() : String(error); }
     finally { this.busy = false; }
   }
   private renderTopbar(projectName: string) {
-    return html`<mux-ui-screen-header .section=${projectName} heading="New chat" label="New chat" with-section-icon><span slot="section-icon">${icon(this.projectId === 'ungrouped' ? MessageCircle : Folder,{size:14})}</span></mux-ui-screen-header>`;
+    return html`<mux-ui-screen-header .section=${projectName} heading="New chat" label="New chat" with-section-icon><span slot="section-icon">${icon(this.remoteHost ? Network : this.projectId === 'ungrouped' ? MessageCircle : Folder,{size:14})}</span></mux-ui-screen-header>`;
   }
 
   override render() {
-    const selectedProject = sdkChats.projects.find(project => project.id === this.projectId);
-    const projectName = selectedProject?.name || 'Chat';
+    const selectedProject = sdkChats.projects.find(project => project.id === this.projectId && (project.remoteHost || '') === this.remoteHost);
+    const projectName = selectedProject?.name || (this.remoteHost ? sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'Remote chat' : 'Chat');
     const models = this.catalog?.models || [];
     const selectedModel = models.find(item => item.id === this.model);
     const efforts = selectedModel?.efforts?.length ? selectedModel.efforts : this.harness === 'codex' && this.model ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : [];
@@ -502,26 +553,37 @@ export class MuxNewChat extends LitElement {
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
       <div class="context-bar">
-        <div class="project-picker"><button class="project-trigger" type="button" aria-label="Session location" aria-haspopup="menu" aria-expanded=${this.pickerOpen} @click=${() => { this.pickerOpen = !this.pickerOpen; }}>
-          ${icon(this.projectId === 'ungrouped' ? MessageCircle : Folder,{size:15})}<span>${selectedProject?.name || 'Chat'}</span>${icon(ChevronDown,{size:14})}
+        <div class="project-picker"><button class="project-trigger" type="button" aria-label="Session location" aria-haspopup="menu" aria-expanded=${this.pickerOpen} @click=${() => { this.pickerOpen = !this.pickerOpen; this.nodePickerOpen = false; }}>
+          ${icon(this.remoteHost ? Network : this.projectId === 'ungrouped' ? MessageCircle : Folder,{size:15})}<span>${selectedProject?.name || (this.remoteHost ? sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'Remote chat' : 'Chat')}</span>${icon(ChevronDown,{size:14})}
         </button>
         ${this.pickerOpen ? html`<div class="project-options" role="menu" aria-label="Session location">
-          <button class="project-option" role="menuitemradio" aria-checked=${this.projectId === 'ungrouped'} ?selected=${this.projectId === 'ungrouped'} @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy"><strong>Chat</strong><small>No project folder</small></span>${this.projectId === 'ungrouped' ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>
-          <div class="project-divider"></div>
-          <mux-folder-picker inline label="Folders" .value=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? '' : this.folder} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => void this.selectFolder(event.detail.path)}></mux-folder-picker>
-          <div class="project-divider"></div>
-          <mux-ui-menu-item @click=${this.openProjectDialog}>${icon(Plus,{size:16})}<strong>New folder</strong></mux-ui-menu-item>
+          ${this.nodePickerOpen ? html`
+            <mux-ui-menu-item @click=${() => { this.nodePickerOpen = false; }}>${icon(ArrowLeft,{size:16})}<strong>Choose machine</strong></mux-ui-menu-item>
+            <div class="project-divider"></div>
+            <mux-ui-menu-item @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy"><strong>This machine</strong><small>Home Muxterm server</small></span>${!this.remoteHost ? icon(Check,{size:15}) : nothing}</mux-ui-menu-item>
+            ${sdkChats.remoteHosts.map(host => html`<mux-ui-menu-item ?disabled=${host.state !== 'connected'} @click=${() => void this.chooseRemoteHost(host.id)}>${icon(Network,{size:16})}<span class="option-copy"><strong>${host.name}</strong><small>${host.state === 'connected' ? 'Available for chats' : 'Unavailable'}</small></span><span class="remote-status ${host.state}" aria-label=${host.state}></span></mux-ui-menu-item>`)}
+            <div class="project-divider"></div>
+            <mux-ui-menu-item @click=${this.openRemoteSettings}>${icon(Plus,{size:16})}<span>Set up SSH machine…</span></mux-ui-menu-item>
+          ` : html`
+            <button class="project-option" role="menuitemradio" aria-checked=${this.projectId === 'ungrouped' && !this.remoteHost} ?selected=${this.projectId === 'ungrouped' && !this.remoteHost} @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy"><strong>Chat</strong><small>No project folder</small></span>${this.projectId === 'ungrouped' && !this.remoteHost ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>
+            <div class="project-divider"></div>
+            <mux-folder-picker inline label="Folders" .remoteHost=${this.remoteHost} .value=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? '' : this.folder} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => void this.selectFolder(event.detail.path)}></mux-folder-picker>
+            <div class="project-divider"></div>
+            <mux-ui-menu-item @click=${this.openProjectDialog}>${icon(Plus,{size:16})}<strong>New project folder${this.remoteHost ? ` on ${sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'remote machine'}` : ''}</strong></mux-ui-menu-item>
+            <mux-ui-menu-item @click=${() => { this.nodePickerOpen = true; }}>${icon(Network,{size:16})}<span class="option-copy"><strong>Choose machine…</strong><small>${this.remoteHost ? sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'Remote machine' : 'This machine'}</small></span></mux-ui-menu-item>
+            <mux-ui-menu-item @click=${this.openRemoteSettings}>${icon(Plus,{size:16})}<span>Set up SSH machine…</span></mux-ui-menu-item>
+          `}
         </div>` : nothing}</div>
         <div class="spacer"></div>
         <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? 'Choose a project with a Git folder to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || !!selectedProject?.managedFolder} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
       </div>
-      ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New folder" .dismissable=${!this.projectCreating} @dismiss=${this.closeProjectDialog}><div class="new-folder-form">
-        <h2>New folder</h2>
-        <label class="field-label">Parent folder<mux-folder-picker inline label="Parent folder" .value=${this.projectParent} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => { this.projectParent = event.detail.path; }}></mux-folder-picker></label>
+      ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New project folder" .dismissable=${!this.projectCreating} @dismiss=${this.closeProjectDialog}><div class="new-folder-form">
+        <h2>New project folder${this.remoteHost ? ` on ${sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'remote machine'}` : ''}</h2>
+        <label class="field-label">Parent folder<mux-folder-picker inline label="Parent folder" .remoteHost=${this.remoteHost} .value=${this.projectParent} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => { this.projectParent = event.detail.path; }}></mux-folder-picker></label>
         <mux-ui-text-field label="New folder name" aria-label="New folder name" placeholder="Folder name" .value=${this.projectFolderName} @input=${(event:Event) => { this.projectFolderName = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
         <mux-ui-text-field label="Project name (optional)" aria-label="Project name" placeholder="Use folder name" .value=${this.projectName} @input=${(event:Event) => { this.projectName = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
         ${this.projectError ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.projectError}</mux-ui-feedback>` : nothing}
-        <div class="actions"><mux-ui-button variant="quiet" ?disabled=${this.projectCreating} @click=${this.closeProjectDialog}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${this.projectCreating || !this.projectParent || !this.validNewFolderName(this.projectFolderName.trim())} @click=${() => void this.createProject()}>${this.projectCreating ? 'Creating…' : 'Create folder'}</mux-ui-button></div>
+        <div class="actions"><mux-ui-button variant="quiet" ?disabled=${this.projectCreating} @click=${this.closeProjectDialog}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${this.projectCreating || !this.projectParent || !this.validNewFolderName(this.projectFolderName.trim())} @click=${() => void this.createProject()}>${this.projectCreating ? 'Creating…' : 'Create project'}</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.catalogError ? html`<mux-ui-feedback kind="error" appearance="panel">Could not load models: ${this.catalogError}<mux-ui-button slot="action" size="small" @click=${() => void this.loadCatalog()}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}

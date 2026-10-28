@@ -9,6 +9,7 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 @customElement('mux-folder-picker')
 export class MuxFolderPicker extends LitElement {
   @property() value = '';
+  @property() remoteHost = '';
   @property() base = '';
   @property() label = 'Folder';
   @property({ type:Boolean, reflect:true }) field = false;
@@ -58,6 +59,9 @@ export class MuxFolderPicker extends LitElement {
     document.addEventListener('pointerdown', this.onOutsidePointer);
     if (this.inline) void this.browse(this.value || this.base);
   }
+  override updated(changed: Map<string, unknown>) {
+    if (changed.has('remoteHost') && this.inline && this.isConnected) void this.browse(this.value || this.base);
+  }
   override disconnectedCallback() {
     document.removeEventListener('pointerdown', this.onOutsidePointer);
     super.disconnectedCallback();
@@ -73,7 +77,7 @@ export class MuxFolderPicker extends LitElement {
     this.loading = true;
     this.error = '';
     try {
-      const listing = await sdkChats.folders(path);
+      const listing = await sdkChats.folders(path, this.remoteHost);
       this.listing = { ...listing, folders:[...listing.folders].sort((a,b) => Number(a.startsWith('.')) - Number(b.startsWith('.')) || a.localeCompare(b)) };
     }
     catch (error) { this.error = error instanceof Error ? error.message : String(error); }
