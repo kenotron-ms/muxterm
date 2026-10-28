@@ -8,6 +8,7 @@ package main
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #include <stdlib.h>
+extern void goBrowserEvalDone(unsigned long long requestID, const char* result, const char* failure);
 
 static void* browserCreate(void* windowPtr, const char* address) {
     NSWindow* window = (NSWindow*)windowPtr;
@@ -68,15 +69,84 @@ static const char* browserTitle(void* pointer) {
     [value release];
     return result;
 }
+static void browserEval(void* pointer, unsigned long long requestID, const char* script) {
+    WKWebView* browser = (WKWebView*)pointer;
+    NSString* source = [NSString stringWithUTF8String:script];
+    [browser evaluateJavaScript:source completionHandler:^(id value, NSError* error) {
+        NSString* result = [value isKindOfClass:[NSString class]] ? value : [value description];
+        goBrowserEvalDone(requestID, result.UTF8String, error.localizedDescription.UTF8String);
+    }];
+}
+static void browserSnapshot(void* pointer, unsigned long long requestID) {
+    WKWebView* browser = (WKWebView*)pointer;
+    [browser takeSnapshotWithConfiguration:nil completionHandler:^(NSImage* image, NSError* error) {
+        if (error != nil || image == nil) {
+            goBrowserEvalDone(requestID, NULL, error.localizedDescription.UTF8String);
+            return;
+        }
+        NSBitmapImageRep* bitmap = [[NSBitmapImageRep alloc] initWithData:image.TIFFRepresentation];
+        NSData* png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        NSString* encoded = [png base64EncodedStringWithOptions:0];
+        goBrowserEvalDone(requestID, encoded.UTF8String, NULL);
+        [bitmap release];
+    }];
+}
 */
 import "C"
 
 import (
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
+
+type browserEvalResult struct{ value, failure string }
+
+var browserCallbacks = struct {
+	sync.Mutex
+	next    atomic.Uint64
+	pending map[uint64]chan browserEvalResult
+}{pending: make(map[uint64]chan browserEvalResult)}
+
+func (c *Companion) browserEvaluate(id, script string, snapshot bool) (string, error) {
+	c.mu.Lock()
+	tab := c.browserTabs[id]
+	c.mu.Unlock()
+	if tab == nil || !tab.started {
+		return "", errors.New("browser tab is not open")
+	}
+	requestID := browserCallbacks.next.Add(1)
+	ch := make(chan browserEvalResult, 1)
+	browserCallbacks.Lock()
+	browserCallbacks.pending[requestID] = ch
+	browserCallbacks.Unlock()
+	application.InvokeSync(func() {
+		if snapshot {
+			C.browserSnapshot(tab.view, C.ulonglong(requestID))
+		} else {
+			source := C.CString(script)
+			C.browserEval(tab.view, C.ulonglong(requestID), source)
+			C.free(unsafe.Pointer(source))
+		}
+	})
+	select {
+	case result := <-ch:
+		if result.failure != "" {
+			return "", fmt.Errorf("browser: %s", result.failure)
+		}
+		return result.value, nil
+	case <-time.After(15 * time.Second):
+		browserCallbacks.Lock()
+		delete(browserCallbacks.pending, requestID)
+		browserCallbacks.Unlock()
+		return "", errors.New("browser action timed out")
+	}
+}
 
 type browserTab struct {
 	id      string

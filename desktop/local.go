@@ -85,6 +85,9 @@ func (c *Companion) startLocalMuxterm() (string, error) {
 		}
 		cmd := exec.Command(serverPath, "app-serve", "--addr", addr)
 		cmd.Env = localServerEnv(root, filepath.Dir(executable))
+		if c.browserSocket != "" {
+			cmd.Env = append(cmd.Env, "MUXTERM_MAC_BROWSER_SOCKET="+c.browserSocket)
+		}
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		if err := cmd.Start(); err != nil {
@@ -164,7 +167,7 @@ func localServerEnv(root, macOSDir string) []string {
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		switch key {
-		case "PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "MUXTERM_DEV_INSTANCE", "MUXTERM_SESSION_STATE_DIR", "MUXTERM_HOOK_REPORT_ROOT", "INVOCATION_ID":
+		case "PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "MUXTERM_DEV_INSTANCE", "MUXTERM_SESSION_STATE_DIR", "MUXTERM_HOOK_REPORT_ROOT", "MUXTERM_MAC_BROWSER_SOCKET", "INVOCATION_ID":
 			continue
 		}
 		env = append(env, entry)

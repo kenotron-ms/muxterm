@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -70,6 +71,11 @@ type Companion struct {
 	activeBrowser    string
 	browserRect      browserRect
 	browserVisible   bool
+	browserSocket    string
+	browserSocketDir string
+	browserListener  net.Listener
+	browserServer    *http.Server
+	remoteForwards   map[string]*remoteAppForward
 }
 
 func (c *Companion) authorize(token string) error {
@@ -418,11 +424,17 @@ func (c *Companion) OpenPreview(token string, port int) error {
 }
 
 func (c *Companion) close() {
+	c.stopBrowserAutomation()
 	c.mu.Lock()
 	forwards := c.forwards
 	c.forwards = make(map[int]*runningForward)
+	remoteForwards := c.remoteForwards
+	c.remoteForwards = nil
 	c.mu.Unlock()
 	for _, running := range forwards {
+		_ = running.cmd.Process.Kill()
+	}
+	for _, running := range remoteForwards {
 		_ = running.cmd.Process.Kill()
 	}
 	c.stopLocalMuxterm()

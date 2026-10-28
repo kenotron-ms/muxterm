@@ -92,6 +92,7 @@ const UTILITY_TITLES = new Map([
   ['jobs', 'Scheduled jobs'],
   ['connections', 'Connections'],
   ['skills', 'Skills'],
+  ['browser', 'Browser'],
 ]);
 function chatFromHash(): string | null {
   return /^#chat=([0-9a-f]{32})$/i.exec(window.location.hash)?.[1] ?? null;
@@ -330,6 +331,7 @@ export class MuxApp extends LitElement {
          as an absolute overlay rather than replacing the dock — see render(). */
       position: relative;
     }
+    .main-pane > mux-sdk-utility[browser-mode] { flex:1; min-height:0; }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
     .terminal-utility { box-sizing:border-box; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); }
@@ -738,6 +740,7 @@ export class MuxApp extends LitElement {
     void fetchAIStatus().then((s) => store.setAIStatus(s));
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenSettings);
+    window.addEventListener('muxterm-browser-open', this._onNativeBrowserOpen);
     // Layout-command relay: window CustomEvent from ws.ts → mux-dock routing.
     window.addEventListener('layout-command', this._onLayoutCommand);
     // One host-level policy boundary catches composed close events from the
@@ -1105,6 +1108,7 @@ export class MuxApp extends LitElement {
     this._unsubscribeChats?.();
     this._unsubscribeChats = null;
     window.removeEventListener('open-launcher', this._onOpenSettings);
+    window.removeEventListener('muxterm-browser-open', this._onNativeBrowserOpen);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
     window.removeEventListener('hashchange', this._onChatHistory);
@@ -1368,6 +1372,7 @@ export class MuxApp extends LitElement {
           <mux-sidebar
             .newChatActive="${this._sdkChatId === 'new'}"
             .terminalActive="${this._sdkChatId === null}"
+            .browserActive="${this._sdkChatId === 'browser'}"
             .jobsActive="${this._sdkChatId === 'jobs'}"
             .connectionsActive="${this._sdkChatId === 'connections'}"
             .skillsActive="${this._sdkChatId === 'skills'}"
@@ -1377,6 +1382,7 @@ export class MuxApp extends LitElement {
             @home-open="${this._onHomeOpen}"
             @chat-new="${this._onChatNew}"
             @terminal-open="${this._onTerminalOpen}"
+            @browser-open="${this._onBrowserOpen}"
             @jobs-open="${this._onJobsOpen}"
             @connections-open="${this._onConnectionsOpen}"
             @skills-open="${this._onSkillsOpen}"
@@ -1396,7 +1402,7 @@ export class MuxApp extends LitElement {
                 @pane-create-request="${this._createPaneOptimistic}"
               ></mux-title-bar>`
             : ''}
-          ${selectedSDKChat ? '' : panes.length === 0
+          ${selectedSDKChat || this._sdkChatId === 'browser' ? '' : panes.length === 0
             ? html`
                 <div class="empty-workspace">
                   <div class="glyph">${icon(MonitorX, { size: 48 })}</div>
@@ -1436,7 +1442,8 @@ export class MuxApp extends LitElement {
             <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal} @launcher-action=${this._onLauncherAction}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
-            <mux-skills></mux-skills>` : html`
+            <mux-skills></mux-skills>` : this._sdkChatId === 'browser' ? html`
+            <mux-sdk-utility browser-mode .browserOccluded=${this._overlayPanel !== null} .sessionId=${'mac-browser'}></mux-sdk-utility>` : html`
             <mux-sdk-chat .sessionId=${this._sdkChatId} .compact=${this._layoutMode === 'narrow'} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
 
@@ -1455,6 +1462,7 @@ export class MuxApp extends LitElement {
                 .drawer=${true}
                 .newChatActive="${this._sdkChatId === 'new'}"
                 .terminalActive="${this._sdkChatId === null}"
+                .browserActive="${this._sdkChatId === 'browser'}"
                 .jobsActive="${this._sdkChatId === 'jobs'}"
                 .connectionsActive="${this._sdkChatId === 'connections'}"
                 .skillsActive="${this._sdkChatId === 'skills'}"
@@ -1464,6 +1472,7 @@ export class MuxApp extends LitElement {
                 @home-open="${this._onHomeOpen}"
                 @chat-new="${this._onChatNew}"
                 @terminal-open="${this._onTerminalOpen}"
+                @browser-open="${this._onBrowserOpen}"
                 @jobs-open="${this._onJobsOpen}"
                 @connections-open="${this._onConnectionsOpen}"
                 @skills-open="${this._onSkillsOpen}"
@@ -2094,6 +2103,12 @@ export class MuxApp extends LitElement {
     setChatHash(null);
     this._closeDrawer();
   };
+  private _onBrowserOpen = (): void => {
+    this._sdkChatId = 'browser';
+    setChatHash(null);
+    this._closeDrawer();
+  };
+  private _onNativeBrowserOpen = (): void => { this._onBrowserOpen(); };
   private _openUtility(view: 'connections' | 'skills'): void {
     this._jobEditorChatId = '';
     this._newChatForJob = false;

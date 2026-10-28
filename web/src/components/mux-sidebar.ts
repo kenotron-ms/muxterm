@@ -1,6 +1,6 @@
 import { LitElement, css, html, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { CalendarClock, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
+import { CalendarClock, Globe2, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { icon } from '../lib/icons.js';
 import { instanceLabel } from '../lib/instance-identity.js';
@@ -65,6 +65,7 @@ export class MuxSidebar extends LitElement {
 
   @property({ type: Boolean }) newChatActive = false;
   @property({ type: Boolean }) terminalActive = false;
+  @property({ type: Boolean }) browserActive = false;
   @property({ type: Boolean }) jobsActive = false;
   @property({ type: Boolean }) connectionsActive = false;
   @property({ type: Boolean }) skillsActive = false;
@@ -106,6 +107,7 @@ export class MuxSidebar extends LitElement {
     const navActions = [
       { label: 'New Chat', icon: Plus, active: this.newChatActive, event: 'chat-new' },
       { label: 'Terminal', icon: SquareTerminal, active: this.terminalActive, event: 'terminal-open' },
+      ...(macAppVersion() ? [{ label: 'Browser', icon: Globe2, active: this.browserActive, event: 'browser-open' }] : []),
       { label: 'Scheduled jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
       { label: 'Connections', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
       { label: 'Skills', icon: Puzzle, active: this.skillsActive, event: 'skills-open' },

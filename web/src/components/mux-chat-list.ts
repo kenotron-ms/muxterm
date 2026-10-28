@@ -6,6 +6,7 @@ import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlu
 import { icon } from '../lib/icons.js';
 import { laneIcon } from '../lib/lane-icon.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
+import { apiPath } from '../lib/base-path.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIMenu } from '../ui/menu.js';
@@ -37,6 +38,7 @@ function harnessMark(chat: SDKChat, className = 'chat-icon') {
 const ARCHIVE_PAGE_SIZE = 25;
 const ARCHIVE_ROW_HEIGHT = 32;
 interface ChatGroup { id: string; name: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean; archiveStart?: number; total?: number; loading?: boolean; archiveError?: string }
+interface RemoteChatSnapshot { host: string; name?: string; sessions?: SDKChat[]; projects?: SDKProject[]; port?: number; error?: string }
 type PendingConfirmation =
   | { kind:'remove-project'; id:string; name:string }
   | { kind:'archive-linked-chat'; id:string; name:string };
@@ -359,6 +361,39 @@ export class MuxChatList extends LitElement {
   @state() private projectCreating = false;
   @property() selectedSession = '';
   private unsub?: () => void;
+  @state() private remoteSnapshots = new Map<string, RemoteChatSnapshot>();
+  private remoteTimer?: number;
+  private remoteOpen = new Set<string>();
+  private remoteProjectOpen = new Set<string>();
+  private readonly receiveRemoteChats = (event: Event) => {
+    const snapshot = (event as CustomEvent<RemoteChatSnapshot>).detail;
+    if (!snapshot || !this.remoteSnapshots.has(snapshot.host)) return;
+    const previous = this.remoteSnapshots.get(snapshot.host);
+    this.remoteSnapshots = new Map(this.remoteSnapshots).set(snapshot.host, {...snapshot, name:previous?.name});
+  };
+  private readonly receiveRemoteError = (event: Event) => {
+    const {host,error} = (event as CustomEvent<{host:string;error:string}>).detail;
+    const previous = this.remoteSnapshots.get(host);
+    if (previous) this.remoteSnapshots = new Map(this.remoteSnapshots).set(host, {...previous,error});
+  };
+  private readonly browserReady = () => { void this.refreshRemoteChats(); };
+  private async refreshRemoteChats() {
+    const bridge = window.__muxtermDesktopBrowser;
+    if (!bridge) return;
+    try {
+      const response = await fetch(apiPath('/api/remotes'));
+      if (!response.ok) return;
+      const rows = (await response.json() as {connected?: {id:string;name:string}[]}).connected || [];
+      const next = new Map<string,RemoteChatSnapshot>();
+      for (const row of rows) {
+        if (!row.id.startsWith('ssh:')) continue;
+        next.set(row.id, {...this.remoteSnapshots.get(row.id), host:row.id, name:row.name});
+        if (!this.remoteSnapshots.has(row.id)) this.remoteOpen.add(row.id);
+        bridge.send({type:'remote-chats',host:row.id});
+      }
+      this.remoteSnapshots = next;
+    } catch { /* Remotes settings shows server errors. */ }
+  }
   private readonly onChatOpen = (event: Event) => {
     const id = (event as CustomEvent<{ sessionId: string }>).detail?.sessionId;
     if (id) this.selectedSession = id;
@@ -389,6 +424,14 @@ export class MuxChatList extends LitElement {
     .project-form mux-folder-picker { --folder-list-height:var(--ui-picker-trigger-compact-width); }
     .project-preview { overflow-wrap:anywhere; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .project-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-3); }
+    .remote-heading { margin-top:var(--ui-space-4); }
+    .remote-group { margin:0 0 var(--ui-space-3); }
+    .remote-folder { display:flex; align-items:center; gap:var(--ui-space-2); width:100%; min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:none; color:var(--ui-text); font:inherit; text-align:left; cursor:pointer; }
+    .remote-folder:hover { background:var(--ui-surface-hover); }
+    .remote-folder svg { flex:none; }
+    .remote-children { margin-left:var(--ui-space-6); }
+    .remote-project { margin-left:var(--ui-space-5); }
+    .remote-note { padding:var(--ui-space-1) var(--ui-space-2); font-size:var(--ui-text-xs); overflow-wrap:anywhere; }
     @media(hover:none), (max-width:550px) { .pin-unpin { opacity:1; } }
   `;
   override connectedCallback() {
@@ -401,8 +444,54 @@ export class MuxChatList extends LitElement {
       this.lastArchivedCount = sdkChats.archivedCount;
     });
     void sdkChats.refresh();
+    window.addEventListener('muxterm-remote-chats', this.receiveRemoteChats);
+    window.addEventListener('muxterm-remote-chat-error', this.receiveRemoteError);
+    window.addEventListener('muxterm-browser-ready', this.browserReady);
+    void this.refreshRemoteChats();
+    this.remoteTimer = window.setInterval(() => void this.refreshRemoteChats(), 30000);
   }
-  override disconnectedCallback() { this.removeEventListener('chat-open', this.onChatOpen); this.unsub?.(); super.disconnectedCallback(); }
+  override disconnectedCallback() {
+    this.removeEventListener('chat-open', this.onChatOpen);
+    window.removeEventListener('muxterm-remote-chats', this.receiveRemoteChats);
+    window.removeEventListener('muxterm-remote-chat-error', this.receiveRemoteError);
+    window.removeEventListener('muxterm-browser-ready', this.browserReady);
+    window.clearInterval(this.remoteTimer);
+    this.unsub?.();
+    super.disconnectedCallback();
+  }
+
+  private renderRemoteChat(snapshot: RemoteChatSnapshot, chat: SDKChat) {
+    return html`<mux-ui-list-row class="remote-chat" label=${chat.title || 'Untitled chat'} tooltip=${`${chat.harness} · ${chat.state} · ${snapshot.name || snapshot.host}`}
+      @click=${() => window.__muxtermDesktopBrowser?.send({type:'open-remote-chat',host:snapshot.host,chatId:chat.id})}>
+      <span slot="icon" class="pin-icon">${icon(MessageSquare,{size:15})}</span>
+    </mux-ui-list-row>`;
+  }
+
+  private renderRemoteSessions() {
+    if (!this.remoteSnapshots.size) return nothing;
+    return html`<div class="heading remote-heading">Remote sessions</div>${[...this.remoteSnapshots.values()].map(snapshot => {
+      const open = this.remoteOpen.has(snapshot.host);
+      const sessions = snapshot.sessions || [];
+      const projects = snapshot.projects || [];
+      return html`<div class="remote-group"><button class="remote-folder" type="button" aria-expanded=${String(open)}
+        @click=${() => { if (open) this.remoteOpen.delete(snapshot.host); else this.remoteOpen.add(snapshot.host); this.requestUpdate(); }}>
+        ${icon(open ? FolderOpen : Folder,{size:16})}<span>${snapshot.name || snapshot.host}</span>
+      </button>${open ? html`<div class="remote-children">
+        ${snapshot.error ? html`<div class="remote-note" role="alert">${snapshot.error}</div>` : nothing}
+        ${projects.map(project => {
+          const key = `${snapshot.host}/${project.id}`;
+          const projectOpen = !this.remoteProjectOpen.has(key);
+          const chats = sessions.filter(chat => chat.workspaceId === project.id);
+          return html`<button class="remote-folder" type="button" aria-expanded=${String(projectOpen)}
+            @click=${() => { if (projectOpen) this.remoteProjectOpen.add(key); else this.remoteProjectOpen.delete(key); this.requestUpdate(); }}>
+            ${icon(projectOpen ? FolderOpen : Folder,{size:15})}<span>${project.name}</span>
+          </button>${projectOpen ? html`<div class="remote-project">${chats.map(chat => this.renderRemoteChat(snapshot,chat))}</div>` : nothing}`;
+        })}
+        ${sessions.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)).map(chat => this.renderRemoteChat(snapshot,chat))}
+        ${!snapshot.error && !sessions.length ? html`<div class="remote-note">No remote chats</div>` : nothing}
+      </div>` : nothing}</div>`;
+    })}`;
+  }
   private openArchive() {
     this.archiveExpanded = true;
     this.archiveAnchorPage = 0;
@@ -521,6 +610,7 @@ export class MuxChatList extends LitElement {
       <div class="heading-row"><div class="heading">Sessions</div><div class="heading-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="New folder" tooltip="New folder" @click=${() => void this.openProjectDialog()}>${icon(FolderPlus,{size:16})}</mux-ui-button></div></div>
       ${this.pinError ? html`<mux-ui-feedback class="pin-feedback" kind="error" appearance="panel" density="compact">${this.pinError}</mux-ui-feedback>` : nothing}
       ${repeat(groups, group => group.id, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession} @archive-open=${() => this.openArchive()} @archive-visible=${(event:CustomEvent<{index:number}>) => this.onArchiveVisible(event.detail.index)} @archive-close=${() => this.closeArchive()}></mux-chat-workspace>`)}
+      ${this.renderRemoteSessions()}
       ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New folder" .dismissable=${!this.projectCreating} @dismiss=${() => this.closeProjectDialog()}><div class="project-form">
         <h2>New folder</h2>
         <label class="field-label">Parent folder<mux-folder-picker inline label="Parent folder" .value=${this.projectParent} .base=${this.projectParent} @folder-selected=${(event:CustomEvent<{path:string}>) => { this.projectParent=event.detail.path; }}></mux-folder-picker></label>

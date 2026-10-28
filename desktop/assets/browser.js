@@ -8,6 +8,18 @@
   window.__muxtermDesktopReceive = (state) => {
     window.dispatchEvent(new CustomEvent('muxterm-browser-state', { detail: state }));
   };
+  document.addEventListener('click', (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const anchor = event.composedPath().find((node) => node instanceof HTMLAnchorElement && node.href);
+    if (!anchor) return;
+    const url = new URL(anchor.href, location.href);
+    if (!['http:', 'https:'].includes(url.protocol) || url.origin === location.origin) return;
+    event.preventDefault();
+    window.__muxtermDesktopBrowser.send({
+      type: 'open-link', url: url.href,
+      destination: localStorage.getItem('muxterm.mac.linkDestination') === 'default' ? 'default' : 'muxterm',
+    });
+  }, true);
   // The server page lives in its own origin, so Wails' drag helper is not
   // available here. Ask the native window to drag only from empty chrome.
   let dragStart = null;

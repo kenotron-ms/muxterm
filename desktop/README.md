@@ -16,6 +16,28 @@ SDK support libraries into its versioned user cache. Finder launches search
 Homebrew, mise, asdf, Volta, and common user tool locations for the commands.
 Amplifier uses an existing Python environment.
 
+## Native browser and links
+
+The **Browser** item in the Mac sidebar opens a native WebKit browser. External
+links from Chats and terminals open there by default. **Settings → Appearance →
+Links** can send them to the default browser instead. Browser tabs stay open
+when switching between the Browser and Chats.
+
+Coding agents launched by the bundled server receive a `mac_browser` MCP tool.
+It can list and open tabs, navigate, inspect page text and interactive elements,
+click, type, scroll, and capture a screenshot. The tool controls the same native
+tabs visible in the Mac app. It is available only while that app is running.
+
+## Remote Chats over SSH
+
+Add an SSH host in **Settings → Remotes** and connect it. The Mac sidebar then
+shows that host under **Remote sessions**, with its Chat folders and agent
+sessions. Select a session to open the remote Muxterm UI in a separate Mac
+window through an SSH loopback tunnel. The remote machine must run a version of
+Muxterm that includes `desktop_remote_snapshot`, and `muxterm mcp` must be on
+the remote login shell's `PATH`. SSH authentication uses your existing
+`~/.ssh/config` and keys; no remote token is copied into the Mac app.
+
 ## CI build
 
 The **Mac App** GitHub Actions workflow builds and ad hoc signs an Apple
