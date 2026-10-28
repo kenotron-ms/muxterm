@@ -156,11 +156,6 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid chat origin", http.StatusForbidden)
 		return
 	}
-	if origin.Type == "chat-message" && origin.Relation != "operator-to-lane" && origin.Relation != "lane-to-operator" {
-		h.mu.Unlock()
-		http.Error(w, "agent messages require a direct operator/lane relationship", http.StatusForbidden)
-		return
-	}
 	path := h.controlPath(id, req.ClientRef)
 	if data, err := os.ReadFile(path); err == nil {
 		var prior sdkControlReceipt

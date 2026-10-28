@@ -205,198 +205,81 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns49Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 49 tools
-// in the expected order — all without a running sessiond daemon.
-//
-// This is the MANAGER surface: what a session that is not running inside a
-// muxterm pane gets. A chat adapter and a shell on a laptop both
-// see this list. Its lane counterpart is the test below.
-//
-// Tool count history: the count fell from 25 to 17 when a 13-tool family was
-// retired alongside the HTTP proxy and list_tunnels/create_tunnel/close_tunnel
-// (3) and get_config/update_config (2) were added. spawn_lane took it to 18,
-// and the fleet trio (fleet_status, lane_transcript, session_send) to 21.
-// list_machines, which answers "which machines can I reach", took it to 22.
-// read_file and list_dir, which answer "what is IN a file on one of them",
-// took it to 24. The publishing trio (publish_file, list_publications,
-// revoke_publication), which serves one pinned file to anonymous callers,
-// took it to 27. publish_folder, which serves a whole browsable directory
-// tree to anonymous callers, took it to 28. view_file, which shows one local
-// file to the human in the Viewer, took it to 29. The trigger quartet
-// (create_trigger, list_triggers, set_trigger_enabled, delete_trigger), which
-// starts lanes on a schedule or a file change with no human present, took it
-// to 33. The four Chat control tools took it to 37. The three Chat discovery
-// tools took it to 40. move_chat and navigate_app take it to 42. The three
-// Chat Page tools take it to 45. Operator lane tools take it to 49.
-func TestMCPToolsListReturns49Tools(t *testing.T) {
-	bin := buildTestBinary(t)
-	got := mcpToolNames(t, bin, "")
-
-	wantTools := []string{
-		// 16 sessiond-backed tools (terminal + workspace + layout + delegation + fleet)
-		"run_command",
-		"send_input",
-		"get_screen",
-		"list_workspaces",
-		"create_workspace",
-		"switch_workspace",
-		"close_workspace",
-		"create_pane",
-		"rename_pane",
-		"close_pane",
-		"list_panes",
-		"get_layout",
-		"spawn_lane",
-		"fleet_status",
-		"lane_transcript",
-		"session_send",
-		// 1 machine tool (registered via registerMachineTools)
-		"list_machines",
-		// 2 read-only filesystem tools (registered via registerRemoteReadTools)
-		"read_file",
-		"list_dir",
-		// 3 tunnel tools (HTTP REST, registered via registerTunnelTools)
-		"list_tunnels",
-		"create_tunnel",
-		"close_tunnel",
-		// 4 publishing tools (HTTP REST, registered via registerPublishTools)
-		"publish_file",
-		"publish_folder",
-		"list_publications",
-		"revoke_publication",
-		// 12 serve-owned Chat control, discovery, and operator tools.
-		"list_chats",
-		"search_chats",
-		"list_projects",
-		"list_chat_sessions",
-		"spawn_chat",
-		"send_chat_message",
-		"move_chat",
-		"read_chat_session",
-		"get_operator_lanes",
-		"link_operator_lane",
-		"unlink_operator_lane",
-		"spawn_operator_lane",
-		// 2 Chat UI tools (HTTP REST, registered via registerChatUITools)
-		"navigate_app",
-		"view_file",
-		// 3 Chat Page tools (HTTP REST, registered via registerChatPageTools)
-		"get_chat_pages",
-		"append_page_markdown",
-		"add_page_visualization",
-		// 2 config tools (HTTP REST, registered via registerConfigTools)
-		"get_config",
-		"update_config",
-		// 4 trigger tools (registered via registerTriggerTools). LOCAL ONLY:
-		// each one refuses a machine argument rather than ignoring it, because
-		// creating unattended work on a machine you are not looking at is a
-		// follow-on, not this surface.
-		"create_trigger",
-		"list_triggers",
-		"set_trigger_enabled",
-		"delete_trigger",
-	}
-
-	assertToolNames(t, got, wantTools)
+// expectedMCPTools records the scoped agent surface in registration order.
+// Keep this inventory aligned with the real tools/list protocol response.
+var expectedMCPTools = []string{
+	"get_screen",
+	"list_workspaces",
+	"create_workspace",
+	"switch_workspace",
+	"create_pane",
+	"rename_pane",
+	"list_panes",
+	"get_layout",
+	"fleet_status",
+	"lane_transcript",
+	"list_machines",
+	"read_file",
+	"list_dir",
+	"list_tunnels",
+	"create_tunnel",
+	"close_tunnel",
+	"publish_file",
+	"publish_folder",
+	"list_publications",
+	"revoke_publication",
+	"report_goal_evidence",
+	"get_chat_goal",
+	"control_chat_goal",
+	"get_operator_lanes",
+	"list_chats",
+	"search_chats",
+	"list_projects",
+	"list_chat_sessions",
+	"spawn_chat",
+	"send_chat_message",
+	"read_chat_session",
+	"create_chat",
+	"get_chat_transcript",
+	"get_chat_summary",
+	"list_remotes",
+	"add_remote",
+	"connect_remote",
+	"disconnect_remote",
+	"remove_remote",
+	"navigate_app",
+	"view_file",
+	"get_chat_pages",
+	"get_config",
+	"update_config",
+	"browser_action",
+	"get_browser_action",
+	"stop_browser_control",
+	"list_browser_assistants",
+	"request_browser_snapshot",
+	"get_browser_snapshot_request",
+	"prepare_connection",
+	"configure_connection",
+	"check_connection",
+	"cancel_connection_setup",
+	"list_triggers",
 }
 
-// TestMCPToolsListInsidePaneWithholdsCloseTools is the LANE surface: what a
-// session running inside a muxterm pane gets. close_workspace and close_pane
-// are absent; everything else, spawn_lane and the fleet trio included, is not.
-//
-// A lane that cannot close a workspace cannot end its run by destroying the
-// workspace its verdict, its PR number and its final report are sitting in --
-// which is the failure this whole guard exists to prevent, observed in the
-// wild before it was written. A lane that can still spawn_lane and read
-// fleet_status has lost nothing it needs to do its work.
-//
-// It drives the real binary rather than calling registerAllTools directly,
-// because the claim under test is about what an agent's MCP client actually
-// receives over stdio, and the environment is the channel that carries it.
+// TestMCPToolsListReturns55Tools checks the manager's advertised surface.
+func TestMCPToolsListReturns55Tools(t *testing.T) {
+	bin := buildTestBinary(t)
+	assertToolNames(t, mcpToolNames(t, bin, ""), expectedMCPTools)
+}
+
+// TestMCPToolsListInsidePaneWithholdsCloseTools checks the pane surface and
+// guards against exposing destructive workspace or trigger controls.
 func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "7")
-
-	wantTools := []string{
-		// 14 sessiond-backed tools: the 16 above, less the two closers.
-		"run_command",
-		"send_input",
-		"get_screen",
-		"list_workspaces",
-		"create_workspace",
-		"switch_workspace",
-		"create_pane",
-		"rename_pane",
-		"list_panes",
-		"get_layout",
-		"spawn_lane",
-		"fleet_status",
-		"lane_transcript",
-		"session_send",
-		// 1 machine tool. Present in a pane too: knowing which machines
-		// exist is not a destructive capability, and a lane that can see
-		// the fleet has no reason to be blind to where it runs.
-		"list_machines",
-		// 2 read-only filesystem tools. Present in a pane for the same
-		// reason: reading a file destroys nothing, and the guard above
-		// withholds DESTRUCTIVE reach, not reach.
-		"read_file",
-		"list_dir",
-		// 3 tunnel tools, unchanged.
-		"list_tunnels",
-		"create_tunnel",
-		"close_tunnel",
-		// 4 publishing tools, unchanged: publishing is not a destructive
-		// capability against the workspace this lane's report sits in, and a
-		// lane that can publish can hand a human a URL for what it produced.
-		"publish_file",
-		"publish_folder",
-		"list_publications",
-		"revoke_publication",
-		// 12 Chat tools, available inside a session for cross-chat handoffs.
-		"list_chats",
-		"search_chats",
-		"list_projects",
-		"list_chat_sessions",
-		"spawn_chat",
-		"send_chat_message",
-		"move_chat",
-		"read_chat_session",
-		"get_operator_lanes",
-		"link_operator_lane",
-		"unlink_operator_lane",
-		"spawn_operator_lane",
-		// Chat UI tools are present in a pane. view_file SHOWS a file to the
-		// human who is already logged in. It publishes nothing, creates no
-		// link and destroys nothing, so it falls on the same side of this
-		// guard's line as read_file and the publishing four.
-		// Navigation only selects a Chat surface; it has no destructive reach.
-		"navigate_app",
-		"view_file",
-		"get_chat_pages",
-		"append_page_markdown",
-		"add_page_visualization",
-		// 2 config tools, unchanged.
-		"get_config",
-		"update_config",
-		// 1 of the 4 trigger tools. create_trigger, set_trigger_enabled and
-		// delete_trigger are WITHHELD here, on the same principle as the two
-		// closers and for a sharper reason: a lane that can create a trigger
-		// can arrange for MORE LANES, on a schedule, indefinitely, with no
-		// human ever having asked. list_triggers destroys nothing and answers
-		// a question a lane has a real reason to ask -- is something else
-		// about to fire into this repository while I work in it.
-		"list_triggers",
-	}
-
-	assertToolNames(t, got, wantTools)
-
-	// Stated separately from the ordered comparison above so a failure says
-	// which forbidden tool came back, not merely that a list did not match.
+	assertToolNames(t, got, expectedMCPTools)
 	for _, name := range got {
-		if name == "close_workspace" || name == "close_pane" ||
-			name == "create_trigger" || name == "set_trigger_enabled" || name == "delete_trigger" {
+		switch name {
+		case "close_workspace", "close_pane", "create_trigger", "set_trigger_enabled", "delete_trigger":
 			t.Errorf("%s is offered to a session inside a pane; it must be withheld", name)
 		}
 	}

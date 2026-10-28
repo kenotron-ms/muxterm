@@ -18,8 +18,9 @@ type remoteChatDialer interface {
 // handleRemoteChatProxy forwards only chat API calls over the selected SSH
 // machine. Terminal WebSockets and all other app routes stay on this server.
 func (s *Server) handleRemoteChatProxy(w http.ResponseWriter, r *http.Request) {
-	if !humanBrowserRequest(r) {
-		http.Error(w, "remote chat requires a human browser request", http.StatusForbidden)
+	agentRequest := s.agentRemoteChatRequest(r)
+	if !humanBrowserRequest(r) && !agentRequest {
+		http.Error(w, "remote chat requires a browser or scoped agent request", http.StatusForbidden)
 		return
 	}
 	hostID := r.PathValue("id")
@@ -55,8 +56,12 @@ func (s *Server) handleRemoteChatProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "remote chat transport unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	headerTimeout := 30 * time.Second
+	if r.Method == http.MethodPost && (rest == "/api/sdk-chats" || strings.HasSuffix(rest, "/control-send")) {
+		headerTimeout = 4 * time.Minute
+	}
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true,
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: headerTimeout,
 		DialContext:           func(ctx context.Context, _, _ string) (net.Conn, error) { return dialer.DialChat(ctx, host) },
 	}
 	defer transport.CloseIdleConnections()
@@ -70,6 +75,11 @@ func (s *Server) handleRemoteChatProxy(w http.ResponseWriter, r *http.Request) {
 	out.Header = r.Header.Clone()
 	out.Header.Del("Cookie")
 	out.Header.Del("Authorization")
+	if agentRequest {
+		// An origin token identifies a Chat on this server and cannot identify
+		// one on the remote. The remote records this as an external tool input.
+		out.Header.Del("X-Muxterm-Origin")
+	}
 	response, err := transport.RoundTrip(out)
 	if err != nil {
 		http.Error(w, "remote chat backend: "+err.Error(), http.StatusBadGateway)
