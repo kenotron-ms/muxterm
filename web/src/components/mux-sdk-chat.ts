@@ -1318,7 +1318,8 @@ export class MuxSDKChat extends LitElement {
     };
     if (event.type === 'input.accepted' && event.source === 'question') {
       for (let i = blocks.length - 1; i >= 0; i--) {
-        if (blocks[i].kind === 'question' && blocks[i].source === 'question.suggested' && !blocks[i].done) {
+        // The HTTP response can mark this card done before the accepted event arrives.
+        if (blocks[i].kind === 'question' && blocks[i].source === 'question.suggested') {
           blocks.splice(i, 1);
           break;
         }
@@ -1374,7 +1375,7 @@ export class MuxSDKChat extends LitElement {
       }
     }
     else if (event.type === 'input.accepted' && event.source === 'question' && event.kind === 'steer') {
-      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'user', source:'question', text:event.text || '', at:event.at });
+      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'user', source:'question', text:event.text || '', at:event.at, done:true });
       this.busy = true;
       markStart(this.currentTurn);
     }
