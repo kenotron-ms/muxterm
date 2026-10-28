@@ -138,6 +138,12 @@ func (s *Server) handleSDKMeetings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid meeting", 400)
 		return
 	}
+	if input.Kind == "call" {
+		if _, reason := s.meetingInviteOrigin(); reason != "" {
+			http.Error(w, reason, http.StatusConflict)
+			return
+		}
+	}
 	if strings.TrimSpace(input.Title) == "" {
 		input.Title = "Quick recording"
 	}

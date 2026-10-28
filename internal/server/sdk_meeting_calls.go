@@ -7,7 +7,9 @@ import (
 	"errors"
 	"html"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -89,7 +91,46 @@ func meetingICEServers() []map[string]any {
 	return valid
 }
 
+// A guest invite needs a stable HTTPS origin supplied by the operator. The
+// request Host header is not authority for a link that will leave this machine.
+func (s *Server) meetingInviteOrigin() (string, string) {
+	if s.noAuth || os.Getenv("MUXTERM_DEV_INSTANCE") == "1" {
+		return "", "Guest calls require an authenticated, publicly hosted Muxterm server. This development instance cannot create guest invites."
+	}
+	if !s.behindReverseProxy {
+		return "", "Host Muxterm at a public HTTPS address, then set [server] behind_reverse_proxy = true and public_origin before inviting a guest."
+	}
+	origin := s.publicBaseURL()
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return "", "Set [server] public_origin to the public HTTPS address guests can open."
+	}
+	host := strings.ToLower(u.Hostname())
+	ip := net.ParseIP(host)
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") ||
+		(ip != nil && (!ip.IsGlobalUnicast() || ip.IsPrivate())) {
+		return "", "Set [server] public_origin to a public HTTPS address guests can open, not a local address."
+	}
+	return origin, ""
+}
+
+func (s *Server) handleMeetingCallReadiness(w http.ResponseWriter, _ *http.Request) {
+	origin, reason := s.meetingInviteOrigin()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"available": origin != "", "reason": reason, "inviteOrigin": origin,
+	})
+}
+
 func (s *Server) handleMeetingInvite(w http.ResponseWriter, r *http.Request) {
+	inviteOrigin := ""
+	if r.Method == http.MethodPost {
+		var reason string
+		inviteOrigin, reason = s.meetingInviteOrigin()
+		if reason != "" {
+			http.Error(w, reason, http.StatusConflict)
+			return
+		}
+	}
 	chatID, meetingID, ok := s.meetingLocation(w, r)
 	if !ok {
 		return
@@ -116,7 +157,7 @@ func (s *Server) handleMeetingInvite(w http.ResponseWriter, r *http.Request) {
 	call := &meetingCall{ChatID: chatID, MeetingID: meetingID, Token: randomMeetingSecret(), Expires: time.Now().Add(time.Hour), HostLastSeen: time.Now()}
 	s.meetingCalls.byMeeting[meetingID] = call
 	s.meetingCalls.byToken[call.Token] = call
-	writeJSON(w, http.StatusOK, map[string]any{"token": call.Token, "expiresAt": call.Expires.UTC().Format(time.RFC3339), "iceServers": meetingICEServers()})
+	writeJSON(w, http.StatusOK, map[string]any{"token": call.Token, "inviteUrl": inviteOrigin + "/guest/" + call.Token, "expiresAt": call.Expires.UTC().Format(time.RFC3339), "iceServers": meetingICEServers()})
 }
 
 func (s *Server) callByToken(w http.ResponseWriter, token string) *meetingCall {
