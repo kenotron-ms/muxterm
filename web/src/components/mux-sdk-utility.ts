@@ -881,8 +881,9 @@ export class MuxSDKUtility extends LitElement {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'p') { event.preventDefault(); this.showQuickOpen(); }
       if (event.key === 'Escape' && !this.quickOpen && this.fileMenuOpen) { this.fileMenuOpen = false; this.paintAll(); queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }
     }}>
+      ${!this.terminalMode ? this.fileHeader(projectName, segments, file, hasAlternateView) : nothing}
       <div class="viewer">
-        ${this.fileHeader(projectName, segments, file, hasAlternateView)}
+        ${this.terminalMode ? this.fileHeader(projectName, segments, file, hasAlternateView) : nothing}
         <div class="viewer-body">${this.selected ? this.fileBody() : html`<mux-ui-empty-state heading="Explore this project"><span slot="icon">${icon(FolderOpen,{size:24})}</span>Choose a file from the explorer or search by name across the project.<mux-ui-button slot="action" variant="secondary" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></mux-ui-button></mux-ui-empty-state>`}</div>
         ${file ? html`<div class="file-status"><span>${fileLanguage(file.name)}</span>${!file.binary && !file.tooLarge && file.text ? html`<span>${file.text.split('\n').length} lines</span>` : nothing}<span class="status-spacer"></span><span class="file-action-notice" role="status">${this.fileActionNotice}</span><span>${readableSize(file.size)}</span><span>Read only</span></div>` : nothing}
       </div>
@@ -1095,8 +1096,12 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .utility-placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--ui-text-muted); }
     mux-sdk-utility .empty { color:var(--ui-text-muted); line-height:1.6; } mux-sdk-utility a { color:var(--ui-accent); }
     mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { display:grid; grid-template-columns:clamp(var(--ui-utility-rail-min-width),var(--rail-width),45%) var(--ui-utility-rail-resizer-width) minmax(0,1fr); height:100%; min-width:0; overflow:hidden; position:relative; background:var(--ui-surface-base); }
-    mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr) 6px clamp(180px,var(--rail-width),45%); }
+    mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr) 6px clamp(180px,var(--rail-width),45%); grid-template-rows:auto minmax(0,1fr); }
     mux-sdk-utility .files-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
+    mux-sdk-utility .files-panel > .viewer-header { grid-column:1 / -1; grid-row:1; }
+    mux-sdk-utility .files-panel > .viewer { grid-column:1; grid-row:2; }
+    mux-sdk-utility .files-panel > .vertical-resizer { grid-column:2; grid-row:2; }
+    mux-sdk-utility .files-panel > .browser { grid-column:3; grid-row:2; }
     mux-sdk-utility .browser { display:flex; flex-direction:column; min-width:0; min-height:0; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
     mux-sdk-utility .files-panel .browser { border-left:1px solid var(--ui-border); background:var(--ui-surface-base); }
     mux-sdk-utility .files-panel .browser-heading { height:var(--ui-utility-file-header-height); flex:none; }
@@ -1122,7 +1127,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .goal-toolbar-title span { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .goal-toolbar-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
     mux-sdk-utility mux-ui-feedback.goal-feedback { margin:var(--ui-space-3) var(--ui-space-6) 0; }
-    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:var(--ui-surface-raised); }
+    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:transparent; }
     mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; }
     mux-sdk-utility .file-open-wrap { position:relative; }
     mux-sdk-utility .file-open-menu { --ui-menu-offset-y:calc(var(--ui-control-sm) + var(--ui-space-1)); --ui-menu-offset-x:0; --ui-menu-width:var(--ui-toast-min-width); }
@@ -1215,7 +1220,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-delete-dialog h2 { margin:0; font-size:var(--ui-text-xl); }
     mux-sdk-utility .page-delete-dialog p { margin:var(--ui-space-4) 0 var(--ui-space-7); color:var(--ui-text-muted); }
     mux-sdk-utility .page-delete-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); }
-    @container(max-width:650px) { mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) minmax(170px,38%); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .files-panel .vertical-resizer { display:none; } mux-sdk-utility .files-panel .browser { border-left:0; border-top:1px solid var(--ui-border); } }
+    @container(max-width:650px) { mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) minmax(170px,38%); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:auto minmax(0,1fr); } mux-sdk-utility .files-panel > .browser { grid-column:1; grid-row:3; border-left:0; border-top:1px solid var(--ui-border); } mux-sdk-utility .files-panel .vertical-resizer { display:none; } }
     @container(max-width:430px) { mux-sdk-utility .viewer-header { flex-wrap:wrap; padding-top:var(--ui-space-2); padding-bottom:var(--ui-space-2); } mux-sdk-utility .viewer-header mux-ui-breadcrumb { flex:1 1 100%; } mux-sdk-utility .viewer-header .file-header-actions { margin-left:auto; } }
     @container(max-width:430px) { mux-sdk-utility .file-action-button span { display:none; } }
     @media(pointer:coarse) { mux-sdk-utility .browser-heading, mux-sdk-utility .files-panel .browser-heading { height:auto; min-height:var(--ui-control-lg); } }
