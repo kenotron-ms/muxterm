@@ -112,15 +112,19 @@ export class MuxChatWorkspace extends LitElement {
     .row:hover,.chat-row:hover { background:var(--ui-surface-hover); }
     .folder { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
     .folder { width:var(--ui-space-6); color:var(--ui-text-muted); }
-    .host-label { display:inline-flex; align-items:center; gap:var(--ui-space-3); padding-right:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); white-space:nowrap; }
+    .host-label { display:inline-flex; align-items:center; gap:var(--ui-space-3); margin-left:auto; max-width:50%; min-width:0; padding-right:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); white-space:nowrap; }
+    .host-label > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; }
     .host-dot { width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); border-radius:50%; background:var(--ui-text-muted); }
     .host-dot.connected { background:var(--ui-success); }
     .action { flex:none; opacity:0; }
-    .row:hover .action,.row:focus-within .action { opacity:1; }
+    .row .action { display:none; opacity:1; }
+    .row:hover .host-label,.row:focus-within .host-label { display:none; }
+    .row:hover .action,.row:focus-within .action { display:inline-flex; }
     .chat-row .action { display:none; opacity:1; }
     .chat-row .action.more { display:none; }
     .chat-row:hover .action,.chat-row:has(.chat:focus-within) .action { display:inline-flex; }
     .row:has(mux-ui-menu) .action.more,.chat-row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
+    .row:has(mux-ui-menu) .host-label { display:none; }
     mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-space-8); }
     .archive-list { box-sizing:border-box; max-height:var(--ui-chat-edit-max-height); overflow-y:auto; overscroll-behavior:contain; }
