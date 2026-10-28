@@ -27,3 +27,6 @@ func (c *Companion) browserAction(string, string, string) error {
 	return errors.New("native browser view requires macOS")
 }
 func (c *Companion) browserState() (string, []browserTabState) { return "", nil }
+func (c *Companion) browserEvaluate(string, string, bool) (string, error) {
+	return "", errors.New("native browser automation requires macOS")
+}

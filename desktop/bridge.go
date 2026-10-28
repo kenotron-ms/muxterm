@@ -4,17 +4,21 @@ import (
 	"encoding/json"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type browserMessage struct {
-	Type    string      `json:"type"`
-	ID      string      `json:"id"`
-	URL     string      `json:"url"`
-	Visible bool        `json:"visible"`
-	Rect    browserRect `json:"rect"`
+	Type        string      `json:"type"`
+	ID          string      `json:"id"`
+	URL         string      `json:"url"`
+	Destination string      `json:"destination"`
+	Host        string      `json:"host"`
+	ChatID      string      `json:"chatId"`
+	Visible     bool        `json:"visible"`
+	Rect        browserRect `json:"rect"`
 }
 
 func (c *Companion) evalMuxtermJS(script string) {
@@ -57,6 +61,29 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			}
 			return
 		}
+		if message.Type == "remote-chats" {
+			allowed := serverURL == localURL && localURL != ""
+			c.bridgeMu.Unlock()
+			if !allowed {
+				return
+			}
+			snapshot := c.readRemoteChats(message.Host)
+			encoded, _ := json.Marshal(snapshot)
+			c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-remote-chats', {detail:" + string(encoded) + "}))")
+			return
+		}
+		if message.Type == "open-remote-chat" {
+			allowed := serverURL == localURL && localURL != ""
+			c.bridgeMu.Unlock()
+			if !allowed {
+				return
+			}
+			if err := c.openRemoteChat(message.Host, message.ChatID); err != nil {
+				encoded, _ := json.Marshal(map[string]string{"host": message.Host, "error": err.Error()})
+				c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-remote-chat-error', {detail:" + string(encoded) + "}))")
+			}
+			return
+		}
 		defer c.bridgeMu.Unlock()
 		var actionErr error
 		switch message.Type {
@@ -95,6 +122,24 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			actionErr = err
 			if actionErr == nil {
 				actionErr = c.app.Browser.OpenURL(address.String())
+			}
+		case "open-link":
+			address, err := c.prepareBrowserURL(message.URL)
+			actionErr = err
+			if actionErr == nil {
+				if message.Destination == "default" {
+					actionErr = c.app.Browser.OpenURL(address.String())
+				} else {
+					c.mu.Lock()
+					c.browserSeq++
+					id := "browser-" + strconv.Itoa(c.browserSeq)
+					c.mu.Unlock()
+					actionErr = c.browserOpen(id, address.String())
+					if actionErr == nil {
+						payload, _ := json.Marshal(map[string]string{"id": id, "url": address.String()})
+						c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-browser-open', {detail:" + string(payload) + "}))")
+					}
+				}
 			}
 		case "select":
 			actionErr = c.browserSelect(message.ID)

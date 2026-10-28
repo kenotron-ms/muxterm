@@ -41,6 +41,7 @@ import { ArrowLeft, ChevronDown } from 'lucide';
 import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { macAppVersion, checkMacUpdate, installMacUpdate, type MacUpdateStatus } from '../lib/mac-app.js';
+import { linkDestination, saveLinkDestination, type LinkDestination } from '../lib/link-destination.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
   DEFAULT_VOICE_STATUS,
@@ -699,6 +700,7 @@ export class MuxSettingsSurface extends LitElement {
   // Per-browser (localStorage), not server config — distinguishes this
   // machine's window/PWA from other muxterm instances. See instance-identity.ts.
   @state() private _titlebarColor: string | null = restoreTitlebarColor();
+  @state() private _linkDestination: LinkDestination = linkDestination();
 
   @state() private _remotes: RemotesList = EMPTY_REMOTES;
   @state() private _remotesError = '';
@@ -1070,6 +1072,18 @@ export class MuxSettingsSurface extends LitElement {
         <p class="section-title">Title Bar Color</p>
         ${this._renderTitlebarColorPicker()}
       </div>
+      ${macAppVersion() ? html`<div class="section-gap">
+        <p class="section-title">Links</p>
+        <mux-ui-radio-group aria-label="Open links in" name="mac-link-destination" .value=${this._linkDestination}
+          .options=${[
+            {value:'muxterm',label:'Muxterm browser',description:'Open links beside your sessions'},
+            {value:'default',label:'Default browser',description:'Open links in your Mac browser'},
+          ]}
+          @change=${(event: CustomEvent<{value:string}>) => {
+            this._linkDestination = event.detail.value === 'default' ? 'default' : 'muxterm';
+            saveLinkDestination(this._linkDestination);
+          }}></mux-ui-radio-group>
+      </div>` : nothing}
     `;
   }
 

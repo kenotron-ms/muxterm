@@ -19,6 +19,9 @@ func main() {
 	// starts a bundled server or opens any windows.
 	updater.HandleHelperMode()
 	companion := newCompanion()
+	if err := companion.startBrowserAutomation(); err != nil {
+		log.Printf("native browser automation unavailable: %v", err)
+	}
 	// Wait for the local server before opening WebKit so the first window always
 	// contains muxterm instead of a transient connection or error page.
 	_, localErr := companion.startLocalMuxterm()

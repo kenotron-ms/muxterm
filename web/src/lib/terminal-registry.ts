@@ -17,6 +17,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebFontsAddon } from '@xterm/addon-web-fonts';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { openLink } from './link-destination.js';
 import { paletteAnsiArray, resolvePalette } from './theme.js';
 import { muxLog } from './mux-log.js';
 import { TERMINAL_FONT_FAMILY } from './fonts.js';
@@ -449,11 +450,11 @@ export const terminalRegistry = {
     // WebFontsAddon: loadFonts() is called in attach() before term.open() per
     // the official xterm.js addon-web-fonts guidance.
     const webFontsAddon = new WebFontsAddon();
-    // WebLinksAddon: auto-linkifies http/https URLs in terminal output using
-    // the addon's own default click handler (window.open(uri, '_blank',
-    // 'noopener')). No stored reference needed \u2014 unlike fitAddon/webFontsAddon,
+    // WebLinksAddon: auto-linkifies http/https URLs in terminal output and
+    // routes clicks through the Mac link preference when available.
+    // No stored reference needed \u2014 unlike fitAddon/webFontsAddon,
     // nothing calls a method on it after load; term.dispose() disposes it.
-    const webLinksAddon = new WebLinksAddon();
+    const webLinksAddon = new WebLinksAddon((_event, uri) => openLink(uri));
     term.loadAddon(fitAddon);
     term.loadAddon(webFontsAddon);
     term.loadAddon(webLinksAddon);
