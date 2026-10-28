@@ -1162,32 +1162,32 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .file-status { display:flex; align-items:center; gap:var(--ui-space-6); flex:none; min-height:var(--ui-utility-status-height); padding:0 var(--ui-space-5); border-top:1px solid var(--ui-border); background:var(--ui-surface-raised); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .file-status span:first-child { color:var(--ui-accent); }
     mux-sdk-utility kbd { border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); padding:calc(var(--ui-space-1) / 2) var(--ui-space-2); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
-    mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:var(--ui-utility-document-width); margin:0 auto; padding:var(--ui-space-6) clamp(var(--ui-space-7),5vw,var(--ui-space-12)) var(--ui-space-13); color:var(--ui-text); font:var(--ui-text-lg)/1.48 var(--ui-font-sans); overflow-wrap:break-word; }
+    mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:var(--ui-utility-document-width); margin:0 auto; padding:clamp(var(--ui-space-7),4vw,var(--ui-space-11)) clamp(var(--ui-space-7),5vw,var(--ui-space-12)) var(--ui-space-13); color:var(--ui-text); font:var(--ui-text-xl)/1.65 var(--ui-font-sans); overflow-wrap:break-word; }
     mux-sdk-utility .document-view > :first-child { margin-top:0; }
     mux-sdk-utility .document-view > :last-child { margin-bottom:0; }
-    mux-sdk-utility .document-view .md-p { margin:0 0 var(--ui-space-3); }
-    mux-sdk-utility .document-view .md-h { margin:var(--ui-space-4) 0 var(--ui-space-2); color:var(--ui-text); font-weight:650; line-height:1.3; overflow-wrap:break-word; }
-    mux-sdk-utility .document-view h1.md-h { margin-top:0; margin-bottom:var(--ui-space-3); font-size:var(--ui-text-3xl); letter-spacing:-.025em; white-space:normal; overflow:visible; text-overflow:clip; }
-    mux-sdk-utility .document-view h2.md-h { font-size:var(--ui-text-2xl); letter-spacing:-.015em; }
-    mux-sdk-utility .document-view h3.md-h { font-size:var(--ui-text-xl); }
+    mux-sdk-utility .document-view .md-p { margin:0 0 var(--ui-space-7); }
+    mux-sdk-utility .document-view .md-h { margin:var(--ui-space-9) 0 var(--ui-space-5); color:var(--ui-text); font-weight:700; line-height:1.3; overflow-wrap:break-word; }
+    mux-sdk-utility .document-view h1.md-h { margin-top:0; font-size:var(--ui-text-4xl); letter-spacing:-.025em; white-space:normal; overflow:visible; text-overflow:clip; }
+    mux-sdk-utility .document-view h2.md-h { font-size:var(--ui-text-3xl); letter-spacing:-.015em; }
+    mux-sdk-utility .document-view h3.md-h { font-size:var(--ui-text-2xl); }
     mux-sdk-utility .document-view h4.md-h { font-size:var(--ui-text-xl); }
-    mux-sdk-utility .document-view h5.md-h, mux-sdk-utility .document-view h6.md-h { font-size:var(--ui-text-lg); }
+    mux-sdk-utility .document-view h5.md-h, mux-sdk-utility .document-view h6.md-h { font-size:var(--ui-text-xl); }
     mux-sdk-utility .document-view strong { font-weight:700; }
     mux-sdk-utility .document-view .md-link { color:var(--ui-accent); text-decoration:underline; text-underline-offset:3px; }
     mux-sdk-utility .document-view .md-link:hover { color:var(--ui-text); }
-    mux-sdk-utility .document-view .md-code { padding:calc(var(--ui-space-1) / 2) var(--ui-space-1); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); background:var(--ui-surface-raised); font:var(--ui-text-sm)/1.45 var(--ui-font-mono); }
-    mux-sdk-utility .document-view .md-pre { box-sizing:border-box; max-width:100%; margin:0 0 var(--ui-space-4); padding:var(--ui-space-6) var(--ui-space-7); overflow:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
+    mux-sdk-utility .document-view .md-code { padding:calc(var(--ui-space-1) / 2) var(--ui-space-1); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); background:var(--ui-surface-raised); font:var(--ui-text-lg)/1.45 var(--ui-font-mono); }
+    mux-sdk-utility .document-view .md-pre { box-sizing:border-box; max-width:100%; margin:0 0 var(--ui-space-8); padding:var(--ui-space-6) var(--ui-space-7); overflow:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
     mux-sdk-utility .document-view .md-pre[data-lang]:not([data-lang=""])::before { content:attr(data-lang); display:block; margin:0 0 var(--ui-space-4); color:var(--ui-text-muted); font:var(--ui-text-xs)/1.4 var(--ui-font-sans); text-transform:uppercase; letter-spacing:.07em; }
-    mux-sdk-utility .document-view .md-pre code { font:var(--ui-text-sm)/1.6 var(--ui-font-mono); white-space:pre; }
-    mux-sdk-utility .document-view .md-ul, mux-sdk-utility .document-view .md-ol { margin:0 0 var(--ui-space-3); padding-left:var(--ui-space-4); }
-    mux-sdk-utility .document-view .md-li { padding-left:calc(var(--ui-space-1) / 2); margin:var(--ui-space-1) 0; }
+    mux-sdk-utility .document-view .md-pre code { font:var(--ui-text-lg)/1.6 var(--ui-font-mono); white-space:pre; }
+    mux-sdk-utility .document-view .md-ul, mux-sdk-utility .document-view .md-ol { margin:0 0 var(--ui-space-7); padding-left:var(--ui-space-9); }
+    mux-sdk-utility .document-view .md-li { padding-left:var(--ui-space-1); margin:var(--ui-space-2) 0; }
     mux-sdk-utility .document-view .md-li .md-p { margin:0; }
     mux-sdk-utility .document-view .md-li > .md-ul, mux-sdk-utility .document-view .md-li > .md-ol { margin:var(--ui-space-1) 0 var(--ui-space-2); }
-    mux-sdk-utility .document-view .md-quote { margin:0 0 var(--ui-space-4); padding:calc(var(--ui-space-1) / 2) 0 calc(var(--ui-space-1) / 2) var(--ui-space-3); border-left:3px solid var(--ui-accent); color:var(--ui-text-muted); }
+    mux-sdk-utility .document-view .md-quote { margin:0 0 var(--ui-space-7); padding:var(--ui-space-1) 0 var(--ui-space-1) var(--ui-space-6); border-left:3px solid var(--ui-accent); color:var(--ui-text-muted); }
     mux-sdk-utility .document-view .md-quote > :last-child { margin-bottom:0; }
     mux-sdk-utility .document-view .md-hr { margin:var(--ui-space-4) 0; border:0; border-top:1px solid var(--ui-border); }
     mux-sdk-utility .document-view .md-tablewrap { max-width:100%; overflow-x:auto; margin:0 0 var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); }
-    mux-sdk-utility .document-view .md-table { width:100%; border-collapse:collapse; font-size:var(--ui-text-md); line-height:1.5; }
+    mux-sdk-utility .document-view .md-table { width:100%; border-collapse:collapse; font-size:var(--ui-text-lg); line-height:1.5; }
     mux-sdk-utility .document-view .md-th, mux-sdk-utility .document-view .md-td { padding:var(--ui-space-4) var(--ui-space-5); border-bottom:1px solid var(--ui-border); text-align:left; vertical-align:top; overflow-wrap:normal; }
     mux-sdk-utility .document-view .md-th + .md-th, mux-sdk-utility .document-view .md-td + .md-td { border-left:1px solid var(--ui-border); }
     mux-sdk-utility .document-view .md-table tr:last-child .md-td { border-bottom:0; }
