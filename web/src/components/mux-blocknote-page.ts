@@ -7,6 +7,7 @@ import { BlockNoteSchema, type PartialBlock } from '@blocknote/core';
 import blockNoteCSS from '@blocknote/core/style.css?inline';
 import mantineCSS from '@blocknote/mantine/style.css?inline';
 import { apiPath } from '../lib/base-path.js';
+import { remoteChatPath } from '../lib/remote-chat-routes.js';
 import { visualizationBlock, visualizationCSS } from './page-visualization.js';
 
 const pageSchema = BlockNoteSchema.create().extend({ blockSpecs:{ visualization:visualizationBlock } });
@@ -15,20 +16,20 @@ type EditorPageContent = PartialBlock<typeof pageSchema.blockSchema, typeof page
 type PageContent = PartialBlock[];
 type PageCommand = 'page' | 'generate' | 'visualize';
 
-async function uploadFile(file: File): Promise<string> {
+async function uploadFile(file: File, remoteHost: string): Promise<string> {
   const form = new FormData();
   form.append('file', file);
-  const response = await fetch(apiPath('/api/sdk-chat-attachments'), {
+  const response = await fetch(apiPath(remoteChatPath(remoteHost, '/api/sdk-chat-attachments')), {
     method: 'POST', headers: { 'X-Muxterm-Chat-Attachment': '1' }, body: form,
   });
   if (!response.ok) throw new Error(`Upload failed (${response.status})`);
   const result = await response.json() as { id?: string };
   if (!result.id) throw new Error('Upload response lacked an attachment ID');
-  return apiPath(`/api/sdk-chat-attachments/${encodeURIComponent(result.id)}`);
+  return apiPath(remoteChatPath(remoteHost, `/api/sdk-chat-attachments/${encodeURIComponent(result.id)}`));
 }
 
-function PageEditor({ content, changed, command }: { content: PageContent; changed: (content: PageContent) => void; command: (command: PageCommand) => void }) {
-  const editor = useCreateBlockNote({ schema:pageSchema, initialContent: (content.length ? content : [{ type: 'paragraph' }]) as EditorPageContent, uploadFile });
+function PageEditor({ content, changed, command, remoteHost }: { content: PageContent; changed: (content: PageContent) => void; command: (command: PageCommand) => void; remoteHost: string }) {
+  const editor = useCreateBlockNote({ schema:pageSchema, initialContent: (content.length ? content : [{ type: 'paragraph' }]) as EditorPageContent, uploadFile:(file) => uploadFile(file, remoteHost) });
   type ViewProps = { editor: typeof editor; theme: 'light'; onChange: () => void; slashMenu: boolean; children?: ReactNode };
   const View = BlockNoteView as unknown as ComponentType<ViewProps>;
   return createElement(View, {
@@ -52,10 +53,12 @@ export class MuxBlockNotePage extends HTMLElement {
   private root: Root | null = null;
   private mount?: HTMLDivElement;
   private currentPageId = '';
+  private currentRemoteHost = '';
   private currentContent: PageContent = [];
   private currentEpoch = 0;
   private editorObserver?: MutationObserver;
 
+  set remoteHost(value: string) { this.currentRemoteHost = value; }
   set pageId(value: string) {
     if (value === this.currentPageId) return;
     this.currentPageId = value;
@@ -101,6 +104,7 @@ export class MuxBlockNotePage extends HTMLElement {
     this.root.render(createElement(PageEditor, {
       key: `${this.currentPageId}:${this.currentEpoch}`,
       content: this.currentContent,
+      remoteHost: this.currentRemoteHost,
       changed: (content: PageContent) => this.dispatchEvent(new CustomEvent('page-content-change', { detail: content, bubbles: true, composed: true })),
       command: (command: PageCommand) => this.dispatchEvent(new CustomEvent('page-command', { detail: command, bubbles: true, composed: true })),
     }));

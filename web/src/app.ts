@@ -41,6 +41,7 @@ import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
 import type { MuxSDKChat } from './components/mux-sdk-chat.js';
+import { chatHost, rememberChatHost } from './lib/remote-chat-routes.js';
 import './components/mux-new-chat.js';
 import './components/mux-scheduled-jobs.js';
 import './components/mux-connections.js';
@@ -94,12 +95,18 @@ const UTILITY_TITLES = new Map([
   ['skills', 'Skills'],
 ]);
 function chatFromHash(): string | null {
-  return /^#chat=([0-9a-f]{32})$/i.exec(window.location.hash)?.[1] ?? null;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const id = params.get('chat');
+  if (!id || !/^[0-9a-f]{32}$/i.test(id)) return null;
+  const host = params.get('host');
+  if (host) rememberChatHost(id, host);
+  return id;
 }
 
 function setChatHash(id: string | null): void {
   if (!id && !chatFromHash()) return;
-  const next = id ? `#chat=${encodeURIComponent(id)}` : '';
+  const host = id ? chatHost(id) : '';
+  const next = id ? `#chat=${encodeURIComponent(id)}${host ? `&host=${encodeURIComponent(host)}` : ''}` : '';
   if (window.location.hash === next) return;
   window.history.pushState(window.history.state, '', window.location.pathname + window.location.search + next);
 }
@@ -550,6 +557,7 @@ export class MuxApp extends LitElement {
   @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
   @state() private _newChatProject = '';
+  @state() private _newChatRemoteHost = '';
   @state() private _newChatPrompt = '';
   @state() private _jobEditorChatId = '';
   private _newChatForJob = false;
@@ -1445,7 +1453,7 @@ export class MuxApp extends LitElement {
               </div>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal} @launcher-action=${this._onLauncherAction}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
+            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialRemoteHost=${this._newChatRemoteHost} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal} @launcher-action=${this._onLauncherAction}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
@@ -2065,6 +2073,7 @@ export class MuxApp extends LitElement {
     this._newChatHarness = 'codex';
     this._newChatFolder = '';
     this._newChatProject = '';
+    this._newChatRemoteHost = '';
     this._newChatPrompt = '';
     this._jobEditorChatId = '';
     this._newChatForJob = false;
@@ -2124,9 +2133,10 @@ export class MuxApp extends LitElement {
     setChatHash(null);
     this._closeDrawer();
   };
-  private _onChatNewProject = (event: CustomEvent<{ projectId: string }>): void => {
+  private _onChatNewProject = (event: CustomEvent<{ projectId: string; remoteHost?: string }>): void => {
     this._onChatNew();
     this._newChatProject = event.detail.projectId;
+    this._newChatRemoteHost = event.detail.remoteHost || '';
   };
 
   /**

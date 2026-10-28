@@ -10,6 +10,7 @@ import { pastedImageFiles, readClipboardImageFiles } from '../lib/clipboard-imag
 import '../lib/mermaid-diagram.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
+import { chatHost, remoteChatPath } from '../lib/remote-chat-routes.js';
 import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
 import { voiceInputController, type ComposerDictationCapture, type VoiceTranscriptPayload } from '../lib/voice-input-controller.js';
@@ -736,7 +737,7 @@ export class MuxSDKChat extends LitElement {
     else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'goal')) utility?.showPanel(tab);
   }
   private async operatorChanged(chat: SDKChat) {
-    this.chat = chat;
+    this.chat = {...chat, remoteHost: chatHost(chat.id) || undefined};
     if (!chat.operator) return;
     this.setPaneMode('split');
     await this.updateComplete;
@@ -1127,7 +1128,7 @@ export class MuxSDKChat extends LitElement {
     source.onopen = () => { if (this.stream === source) this.streamOpenedAt = Date.now(); };
     source.addEventListener('snapshot', e => {
       if (epoch !== this.historyEpoch || this.stream !== source) return;
-      try { this.chat = JSON.parse((e as MessageEvent).data) as SDKChat; }
+      try { this.chat = {...JSON.parse((e as MessageEvent).data) as SDKChat, remoteHost:chatHost(id) || undefined}; }
       catch { this.failStream(source, id, epoch); return; }
       if (this.reconnectFailed) { this.reconnectFailed = false; this.error = ''; }
       this.busy = this.chat.state === 'working';
@@ -1584,8 +1585,8 @@ export class MuxSDKChat extends LitElement {
   }
   private userBubble(block: Block) {
     return html`<div class="bubble">${block.text}${block.attachments?.map(attachment => attachment.kind === 'image'
-      ? html`<img src=${apiPath(`/api/sdk-chat-attachments/${encodeURIComponent(attachment.id)}`)} alt=${attachment.name} loading="lazy">`
-      : html`<a href=${apiPath(`/api/sdk-chat-attachments/${encodeURIComponent(attachment.id)}`)} target="_blank" rel="noopener">${attachment.name}</a>`)}</div>`;
+      ? html`<img src=${apiPath(remoteChatPath(this.chat?.remoteHost || '', `/api/sdk-chat-attachments/${encodeURIComponent(attachment.id)}`))} alt=${attachment.name} loading="lazy">`
+      : html`<a href=${apiPath(remoteChatPath(this.chat?.remoteHost || '', `/api/sdk-chat-attachments/${encodeURIComponent(attachment.id)}`))} target="_blank" rel="noopener">${attachment.name}</a>`)}</div>`;
   }
   private hasFiles(event: DragEvent) { return Array.from(event.dataTransfer?.types || []).includes('Files'); }
   private onDragEnter(event: DragEvent) { if (!this.hasFiles(event)) return; event.preventDefault(); this.dragDepth++; this.dropActive = true; }
@@ -1627,7 +1628,7 @@ export class MuxSDKChat extends LitElement {
   private async upload(item: Attachment) {
     const form = new FormData(); form.append('file', item.file);
     try {
-      const response = await fetch(apiPath('/api/sdk-chat-attachments'), {
+      const response = await fetch(apiPath(remoteChatPath(this.chat?.remoteHost || '', '/api/sdk-chat-attachments')), {
         method: 'POST', headers: { 'X-Muxterm-Chat-Attachment': '1' }, body: form,
       });
       const body = await response.text();
@@ -2560,7 +2561,7 @@ export class MuxSDKChat extends LitElement {
       <div class="composer-controls">${this.attachmentPicker()}<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.dictationButton()}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
-      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility></aside>`) : nothing}
+      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility></aside>`) : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`;
   }
 }
