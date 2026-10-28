@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type pageChartPoint struct {
@@ -120,6 +121,12 @@ func (s *Server) handleSDKPageBlocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page.Blocks = []utilityPageBlock{}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if page.CreatedAt == "" {
+		page.CreatedAt = now
+	}
+	page.UpdatedAt = now
+	page.Revision++
 	doc.Version++
 	output, err := json.Marshal(doc)
 	if err != nil || len(output) > 1<<20 {

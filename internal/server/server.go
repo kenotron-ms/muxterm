@@ -150,6 +150,7 @@ type Server struct {
 	connections        *serviceConnections
 	browserAssistant   *browserAssistantRegistry
 	connectionSetups   *connectionSetupRegistry
+	meetingCalls       *meetingCallRegistry
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -179,6 +180,7 @@ func New(cfg Config) *Server {
 	s.connections = newServiceConnections()
 	s.browserAssistant = newBrowserAssistantRegistry(cfg.LocalToken)
 	s.connectionSetups = newConnectionSetupRegistry()
+	s.meetingCalls = newMeetingCallRegistry()
 	attachmentRoot, err := chatattachments.DefaultRoot()
 	if err != nil {
 		log.Panicf("sdk chat attachment root: %v", err)
@@ -249,6 +251,12 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /p/_asset/doc.js", s.handlePublicAsset)
 	s.mux.HandleFunc("GET /p/{id}", s.handlePublicDocument)
 	s.mux.HandleFunc("GET /p/{id}/{rest...}", s.handlePublicTree)
+	// A guest link is an expiring bearer capability for exactly one meeting.
+	// These routes expose only the join page and that meeting's signaling.
+	s.mux.HandleFunc("GET /guest/{token}", s.handleMeetingGuestPage)
+	s.mux.HandleFunc("POST /guest/{token}/join", s.handleMeetingGuestJoin)
+	s.mux.HandleFunc("GET /guest/{token}/signals", s.handleMeetingGuestSignals)
+	s.mux.HandleFunc("POST /guest/{token}/signals", s.handleMeetingGuestSignals)
 	if s.authSrv != nil {
 		s.mux.HandleFunc("GET /authorize", s.authSrv.ServeAuthorize)
 		s.mux.HandleFunc("POST /authorize", s.authSrv.ServeAuthorize)
@@ -419,6 +427,27 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/pages", protect(http.HandlerFunc(s.handleSDKUtilityPages)))
 	s.mux.Handle("PUT /api/sdk-chats/{id}/utility/pages", protect(http.HandlerFunc(s.handleSDKUtilityPages)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/utility/pages/{pageID}/blocks", protect(http.HandlerFunc(s.handleSDKPageBlocks)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/control-notes", protect(http.HandlerFunc(s.handleSDKNoteControl)))
+	s.mux.Handle("PUT /api/sdk-chats/{id}/control-notes/{noteID}", protect(http.HandlerFunc(s.handleSDKNoteControl)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/control-notes/{noteID}/append", protect(http.HandlerFunc(s.handleSDKNoteControl)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/meetings", protect(http.HandlerFunc(s.handleSDKMeetings)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/meetings", protect(http.HandlerFunc(s.handleSDKMeetings)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/meetings/{meetingID}", protect(http.HandlerFunc(s.handleSDKMeeting)))
+	s.mux.Handle("DELETE /api/sdk-chats/{id}/meetings/{meetingID}", protect(http.HandlerFunc(s.handleSDKMeeting)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/chunks", protect(http.HandlerFunc(s.handleSDKMeetingChunk)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/finish", protect(http.HandlerFunc(s.handleSDKMeetingFinish)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/record-start", protect(http.HandlerFunc(s.handleSDKMeetingRecordStart)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/end", protect(http.HandlerFunc(s.handleSDKMeetingEnd)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/meetings/{meetingID}/media", protect(http.HandlerFunc(s.handleSDKMeetingMedia)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/meetings/{meetingID}/transcript", protect(http.HandlerFunc(s.handleSDKMeetingTranscript)))
+	s.mux.Handle("PUT /api/sdk-chats/{id}/meetings/{meetingID}/transcript", protect(http.HandlerFunc(s.handleSDKMeetingTranscript)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/meetings/{meetingID}/transcript/export", protect(http.HandlerFunc(s.handleSDKMeetingTranscriptExport)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/transcribe", protect(http.HandlerFunc(s.handleSDKMeetingTranscribe)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/note", protect(http.HandlerFunc(s.handleSDKMeetingNote)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/invite", protect(http.HandlerFunc(s.handleMeetingInvite)))
+	s.mux.Handle("DELETE /api/sdk-chats/{id}/meetings/{meetingID}/invite", protect(http.HandlerFunc(s.handleMeetingInvite)))
+	s.mux.Handle("GET /api/sdk-chats/{id}/meetings/{meetingID}/signals", protect(http.HandlerFunc(s.handleMeetingHostSignals)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/signals", protect(http.HandlerFunc(s.handleMeetingHostSignals)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/file", protect(http.HandlerFunc(s.handleSDKUtilityFile)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/raw", protect(http.HandlerFunc(s.handleSDKUtilityRaw)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/utility/pr", protect(http.HandlerFunc(s.handleSDKUtilityPR)))

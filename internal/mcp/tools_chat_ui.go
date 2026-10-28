@@ -16,7 +16,7 @@ func registerChatUITools(srv *Server) {
 			return "", err
 		}
 		payload := map[string]string{"action": action, "session_id": id}
-		for _, key := range []string{"mode", "tab", "path"} {
+		for _, key := range []string{"mode", "tab", "path", "note_id"} {
 			value, present, err := argStringOptional(args, key)
 			if err != nil {
 				return "", err
@@ -37,7 +37,7 @@ func registerChatUITools(srv *Server) {
 			"session_id": map[string]any{"type": "string", "description": "Chat ID"},
 			"action":     map[string]any{"type": "string", "enum": []string{"chat", "panel", "tab"}},
 			"mode":       map[string]any{"type": "string", "enum": []string{"chat", "split"}, "description": "required for action=panel"},
-			"tab":        map[string]any{"type": "string", "enum": []string{"status", "files", "changes", "terminal", "pages", "goal"}, "description": "required for action=tab"},
+			"tab":        map[string]any{"type": "string", "enum": []string{"status", "files", "changes", "terminal", "pages", "notes", "goal"}, "description": "required for action=tab"},
 		}), "required": []string{"session_id", "action"}},
 		func(args map[string]any) (string, error) {
 			action, err := argString(args, "action")
@@ -52,4 +52,10 @@ func registerChatUITools(srv *Server) {
 			"path":       map[string]any{"type": "string", "description": "absolute path inside the Chat's folder"},
 		}), "required": []string{"session_id", "path"}},
 		func(args map[string]any) (string, error) { return call(args, "file") })
+	srv.Register("open_chat_note", "Open an existing Note by stable ID in the owning Chat's Notes tab in connected muxterm browsers. Does not create a Note. Returns a browser count. Local machine only.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{
+			"session_id": map[string]any{"type": "string", "description": "Owning Chat ID"},
+			"note_id":    map[string]any{"type": "string", "description": "Existing Note ID"},
+		}), "required": []string{"session_id", "note_id"}},
+		func(args map[string]any) (string, error) { return call(args, "note") })
 }

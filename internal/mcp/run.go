@@ -331,6 +331,7 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 	registerChatRemoteTools(srv)
 	registerChatUITools(srv)
 	registerChatPageTools(srv)
+	registerChatNoteTools(srv)
 	registerConfigTools(srv)
 	registerBrowserAssistantTools(srv)
 	registerConnectionSetupTools(srv)

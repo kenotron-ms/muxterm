@@ -15,6 +15,7 @@ type chatUINavigation struct {
 	Mode      string `json:"mode,omitempty"`
 	Tab       string `json:"tab,omitempty"`
 	Path      string `json:"path,omitempty"`
+	NoteID    string `json:"note_id,omitempty"`
 }
 
 // handleChatUINavigation validates a requested view before relaying it to
@@ -44,8 +45,32 @@ func (s *Server) handleChatUINavigation(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	case "tab":
-		if nav.Tab != "status" && nav.Tab != "files" && nav.Tab != "changes" && nav.Tab != "terminal" && nav.Tab != "pages" && nav.Tab != "goal" {
+		if nav.Tab != "status" && nav.Tab != "files" && nav.Tab != "changes" && nav.Tab != "terminal" && nav.Tab != "pages" && nav.Tab != "notes" && nav.Tab != "goal" {
 			writeSDKJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown chat tab"})
+			return
+		}
+	case "note":
+		if !safePageID(nav.NoteID) {
+			writeSDKJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid note ID"})
+			return
+		}
+		pagesLock := s.pageDocumentLock(nav.SessionID)
+		pagesLock.Lock()
+		doc, err := readUtilityPages(filepath.Join(sdkDataDir(), "pages", nav.SessionID+".json"))
+		pagesLock.Unlock()
+		if err != nil {
+			writeSDKJSON(w, http.StatusInternalServerError, map[string]string{"error": "cannot read notes"})
+			return
+		}
+		found := false
+		for _, page := range doc.Pages {
+			if page.ID == nav.NoteID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeSDKJSON(w, http.StatusNotFound, map[string]string{"error": "note not found"})
 			return
 		}
 	case "file":
