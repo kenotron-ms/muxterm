@@ -12,10 +12,23 @@ Reference: `docs/design/webview-wrapper.md` on branch `design/webview-wrapper`.
 ```sh
 export JAVA_HOME=/home/ken/android-toolchain/jdk-17.0.20+8
 export ANDROID_HOME=/home/ken/android-toolchain/android-sdk
-cd android && ./gradlew assembleDebug
+cd android && ./gradlew assemblePhone
 ```
 
-Output: `android/app/build/outputs/apk/debug/app-debug.apk` (debug-signed, sideloadable).
+Output: `android/app/build/outputs/apk/phone/app-phone.apk` (debug-signed, sideloadable).
+The `assembleDebug` variant also includes an Android Automotive OS launcher for
+emulator verification. Do not install that variant on a phone.
+
+## GitHub releases
+
+Every `vMAJOR.MINOR.PATCH` tag builds a signed phone APK and attaches
+`Muxterm-MAJOR.MINOR.PATCH-android.apk` to the existing GitHub Release. The tag
+sets the Android version name and a monotonically increasing version code.
+The release job uses repository secrets `ANDROID_RELEASE_KEYSTORE_BASE64` and
+`ANDROID_RELEASE_KEYSTORE_PASSWORD`; the key alias is `muxterm-android`.
+Release APKs use a different signing key from local debug and phone builds, so
+installing the first release over a debug build requires uninstalling the debug
+build once. Later release APKs can update each other in place.
 
 ## Pointing it at a different server
 
@@ -23,7 +36,7 @@ Three ways, in precedence order:
 
 1. In-app: press **back** at the root of history -> **Change URL**.
 2. Intent: `adb shell am start -n io.ampbox.muxterm/.MainActivity -e url https://host`
-3. Build time: `./gradlew assembleDebug -PmuxtermUrl=https://host`
+3. Build time: `./gradlew assemblePhone -PmuxtermUrl=https://host`
 
 (1) and (2) persist in SharedPreferences; **Reset to default** clears the override.
 
