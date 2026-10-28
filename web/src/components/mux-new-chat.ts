@@ -4,7 +4,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import { remoteChatPath } from '../lib/remote-chat-routes.js';
-import { ArrowUp, Check, ChevronDown, Folder, MessageCircle, Network, Plus } from 'lucide';
+import { ArrowLeft, ArrowUp, Check, ChevronDown, Folder, MessageCircle, Network, Plus } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { chatComposerAttachment } from './chat-composer-attachment.js';
 import '../ui/button.js';
@@ -44,6 +44,7 @@ export class MuxNewChat extends LitElement {
   @property() initialPrompt = '';
   @state() private projectId = 'ungrouped';
   @state() private remoteHost = '';
+  @state() private nodePickerOpen = false;
   @state() private folder = '';
   @state() private workMode: 'local' | 'worktree' = 'local';
   @state() private projectName = '';
@@ -270,6 +271,7 @@ export class MuxNewChat extends LitElement {
     this.listing = undefined;
     this.workMode = 'local';
     this.pickerOpen = false;
+    this.nodePickerOpen = false;
     void sdkChats.folders().then(listing => { if (!this.remoteHost) { this.listing = listing; this.folder = listing.base; void this.loadStartOptions(); } });
   }
   private async selectFolder(path: string) {
@@ -317,6 +319,7 @@ export class MuxNewChat extends LitElement {
     finally { this.projectCreating = false; }
   }
   private async chooseRemoteHost(host: string) {
+    this.nodePickerOpen = false;
     if (host === this.remoteHost) { this.pickerOpen = false; return; }
     this.catalogVersion++;
     this.startOptionsVersion++;
@@ -338,23 +341,10 @@ export class MuxNewChat extends LitElement {
       await this.loadStartOptions();
     } catch (error) { if (this.remoteHost === host) this.error = error instanceof Error ? error.message : String(error); }
   }
-  private chooseProject(project: { id:string; path:string; remoteHost?:string }) {
-    const host = project.remoteHost || '';
-    if (host !== this.remoteHost) {
-      for (const item of this.attachments) if (item.preview) URL.revokeObjectURL(item.preview);
-      this.attachments = [];
-    }
-    this.catalogVersion++;
-    this.startOptionsVersion++;
-    this.remoteHost = host;
-    this.projectId = project.id;
-    this.folder = project.path;
-    this.workMode = 'local';
+  private openRemoteSettings() {
     this.pickerOpen = false;
-    this.catalog = undefined;
-    this.startOptions = undefined;
-    void sdkChats.folders('', this.remoteHost).then(listing => { if (this.projectId === project.id) this.listing = listing; });
-    void this.loadStartOptions();
+    this.nodePickerOpen = false;
+    this.dispatchEvent(new CustomEvent('launcher-action', { detail:{action:'settings',section:'remotes'}, bubbles:true, composed:true }));
   }
   private onHarnessChange(value: SDKHarnessName) {
     const option = this.startOptions?.find(item => item.harness === value);
@@ -563,28 +553,37 @@ export class MuxNewChat extends LitElement {
         ${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}
       </div>
       <div class="context-bar">
-        <div class="project-picker"><button class="project-trigger" type="button" aria-label="Session location" aria-haspopup="menu" aria-expanded=${this.pickerOpen} @click=${() => { this.pickerOpen = !this.pickerOpen; }}>
+        <div class="project-picker"><button class="project-trigger" type="button" aria-label="Session location" aria-haspopup="menu" aria-expanded=${this.pickerOpen} @click=${() => { this.pickerOpen = !this.pickerOpen; this.nodePickerOpen = false; }}>
           ${icon(this.remoteHost ? Network : this.projectId === 'ungrouped' ? MessageCircle : Folder,{size:15})}<span>${selectedProject?.name || (this.remoteHost ? sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'Remote chat' : 'Chat')}</span>${icon(ChevronDown,{size:14})}
         </button>
         ${this.pickerOpen ? html`<div class="project-options" role="menu" aria-label="Session location">
-          <button class="project-option" role="menuitemradio" aria-checked=${this.projectId === 'ungrouped' && !this.remoteHost} ?selected=${this.projectId === 'ungrouped' && !this.remoteHost} @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy"><strong>Chat</strong><small>No project folder</small></span>${this.projectId === 'ungrouped' && !this.remoteHost ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>
-          <div class="project-divider"></div>
-          ${sdkChats.remoteHosts.map(host => html`<mux-ui-menu-item ?disabled=${host.state !== 'connected'} @click=${() => void this.chooseRemoteHost(host.id)}>${icon(Network,{size:16})}<span class="option-copy"><strong>${host.name}</strong><small>${host.state === 'connected' ? 'Browse folders on this machine' : host.state}</small></span><span class="remote-status ${host.state}" aria-label=${host.state}></span></mux-ui-menu-item>${sdkChats.projects.filter(project => project.remoteHost === host.id).map(project => html`<mux-ui-menu-item @click=${() => this.chooseProject(project)}>${icon(Network,{size:16})}<span class="option-copy"><strong>${project.name}</strong><small>${project.path}</small></span></mux-ui-menu-item>`)}`)}
-          ${sdkChats.remoteHosts.length ? html`<div class="project-divider"></div>` : nothing}
-          <mux-folder-picker inline label="Folders" .remoteHost=${this.remoteHost} .value=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? '' : this.folder} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => void this.selectFolder(event.detail.path)}></mux-folder-picker>
-          <div class="project-divider"></div>
-          <mux-ui-menu-item @click=${this.openProjectDialog}>${icon(Plus,{size:16})}<strong>New folder</strong></mux-ui-menu-item>
+          ${this.nodePickerOpen ? html`
+            <mux-ui-menu-item @click=${() => { this.nodePickerOpen = false; }}>${icon(ArrowLeft,{size:16})}<strong>Choose machine</strong></mux-ui-menu-item>
+            <div class="project-divider"></div>
+            <mux-ui-menu-item @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy"><strong>This machine</strong><small>Home Muxterm server</small></span>${!this.remoteHost ? icon(Check,{size:15}) : nothing}</mux-ui-menu-item>
+            ${sdkChats.remoteHosts.map(host => html`<mux-ui-menu-item ?disabled=${host.state !== 'connected'} @click=${() => void this.chooseRemoteHost(host.id)}>${icon(Network,{size:16})}<span class="option-copy"><strong>${host.name}</strong><small>${host.state === 'connected' ? 'Available for chats' : 'Unavailable'}</small></span><span class="remote-status ${host.state}" aria-label=${host.state}></span></mux-ui-menu-item>`)}
+            <div class="project-divider"></div>
+            <mux-ui-menu-item @click=${this.openRemoteSettings}>${icon(Plus,{size:16})}<span>Set up SSH machine…</span></mux-ui-menu-item>
+          ` : html`
+            <button class="project-option" role="menuitemradio" aria-checked=${this.projectId === 'ungrouped' && !this.remoteHost} ?selected=${this.projectId === 'ungrouped' && !this.remoteHost} @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy"><strong>Chat</strong><small>No project folder</small></span>${this.projectId === 'ungrouped' && !this.remoteHost ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>
+            <div class="project-divider"></div>
+            <mux-folder-picker inline label="Folders" .remoteHost=${this.remoteHost} .value=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? '' : this.folder} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => void this.selectFolder(event.detail.path)}></mux-folder-picker>
+            <div class="project-divider"></div>
+            <mux-ui-menu-item @click=${this.openProjectDialog}>${icon(Plus,{size:16})}<strong>New project folder${this.remoteHost ? ` on ${sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'remote machine'}` : ''}</strong></mux-ui-menu-item>
+            <mux-ui-menu-item @click=${() => { this.nodePickerOpen = true; }}>${icon(Network,{size:16})}<span class="option-copy"><strong>Choose machine…</strong><small>${this.remoteHost ? sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'Remote machine' : 'This machine'}</small></span></mux-ui-menu-item>
+            <mux-ui-menu-item @click=${this.openRemoteSettings}>${icon(Plus,{size:16})}<span>Set up SSH machine…</span></mux-ui-menu-item>
+          `}
         </div>` : nothing}</div>
         <div class="spacer"></div>
         <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? 'Choose a project with a Git folder to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || !!selectedProject?.managedFolder} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
       </div>
-      ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New folder" .dismissable=${!this.projectCreating} @dismiss=${this.closeProjectDialog}><div class="new-folder-form">
-        <h2>New folder</h2>
+      ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New project folder" .dismissable=${!this.projectCreating} @dismiss=${this.closeProjectDialog}><div class="new-folder-form">
+        <h2>New project folder${this.remoteHost ? ` on ${sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'remote machine'}` : ''}</h2>
         <label class="field-label">Parent folder<mux-folder-picker inline label="Parent folder" .remoteHost=${this.remoteHost} .value=${this.projectParent} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => { this.projectParent = event.detail.path; }}></mux-folder-picker></label>
         <mux-ui-text-field label="New folder name" aria-label="New folder name" placeholder="Folder name" .value=${this.projectFolderName} @input=${(event:Event) => { this.projectFolderName = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
         <mux-ui-text-field label="Project name (optional)" aria-label="Project name" placeholder="Use folder name" .value=${this.projectName} @input=${(event:Event) => { this.projectName = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
         ${this.projectError ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.projectError}</mux-ui-feedback>` : nothing}
-        <div class="actions"><mux-ui-button variant="quiet" ?disabled=${this.projectCreating} @click=${this.closeProjectDialog}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${this.projectCreating || !this.projectParent || !this.validNewFolderName(this.projectFolderName.trim())} @click=${() => void this.createProject()}>${this.projectCreating ? 'Creating…' : 'Create folder'}</mux-ui-button></div>
+        <div class="actions"><mux-ui-button variant="quiet" ?disabled=${this.projectCreating} @click=${this.closeProjectDialog}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${this.projectCreating || !this.projectParent || !this.validNewFolderName(this.projectFolderName.trim())} @click=${() => void this.createProject()}>${this.projectCreating ? 'Creating…' : 'Create project'}</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
       ${this.busy ? html`<div class="receipt" role="status">Message received · Creating chat…</div>` : nothing}
       ${this.catalogError ? html`<mux-ui-feedback kind="error" appearance="panel">Could not load models: ${this.catalogError}<mux-ui-button slot="action" size="small" @click=${() => void this.loadCatalog()}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}

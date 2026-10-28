@@ -107,7 +107,7 @@ export class MuxSidebar extends LitElement {
       { label: 'New Chat', icon: Plus, active: this.newChatActive, event: 'chat-new' },
       { label: 'Terminal', icon: SquareTerminal, active: this.terminalActive, event: 'terminal-open' },
       { label: 'Scheduled jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
-      { label: 'Connections', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
+      { label: 'Customizations', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
       { label: 'Skills', icon: Puzzle, active: this.skillsActive, event: 'skills-open' },
     ];
 

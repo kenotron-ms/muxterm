@@ -110,8 +110,10 @@ reuse those SSH machines. The Chats sidebar discovers project folders and
 sessions from their chat backends automatically; a network icon, machine name,
 and green dot identify a reachable remote project.
 
-In **New chat → Session location**, choose a machine, browse a folder there,
-and start the chat. Its project files, agent process, and chat history stay on
+In **New chat → Session location**, choose **Choose machine…**, select the SSH
+node, then browse a folder or create a new project folder there. The same
+dropdown offers **Set up SSH machine…**, which opens **Settings → Remotes**.
+Its project files, agent process, and chat history stay on
 that machine. The home server forwards chat requests over SSH; the client keeps
 using the home URL. Reloading a chat link reconnects to the same node.
 
@@ -141,7 +143,7 @@ existing project rows remain visible in the current client until it reloads.
 
 ## Browser Assistant
 
-Download `muxterm-browser-assistant-dev.zip` from the [GitHub release assets](https://github.com/kenotron-ms/muxterm/releases/latest), extract it, and load the `browser-assistant` folder through Chrome’s **Load unpacked** option. In Muxterm, use **Connections → Browser Assistant → Connect browser**, then confirm the connection in the extension popup.
+Download `muxterm-browser-assistant-dev.zip` from the [GitHub release assets](https://github.com/kenotron-ms/muxterm/releases/latest), extract it, and load the `browser-assistant` folder through Chrome’s **Load unpacked** option. In Muxterm, use **Customizations → Browser Assistant → Connect browser**, then confirm the connection in the extension popup.
 
 **Browser access** opens a dedicated agent window; **Control this tab** authorizes your current tab and site. Access has no timer, and browser restarts pause it. Signed-in browser actions can read private data and submit forms: enable access only for an instance and agents you trust. Use HTTPS for remote pairing. This developer preview uses the current shared-owner authorization model, not per-agent or full multi-user isolation. See [setup, permissions, and limitations](extensions/browser-assistant/README.md).
 

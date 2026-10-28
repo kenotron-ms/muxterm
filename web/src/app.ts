@@ -91,7 +91,7 @@ const SIDEBAR_SUBPIXEL_ROUNDING_BIAS = 0.001;
 const UTILITY_TITLES = new Map([
   ['new', 'New Chat'],
   ['jobs', 'Scheduled jobs'],
-  ['connections', 'Connections'],
+  ['connections', 'Customizations'],
   ['skills', 'Skills'],
 ]);
 function chatFromHash(): string | null {

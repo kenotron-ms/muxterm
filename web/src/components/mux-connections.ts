@@ -223,9 +223,9 @@ export class MuxConnections extends LitElement {
     const prompt=`Help me ${existing?'review and, if needed, redo':'set up'} ${service.name} in this Muxterm using Browser Assistant. Start by checking whether my Google account and Cloud project are eligible for the Google Workspace Developer Preview MCP service. Ask me which account and project to use; inspect existing registrations before creating another one.
 
 Use prepare_connection with provider "google" and services ["${service.id}"] on this Muxterm. Compare its exact callback, endpoint, and scopes with these displayed values:
-Callback: ${this.remotes?.callbackUrl||'Check the Connections page'}
-Endpoint: ${service.endpoint||'Check the Connections page'}
-Scopes: ${service.scopes?.join(', ')||'Check the Connections page'}
+Callback: ${this.remotes?.callbackUrl||'Check the Customizations page'}
+Endpoint: ${service.endpoint||'Check the Customizations page'}
+Scopes: ${service.scopes?.join(', ')||'Check the Customizations page'}
 
 Guide me through the Google Cloud Console using my paired Browser Assistant. Stop before any client secret appears. I will pause browser access and upload the Web OAuth JSON or enter credentials on the private Muxterm setup page. Never put a client ID, secret, registration file, or its contents in chat or agent tools. Then use check_connection and the opaque credential handle to configure the connection. Guide me through Google sign-in, checking tools, and choosing which read tools to enable. Do not read mail content just to verify setup.
 
@@ -339,8 +339,8 @@ If I already have a connection, check its status first. Do not remove or replace
       ${services.length?html`<mux-ui-select class="service-picker" label="Choose a Google service" .value=${selected.id} .options=${services.map(service=>({value:service.id,label:service.name}))} @change=${(event:Event)=>{this.googleService=(event.target as MuxUISelect).value;this.googleClientID='';this.googleClientSecret='';}}></mux-ui-select>${this.googleDetail(selected)}`:html`<mux-ui-feedback kind="empty">No Google services are available.</mux-ui-feedback>`}`;
   }
   override render() {
-    return html`<mux-ui-screen-header section="Services" heading="Connections"></mux-ui-screen-header>
-      <mux-ui-page-intro heading="Connections" description="Choose an account to make its tools available in new chats."></mux-ui-page-intro>
+    return html`<mux-ui-screen-header section="Services" heading="Customizations"></mux-ui-screen-header>
+      <mux-ui-page-intro heading="Customizations" description="Choose an account to make its tools available in new chats."></mux-ui-page-intro>
       <div class="layout"><nav class="catalog" aria-label="Providers">
         <mux-ui-nav-item label="Google" status-tone=${this.providerStatusTone('google')} status-label=${this.providerStatusLabel('google')} ?active=${this.selected==='google'} @click=${()=>this.selectService('google')}></mux-ui-nav-item>
         <mux-ui-nav-item label="Microsoft" status-tone=${this.providerStatusTone('microsoft')} status-label=${this.providerStatusLabel('microsoft')} ?active=${this.selected==='microsoft'} @click=${()=>this.selectService('microsoft')}></mux-ui-nav-item>
