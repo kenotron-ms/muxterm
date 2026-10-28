@@ -14,6 +14,13 @@ import type { MuxUITextField } from '../ui/text-field.js';
 type Meeting = { id:string; chatId:string; title:string; kind:'recording'|'call'; startedAt:string; endedAt?:string; participants:string[]; recordingState:string; transcriptState:string; transcriptError?:string; linkedNoteId?:string; mediaType?:string; mediaBytes:number; chunks:number; error?:string };
 type Transcript = { revision:number; segments:{id:string;startMs:number;endMs:number;text:string;speaker:string}[]; corrections:Record<string,string> };
 type LocalChunk = { key:string; blob:Blob };
+type CallRoute = 'checking'|'direct'|'relay'|'stalled'|'failed';
+type CallNetwork = { route:CallRoute; ice:string; localType?:string; remoteType?:string; protocol?:string; relayProtocol?:string; errorCode?:number; turnConfigured:boolean };
+type CandidateStat = { id:string; type:string; selectedCandidatePairId?:string; localCandidateId?:string; remoteCandidateId?:string; state?:string; nominated?:boolean; candidateType?:string; protocol?:string; relayProtocol?:string };
+
+function hasTurnServer(servers:RTCIceServer[]) {
+  return servers.some(server => [server.urls].flat().some(url => /^turns?:/i.test(url)));
+}
 
 function localMediaDB(): Promise<IDBDatabase> {
   return new Promise((resolve,reject) => {
@@ -79,6 +86,9 @@ export class MuxMeetings extends LitElement {
   private callPollTimer?:number;
   private callPolling = false;
   private callStatus = '';
+  private callNetwork:CallNetwork = {route:'checking',ice:'new',turnConfigured:false};
+  private lastNetworkCheck = 0;
+  private callAttemptAt = 0;
   private inviteUrl = '';
   private guestJoined = false;
   private offerSent = false;
@@ -139,7 +149,7 @@ export class MuxMeetings extends LitElement {
   private path(id:string, suffix='') { return `${this.base()}/${encodeURIComponent(id)}${suffix}`; }
   private selected() { return this.meetings.find(item => item.id === this.selectedId); }
   /** Storybook uses this production component with explicit sample state. */
-  showSample(scene:'library'|'review'|'recorder'|'preflight'|'waiting'|'call'|'share'|'recording'|'recording-share') {
+  showSample(scene:'library'|'review'|'recorder'|'preflight'|'waiting'|'call'|'relay'|'stalled'|'failed'|'share'|'recording'|'recording-share') {
     this.loadRequest++;
     this.sampleScene=scene;
     this.loading=false;
@@ -151,10 +161,11 @@ export class MuxMeetings extends LitElement {
     this.meetings=[recording,call];
     this.selectedId=scene==='library'||scene==='preflight'?'':scene==='review'||scene==='recorder'?'sample-recording':'sample-call';
     this.callPreparing=scene==='preflight';
-    this.callStream=scene==='preflight'||['waiting','call','share','recording','recording-share'].includes(scene)?new MediaStream():undefined;
-    this.callId=['waiting','call','share','recording','recording-share'].includes(scene)?'sample-call':'';
-    this.callStatus=scene==='waiting'?'Waiting for a guest':'Connected · sample call';
+    this.callStream=scene==='preflight'||['waiting','call','relay','stalled','failed','share','recording','recording-share'].includes(scene)?new MediaStream():undefined;
+    this.callId=['waiting','call','relay','stalled','failed','share','recording','recording-share'].includes(scene)?'sample-call':'';
+    this.callStatus=scene==='waiting'?'Waiting for a guest':scene==='failed'?'Connection failed · sample call':scene==='stalled'?'Still connecting · sample call':'Connected · sample call';
     this.guestJoined=scene!=='waiting';
+    this.callNetwork=scene==='relay'?{route:'relay',ice:'connected',localType:'relay',remoteType:'host',protocol:'udp',relayProtocol:'udp',turnConfigured:true}:scene==='failed'?{route:'failed',ice:'failed',errorCode:701,turnConfigured:true}:scene==='stalled'?{route:'stalled',ice:'new',turnConfigured:false}:{route:scene==='waiting'?'checking':'direct',ice:scene==='waiting'?'new':'connected',localType:scene==='waiting'?undefined:'host',remoteType:scene==='waiting'?undefined:'host',protocol:scene==='waiting'?undefined:'udp',turnConfigured:false};
     this.screenStream=scene==='share'||scene==='recording-share'?new MediaStream():undefined;
     this.callRecording=scene==='recording'||scene==='recording-share';
     this.inviteUrl='Sample invite · access limited to this meeting';
@@ -306,12 +317,17 @@ export class MuxMeetings extends LitElement {
       this.offerSent = false;
       this.callReady = false;
       this.pendingICE = [];
+      this.callNetwork={route:'checking',ice:'new',turnConfigured:hasTurnServer(invite.iceServers || [])};
+      this.lastNetworkCheck=0;
+      this.callAttemptAt=0;
       this.remoteStream = undefined;
       this.remoteScreen = undefined;
       const peer = new RTCPeerConnection({iceServers:invite.iceServers || []});
       this.callPeer = peer;
       peer.onicecandidate = event => { if (event.candidate) void this.callSignal('ice',event.candidate).catch(error => { this.callStatus=String(error); this.requestUpdate(); }); };
-      peer.onconnectionstatechange = () => { this.callStatus=peer.connectionState; this.requestUpdate(); };
+      peer.onicecandidateerror = event => { const code=(event as Event & {errorCode?:number}).errorCode; this.callNetwork={...this.callNetwork,errorCode:code}; this.requestUpdate(); };
+      peer.oniceconnectionstatechange = () => { void this.inspectCallNetwork(); };
+      peer.onconnectionstatechange = () => { this.callStatus=peer.connectionState==='connected'?'Connected to guest':peer.connectionState==='failed'?'Media connection failed':peer.connectionState==='disconnected'?'Guest media disconnected; reconnecting…':'Connecting media…'; void this.inspectCallNetwork(); this.requestUpdate(); };
       peer.ontrack = event => {
         if (event.track.kind === 'audio') {
           this.remoteStream ??= new MediaStream();
@@ -342,6 +358,7 @@ export class MuxMeetings extends LitElement {
       await peer.setLocalDescription(offer);
       await this.callSignal('offer',peer.localDescription);
       this.offerSent = true;
+      this.callAttemptAt=Date.now();
     } catch (error) { this.callStatus = `Connection setup failed: ${String(error)}`; this.requestUpdate(); }
   }
   private async pollCall() {
@@ -354,11 +371,30 @@ export class MuxMeetings extends LitElement {
       for (const message of data.signals) { this.callCursor=Math.max(this.callCursor,message.seq); await this.receiveCall(message); }
       this.callCursor=Math.max(this.callCursor,data.cursor);
       this.guestJoined=data.guestJoined;
+      if (this.guestJoined && this.callStatus==='Waiting for a guest') this.callStatus='Guest joined; checking media connection…';
       if (this.guestJoined && !this.offerSent && this.callPeer?.signalingState === 'stable') await this.offerCall();
       if (this.guestJoined && !data.peerConnected) this.callStatus='Guest disconnected; reconnecting…';
+      if (Date.now()-this.lastNetworkCheck>3000) void this.inspectCallNetwork();
       this.requestUpdate();
     } catch (error) { this.callStatus=String(error); this.requestUpdate(); }
     this.callPolling = false;
+  }
+  private async inspectCallNetwork() {
+    const peer=this.callPeer;
+    if (!peer) return;
+    this.lastNetworkCheck=Date.now();
+    try {
+      const report=await peer.getStats();
+      if (peer!==this.callPeer) return;
+      const stats=[...report.values()] as CandidateStat[];
+      const transport=stats.find(stat=>stat.type==='transport' && stat.selectedCandidatePairId);
+      const pair=stats.find(stat=>stat.id===transport?.selectedCandidatePairId) || stats.find(stat=>stat.type==='candidate-pair' && stat.nominated && stat.state==='succeeded');
+      const local=stats.find(stat=>stat.id===pair?.localCandidateId);
+      const remote=stats.find(stat=>stat.id===pair?.remoteCandidateId);
+      const route:CallRoute=peer.iceConnectionState==='failed'?'failed':pair ? (local?.candidateType==='relay'||remote?.candidateType==='relay'?'relay':'direct'):this.callAttemptAt && Date.now()-this.callAttemptAt>12000?'stalled':'checking';
+      this.callNetwork={...this.callNetwork,route,ice:peer.iceConnectionState,localType:local?.candidateType,remoteType:remote?.candidateType,protocol:local?.protocol || remote?.protocol,relayProtocol:local?.relayProtocol};
+      this.requestUpdate();
+    } catch { this.callNetwork={...this.callNetwork,ice:peer.iceConnectionState,route:peer.iceConnectionState==='failed'?'failed':'checking'};this.requestUpdate(); }
   }
   private async receiveCall(message:{type:string;payload:any}) {
     const peer=this.callPeer;
@@ -482,6 +518,8 @@ export class MuxMeetings extends LitElement {
     this.callStream?.getTracks().forEach(track=>track.stop());this.callStream=undefined;
     this.screenStream?.getTracks().forEach(track=>track.stop());this.screenStream=undefined;
     this.callId='';this.inviteUrl='';this.callRecording=false;this.remoteStream=undefined;this.remoteScreen=undefined;
+    this.callNetwork={route:'checking',ice:'new',turnConfigured:false};
+    this.callAttemptAt=0;
     await this.load(false);
   }
   override updated() {
@@ -650,10 +688,18 @@ export class MuxMeetings extends LitElement {
     if (selected) return html`<div class="meeting-detail"><div class="meeting-overline">${selected.kind === 'call' ? 'VIDEO CALL' : 'RECORDING'} · ${new Date(selected.startedAt).toLocaleString()}</div><h2>${selected.title}</h2><p>${selected.participants.join(', ')} · ${this.clock(this.duration(selected))}</p><p>Status: ${selected.recordingState === 'ready' ? 'Recording ready' : selected.recordingState === 'interrupted' ? 'Capture interrupted' : selected.recordingState}</p>${selected.error ? html`<mux-ui-feedback kind="warning">${selected.error}</mux-ui-feedback>` : nothing}${selected.recordingState === 'ready' ? html`${selected.mediaType?.startsWith('video/') ? html`<video class="meeting-player" controls preload="metadata" src=${this.path(selected.id,'/media')}></video>` : html`<audio controls preload="metadata" src=${this.path(selected.id,'/media')}></audio>`}<a class="meeting-download" href=${this.path(selected.id,'/media')} download=${`meeting-${selected.id}.webm`}>${icon(Download,{size:15})} Download original</a>${this.transcriptView(selected)}` : selected.chunks > 0 || this.locallyRecoverable.has(selected.id) ? html`<mux-ui-button variant="secondary" @click=${() => void this.recover(selected)}>Recover and finalize saved media</mux-ui-button>` : nothing}<div class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => { this.selectedId=''; this.requestUpdate(); }}>All meetings</mux-ui-button><mux-ui-button variant="danger" @click=${() => { this.deleteId=selected.id; this.requestUpdate(); }}>${icon(Trash2,{size:15})} Delete meeting</mux-ui-button></div></div>`;
     return html`<mux-ui-empty-state heading="Meet here"><span slot="icon">${icon(AudioLines,{size:24})}</span>Record from your microphone or invite someone to a private call.<div slot="action" class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => void this.prepare()}>${icon(Plus,{size:15})} Record a meeting</mux-ui-button><mux-ui-button variant="secondary" @click=${() => void this.prepareCall()}>${icon(Video,{size:15})} Start a call</mux-ui-button></div></mux-ui-empty-state>`;
   }
+  private networkView() {
+    const network=this.callNetwork;
+    const routeLabel=network.route==='direct'?'Direct browser connection':network.route==='relay'?'TURN relay':network.route==='failed'?'No connection':network.route==='stalled'?'No route selected yet':'Checking routes';
+    const noRouteHint=network.turnConfigured?'Check TURN reachability and credentials. The browser cannot identify the exact network rule.':'No TURN fallback is configured. A NAT or firewall may be blocking the direct path.';
+    const hint=network.route==='direct'?'Media is traveling directly between browsers.':network.route==='relay'?'Media is using TURN. The browser cannot identify the exact NAT or firewall rule that prevented a direct route.':network.route==='failed'?`No route connected. ${noRouteHint}`:network.route==='stalled'?`No route was selected after 12 seconds. The browser has not reported failure. ${noRouteHint}`:'Browsers are testing available paths.';
+    const types:Record<string,string>={host:'local',srflx:'NAT-mapped',prflx:'peer-mapped',relay:'relay'};
+    return html`<div class="call-network" role="status"><strong>Connection: ${routeLabel}</strong><span>ICE ${network.ice}${network.protocol ? ` · ${network.protocol.toUpperCase()}` : ''}${network.localType && network.remoteType ? ` · ${types[network.localType] || network.localType} ↔ ${types[network.remoteType] || network.remoteType}` : ''}${network.relayProtocol ? ` · TURN over ${network.relayProtocol.toUpperCase()}` : ''}</span><p>${hint}${(network.route==='failed'||network.route==='stalled') && network.errorCode ? ` ICE server error ${network.errorCode}.` : ''}</p></div>`;
+  }
   private callView(selected?:Meeting) {
     const localAudio=this.callStream?.getAudioTracks()[0],localVideo=this.callStream?.getVideoTracks()[0];
     const screen=this.screenStream || this.remoteScreen;
-    return html`<div class="meeting-call"><div class="meeting-overline">${selected?.title || 'VIDEO CALL'} · ${this.guestJoined ? 'GUEST JOINED' : 'WAITING FOR GUEST'}</div><h2>${this.guestJoined ? 'You and a guest' : 'Waiting for a guest'}</h2><p>${this.callStatus || 'Connecting…'}</p>${this.callRecording ? html`<div class="record-live">● Recording audio, video, and active screen share. Both people can see this indicator.</div>` : nothing}
+    return html`<div class="meeting-call"><div class="meeting-overline">${selected?.title || 'VIDEO CALL'} · ${this.guestJoined ? 'GUEST JOINED' : 'WAITING FOR GUEST'}</div><h2>${this.guestJoined ? 'You and a guest' : 'Waiting for a guest'}</h2><p>${this.callStatus || 'Connecting…'}</p>${this.networkView()}${this.callRecording ? html`<div class="record-live">● Recording audio, video, and active screen share. Both people can see this indicator.</div>` : nothing}
       <div class="call-stage ${screen ? 'sharing' : ''} ${this.sampleScene ? 'sample-media' : ''}">${screen ? html`<div class="call-screen-tile">${this.sampleScene ? html`<div class="sample-screen"><i></i><strong>Project notes</strong><p>Decisions · follow ups · next steps</p></div>` : nothing}<video class="call-screen" autoplay playsinline ?muted=${!!this.screenStream}></video><span>${this.screenStream ? 'Your screen' : 'Guest screen'}</span></div>` : nothing}<div class="call-video-tile">${this.sampleScene ? html`<div class="sample-person guest"><i></i><b></b></div>` : nothing}<video class="call-remote" autoplay playsinline></video><span>${this.guestJoined ? 'Guest' : 'Waiting for a guest'}</span></div><div class="call-video-tile">${this.sampleScene ? html`<div class="sample-person host"><i></i><b></b></div>` : nothing}<video class="call-local" autoplay playsinline muted></video><span>You</span></div></div>
       <div class="call-controls"><mux-ui-button size="small" variant="secondary" @click=${() => { if(this.sampleScene)this.sampleMicOn=!this.sampleMicOn;else if(localAudio)localAudio.enabled=!localAudio.enabled;this.requestUpdate(); }}>${icon((this.sampleScene ? this.sampleMicOn : localAudio?.enabled) ? Mic : MicOff,{size:15})} ${(this.sampleScene ? this.sampleMicOn : localAudio?.enabled) ? 'Mute' : 'Unmute'}</mux-ui-button><mux-ui-button size="small" variant="secondary" ?disabled=${!localVideo&&!this.sampleScene} @click=${() => { if(this.sampleScene)this.sampleCameraOn=!this.sampleCameraOn;else if(localVideo)localVideo.enabled=!localVideo.enabled;this.requestUpdate(); }}>${icon((this.sampleScene ? this.sampleCameraOn : localVideo?.enabled) ? Video : VideoOff,{size:15})} ${(this.sampleScene ? this.sampleCameraOn : localVideo?.enabled) ? 'Camera off' : 'Camera on'}</mux-ui-button><mux-ui-button size="small" variant="secondary" @click=${() => { if(this.sampleScene){this.screenStream=this.screenStream?undefined:new MediaStream();this.requestUpdate();}else void this.toggleShare(); }}>${icon(MonitorUp,{size:15})} ${this.screenStream ? 'Stop share' : 'Share screen'}</mux-ui-button><mux-ui-button size="small" variant="danger" @click=${() => { if(this.sampleScene){this.callId='';this.requestUpdate();}else void this.leaveCall(); }}>${icon(X,{size:15})} End call</mux-ui-button></div>
       <div class="call-invite"><strong>Guest invite</strong><span>${this.inviteUrl}</span><mux-ui-button size="small" variant="secondary" @click=${() => void navigator.clipboard.writeText(this.inviteUrl).catch(error => {this.callStatus=String(error);this.requestUpdate();})}>${icon(Copy,{size:15})} Copy link</mux-ui-button></div>
@@ -740,6 +786,9 @@ const styles = `
   mux-meetings .call-invite, mux-meetings .call-record-action { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); padding:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); margin:var(--ui-space-4) 0; }
   mux-meetings .call-invite span { overflow-wrap:anywhere; color:var(--ui-text-muted); font-size:var(--ui-text-sm); flex:1; }
   mux-meetings .call-record-action p { margin:0; flex:1; }
+  mux-meetings .call-network { display:grid; gap:var(--ui-space-1); padding:var(--ui-space-3) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
+  mux-meetings .call-network strong { font-size:var(--ui-text-sm); }
+  mux-meetings .call-network span, mux-meetings .call-network p { color:var(--ui-text-muted); font-size:var(--ui-text-xs); margin:0; }
   mux-meetings .record-live { margin:var(--ui-space-3) 0; }
   @container(max-width:620px) { mux-meetings .meeting-layout { display:flex; flex-direction:column; } mux-meetings .meeting-rail { min-height:160px; max-height:36%; } mux-meetings .meeting-divider { height:1px; } mux-meetings .meeting-viewer { flex:1; } }
   @container(max-width:620px) { mux-meetings .call-stage, mux-meetings .call-stage.sharing { display:flex; flex-direction:column; } mux-meetings .call-screen-tile { aspect-ratio:16/10 !important; } mux-meetings .call-video-tile { aspect-ratio:16/9 !important; } }
