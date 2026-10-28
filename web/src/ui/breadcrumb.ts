@@ -15,6 +15,8 @@ export class MuxUIBreadcrumb extends LitElement {
   private scrollFrame = 0;
 
   static override styles = css`
+    /* The breadcrumb is interactive wherever it appears, including WCO and
+       native chrome. Keep its whole hit area outside drag regions. */
     :host { display:block; flex:1; min-width:0; font-family:var(--ui-font-sans); -webkit-app-region:no-drag; app-region:no-drag; }
     nav { min-width:0; overflow-x:auto; scrollbar-width:none; }
     nav::-webkit-scrollbar { display:none; }
