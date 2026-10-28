@@ -426,9 +426,7 @@ export class MuxChatList extends LitElement {
     .project-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-3); }
     .remote-heading { margin-top:var(--ui-space-4); }
     .remote-group { margin:0 0 var(--ui-space-3); }
-    .remote-folder { display:flex; align-items:center; gap:var(--ui-space-2); width:100%; min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:none; color:var(--ui-text); font:inherit; text-align:left; cursor:pointer; }
-    .remote-folder:hover { background:var(--ui-surface-hover); }
-    .remote-folder svg { flex:none; }
+    .remote-folder { display:flex; width:100%; }
     .remote-children { margin-left:var(--ui-space-6); }
     .remote-project { margin-left:var(--ui-space-5); }
     .remote-note { padding:var(--ui-space-1) var(--ui-space-2); font-size:var(--ui-text-xs); overflow-wrap:anywhere; }
@@ -473,19 +471,19 @@ export class MuxChatList extends LitElement {
       const open = this.remoteOpen.has(snapshot.host);
       const sessions = snapshot.sessions || [];
       const projects = snapshot.projects || [];
-      return html`<div class="remote-group"><button class="remote-folder" type="button" aria-expanded=${String(open)}
+      return html`<div class="remote-group"><mux-ui-list-row class="remote-folder" variant="group" expandable .expanded=${open} label=${snapshot.name || snapshot.host}
         @click=${() => { if (open) this.remoteOpen.delete(snapshot.host); else this.remoteOpen.add(snapshot.host); this.requestUpdate(); }}>
-        ${icon(open ? FolderOpen : Folder,{size:16})}<span>${snapshot.name || snapshot.host}</span>
-      </button>${open ? html`<div class="remote-children">
+        <span slot="icon">${icon(open ? FolderOpen : Folder,{size:16})}</span>
+      </mux-ui-list-row>${open ? html`<div class="remote-children">
         ${snapshot.error ? html`<div class="remote-note" role="alert">${snapshot.error}</div>` : nothing}
         ${projects.map(project => {
           const key = `${snapshot.host}/${project.id}`;
           const projectOpen = !this.remoteProjectOpen.has(key);
           const chats = sessions.filter(chat => chat.workspaceId === project.id);
-          return html`<button class="remote-folder" type="button" aria-expanded=${String(projectOpen)}
+          return html`<mux-ui-list-row class="remote-folder" variant="group" expandable .expanded=${projectOpen} label=${project.name}
             @click=${() => { if (projectOpen) this.remoteProjectOpen.add(key); else this.remoteProjectOpen.delete(key); this.requestUpdate(); }}>
-            ${icon(projectOpen ? FolderOpen : Folder,{size:15})}<span>${project.name}</span>
-          </button>${projectOpen ? html`<div class="remote-project">${chats.map(chat => this.renderRemoteChat(snapshot,chat))}</div>` : nothing}`;
+            <span slot="icon">${icon(projectOpen ? FolderOpen : Folder,{size:15})}</span>
+          </mux-ui-list-row>${projectOpen ? html`<div class="remote-project">${chats.map(chat => this.renderRemoteChat(snapshot,chat))}</div>` : nothing}`;
         })}
         ${sessions.filter(chat => !chat.workspaceId || !projects.some(project => project.id === chat.workspaceId)).map(chat => this.renderRemoteChat(snapshot,chat))}
         ${!snapshot.error && !sessions.length ? html`<div class="remote-note">No remote chats</div>` : nothing}
