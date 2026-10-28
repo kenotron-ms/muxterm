@@ -4,9 +4,14 @@ plugins {
 }
 
 // Default URL the wrapper loads. Override at build time with:
-//   ./gradlew assembleDebug -PmuxtermUrl=https://your.host
+//   ./gradlew assemblePhone -PmuxtermUrl=https://your.host
 val muxtermUrl: String = (project.findProperty("muxtermUrl") as String?)
     ?: "https://muxterm.ampbox.io"
+val releaseVersion: String? = project.findProperty("muxtermVersion") as String?
+val releaseVersionCode: Int? = (project.findProperty("muxtermVersionCode") as String?)?.toIntOrNull()
+if ((releaseVersion == null) != (releaseVersionCode == null)) {
+    error("muxtermVersion and muxtermVersionCode must be provided together")
+}
 
 android {
     namespace = "io.ampbox.muxterm"
@@ -16,8 +21,8 @@ android {
         applicationId = "io.ampbox.muxterm"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersionCode ?: 2
+        versionName = releaseVersion ?: "0.1.1"
 
         buildConfigField("String", "MUXTERM_URL", "\"$muxtermUrl\"")
     }
@@ -26,8 +31,19 @@ android {
         buildConfig = true
     }
 
+    signingConfigs {
+        create("githubRelease") {
+            System.getenv("ANDROID_RELEASE_KEYSTORE_FILE")?.let { storeFile = file(it) }
+            storePassword = System.getenv("ANDROID_RELEASE_KEYSTORE_PASSWORD")
+            keyAlias = "muxterm-android"
+            keyPassword = System.getenv("ANDROID_RELEASE_KEYSTORE_PASSWORD")
+        }
+    }
+
     buildTypes {
-        // Debug-signed on purpose: this is a sideloaded demo build, not a Play release.
+        // The debug variant includes an Automotive OS emulator launcher from
+        // src/debug. It must not be sent to a phone: that extra launcher opens
+        // CarAppActivity and reports "System requires update" without a car host.
         getByName("debug") {
             isMinifyEnabled = false
             // Side-by-side installs, for when two people are verifying two
@@ -39,6 +55,18 @@ android {
             (project.findProperty("appIdSuffix") as String?)
                 ?.takeIf { it.isNotBlank() }
                 ?.let { applicationIdSuffix = it }
+        }
+
+        // Sideloadable phone build: debug-signed, with only MainActivity as a
+        // launcher. A separate build type keeps src/debug's Automotive OS
+        // emulator overlay and dependency out of the phone APK.
+        create("phone") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+        }
+
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("githubRelease")
         }
     }
 
@@ -79,9 +107,7 @@ dependencies {
     // only way to SEE this screen render on this machine is to install the
     // debug build on an AAOS emulator, which has the same templates host.
     //
-    // Scoped to debug so the shipped app keeps exactly one launcher entry.
-    // Promoting this to a real Automotive OS build means a product flavor, not
-    // moving this line.
+    // Scoped to debug so the phone build keeps exactly one launcher entry.
     debugImplementation("androidx.car.app:app-automotive:1.7.0")
 
     // JVM unit tests for the notification logic. The transition detector and
