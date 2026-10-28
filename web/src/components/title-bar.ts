@@ -40,6 +40,7 @@ export class MuxTitleBar extends LitElement {
       box-sizing: border-box;
       flex-shrink: 0;
       user-select: none;
+      cursor: default;
       position: relative;
     }
 
