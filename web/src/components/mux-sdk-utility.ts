@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, PanelRight, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
@@ -252,7 +252,16 @@ export class MuxSDKUtility extends LitElement {
   override render() {
     if (this.terminalMode) return html`<style>${this.surfaceCSS}</style><div class="terminal-files-header"><strong>Files</strong><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Close file explorer" tooltip="Close file explorer" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(X,{size:16})}</mux-ui-button></div><div class="utility-body" aria-label="Files">${this.filesView()}</div>`;
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style><mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="mobile-tab-picker"><mux-ui-select aria-label="Chat tools tab" .options=${this.tabs.map(item => ({value:item.id,label:this.tabTitle(item)}))} .value=${tab.id} @change=${(event:Event) => this.selectTab((event.target as MuxUISelect).value)}></mux-ui-select><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.addTab()}>${icon(Plus,{size:18})}</mux-ui-button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style>${this.mobileHeader()}<mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="mobile-tab-picker"><mux-ui-select aria-label="Chat tools tab" .options=${this.tabs.map(item => ({value:item.id,label:this.tabTitle(item)}))} .value=${tab.id} @change=${(event:Event) => this.selectTab((event.target as MuxUISelect).value)}></mux-ui-select><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.addTab()}>${icon(Plus,{size:18})}</mux-ui-button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}</div>`;
+  }
+  private mobileHeader(): TemplateResult {
+    if (this.currentTab.kind === 'files') {
+      const file = this.artifact;
+      const hasAlternateView = !!file && !file.binary && !file.tooLarge && (file.kind === 'markdown' || /\.(csv|tsv|html?|svg)$/i.test(file.name));
+      const projectName = (this.projectPath || this.listing?.root || 'Project').split('/').filter(Boolean).pop() || 'Project';
+      return this.fileHeader(projectName, this.selected.split('/').filter(Boolean), file, hasAlternateView, true);
+    }
+    return html`<div class="mobile-utility-header"><span>Chat tools</span><mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close utility pane" tooltip="Close utility pane" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(PanelRight,{size:20})}</mux-ui-button></div>`;
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
@@ -840,23 +849,27 @@ export class MuxSDKUtility extends LitElement {
     window.open(url, '_blank', 'noopener');
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
-  private fileHeader(projectName: string, segments: string[], file: Artifact | undefined, hasAlternateView: boolean): TemplateResult {
+  private fileHeader(projectName: string, segments: string[], file: Artifact | undefined, hasAlternateView: boolean, mobile = false): TemplateResult {
     const canOpenInBrowser = !!file && (file.kind === 'image' || !!this.pdfBytes || (!file.tooLarge && !file.binary && (file.kind === 'markdown' || file.kind === 'text')));
     const vsCodeURL = this.vsCodeURL();
-    const pathItems = segments.length ? [
+    const pathItems = [
       { id:'.', label:projectName, actionLabel:'Show project files' },
       ...segments.map((part,index) => ({id:segments.slice(0,index+1).join('/'),label:part,actionLabel:index < segments.length-1 ? `Show ${part} in file browser` : undefined})),
-    ] : [];
-    return html`<div class="viewer-header">
+    ];
+    const showMenu = this.fileMenuOpen && (this.terminalMode || mobile === window.matchMedia('(max-width:767.98px)').matches);
+    return html`<div class="viewer-header ${mobile ? 'mobile-file-header' : ''}">
       ${this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back to files" tooltip="Back to files" @click=${() => this.backToTerminalFiles()}>${icon(ArrowLeft,{size:15})}</mux-ui-button>` : nothing}
-      ${this.selected ? html`<mux-ui-breadcrumb label="Open file path" .items=${pathItems} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => void this.navigateFileBreadcrumb(event.detail.id)}></mux-ui-breadcrumb>` : nothing}
+      ${this.selected || mobile ? html`<mux-ui-breadcrumb label="Open file path" .items=${pathItems} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => void this.navigateFileBreadcrumb(event.detail.id)}></mux-ui-breadcrumb>` : nothing}
       <div class="file-header-actions">
-        ${file && !this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Ask about file" tooltip="Ask about file" @click=${() => this.askAboutFile()}>${icon(MessageCircleQuestionMark,{size:15})}</mux-ui-button>` : nothing}
+        ${file && !this.terminalMode ? html`<mux-ui-button class="file-ask-button" icon-only size="small" variant="quiet" tone="muted" accessible-label="Ask about file" tooltip="Ask about file" @click=${() => this.askAboutFile()}>${icon(MessageCircleQuestionMark,{size:15})}</mux-ui-button>` : nothing}
         ${hasAlternateView ? html`<mux-ui-button class="file-action-button" size="small" variant="secondary" accessible-label=${this.fileMode === 'preview' ? 'View source' : 'View preview'} @click=${() => this.toggleFileMode()}>${icon(Code2,{size:14})}<span>${this.fileMode === 'preview' ? 'View source' : 'View preview'}</span></mux-ui-button>` : nothing}
         ${!this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" toggle .pressed=${this.filesRailOpen} accessible-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} tooltip=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.fileMenuOpen = false; this.paintAll(); }}>${icon(Folder,{size:15})}</mux-ui-button>` : nothing}
+        ${!file && mobile ? html`<mux-ui-button size="small" variant="secondary" accessible-label="Open file" @click=${() => this.showQuickOpen()}>${icon(Search,{size:14})}<span>Open</span></mux-ui-button>` : nothing}
         ${file ? html`<div class="file-open-wrap">
           <mux-ui-button class="file-open-button" size="small" variant="secondary" accessible-label="Open file options" tooltip="Open file options" haspopup="menu" .expanded=${this.fileMenuOpen} @click=${() => { this.fileMenuOpen = !this.fileMenuOpen; this.paintAll(); }}>${icon(ExternalLink,{size:14})}<span>Open</span>${icon(ChevronDown,{size:13})}</mux-ui-button>
-          ${this.fileMenuOpen ? html`<mux-ui-menu class="file-open-menu" label="Open file" @menu-dismiss=${(event:CustomEvent<{restoreFocus:boolean}>) => { this.fileMenuOpen = false; this.paintAll(); if (event.detail.restoreFocus) queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }}>
+          ${showMenu ? html`<mux-ui-menu class="file-open-menu" label="Open file" @menu-dismiss=${(event:CustomEvent<{restoreFocus:boolean}>) => { this.fileMenuOpen = false; this.paintAll(); if (event.detail.restoreFocus) queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }}>
+            ${mobile ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.askAboutFile(); }}>${icon(MessageCircleQuestionMark,{size:14})}Ask about file</mux-ui-menu-item>` : nothing}
+            ${mobile && hasAlternateView ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.toggleFileMode(); }}>${icon(Code2,{size:14})}${this.fileMode === 'preview' ? 'View source' : 'View preview'}</mux-ui-menu-item>` : nothing}
             ${canOpenInBrowser ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.openFileInBrowser(); }}>${icon(ExternalLink,{size:14})}Open in browser tab</mux-ui-menu-item>` : nothing}
             ${vsCodeURL ? html`<mux-ui-menu-item href=${vsCodeURL} @click=${() => { this.fileMenuOpen = false; }}>${icon(Code2,{size:14})}Open with VS Code</mux-ui-menu-item>` : nothing}
             <div role="separator"></div>
@@ -868,6 +881,7 @@ export class MuxSDKUtility extends LitElement {
             <mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; if (this.terminalMode) this.backToTerminalFiles(); else this.closeTab(this.currentTab.id); }}>${icon(X,{size:14})}Close file</mux-ui-menu-item>
           </mux-ui-menu>` : nothing}
         </div>` : nothing}
+        ${mobile ? html`<mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close utility pane" tooltip="Close utility pane" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(PanelRight,{size:20})}</mux-ui-button>` : nothing}
       </div>
     </div>`;
   }
@@ -1133,6 +1147,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .goal-toolbar-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
     mux-sdk-utility mux-ui-feedback.goal-feedback { margin:var(--ui-space-3) var(--ui-space-6) 0; }
     mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:transparent; }
+    mux-sdk-utility .mobile-utility-header, mux-sdk-utility .viewer-header.mobile-file-header { display:none; }
     mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; margin-left:auto; }
     mux-sdk-utility .file-open-wrap { position:relative; }
     mux-sdk-utility .file-open-menu { --ui-menu-offset-y:calc(var(--ui-control-sm) + var(--ui-space-1)); --ui-menu-offset-x:0; --ui-menu-width:var(--ui-toast-min-width); }
@@ -1237,5 +1252,14 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility[terminal-mode] .files-panel > .viewer { display:none; height:100%; }
     mux-sdk-utility[terminal-mode] .files-panel.terminal-preview > .browser { display:none; }
     mux-sdk-utility[terminal-mode] .files-panel.terminal-preview > .viewer { display:flex; }
+    @media(max-width:767.98px) {
+      mux-sdk-utility .mobile-utility-header, mux-sdk-utility .viewer-header.mobile-file-header { box-sizing:border-box; display:flex; align-items:center; flex:none; min-height:var(--ui-nav-height); padding:0 var(--ui-space-4) 0 var(--ui-space-5); border-bottom:1px solid var(--ui-border); }
+      mux-sdk-utility .mobile-utility-header { justify-content:space-between; font:600 var(--ui-text-md) var(--ui-font-sans); }
+      mux-sdk-utility .viewer-header.mobile-file-header { flex-wrap:nowrap; gap:var(--ui-space-2); }
+      mux-sdk-utility .viewer-header.mobile-file-header mux-ui-breadcrumb { flex:1 1 auto; min-width:0; }
+      mux-sdk-utility .viewer-header.mobile-file-header .file-header-actions { gap:var(--ui-space-2); margin-left:0; }
+      mux-sdk-utility .viewer-header.mobile-file-header .file-ask-button, mux-sdk-utility .viewer-header.mobile-file-header .file-action-button { display:none; }
+      mux-sdk-utility .files-panel > .viewer-header { display:none; }
+    }
   `;
 }
