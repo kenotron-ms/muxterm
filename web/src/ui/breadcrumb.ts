@@ -15,7 +15,7 @@ export class MuxUIBreadcrumb extends LitElement {
   private scrollFrame = 0;
 
   static override styles = css`
-    :host { display:block; flex:1; min-width:0; font-family:var(--ui-font-sans); }
+    :host { display:block; flex:1; min-width:0; font-family:var(--ui-font-sans); -webkit-app-region:no-drag; app-region:no-drag; }
     nav { min-width:0; overflow-x:auto; scrollbar-width:none; }
     nav::-webkit-scrollbar { display:none; }
     ol { display:flex; align-items:center; gap:var(--ui-space-3); width:max-content; min-width:0; min-height:var(--ui-control-sm); margin:0; padding:0; list-style:none; white-space:nowrap; }
