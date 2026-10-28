@@ -8,7 +8,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { MonitorX, Plus } from 'lucide';
+import { MonitorX, Plus, X } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
@@ -388,7 +388,7 @@ export class MuxApp extends LitElement {
 
       position: fixed;
       inset: 0 auto 0 0;
-      width: min(86vw, var(--ui-mobile-drawer-width));
+      width: 100vw;
       height: 100%;
       max-width: none;
       max-height: none;
@@ -408,7 +408,7 @@ export class MuxApp extends LitElement {
       background: var(--ui-surface-nav);
       color: var(--ui-text);
       border: 0;
-      border-right: 1px solid var(--ui-border);
+      border-right: 0;
       box-shadow: var(--ui-shadow-drawer);
       translate: -100% 0;
       transition:
@@ -432,6 +432,18 @@ export class MuxApp extends LitElement {
       background: var(--scrim);
     }
 
+    .drawer-header {
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex: none;
+      min-height: calc(var(--ui-nav-height) + env(safe-area-inset-top, 0px));
+      padding: env(safe-area-inset-top, 0px) max(var(--ui-space-5), env(safe-area-inset-right, 0px)) 0 max(var(--ui-space-5), env(safe-area-inset-left, 0px));
+      border-bottom: 1px solid var(--ui-border);
+      font: 600 var(--ui-text-md) var(--ui-font-sans);
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .drawer {
         --drawer-dur: 0ms;
@@ -450,7 +462,7 @@ export class MuxApp extends LitElement {
       min-width: 0;
       max-width: none;
       border-right: 0;
-      padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
+      padding-block: 0 env(safe-area-inset-bottom, 0px);
       padding-left: 0;
       padding-left: env(safe-area-inset-left);
       box-sizing: border-box;
@@ -1349,7 +1361,7 @@ export class MuxApp extends LitElement {
           @pane-create-request=${this._createPaneOptimistic}
         ></mux-title-bar>
       </div>
-      ${!isWide && !settingsPage ? html`<mux-title-bar
+      ${!isWide && !settingsPage && !selectedSDKChat ? html`<mux-title-bar
         class="mobile-title-bar"
         .drawerOpen="${this._drawerOpen}"
         .chatTitle="${chatTitle}"
@@ -1437,7 +1449,7 @@ export class MuxApp extends LitElement {
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} .compact=${this._layoutMode === 'narrow'} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .sessionId=${this._sdkChatId} .compact=${this._layoutMode === 'narrow'} @drawer-toggle=${this._onDrawerToggle} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -1451,6 +1463,7 @@ export class MuxApp extends LitElement {
               aria-label="Navigation"
               @toggle="${this._onDrawerPopoverToggle}"
             >
+              <div class="drawer-header"><span>Navigation</span><mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close navigation" tooltip="Close navigation" @click=${this._closeDrawer}>${icon(X,{size:20})}</mux-ui-button></div>
               <mux-sidebar
                 .drawer=${true}
                 .newChatActive="${this._sdkChatId === 'new'}"
