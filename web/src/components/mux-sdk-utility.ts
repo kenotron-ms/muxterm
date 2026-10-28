@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, PanelRight, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
@@ -252,7 +252,16 @@ export class MuxSDKUtility extends LitElement {
   override render() {
     if (this.terminalMode) return html`<style>${this.surfaceCSS}</style><div class="terminal-files-header"><strong>Files</strong><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Close file explorer" tooltip="Close file explorer" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(X,{size:16})}</mux-ui-button></div><div class="utility-body" aria-label="Files">${this.filesView()}</div>`;
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style><mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style>${this.mobileHeader()}<mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="mobile-tab-picker"><mux-ui-select aria-label="Chat tools tab" .options=${this.tabs.map(item => ({value:item.id,label:this.tabTitle(item)}))} .value=${tab.id} @change=${(event:Event) => this.selectTab((event.target as MuxUISelect).value)}></mux-ui-select><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.addTab()}>${icon(Plus,{size:18})}</mux-ui-button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}</div>`;
+  }
+  private mobileHeader(): TemplateResult {
+    if (this.currentTab.kind === 'files') {
+      const file = this.artifact;
+      const hasAlternateView = !!file && !file.binary && !file.tooLarge && (file.kind === 'markdown' || /\.(csv|tsv|html?|svg)$/i.test(file.name));
+      const projectName = (this.projectPath || this.listing?.root || 'Project').split('/').filter(Boolean).pop() || 'Project';
+      return this.fileHeader(projectName, this.selected.split('/').filter(Boolean), file, hasAlternateView, true);
+    }
+    return html`<div class="mobile-utility-header"><span>Chat tools</span><mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close utility pane" tooltip="Close utility pane" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(PanelRight,{size:20})}</mux-ui-button></div>`;
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
@@ -840,23 +849,27 @@ export class MuxSDKUtility extends LitElement {
     window.open(url, '_blank', 'noopener');
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
-  private fileHeader(projectName: string, segments: string[], file: Artifact | undefined, hasAlternateView: boolean): TemplateResult {
+  private fileHeader(projectName: string, segments: string[], file: Artifact | undefined, hasAlternateView: boolean, mobile = false): TemplateResult {
     const canOpenInBrowser = !!file && (file.kind === 'image' || !!this.pdfBytes || (!file.tooLarge && !file.binary && (file.kind === 'markdown' || file.kind === 'text')));
     const vsCodeURL = this.vsCodeURL();
-    const pathItems = segments.length ? [
+    const pathItems = [
       { id:'.', label:projectName, actionLabel:'Show project files' },
       ...segments.map((part,index) => ({id:segments.slice(0,index+1).join('/'),label:part,actionLabel:index < segments.length-1 ? `Show ${part} in file browser` : undefined})),
-    ] : [];
-    return html`<div class="viewer-header">
+    ];
+    const showMenu = this.fileMenuOpen && (this.terminalMode || mobile === window.matchMedia('(max-width:767.98px)').matches);
+    return html`<div class="viewer-header ${mobile ? 'mobile-file-header' : ''}">
       ${this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back to files" tooltip="Back to files" @click=${() => this.backToTerminalFiles()}>${icon(ArrowLeft,{size:15})}</mux-ui-button>` : nothing}
-      <mux-ui-breadcrumb label="Open file path" placeholder="Open a file to preview it" .items=${pathItems} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => void this.navigateFileBreadcrumb(event.detail.id)}></mux-ui-breadcrumb>
+      ${this.selected || mobile ? html`<mux-ui-breadcrumb label="Open file path" .items=${pathItems} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => void this.navigateFileBreadcrumb(event.detail.id)}></mux-ui-breadcrumb>` : nothing}
       <div class="file-header-actions">
-        ${file && !this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Ask about file" tooltip="Ask about file" @click=${() => this.askAboutFile()}>${icon(MessageCircleQuestionMark,{size:15})}</mux-ui-button>` : nothing}
+        ${file && !this.terminalMode ? html`<mux-ui-button class="file-ask-button" icon-only size="small" variant="quiet" tone="muted" accessible-label="Ask about file" tooltip="Ask about file" @click=${() => this.askAboutFile()}>${icon(MessageCircleQuestionMark,{size:15})}</mux-ui-button>` : nothing}
         ${hasAlternateView ? html`<mux-ui-button class="file-action-button" size="small" variant="secondary" accessible-label=${this.fileMode === 'preview' ? 'View source' : 'View preview'} @click=${() => this.toggleFileMode()}>${icon(Code2,{size:14})}<span>${this.fileMode === 'preview' ? 'View source' : 'View preview'}</span></mux-ui-button>` : nothing}
         ${!this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" toggle .pressed=${this.filesRailOpen} accessible-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} tooltip=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.fileMenuOpen = false; this.paintAll(); }}>${icon(Folder,{size:15})}</mux-ui-button>` : nothing}
+        ${!file && mobile ? html`<mux-ui-button size="small" variant="secondary" accessible-label="Open file" @click=${() => this.showQuickOpen()}>${icon(Search,{size:14})}<span>Open</span></mux-ui-button>` : nothing}
         ${file ? html`<div class="file-open-wrap">
           <mux-ui-button class="file-open-button" size="small" variant="secondary" accessible-label="Open file options" tooltip="Open file options" haspopup="menu" .expanded=${this.fileMenuOpen} @click=${() => { this.fileMenuOpen = !this.fileMenuOpen; this.paintAll(); }}>${icon(ExternalLink,{size:14})}<span>Open</span>${icon(ChevronDown,{size:13})}</mux-ui-button>
-          ${this.fileMenuOpen ? html`<mux-ui-menu class="file-open-menu" label="Open file" @menu-dismiss=${(event:CustomEvent<{restoreFocus:boolean}>) => { this.fileMenuOpen = false; this.paintAll(); if (event.detail.restoreFocus) queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }}>
+          ${showMenu ? html`<mux-ui-menu class="file-open-menu" label="Open file" @menu-dismiss=${(event:CustomEvent<{restoreFocus:boolean}>) => { this.fileMenuOpen = false; this.paintAll(); if (event.detail.restoreFocus) queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }}>
+            ${mobile ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.askAboutFile(); }}>${icon(MessageCircleQuestionMark,{size:14})}Ask about file</mux-ui-menu-item>` : nothing}
+            ${mobile && hasAlternateView ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.toggleFileMode(); }}>${icon(Code2,{size:14})}${this.fileMode === 'preview' ? 'View source' : 'View preview'}</mux-ui-menu-item>` : nothing}
             ${canOpenInBrowser ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.openFileInBrowser(); }}>${icon(ExternalLink,{size:14})}Open in browser tab</mux-ui-menu-item>` : nothing}
             ${vsCodeURL ? html`<mux-ui-menu-item href=${vsCodeURL} @click=${() => { this.fileMenuOpen = false; }}>${icon(Code2,{size:14})}Open with VS Code</mux-ui-menu-item>` : nothing}
             <div role="separator"></div>
@@ -868,6 +881,7 @@ export class MuxSDKUtility extends LitElement {
             <mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; if (this.terminalMode) this.backToTerminalFiles(); else this.closeTab(this.currentTab.id); }}>${icon(X,{size:14})}Close file</mux-ui-menu-item>
           </mux-ui-menu>` : nothing}
         </div>` : nothing}
+        ${mobile ? html`<mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close utility pane" tooltip="Close utility pane" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(PanelRight,{size:20})}</mux-ui-button>` : nothing}
       </div>
     </div>`;
   }
@@ -881,14 +895,15 @@ export class MuxSDKUtility extends LitElement {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'p') { event.preventDefault(); this.showQuickOpen(); }
       if (event.key === 'Escape' && !this.quickOpen && this.fileMenuOpen) { this.fileMenuOpen = false; this.paintAll(); queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }
     }}>
+      ${!this.terminalMode && (this.selected || !this.filesRailOpen) ? this.fileHeader(projectName, segments, file, hasAlternateView) : nothing}
       <div class="viewer">
-        ${this.fileHeader(projectName, segments, file, hasAlternateView)}
+        ${this.terminalMode ? this.fileHeader(projectName, segments, file, hasAlternateView) : nothing}
         <div class="viewer-body">${this.selected ? this.fileBody() : html`<mux-ui-empty-state heading="Explore this project"><span slot="icon">${icon(FolderOpen,{size:24})}</span>Choose a file from the explorer or search by name across the project.<mux-ui-button slot="action" variant="secondary" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></mux-ui-button></mux-ui-empty-state>`}</div>
         ${file ? html`<div class="file-status"><span>${fileLanguage(file.name)}</span>${!file.binary && !file.tooLarge && file.text ? html`<span>${file.text.split('\n').length} lines</span>` : nothing}<span class="status-spacer"></span><span class="file-action-notice" role="status">${this.fileActionNotice}</span><span>${readableSize(file.size)}</span><span>Read only</span></div>` : nothing}
       </div>
       ${this.filesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize file explorer" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'files')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'files')}></div>` : nothing}
       ${this.filesRailOpen ? html`<div class="browser">
-        <div class="browser-heading"><div class="explorer-label">FILES</div><div class="explorer-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Quick open file" tooltip="Quick Open · Ctrl+P" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Refresh file tree" tooltip="Refresh file tree" @click=${() => void this.refreshTree()}>${icon(RefreshCw,{size:15})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Collapse folders" tooltip="Collapse folders" @click=${() => { this.expandedDirs = new Set(['.']); this.paintAll(); }}>${icon(ChevronsDownUp,{size:15})}</mux-ui-button></div></div>
+        <div class="browser-heading"><div class="explorer-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Quick open file" tooltip="Quick Open · Ctrl+P" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Refresh file tree" tooltip="Refresh file tree" @click=${() => void this.refreshTree()}>${icon(RefreshCw,{size:15})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Collapse folders" tooltip="Collapse folders" @click=${() => { this.expandedDirs = new Set(['.']); this.paintAll(); }}>${icon(ChevronsDownUp,{size:15})}</mux-ui-button></div></div>
         <div class="browser-tools"><mux-ui-text-field size="small" type="search" aria-label="Filter visible files" placeholder="Filter files…" .value=${this.fileQuery} @input=${(event: InputEvent) => { this.fileQuery = (event.target as MuxUITextField).value; this.paintAll(); }}></mux-ui-text-field><mux-ui-select size="small" aria-label="Sort files" .value=${this.fileSort} .options=${[{value:'name',label:'Name'},{value:'recent',label:'Recent'},{value:'size',label:'Size'}]} @change=${(event: Event) => { this.fileSort = (event.target as MuxUISelect).value as typeof this.fileSort; this.paintAll(); }}></mux-ui-select></div>
         ${this.touched.length ? html`<div class="touched-files"><h3>Changed files <span>${this.touched.length}</span></h3>${this.touched.map(path => html`<mux-ui-rail-row reserve-chevron label=${path} tooltip=${path} @click=${() => void this.revealFile(path)}><span slot="icon">${icon(fileGlyph(path),{size:14})}</span></mux-ui-rail-row>`)}</div>` : nothing}
         <div class="file-list" role="tree" aria-label=${this.terminalMode ? 'Home files' : 'Project files'} @keydown=${(event: KeyboardEvent) => this.onTreeKey(event)}>
@@ -1067,6 +1082,8 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility *::-webkit-scrollbar-track { background:transparent; }
     mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--ui-text-muted) 34%,transparent); border-radius:var(--ui-radius-pill); }
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--ui-text-muted) 58%,transparent); }
+    mux-sdk-utility .mobile-tab-picker { display:none; }
+    @media(max-width:767.98px) { mux-sdk-utility mux-ui-tab-strip { display:none; } mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-height:var(--ui-nav-height); padding:var(--ui-space-2) var(--ui-space-4); border-bottom:1px solid var(--ui-border); } mux-sdk-utility .mobile-tab-picker mux-ui-select { flex:1; min-width:0; } }
     mux-sdk-utility .new-tab-surface { box-sizing:border-box; width:100%; height:100%; padding:var(--ui-space-9) 0; background:var(--ui-surface-base); container-type:inline-size; }
     mux-sdk-utility .new-tab-home { width:min(var(--ui-utility-home-width),calc(100% - var(--ui-utility-home-gutter))); margin:0 auto; }
     mux-sdk-utility .new-tab-home h2 { margin:0 0 var(--ui-space-6); color:var(--ui-text); font:600 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
@@ -1095,11 +1112,18 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .utility-placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--ui-text-muted); }
     mux-sdk-utility .empty { color:var(--ui-text-muted); line-height:1.6; } mux-sdk-utility a { color:var(--ui-accent); }
     mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { display:grid; grid-template-columns:clamp(var(--ui-utility-rail-min-width),var(--rail-width),45%) var(--ui-utility-rail-resizer-width) minmax(0,1fr); height:100%; min-width:0; overflow:hidden; position:relative; background:var(--ui-surface-base); }
-    mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr) 6px clamp(180px,var(--rail-width),45%); }
+    mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr) var(--ui-divider-thickness) clamp(180px,var(--rail-width),45%); grid-template-rows:auto minmax(0,1fr); }
     mux-sdk-utility .files-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
+    mux-sdk-utility .files-panel > .viewer-header { grid-column:1 / -1; grid-row:1; }
+    mux-sdk-utility .files-panel > .viewer { grid-column:1; grid-row:2; }
+    mux-sdk-utility .files-panel > .vertical-resizer { grid-column:2; grid-row:2; z-index:var(--ui-z-local); width:var(--ui-chat-resize-handle-width); margin-left:calc(-.5 * (var(--ui-chat-resize-handle-width) - var(--ui-divider-thickness))); background:transparent; }
+    mux-sdk-utility .files-panel > .vertical-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc(.5 * (var(--ui-chat-resize-handle-width) - var(--ui-divider-thickness))); width:var(--ui-divider-thickness); background:var(--ui-border); pointer-events:none; }
+    mux-sdk-utility .files-panel > .vertical-resizer:hover, mux-sdk-utility .files-panel > .vertical-resizer:focus-visible { background:transparent; }
+    mux-sdk-utility .files-panel > .vertical-resizer:hover::after, mux-sdk-utility .files-panel > .vertical-resizer:focus-visible::after { background:var(--ui-accent); }
+    mux-sdk-utility .files-panel > .browser { grid-column:3; grid-row:2; }
     mux-sdk-utility .browser { display:flex; flex-direction:column; min-width:0; min-height:0; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
-    mux-sdk-utility .files-panel .browser { border-left:1px solid var(--ui-border); background:var(--ui-surface-base); }
-    mux-sdk-utility .files-panel .browser-heading { height:var(--ui-utility-file-header-height); flex:none; }
+    mux-sdk-utility .files-panel .browser { background:var(--ui-surface-base); }
+    mux-sdk-utility .files-panel .browser-heading { height:var(--ui-utility-file-header-height); flex:none; justify-content:flex-end; }
     mux-sdk-utility .browser-heading { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); height:var(--ui-utility-browser-heading-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); }
     mux-sdk-utility .explorer-label { color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); letter-spacing:.13em; }
     mux-sdk-utility .explorer-actions { display:flex; align-items:center; gap:var(--ui-space-1); }
@@ -1122,8 +1146,9 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .goal-toolbar-title span { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .goal-toolbar-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
     mux-sdk-utility mux-ui-feedback.goal-feedback { margin:var(--ui-space-3) var(--ui-space-6) 0; }
-    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:var(--ui-surface-raised); }
-    mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; }
+    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:transparent; }
+    mux-sdk-utility .mobile-utility-header, mux-sdk-utility .viewer-header.mobile-file-header { display:none; }
+    mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; margin-left:auto; }
     mux-sdk-utility .file-open-wrap { position:relative; }
     mux-sdk-utility .file-open-menu { --ui-menu-offset-y:calc(var(--ui-control-sm) + var(--ui-space-1)); --ui-menu-offset-x:0; --ui-menu-width:var(--ui-toast-min-width); }
     mux-sdk-utility .file-open-menu svg { flex:none; color:var(--ui-text-muted); }
@@ -1215,7 +1240,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-delete-dialog h2 { margin:0; font-size:var(--ui-text-xl); }
     mux-sdk-utility .page-delete-dialog p { margin:var(--ui-space-4) 0 var(--ui-space-7); color:var(--ui-text-muted); }
     mux-sdk-utility .page-delete-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); }
-    @container(max-width:650px) { mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) minmax(170px,38%); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .files-panel .vertical-resizer { display:none; } mux-sdk-utility .files-panel .browser { border-left:0; border-top:1px solid var(--ui-border); } }
+    @container(max-width:650px) { mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) minmax(170px,38%); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:auto minmax(0,1fr); } mux-sdk-utility .files-panel > .browser { grid-column:1; grid-row:3; border-left:0; border-top:1px solid var(--ui-border); } mux-sdk-utility .files-panel .vertical-resizer { display:none; } }
     @container(max-width:430px) { mux-sdk-utility .viewer-header { flex-wrap:wrap; padding-top:var(--ui-space-2); padding-bottom:var(--ui-space-2); } mux-sdk-utility .viewer-header mux-ui-breadcrumb { flex:1 1 100%; } mux-sdk-utility .viewer-header .file-header-actions { margin-left:auto; } }
     @container(max-width:430px) { mux-sdk-utility .file-action-button span { display:none; } }
     @media(pointer:coarse) { mux-sdk-utility .browser-heading, mux-sdk-utility .files-panel .browser-heading { height:auto; min-height:var(--ui-control-lg); } }
@@ -1227,5 +1252,14 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility[terminal-mode] .files-panel > .viewer { display:none; height:100%; }
     mux-sdk-utility[terminal-mode] .files-panel.terminal-preview > .browser { display:none; }
     mux-sdk-utility[terminal-mode] .files-panel.terminal-preview > .viewer { display:flex; }
+    @media(max-width:767.98px) {
+      mux-sdk-utility .mobile-utility-header, mux-sdk-utility .viewer-header.mobile-file-header { box-sizing:border-box; display:flex; align-items:center; flex:none; min-height:var(--ui-nav-height); padding:0 var(--ui-space-4) 0 var(--ui-space-5); border-bottom:1px solid var(--ui-border); }
+      mux-sdk-utility .mobile-utility-header { justify-content:space-between; font:600 var(--ui-text-md) var(--ui-font-sans); }
+      mux-sdk-utility .viewer-header.mobile-file-header { flex-wrap:nowrap; gap:var(--ui-space-2); }
+      mux-sdk-utility .viewer-header.mobile-file-header mux-ui-breadcrumb { flex:1 1 auto; min-width:0; }
+      mux-sdk-utility .viewer-header.mobile-file-header .file-header-actions { gap:var(--ui-space-2); margin-left:0; }
+      mux-sdk-utility .viewer-header.mobile-file-header .file-ask-button, mux-sdk-utility .viewer-header.mobile-file-header .file-action-button { display:none; }
+      mux-sdk-utility .files-panel > .viewer-header { display:none; }
+    }
   `;
 }

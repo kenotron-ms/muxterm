@@ -11,6 +11,7 @@ export class MuxUIScreenHeader extends LitElement {
   @property() label = '';
   @property({ type:Boolean, reflect:true, attribute:'with-section-icon' }) withSectionIcon = false;
   @property({ type:Boolean, reflect:true, attribute:'with-actions' }) withActions = false;
+  @property({ type:Boolean, reflect:true, attribute:'with-leading' }) withLeading = false;
   @property({ type:Boolean, reflect:true, attribute:'show-on-phone' }) showOnPhone = false;
 
   static override styles = css`
@@ -26,17 +27,19 @@ export class MuxUIScreenHeader extends LitElement {
     slot[name='heading'] { display:flex; align-items:center; min-width:0; overflow:hidden; }
     strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
     slot[name='actions'] { display:flex; align-items:center; flex:none; margin-left:auto; }
+    slot[name='leading'] { display:flex; align-items:center; flex:none; }
     @media (max-width:767.98px) {
       :host(:not([show-on-phone])) { display:none; }
       :host([show-on-phone]) .section,:host([show-on-phone]) .divider { display:none; }
       :host([show-on-phone]) header { gap:var(--ui-space-3); padding-left:var(--ui-space-5); padding-right:var(--ui-space-5); }
+      :host([show-on-phone]) header { height:calc(var(--ui-nav-height) + env(safe-area-inset-top, 0px)); padding-top:env(safe-area-inset-top, 0px); }
     }
     @media (display-mode:window-controls-overlay) { header { -webkit-app-region:drag; } }
-    @media (display-mode:window-controls-overlay) { slot[name='actions']::slotted(*) { -webkit-app-region:no-drag; } }
+    @media (display-mode:window-controls-overlay) { slot[name='actions']::slotted(*),slot[name='leading']::slotted(*) { -webkit-app-region:no-drag; } }
   `;
 
   override render() {
-    return html`<header aria-label=${this.label || nothing}><span class="section">${this.withSectionIcon ? html`<span class="section-icon" aria-hidden="true"><slot name="section-icon"></slot></span>` : nothing}<span class="section-label">${this.section}</span></span><span class="divider" aria-hidden="true">›</span><span class="heading"><slot name="heading"><strong>${this.heading}</strong></slot></span>${this.withActions ? html`<slot name="actions"></slot>` : nothing}</header>`;
+    return html`<header aria-label=${this.label || nothing}>${this.withLeading ? html`<slot name="leading"></slot>` : nothing}<span class="section">${this.withSectionIcon ? html`<span class="section-icon" aria-hidden="true"><slot name="section-icon"></slot></span>` : nothing}<span class="section-label">${this.section}</span></span><span class="divider" aria-hidden="true">›</span><span class="heading"><slot name="heading"><strong>${this.heading}</strong></slot></span>${this.withActions ? html`<slot name="actions"></slot>` : nothing}</header>`;
   }
 }
 
