@@ -22,6 +22,59 @@ func (s *Server) agentBrowserControlRequest(r *http.Request) bool {
 		(r.Method == http.MethodDelete && parts[4] == "control")
 }
 
+// Agent Chat requests are limited to discovery, creation, transcript/status
+// reads, and idempotent message admission. A same-user local token authenticates
+// the MCP process; goal controls retain their separate origin and ledger rules.
+func (s *Server) agentChatRequest(r *http.Request) bool {
+	if r.Header.Get("X-Muxterm-Agent") != "1" || s.browserAssistant.localToken == "" {
+		return false
+	}
+	token, ok := bearerToken(r)
+	return ok && subtle.ConstantTimeCompare([]byte(token), []byte(s.browserAssistant.localToken)) == 1 && agentChatPathAllowed(r.Method, r.URL.Path)
+}
+
+func (s *Server) agentRemoteChatRequest(r *http.Request) bool {
+	if r.Header.Get("X-Muxterm-Agent") != "1" || s.browserAssistant.localToken == "" {
+		return false
+	}
+	token, ok := bearerToken(r)
+	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.browserAssistant.localToken)) != 1 {
+		return false
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/api/remote-chat/"+r.PathValue("id"))
+	return r.PathValue("id") != "" && path != r.URL.Path && agentChatPathAllowed(r.Method, path)
+}
+
+func agentChatPathAllowed(method, path string) bool {
+	if path == "/api/sdk-chats" {
+		return method == http.MethodGet || method == http.MethodPost
+	}
+	if path == "/api/sdk-projects" || path == "/api/sdk-chats/search-content" {
+		return method == http.MethodGet
+	}
+	if !strings.HasPrefix(path, "/api/sdk-chats/") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(path, "/api/sdk-chats/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return false
+	}
+	if len(parts) == 1 {
+		return method == http.MethodGet
+	}
+	if len(parts) != 2 {
+		return false
+	}
+	switch parts[1] {
+	case "history", "control-history":
+		return method == http.MethodGet
+	case "control-send":
+		return method == http.MethodPost
+	default:
+		return false
+	}
+}
+
 // A remote chat bridge is reached only after the home server has accepted a
 // human browser request. Its same-user helper token is scoped here to chat and
 // project operations; goal controls and operator authority stay on their
@@ -55,7 +108,7 @@ func (s *Server) chatAuthorityBoundary(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if s.agentBrowserControlRequest(r) {
+		if s.agentBrowserControlRequest(r) || s.agentChatRequest(r) || s.agentRemoteChatRequest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

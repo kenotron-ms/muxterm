@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,6 +17,7 @@ const chatLocalOnly = "Chats belong to this muxterm serve process; use a session
 // Discovery projects Go-owned chat IDs without exposing native harness resume IDs.
 // The same ID is accepted unchanged by send_chat_message and read_chat_session.
 type discoverChat struct {
+	Machine        string    `json:"machine"`
 	ID             string    `json:"id"`
 	Project        string    `json:"project"`
 	ProjectID      string    `json:"project_id,omitempty"`
@@ -28,18 +30,23 @@ type discoverChat struct {
 }
 
 type discoverProject struct {
-	ID    string         `json:"id"`
-	Name  string         `json:"name"`
-	Path  string         `json:"path"`
-	Chats []discoverChat `json:"chats"`
+	Machine string         `json:"machine"`
+	ID      string         `json:"id"`
+	Name    string         `json:"name"`
+	Path    string         `json:"path"`
+	Chats   []discoverChat `json:"chats"`
 }
 
-func (pt *publishTools) chatDiscovery() ([]discoverChat, []discoverProject, []discoverChat, error) {
-	chatBody, err := pt.doRequest(http.MethodGet, "/api/sdk-chats", nil)
+func (pt *publishTools) chatDiscovery(args map[string]any) ([]discoverChat, []discoverProject, []discoverChat, error) {
+	machine, err := pt.chatMachine(args)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	projectBody, err := pt.doRequest(http.MethodGet, "/api/sdk-projects", nil)
+	chatBody, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats", nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	projectBody, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-projects", nil)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -58,7 +65,7 @@ func (pt *publishTools) chatDiscovery() ([]discoverChat, []discoverProject, []di
 	byID := make(map[string]int, len(rawProjects))
 	for _, p := range rawProjects {
 		byID[p.ID] = len(projects)
-		projects = append(projects, discoverProject{ID: p.ID, Name: p.Name, Path: p.Path, Chats: []discoverChat{}})
+		projects = append(projects, discoverProject{Machine: machine, ID: p.ID, Name: p.Name, Path: p.Path, Chats: []discoverChat{}})
 	}
 	chats := make([]discoverChat, 0, len(rawChats))
 	ungrouped := []discoverChat{}
@@ -67,7 +74,7 @@ func (pt *publishTools) chatDiscovery() ([]discoverChat, []discoverProject, []di
 		if activityAt.IsZero() {
 			activityAt = c.CreatedAt
 		}
-		row := discoverChat{ID: c.ID, Project: "Ungrouped", ProjectPath: c.ProjectPath,
+		row := discoverChat{Machine: machine, ID: c.ID, Project: "Ungrouped", ProjectPath: c.ProjectPath,
 			Harness: c.Harness, Title: c.Title, State: c.State,
 			LastActivityAt: activityAt, LastActivity: c.LastActivity}
 		if i, ok := byID[c.WorkspaceID]; ok {
@@ -209,27 +216,21 @@ func registerChatControlTools(srv *Server) {
 			}
 			return string(result), nil
 		})
-	srv.Register("list_chats", "List every addressable Chat on this muxterm serve process. IDs can be passed unchanged to send_chat_message. Local machine only.",
+	srv.Register("list_chats", "List every addressable Chat on this muxterm serve process. IDs can be passed unchanged to send_chat_message. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{})},
 		func(args map[string]any) (string, error) {
-			if err := refuseRemote(args, chatLocalOnly); err != nil {
-				return "", err
-			}
-			chats, _, _, err := pt.chatDiscovery()
+			chats, _, _, err := pt.chatDiscovery(args)
 			if err != nil {
 				return "", err
 			}
 			return jsonText(map[string]any{"chats": chats}), nil
 		})
-	srv.Register("search_chats", "Search addressable Chats by case-insensitive substring in title, project name, or project path. Set include_content to also search accepted inputs and assistant text. Results carry IDs usable by send_chat_message. Local machine only.",
+	srv.Register("search_chats", "Search addressable Chats by case-insensitive substring in title, project name, or project path. Set include_content to also search accepted inputs and assistant text. Results carry IDs usable by send_chat_message. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"query":           map[string]any{"type": "string", "description": "non-empty case-insensitive substring of title, project name, or project path"},
 			"include_content": map[string]any{"type": "boolean", "description": "also search accepted chat inputs and assistant output (default false)"},
 		}), "required": []string{"query"}},
 		func(args map[string]any) (string, error) {
-			if err := refuseRemote(args, chatLocalOnly); err != nil {
-				return "", err
-			}
 			query, err := argString(args, "query")
 			if err != nil {
 				return "", err
@@ -238,13 +239,13 @@ func registerChatControlTools(srv *Server) {
 			if query == "" {
 				return "", fmt.Errorf("query must not be empty")
 			}
-			chats, _, _, err := pt.chatDiscovery()
+			chats, _, _, err := pt.chatDiscovery(args)
 			if err != nil {
 				return "", err
 			}
 			contentIDs := map[string]bool{}
 			if include, ok := args["include_content"].(bool); ok && include {
-				body, err := pt.doRequest(http.MethodGet, "/api/sdk-chats/search-content?q="+url.QueryEscape(query), nil)
+				body, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats/search-content?q="+url.QueryEscape(query), nil)
 				if err != nil {
 					return "", err
 				}
@@ -268,37 +269,32 @@ func registerChatControlTools(srv *Server) {
 			}
 			return jsonText(map[string]any{"query": query, "chats": matches}), nil
 		})
-	srv.Register("list_projects", "List every muxterm Chat project with its addressable Chats. Ungrouped Chats are returned separately. Local machine only.",
+	srv.Register("list_projects", "List every muxterm Chat project with its addressable Chats. Ungrouped Chats are returned separately. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{})},
 		func(args map[string]any) (string, error) {
-			if err := refuseRemote(args, chatLocalOnly); err != nil {
-				return "", err
-			}
-			_, projects, ungrouped, err := pt.chatDiscovery()
+			_, projects, ungrouped, err := pt.chatDiscovery(args)
 			if err != nil {
 				return "", err
 			}
 			return jsonText(map[string]any{"projects": projects, "ungrouped_chats": ungrouped}), nil
 		})
-	srv.Register("list_chat_sessions", "List addressable Chats with stable IDs, project, harness, title, current state, last activity and recent output. Local machine only.",
+	srv.Register("list_chat_sessions", "List addressable Chats with stable IDs, project, harness, title, current state, last activity and recent output. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{})},
 		func(args map[string]any) (string, error) {
-			if err := refuseRemote(args, chatLocalOnly); err != nil {
-				return "", err
-			}
-			chats, err := pt.doRequest(http.MethodGet, "/api/sdk-chats", nil)
+			chats, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats", nil)
 			if err != nil {
 				return "", err
 			}
-			projects, err := pt.doRequest(http.MethodGet, "/api/sdk-projects", nil)
+			projects, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-projects", nil)
 			if err != nil {
 				return "", err
 			}
 			return jsonText(map[string]any{"sessions": json.RawMessage(chats), "projects": json.RawMessage(projects)}), nil
 		})
-	srv.Register("spawn_chat", "Delegate work to a project Chat by default. Optional goal starts an Amplifier stop-condition loop. Chats run with unattended approvals. Returns its stable session ID. Local machine only.",
+	srv.Register("spawn_chat", "Delegate work to a project Chat by default. Optional goal starts an Amplifier stop-condition loop. Chats run with unattended approvals. Returns its stable session ID. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"project":     map[string]any{"type": "string", "description": "exact name of an existing project; omit for Ungrouped"},
+			"project_id":  map[string]any{"type": "string", "description": "stable ID from list_projects"},
 			"harness":     map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex", "pi", "opencode", "deepseek", "gemini"}},
 			"prompt":      map[string]any{"type": "string", "description": "opening user turn"},
 			"goal":        map[string]any{"type": "string", "description": "Amplifier stop condition; starts a real goal loop and supersedes prompt"},
@@ -306,9 +302,6 @@ func registerChatControlTools(srv *Server) {
 			"approval":    map[string]any{"type": "string", "enum": []string{"never"}, "description": "optional explicit unattended policy; chats always use never"},
 		}), "required": []string{"harness"}},
 		func(args map[string]any) (string, error) {
-			if err := refuseRemote(args, chatLocalOnly); err != nil {
-				return "", err
-			}
 			harness, err := argString(args, "harness")
 			if err != nil {
 				return "", err
@@ -344,6 +337,13 @@ func registerChatControlTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
+			projectID, _, err := argStringOptional(args, "project_id")
+			if err != nil {
+				return "", err
+			}
+			if project != "" && projectID != "" {
+				return "", fmt.Errorf("choose project or project_id, not both")
+			}
 			payload := map[string]any{"harness": harness, "prompt": prompt, "goal": goal, "approval": approval}
 			operatorID, _, err := argStringOptional(args, "operator_id")
 			if err != nil {
@@ -352,8 +352,8 @@ func registerChatControlTools(srv *Server) {
 			if operatorID != "" {
 				payload["operatorId"] = operatorID
 			}
-			if project != "" {
-				body, err := pt.doRequest(http.MethodGet, "/api/sdk-projects", nil)
+			if project != "" || projectID != "" {
+				body, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-projects", nil)
 				if err != nil {
 					return "", err
 				}
@@ -363,21 +363,30 @@ func registerChatControlTools(srv *Server) {
 				}
 				matches := 0
 				for _, p := range projects {
-					if p.Name == project {
+					if (projectID != "" && p.ID == projectID) || (projectID == "" && p.Name == project) {
 						payload["workspaceId"] = p.ID
 						matches++
 					}
 				}
 				if matches != 1 {
-					return "", fmt.Errorf("project %q matched %d projects; name must identify exactly one", project, matches)
+					return "", fmt.Errorf("project %q matched %d projects; use an ID from list_projects", project+projectID, matches)
 				}
 			}
+			machine, err := pt.chatMachine(args)
+			if err != nil {
+				return "", err
+			}
 			body, _ := json.Marshal(payload)
-			result, err := pt.doRequest(http.MethodPost, "/api/sdk-chats", body)
+			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-chats", body)
 			if err != nil {
 				return "", fmt.Errorf("spawn_chat outcome uncertain; list_chat_sessions before creating another chat: %w", err)
 			}
-			return string(result), nil
+			var created map[string]any
+			if err := json.Unmarshal(result, &created); err != nil {
+				return "", err
+			}
+			created["machine"] = machine
+			return jsonText(created), nil
 		})
 	srv.Register("send_chat_message", "Submit a durable, idempotent turn to a Chat by stable ID. While Amplifier is running, steering is delivered at its next request boundary. Accepted proves admission, not completion; read_chat_session shows delivery and output. Reuse client_ref to query the same receipt; uncertain never retries the input.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
@@ -386,9 +395,6 @@ func registerChatControlTools(srv *Server) {
 			"content":    map[string]any{"type": "string"},
 		}), "required": []string{"session_id", "client_ref", "content"}},
 		func(args map[string]any) (string, error) {
-			if err := refuseRemote(args, chatLocalOnly); err != nil {
-				return "", err
-			}
 			id, err := argString(args, "session_id")
 			if err != nil {
 				return "", err
@@ -401,8 +407,12 @@ func registerChatControlTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
+			machine, err := pt.chatMachine(args)
+			if err != nil {
+				return "", err
+			}
 			originToken := ""
-			if originFile := os.Getenv("MUXTERM_CHAT_ORIGIN_FILE"); originFile != "" {
+			if originFile := os.Getenv("MUXTERM_CHAT_ORIGIN_FILE"); machine == LocalMachine && originFile != "" {
 				data, err := os.ReadFile(originFile)
 				if err != nil {
 					return "", fmt.Errorf("read chat origin capability: %w", err)
@@ -410,7 +420,7 @@ func registerChatControlTools(srv *Server) {
 				originToken = strings.TrimSpace(string(data))
 			}
 			body, _ := json.Marshal(map[string]string{"clientRef": key, "content": content, "originToken": originToken})
-			result, err := pt.doRequest(http.MethodPost, "/api/sdk-chats/"+url.PathEscape(id)+"/control-send", body)
+			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-chats/"+url.PathEscape(id)+"/control-send", body)
 			if err != nil {
 				return "", fmt.Errorf("send_chat_message delivery uncertain; retry only with the same client_ref: %w", err)
 			}
@@ -440,20 +450,112 @@ func registerChatControlTools(srv *Server) {
 			}
 			return string(result), nil
 		})
-	srv.Register("read_chat_session", "Read a Chat's recent persisted events and output by stable ID. Milestones retain input acceptance, delivery, and completion across long streamed replies. Local machine only.",
+	srv.Register("read_chat_session", "Read a Chat's recent persisted events and output by stable ID. Milestones retain input acceptance, delivery, and completion across long streamed replies. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"session_id": map[string]any{"type": "string"}}), "required": []string{"session_id"}},
 		func(args map[string]any) (string, error) {
-			if err := refuseRemote(args, chatLocalOnly); err != nil {
-				return "", err
-			}
 			id, err := argString(args, "session_id")
 			if err != nil {
 				return "", err
 			}
-			result, err := pt.doRequest(http.MethodGet, "/api/sdk-chats/"+url.PathEscape(id)+"/control-history", nil)
+			result, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats/"+url.PathEscape(id)+"/control-history", nil)
 			if err != nil {
 				return "", err
 			}
 			return string(result), nil
+		})
+
+	spawn := srv.tools["spawn_chat"]
+	if spawn != nil {
+		srv.Register("create_chat", "Create a Chat with an opening prompt in a project, or Ungrouped. Use project_id from list_projects; set machine for a connected remote.", map[string]any{"type": "object", "properties": withMachine(map[string]any{"project": map[string]any{"type": "string"}, "project_id": map[string]any{"type": "string"}, "harness": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}}), "required": []string{"harness", "prompt"}}, spawn.fn)
+	}
+
+	srv.Register("get_chat_transcript", "Read a page of persisted Chat transcript events. Pass the returned from cursor as before to read older pages. view=messages coalesces assistant text; view=raw includes tool events. Set machine to a connected remote ID to read there.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{
+			"session_id": map[string]any{"type": "string"},
+			"before":     map[string]any{"type": "string", "description": "optional byte cursor returned as from by the previous page"},
+			"view":       map[string]any{"type": "string", "enum": []string{"messages", "raw"}},
+		}), "required": []string{"session_id"}},
+		func(args map[string]any) (string, error) {
+			id, err := argString(args, "session_id")
+			if err != nil {
+				return "", err
+			}
+			view, _, err := argStringOptional(args, "view")
+			if err != nil {
+				return "", err
+			}
+			if view == "" {
+				view = "messages"
+			}
+			if view != "messages" && view != "raw" {
+				return "", fmt.Errorf("view must be messages or raw")
+			}
+			query := "?"
+			if view == "messages" {
+				query += "view=messages"
+			}
+			if before, present, err := argStringOptional(args, "before"); err != nil {
+				return "", err
+			} else if present {
+				if n, parseErr := strconv.ParseInt(before, 10, 64); parseErr != nil || n < 0 {
+					return "", fmt.Errorf("before must be a nonnegative byte cursor")
+				}
+				if query != "?" {
+					query += "&"
+				}
+				query += "before=" + url.QueryEscape(before)
+			}
+			result, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats/"+url.PathEscape(id)+"/history"+query, nil)
+			return string(result), err
+		})
+
+	srv.Register("get_chat_summary", "Read a Chat's current state, project, goal status if present, last output, and recent milestones. This is the persisted status summary, not a newly generated synopsis. Set machine to a connected remote ID to read there.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"session_id": map[string]any{"type": "string"}}), "required": []string{"session_id"}},
+		func(args map[string]any) (string, error) {
+			id, err := argString(args, "session_id")
+			if err != nil {
+				return "", err
+			}
+			body, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats/"+url.PathEscape(id), nil)
+			if err != nil {
+				return "", err
+			}
+			var chat struct {
+				ID           string    `json:"id"`
+				WorkspaceID  string    `json:"workspaceId"`
+				ProjectPath  string    `json:"projectPath"`
+				Title        string    `json:"title"`
+				Harness      string    `json:"harness"`
+				State        string    `json:"state"`
+				LastActivity string    `json:"lastActivity"`
+				LastOutput   string    `json:"lastOutput"`
+				GoalState    string    `json:"goalState"`
+				GoalReason   string    `json:"goalReason"`
+				GoalSummary  string    `json:"goalSummary"`
+				UpdatedAt    time.Time `json:"updatedAt"`
+			}
+			if err := json.Unmarshal(body, &chat); err != nil {
+				return "", err
+			}
+			history, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats/"+url.PathEscape(id)+"/control-history", nil)
+			if err != nil {
+				return "", err
+			}
+			var recent struct {
+				Milestones   []json.RawMessage `json:"milestones"`
+				RecentOutput string            `json:"recentOutput"`
+			}
+			if err := json.Unmarshal(history, &recent); err != nil {
+				return "", err
+			}
+			machine, err := pt.chatMachine(args)
+			if err != nil {
+				return "", err
+			}
+			return jsonText(map[string]any{"machine": machine, "session_id": chat.ID, "project_id": chat.WorkspaceID,
+				"project_path": chat.ProjectPath, "title": chat.Title, "harness": chat.Harness, "state": chat.State,
+				"last_activity": chat.LastActivity, "updated_at": chat.UpdatedAt, "last_output": chat.LastOutput,
+				"goal_state": chat.GoalState, "goal_reason": chat.GoalReason, "goal_summary": chat.GoalSummary,
+				"recent_output": recent.RecentOutput, "milestones": recent.Milestones}), nil
 		})
 }
