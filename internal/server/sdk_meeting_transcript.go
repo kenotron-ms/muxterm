@@ -160,41 +160,45 @@ func (s *Server) handleSDKMeetingTranscribe(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	lock := s.pageDocumentLock("meeting-" + chatID)
-	lock.Lock()
-	meeting, err := readMeeting(chatID, meetingID)
-	if errors.Is(err, os.ErrNotExist) {
-		lock.Unlock()
-		http.Error(w, "Meeting not found", 404)
+	meeting, ctx, status, message := s.queueMeetingTranscription(chatID, meetingID)
+	if status != 0 {
+		http.Error(w, message, status)
 		return
 	}
+	go func() {
+		defer s.meetingJobs.Done()
+		s.runMeetingTranscription(ctx, chatID, meetingID)
+	}()
+	writeJSON(w, http.StatusAccepted, meeting)
+}
+
+func (s *Server) queueMeetingTranscription(chatID, meetingID string) (sdkMeeting, context.Context, int, string) {
+	lock := s.pageDocumentLock("meeting-" + chatID)
+	lock.Lock()
+	defer lock.Unlock()
+	meeting, err := readMeeting(chatID, meetingID)
+	if errors.Is(err, os.ErrNotExist) {
+		return sdkMeeting{}, nil, 404, "Meeting not found"
+	}
 	if err != nil {
-		lock.Unlock()
-		http.Error(w, "Cannot read meeting", 500)
-		return
+		return sdkMeeting{}, nil, 500, "Cannot read meeting"
 	}
 	if meeting.TranscriptState == "queued" || meeting.TranscriptState == "processing" {
 		if _, active := s.meetingTranscriptions.Load(meetingID); !active {
 			meeting.TranscriptState = "failed"
 			meeting.TranscriptError = "Transcription stopped before completion; retry it."
 			if err := saveMeeting(meeting); err != nil {
-				lock.Unlock()
-				http.Error(w, "Cannot recover transcription state", 500)
-				return
+				return sdkMeeting{}, nil, 500, "Cannot recover transcription state"
 			}
 		}
 	}
 	if meeting.RecordingState != "ready" || (meeting.TranscriptState != "not_started" && meeting.TranscriptState != "failed") {
-		lock.Unlock()
-		http.Error(w, "Transcription unavailable in current state", 409)
-		return
+		return sdkMeeting{}, nil, 409, "Transcription unavailable in current state"
 	}
 	meeting.TranscriptState = "queued"
 	meeting.TranscriptError = ""
 	if err := saveMeeting(meeting); err != nil {
-		lock.Unlock()
-		http.Error(w, "Cannot queue transcription", 500)
-		return
+		return sdkMeeting{}, nil, 500, "Cannot queue transcription"
 	}
 	parent := s.meetingJobContext
 	if parent == nil {
@@ -203,12 +207,7 @@ func (s *Server) handleSDKMeetingTranscribe(w http.ResponseWriter, r *http.Reque
 	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 	s.meetingTranscriptions.Store(meetingID, cancel)
 	s.meetingJobs.Add(1)
-	lock.Unlock()
-	go func() {
-		defer s.meetingJobs.Done()
-		s.runMeetingTranscription(ctx, chatID, meetingID)
-	}()
-	writeJSON(w, http.StatusAccepted, meeting)
+	return meeting, ctx, 0, ""
 }
 
 func (s *Server) runMeetingTranscription(ctx context.Context, chatID, meetingID string) {

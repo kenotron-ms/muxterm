@@ -430,7 +430,7 @@ export class MuxMeetings extends LitElement {
       if (Date.now()-this.lastNetworkCheck>3000) void this.inspectCallNetwork();
       this.requestUpdate();
     } catch (error) { this.callStatus=String(error); this.requestUpdate(); }
-    this.callPolling = false;
+    finally { this.callPolling = false; }
   }
   private async inspectCallNetwork() {
     const peer=this.callPeer;
@@ -665,13 +665,16 @@ export class MuxMeetings extends LitElement {
   }
   private async recover(meeting:Meeting) {
     try {
+      const response=await fetch(this.path(meeting.id));
+      if (!response.ok) throw new Error(`Meeting unavailable (${response.status})`);
+      const current=await response.json() as Meeting;
       const prefix = `${this.sessionId}/${meeting.id}/`;
       const range=IDBKeyRange.bound(prefix,prefix+'\uffff');
       const chunks = (await chunkStore('readonly',store => store.getAll(range)) as LocalChunk[])
         .sort((a,b) => a.key.localeCompare(b.key));
       for (const item of chunks) {
         const index = Number(item.key.slice(prefix.length));
-        if (index >= meeting.chunks) await this.uploadChunk(meeting.id,index,item.blob);
+        if (index >= current.chunks) await this.uploadChunk(meeting.id,index,item.blob);
         await chunkStore('readwrite',store => store.delete(item.key));
       }
       await this.finalize(meeting.id);
