@@ -60,8 +60,10 @@ catalog, while the live app is the behavior source of truth.
 ## Fixed feature dimensions
 
 The `literalDimensions` baseline in `web/scripts/ui-legacy-baseline.json` is
-zero for every component. The gate also scans static inline style attributes,
-which previously hid fixed spacing in Settings Notifications. Positive pixel or
+zero for product components. The Storybook-only Notes and Meetings concept
+retains 19 fixed dimensions as a reviewed prototype ceiling; the production
+Meeting component uses the shared token scale. The gate also scans static inline
+style attributes, which previously hid fixed spacing in Settings Notifications. Positive pixel or
 rem values in width and height declarations must use named design tokens. Chat
 and Utility retain their own layout structure, but their bounds are explicit
 tokens in `tokens.css`.
@@ -76,6 +78,8 @@ their screen stories and the live app.
 | Chat and New Chat | Three hidden file inputs | Browser file picking and multiple-file selection require native inputs; the visible trigger and attachment state use shared Button and Attachment. | Attachment stories and live upload/removal flows. |
 | New Chat and Folder Picker | Two location buttons and five folder navigation buttons | The Chat choice and folder rows expose native `menuitemradio` selection semantics; the location trigger, parent navigation, and browse controls retain direct keyboard focus. The folder picker is shared by the composer and folder dialogs; its dimensions and spacing use design tokens. | New Chat and Folder Picker stories; dev-local location menu and folder creation. |
 | Utility Pages | Native page-title textarea | Inline title editing grows with document content; other page actions use shared controls. Its minimum height comes from the document token and computed style. | Utility Pages stories and live Pages editor. |
+| Meetings product | Three native microphone/camera selectors, a transcript correction textarea, and a timestamp seek button | Device lists and timestamped text edits retain browser selection and editing behavior. Repeated actions, search, feedback, rails and dialogs use shared UI components; this is a ceiling of five native controls. | `Components/Meetings` and `Screens/Utility` stories; isolated live Meeting pane. |
+| Notes and Meetings concept | Two native prototype controls; 52 literal colors, 19 scale declarations and 19 fixed dimensions | This is a Storybook-only historical storyboard, outside the app render path. Its checked baseline preserves the concept for review while preventing further literal growth. Production Notes and Meetings stories mount the shared utility and Meeting components. | `Concepts/Notes and Meetings`; compare with `Screens/Utility`. |
 | Phone pane picker | Native Popover trigger button | The browser owns the declarative Popover target; pane rows, New pane and close actions use shared Buttons. | Pane Picker stories and live sessiond pane selection/closure. |
 | Settings Voice | Aligned text and status glyph gutter | Configuration facts and check results form one scannable column; marker shape and wording carry meaning, with shared semantic status colors. It is not an alert panel. | Voice mode, failure and phone Settings stories. |
 | Dockview, xterm, Monaco, BlockNote, PDF | Library-owned tab, terminal, editor, and canvas DOM | These integrations control rendering, selection, and document or terminal state. App chrome around them uses shared tokens and controls. | Dock, Utility, Page visualization and PDF stories; live terminal and Utility. |

@@ -60,6 +60,13 @@
     "literalDimensions": 0,
     "nativeControls": 5
   },
+  "components/mux-meetings.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "literalDimensions": 0,
+    "nativeControls": 5
+  },
   "components/mux-monaco-diff.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
@@ -77,6 +84,13 @@
     "literalColors": 0,
     "literalScale": 0,
     "nativeControls": 4
+  },
+  "components/mux-notes-meetings-concept.ts": {
+    "legacyTokens": 0,
+    "literalColors": 52,
+    "literalScale": 19,
+    "literalDimensions": 19,
+    "nativeControls": 2
   },
   "components/mux-operator-status.ts": {
     "legacyTokens": 0,
