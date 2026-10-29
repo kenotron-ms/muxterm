@@ -88,6 +88,12 @@ type VoiceConfig struct {
 	// Model is the deployment/model name, e.g. "gpt-realtime-2.1".
 	Model string `toml:"model" json:"model"`
 
+	// TranscriptionModel is the separate file-transcription model or Azure
+	// deployment used only when a user explicitly sends a saved meeting to the
+	// configured Voice provider. Empty uses gpt-transcribe on OpenAI and leaves
+	// provider transcription unavailable on Azure until a deployment is named.
+	TranscriptionModel string `toml:"transcription_model,omitempty" json:"transcription_model"`
+
 	// AuthMode is VoiceAuthEntra or VoiceAuthAPIKey. Required when
 	// Enabled: see the block comment above for why this is explicit.
 	AuthMode string `toml:"auth_mode" json:"auth_mode"`

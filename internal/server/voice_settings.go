@@ -95,12 +95,13 @@ var allowedVoiceEndpointSuffixes = []string{
 // voiceStatus is everything the browser is allowed to know. Note what is
 // absent: any field derived from a secret's value.
 type voiceStatus struct {
-	Enabled    bool   `json:"enabled"`
-	Mode       string `json:"mode"`
-	Endpoint   string `json:"endpoint"`
-	Model      string `json:"model"`
-	AuthMode   string `json:"authMode"`
-	EntraScope string `json:"entraScope"`
+	Enabled            bool   `json:"enabled"`
+	Mode               string `json:"mode"`
+	Endpoint           string `json:"endpoint"`
+	Model              string `json:"model"`
+	TranscriptionModel string `json:"transcriptionModel"`
+	AuthMode           string `json:"authMode"`
+	EntraScope         string `json:"entraScope"`
 	// KeySource is "stored", "env", "none" or "" (not a key mode). It says
 	// WHERE the key comes from, never what it is.
 	KeySource string `json:"keySource"`
@@ -150,17 +151,18 @@ func (s *Server) buildVoiceStatus() voiceStatus {
 	s.cfgMu.RUnlock()
 	v := s.voiceConfigOnDisk()
 	st := voiceStatus{
-		Enabled:       v.Enabled,
-		Mode:          voiceModeOf(v),
-		Endpoint:      v.Endpoint,
-		Model:         v.Model,
-		AuthMode:      v.AuthMode,
-		EntraScope:    v.Resolved().EntraScope,
-		KeySource:     v.KeySource(),
-		KeyEnvVar:     v.APIKeyEnv,
-		AllowedScopes: allowedEntraScopes,
-		ConfigPath:    s.configPath,
-		KeyPath:       voice.DefaultKeyPath(),
+		Enabled:            v.Enabled,
+		Mode:               voiceModeOf(v),
+		Endpoint:           v.Endpoint,
+		Model:              v.Model,
+		TranscriptionModel: v.TranscriptionModel,
+		AuthMode:           v.AuthMode,
+		EntraScope:         v.Resolved().EntraScope,
+		KeySource:          v.KeySource(),
+		KeyEnvVar:          v.APIKeyEnv,
+		AllowedScopes:      allowedEntraScopes,
+		ConfigPath:         s.configPath,
+		KeyPath:            voice.DefaultKeyPath(),
 	}
 	switch st.KeySource {
 	case "stored":
@@ -228,11 +230,12 @@ func (s *Server) handleVoiceSettingsGet(w http.ResponseWriter, _ *http.Request) 
 }
 
 type voiceSettingsRequest struct {
-	Enabled    bool   `json:"enabled"`
-	Mode       string `json:"mode"`
-	Endpoint   string `json:"endpoint"`
-	Model      string `json:"model"`
-	EntraScope string `json:"entraScope"`
+	Enabled            bool   `json:"enabled"`
+	Mode               string `json:"mode"`
+	Endpoint           string `json:"endpoint"`
+	Model              string `json:"model"`
+	TranscriptionModel string `json:"transcriptionModel"`
+	EntraScope         string `json:"entraScope"`
 	// APIKey is write-only and OPTIONAL. Absent or empty means "leave the
 	// stored key alone", which is what makes editing the model name
 	// without re-typing a key possible.
@@ -263,6 +266,11 @@ func (s *Server) handleVoiceSettingsPut(w http.ResponseWriter, r *http.Request) 
 	next := current
 	next.Enabled = body.Enabled
 	next.Model = strings.TrimSpace(body.Model)
+	next.TranscriptionModel = strings.TrimSpace(body.TranscriptionModel)
+	if len(next.TranscriptionModel) > 120 || strings.ContainsAny(next.TranscriptionModel, " \t\r\n") {
+		writeVoiceSettingsError(w, http.StatusBadRequest, "Meeting transcription model must be a model or deployment name without spaces (120 characters maximum).")
+		return
+	}
 	newKey := strings.TrimSpace(body.APIKey)
 
 	switch body.Mode {

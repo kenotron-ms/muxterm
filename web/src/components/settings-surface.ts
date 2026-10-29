@@ -690,6 +690,7 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _vEnabled = false;
   @state() private _vEndpoint = '';
   @state() private _vModel = '';
+  @state() private _vTranscriptionModel = '';
   @state() private _vScope = '';
   @state() private _vKeyInput = '';
   @state() private _voiceBusy = false;
@@ -1443,6 +1444,7 @@ export class MuxSettingsSurface extends LitElement {
     this._vEnabled = st.enabled;
     this._vEndpoint = st.endpoint;
     this._vModel = st.model;
+    this._vTranscriptionModel = st.transcriptionModel;
     this._vScope = st.entraScope || (st.allowedScopes[0] ?? '');
     this._vKeyInput = '';
   }
@@ -1476,6 +1478,7 @@ export class MuxSettingsSurface extends LitElement {
         mode: this._vMode,
         endpoint: this._vEndpoint.trim(),
         model: this._vModel.trim(),
+        transcriptionModel: this._vTranscriptionModel.trim(),
         entraScope: this._vScope,
         ...(key === '' ? {} : { apiKey: key }),
       });
@@ -1611,13 +1614,25 @@ export class MuxSettingsSurface extends LitElement {
 
       <div class="v-field">
         <mux-ui-text-field
-          label="Model"
+          label="Live voice model"
           type="text"
           autocomplete="off"
           placeholder="gpt-realtime-2.1-mini"
           .value="${this._vModel}"
           @input="${(e: Event) => { this._vModel = (e.target as HTMLInputElement).value; }}"
         ></mux-ui-text-field>
+      </div>
+
+      <div class="v-field">
+        <mux-ui-text-field
+          label="Meeting transcription model"
+          type="text"
+          autocomplete="off"
+          placeholder="${isOpenAI ? 'gpt-transcribe' : 'Your Azure transcription deployment'}"
+          .value="${this._vTranscriptionModel}"
+          @input="${(e: Event) => { this._vTranscriptionModel = (e.target as HTMLInputElement).value; }}"
+        ></mux-ui-text-field>
+        <p class="v-hint">Saved meetings need a file transcription model separate from live voice. ${isOpenAI ? 'Leave blank to use gpt-transcribe.' : 'Enter the name of a transcription deployment on this Azure resource.'} Choosing the provider in Meetings sends saved audio to ${isOpenAI ? 'OpenAI' : 'Azure OpenAI'}; Muxterm stores the transcript.</p>
       </div>
 
       ${isEntra

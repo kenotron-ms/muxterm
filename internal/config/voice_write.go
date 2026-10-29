@@ -237,6 +237,9 @@ func renderVoiceSection(v VoiceConfig) string {
 	if v.Model != "" {
 		fmt.Fprintf(&b, "  model = %s\n", strconv.Quote(v.Model))
 	}
+	if v.TranscriptionModel != "" {
+		fmt.Fprintf(&b, "  transcription_model = %s\n", strconv.Quote(v.TranscriptionModel))
+	}
 	if v.AuthMode != "" {
 		fmt.Fprintf(&b, "  auth_mode = %s\n", strconv.Quote(v.AuthMode))
 	}

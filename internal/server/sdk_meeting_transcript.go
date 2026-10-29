@@ -163,19 +163,56 @@ func (s *Server) handleSDKMeetingTranscribe(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	meeting, ctx, status, message := s.queueMeetingTranscription(chatID, meetingID)
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 256))
+	if err != nil {
+		http.Error(w, "Invalid transcription request", http.StatusBadRequest)
+		return
+	}
+	var request struct {
+		Engine string `json:"engine"`
+	}
+	if len(data) != 0 && json.Unmarshal(data, &request) != nil {
+		http.Error(w, "Invalid transcription request", http.StatusBadRequest)
+		return
+	}
+	if request.Engine == "" {
+		request.Engine = "local"
+	}
+	var target meetingVoiceTarget
+	switch request.Engine {
+	case "local":
+		if err := localMeetingTranscriberReady(); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	case "voice":
+		var err error
+		target, err = s.meetingVoiceTarget()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	default:
+		http.Error(w, "Unknown transcription engine", http.StatusBadRequest)
+		return
+	}
+	source := "local"
+	if request.Engine == "voice" {
+		source = target.name
+	}
+	meeting, ctx, status, message := s.queueMeetingTranscription(chatID, meetingID, source)
 	if status != 0 {
 		http.Error(w, message, status)
 		return
 	}
 	go func() {
 		defer s.meetingJobs.Done()
-		s.runMeetingTranscription(ctx, chatID, meetingID)
+		s.runMeetingTranscription(ctx, chatID, meetingID, request.Engine, target)
 	}()
 	writeJSON(w, http.StatusAccepted, meeting)
 }
 
-func (s *Server) queueMeetingTranscription(chatID, meetingID string) (sdkMeeting, context.Context, int, string) {
+func (s *Server) queueMeetingTranscription(chatID, meetingID, source string) (sdkMeeting, context.Context, int, string) {
 	lock := s.pageDocumentLock("meeting-" + chatID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -199,6 +236,7 @@ func (s *Server) queueMeetingTranscription(chatID, meetingID string) (sdkMeeting
 		return sdkMeeting{}, nil, 409, "Transcription unavailable in current state"
 	}
 	meeting.TranscriptState = "queued"
+	meeting.TranscriptSource = source
 	meeting.TranscriptError = ""
 	if err := saveMeeting(meeting); err != nil {
 		return sdkMeeting{}, nil, 500, "Cannot queue transcription"
@@ -213,7 +251,7 @@ func (s *Server) queueMeetingTranscription(chatID, meetingID string) (sdkMeeting
 	return meeting, ctx, 0, ""
 }
 
-func (s *Server) runMeetingTranscription(ctx context.Context, chatID, meetingID string) {
+func (s *Server) runMeetingTranscription(ctx context.Context, chatID, meetingID, engine string, target meetingVoiceTarget) {
 	defer func() {
 		if value, ok := s.meetingTranscriptions.LoadAndDelete(meetingID); ok {
 			value.(context.CancelFunc)()
@@ -234,48 +272,52 @@ func (s *Server) runMeetingTranscription(ctx context.Context, chatID, meetingID 
 	setState("processing", "")
 	dir := meetingDir(chatID, meetingID)
 	input := filepath.Join(dir, "original.media")
-	wav := filepath.Join(dir, "transcription-input.wav")
-	output := filepath.Join(dir, "transcription-output.json")
-	defer os.Remove(wav)
-	defer os.Remove(output)
-	transcriber := os.Getenv("MUXTERM_MEETING_TRANSCRIBER")
-	if transcriber == "" {
-		setState("failed", "Local transcription is not configured. Set MUXTERM_MEETING_TRANSCRIBER to a self-hosted executable.")
-		return
-	}
-	convert := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", input, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav)
-	if log, err := convert.CombinedOutput(); err != nil {
-		setState("failed", fmt.Sprintf("Audio conversion failed: %v: %s", err, strings.TrimSpace(string(log))))
-		return
-	}
-	command := exec.CommandContext(ctx, transcriber, wav, output)
-	command.Dir = dir
-	if log, err := command.CombinedOutput(); err != nil {
-		setState("failed", fmt.Sprintf("Local transcriber failed: %v: %s", err, strings.TrimSpace(string(log))))
-		return
-	}
-	info, err := os.Stat(output)
-	if err != nil || info.Size() > 10<<20 {
-		setState("failed", "Local transcriber did not produce a valid bounded JSON file.")
-		return
-	}
-	data, err := os.ReadFile(output)
-	if err != nil || len(data) > 10<<20 {
-		setState("failed", "Local transcriber did not produce a valid bounded JSON file.")
-		return
-	}
 	var result struct {
 		Segments []meetingSegment `json:"segments"`
 	}
-	if json.Unmarshal(data, &result) != nil || len(result.Segments) == 0 || len(result.Segments) > 10000 {
-		setState("failed", "Local transcriber returned no valid segments.")
+	if engine == "voice" {
+		segments, err := transcribeMeetingWithVoice(ctx, input, dir, target)
+		if err != nil {
+			setState("failed", "Provider transcription failed: "+err.Error())
+			return
+		}
+		result.Segments = segments
+	} else {
+		wav := filepath.Join(dir, "transcription-input.wav")
+		output := filepath.Join(dir, "transcription-output.json")
+		defer os.Remove(wav)
+		defer os.Remove(output)
+		convert := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", input, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav)
+		if log, err := convert.CombinedOutput(); err != nil {
+			setState("failed", fmt.Sprintf("Audio conversion failed: %v: %s", err, strings.TrimSpace(string(log))))
+			return
+		}
+		command := exec.CommandContext(ctx, os.Getenv("MUXTERM_MEETING_TRANSCRIBER"), wav, output)
+		command.Dir = dir
+		if log, err := command.CombinedOutput(); err != nil {
+			setState("failed", fmt.Sprintf("Local transcriber failed: %v: %s", err, strings.TrimSpace(string(log))))
+			return
+		}
+		info, err := os.Stat(output)
+		if err != nil || info.Size() > 10<<20 {
+			setState("failed", "Local transcriber did not produce a valid bounded JSON file.")
+			return
+		}
+		data, err := os.ReadFile(output)
+		if err != nil || len(data) > 10<<20 || json.Unmarshal(data, &result) != nil {
+			setState("failed", "Local transcriber did not produce a valid bounded JSON file.")
+			return
+		}
+	}
+	if len(result.Segments) == 0 || len(result.Segments) > 10000 {
+		setState("failed", "Transcription returned no valid segments.")
 		return
 	}
 	sort.Slice(result.Segments, func(i, j int) bool { return result.Segments[i].StartMs < result.Segments[j].StartMs })
 	for i := range result.Segments {
 		segment := &result.Segments[i]
 		if segment.StartMs < 0 || segment.EndMs <= segment.StartMs || len(segment.Text) == 0 || len(segment.Text) > 10000 {
-			setState("failed", "Local transcriber returned an invalid segment.")
+			setState("failed", "Transcription returned an invalid segment.")
 			return
 		}
 		segment.ID = sdkID()
@@ -289,7 +331,7 @@ func (s *Server) runMeetingTranscription(ctx context.Context, chatID, meetingID 
 		lock.Unlock()
 		return
 	}
-	err = writeMeetingTranscript(chatID, meetingID, transcript)
+	err := writeMeetingTranscript(chatID, meetingID, transcript)
 	if err == nil {
 		meeting.TranscriptState = "ready"
 		meeting.TranscriptError = ""
