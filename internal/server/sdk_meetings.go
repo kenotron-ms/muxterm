@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,7 +79,16 @@ func saveMeeting(meeting sdkMeeting) error {
 	return writeUtilityPages(filepath.Join(dir, "meeting.json"), data)
 }
 
-func meetingState(meeting sdkMeeting) sdkMeeting {
+func (s *Server) meetingState(meeting sdkMeeting) sdkMeeting {
+	if meeting.TranscriptState == "queued" || meeting.TranscriptState == "processing" {
+		if _, active := s.meetingTranscriptions.Load(meeting.ID); !active {
+			meeting.TranscriptState = "failed"
+			meeting.TranscriptError = "Transcription stopped before completion; retry it."
+			if err := saveMeeting(meeting); err != nil {
+				meeting.TranscriptError = "Transcription stopped, but recovery state could not be saved: " + err.Error()
+			}
+		}
+	}
 	if meeting.RecordingState == "recording" {
 		last := meeting.StartedAt
 		if meeting.LastChunkAt != "" {
@@ -118,7 +128,7 @@ func (s *Server) handleSDKMeetings(w http.ResponseWriter, r *http.Request) {
 			}
 			meeting, err := readMeeting(chatID, entry.Name())
 			if err == nil {
-				meetings = append(meetings, meetingState(meeting))
+				meetings = append(meetings, s.meetingState(meeting))
 			}
 		}
 		writeJSON(w, http.StatusOK, meetings)
@@ -134,7 +144,7 @@ func (s *Server) handleSDKMeetings(w http.ResponseWriter, r *http.Request) {
 		Kind      string `json:"kind"`
 		MediaType string `json:"mediaType"`
 	}
-	if json.Unmarshal(data, &input) != nil || len(input.Title) > 300 || (input.Kind != "recording" && input.Kind != "call") || !validMeetingMediaType(input.MediaType) {
+	if json.Unmarshal(data, &input) != nil || len(input.Title) > 300 || (input.Kind != "recording" && input.Kind != "call") || (input.Kind == "recording" && !validMeetingMediaType(input.MediaType)) || (input.Kind == "call" && input.MediaType != "") {
 		http.Error(w, "Invalid meeting", 400)
 		return
 	}
@@ -160,7 +170,7 @@ func (s *Server) handleSDKMeetings(w http.ResponseWriter, r *http.Request) {
 
 func validMeetingMediaType(value string) bool {
 	switch value {
-	case "", "audio/webm", "audio/webm;codecs=opus", "audio/ogg", "audio/mp4", "video/webm", "video/webm;codecs=vp8,opus", "video/webm;codecs=vp9,opus", "video/mp4":
+	case "audio/webm", "audio/webm;codecs=opus", "audio/ogg", "audio/mp4", "video/webm", "video/webm;codecs=vp8,opus", "video/webm;codecs=vp9,opus", "video/mp4":
 		return true
 	}
 	return false
@@ -184,14 +194,18 @@ func (s *Server) handleSDKMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
+		if value, active := s.meetingTranscriptions.Load(meetingID); active {
+			value.(context.CancelFunc)()
+		}
 		if err := os.RemoveAll(meetingDir(chatID, meetingID)); err != nil {
 			http.Error(w, "Cannot delete meeting", 500)
 			return
 		}
+		s.meetingCalls.revoke(meetingID)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	writeJSON(w, http.StatusOK, meetingState(meeting))
+	writeJSON(w, http.StatusOK, s.meetingState(meeting))
 }
 
 func (s *Server) handleSDKMeetingChunk(w http.ResponseWriter, r *http.Request) {
@@ -398,6 +412,7 @@ func (s *Server) handleSDKMeetingEnd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Cannot end meeting", 500)
 		return
 	}
+	s.meetingCalls.revoke(meetingID)
 	writeJSON(w, http.StatusOK, meeting)
 }
 
@@ -420,6 +435,13 @@ func (s *Server) handleSDKMeetingMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", meeting.MediaType)
-	w.Header().Set("Content-Disposition", "inline; filename=meeting-"+meetingID+".webm")
+	extension := ".webm"
+	if strings.Contains(meeting.MediaType, "mp4") {
+		extension = ".mp4"
+	} else if strings.Contains(meeting.MediaType, "ogg") {
+		extension = ".ogg"
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "inline; filename=meeting-"+meetingID+extension)
 	http.ServeFile(w, r, filepath.Join(meetingDir(chatID, meetingID), "original.media"))
 }

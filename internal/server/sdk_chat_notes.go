@@ -19,9 +19,14 @@ func (s *Server) handleSDKNoteControl(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sdkChats.mu.Lock()
 	exists := s.sdkChats.chats[chatID] != nil
+	if exists && !humanBrowserRequest(r) {
+		token := r.Header.Get("X-Muxterm-Origin")
+		origin, valid := s.sdkChats.controlOriginLocked(token, chatID)
+		exists = token != "" && valid && (origin.ChatID == chatID || origin.Relation == "operator-to-lane" || origin.Relation == "lane-to-operator")
+	}
 	s.sdkChats.mu.Unlock()
 	if !exists {
-		http.Error(w, "Chat not found", http.StatusNotFound)
+		http.Error(w, "Note capability unavailable", http.StatusForbidden)
 		return
 	}
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 128<<10))
@@ -103,6 +108,22 @@ func (s *Server) handleSDKNoteControl(w http.ResponseWriter, r *http.Request) {
 			content = append(content, additions...)
 			note.Content, err = json.Marshal(content)
 		} else {
+			if len(note.Blocks) > 0 {
+				http.Error(w, "Rich note cannot be replaced as plain text; append instead", http.StatusConflict)
+				return
+			}
+			if len(note.Content) > 0 {
+				var blocks []map[string]json.RawMessage
+				if json.Unmarshal(note.Content, &blocks) != nil || len(blocks) != 1 {
+					http.Error(w, "Rich note cannot be replaced as plain text; append instead", http.StatusConflict)
+					return
+				}
+				var kind, plain string
+				if json.Unmarshal(blocks[0]["type"], &kind) != nil || kind != "paragraph" || json.Unmarshal(blocks[0]["content"], &plain) != nil {
+					http.Error(w, "Rich note cannot be replaced as plain text; append instead", http.StatusConflict)
+					return
+				}
+			}
 			if input.Title != nil {
 				note.Title = *input.Title
 			}

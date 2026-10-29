@@ -43,6 +43,26 @@ func newMeetingCallRegistry() *meetingCallRegistry {
 	return &meetingCallRegistry{byMeeting: map[string]*meetingCall{}, byToken: map[string]*meetingCall{}}
 }
 
+func (r *meetingCallRegistry) revoke(meetingID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if call := r.byMeeting[meetingID]; call != nil {
+		delete(r.byToken, call.Token)
+		delete(r.byMeeting, meetingID)
+	}
+}
+
+func (r *meetingCallRegistry) sweep() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, call := range r.byMeeting {
+		if time.Now().After(call.Expires) {
+			delete(r.byToken, call.Token)
+			delete(r.byMeeting, id)
+		}
+	}
+}
+
 func randomMeetingSecret() string {
 	var bytes [24]byte
 	_, _ = rand.Read(bytes[:])
@@ -144,19 +164,24 @@ func (s *Server) handleMeetingInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not a call meeting", 400)
 		return
 	}
+	if r.Method == http.MethodPost && meeting.EndedAt != "" {
+		http.Error(w, "Call already ended", http.StatusConflict)
+		return
+	}
 	s.meetingCalls.mu.Lock()
-	defer s.meetingCalls.mu.Unlock()
 	if old := s.meetingCalls.byMeeting[meetingID]; old != nil {
 		delete(s.meetingCalls.byToken, old.Token)
 	}
 	delete(s.meetingCalls.byMeeting, meetingID)
 	if r.Method == http.MethodDelete {
+		s.meetingCalls.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	call := &meetingCall{ChatID: chatID, MeetingID: meetingID, Token: randomMeetingSecret(), Expires: time.Now().Add(time.Hour), HostLastSeen: time.Now()}
 	s.meetingCalls.byMeeting[meetingID] = call
 	s.meetingCalls.byToken[call.Token] = call
+	s.meetingCalls.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"token": call.Token, "inviteUrl": inviteOrigin + "/guest/" + call.Token, "expiresAt": call.Expires.UTC().Format(time.RFC3339), "iceServers": meetingICEServers()})
 }
 
@@ -167,7 +192,7 @@ func (s *Server) callByToken(w http.ResponseWriter, token string) *meetingCall {
 	}
 	s.meetingCalls.mu.Lock()
 	call := s.meetingCalls.byToken[token]
-	if call == nil || (time.Now().After(call.Expires) && !call.GuestJoined) {
+	if call == nil || time.Now().After(call.Expires) {
 		call = nil
 	}
 	s.meetingCalls.mu.Unlock()
@@ -183,32 +208,42 @@ func (s *Server) handleMeetingGuestJoin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.meetingCalls.mu.Lock()
-	defer s.meetingCalls.mu.Unlock()
-	if s.meetingCalls.byToken[call.Token] != call || (time.Now().After(call.Expires) && (!call.GuestJoined || r.Header.Get("X-Muxterm-Guest-Lease") != call.GuestLease)) {
+	if s.meetingCalls.byToken[call.Token] != call || time.Now().After(call.Expires) {
+		s.meetingCalls.mu.Unlock()
 		http.Error(w, "Invite expired or revoked", 404)
 		return
 	}
 	provided := r.Header.Get("X-Muxterm-Guest-Lease")
 	if call.GuestJoined && (provided == "" || provided != call.GuestLease) {
+		s.meetingCalls.mu.Unlock()
 		http.Error(w, "This invite already has a guest", 409)
 		return
 	}
+	joinedNow := !call.GuestJoined
 	if !call.GuestJoined {
 		call.GuestJoined = true
 		call.GuestLease = randomMeetingSecret()
-		meetingLock := s.pageDocumentLock("meeting-" + call.ChatID)
-		meetingLock.Lock()
-		if meeting, err := readMeeting(call.ChatID, call.MeetingID); err == nil {
-			meeting.Participants = []string{"You", "Guest"}
-			_ = saveMeeting(meeting)
-		}
-		meetingLock.Unlock()
 	}
 	call.NextSeq++
 	call.Signals = append(call.Signals, meetingSignal{Seq: call.NextSeq, From: "guest", Type: "joined"})
 	call.GuestLastSeen = time.Now()
-	meeting, _ := readMeeting(call.ChatID, call.MeetingID)
-	writeJSON(w, http.StatusOK, map[string]any{"meetingId": call.MeetingID, "title": meeting.Title, "lease": call.GuestLease, "iceServers": meetingICEServers(), "expiresAt": call.Expires.UTC().Format(time.RFC3339)})
+	lease, expires := call.GuestLease, call.Expires
+	chatID, meetingID := call.ChatID, call.MeetingID
+	s.meetingCalls.mu.Unlock()
+	meetingLock := s.pageDocumentLock("meeting-" + chatID)
+	meetingLock.Lock()
+	meeting, err := readMeeting(chatID, meetingID)
+	if err == nil && joinedNow {
+		meeting.Participants = []string{"You", "Guest"}
+		err = saveMeeting(meeting)
+	}
+	meetingLock.Unlock()
+	if err != nil {
+		s.meetingCalls.revoke(meetingID)
+		http.Error(w, "Meeting unavailable", 404)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"meetingId": meetingID, "title": meeting.Title, "lease": lease, "iceServers": meetingICEServers(), "expiresAt": expires.UTC().Format(time.RFC3339)})
 }
 
 func (s *Server) handleMeetingHostSignals(w http.ResponseWriter, r *http.Request) {
@@ -216,32 +251,73 @@ func (s *Server) handleMeetingHostSignals(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	input, status, message := readMeetingSignal(w, r)
+	if status != 0 {
+		http.Error(w, message, status)
+		return
+	}
 	s.meetingCalls.mu.Lock()
-	defer s.meetingCalls.mu.Unlock()
 	call := s.meetingCalls.byMeeting[meetingID]
-	if call == nil || call.ChatID != chatID || (time.Now().After(call.Expires) && !call.GuestJoined) {
+	if call == nil || call.ChatID != chatID || time.Now().After(call.Expires) {
+		s.meetingCalls.mu.Unlock()
 		http.Error(w, "Call invite unavailable", 404)
 		return
 	}
-	s.serveMeetingSignalsLocked(w, r, call, "host")
+	output := serveMeetingSignalsLocked(r, call, "host", input)
+	s.meetingCalls.mu.Unlock()
+	writeJSON(w, http.StatusOK, output)
 }
 
 func (s *Server) handleMeetingGuestSignals(w http.ResponseWriter, r *http.Request) {
+	input, status, message := readMeetingSignal(w, r)
+	if status != 0 {
+		http.Error(w, message, status)
+		return
+	}
 	s.meetingCalls.mu.Lock()
-	defer s.meetingCalls.mu.Unlock()
 	call := s.meetingCalls.byToken[r.PathValue("token")]
-	if call == nil || (time.Now().After(call.Expires) && !call.GuestJoined) {
+	if call == nil || time.Now().After(call.Expires) {
+		s.meetingCalls.mu.Unlock()
 		http.Error(w, "Invite expired or revoked", 404)
 		return
 	}
 	if !call.GuestJoined || r.Header.Get("X-Muxterm-Guest-Lease") != call.GuestLease {
+		s.meetingCalls.mu.Unlock()
 		http.Error(w, "Join the meeting first", 403)
 		return
 	}
-	s.serveMeetingSignalsLocked(w, r, call, "guest")
+	if r.Method == http.MethodPost && (input.Type == "recording" || input.Type == "end") {
+		s.meetingCalls.mu.Unlock()
+		http.Error(w, "Guest cannot change host recording or end the call", 403)
+		return
+	}
+	output := serveMeetingSignalsLocked(r, call, "guest", input)
+	s.meetingCalls.mu.Unlock()
+	writeJSON(w, http.StatusOK, output)
 }
 
-func (s *Server) serveMeetingSignalsLocked(w http.ResponseWriter, r *http.Request, call *meetingCall, role string) {
+type meetingSignalInput struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+func readMeetingSignal(w http.ResponseWriter, r *http.Request) (meetingSignalInput, int, string) {
+	if r.Method == http.MethodGet {
+		return meetingSignalInput{}, 0, ""
+	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(15 * time.Second))
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<10))
+	if err != nil {
+		return meetingSignalInput{}, 413, "Signal too large"
+	}
+	var input meetingSignalInput
+	if json.Unmarshal(data, &input) != nil || !validMeetingSignal(input.Type) || len(input.Payload) > 30<<10 || (len(input.Payload) > 0 && !json.Valid(input.Payload)) {
+		return meetingSignalInput{}, 400, "Invalid signal"
+	}
+	return input, 0, ""
+}
+
+func serveMeetingSignalsLocked(r *http.Request, call *meetingCall, role string, input meetingSignalInput) map[string]any {
 	now := time.Now()
 	if role == "host" {
 		call.HostLastSeen = now
@@ -260,32 +336,15 @@ func (s *Server) serveMeetingSignalsLocked(w http.ResponseWriter, r *http.Reques
 		if role == "guest" {
 			peerSeen = call.HostLastSeen
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"signals": out, "cursor": call.NextSeq, "peerConnected": !peerSeen.IsZero() && now.Sub(peerSeen) < 10*time.Second, "guestJoined": call.GuestJoined})
-		return
-	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<10))
-	if err != nil {
-		http.Error(w, "Signal too large", 413)
-		return
-	}
-	var input struct {
-		Type    string          `json:"type"`
-		Payload json.RawMessage `json:"payload"`
-	}
-	if json.Unmarshal(data, &input) != nil || !validMeetingSignal(input.Type) || len(input.Payload) > 30<<10 {
-		http.Error(w, "Invalid signal", 400)
-		return
-	}
-	if len(input.Payload) > 0 && !json.Valid(input.Payload) {
-		http.Error(w, "Invalid payload", 400)
-		return
+		dropped := len(call.Signals) > 0 && call.Signals[0].Seq > 1 && since < call.Signals[0].Seq-1
+		return map[string]any{"signals": out, "cursor": call.NextSeq, "signalsDropped": dropped, "peerConnected": !peerSeen.IsZero() && now.Sub(peerSeen) < 10*time.Second, "guestJoined": call.GuestJoined}
 	}
 	call.NextSeq++
 	call.Signals = append(call.Signals, meetingSignal{Seq: call.NextSeq, From: role, Type: input.Type, Payload: input.Payload})
 	if len(call.Signals) > 256 {
 		call.Signals = call.Signals[len(call.Signals)-256:]
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"cursor": call.NextSeq})
+	return map[string]any{"cursor": call.NextSeq}
 }
 
 func validMeetingSignal(kind string) bool {

@@ -143,14 +143,16 @@ type Server struct {
 	version  string
 	updating atomic.Bool
 
-	sdkChats           *sdkChatHost
-	pagesMu            sync.Map // chat ID -> *sync.Mutex; page writes never hold the global chat lock
-	sdkChatAttachments *chatattachments.Store
-	sdkJobs            *sdkJobs
-	connections        *serviceConnections
-	browserAssistant   *browserAssistantRegistry
-	connectionSetups   *connectionSetupRegistry
-	meetingCalls       *meetingCallRegistry
+	sdkChats              *sdkChatHost
+	pagesMu               sync.Map // chat ID -> *sync.Mutex; page writes never hold the global chat lock
+	sdkChatAttachments    *chatattachments.Store
+	sdkJobs               *sdkJobs
+	connections           *serviceConnections
+	browserAssistant      *browserAssistantRegistry
+	connectionSetups      *connectionSetupRegistry
+	meetingCalls          *meetingCallRegistry
+	meetingTranscriptions sync.Map // meeting ID -> context.CancelFunc
+	meetingJobContext     context.Context
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -483,8 +485,9 @@ func (s *Server) Handler() http.Handler {
 // when the server closes normally.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	srv := &http.Server{
-		Addr:    s.addr,
-		Handler: s.mux,
+		Addr:              s.addr,
+		Handler:           s.mux,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	// SDK chat adapters are child processes and are stopped with the server.
@@ -493,6 +496,19 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		defer s.sdkVoice.close()
 	}
 	jobContext, stopJobs := context.WithCancel(ctx)
+	s.meetingJobContext = jobContext
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-jobContext.Done():
+				return
+			case <-ticker.C:
+				s.meetingCalls.sweep()
+			}
+		}
+	}()
 	s.sdkJobs.mu.Lock()
 	s.sdkJobs.ctx = jobContext
 	s.sdkJobs.mu.Unlock()

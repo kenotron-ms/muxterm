@@ -170,6 +170,17 @@ func (s *Server) handleSDKMeetingTranscribe(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Cannot read meeting", 500)
 		return
 	}
+	if meeting.TranscriptState == "queued" || meeting.TranscriptState == "processing" {
+		if _, active := s.meetingTranscriptions.Load(meetingID); !active {
+			meeting.TranscriptState = "failed"
+			meeting.TranscriptError = "Transcription stopped before completion; retry it."
+			if err := saveMeeting(meeting); err != nil {
+				lock.Unlock()
+				http.Error(w, "Cannot recover transcription state", 500)
+				return
+			}
+		}
+	}
 	if meeting.RecordingState != "ready" || (meeting.TranscriptState != "not_started" && meeting.TranscriptState != "failed") {
 		lock.Unlock()
 		http.Error(w, "Transcription unavailable in current state", 409)
@@ -182,12 +193,23 @@ func (s *Server) handleSDKMeetingTranscribe(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Cannot queue transcription", 500)
 		return
 	}
+	parent := s.meetingJobContext
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
+	s.meetingTranscriptions.Store(meetingID, cancel)
 	lock.Unlock()
-	go s.runMeetingTranscription(chatID, meetingID)
+	go s.runMeetingTranscription(ctx, chatID, meetingID)
 	writeJSON(w, http.StatusAccepted, meeting)
 }
 
-func (s *Server) runMeetingTranscription(chatID, meetingID string) {
+func (s *Server) runMeetingTranscription(ctx context.Context, chatID, meetingID string) {
+	defer func() {
+		if value, ok := s.meetingTranscriptions.LoadAndDelete(meetingID); ok {
+			value.(context.CancelFunc)()
+		}
+	}()
 	lock := s.pageDocumentLock("meeting-" + chatID)
 	setState := func(state, errorText string) {
 		lock.Lock()
@@ -212,8 +234,6 @@ func (s *Server) runMeetingTranscription(chatID, meetingID string) {
 		setState("failed", "Local transcription is not configured. Set MUXTERM_MEETING_TRANSCRIBER to a self-hosted executable.")
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
 	convert := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", input, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav)
 	if log, err := convert.CombinedOutput(); err != nil {
 		setState("failed", fmt.Sprintf("Audio conversion failed: %v: %s", err, strings.TrimSpace(string(log))))
@@ -223,6 +243,11 @@ func (s *Server) runMeetingTranscription(chatID, meetingID string) {
 	command.Dir = dir
 	if log, err := command.CombinedOutput(); err != nil {
 		setState("failed", fmt.Sprintf("Local transcriber failed: %v: %s", err, strings.TrimSpace(string(log))))
+		return
+	}
+	info, err := os.Stat(output)
+	if err != nil || info.Size() > 10<<20 {
+		setState("failed", "Local transcriber did not produce a valid bounded JSON file.")
 		return
 	}
 	data, err := os.ReadFile(output)
@@ -250,14 +275,16 @@ func (s *Server) runMeetingTranscription(chatID, meetingID string) {
 	}
 	transcript := meetingTranscript{Revision: 1, Segments: result.Segments, Corrections: map[string]string{}}
 	lock.Lock()
+	meeting, readErr := readMeeting(chatID, meetingID)
+	if readErr != nil || ctx.Err() != nil {
+		lock.Unlock()
+		return
+	}
 	err = writeMeetingTranscript(chatID, meetingID, transcript)
 	if err == nil {
-		meeting, readErr := readMeeting(chatID, meetingID)
-		if readErr == nil {
-			meeting.TranscriptState = "ready"
-			meeting.TranscriptError = ""
-			err = saveMeeting(meeting)
-		}
+		meeting.TranscriptState = "ready"
+		meeting.TranscriptError = ""
+		err = saveMeeting(meeting)
 	}
 	lock.Unlock()
 	if err != nil {
