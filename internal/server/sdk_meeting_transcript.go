@@ -56,6 +56,22 @@ func (s *Server) handleSDKMeetingTranscript(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	var input struct {
+		Revision    int64             `json:"revision"`
+		Corrections map[string]string `json:"corrections"`
+	}
+	if r.Method != http.MethodGet {
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(15 * time.Second))
+		data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "Correction too large", 413)
+			return
+		}
+		if json.Unmarshal(data, &input) != nil || input.Corrections == nil {
+			http.Error(w, "Invalid correction", 400)
+			return
+		}
+	}
 	lock := s.pageDocumentLock("meeting-" + chatID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -83,19 +99,6 @@ func (s *Server) handleSDKMeetingTranscript(w http.ResponseWriter, r *http.Reque
 	}
 	if meeting.TranscriptState != "ready" {
 		http.Error(w, "Transcript not ready", 409)
-		return
-	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
-	if err != nil {
-		http.Error(w, "Correction too large", 413)
-		return
-	}
-	var input struct {
-		Revision    int64             `json:"revision"`
-		Corrections map[string]string `json:"corrections"`
-	}
-	if json.Unmarshal(data, &input) != nil || input.Corrections == nil {
-		http.Error(w, "Invalid correction", 400)
 		return
 	}
 	if input.Revision != transcript.Revision {

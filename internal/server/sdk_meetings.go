@@ -108,6 +108,23 @@ func (s *Server) handleSDKMeetings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var input struct {
+		Title     string `json:"title"`
+		Kind      string `json:"kind"`
+		MediaType string `json:"mediaType"`
+	}
+	if r.Method != http.MethodGet {
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(15 * time.Second))
+		data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
+		if err != nil {
+			http.Error(w, "Meeting request too large", 413)
+			return
+		}
+		if json.Unmarshal(data, &input) != nil || len(input.Title) > 300 || (input.Kind != "recording" && input.Kind != "call") || (input.Kind == "recording" && !validMeetingMediaType(input.MediaType)) || (input.Kind == "call" && input.MediaType != "") {
+			http.Error(w, "Invalid meeting", 400)
+			return
+		}
+	}
 	lock := s.pageDocumentLock("meeting-" + chatID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -132,20 +149,6 @@ func (s *Server) handleSDKMeetings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		writeJSON(w, http.StatusOK, meetings)
-		return
-	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
-	if err != nil {
-		http.Error(w, "Meeting request too large", 413)
-		return
-	}
-	var input struct {
-		Title     string `json:"title"`
-		Kind      string `json:"kind"`
-		MediaType string `json:"mediaType"`
-	}
-	if json.Unmarshal(data, &input) != nil || len(input.Title) > 300 || (input.Kind != "recording" && input.Kind != "call") || (input.Kind == "recording" && !validMeetingMediaType(input.MediaType)) || (input.Kind == "call" && input.MediaType != "") {
-		http.Error(w, "Invalid meeting", 400)
 		return
 	}
 	if input.Kind == "call" {
@@ -218,6 +221,12 @@ func (s *Server) handleSDKMeetingChunk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid chunk index", 400)
 		return
 	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(120 * time.Second))
+	chunk, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
+	if err != nil || len(chunk) == 0 {
+		http.Error(w, "Empty or oversized media chunk", 413)
+		return
+	}
 	lock := s.pageDocumentLock("meeting-" + chatID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -236,11 +245,6 @@ func (s *Server) handleSDKMeetingChunk(w http.ResponseWriter, r *http.Request) {
 	}
 	if index != meeting.Chunks {
 		http.Error(w, fmt.Sprintf("Expected chunk %d", meeting.Chunks), 409)
-		return
-	}
-	chunk, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
-	if err != nil || len(chunk) == 0 {
-		http.Error(w, "Empty or oversized media chunk", 413)
 		return
 	}
 	if meeting.MediaBytes+int64(len(chunk)) > 1<<30 {
@@ -343,6 +347,19 @@ func (s *Server) handleSDKMeetingRecordStart(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(15 * time.Second))
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1024))
+	if err != nil {
+		http.Error(w, "Invalid media type", 400)
+		return
+	}
+	var input struct {
+		MediaType string `json:"mediaType"`
+	}
+	if json.Unmarshal(data, &input) != nil || !validMeetingMediaType(input.MediaType) || !strings.HasPrefix(input.MediaType, "video/") {
+		http.Error(w, "Invalid video recording format", 400)
+		return
+	}
 	lock := s.pageDocumentLock("meeting-" + chatID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -357,18 +374,6 @@ func (s *Server) handleSDKMeetingRecordStart(w http.ResponseWriter, r *http.Requ
 	}
 	if meeting.Kind != "call" || meeting.EndedAt != "" || meeting.RecordingState != "not_started" {
 		http.Error(w, "Call cannot start recording", 409)
-		return
-	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1024))
-	if err != nil {
-		http.Error(w, "Invalid media type", 400)
-		return
-	}
-	var input struct {
-		MediaType string `json:"mediaType"`
-	}
-	if json.Unmarshal(data, &input) != nil || !validMeetingMediaType(input.MediaType) || !strings.HasPrefix(input.MediaType, "video/") {
-		http.Error(w, "Invalid video recording format", 400)
 		return
 	}
 	meeting.MediaType = input.MediaType
