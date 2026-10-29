@@ -735,7 +735,7 @@ export class MuxSDKChat extends LitElement {
     const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
     if (action === 'file' && path) await utility?.showFile(path);
     else if (action === 'note' && noteId) await utility?.showNote(noteId);
-    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'notes' || tab === 'goal')) utility?.showPanel(tab === 'notes' ? 'pages' : tab);
+    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'notes' || tab === 'meetings' || tab === 'goal')) utility?.showPanel(tab === 'notes' ? 'pages' : tab);
   }
   private async operatorChanged(chat: SDKChat) {
     this.chat = {...chat, remoteHost: chatHost(chat.id) || undefined};

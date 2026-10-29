@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+func plainNoteParagraph(value string) map[string]any {
+	inline := []map[string]any{}
+	if value != "" {
+		inline = append(inline, map[string]any{"type": "text", "text": value, "styles": map[string]any{}})
+	}
+	return map[string]any{"type": "paragraph", "content": inline}
+}
+
 // Note controls are narrow, atomic mutations of the compatibility Pages store.
 // The agent may use these routes without gaining whole-document Pages write access.
 func (s *Server) handleSDKNoteControl(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +84,7 @@ func (s *Server) handleSDKNoteControl(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Too many notes", http.StatusRequestEntityTooLarge)
 			return
 		}
-		content, _ := json.Marshal([]map[string]any{{"type": "paragraph", "content": *input.Body}})
+		content, _ := json.Marshal([]map[string]any{plainNoteParagraph(*input.Body)})
 		doc.Pages = append(doc.Pages, utilityPage{ID: sdkID(), Title: *input.Title, Blocks: []utilityPageBlock{}, Content: content, CreatedAt: now, UpdatedAt: now, Revision: 1})
 		note = &doc.Pages[len(doc.Pages)-1]
 	} else {
@@ -118,8 +126,8 @@ func (s *Server) handleSDKNoteControl(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "Rich note cannot be replaced as plain text; append instead", http.StatusConflict)
 					return
 				}
-				var kind, plain string
-				if json.Unmarshal(blocks[0]["type"], &kind) != nil || kind != "paragraph" || json.Unmarshal(blocks[0]["content"], &plain) != nil {
+				var kind string
+				if json.Unmarshal(blocks[0]["type"], &kind) != nil || kind != "paragraph" || !plainNoteContent(blocks[0]["content"]) {
 					http.Error(w, "Rich note cannot be replaced as plain text; append instead", http.StatusConflict)
 					return
 				}
@@ -127,7 +135,7 @@ func (s *Server) handleSDKNoteControl(w http.ResponseWriter, r *http.Request) {
 			if input.Title != nil {
 				note.Title = *input.Title
 			}
-			note.Content, err = json.Marshal([]map[string]any{{"type": "paragraph", "content": *input.Body}})
+			note.Content, err = json.Marshal([]map[string]any{plainNoteParagraph(*input.Body)})
 		}
 		if err != nil {
 			http.Error(w, "Cannot encode note", http.StatusInternalServerError)
@@ -151,4 +159,19 @@ func (s *Server) handleSDKNoteControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"note_id": note.ID, "version": doc.Version, "note": note})
+}
+
+func plainNoteContent(content json.RawMessage) bool {
+	var legacy string
+	if json.Unmarshal(content, &legacy) == nil {
+		return true
+	}
+	var inline []struct {
+		Type   string         `json:"type"`
+		Styles map[string]any `json:"styles"`
+	}
+	if json.Unmarshal(content, &inline) != nil || len(inline) > 1 {
+		return false
+	}
+	return len(inline) == 0 || (inline[0].Type == "text" && len(inline[0].Styles) == 0)
 }

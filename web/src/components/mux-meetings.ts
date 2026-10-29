@@ -44,6 +44,15 @@ async function chunkStore<T>(mode:IDBTransactionMode, run:(store:IDBObjectStore)
   }); } finally { db.close(); }
 }
 
+function stopMediaRecorder(recorder:MediaRecorder):Promise<void> {
+  if (recorder.state==='inactive') return Promise.resolve();
+  return new Promise((resolve,reject)=>{
+    const timeout=window.setTimeout(()=>reject(new Error('Recorder did not stop; saved chunks remain recoverable.')),3000);
+    recorder.addEventListener('stop',()=>{window.clearTimeout(timeout);resolve();},{once:true});
+    try { recorder.stop(); } catch(error) { window.clearTimeout(timeout);reject(error); }
+  });
+}
+
 @customElement('mux-meetings')
 export class MuxMeetings extends LitElement {
   @property({attribute:false}) sessionId = '';
@@ -334,14 +343,19 @@ export class MuxMeetings extends LitElement {
   private async startCall() {
     if (this.callStarting || this.callId) return;
     if (!this.callStream?.getAudioTracks().some(track => track.readyState === 'live')) { this.error='Microphone unavailable.'; this.requestUpdate(); return; }
+    const seq=++this.callPreparationSeq, chatId=this.sessionId;
+    const stale=()=>seq!==this.callPreparationSeq || chatId!==this.sessionId || !this.isConnected;
+    const meetingPath=(id:string)=>apiPath(`/api/sdk-chats/${encodeURIComponent(chatId)}/meetings/${encodeURIComponent(id)}`);
     this.callStarting=true;this.requestUpdate();
     try {
       const created = await fetch(this.base(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'call',title:'Video call'})});
       if (!created.ok) throw new Error((await created.text()).trim() || `Could not create call (${created.status})`);
       const meeting = await created.json() as Meeting;
-      const invited = await fetch(this.path(meeting.id,'/invite'),{method:'POST'});
+      if (stale()) { await fetch(meetingPath(meeting.id),{method:'DELETE',keepalive:true}); return; }
+      const invited = await fetch(meetingPath(meeting.id)+'/invite',{method:'POST'});
       if (!invited.ok) throw new Error((await invited.text()).trim() || `Could not create invite (${invited.status})`);
       const invite = await invited.json() as {inviteUrl:string;iceServers:RTCIceServer[]};
+      if (stale()) { await fetch(meetingPath(meeting.id),{method:'DELETE',keepalive:true}); return; }
       this.callId = meeting.id;
       this.selectedId = meeting.id;
       this.meetings.unshift(meeting);
@@ -546,9 +560,12 @@ export class MuxMeetings extends LitElement {
     const recorder=this.callRecorder;
     const id=this.callId, chatId=this.sessionId;
     try {
-      if (recorder?.state!=='inactive' && recorder) await new Promise<void>(resolve=>{recorder.onstop=()=>resolve();recorder.stop()});
+      if (recorder) await stopMediaRecorder(recorder);
       await this.uploadQueue;
       if (!this.captureError && id) await this.finalize(id,chatId);
+    } catch (error) {
+      this.captureError=`Recording could not finish: ${String(error)}`;
+      this.requestUpdate();
     } finally {
       this.callRecorder=undefined;this.callRecording=false;
       this.releaseCallCapture();
@@ -623,7 +640,8 @@ export class MuxMeetings extends LitElement {
     if (!recorder || this.recordingStopping) return;
     this.recordingStopping=true;
     const chatId=this.sessionId;
-    if (recorder.state !== 'inactive') await new Promise<void>(resolve => { recorder.onstop = () => resolve(); recorder.stop(); });
+    try { await stopMediaRecorder(recorder); }
+    catch (error) { this.captureError=`Recording could not finish: ${String(error)}`;this.requestUpdate(); }
     if (this.timer) window.clearInterval(this.timer);
     this.stream?.getTracks().forEach(track => track.stop());
     this.stopInputMeter();
@@ -648,8 +666,9 @@ export class MuxMeetings extends LitElement {
   private async recover(meeting:Meeting) {
     try {
       const prefix = `${this.sessionId}/${meeting.id}/`;
-      const chunks = (await chunkStore('readonly',store => store.getAll()) as LocalChunk[])
-        .filter(item => item.key.startsWith(prefix)).sort((a,b) => a.key.localeCompare(b.key));
+      const range=IDBKeyRange.bound(prefix,prefix+'\uffff');
+      const chunks = (await chunkStore('readonly',store => store.getAll(range)) as LocalChunk[])
+        .sort((a,b) => a.key.localeCompare(b.key));
       for (const item of chunks) {
         const index = Number(item.key.slice(prefix.length));
         if (index >= meeting.chunks) await this.uploadChunk(meeting.id,index,item.blob);

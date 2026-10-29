@@ -131,7 +131,10 @@ func (s *Server) handleSDKMeetingTranscriptExport(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
+	lock := s.pageDocumentLock("meeting-" + chatID)
+	lock.Lock()
 	transcript, err := readMeetingTranscript(chatID, meetingID)
+	lock.Unlock()
 	if errors.Is(err, os.ErrNotExist) {
 		http.Error(w, "Transcript not ready", 409)
 		return
@@ -199,8 +202,12 @@ func (s *Server) handleSDKMeetingTranscribe(w http.ResponseWriter, r *http.Reque
 	}
 	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 	s.meetingTranscriptions.Store(meetingID, cancel)
+	s.meetingJobs.Add(1)
 	lock.Unlock()
-	go s.runMeetingTranscription(ctx, chatID, meetingID)
+	go func() {
+		defer s.meetingJobs.Done()
+		s.runMeetingTranscription(ctx, chatID, meetingID)
+	}()
 	writeJSON(w, http.StatusAccepted, meeting)
 }
 
@@ -265,7 +272,7 @@ func (s *Server) runMeetingTranscription(ctx context.Context, chatID, meetingID 
 	sort.Slice(result.Segments, func(i, j int) bool { return result.Segments[i].StartMs < result.Segments[j].StartMs })
 	for i := range result.Segments {
 		segment := &result.Segments[i]
-		if segment.StartMs < 0 || segment.EndMs < segment.StartMs || len(segment.Text) == 0 || len(segment.Text) > 10000 {
+		if segment.StartMs < 0 || segment.EndMs <= segment.StartMs || len(segment.Text) == 0 || len(segment.Text) > 10000 {
 			setState("failed", "Local transcriber returned an invalid segment.")
 			return
 		}
@@ -343,13 +350,13 @@ func (s *Server) handleSDKMeetingNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Too many notes", 413)
 		return
 	}
-	content := []map[string]any{{"type": "paragraph", "content": "Meeting: " + meeting.Title + " · " + meeting.StartedAt}}
+	content := []map[string]any{plainNoteParagraph("Meeting: " + meeting.Title + " · " + meeting.StartedAt)}
 	for _, segment := range transcript.Segments {
 		text := segment.Text
 		if correction, exists := transcript.Corrections[segment.ID]; exists {
 			text = correction
 		}
-		content = append(content, map[string]any{"type": "paragraph", "content": fmt.Sprintf("[%s] %s: %s", vttTime(segment.StartMs), segment.Speaker, text)})
+		content = append(content, plainNoteParagraph(fmt.Sprintf("[%s] %s: %s", vttTime(segment.StartMs), segment.Speaker, text)))
 	}
 	if len(content) > 500 {
 		http.Error(w, "Transcript too long for one note", 413)

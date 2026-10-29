@@ -421,7 +421,10 @@ func (s *Server) handleSDKMeetingMedia(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	lock := s.pageDocumentLock("meeting-" + chatID)
+	lock.Lock()
 	meeting, err := readMeeting(chatID, meetingID)
+	lock.Unlock()
 	if errors.Is(err, os.ErrNotExist) {
 		http.Error(w, "Meeting not found", 404)
 		return

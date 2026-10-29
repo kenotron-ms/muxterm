@@ -153,6 +153,7 @@ type Server struct {
 	meetingCalls          *meetingCallRegistry
 	meetingTranscriptions sync.Map // meeting ID -> context.CancelFunc
 	meetingJobContext     context.Context
+	meetingJobs           sync.WaitGroup
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -543,7 +544,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	defer close(sweepDone)
 	go s.sweepPublications(sweepDone)
 	// Stop scheduling before waiting for other server work or closing adapters.
-	defer func() { stopJobs(); <-jobsDone; s.sdkJobs.dispatchWG.Wait() }()
+	defer func() { stopJobs(); <-jobsDone; s.sdkJobs.dispatchWG.Wait(); s.meetingJobs.Wait() }()
 
 	errCh := make(chan error, 1)
 	go func() {

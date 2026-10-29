@@ -155,16 +155,26 @@ func (s *Server) handleMeetingInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	meetingLock := s.pageDocumentLock("meeting-" + chatID)
+	meetingLock.Lock()
 	meeting, err := readMeeting(chatID, meetingID)
 	if errors.Is(err, os.ErrNotExist) {
+		meetingLock.Unlock()
 		http.Error(w, "Meeting not found", 404)
 		return
 	}
-	if err != nil || meeting.Kind != "call" {
+	if err != nil {
+		meetingLock.Unlock()
+		http.Error(w, "Cannot read meeting", 500)
+		return
+	}
+	if meeting.Kind != "call" {
+		meetingLock.Unlock()
 		http.Error(w, "Not a call meeting", 400)
 		return
 	}
 	if r.Method == http.MethodPost && meeting.EndedAt != "" {
+		meetingLock.Unlock()
 		http.Error(w, "Call already ended", http.StatusConflict)
 		return
 	}
@@ -175,6 +185,7 @@ func (s *Server) handleMeetingInvite(w http.ResponseWriter, r *http.Request) {
 	delete(s.meetingCalls.byMeeting, meetingID)
 	if r.Method == http.MethodDelete {
 		s.meetingCalls.mu.Unlock()
+		meetingLock.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -182,6 +193,7 @@ func (s *Server) handleMeetingInvite(w http.ResponseWriter, r *http.Request) {
 	s.meetingCalls.byMeeting[meetingID] = call
 	s.meetingCalls.byToken[call.Token] = call
 	s.meetingCalls.mu.Unlock()
+	meetingLock.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"token": call.Token, "inviteUrl": inviteOrigin + "/guest/" + call.Token, "expiresAt": call.Expires.UTC().Format(time.RFC3339), "iceServers": meetingICEServers()})
 }
 
@@ -360,7 +372,10 @@ func (s *Server) handleMeetingGuestPage(w http.ResponseWriter, r *http.Request) 
 	if call == nil {
 		return
 	}
+	meetingLock := s.pageDocumentLock("meeting-" + call.ChatID)
+	meetingLock.Lock()
 	meeting, err := readMeeting(call.ChatID, call.MeetingID)
+	meetingLock.Unlock()
 	if err != nil {
 		http.Error(w, "Meeting unavailable", 404)
 		return
@@ -368,6 +383,6 @@ func (s *Server) handleMeetingGuestPage(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; img-src 'self' data:")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; img-src 'self' data:")
 	_, _ = io.WriteString(w, strings.ReplaceAll(meetingGuestHTML, "{{TITLE}}", html.EscapeString(meeting.Title)))
 }
