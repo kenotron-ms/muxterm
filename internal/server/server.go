@@ -446,6 +446,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("PUT /api/sdk-chats/{id}/meetings/{meetingID}/transcript", protect(http.HandlerFunc(s.handleSDKMeetingTranscript)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/meetings/{meetingID}/transcript/export", protect(http.HandlerFunc(s.handleSDKMeetingTranscriptExport)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/transcribe", protect(http.HandlerFunc(s.handleSDKMeetingTranscribe)))
+	s.mux.Handle("GET /api/meetings/transcription-options", protect(http.HandlerFunc(s.handleMeetingTranscriptionOptions)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/note", protect(http.HandlerFunc(s.handleSDKMeetingNote)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/meetings/{meetingID}/invite", protect(http.HandlerFunc(s.handleMeetingInvite)))
 	s.mux.Handle("GET /api/meetings/call-readiness", protect(http.HandlerFunc(s.handleMeetingCallReadiness)))

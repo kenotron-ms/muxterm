@@ -29,6 +29,7 @@ export interface VoiceStatus {
   mode: VoiceMode;
   endpoint: string;
   model: string;
+  transcriptionModel: string;
   authMode: string;
   entraScope: string;
   keySource: VoiceKeySource;
@@ -48,6 +49,7 @@ export const DEFAULT_VOICE_STATUS: VoiceStatus = {
   mode: 'azure_entra',
   endpoint: '',
   model: '',
+  transcriptionModel: '',
   authMode: '',
   entraScope: '',
   keySource: '',
@@ -78,6 +80,7 @@ export function parseVoiceStatus(raw: unknown): VoiceStatus {
       : 'azure_entra',
     endpoint: str(r, 'endpoint'),
     model: str(r, 'model'),
+    transcriptionModel: str(r, 'transcriptionModel'),
     authMode: str(r, 'authMode'),
     entraScope: str(r, 'entraScope'),
     keySource: source === 'stored' || source === 'env' || source === 'none' ? source : '',
@@ -116,6 +119,7 @@ export interface VoiceSettingsInput {
   mode: VoiceMode;
   endpoint: string;
   model: string;
+  transcriptionModel: string;
   entraScope: string;
   /** Omit or leave empty to keep whatever key is already stored. */
   apiKey?: string;

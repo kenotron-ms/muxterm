@@ -11,7 +11,8 @@ import '../ui/rail-row.js';
 import '../ui/text-field.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 
-type Meeting = { id:string; chatId:string; title:string; kind:'recording'|'call'; startedAt:string; endedAt?:string; participants:string[]; recordingState:string; transcriptState:string; transcriptError?:string; linkedNoteId?:string; mediaType?:string; mediaBytes:number; chunks:number; error?:string };
+type Meeting = { id:string; chatId:string; title:string; kind:'recording'|'call'; startedAt:string; endedAt?:string; participants:string[]; recordingState:string; transcriptState:string; transcriptSource?:string; transcriptError?:string; linkedNoteId?:string; mediaType?:string; mediaBytes:number; chunks:number; error?:string };
+type TranscriptionOptions = { localReady:boolean; localDetail:string; providerReady:boolean; providerName:string; providerModel:string; providerDetail:string };
 type Transcript = { revision:number; segments:{id:string;startMs:number;endMs:number;text:string;speaker:string}[]; corrections:Record<string,string> };
 type LocalChunk = { key:string; blob:Blob };
 type CallRoute = 'checking'|'direct'|'relay'|'stalled'|'failed';
@@ -51,6 +52,21 @@ function stopMediaRecorder(recorder:MediaRecorder):Promise<void> {
     recorder.addEventListener('stop',()=>{window.clearTimeout(timeout);resolve();},{once:true});
     try { recorder.stop(); } catch(error) { window.clearTimeout(timeout);reject(error); }
   });
+}
+
+export function drawRecordingVideo(context:CanvasRenderingContext2D, source:CanvasImageSource, sourceWidth:number, sourceHeight:number, x:number, y:number, width:number, height:number, fit:'cover'|'contain') {
+  if (!sourceWidth || !sourceHeight) return;
+  const sourceRatio=sourceWidth/sourceHeight;
+  const frameRatio=width/height;
+  if (fit==='contain') {
+    const drawnWidth=sourceRatio>frameRatio?width:height*sourceRatio;
+    const drawnHeight=sourceRatio>frameRatio?width/sourceRatio:height;
+    context.drawImage(source,x+(width-drawnWidth)/2,y+(height-drawnHeight)/2,drawnWidth,drawnHeight);
+    return;
+  }
+  const cropWidth=sourceRatio>frameRatio?sourceHeight*frameRatio:sourceWidth;
+  const cropHeight=sourceRatio>frameRatio?sourceHeight:sourceWidth/frameRatio;
+  context.drawImage(source,(sourceWidth-cropWidth)/2,(sourceHeight-cropHeight)/2,cropWidth,cropHeight,x,y,width,height);
 }
 
 @customElement('mux-meetings')
@@ -122,6 +138,8 @@ export class MuxMeetings extends LitElement {
   private correctionDraft:Record<string,string> = {};
   private transcriptBusy = false;
   private transcriptNotice = '';
+  private transcriptionOptions?:TranscriptionOptions;
+  private transcribeProviderId = '';
   private loadRequest = 0;
   private sampleScene = '';
   private sampleMicOn = true;
@@ -131,6 +149,7 @@ export class MuxMeetings extends LitElement {
   override createRenderRoot() { return this; }
   override connectedCallback() {
     super.connectedCallback();
+    void this.loadTranscriptionOptions();
     this.refreshing = window.setInterval(() => { if (!this.activeId && !this.hidden) void this.load(false); },10000);
   }
   override willUpdate(changed:PropertyValues<this>) {
@@ -172,17 +191,18 @@ export class MuxMeetings extends LitElement {
   private path(id:string, suffix='') { return `${this.base()}/${encodeURIComponent(id)}${suffix}`; }
   private selected() { return this.meetings.find(item => item.id === this.selectedId); }
   /** Storybook uses this production component with explicit sample state. */
-  showSample(scene:'library'|'review'|'recorder'|'preflight'|'hosting-required'|'waiting'|'call'|'relay'|'stalled'|'failed'|'share'|'recording'|'recording-share') {
+  showSample(scene:'library'|'review'|'transcription'|'recorder'|'preflight'|'hosting-required'|'waiting'|'call'|'relay'|'stalled'|'failed'|'share'|'recording'|'recording-share') {
     this.loadRequest++;
     this.sampleScene=scene;
     this.loading=false;
     this.sampleMicOn=true;
     this.sampleCameraOn=true;
     const now=new Date().toISOString();
-    const recording:Meeting={id:'sample-recording',chatId:this.sessionId,title:'Product review',kind:'recording',startedAt:new Date(Date.now()-28*60*1000).toISOString(),endedAt:now,participants:['You','Mara'],recordingState:'ready',transcriptState:'ready',mediaType:'audio/webm',mediaBytes:2400000,chunks:4};
+    const recording:Meeting={id:'sample-recording',chatId:this.sessionId,title:'Product review',kind:'recording',startedAt:new Date(Date.now()-28*60*1000).toISOString(),endedAt:now,participants:['You','Mara'],recordingState:'ready',transcriptState:scene==='transcription'?'not_started':'ready',transcriptSource:'local',mediaType:'audio/webm',mediaBytes:2400000,chunks:4};
     const call:Meeting={id:'sample-call',chatId:this.sessionId,title:'Design review',kind:'call',startedAt:new Date(Date.now()-8*60*1000).toISOString(),participants:['You','Mara'],recordingState:'not_started',transcriptState:'not_started',mediaBytes:0,chunks:0};
     this.meetings=[recording,call];
-    this.selectedId=scene==='library'||scene==='preflight'||scene==='hosting-required'?'':scene==='review'||scene==='recorder'?'sample-recording':'sample-call';
+    this.selectedId=scene==='library'||scene==='preflight'||scene==='hosting-required'?'':scene==='review'||scene==='transcription'||scene==='recorder'?'sample-recording':'sample-call';
+    this.transcriptionOptions={localReady:true,localDetail:'',providerReady:true,providerName:'OpenAI',providerModel:'gpt-transcribe',providerDetail:''};
     this.callPreparing=scene==='preflight'||scene==='hosting-required';
     this.callHostingError=scene==='hosting-required'?'Host Muxterm at a public HTTPS address, then set [server] behind_reverse_proxy = true and public_origin before inviting a guest.':'';
     this.callStream=scene==='preflight'||['waiting','call','relay','stalled','failed','share','recording','recording-share'].includes(scene)?new MediaStream():undefined;
@@ -521,9 +541,17 @@ export class MuxMeetings extends LitElement {
       const draw=()=>{
         context.fillStyle='#161c28';context.fillRect(0,0,1280,720);
         const local=this.querySelector<HTMLVideoElement>('.call-local'),remote=this.querySelector<HTMLVideoElement>('.call-remote'),screen=this.querySelector<HTMLVideoElement>('.call-screen');
-        const drawVideo=(video:HTMLVideoElement|null,x:number,y:number,w:number,h:number)=>{ if(video?.readyState && video.readyState>=2)context.drawImage(video,x,y,w,h); };
-        if (this.screenStream || this.remoteScreen) { drawVideo(screen,0,0,1280,720);drawVideo(remote,1010,20,250,140);drawVideo(local,1010,180,250,140); }
-        else { drawVideo(remote,0,0,640,720);drawVideo(local,640,0,640,720); }
+        const drawVideo=(video:HTMLVideoElement|null,x:number,y:number,w:number,h:number,fit:'cover'|'contain')=>{
+          if (video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) drawRecordingVideo(context,video,video.videoWidth,video.videoHeight,x,y,w,h,fit);
+        };
+        if (this.screenStream || this.remoteScreen) {
+          drawVideo(screen,0,0,1280,720,'contain');
+          drawVideo(remote,1010,20,250,140,'cover');
+          drawVideo(local,1010,180,250,140,'cover');
+        } else {
+          drawVideo(remote,0,0,640,720,'cover');
+          drawVideo(local,640,0,640,720,'cover');
+        }
       };
       draw(); this.callDrawTimer=window.setInterval(draw,42);
       const captured=canvas.captureStream(24);
@@ -701,6 +729,7 @@ export class MuxMeetings extends LitElement {
   }
   private selectMeeting(meeting:Meeting) {
     this.selectedId=meeting.id;
+    this.transcribeProviderId='';
     this.transcript=undefined;
     this.transcriptMeetingId='';
     this.transcriptNotice='';
@@ -720,14 +749,37 @@ export class MuxMeetings extends LitElement {
     } catch(error) { this.transcriptNotice=String(error); }
     this.requestUpdate();
   }
-  private async transcribe(meeting:Meeting) {
+  private async loadTranscriptionOptions() {
+    if (this.sampleScene) return;
+    try {
+      const response=await fetch(apiPath('/api/meetings/transcription-options'));
+      if (!response.ok) throw new Error(`Setup check failed (${response.status})`);
+      const options=await response.json() as TranscriptionOptions;
+      if (!this.sampleScene) this.transcriptionOptions=options;
+    } catch {
+      if (!this.sampleScene) this.transcriptionOptions={localReady:false,localDetail:'Could not check local transcription setup.',providerReady:false,providerName:'',providerModel:'',providerDetail:'Could not check Voice settings.'};
+    }
+    this.requestUpdate();
+  }
+  private async transcribe(meeting:Meeting,engine:'local'|'voice') {
     this.transcriptBusy=true;this.transcriptNotice='';this.requestUpdate();
     try {
-      const response=await fetch(this.path(meeting.id,'/transcribe'),{method:'POST'});
-      if(!response.ok)throw new Error(`Could not queue transcription (${response.status})`);
+      const response=await fetch(this.path(meeting.id,'/transcribe'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({engine})});
+      if(!response.ok)throw new Error((await response.text()).trim() || `Could not queue transcription (${response.status})`);
       await this.load(false);
     } catch(error) { this.transcriptNotice=String(error); }
     this.transcriptBusy=false;this.requestUpdate();
+  }
+  private transcriptionActions(meeting:Meeting) {
+    const options=this.transcriptionOptions;
+    if (!options) return html`<mux-ui-feedback kind="loading">Checking transcription setup…</mux-ui-feedback>`;
+    return html`<div class="meeting-transcription-actions">
+      ${options.localReady ? html`<mux-ui-button variant="secondary" ?disabled=${this.transcriptBusy} @click=${() => void this.transcribe(meeting,'local')}>Transcribe on this server</mux-ui-button>` : nothing}
+      ${options.providerReady ? html`<mux-ui-button variant="secondary" ?disabled=${this.transcriptBusy} @click=${() => {this.transcribeProviderId=meeting.id;this.requestUpdate();}}>Transcribe with ${options.providerName}</mux-ui-button><p class="transcription-disclosure">This sends the saved audio to ${options.providerName} using the Voice credential. Muxterm keeps the resulting transcript with this meeting.</p>` : nothing}
+      ${!options.localReady ? html`<p class="transcription-disclosure">On this server: ${options.localDetail}</p>` : nothing}
+      ${!options.providerReady ? html`<p class="transcription-disclosure">Voice provider: ${options.providerDetail}</p>` : nothing}
+      <mux-ui-button size="small" variant="quiet" @click=${() => void this.loadTranscriptionOptions()}>Refresh transcription setup</mux-ui-button>
+    </div>`;
   }
   private async saveCorrections(meeting:Meeting) {
     if(!this.transcript)return;
@@ -761,9 +813,15 @@ export class MuxMeetings extends LitElement {
   private transcriptView(meeting:Meeting) {
     if(meeting.recordingState!=='ready')return nothing;
     const state=meeting.transcriptState;
-    return html`<section class="meeting-transcript"><div class="transcript-header"><div><strong>Transcript</strong><p>Generated locally from the saved original. Speaker identity is unknown for mixed audio.</p></div>${state==='ready' ? html`<a href=${this.path(meeting.id,'/transcript/export')} download=${`meeting-${meeting.id}.vtt`}>${icon(Download,{size:15})} Export VTT</a>` : nothing}</div>
-      ${state==='not_started' ? html`<mux-ui-button variant="secondary" ?disabled=${this.transcriptBusy} @click=${() => void this.transcribe(meeting)}>Transcribe locally</mux-ui-button>` : state==='queued'||state==='processing' ? html`<mux-ui-feedback kind="loading">${state==='queued'?'Transcription queued…':'Transcribing saved media locally…'}</mux-ui-feedback>` : state==='failed' ? html`<mux-ui-feedback kind="error">${meeting.transcriptError || 'Transcription failed.'}</mux-ui-feedback><mux-ui-button variant="secondary" ?disabled=${this.transcriptBusy} @click=${() => void this.transcribe(meeting)}>Retry from original</mux-ui-button>` : this.transcriptMeetingId===meeting.id && this.transcript ? html`<div class="transcript-segments">${this.transcript.segments.map(segment => html`<div class="transcript-segment"><button class="transcript-time" @click=${() => this.seekTranscript(segment.startMs)}>${this.clock(Math.floor(segment.startMs/1000))}</button><div><strong>${segment.speaker}</strong><textarea aria-label=${`Correct transcript at ${this.clock(Math.floor(segment.startMs/1000))}`} .value=${this.correctionDraft[segment.id] ?? segment.text} @input=${(event:Event) => {this.correctionDraft[segment.id]=(event.target as HTMLTextAreaElement).value;}}></textarea></div></div>`)}</div><div class="meeting-buttons"><mux-ui-button variant="secondary" ?disabled=${this.transcriptBusy} @click=${() => void this.saveCorrections(meeting)}>Save corrections</mux-ui-button>${meeting.linkedNoteId ? html`<mux-ui-button variant="secondary" @click=${() => this.openLinkedNote(meeting.linkedNoteId!)}>Open linked note</mux-ui-button>` : html`<mux-ui-button variant="secondary" ?disabled=${this.transcriptBusy} @click=${() => void this.createLinkedNote(meeting)}>Create linked note</mux-ui-button>`}</div>` : html`<mux-ui-feedback kind="loading">Loading transcript…</mux-ui-feedback>`}
+    return html`<section class="meeting-transcript"><div class="transcript-header"><div><strong>Transcript</strong><p>${state==='ready' ? `Stored with this meeting · ${meeting.transcriptSource === 'local' || !meeting.transcriptSource ? 'transcribed on this server' : `transcribed with ${meeting.transcriptSource}`}.` : 'Choose where saved audio is transcribed. Speaker identity is unknown for mixed audio.'}</p></div>${state==='ready' ? html`<a href=${this.path(meeting.id,'/transcript/export')} download=${`meeting-${meeting.id}.vtt`}>${icon(Download,{size:15})} Export VTT</a>` : nothing}</div>
+      ${state==='failed' ? html`<mux-ui-feedback kind="error">${meeting.transcriptError || 'Transcription failed.'}</mux-ui-feedback>` : nothing}
+      ${state==='not_started'||state==='failed' ? this.transcriptionActions(meeting) : nothing}
+      ${state==='queued'||state==='processing' ? html`<mux-ui-feedback kind="loading">${state==='queued'?'Transcription queued…':`Transcribing saved media ${meeting.transcriptSource === 'local' ? 'on this server' : meeting.transcriptSource ? `with ${meeting.transcriptSource}` : ''}…`}</mux-ui-feedback>` : nothing}
+      ${state==='ready' ? this.transcriptMeetingId===meeting.id && this.transcript ? html`<div class="transcript-segments">${this.transcript.segments.map(segment => html`<div class="transcript-segment"><button class="transcript-time" @click=${() => this.seekTranscript(segment.startMs)}>${this.clock(Math.floor(segment.startMs/1000))}</button><div><strong>${segment.speaker}</strong><textarea aria-label=${`Correct transcript at ${this.clock(Math.floor(segment.startMs/1000))}`} .value=${this.correctionDraft[segment.id] ?? segment.text} @input=${(event:Event) => {this.correctionDraft[segment.id]=(event.target as HTMLTextAreaElement).value;}}></textarea></div></div>`)}</div><div class="meeting-buttons"><mux-ui-button variant="secondary" ?disabled=${this.transcriptBusy} @click=${() => void this.saveCorrections(meeting)}>Save corrections</mux-ui-button>${meeting.linkedNoteId ? html`<mux-ui-button variant="secondary" @click=${() => this.openLinkedNote(meeting.linkedNoteId!)}>Open linked note</mux-ui-button>` : html`<mux-ui-button variant="secondary" ?disabled=${this.transcriptBusy} @click=${() => void this.createLinkedNote(meeting)}>Create linked note</mux-ui-button>`}</div>` : html`<mux-ui-feedback kind="loading">Loading transcript…</mux-ui-feedback>` : nothing}
       ${this.transcriptNotice ? html`<mux-ui-feedback kind=${this.transcriptNotice.includes('saved')?'info':'warning'}>${this.transcriptNotice}</mux-ui-feedback>` : nothing}
+      <mux-ui-dialog size="compact" presentation="adaptive" label="Send meeting audio for transcription" ?open=${this.transcribeProviderId===meeting.id} @dismiss=${() => {this.transcribeProviderId='';this.requestUpdate();}}>
+        <div class="meeting-confirm"><h2>Send audio to ${this.transcriptionOptions?.providerName || 'the Voice provider'}?</h2><p>The saved audio will be sent to ${this.transcriptionOptions?.providerName || 'the configured Voice provider'} for transcription. Muxterm stores the transcript with this meeting.</p><div class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => {this.transcribeProviderId='';this.requestUpdate();}}>Cancel</mux-ui-button><mux-ui-button variant="primary" @click=${() => {this.transcribeProviderId='';void this.transcribe(meeting,'voice');}}>Send and transcribe</mux-ui-button></div></div>
+      </mux-ui-dialog>
     </section>`;
   }
   private duration(meeting:Meeting) {
@@ -838,6 +896,8 @@ const styles = `
   mux-meetings .meeting-buttons { display:flex; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-7); }
   mux-meetings .meeting-download { display:inline-flex; align-items:center; gap:var(--ui-space-2); }
   mux-meetings .meeting-transcript { margin:var(--ui-space-8) 0; padding-top:var(--ui-space-5); border-top:1px solid var(--ui-border); }
+  mux-meetings .meeting-transcription-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ui-space-3); margin:var(--ui-space-5) 0; }
+  mux-meetings .meeting-transcription-actions .transcription-disclosure { width:100%; margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
   mux-meetings .transcript-header { display:flex; align-items:start; justify-content:space-between; gap:var(--ui-space-4); }
   mux-meetings .transcript-header strong { font-size:var(--ui-text-lg); }
   mux-meetings .transcript-header p { font-size:var(--ui-text-sm); }

@@ -15,22 +15,23 @@ import (
 )
 
 type sdkMeeting struct {
-	ID              string   `json:"id"`
-	ChatID          string   `json:"chatId"`
-	Title           string   `json:"title"`
-	Kind            string   `json:"kind"`
-	StartedAt       string   `json:"startedAt"`
-	EndedAt         string   `json:"endedAt,omitempty"`
-	Participants    []string `json:"participants"`
-	RecordingState  string   `json:"recordingState"`
-	TranscriptState string   `json:"transcriptState"`
-	MediaType       string   `json:"mediaType,omitempty"`
-	MediaBytes      int64    `json:"mediaBytes"`
-	Chunks          int      `json:"chunks"`
-	LastChunkAt     string   `json:"lastChunkAt,omitempty"`
-	Error           string   `json:"error,omitempty"`
-	TranscriptError string   `json:"transcriptError,omitempty"`
-	LinkedNoteID    string   `json:"linkedNoteId,omitempty"`
+	ID               string   `json:"id"`
+	ChatID           string   `json:"chatId"`
+	Title            string   `json:"title"`
+	Kind             string   `json:"kind"`
+	StartedAt        string   `json:"startedAt"`
+	EndedAt          string   `json:"endedAt,omitempty"`
+	Participants     []string `json:"participants"`
+	RecordingState   string   `json:"recordingState"`
+	TranscriptState  string   `json:"transcriptState"`
+	TranscriptSource string   `json:"transcriptSource,omitempty"`
+	MediaType        string   `json:"mediaType,omitempty"`
+	MediaBytes       int64    `json:"mediaBytes"`
+	Chunks           int      `json:"chunks"`
+	LastChunkAt      string   `json:"lastChunkAt,omitempty"`
+	Error            string   `json:"error,omitempty"`
+	TranscriptError  string   `json:"transcriptError,omitempty"`
+	LinkedNoteID     string   `json:"linkedNoteId,omitempty"`
 }
 
 func (s *Server) meetingLocation(w http.ResponseWriter, r *http.Request) (string, string, bool) {
