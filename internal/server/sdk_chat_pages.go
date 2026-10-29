@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type utilityPageBlock struct {
@@ -21,10 +22,14 @@ type utilityPageBlock struct {
 }
 
 type utilityPage struct {
-	ID       string             `json:"id"`
-	ParentID string             `json:"parentId,omitempty"`
-	Title    string             `json:"title"`
-	Blocks   []utilityPageBlock `json:"blocks"`
+	ID              string             `json:"id"`
+	ParentID        string             `json:"parentId,omitempty"`
+	Title           string             `json:"title"`
+	Blocks          []utilityPageBlock `json:"blocks"`
+	CreatedAt       string             `json:"createdAt,omitempty"`
+	UpdatedAt       string             `json:"updatedAt,omitempty"`
+	Revision        int64              `json:"revision,omitempty"`
+	LinkedMeetingID string             `json:"linkedMeetingId,omitempty"`
 	// Content stores BlockNote's lossless document JSON; Blocks remains for older pages.
 	Content json.RawMessage `json:"content,omitempty"`
 }
@@ -113,6 +118,34 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	previous := make(map[string]utilityPage, len(current.Pages))
+	for _, page := range current.Pages {
+		previous[page.ID] = page
+	}
+	for i := range doc.Pages {
+		old, exists := previous[doc.Pages[i].ID]
+		if !exists {
+			doc.Pages[i].CreatedAt = now
+			doc.Pages[i].UpdatedAt = now
+			doc.Pages[i].Revision = 1
+			continue
+		}
+		doc.Pages[i].CreatedAt = old.CreatedAt
+		if doc.Pages[i].LinkedMeetingID == "" {
+			doc.Pages[i].LinkedMeetingID = old.LinkedMeetingID
+		}
+		if doc.Pages[i].CreatedAt == "" {
+			doc.Pages[i].CreatedAt = now
+		}
+		if old.Title != doc.Pages[i].Title || old.ParentID != doc.Pages[i].ParentID || !equalPageData(old.Blocks, doc.Pages[i].Blocks) || !jsonEqual(old.Content, doc.Pages[i].Content) {
+			doc.Pages[i].UpdatedAt = now
+			doc.Pages[i].Revision = old.Revision + 1
+		} else {
+			doc.Pages[i].UpdatedAt = old.UpdatedAt
+			doc.Pages[i].Revision = old.Revision
+		}
+	}
 	doc.Version++
 	data, err = json.Marshal(doc)
 	if err != nil || len(data) > 1<<20 {
@@ -124,6 +157,25 @@ func (s *Server) handleSDKUtilityPages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, doc)
+}
+
+func equalPageData(a, b []utilityPageBlock) bool {
+	left, _ := json.Marshal(a)
+	right, _ := json.Marshal(b)
+	return string(left) == string(right)
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	var left, right any
+	if json.Unmarshal(a, &left) != nil || json.Unmarshal(b, &right) != nil {
+		return false
+	}
+	l, _ := json.Marshal(left)
+	r, _ := json.Marshal(right)
+	return string(l) == string(r)
 }
 
 func readUtilityPages(path string) (utilityPagesDocument, error) {

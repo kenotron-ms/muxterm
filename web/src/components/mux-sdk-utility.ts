@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, PanelRight, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
+import { ArrowLeft, AudioLines, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, PanelRight, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { remoteChatPath } from '../lib/remote-chat-routes.js';
 import { icon } from '../lib/icons.js';
@@ -11,6 +11,7 @@ import './mux-sdk-pdf-preview.js';
 import './mux-monaco-source.js';
 import './mux-monaco-diff.js';
 import './mux-operator-status.js';
+import './mux-meetings.js';
 import '../ui/action-tile.js';
 import '../ui/breadcrumb.js';
 import '../ui/button.js';
@@ -45,7 +46,8 @@ type ChangedFile = { repo: string; path: string; status: string };
 type ChangeDetail = { repo: string; path: string; before: string; after: string; binary?: boolean; tooLarge?: boolean };
 type PageBlockType = 'text' | 'heading' | 'heading2' | 'heading3' | 'bullet' | 'numbered' | 'check' | 'code' | 'quote' | 'divider' | 'instructions' | 'image' | 'file' | 'page';
 type PageBlock = { id: string; type: PageBlockType; text: string; checked?: boolean; attachmentId?: string; childPageId?: string };
-type NotePage = { id: string; parentId?: string; title: string; blocks: PageBlock[]; content?: PartialBlock[] };
+type NotePage = { id: string; parentId?: string; title: string; blocks: PageBlock[]; content?: PartialBlock[]; createdAt?: string; updatedAt?: string; revision?: number };
+type NoteConflictDraft = { page: NotePage; capturedAt: string; reason?: 'conflict' | 'save-error' };
 
 function legacyPageContent(blocks: PageBlock[], remoteHost = ''): PartialBlock[] {
   const converted = blocks.map((block): PartialBlock => {
@@ -64,14 +66,14 @@ function legacyPageContent(blocks: PageBlock[], remoteHost = ''): PartialBlock[]
   });
   return converted.length ? converted : [{type:'paragraph'}];
 }
-type UtilityTabId = 'new' | 'files' | 'status' | 'changes' | 'pages' | 'browser' | 'goal';
+type UtilityTabId = 'new' | 'files' | 'status' | 'changes' | 'pages' | 'meetings' | 'browser' | 'goal';
 type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string; url?: string; title?: string };
 type BrowserState = { tabs?: { id:string; url:string; title:string; canGoBack:boolean; canGoForward:boolean }[]; error?:string };
 type BrowserBridge = { send: (message: Record<string, unknown>) => void };
 declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge } }
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
 const BROWSER_RECENT_KEY = 'muxterm.desktop.browser.recent';
-const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, pages:NotebookPen, browser:Globe2, goal:Target };
+const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, pages:NotebookPen, meetings:AudioLines, browser:Globe2, goal:Target };
 
 function readableSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -173,14 +175,17 @@ export class MuxSDKUtility extends LitElement {
   private changeAbort?: AbortController;
   private pages?: NotePage[];
   private pagesVersion = 0;
+  private pagesLoadRequest = 0;
   private pagesRenderEpoch = 0;
   private pagesPollTimer?: number;
   private pagesError = '';
+  private pageQuery = '';
   private pageId = '';
   private pageSaveTimer?: number;
   private pageSaveQueue: Promise<void> = Promise.resolve();
   private pageSaving = false;
   private pagesConflict = false;
+  private conflictDraft?: NoteConflictDraft;
   private browserOpened = new Set<string>();
   private browserStates = new Map<string, { canGoBack:boolean; canGoForward:boolean }>();
   private browserError = '';
@@ -197,6 +202,7 @@ export class MuxSDKUtility extends LitElement {
   private pathKey() { return `muxterm.sdk.utility.path.${this.sessionId}`; }
   private fileKey() { return `muxterm.sdk.utility.file.${this.sessionId}`; }
   private pageKey() { return `muxterm.sdk.utility.page.${this.sessionId}`; }
+  private conflictKey() { return `muxterm.sdk.utility.note-conflict.${this.sessionId}`; }
 
   override createRenderRoot() { return this; }
   override connectedCallback() {
@@ -209,7 +215,7 @@ export class MuxSDKUtility extends LitElement {
     }
     try {
       const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string }[]; activeTabId?: string } | null;
-      const valid = new Set<string>(['new','files','status','changes','terminal','pages','web','browser','goal']);
+      const valid = new Set<string>(['new','files','status','changes','terminal','pages','meetings','web','browser','goal']);
       if (saved?.tabs?.length && saved.tabs.length <= 30 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
         this.tabs = saved.tabs.map(tab => ({ id:tab.kind === 'browser' ? crypto.randomUUID() : tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title }));
         const activeIndex = saved.tabs.findIndex(tab => tab.id === saved.activeTabId);
@@ -224,6 +230,10 @@ export class MuxSDKUtility extends LitElement {
     let folder = '.';
     try { folder = localStorage.getItem(this.pathKey()) || '.'; } catch { /* private browsing */ }
     try { this.pageId = localStorage.getItem(this.pageKey()) || ''; } catch { /* private browsing */ }
+    try {
+      const draft = localStorage.getItem(this.conflictKey());
+      if (draft) { this.conflictDraft = JSON.parse(draft) as NoteConflictDraft; this.pagesConflict = true; }
+    } catch { /* private browsing */ }
     void this.restoreExplorer(folder);
     if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
     if (this.activeTab === 'changes') void this.loadChanges();
@@ -254,7 +264,7 @@ export class MuxSDKUtility extends LitElement {
   override render() {
     if (this.terminalMode) return html`<style>${this.surfaceCSS}</style><div class="terminal-files-header"><strong>Files</strong><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Close file explorer" tooltip="Close file explorer" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(X,{size:16})}</mux-ui-button></div><div class="utility-body" aria-label="Files">${this.filesView()}</div>`;
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style>${this.mobileHeader()}<mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="mobile-tab-picker"><mux-ui-select aria-label="Chat tools tab" .options=${this.tabs.map(item => ({value:item.id,label:this.tabTitle(item)}))} .value=${tab.id} @change=${(event:Event) => this.selectTab((event.target as MuxUISelect).value)}></mux-ui-select><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.addTab()}>${icon(Plus,{size:18})}</mux-ui-button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}</div>`;
+    return html`<style>${this.surfaceCSS}</style>${this.mobileHeader()}<mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="mobile-tab-picker"><mux-ui-select aria-label="Chat tools tab" .options=${this.tabs.map(item => ({value:item.id,label:this.tabTitle(item)}))} .value=${tab.id} @change=${(event:Event) => this.selectTab((event.target as MuxUISelect).value)}></mux-ui-select><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.addTab()}>${icon(Plus,{size:18})}</mux-ui-button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'meetings' ? nothing : tab.kind === 'new' ? this.newTabView() : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}<mux-meetings .sessionId=${this.sessionId} ?hidden=${tab.kind !== 'meetings'} @meeting-open-note=${(event:CustomEvent<{id:string}>) => void this.showNote(event.detail.id)}></mux-meetings></div>`;
   }
   private mobileHeader(): TemplateResult {
     if (this.currentTab.kind === 'files') {
@@ -268,7 +278,8 @@ export class MuxSDKUtility extends LitElement {
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
     if (tab.kind === 'files') return tab.filePath?.split('/').pop() || 'Files';
-    if (tab.kind === 'pages') return this.pages?.find(page => page.id === tab.pageId)?.title || 'Page';
+    if (tab.kind === 'pages') return 'Notes';
+    if (tab.kind === 'meetings') return 'Meetings';
     if (tab.kind === 'browser') return tab.title || (tab.url ? new URL(tab.url).hostname : 'Browser');
     return ({ status:'Status', changes:'Changes', goal:'Goal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
@@ -336,14 +347,21 @@ export class MuxSDKUtility extends LitElement {
     if (existing) this.selectTab(existing.id);
     else this.addTab(id);
   }
-  private chooseTool(kind: 'files' | 'status' | 'changes' | 'pages' | 'browser' | 'goal') {
+  async showNote(id: string): Promise<void> {
+    this.showPanel('pages');
+    await this.loadPages();
+    if (!this.pages?.some(page => page.id === id)) {
+      this.pagesError = `Note ${id} is unavailable`;
+      this.paintAll();
+      return;
+    }
+    this.selectPage(id);
+  }
+  private chooseTool(kind: 'files' | 'status' | 'changes' | 'pages' | 'meetings' | 'browser' | 'goal') {
     const current = this.currentTab;
     if (current.kind === 'browser' && kind !== 'browser') { this.hideBrowser(); if (this.browserOpened.delete(current.id)) this.browserSend({type:'close',id:current.id}); }
     current.kind = kind;
-    if (kind === 'pages') {
-      if (!this.pages) { void this.loadPages().then(() => { const page = this.newPage(); current.pageId = page.id; this.saveTabs(); }); }
-      else { const page = this.newPage(); current.pageId = page.id; }
-    } else this.activateTab(current);
+    this.activateTab(current);
     this.saveTabs(); this.paintAll();
   }
   private newTabView(): TemplateResult {
@@ -352,7 +370,8 @@ export class MuxSDKUtility extends LitElement {
       <mux-ui-action-tile label="Files" description="Browse and preview project files" @click=${() => this.chooseTool('files')}><span slot="icon">${icon(Folder,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Status" description="See agent activity" @click=${() => this.chooseTool('status')}><span slot="icon">${icon(Network,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Changes" description="Review edits in this project" @click=${() => this.chooseTool('changes')}><span slot="icon">${icon(GitCompare,{size:18})}</span></mux-ui-action-tile>
-      <mux-ui-action-tile label="New page" description="Write notes for this chat" @click=${() => this.chooseTool('pages')}><span slot="icon">${icon(NotebookPen,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="Notes" description="Browse and edit notes for this chat" @click=${() => this.chooseTool('pages')}><span slot="icon">${icon(NotebookPen,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="Meetings" description="Record or invite someone to a call" @click=${() => this.chooseTool('meetings')}><span slot="icon">${icon(AudioLines,{size:18})}</span></mux-ui-action-tile>
       ${window.__muxtermDesktopBrowser ? html`<mux-ui-action-tile label="Browser" description="Open a page in the Mac app" @click=${() => this.chooseTool('browser')}><span slot="icon">${icon(Globe2,{size:18})}</span></mux-ui-action-tile>` : nothing}
     </div></div></section>`;
   }
@@ -924,16 +943,18 @@ export class MuxSDKUtility extends LitElement {
     </div><div class="vertical-resizer" role="separator" aria-label="Resize changes list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'changes')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'changes')}></div><div class="change-viewer"><header><span>${this.selectedChange?.path || 'Select a changed file'}</span>${this.selectedChange ? html`<small>${this.selectedChange.status.trim() || 'Modified'}</small>` : nothing}</header>${!this.selectedChange ? html`<mux-ui-empty-state heading="Review project changes"><span slot="icon">${icon(GitCompare,{size:24})}</span>Select a file to compare it with HEAD.</mux-ui-empty-state>` : this.changeError ? html`<mux-ui-feedback class="change-feedback" kind="error" align="center">${this.changeError}<mux-ui-button slot="action" variant="secondary" size="small" @click=${() => this.retryChange()}>Retry</mux-ui-button></mux-ui-feedback>` : !detail ? html`<mux-ui-feedback class="change-feedback" kind="loading" align="center">Loading diff…</mux-ui-feedback>` : detail.tooLarge ? html`<mux-ui-feedback class="change-feedback" kind="warning" align="center">This file is too large for the diff viewer.</mux-ui-feedback>` : detail.binary ? html`<mux-ui-feedback class="change-feedback" kind="info" align="center">Binary changes cannot be shown as text.</mux-ui-feedback>` : html`<mux-monaco-diff .repo=${detail.repo} .path=${detail.path} .originalText=${detail.before} .modifiedText=${detail.after}></mux-monaco-diff>`}</div></section>`;
   }
   private async loadPages() {
+    const request = ++this.pagesLoadRequest;
     this.pagesError = '';
     try {
       await import('./mux-blocknote-page.js');
       const response = await fetch(this.endpoint('pages'));
-      if (!response.ok) throw new Error(`Pages unavailable (${response.status})`);
+      if (!response.ok) throw new Error(`Notes unavailable (${response.status})`);
       const doc = await response.json() as { pages: NotePage[]; version?: number };
+      if (request !== this.pagesLoadRequest || this.pageSaving || (doc.version || 0) < this.pagesVersion) return;
       this.pages = doc.pages || [];
       this.pagesVersion = doc.version || 0;
-      this.pagesConflict = false;
-      if (!this.pages.some(page => page.id === this.pageId)) this.pageId = this.pages[0]?.id || '';
+      this.pagesConflict = !!this.conflictDraft;
+      if (!this.pages.some(page => page.id === this.pageId)) this.pageId = '';
     } catch (error) { this.pagesError = error instanceof Error ? error.message : String(error); }
     this.paintAll();
   }
@@ -946,7 +967,7 @@ export class MuxSDKUtility extends LitElement {
       this.pages = doc.pages || [];
       this.pagesVersion = doc.version || 0;
       this.pagesRenderEpoch++;
-      if (!this.pages.some(page => page.id === this.pageId)) this.pageId = this.pages[0]?.id || '';
+      if (!this.pages.some(page => page.id === this.pageId)) this.pageId = '';
       this.paintAll();
     } catch { /* refresh on next poll */ }
   }
@@ -959,14 +980,64 @@ export class MuxSDKUtility extends LitElement {
     this.pageSaveQueue = this.pageSaveQueue.catch(() => {}).then(async () => {
       const snapshot = JSON.stringify({ version:this.pagesVersion, pages:this.pages || [] });
       const response = await fetch(this.endpoint('pages'), { method:'PUT', headers:{'Content-Type':'application/json'}, body:snapshot });
-      if (!response.ok) { if (response.status === 409) this.pagesConflict = true; throw new Error(response.status === 409 ? 'Page changed elsewhere. Your edits are still here; reload after copying them.' : `Could not save pages (${response.status})`); }
+      if (!response.ok) {
+        this.pagesConflict = true;
+        const page = this.pages?.find(item => item.id === this.pageId);
+        if (page) {
+          this.conflictDraft = {page:structuredClone(page), capturedAt:new Date().toISOString(), reason:response.status === 409 ? 'conflict' : 'save-error'};
+          try { localStorage.setItem(this.conflictKey(), JSON.stringify(this.conflictDraft)); } catch { /* draft stays in memory */ }
+        }
+        throw new Error(response.status === 409 ? 'This note changed elsewhere. Recover your edit as a separate note or discard it.' : `Could not save notes (${response.status})`);
+      }
       const result = await response.json() as { version?: number };
       this.pagesVersion = result.version || 0;
       this.pagesError = '';
       this.pageSaving = false;
+      this.conflictDraft = undefined;
+      this.pagesConflict = false;
+      try { localStorage.removeItem(this.conflictKey()); } catch { /* private browsing */ }
       this.paintAll();
-    }).catch(error => { this.pagesError = String(error); this.pageSaving = false; this.paintAll(); });
+    }).catch(error => {
+      if (!this.conflictDraft) {
+        const page = this.pages?.find(item => item.id === this.pageId);
+        if (page) {
+          this.conflictDraft = {page:structuredClone(page), capturedAt:new Date().toISOString(), reason:'save-error'};
+          try { localStorage.setItem(this.conflictKey(), JSON.stringify(this.conflictDraft)); } catch { /* draft stays in memory */ }
+        }
+      }
+      this.pagesConflict = !!this.conflictDraft;
+      this.pagesError = String(error); this.pageSaving = false; this.paintAll();
+    });
     return this.pageSaveQueue;
+  }
+  private async recoverNoteDraft() {
+    const draft = this.conflictDraft;
+    if (!draft) return;
+    try {
+      const latestResponse = await fetch(this.endpoint('pages'));
+      if (!latestResponse.ok) throw new Error(`Could not load latest notes (${latestResponse.status})`);
+      const latest = await latestResponse.json() as { version:number; pages:NotePage[] };
+      const id = crypto.randomUUID();
+      const copy: NotePage = {...structuredClone(draft.page), id, parentId:undefined, title:`${draft.page.title || 'Untitled'} (recovered)`};
+      const response = await fetch(this.endpoint('pages'), {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({version:latest.version, pages:[...latest.pages, copy]})});
+      if (!response.ok) throw new Error(response.status === 409 ? 'Notes changed again. Retry recovery.' : `Could not recover note (${response.status})`);
+      const saved = await response.json() as { version:number; pages:NotePage[] };
+      this.pages = saved.pages;
+      this.pagesVersion = saved.version;
+      this.pagesConflict = false;
+      this.conflictDraft = undefined;
+      this.pagesError = '';
+      this.pagesRenderEpoch++;
+      try { localStorage.removeItem(this.conflictKey()); } catch { /* private browsing */ }
+      this.selectPage(id);
+    } catch (error) { this.pagesError = String(error); this.paintAll(); }
+  }
+  private async discardNoteDraft() {
+    this.conflictDraft = undefined;
+    this.pagesConflict = false;
+    this.pagesError = '';
+    try { localStorage.removeItem(this.conflictKey()); } catch { /* private browsing */ }
+    await this.loadPages();
   }
   private newPage(parentId = '') {
     const page: NotePage = { id:crypto.randomUUID(), parentId:parentId || undefined, title:'Untitled', blocks:[], content:[{type:'paragraph'}] };
@@ -1016,7 +1087,8 @@ export class MuxSDKUtility extends LitElement {
     if (depth > 8) return [];
     const rows: TemplateResult[] = [];
     for (const page of (this.pages || []).filter(item => (item.parentId || '') === parentId)) {
-      rows.push(html`<mux-ui-rail-row label=${page.title || 'Untitled'} tooltip=${page.title || 'Untitled'} .depth=${depth} ?selected=${page.id === this.pageId} @click=${() => this.selectPage(page.id)}><span slot="icon">${icon(NotebookPen,{size:15})}</span></mux-ui-rail-row>`);
+      const searchText = `${page.title} ${JSON.stringify(page.content || page.blocks)}`.toLowerCase();
+      if (!this.pageQuery || searchText.includes(this.pageQuery.toLowerCase())) rows.push(html`<mux-ui-rail-row label=${page.title || 'Untitled'} tooltip=${page.title || 'Untitled'} .depth=${depth} ?selected=${page.id === this.pageId} @click=${() => this.selectPage(page.id)}><span slot="icon">${icon(NotebookPen,{size:15})}</span></mux-ui-rail-row>`);
       rows.push(...this.pageRows(page.id, depth + 1));
     }
     return rows;
@@ -1067,14 +1139,15 @@ export class MuxSDKUtility extends LitElement {
     const page = this.pages?.find(item => item.id === this.pageId);
     const parent = page?.parentId ? this.pages?.find(item => item.id === page.parentId) : undefined;
     return html`<section class="pages-panel split-panel ${this.pagesRailOpen ? '' : 'rail-closed'}" style=${`--rail-width:${this.railWidths.pages}px`}>
-      ${this.pagesRailOpen ? html`<div class="pages-list"><div class="browser-heading"><div class="explorer-label">PAGES</div><div class="explorer-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="New page" tooltip="New page" @click=${() => this.newPage()}>${icon(Plus,{size:15})}</mux-ui-button></div></div><div class="page-list-rows">${this.pagesError ? html`<mux-ui-feedback class="rail-feedback" kind="error" density="compact">${this.pagesError}${!this.pages ? html`<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => void this.loadPages()}>Retry</mux-ui-button>` : nothing}</mux-ui-feedback>` : nothing}${!this.pages && !this.pagesError ? html`<mux-ui-feedback class="rail-feedback" kind="loading" density="compact">Loading pages…</mux-ui-feedback>` : this.pages?.length ? this.pageRows() : !this.pagesError ? html`<mux-ui-feedback class="rail-feedback" kind="empty" density="compact">Create a page to start writing.</mux-ui-feedback>` : nothing}</div></div>` : nothing}
-      ${this.pagesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize page list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'pages')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'pages')}></div>` : nothing}
+      ${this.pagesRailOpen ? html`<div class="pages-list"><div class="browser-heading"><div class="explorer-label">NOTES</div><div class="explorer-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="New note" tooltip="New note" ?disabled=${!this.pages} @click=${() => this.newPage()}>${icon(Plus,{size:15})}</mux-ui-button></div></div><mux-ui-text-field class="notes-search" size="small" type="search" aria-label="Search notes" placeholder="Search notes" .value=${this.pageQuery} @input=${(event:Event) => { this.pageQuery = (event.target as MuxUITextField).liveValue; this.paintAll(); }}></mux-ui-text-field><div class="page-list-rows">${this.pagesError ? html`<mux-ui-feedback class="rail-feedback" kind="error" density="compact">${this.pagesError}${!this.pages ? html`<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => void this.loadPages()}>Retry</mux-ui-button>` : nothing}</mux-ui-feedback>` : nothing}${!this.pages && !this.pagesError ? html`<mux-ui-feedback class="rail-feedback" kind="loading" density="compact">Loading notes…</mux-ui-feedback>` : this.pages?.length ? this.pageRows() : !this.pagesError ? html`<mux-ui-feedback class="rail-feedback" kind="empty" density="compact">No notes yet. Create one when you are ready to write.</mux-ui-feedback>` : nothing}</div></div>` : nothing}
+      ${this.pagesRailOpen ? html`<div class="vertical-resizer" role="separator" aria-label="Resize notes list" aria-orientation="vertical" tabindex="0" @pointerdown=${(event: PointerEvent) => this.startRailResize(event,'pages')} @pointermove=${(event: PointerEvent) => this.moveRailResize(event)} @pointerup=${(event: PointerEvent) => this.endRailResize(event)} @lostpointercapture=${(event: PointerEvent) => this.endRailResize(event)} @keydown=${(event: KeyboardEvent) => this.keyRailResize(event,'pages')}></div>` : nothing}
       <div class="page-editor"><div class=${parent ? 'page-toolbar nested' : 'page-toolbar'}><div>
-        <mux-ui-button appearance="document" icon-only size="small" variant="quiet" tone="muted" toggle .pressed=${this.pagesRailOpen} accessible-label=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} tooltip=${this.pagesRailOpen ? 'Hide pages list' : 'Show pages list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</mux-ui-button>
-        <mux-ui-breadcrumb appearance="document" label="Page path" .items=${parent ? [{id:parent.id,label:parent.title,actionLabel:`Open parent page ${parent.title}`},{id:page?.id || '',label:page?.title || 'Pages'}] : [{id:page?.id || '',label:page?.title || 'Pages'}]} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => this.selectPage(event.detail.id)}></mux-ui-breadcrumb>
-      </div><div class="page-toolbar-actions">${page ? html`<span class="page-save-state" ?data-saving=${this.pageSaving}>${this.pageSaving ? 'Saving…' : 'Saved'}</span>` : nothing}${page ? html`<mux-ui-button class="page-delete" appearance="document" icon-only size="small" variant="quiet" tone="danger" accessible-label=${`Delete page ${page.title || 'Untitled'}`} tooltip=${this.pagesConflict ? 'Reload pages before deleting' : 'Delete page'} ?disabled=${this.pagesConflict} @click=${() => this.requestDeletePage(page)}>${icon(Trash2,{size:15})}</mux-ui-button>` : nothing}</div></div>
-      ${page ? html`<div class="page-canvas"><div class="page-paper"><textarea class="page-title" aria-label="Page title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .remoteHost=${this.remoteHost} .content=${page.content?.length ? page.content : legacyPageContent(page.blocks, this.remoteHost)} .pageId=${page.id} .documentEpoch=${this.pagesRenderEpoch} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><mux-ui-button class="page-subpage" appearance="document" size="small" variant="quiet" tone="muted" @click=${() => this.newPage(page.id)}>${icon(Plus,{size:14})}<span>New subpage</span></mux-ui-button></div></div>` : this.pagesError && !this.pages ? html`<mux-ui-empty-state heading="Pages unavailable" appearance="document"><span slot="icon">${icon(NotebookPen,{size:24})}</span>Use Retry in the Pages list.</mux-ui-empty-state>` : html`<mux-ui-empty-state heading="Pages" appearance="document"><span slot="icon">${icon(NotebookPen,{size:24})}</span>Create a document for this chat.<mux-ui-button slot="action" appearance="document" size="small" variant="secondary" @click=${() => this.newPage()}>New page</mux-ui-button></mux-ui-empty-state>`}</div>
-      <mux-ui-dialog size="compact" presentation="adaptive" label="Delete page" ?open=${!!this.pendingPageDeletion} @dismiss=${() => { this.pendingPageDeletion = undefined; this.paintAll(); }}><div class="page-delete-dialog"><h2>Delete page?</h2><p>${this.pendingPageDeletion?.message || ''}</p><div class="page-delete-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingPageDeletion = undefined; this.paintAll(); }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => this.deletePage()}>Delete page</mux-ui-button></div></div></mux-ui-dialog>
+        <mux-ui-button appearance="document" icon-only size="small" variant="quiet" tone="muted" toggle .pressed=${this.pagesRailOpen} accessible-label=${this.pagesRailOpen ? 'Hide notes list' : 'Show notes list'} tooltip=${this.pagesRailOpen ? 'Hide notes list' : 'Show notes list'} @click=${() => { this.pagesRailOpen = !this.pagesRailOpen; this.paintAll(); }}>${icon(NotebookPen,{size:15})}</mux-ui-button>
+        <mux-ui-breadcrumb appearance="document" label="Note path" .items=${parent ? [{id:parent.id,label:parent.title,actionLabel:`Open parent note ${parent.title}`},{id:page?.id || '',label:page?.title || 'Notes'}] : [{id:page?.id || '',label:page?.title || 'Notes'}]} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => this.selectPage(event.detail.id)}></mux-ui-breadcrumb>
+      </div><div class="page-toolbar-actions">${page ? html`<span class="page-save-state" ?data-saving=${this.pageSaving}>${this.pageSaving ? 'Saving…' : this.pagesError ? 'Save failed' : 'Saved'}</span>` : nothing}${page ? html`<mux-ui-button class="page-delete" appearance="document" icon-only size="small" variant="quiet" tone="danger" accessible-label=${`Delete note ${page.title || 'Untitled'}`} tooltip=${this.pagesConflict ? 'Resolve note conflict before deleting' : 'Delete note'} ?disabled=${this.pagesConflict} @click=${() => this.requestDeletePage(page)}>${icon(Trash2,{size:15})}</mux-ui-button>` : nothing}</div></div>
+      ${this.conflictDraft ? html`<div class="note-conflict-banner" role="alert"><strong>Unsaved note recovered</strong><span>${this.conflictDraft.reason === 'save-error' ? 'The last save did not complete. Preserve your draft as a separate note or discard it.' : 'Another editor saved first. Keep both versions by saving your draft as a new note.'}</span><mux-ui-button size="small" variant="secondary" @click=${() => void this.recoverNoteDraft()}>Save recovered copy</mux-ui-button><mux-ui-button size="small" variant="quiet" @click=${() => void this.discardNoteDraft()}>Discard my draft</mux-ui-button></div>` : nothing}
+      ${page ? html`<div class="page-canvas" ?inert=${this.pagesConflict}><div class="page-paper"><textarea class="page-title" aria-label="Note title" placeholder="Untitled" rows="1" .value=${page.title} @input=${(event: InputEvent) => { page.title = (event.target as HTMLTextAreaElement).value; this.growPageField(event); this.schedulePageSave(); }}></textarea><mux-blocknote-page .remoteHost=${this.remoteHost} .content=${page.content?.length ? page.content : legacyPageContent(page.blocks, this.remoteHost)} .pageId=${page.id} .documentEpoch=${this.pagesRenderEpoch} @click=${(event: MouseEvent) => this.openPageLink(event)} @page-content-change=${(event: CustomEvent<PartialBlock[]>) => { page.content = event.detail; this.schedulePageSave(); }} @page-command=${(event: CustomEvent<'page' | 'generate' | 'visualize'>) => this.pageCommand(page,event.detail)}></mux-blocknote-page><mux-ui-button class="page-subpage" appearance="document" size="small" variant="quiet" tone="muted" @click=${() => this.newPage(page.id)}>${icon(Plus,{size:14})}<span>New subpage</span></mux-ui-button></div></div>` : this.pagesError && !this.pages ? html`<mux-ui-empty-state heading="Notes unavailable" appearance="document"><span slot="icon">${icon(NotebookPen,{size:24})}</span>Use Retry in the Notes list.</mux-ui-empty-state>` : html`<mux-ui-empty-state heading="Notes" appearance="document"><span slot="icon">${icon(NotebookPen,{size:24})}</span>Select a note to edit, or create a new one.<mux-ui-button slot="action" appearance="document" size="small" variant="secondary" @click=${() => this.newPage()}>New note</mux-ui-button></mux-ui-empty-state>`}</div>
+      <mux-ui-dialog size="compact" presentation="adaptive" label="Delete note" ?open=${!!this.pendingPageDeletion} @dismiss=${() => { this.pendingPageDeletion = undefined; this.paintAll(); }}><div class="page-delete-dialog"><h2>Delete note?</h2><p>${this.pendingPageDeletion?.message || ''}</p><div class="page-delete-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingPageDeletion = undefined; this.paintAll(); }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => this.deletePage()}>Delete note</mux-ui-button></div></div></mux-ui-dialog>
     </section>`;
   }
   private surfaceCSS = `
@@ -1111,6 +1184,8 @@ export class MuxSDKUtility extends LitElement {
     @container(max-width:570px) { mux-sdk-utility .native-browser-toolbar { gap:var(--ui-space-1); padding-inline:var(--ui-space-2); } mux-sdk-utility .native-browser-home { padding:var(--ui-space-7) var(--ui-space-5); } mux-sdk-utility .native-browser-recent { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     @container(max-width:390px) { mux-sdk-utility .native-browser-tool-grid { grid-template-columns:1fr; } mux-sdk-utility .native-browser-actions mux-ui-button:first-child { display:none; } }
     mux-sdk-utility .utility-body { flex:1; min-height:0; min-width:0; overflow:hidden; container-type:inline-size; }
+    mux-sdk-utility mux-meetings { display:block; height:100%; }
+    mux-sdk-utility mux-meetings[hidden] { display:none; }
     mux-sdk-utility .utility-placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--ui-text-muted); }
     mux-sdk-utility .empty { color:var(--ui-text-muted); line-height:1.6; } mux-sdk-utility a { color:var(--ui-accent); }
     mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { display:grid; grid-template-columns:clamp(var(--ui-utility-rail-min-width),var(--rail-width),45%) var(--ui-utility-rail-resizer-width) minmax(0,1fr); height:100%; min-width:0; overflow:hidden; position:relative; background:var(--ui-surface-base); }
@@ -1218,8 +1293,11 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility mux-monaco-diff .monaco-diff-host { width:100%; height:100%; }
     mux-sdk-utility .pages-list { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
     mux-sdk-utility .pages-list .browser-heading { flex:none; }
+    mux-sdk-utility .notes-search { display:block; margin:0 var(--ui-space-4) var(--ui-space-3); }
     mux-sdk-utility .page-list-rows { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-1) 0 var(--ui-space-5); }
     mux-sdk-utility .page-editor { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:auto; }
+    mux-sdk-utility .note-conflict-banner { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ui-space-2); padding:var(--ui-space-3) var(--ui-space-5); border-bottom:1px solid var(--ui-warning-border,var(--ui-border)); background:var(--ui-surface-raised); font-size:var(--ui-text-xs); }
+    mux-sdk-utility .note-conflict-banner span { flex:1 1 180px; color:var(--ui-text-muted); }
     mux-sdk-utility .page-editor-top { display:flex; align-items:center; justify-content:space-between; min-height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-7); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .page-editor-top span:first-child { display:flex; align-items:center; gap:var(--ui-space-4); }
     mux-sdk-utility .page-paper { width:min(var(--ui-utility-page-width),100%); box-sizing:border-box; margin:0 auto; padding:var(--ui-space-11) clamp(var(--ui-space-7),8%,var(--ui-space-14)) var(--ui-space-15); }

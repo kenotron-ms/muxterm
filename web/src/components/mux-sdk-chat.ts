@@ -720,7 +720,7 @@ export class MuxSDKChat extends LitElement {
     this.previewFocused = mode === 'preview';
   }
   /** Apply a server-relayed request after this chat is on screen. */
-  async navigateUI(action: 'chat' | 'panel' | 'tab' | 'file', mode?: string, tab?: string, path?: string): Promise<void> {
+  async navigateUI(action: 'chat' | 'panel' | 'tab' | 'file' | 'note', mode?: string, tab?: string, path?: string, noteId?: string): Promise<void> {
     if (action === 'chat') return;
     if (action === 'tab' && tab === 'terminal') {
       this.dispatchEvent(new CustomEvent('terminal-open', { bubbles:true, composed:true }));
@@ -734,7 +734,8 @@ export class MuxSDKChat extends LitElement {
     await this.updateComplete;
     const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
     if (action === 'file' && path) await utility?.showFile(path);
-    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'goal')) utility?.showPanel(tab);
+    else if (action === 'note' && noteId) await utility?.showNote(noteId);
+    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'notes' || tab === 'meetings' || tab === 'goal')) utility?.showPanel(tab === 'notes' ? 'pages' : tab);
   }
   private async operatorChanged(chat: SDKChat) {
     this.chat = {...chat, remoteHost: chatHost(chat.id) || undefined};

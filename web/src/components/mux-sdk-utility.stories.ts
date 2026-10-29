@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import { fixtureJSON, type ApiFixture } from '../stories/api-fixture.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
+import type { MuxMeetings } from './mux-meetings.js';
 import type { MuxUIButton } from '../ui/button.js';
 import './mux-sdk-utility.js';
 
@@ -80,6 +81,7 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
       ]});
     }
     if (method === 'PUT' && url.pathname === `${base}pages`) return fixtureJSON({version:2});
+    if (method === 'GET' && url.pathname === `/api/sdk-chats/${id}/meetings`) return fixtureJSON([]);
     return fixtureJSON({error:`No utility fixture for ${method} ${url.pathname}`},501);
   };
 }
@@ -251,19 +253,31 @@ export const DiffRecovery: Story = {
   args:{sessionId:sessionId('diff-recovery')},parameters:{apiFixture:utilityFixture(sessionId('diff-recovery'))},
   play:DiffUnavailable.play,
 };
-export const Pages: Story = {
+export const NotesLibrary: Story = {
   args:{sessionId:sessionId('pages')},parameters:{apiFixture:utilityFixture(sessionId('pages'))},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('pages'); },
 };
-export const PagesUnavailable: Story = {
+export const NoteEditor: Story = {
+  args:{sessionId:sessionId('note-editor')},parameters:{apiFixture:utilityFixture(sessionId('note-editor'))},
+  play:async ({canvasElement}) => {
+    target(canvasElement)?.showPanel('pages');
+    let row: HTMLElement | null = null;
+    for (let attempt=0; attempt<40 && !row; attempt++) {
+      row = target(canvasElement)?.querySelector<HTMLElement>('mux-ui-rail-row[label="Component review"]') || null;
+      if (!row) await new Promise(resolve=>window.setTimeout(resolve,50));
+    }
+    row?.click();
+  },
+};
+export const NotesUnavailable: Story = {
   args:{sessionId:sessionId('pages-error')},parameters:{apiFixture:utilityFixture(sessionId('pages-error'))},
-  play:Pages.play,
+  play:NotesLibrary.play,
 };
-export const PagesRecovery: Story = {
+export const NotesRecovery: Story = {
   args:{sessionId:sessionId('pages-recovery')},parameters:{apiFixture:utilityFixture(sessionId('pages-recovery'))},
-  play:Pages.play,
+  play:NotesLibrary.play,
 };
-export const EmptyPages: Story = {
+export const EmptyNotes: Story = {
   args:{sessionId:sessionId('empty-pages')},parameters:{apiFixture:utilityFixture(sessionId('empty-pages'),true)},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('pages'); },
 };
@@ -290,7 +304,7 @@ export const PhoneChanges: Story = {
   globals:{viewport:{value:'phone390',isRotated:false}},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('changes'); },
 };
-export const PhonePages: Story = {
+export const PhoneNotes: Story = {
   args:{sessionId:sessionId('phone-pages')},parameters:{apiFixture:utilityFixture(sessionId('phone-pages'))},
   globals:{viewport:{value:'phone390',isRotated:false}},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('pages'); },
@@ -315,7 +329,7 @@ export const PhonePageDeleteConfirmation: Story = {
     target(canvasElement)?.showPanel('pages');
     let button: MuxUIButton | null = null;
     for (let attempt=0; attempt<40 && !button; attempt++) {
-      button = target(canvasElement)?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Delete page Component review"]') || null;
+      button = target(canvasElement)?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Delete note Component review"]') || null;
       if (!button) await new Promise(resolve=>window.setTimeout(resolve,50));
     }
     button?.click();
@@ -326,3 +340,40 @@ export const LightFilePreview: Story = {
   globals:{palette:'github-light'},
   play:async ({canvasElement}) => { await target(canvasElement)?.showFile('README.md'); },
 };
+
+type MeetingScene = Parameters<MuxMeetings['showSample']>[0];
+function meetingStory(name:string,scene:MeetingScene,phone=false):Story {
+  const id=sessionId(`meeting-${name}`);
+  return {
+    args:{sessionId:id},parameters:{apiFixture:utilityFixture(id)},
+    ...(phone ? {globals:{viewport:{value:'phone390',isRotated:false}}} : {}),
+    play:async ({canvasElement}) => {
+      const utility=target(canvasElement);
+      utility?.showPanel('meetings');
+      await utility?.updateComplete;
+      utility?.querySelector<MuxMeetings>('mux-meetings')?.showSample(scene);
+    },
+  };
+}
+
+/** Production utility and meeting components, with sample data marked in the rail. */
+export const MeetingLibrary:Story=meetingStory('library','library');
+export const MeetingReview:Story=meetingStory('review','review');
+export const MeetingRecorder:Story=meetingStory('recorder','recorder');
+export const MeetingCallPreflight:Story=meetingStory('preflight','preflight');
+export const MeetingHostingRequired:Story=meetingStory('hosting-required','hosting-required');
+export const MeetingWaiting:Story=meetingStory('waiting','waiting');
+export const MeetingVideoCall:Story=meetingStory('video-call','call');
+export const MeetingDirectRoute:Story=meetingStory('direct-route','call');
+export const MeetingRelayRoute:Story=meetingStory('relay-route','relay');
+export const MeetingConnectionStalled:Story=meetingStory('connection-stalled','stalled');
+export const MeetingConnectionFailed:Story=meetingStory('connection-failed','failed');
+export const MeetingScreenShare:Story=meetingStory('screen-share','share');
+export const MeetingRecording:Story=meetingStory('recording','recording');
+export const MeetingRecordingScreenShare:Story=meetingStory('recording-share','recording-share');
+export const PhoneMeetingLibrary:Story=meetingStory('phone-library','library',true);
+export const PhoneMeetingHostingRequired:Story=meetingStory('phone-hosting-required','hosting-required',true);
+export const PhoneMeetingReview:Story=meetingStory('phone-review','review',true);
+export const PhoneMeetingCall:Story=meetingStory('phone-call','call',true);
+export const PhoneMeetingConnectionFailed:Story=meetingStory('phone-connection-failed','failed',true);
+export const PhoneMeetingScreenShare:Story=meetingStory('phone-share','share',true);

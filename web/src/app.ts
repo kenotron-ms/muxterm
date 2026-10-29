@@ -1723,16 +1723,16 @@ export class MuxApp extends LitElement {
       store.setAIStatus(parseAIStatus(msg['aiStatus']));
     }
     if ('chatUINavigation' in msg) {
-      const nav = msg['chatUINavigation'] as { action: 'chat' | 'panel' | 'tab' | 'file'; session_id: string; mode?: string; tab?: string; path?: string };
+      const nav = msg['chatUINavigation'] as { action: 'chat' | 'panel' | 'tab' | 'file' | 'note'; session_id: string; mode?: string; tab?: string; path?: string; note_id?: string };
       void this._navigateChatUI(nav);
     }
   };
 
-  private async _navigateChatUI(nav: { action: 'chat' | 'panel' | 'tab' | 'file'; session_id: string; mode?: string; tab?: string; path?: string }): Promise<void> {
+  private async _navigateChatUI(nav: { action: 'chat' | 'panel' | 'tab' | 'file' | 'note'; session_id: string; mode?: string; tab?: string; path?: string; note_id?: string }): Promise<void> {
     this._onChatOpen(new CustomEvent('chat-open', { detail: { sessionId: nav.session_id } }));
     await this.updateComplete;
     const chat = this.renderRoot.querySelector<MuxSDKChat>('mux-sdk-chat');
-    await chat?.navigateUI(nav.action, nav.mode, nav.tab, nav.path);
+    await chat?.navigateUI(nav.action, nav.mode, nav.tab, nav.path, nav.note_id);
   }
 
   // Phase 3: _onOpenWorkspacePicker will be re-introduced here for workspace management UI.

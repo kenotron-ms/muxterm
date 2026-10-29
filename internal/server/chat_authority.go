@@ -62,6 +62,12 @@ func agentChatPathAllowed(method, path string) bool {
 	if len(parts) == 1 {
 		return method == http.MethodGet
 	}
+	if len(parts) == 3 && parts[1] == "control-notes" && parts[2] != "" {
+		return method == http.MethodPut
+	}
+	if len(parts) == 4 && parts[1] == "control-notes" && parts[2] != "" && parts[3] == "append" {
+		return method == http.MethodPost
+	}
 	if len(parts) != 2 {
 		return false
 	}
@@ -69,6 +75,8 @@ func agentChatPathAllowed(method, path string) bool {
 	case "history", "control-history":
 		return method == http.MethodGet
 	case "control-send":
+		return method == http.MethodPost
+	case "control-notes":
 		return method == http.MethodPost
 	default:
 		return false
