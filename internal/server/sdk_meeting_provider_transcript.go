@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,7 +113,7 @@ func transcribeMeetingWithVoice(ctx context.Context, input, dir string, target m
 	}
 	defer os.RemoveAll(segmentDir)
 	pattern := filepath.Join(segmentDir, "segment-%05d.wav")
-	convert := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", input, "-map", "0:a:0", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-f", "segment", "-segment_time", "60", "-reset_timestamps", "1", pattern)
+	convert := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", input, "-map", "0:a:0", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-f", "segment", "-segment_time", strconv.Itoa(meetingProviderSegmentSeconds), "-reset_timestamps", "1", pattern)
 	if log, err := convert.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("audio conversion failed: %v: %s", err, strings.TrimSpace(string(log)))
 	}
