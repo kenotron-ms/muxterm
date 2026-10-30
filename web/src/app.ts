@@ -568,6 +568,9 @@ export class MuxApp extends LitElement {
   private _bootSurfaceApplied = false;
   private _bootChatId: string | null = null;
   private _bootChatHost = '';
+  // The view represented by a URL with no Chat hash, for Back/Forward.
+  private _unhashedSurface: string | null | undefined;
+  private _wasChatHash = false;
 
   /**
    * A composer dispatch waiting on an attach: where it is going, and what to
@@ -757,7 +760,13 @@ export class MuxApp extends LitElement {
     }
     if (this._sdkChatId === null) {
       const fromHash = chatFromHash();
-      if (fromHash) this._selectMainSurface(fromHash, 'none');
+      if (fromHash) {
+        let saved: string | null = null;
+        try { saved = localStorage.getItem(LAST_MAIN_SURFACE_KEY); } catch { /* storage unavailable */ }
+        this._unhashedSurface = saved === 'terminal' ? null : saved?.startsWith('utility:') && UTILITY_TITLES.has(saved.slice('utility:'.length)) ? saved.slice('utility:'.length) : 'new';
+        this._wasChatHash = true;
+        this._selectMainSurface(fromHash, 'none');
+      }
     }
     window.addEventListener('hashchange', this._onChatHistory);
     window.addEventListener('popstate', this._onChatHistory);
@@ -2078,10 +2087,14 @@ export class MuxApp extends LitElement {
     if (this._sdkChatId !== null) return;
     let saved: string | null = null;
     try { saved = localStorage.getItem(LAST_MAIN_SURFACE_KEY); } catch { /* storage unavailable */ }
-    if (saved === 'terminal') return;
+    if (saved === 'terminal') {
+      this._unhashedSurface = null;
+      return;
+    }
     if (saved?.startsWith('utility:')) {
       const view = saved.slice('utility:'.length);
       this._sdkChatId = UTILITY_TITLES.has(view) ? view : 'new';
+      this._unhashedSurface = this._sdkChatId;
       return;
     }
     if (saved?.startsWith('chat:')) {
@@ -2093,6 +2106,8 @@ export class MuxApp extends LitElement {
         this._bootChatId = id;
         this._bootChatHost = host;
         this._sdkChatId = id;
+        this._wasChatHash = true;
+        this._unhashedSurface = 'new';
         (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = id;
         setChatHash(id, true);
         this._reconcileBootChat();
@@ -2100,6 +2115,7 @@ export class MuxApp extends LitElement {
       }
     }
     this._sdkChatId = 'new';
+    this._unhashedSurface = 'new';
   }
 
   private _reconcileBootChat(): void {
@@ -2111,15 +2127,24 @@ export class MuxApp extends LitElement {
       return;
     }
     // Keep an unavailable remote chat selected until that host reconnects.
-    if (this._bootChatHost && !sdkChats.remoteHosts.some(host => host.id === this._bootChatHost && host.state === 'connected')) return;
+    if (this._bootChatHost && (!sdkChats.remoteInventoryReady || sdkChats.remoteHosts.some(host => host.id === this._bootChatHost && host.state !== 'connected'))) return;
     this._selectMainSurface('new', 'replace');
   }
 
   private _selectMainSurface(view: string | null, history: 'push' | 'replace' | 'none' = 'push'): void {
+    const chatId = view && !UTILITY_TITLES.has(view) ? view : null;
+    if (history !== 'none') {
+      if (chatId) {
+        if (!this._wasChatHash) this._unhashedSurface = this._sdkChatId;
+        this._wasChatHash = true;
+      } else {
+        this._unhashedSurface = view;
+        this._wasChatHash = false;
+      }
+    }
     this._bootChatId = null;
     this._bootChatHost = '';
     this._sdkChatId = view;
-    const chatId = view && !UTILITY_TITLES.has(view) ? view : null;
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = chatId ?? '';
     const host = chatId ? chatHost(chatId) || sdkChats.chats.find(chat => chat.id === chatId)?.remoteHost || '' : '';
     if (chatId && host) rememberChatHost(chatId, host);
@@ -2235,7 +2260,14 @@ export class MuxApp extends LitElement {
 
   private _onChatHistory = (): void => {
     const id = chatFromHash();
-    this._selectMainSurface(id ?? 'new', 'none');
+    if (id) {
+      if (!this._wasChatHash) this._unhashedSurface = this._sdkChatId;
+      this._wasChatHash = true;
+      this._selectMainSurface(id, 'none');
+    } else {
+      this._wasChatHash = false;
+      this._selectMainSurface(this._unhashedSurface === undefined ? 'new' : this._unhashedSurface, 'none');
+    }
     this._closeDrawer();
   };
 
