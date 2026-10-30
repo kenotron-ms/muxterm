@@ -94,6 +94,7 @@ const UTILITY_TITLES = new Map([
   ['connections', 'Customizations'],
   ['skills', 'Skills'],
 ]);
+const LAST_MAIN_SURFACE_KEY = 'muxterm.lastMainSurface';
 function chatFromHash(): string | null {
   const params = new URLSearchParams(window.location.hash.slice(1));
   const id = params.get('chat');
@@ -103,12 +104,12 @@ function chatFromHash(): string | null {
   return id;
 }
 
-function setChatHash(id: string | null): void {
+function setChatHash(id: string | null, replace = false): void {
   if (!id && !chatFromHash()) return;
   const host = id ? chatHost(id) : '';
   const next = id ? `#chat=${encodeURIComponent(id)}${host ? `&host=${encodeURIComponent(host)}` : ''}` : '';
   if (window.location.hash === next) return;
-  window.history.pushState(window.history.state, '', window.location.pathname + window.location.search + next);
+  window.history[replace ? 'replaceState' : 'pushState'](window.history.state, '', window.location.pathname + window.location.search + next);
 }
 interface CloseRequestState {
   target: CloseTarget;
@@ -565,6 +566,8 @@ export class MuxApp extends LitElement {
 
   /** The initial screen is selected once per page load. */
   private _bootSurfaceApplied = false;
+  private _bootChatId: string | null = null;
+  private _bootChatHost = '';
 
   /**
    * A composer dispatch waiting on an attach: where it is going, and what to
@@ -737,7 +740,10 @@ export class MuxApp extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
-    this._unsubscribeChats = sdkChats.subscribe(() => this.requestUpdate());
+    this._unsubscribeChats = sdkChats.subscribe(() => {
+      this._reconcileBootChat();
+      this.requestUpdate();
+    });
 
     // Return from service authorization to the Connections page. Consume only
     // muxterm's own marker and preserve any unrelated URL parameters.
@@ -747,9 +753,12 @@ export class MuxApp extends LitElement {
       this._connectionSelection = connectionReturn;
       url.searchParams.delete('connections');
       window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
-      this._sdkChatId = 'connections';
+      this._selectMainSurface('connections', 'replace');
     }
-    if (this._sdkChatId === null) this._sdkChatId = chatFromHash();
+    if (this._sdkChatId === null) {
+      const fromHash = chatFromHash();
+      if (fromHash) this._selectMainSurface(fromHash, 'none');
+    }
     window.addEventListener('hashchange', this._onChatHistory);
     window.addEventListener('popstate', this._onChatHistory);
     // Opt-in AI capability: resolve the flag once on load. Fetched over HTTP
@@ -2065,7 +2074,58 @@ export class MuxApp extends LitElement {
   private _applyBootSurface(): void {
     if (this._bootSurfaceApplied) return;
     this._bootSurfaceApplied = true;
-    if (this._sdkChatId === null) this._sdkChatId = 'new';
+    // An authorization return or explicit chat link has already chosen a view.
+    if (this._sdkChatId !== null) return;
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(LAST_MAIN_SURFACE_KEY); } catch { /* storage unavailable */ }
+    if (saved === 'terminal') return;
+    if (saved?.startsWith('utility:')) {
+      const view = saved.slice('utility:'.length);
+      this._sdkChatId = UTILITY_TITLES.has(view) ? view : 'new';
+      return;
+    }
+    if (saved?.startsWith('chat:')) {
+      const [id, encodedHost = ''] = saved.slice('chat:'.length).split('|', 2);
+      if (/^[0-9a-f]{32}$/i.test(id)) {
+        let host = '';
+        try { host = decodeURIComponent(encodedHost); } catch { /* invalid stored host */ }
+        if (host) rememberChatHost(id, host);
+        this._bootChatId = id;
+        this._bootChatHost = host;
+        this._sdkChatId = id;
+        (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = id;
+        setChatHash(id, true);
+        this._reconcileBootChat();
+        return;
+      }
+    }
+    this._sdkChatId = 'new';
+  }
+
+  private _reconcileBootChat(): void {
+    const id = this._bootChatId;
+    if (!id || !sdkChats.inventoryReady) return;
+    if (sdkChats.chats.some(chat => chat.id === id && !chat.archived)) {
+      this._bootChatId = null;
+      this._bootChatHost = '';
+      return;
+    }
+    // Keep an unavailable remote chat selected until that host reconnects.
+    if (this._bootChatHost && !sdkChats.remoteHosts.some(host => host.id === this._bootChatHost && host.state === 'connected')) return;
+    this._selectMainSurface('new', 'replace');
+  }
+
+  private _selectMainSurface(view: string | null, history: 'push' | 'replace' | 'none' = 'push'): void {
+    this._bootChatId = null;
+    this._bootChatHost = '';
+    this._sdkChatId = view;
+    const chatId = view && !UTILITY_TITLES.has(view) ? view : null;
+    (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = chatId ?? '';
+    const host = chatId ? chatHost(chatId) || sdkChats.chats.find(chat => chat.id === chatId)?.remoteHost || '' : '';
+    if (chatId && host) rememberChatHost(chatId, host);
+    if (history !== 'none') setChatHash(chatId, history === 'replace');
+    const saved = view === null ? 'terminal' : chatId ? `chat:${chatId}${host ? `|${encodeURIComponent(host)}` : ''}` : `utility:${view}`;
+    try { localStorage.setItem(LAST_MAIN_SURFACE_KEY, saved); } catch { /* storage unavailable */ }
   }
 
   private _onChatNew = (): void => {
@@ -2077,14 +2137,11 @@ export class MuxApp extends LitElement {
     this._newChatPrompt = '';
     this._jobEditorChatId = '';
     this._newChatForJob = false;
-    this._sdkChatId = 'new';
-    setChatHash(null);
+    this._selectMainSurface('new');
     this._closeDrawer();
   };
   private _onTerminalOpen = (): void => {
-    this._sdkChatId = null;
-    setChatHash(null);
-    (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = '';
+    this._selectMainSurface(null);
     this._closeDrawer();
     if (store.attached) return;
     const existing = store.workspaces[0];
@@ -2112,15 +2169,13 @@ export class MuxApp extends LitElement {
   private _onJobsOpen = (): void => {
     this._jobEditorChatId = '';
     this._newChatForJob = false;
-    this._sdkChatId = 'jobs';
-    setChatHash(null);
+    this._selectMainSurface('jobs');
     this._closeDrawer();
   };
   private _openUtility(view: 'connections' | 'skills'): void {
     this._jobEditorChatId = '';
     this._newChatForJob = false;
-    this._sdkChatId = view;
-    setChatHash(null);
+    this._selectMainSurface(view);
     this._closeDrawer();
   }
   private _onConnectionsOpen = (): void => this._openUtility('connections');
@@ -2129,8 +2184,7 @@ export class MuxApp extends LitElement {
     if (!this._newChatForJob) { this._onChatOpen(event); return; }
     this._newChatForJob = false;
     this._jobEditorChatId = event.detail.sessionId;
-    this._sdkChatId = 'jobs';
-    setChatHash(null);
+    this._selectMainSurface('jobs');
     this._closeDrawer();
   };
   private _onChatNewProject = (event: CustomEvent<{ projectId: string; remoteHost?: string }>): void => {
@@ -2162,9 +2216,7 @@ export class MuxApp extends LitElement {
   private _onHomeOpen = (e: Event): void => {
     const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
     if (!d) return;
-    this._sdkChatId = null;
-    setChatHash(null);
-    (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = '';
+    this._selectMainSurface(null);
     // Reveal the dock before selecting its pane.
     if (d.workspaceId && d.workspaceId !== store.attached) {
       // Hand the pane to the dock as an INPUT to its restore. Applying it from
@@ -2183,26 +2235,22 @@ export class MuxApp extends LitElement {
 
   private _onChatHistory = (): void => {
     const id = chatFromHash();
-    this._sdkChatId = id ?? 'new';
-    (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = id ?? '';
+    this._selectMainSurface(id ?? 'new', 'none');
     this._closeDrawer();
   };
 
   private _onChatOpen = (e: Event): void => {
     const detail = (e as CustomEvent<{ sessionId: string }>).detail;
     if (!detail?.sessionId) return;
-    this._sdkChatId = detail.sessionId;
-    setChatHash(detail.sessionId);
+    this._selectMainSurface(detail.sessionId);
     this._jobEditorChatId = '';
     this._newChatForJob = false;
-    (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = detail.sessionId;
     this._closeDrawer();
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     // Picking a workspace closes the drawer covering the terminal.
-    this._sdkChatId = null;
-    setChatHash(null);
+    this._selectMainSurface(null);
     this._closeDrawer();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive
