@@ -12,6 +12,7 @@ export interface SDKRemoteHost { id: string; name: string; state: string }
 export interface FolderListing { path: string; base: string; parent: string; folders: string[] }
 class SDKChatStore {
   chats: SDKChat[] = [];
+  inventoryReady = false;
   projects: SDKProject[] = [];
   remoteHosts: SDKRemoteHost[] = [];
   archivedCount = 0;
@@ -71,6 +72,7 @@ class SDKChatStore {
     const activeChats = [...localChats, ...remoteResults.flatMap(result => result.chats.map(chat => ({...chat, remoteHost: result.host.id})))];
     for (const chat of activeChats) this.archivedCache.delete(chat.id);
     this.chats = [...activeChats, ...this.archivedCache.values()];
+    this.inventoryReady = true;
     this.projects = [...localProjects, ...remoteResults.flatMap(result => result.projects.map(project => ({...project, remoteHost: result.host.id})))];
     for (const chat of this.chats) rememberChatHost(chat.id, chat.remoteHost || '');
     for (const project of this.projects) rememberProjectHost(project.id, project.remoteHost || '');
