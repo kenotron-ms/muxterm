@@ -2,6 +2,7 @@ package authserver
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -224,18 +225,8 @@ func (a *AuthServer) renderLoginPage(w http.ResponseWriter, r *http.Request, err
 	_ = a.tmpl.Execute(w, loginPageData{Error: errMsg, Hidden: hidden})
 }
 
-const loginPageHTML = `<!DOCTYPE html>
-<html><head><title>muxterm login</title></head>
-<body>
-<h1>muxterm</h1>
-{{if .Error}}<p style="color:red">{{.Error}}</p>{{end}}
-<form method="POST">
-{{range $k, $v := .Hidden}}<input type="hidden" name="{{$k}}" value="{{$v}}">
-{{end}}
-<label>Password: <input type="password" name="password" autocomplete="current-password" autofocus></label>
-<button type="submit">Log in</button>
-</form>
-</body></html>`
+//go:embed login_page.html
+var loginPageHTML string
 
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
