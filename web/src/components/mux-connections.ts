@@ -300,7 +300,7 @@ If I already have a connection, check its status first. Do not remove or replace
       </div>
       <div class="box"><strong>Use in chats</strong>
         <p class="note">Muxterm uses your GitHub CLI login when starting GitHub’s service. Muxterm stores only whether you enabled this connection; GitHub CLI stores its own authorization. The service exposes read-only repository, issue, and pull request tools.</p>
-        ${g.state==='ready'?html`<p class="note">${g.toolCount} tools verified. They are available in new Codex, Claude, and Amplifier chats.</p>`:g.error?html`<p class="note">${g.error}</p>`:nothing}
+        ${g.state==='ready'?html`<p class="note">${g.toolCount} tools verified. They are available in new chats.</p>`:g.error?html`<p class="note">${g.error}</p>`:nothing}
         <div class="actions">${g.enabled?html`<mux-ui-button variant="secondary" ?disabled=${!!this.busy||!g.ghInstalled||!g.serverInstalled||!g.signedIn} @click=${this.check}>Check tools again</mux-ui-button>`:nothing}
           ${g.enabled?html`<mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${this.disconnect}>Disable for new chats</mux-ui-button>`:nothing}</div>
       </div>
@@ -319,7 +319,7 @@ If I already have a connection, check its status first. Do not remove or replace
         <p class="note">This page updates when sign-in completes.</p>
         <div class="actions">${profile.userCode&&profile.verificationUrl?html`<mux-ui-button href=${profile.verificationUrl} target="_blank" variant="primary">Open Microsoft sign-in ↗</mux-ui-button>`:nothing}<mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${this.cancelMicrosoft}>Cancel sign-in</mux-ui-button></div>`:nothing}
       ${attention?html`<p class="note">${profile.error}</p>`:nothing}
-      ${ready?html`<p class="note">${profile.toolCount>0?`${profile.toolCount} read-only tools are available`:'Read-only tools are enabled'} for new Codex, Claude, and Amplifier chats.</p>`:nothing}
+      ${ready?html`<p class="note">${profile.toolCount>0?`${profile.toolCount} read-only tools are available`:'Read-only tools are enabled'} for new chats.</p>`:nothing}
       ${!pending?html`<div class="actions"><mux-ui-button variant="primary" ?disabled=${!!this.busy} @click=${this.connectMicrosoft}>${ready?'Sign in again':this.busy==='microsoft-personal'?'Installing…':attention?'Try sign-in again':'Connect account'}</mux-ui-button>
         ${ready?html`<mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${this.checkMicrosoft}>Check access</mux-ui-button>`:nothing}
         ${ready||attention?html`<mux-ui-button variant="secondary" ?disabled=${!!this.busy} @click=${this.disconnectMicrosoft}>Disconnect</mux-ui-button>`:nothing}</div>`:nothing}

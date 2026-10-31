@@ -16,10 +16,10 @@ import (
 // The installed binary carries the sidecar and the exact npm dependency lock.
 // Node packages are installed into a versioned cache before the sidecar starts.
 //
-//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs antigravity-login.mjs agent-command.mjs package.json package-lock.json
+//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs antigravity-login.mjs agent-command.mjs pi-mcp-wrapper.sh pi-mcp-extension.mjs package.json package-lock.json
 var files embed.FS
 
-var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "antigravity-login.mjs", "agent-command.mjs", "package.json", "package-lock.json"}
+var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "antigravity-login.mjs", "agent-command.mjs", "pi-mcp-wrapper.sh", "pi-mcp-extension.mjs", "package.json", "package-lock.json"}
 var prepareMu sync.Mutex
 
 func ready(dir string) bool {
@@ -29,6 +29,8 @@ func ready(dir string) bool {
 		"acp-stream.mjs",
 		"antigravity-login.mjs",
 		"agent-command.mjs",
+		"pi-mcp-wrapper.sh",
+		"pi-mcp-extension.mjs",
 		"node_modules/@anthropic-ai/claude-agent-sdk/package.json",
 		"node_modules/@agentclientprotocol/sdk/package.json",
 	} {
@@ -93,7 +95,11 @@ func Prepare() (string, error) {
 	}
 	defer os.RemoveAll(tmp) //nolint:errcheck
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(tmp, name), contents[name], 0600); err != nil {
+		mode := os.FileMode(0600)
+		if name == "pi-mcp-wrapper.sh" {
+			mode = 0700
+		}
+		if err := os.WriteFile(filepath.Join(tmp, name), contents[name], mode); err != nil {
 			return "", fmt.Errorf("sdk-chat: extract %s: %w", name, err)
 		}
 	}

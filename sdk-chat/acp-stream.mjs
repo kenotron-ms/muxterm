@@ -1,13 +1,14 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, constants } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, existsSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, delimiter, isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 
 const profiles = {
   copilot: { command: 'copilot', args: ['--acp', '--stdio'], env: 'MUXTERM_ACP_COPILOT_COMMAND', mcp: true },
-  pi: { command: 'pi-acp', args: [], env: 'MUXTERM_ACP_PI_COMMAND' },
+  pi: { command: 'pi-acp', args: [], env: 'MUXTERM_ACP_PI_COMMAND', mcp: true },
   opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
   deepseek: { command: 'dsh', args: ['--profile', 'acp'], env: 'MUXTERM_ACP_DEEPSEEK_COMMAND', mcp: true },
   gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
@@ -15,6 +16,26 @@ const profiles = {
 };
 
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
+
+function connectorServers(mcpBin, originFile) {
+  if (!mcpBin) return [];
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  const connectionDir = join(dataHome, 'muxterm', 'sdk-chat', 'connections');
+  const envEntries = keys => keys.filter(name => process.env[name])
+    .map(name => ({ name, value: process.env[name] }));
+  const localEnv = envEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']);
+  const servers = [{ name: 'muxterm', command: mcpBin, args: ['mcp'],
+    env: [...localEnv, ...(originFile ? [{ name: 'MUXTERM_CHAT_ORIGIN_FILE', value: originFile }] : [])] }];
+  if (existsSync(join(connectionDir, 'github-enabled')))
+    servers.push({ name: 'github', command: mcpBin, args: ['connection-mcp', 'github'],
+      env: [...localEnv, ...envEntries(['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR'])] });
+  if (existsSync(join(connectionDir, 'remote.json')))
+    servers.push({ name: 'remote', command: mcpBin, args: ['connection-mcp', 'remote'], env: localEnv });
+  if (existsSync(join(connectionDir, 'microsoft-graph', 'personal', 'enabled')))
+    servers.push({ name: 'microsoft_personal', command: mcpBin, args: ['connection-mcp', 'microsoft-personal'],
+      env: [...localEnv, ...envEntries(['PATH', 'HOME'])] });
+  return servers;
+}
 
 export function antigravityCommand() {
   if (process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND) return process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND;
@@ -185,9 +206,16 @@ export class ACPStream {
       : session.harness === 'copilot' ? copilotCommand()
       : launch?.command || process.env[profile.env] || profile.command;
     this.profile = profile;
+    this.mcpServers = profile.mcp ? connectorServers(process.env.MUXTERM_CHAT_MCP_BIN, session.originFile) : [];
+    const piEnv = session.harness === 'pi' && this.mcpServers.length ? {
+      PI_ACP_PI_COMMAND: fileURLToPath(new URL('./pi-mcp-wrapper.sh', import.meta.url)),
+      MUXTERM_PI_COMMAND: process.env.PI_ACP_PI_COMMAND || 'pi',
+      MUXTERM_PI_EXTENSION: fileURLToPath(new URL('./pi-mcp-extension.mjs', import.meta.url)),
+      MUXTERM_ACP_MCP_SERVERS: JSON.stringify(this.mcpServers),
+    } : {};
     this.process = spawn(command, launch?.args || profile.args, { cwd: session.cwd,
       env: session.harness === 'gemini' ? geminiEnvironment()
-        : launch?.env || process.env,
+        : { ...(launch?.env || process.env), ...piEnv },
       stdio: ['pipe', 'pipe', 'pipe'] });
     this.exited = new Promise(resolve => { this.resolveExit = resolve; });
     this.stderr = '';
@@ -208,11 +236,7 @@ export class ACPStream {
     this.agentCapabilities = result.agentCapabilities || {};
     this.steeringExtension = result._meta?.steering?.supported === true;
     let session;
-    const mcpBin = process.env.MUXTERM_CHAT_MCP_BIN;
-    const mcpServers = this.profile.mcp && mcpBin ? [{ name: 'muxterm', command: mcpBin, args: ['mcp'],
-      env: [...['XDG_RUNTIME_DIR', 'XDG_DATA_HOME'].filter(key => process.env[key]).map(name => ({ name, value: process.env[name] })),
-        ...(this.session.originFile ? [{ name: 'MUXTERM_CHAT_ORIGIN_FILE', value: this.session.originFile }] : [])] }] : [];
-    const params = { cwd: this.session.cwd, mcpServers,
+    const params = { cwd: this.session.cwd, mcpServers: this.mcpServers,
       ...(this.session.sourceFolders.length && this.agentCapabilities.sessionCapabilities?.additionalDirectories
         ? { additionalDirectories: this.session.sourceFolders } : {}) };
     if (this.session.nativeId) {
