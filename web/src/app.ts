@@ -95,6 +95,7 @@ const UTILITY_TITLES = new Map([
   ['skills', 'Skills'],
 ]);
 const LAST_MAIN_SURFACE_KEY = 'muxterm.lastMainSurface';
+const HISTORY_MAIN_SURFACE_KEY = 'muxtermMainSurface';
 function chatFromHash(): string | null {
   const params = new URLSearchParams(window.location.hash.slice(1));
   const id = params.get('chat');
@@ -757,7 +758,9 @@ export class MuxApp extends LitElement {
     }
     if (this._sdkChatId === null) {
       const fromHash = chatFromHash();
-      if (fromHash) this._selectMainSurface(fromHash, 'none');
+      if (fromHash) {
+        this._selectMainSurface(fromHash, 'none');
+      }
     }
     window.addEventListener('hashchange', this._onChatHistory);
     window.addEventListener('popstate', this._onChatHistory);
@@ -2078,10 +2081,14 @@ export class MuxApp extends LitElement {
     if (this._sdkChatId !== null) return;
     let saved: string | null = null;
     try { saved = localStorage.getItem(LAST_MAIN_SURFACE_KEY); } catch { /* storage unavailable */ }
-    if (saved === 'terminal') return;
+    if (saved === 'terminal') {
+      this._rememberHistorySurface(null);
+      return;
+    }
     if (saved?.startsWith('utility:')) {
       const view = saved.slice('utility:'.length);
       this._sdkChatId = UTILITY_TITLES.has(view) ? view : 'new';
+      this._rememberHistorySurface(this._sdkChatId);
       return;
     }
     if (saved?.startsWith('chat:')) {
@@ -2095,11 +2102,13 @@ export class MuxApp extends LitElement {
         this._sdkChatId = id;
         (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = id;
         setChatHash(id, true);
+        this._rememberHistorySurface(id);
         this._reconcileBootChat();
         return;
       }
     }
     this._sdkChatId = 'new';
+    this._rememberHistorySurface('new');
   }
 
   private _reconcileBootChat(): void {
@@ -2111,19 +2120,27 @@ export class MuxApp extends LitElement {
       return;
     }
     // Keep an unavailable remote chat selected until that host reconnects.
-    if (this._bootChatHost && !sdkChats.remoteHosts.some(host => host.id === this._bootChatHost && host.state === 'connected')) return;
+    if (this._bootChatHost && (!sdkChats.remoteInventoryReady || sdkChats.remoteHosts.some(host => host.id === this._bootChatHost && host.state !== 'connected'))) return;
     this._selectMainSurface('new', 'replace');
   }
 
+  private _rememberHistorySurface(view: string | null): void {
+    const current = window.history.state;
+    const state = current && typeof current === 'object' && !Array.isArray(current) ? current as Record<string, unknown> : {};
+    window.history.replaceState({ ...state, [HISTORY_MAIN_SURFACE_KEY]: view ?? 'terminal' }, '', window.location.href);
+  }
+
   private _selectMainSurface(view: string | null, history: 'push' | 'replace' | 'none' = 'push'): void {
+    if (history === 'push') this._rememberHistorySurface(this._sdkChatId);
+    const chatId = view && !UTILITY_TITLES.has(view) ? view : null;
     this._bootChatId = null;
     this._bootChatHost = '';
     this._sdkChatId = view;
-    const chatId = view && !UTILITY_TITLES.has(view) ? view : null;
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = chatId ?? '';
     const host = chatId ? chatHost(chatId) || sdkChats.chats.find(chat => chat.id === chatId)?.remoteHost || '' : '';
     if (chatId && host) rememberChatHost(chatId, host);
     if (history !== 'none') setChatHash(chatId, history === 'replace');
+    this._rememberHistorySurface(view);
     const saved = view === null ? 'terminal' : chatId ? `chat:${chatId}${host ? `|${encodeURIComponent(host)}` : ''}` : `utility:${view}`;
     try { localStorage.setItem(LAST_MAIN_SURFACE_KEY, saved); } catch { /* storage unavailable */ }
   }
@@ -2235,7 +2252,13 @@ export class MuxApp extends LitElement {
 
   private _onChatHistory = (): void => {
     const id = chatFromHash();
-    this._selectMainSurface(id ?? 'new', 'none');
+    if (id) {
+      this._selectMainSurface(id, 'none');
+    } else {
+      const stored = (window.history.state as Record<string, unknown> | null)?.[HISTORY_MAIN_SURFACE_KEY];
+      const view = stored === 'terminal' ? null : typeof stored === 'string' && UTILITY_TITLES.has(stored) ? stored : 'new';
+      this._selectMainSurface(view, 'none');
+    }
     this._closeDrawer();
   };
 
