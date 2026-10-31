@@ -50,7 +50,7 @@ protocol](https://developers.openai.com/codex/app-server#items) and
 
 ## ACP agents
 
-GitHub Copilot, Pi, OpenCode, DeepSeek Harness, and Gemini CLI run as local ACP agents through the official
+GitHub Copilot, Pi, OpenCode, DeepSeek Harness, Gemini CLI, and Antigravity run as local ACP agents through the official
 `@agentclientprotocol/sdk` client. Install and configure each harness separately:
 
 | Chat choice | Required command | ACP launch |
@@ -60,6 +60,7 @@ GitHub Copilot, Pi, OpenCode, DeepSeek Harness, and Gemini CLI run as local ACP 
 | OpenCode | `opencode` | `opencode acp` |
 | DeepSeek Harness | `dsh` | `dsh --profile acp` |
 | Gemini CLI | `gemini` | `gemini --acp` |
+| Antigravity | muxterm-managed ACP server | `agy_acp_server.par` |
 
 Muxterm offers a choice when its command is on the server's `PATH`. The agent
 uses its own provider credentials and model configuration; command presence does
@@ -86,10 +87,11 @@ use the current choice; chats already running keep their existing connection.
 The client keeps one ACP process per chat and saves the native ACP session ID.
 On reconnect it uses `session/resume` where advertised, then `session/load`.
 Streaming text, tool activity, cancellation, image prompts, and
-advertised model and thinking controls flow into the existing chat UI. GitHub Copilot,
-OpenCode, DeepSeek Harness, and Gemini CLI receive muxterm's local MCP server through ACP. The Pi ACP
-adapter currently accepts MCP server definitions but does not connect them to
-Pi, so muxterm does not advertise that integration for Pi.
+advertised model and thinking controls flow into the existing chat UI. ACP chats
+receive muxterm's local MCP server and enabled GitHub, Microsoft personal, and
+remote connector servers. The remote server carries authorized Google tools.
+Pi's ACP adapter ignores MCP server definitions, so muxterm loads a session-only
+Pi extension that registers the same servers through Pi's native MCP API.
 
 ACP v1 has no general live input method for steering an active prompt. When an
 agent advertises the ACP steering extension, muxterm sends an injected steer.
