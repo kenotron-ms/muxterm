@@ -1974,7 +1974,7 @@ export class MuxSDKChat extends LitElement {
     if (this.detailsError) return html`${steps}<div class="work-item" role="status">Work details could not be loaded. <mux-ui-button size="small" variant="secondary" tooltip=${this.detailsError} @click=${() => void this.loadDetails()}>Retry work details</mux-ui-button></div>`;
     if (steps.length) return html`${steps}`;
     if (items.some(item => item.kind === 'progress') && this.blocks.some(block => block.turn === turn && block.kind === 'question' && block.source === 'question.requested' && !block.done))
-      return html`<div class="work-item">Waiting for your answer below.</div>`;
+      return html`<div class="work-item">Waiting for your answer.</div>`;
     // Lightweight message history intentionally omits raw thought and tool
     // payloads. Do not display its flattened activity summary as a timeline.
     if (this.loadingDetails) return html`<div class="work-item">Loading work details…</div>`;
