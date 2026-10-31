@@ -1399,7 +1399,15 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'question.requested' || event.type === 'question.suggested') {
       const questions = (event.raw as {questions?:QuestionPrompt[]} | undefined)?.questions;
-      if (questions?.length) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'question', id:event.itemId, source:event.type, input:questions, text:'', at:event.at });
+      if (questions?.length) {
+        // A question request, like a tool call, keeps preceding assistant text
+        // in the in-turn timeline instead of treating it as the final reply.
+        const last = blocks[blocks.length - 1];
+        if (last?.kind === 'assistant' && last.turn === this.currentTurn && last.channel !== 'voice' && !last.done)
+          blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
+        this.workCollapsedWhileWorking.delete(this.currentTurn);
+        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'question', id:event.itemId, source:event.type, input:questions, text:'', at:event.at });
+      }
     }
     else if (event.type === 'question.answered' || event.type === 'question.resolved') {
       const index = blocks.findIndex(block => block.kind === 'question' && block.id === event.itemId);
@@ -1958,6 +1966,7 @@ export class MuxSDKChat extends LitElement {
         flush();
         if (item.kind === 'commentary') steps.push(this.commentaryEntry(item));
         else if (item.kind === 'interjection') steps.push(this.interjectionEntry(item));
+        else if (item.kind === 'question') steps.push(this.questionCard(item));
         else if (item.kind === 'voice-input' || item.kind === 'voice-output') steps.push(html`<div class="voice-work"><span class="work-icon">${icon(Mic,{size:14})}</span><span><strong>${item.kind === 'voice-input' ? item.source === 'steer' ? 'Voice steer' : 'You said' : 'Voice replied'}</strong>${item.text ? html` · ${item.text}` : nothing}</span></div>`);
       }
     }
@@ -1974,6 +1983,8 @@ export class MuxSDKChat extends LitElement {
     return html`<div class="work-item">No work details were reported.</div>`;
   }
   private workDisclosureOpen(turn: number) {
+    if (this.blocks.some(block => block.turn === turn && block.kind === 'question' && !block.done))
+      return !this.workCollapsedWhileWorking.has(turn);
     return this.turnFinished.has(turn) ? this.workExpanded.has(turn) : !this.workCollapsedWhileWorking.has(turn);
   }
   private streamingWorkLabel(turn: number) {
@@ -1996,18 +2007,31 @@ export class MuxSDKChat extends LitElement {
     if (this.rowsCache?.blocks === this.blocks) return this.withGoalResponse(this.rowsCache.rows);
     const work = new Map<number, Block[]>();
     const latestInput = new Map<number, number>();
+    const questionTurns = new Set(this.blocks.filter(block => block.kind === 'question').map(block => block.turn));
+    const isWork = (block: Block) => block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output' || block.kind === 'question';
     for (const block of this.blocks) {
       if (block.kind === 'user' || block.kind === 'chat-message') latestInput.set(block.turn, block.key);
-      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output') {
+      if (isWork(block) && !questionTurns.has(block.turn)) {
         const items = work.get(block.turn) || [];
         items.push(block);
         work.set(block.turn, items);
       }
     }
     const shown = new Set<number>();
+    const questionWorkShown = new Set<number>();
     const rows: TranscriptRow[] = [];
     for (const block of this.blocks) {
-      if (block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output') {
+      if (questionTurns.has(block.turn)) {
+        if (isWork(block)) {
+          const previous = rows.at(-1);
+          if (previous?.work && previous.block.turn === block.turn) previous.work.push(block);
+          else {
+            const key = questionWorkShown.has(block.turn) ? `work-${block.turn}-${block.key}` : `work-${block.turn}`;
+            questionWorkShown.add(block.turn);
+            rows.push({ key, block, work:[block] });
+          }
+        } else rows.push({ key:`block-${block.key}`, block });
+      } else if (isWork(block)) {
         if (shown.has(block.turn) || latestInput.has(block.turn)) continue;
         shown.add(block.turn);
         const items = work.get(block.turn);
@@ -2024,8 +2048,9 @@ export class MuxSDKChat extends LitElement {
         }
       }
     }
-    this.rowsCache = { blocks:this.blocks, rows };
-    return this.withGoalResponse(rows);
+    const visibleRows = rows.filter(row => !(row.work?.every(item => item.kind === 'progress') && this.turnFinished.has(row.block.turn)));
+    this.rowsCache = { blocks:this.blocks, rows:visibleRows };
+    return this.withGoalResponse(visibleRows);
   }
   private withGoalResponse(rows: TranscriptRow[]): TranscriptRow[] {
     if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice) return rows;
@@ -2225,12 +2250,13 @@ export class MuxSDKChat extends LitElement {
   }
   private toggleWorkDisclosure(turn: number, event: MouseEvent) {
     event.preventDefault();
+    const pendingQuestion = this.blocks.some(block => block.turn === turn && block.kind === 'question' && !block.done);
     if (this.workDisclosureOpen(turn)) {
       this.workExpanded.delete(turn);
-      if (!this.turnFinished.has(turn)) this.workCollapsedWhileWorking.add(turn);
+      if (!this.turnFinished.has(turn) || pendingQuestion) this.workCollapsedWhileWorking.add(turn);
     } else {
-      if (!this.turnFinished.has(turn)) this.workCollapsedWhileWorking.delete(turn);
-      else this.workExpanded.add(turn);
+      this.workCollapsedWhileWorking.delete(turn);
+      if (this.turnFinished.has(turn)) this.workExpanded.add(turn);
       if (!this.detailsLoaded) void this.loadDetails();
     }
     this.requestUpdate();
