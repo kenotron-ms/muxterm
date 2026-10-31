@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1a1b26">
+  <title>Sign in</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, "Segoe UI", system-ui, sans-serif;
+      background: #1a1b26;
+      color: #c0caf5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100dvh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    main {
+      width: min(100%, 390px);
+      padding: 32px;
+      background: #16161e;
+      border: 1px solid #3b425b;
+      border-radius: 12px;
+      box-shadow: 0 24px 70px #080a15a3;
+    }
+    .mark {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      background: #7aa2f7;
+      border-radius: 9px;
+      color: #16161e;
+      font-size: 22px;
+      font-weight: 700;
+    }
+    h1 {
+      margin: 22px 0 6px;
+      font-size: 28px;
+      line-height: 1.15;
+      letter-spacing: -.045em;
+      font-weight: 720;
+    }
+    .intro {
+      margin: 0 0 28px;
+      color: #9aa7cb;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .error {
+      margin: 0 0 20px;
+      padding: 10px 12px;
+      border: 1px solid #a94c62;
+      border-radius: 7px;
+      background: #39212c;
+      color: #ffc6d1;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    input[type="password"] {
+      display: block;
+      width: 100%;
+      height: 44px;
+      padding: 0 13px;
+      border: 1px solid #56617f;
+      border-radius: 7px;
+      background: #202434;
+      color: #f1f4ff;
+      font: inherit;
+      font-size: 15px;
+    }
+    input::placeholder { color: #8290b2; }
+    input:focus-visible, button:focus-visible {
+      outline: 3px solid #9bbcff;
+      outline-offset: 3px;
+    }
+    button {
+      width: 100%;
+      min-height: 44px;
+      margin-top: 16px;
+      border: 0;
+      border-radius: 7px;
+      background: #8eb7ff;
+      color: #111a2b;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 720;
+      cursor: pointer;
+    }
+    button:hover { background: #a4c6ff; }
+    @media (max-width: 430px) {
+      main { padding: 26px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">◈</div>
+    <h1>Sign in</h1>
+    <p class="intro">Open your workspace.</p>
+    {{if .Error}}<p class="error" id="login-error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post">
+      {{range $name, $value := .Hidden}}<input type="hidden" name="{{$name}}" value="{{$value}}">{{end}}
+      <label for="password">Device password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter password" {{if .Error}}aria-invalid="true" aria-describedby="login-error" {{end}}required autofocus>
+      <button type="submit">Continue</button>
+    </form>
+  </main>
+</body>
+</html>
