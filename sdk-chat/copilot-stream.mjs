@@ -213,11 +213,15 @@ export class CopilotStream {
 
   async interrupt() { await this.ready; this.session.cancelRequested = true; await this.native.abort(); return { status: 'accepted' }; }
   async close() {
-    this.session.busy = false;
-    this.inputIds = [];
-    this.reminder = null;
-    this.unsubscribe?.();
-    await this.native?.disconnect();
-    await this.client.stop();
+    if (this.closePromise) return this.closePromise;
+    this.closePromise = (async () => {
+      this.session.busy = false;
+      this.inputIds = [];
+      this.reminder = null;
+      this.unsubscribe?.();
+      await this.native?.disconnect();
+      await this.client.stop();
+    })();
+    return this.closePromise;
   }
 }

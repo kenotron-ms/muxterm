@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -18,6 +17,8 @@ import (
 
 	"github.com/kenotron-ms/muxterm/internal/atomicfile"
 )
+
+var errInboxCursor = errors.New("cursor beyond inbox")
 
 // A subscription belongs to a session. Each matching source event is copied
 // once into that session's inbox, even if several subscriptions match it.
@@ -324,7 +325,11 @@ func (s *Server) handleSDKInbox(w http.ResponseWriter, r *http.Request) {
 	for {
 		items, cursor, end, readErr := h.readInbox(id, after, limit)
 		if readErr != nil {
-			http.Error(w, readErr.Error(), 400)
+			status := http.StatusInternalServerError
+			if errors.Is(readErr, errInboxCursor) {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, readErr.Error(), status)
 			return
 		}
 		if len(items) > 0 || waitMS == 0 {
@@ -348,7 +353,7 @@ func (h *sdkChatHost) readInbox(id string, after int64, limit int) ([]sdkInboxEv
 	if errors.Is(err, os.ErrNotExist) {
 		h.mu.Unlock()
 		if after != 0 {
-			return nil, after, 0, fmt.Errorf("cursor beyond inbox")
+			return nil, after, 0, errInboxCursor
 		}
 		return []sdkInboxEvent{}, 0, 0, nil
 	}
@@ -364,7 +369,7 @@ func (h *sdkChatHost) readInbox(id string, after int64, limit int) ([]sdkInboxEv
 	}
 	end := info.Size()
 	if after > end {
-		return nil, after, end, fmt.Errorf("cursor beyond inbox")
+		return nil, after, end, errInboxCursor
 	}
 	reader := bufio.NewReader(io.NewSectionReader(f, after, end-after))
 	items := make([]sdkInboxEvent, 0, min(limit, 100))
