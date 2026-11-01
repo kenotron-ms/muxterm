@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CodexStream } from './codex-stream.mjs';
+import { CopilotStream } from './copilot-stream.mjs';
 import { agentCommand } from './agent-command.mjs';
 import { ACPStream, isACPHarness } from './acp-stream.mjs';
 import { antigravityLoginStatus, startAntigravityLogin, cancelAntigravityLogin, finishAntigravityLogin } from './antigravity-login.mjs';
@@ -53,7 +54,9 @@ function broadcast(message) {
   const line = JSON.stringify(message) + '\n';
   for (const client of clients) if (!client.destroyed) client.write(line);
 }
-const capabilities = harness => isACPHarness(harness)
+const capabilities = harness => harness === 'copilot'
+  ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: true }
+  : isACPHarness(harness)
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: false }
   : harness === 'claude'
   ? { approvals: false, transcript_read: true, interrupt: true, live_input: true, attributed_service_input: true, native_steering: false }
@@ -213,11 +216,21 @@ async function command(cmd) {
   }
   if (op === 'start' || op === 'resume') {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
-    if (harness !== 'codex' && harness !== 'claude' && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
+    if (harness !== 'codex' && harness !== 'claude' && harness !== 'copilot' && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
     const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval, originFile: originFile(sessionId, cmd.originToken), inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
+    if (harness === 'copilot') {
+      try {
+        s.copilot = new CopilotStream(s, emit);
+        await s.copilot.ready;
+      } catch (error) {
+        await s.copilot?.close(); sessions.delete(sessionId); forgetOriginFile(s.originFile);
+        throw error;
+      }
+      return { sessionId, capabilities: capabilities(harness) };
+    }
     if (isACPHarness(harness)) {
       try {
         s.acp = new ACPStream(s, emit, () => {
@@ -239,6 +252,7 @@ async function command(cmd) {
   const s = sessions.get(sessionId);
   if (!s) throw new Error('Session is not resident; resume it first');
   if (op === 'goal') {
+    if (s.copilot) return await s.copilot.goal(cmd);
     if (s.harness === 'codex') {
       s.codex ||= new CodexStream(s, emit);
       const snapshot = await s.codex.goal(cmd.action, cmd.objective, cmd.paused);
@@ -264,6 +278,7 @@ async function command(cmd) {
     throw new Error('Native goal controls unavailable for this adapter');
   }
   if (op === 'options') {
+    if (s.copilot) return s.copilot.options();
     if (s.acp) return s.acp.options();
     if (s.harness === 'codex') {
       s.codex ||= new CodexStream(s, emit);
@@ -276,6 +291,7 @@ async function command(cmd) {
     return { model: s.model || models[0]?.id || '', effort: s.effort, models };
   }
   if (op === 'select') {
+    if (s.copilot) return s.copilot.select(cmd);
     if (s.acp) return await s.acp.select(cmd);
     if (s.busy) throw new Error('Finish the current turn before changing settings');
     const options = await command({ op: 'options', sessionId });
@@ -294,6 +310,7 @@ async function command(cmd) {
     return { ...options, model, effort };
   }
   if (op === 'title') {
+    if (s.copilot) return s.copilot.title(cmd);
     if (s.acp) return s.acp.title(cmd);
     if (s.harness === 'codex') {
       s.codex ||= new CodexStream(s, emit);
@@ -321,6 +338,7 @@ async function command(cmd) {
     if (input.kind === 'steer' && !s.busy) throw new Error('No active turn to steer');
     if (s.busy && input.kind !== 'steer' && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');
     if (s.acp) return await s.acp.send(input);
+    if (s.copilot) return await s.copilot.send(input);
     if (s.harness === 'claude') {
       if (s.claudeEnded) { s.claudeEnded = false; void runClaude(s); }
       if (input.model && input.model !== s.model) { await s.query.setModel(input.model); s.model = input.model; }
@@ -371,6 +389,7 @@ async function command(cmd) {
   if (op === 'interrupt') {
     if (!s.busy) throw new Error('No active turn to stop');
     if (s.acp) return await s.acp.interrupt();
+    if (s.copilot) return await s.copilot.interrupt();
     if (s.harness === 'codex') await s.codex?.interrupt();
     else {
       s.cancelRequested = true;
@@ -383,7 +402,7 @@ async function command(cmd) {
     return { status: 'accepted' };
   }
   if (op === 'close') {
-    s.closed = true; s.wake?.(); s.acp?.close(); s.codex?.close(); s.query?.close?.(); sessions.delete(sessionId);
+    s.closed = true; s.wake?.(); s.acp?.close(); await s.copilot?.close(); s.codex?.close(); s.query?.close?.(); sessions.delete(sessionId);
     forgetOriginFile(s.originFile);
     return { status: 'closed' };
   }
@@ -410,7 +429,7 @@ server.listen(socketPath);
 
 async function shutdown() {
   cancelAntigravityLogin();
-  for (const s of sessions.values()) { s.closed = true; s.wake?.(); s.acp?.close(); s.codex?.close(); try { await s.query?.close?.(); } catch {} }
+  for (const s of sessions.values()) { s.closed = true; s.wake?.(); s.acp?.close(); await s.copilot?.close(); s.codex?.close(); try { await s.query?.close?.(); } catch {} }
   server.close();
   try { await unlink(socketPath); } catch {}
   process.exit(0);

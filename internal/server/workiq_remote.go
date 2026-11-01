@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"time"
 )
 
 // Legacy Work IQ records remain readable and removable so existing local
@@ -28,16 +27,15 @@ func workIQState() (map[string]any, error) {
 		result["savedAuthorization"] = true
 		result["state"] = "authorized"
 		result["toolCount"] = record.ToolCount
-		result["discoveredTools"] = record.public().DiscoveredTools
-		result["allowedTools"] = record.public().AllowedTools
+		public := record.public()
+		result["discoveredTools"] = public.DiscoveredTools
+		result["allowedTools"] = public.AllowedTools
 		if !record.CheckedAt.IsZero() {
 			result["checkedAt"] = record.CheckedAt
 		}
+		result["state"] = public.State
 		if record.CheckError != "" {
-			result["state"] = "needs-attention"
 			result["error"] = record.CheckError
-		} else if !record.CheckedAt.IsZero() && time.Since(record.CheckedAt) < 5*time.Minute && len(record.AllowedTools) > 0 {
-			result["state"] = "ready"
 		}
 		return nil
 	})
@@ -45,6 +43,11 @@ func workIQState() (map[string]any, error) {
 }
 
 func (s *Server) handleWorkIQRemote(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
+		w.Header().Set("Allow", "GET, DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if r.Method == http.MethodDelete {
 		err := withRemoteConnections(func(records map[string]remoteConnection) error {
 			delete(records, workIQRemoteID)

@@ -82,6 +82,7 @@ type sdkProject struct {
 	Pinned        bool     `json:"pinned,omitempty"`
 }
 type sdkEvent struct {
+	ID              string                 `json:"id,omitempty"`
 	SessionID       string                 `json:"sessionId"`
 	At              time.Time              `json:"at,omitempty"`
 	Type            string                 `json:"type"`
@@ -110,6 +111,8 @@ type sdkEvent struct {
 	Goal            *string                `json:"goal,omitempty"`
 	GoalReason      string                 `json:"goalReason,omitempty"`
 	GoalSummary     string                 `json:"goalSummary,omitempty"`
+	Topic           string                 `json:"topic,omitempty"`
+	WorkID          string                 `json:"workId,omitempty"`
 	Failed          bool                   `json:"failed,omitempty"`
 	Complete        bool                   `json:"complete,omitempty"`
 	Attachments     []sdkDisplayAttachment `json:"attachments,omitempty"`
@@ -158,6 +161,7 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 
 type sdkChatHost struct {
 	mu               sync.Mutex
+	inboxDeliveryMu  sync.Mutex
 	nameLocks        map[string]*sync.Mutex
 	dir              string
 	socket           string
@@ -169,6 +173,9 @@ type sdkChatHost struct {
 	chats            map[string]*sdkChat
 	projects         map[string]*sdkProject
 	streams          map[string]map[chan sdkEvent]struct{}
+	subscriptions    map[string]*sdkChatSubscription
+	inboxStreams     map[string]map[chan struct{}]struct{}
+	workItems        map[string]*sdkWorkItem
 	nameStreams      map[chan string]struct{}
 	naming           map[string]bool
 	reportRunning    map[string]bool
@@ -189,10 +196,11 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}}
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}}
 	h.estimates = newSDKEffortEstimator(h.dir)
 	h.goals = openGoalLedger(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
+	h.loadSubscriptions()
 	entries, _ := os.ReadDir(h.dir)
 	// A catalog is authoritative once written. A removed project must stay
 	// removed even when an older chat record still names its former ID.
@@ -239,6 +247,8 @@ func newSDKChatHost() *sdkChatHost {
 			go h.drainOperatorReports(c.ID)
 		}
 	}
+	h.loadWorkItems()
+	h.recoverPendingDeliveries()
 	return h
 }
 func sdkID() string { var b [16]byte; _, _ = rand.Read(b[:]); return hex.EncodeToString(b[:]) }
@@ -290,6 +300,9 @@ func (h *sdkChatHost) notifyCatalogLocked(id string) {
 	}
 }
 func (h *sdkChatHost) appendEvent(event sdkEvent) {
+	if event.ID == "" {
+		event.ID = sdkID()
+	}
 	if event.At.IsZero() {
 		event.At = time.Now().UTC()
 	}
@@ -405,12 +418,29 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	}
 	h.observeGoalLocked(c, event)
 	_ = h.saveLocked(c)
+	delivery := h.planSubscriptionsLocked(event)
+	pendingSaved := false
+	if len(delivery.Inbox) > 0 {
+		if err := h.savePendingDeliveryLocked(delivery); err != nil {
+			log.Printf("save pending SDK chat delivery %s: %v", event.ID, err)
+		} else {
+			pendingSaved = true
+		}
+	}
 	line, _ := json.Marshal(event)
 	f, err := os.OpenFile(filepath.Join(h.dir, c.ID+".ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err == nil {
-		_, _ = f.Write(append(line, '\n'))
-		_ = f.Sync()
-		_ = f.Close()
+		_, err = f.Write(append(line, '\n'))
+		if err == nil {
+			err = f.Sync()
+		}
+		closeErr := f.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}
+	if err != nil {
+		log.Printf("append SDK chat event %s: %v", event.SessionID, err)
 	}
 	for ch := range h.streams[event.SessionID] {
 		select {
@@ -430,6 +460,15 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		h.scheduleNamingLocked(c)
 	}
 	h.mu.Unlock()
+	// The pending plan and source journal are durable before fanout. Subscriber
+	// fsyncs can be slow, so they must not hold the global chat mutex.
+	if err == nil && pendingSaved {
+		if deliveryErr := h.deliverPending(delivery); deliveryErr != nil {
+			log.Printf("deliver SDK chat event %s: %v", event.ID, deliveryErr)
+		} else if removeErr := h.removePendingDelivery(event.ID); removeErr != nil {
+			log.Printf("remove pending SDK chat delivery %s: %v", event.ID, removeErr)
+		}
+	}
 	if h.onEvent != nil {
 		h.onEvent(event)
 	}
@@ -1049,7 +1088,7 @@ func sdkPermissions(harness string) []string {
 	return []string{"full-permission"}
 }
 func sdkModes(harness string) []string {
-	if harness == "amplifier" || isSDKACPHarness(harness) {
+	if harness == "amplifier" || harness == "copilot" || isSDKACPHarness(harness) {
 		return []string{"agent"}
 	}
 	return []string{"agent", "plan"}
@@ -1078,7 +1117,7 @@ func sdkModeNames(value any) []string {
 
 func isSDKACPHarness(harness string) bool {
 	switch harness {
-	case "copilot", "pi", "opencode", "deepseek", "gemini", "antigravity":
+	case "pi", "opencode", "deepseek", "gemini", "antigravity":
 		return true
 	}
 	return false
@@ -1086,14 +1125,6 @@ func isSDKACPHarness(harness string) bool {
 
 func sdkACPExecutable(harness string) string {
 	switch harness {
-	case "copilot":
-		if value := os.Getenv("MUXTERM_ACP_COPILOT_COMMAND"); value != "" {
-			return value
-		}
-		if path, err := sdkExecutablePath("copilot"); err == nil {
-			return path
-		}
-		return "copilot"
 	case "pi":
 		if value := os.Getenv("MUXTERM_ACP_PI_COMMAND"); value != "" {
 			return value
@@ -1477,7 +1508,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	codexPath, codexErr := sdkAgentExecutable("codex")
 	claudePath, claudeErr := sdkAgentExecutable("claude")
 	availableACP := make([]string, 0, 4)
-	for _, harness := range []string{"copilot", "pi", "opencode", "deepseek", "antigravity"} {
+	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity"} {
 		if harness == "antigravity" {
 			if antigravityAvailable() {
 				availableACP = append(availableACP, harness)
@@ -1488,7 +1519,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 			availableACP = append(availableACP, harness)
 		}
 	}
-	sdkReady := (codexErr == nil || claudeErr == nil || len(availableACP) > 0) && s.sdkChats.ensure("") == nil
+	sdkReady := s.sdkChats.ensure("") == nil
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	home, _ := os.UserHomeDir()
@@ -1499,6 +1530,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if sdkReady {
+		options = append(options, option{Harness: "copilot", Provider: "github"})
 		for _, harness := range availableACP {
 			if harness == "pi" {
 				if _, err := sdkExecutablePath("pi"); err != nil {
@@ -1540,7 +1572,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 // returning, so changing harnesses in the composer leaves no chat behind.
 func (s *Server) handleSDKChatCatalog(w http.ResponseWriter, r *http.Request) {
 	harness := r.URL.Query().Get("harness")
-	if harness != "codex" && harness != "claude" && harness != "amplifier" && !isSDKACPHarness(harness) {
+	if harness != "codex" && harness != "claude" && harness != "copilot" && harness != "amplifier" && !isSDKACPHarness(harness) {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
@@ -1657,7 +1689,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", 400)
 		return
 	}
-	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness) {
+	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "copilot" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness) {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
@@ -1697,16 +1729,20 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "anthropic"
 		case "amplifier":
 			req.Provider = "configured"
-		case "copilot", "pi", "opencode", "deepseek", "gemini", "antigravity":
+		case "copilot":
+			req.Provider = "github"
+		case "pi", "opencode", "deepseek", "gemini", "antigravity":
 			req.Provider = "configured"
 		}
 	}
-	if req.Provider != "openai" && req.Provider != "anthropic" && req.Provider != "configured" && !(req.Harness == "amplifier" && strings.HasPrefix(req.Provider, "provider-")) {
+	if req.Provider != "openai" && req.Provider != "anthropic" && req.Provider != "github" && req.Provider != "configured" && !(req.Harness == "amplifier" && strings.HasPrefix(req.Provider, "provider-")) {
 		http.Error(w, "unsupported provider", 400)
 		return
 	}
 	if (req.Provider == "openai" && req.Harness == "claude") ||
 		(req.Provider == "anthropic" && req.Harness == "codex") ||
+		(req.Provider == "github" && req.Harness != "copilot") ||
+		(req.Harness == "copilot" && req.Provider != "github") ||
 		(req.Provider == "configured" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness)) ||
 		(isSDKACPHarness(req.Harness) && req.Provider != "configured") {
 		http.Error(w, "provider does not match harness", 400)

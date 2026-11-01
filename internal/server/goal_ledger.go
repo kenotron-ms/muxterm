@@ -228,13 +228,15 @@ func goalCapabilityGap(harness string) string {
 		return "Native loop-live goals; pause prevents future continuation, not rollback of current tool effects."
 	case "claude":
 		return "Native /goal commands. Suspend clears the native goal; reactivation resets native goal counters. Application awaits native observation."
+	case "copilot":
+		return "Native Copilot /goal objective and autopilot mode. Pause uses /goal off; resume refocuses the objective and resets native counters. This runtime does not support /goal clear."
 	default:
 		return "Native goal controls are unavailable for this harness."
 	}
 }
 
 func supportsNativeGoalControl(harness string) bool {
-	return harness == "codex" || harness == "claude" || harness == "amplifier"
+	return harness == "codex" || harness == "claude" || harness == "copilot" || harness == "amplifier"
 }
 
 func (h *sdkChatHost) observeGoalLocked(chat *sdkChat, event sdkEvent) {
