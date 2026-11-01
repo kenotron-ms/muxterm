@@ -205,6 +205,7 @@ export class CopilotStream {
       catch (error) { this.emit(id, 'goal.capability', { message: `Copilot goal observation failed: ${error}` }); }
     } else if (event.type === 'session.error') {
       this.session.busy = false;
+      this.reminder = null;
       this.emit(id, 'error', { inputIds: this.inputIds, message: data.message || 'Copilot session error' });
       this.inputIds = [];
     }

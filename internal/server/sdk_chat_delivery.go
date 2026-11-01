@@ -195,6 +195,9 @@ func (h *sdkChatHost) recoverPendingDeliveries() {
 	for _, plan := range plans {
 		if h.chats[plan.Event.SessionID] == nil {
 			log.Printf("pending chat delivery %s has unknown source session", plan.Event.ID)
+			if err := h.removePendingDelivery(plan.Event.ID); err != nil {
+				log.Printf("remove orphaned chat delivery %s: %v", plan.Event.ID, err)
+			}
 			continue
 		}
 		path := filepath.Join(h.dir, plan.Event.SessionID+".ndjson")
