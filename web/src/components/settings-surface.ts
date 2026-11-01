@@ -19,6 +19,7 @@ import '../ui/text-field.js';
 import '../ui/theme-choice.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
+import { sdkHarnessLabel, type SDKHarnessName } from '../lib/sdk-chats.js';
 import {
   instanceLabel,
   restoreTitlebarColor,
@@ -105,6 +106,8 @@ const SETUP_AGENTS = [
   { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
   { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
+// Existing Gemini CLI chats can resume, but new chats use Antigravity.
+const DEFAULT_HARNESSES: SDKHarnessName[] = ['codex', 'claude', 'copilot', 'amplifier', 'pi', 'opencode', 'deepseek', 'antigravity'];
 
 /**
  * The status markers. A glyph in a fixed gutter, not a coloured slab: colour
@@ -400,6 +403,7 @@ export class MuxSettingsSurface extends LitElement {
 
     /* ── Coding agent guides in AI settings ── */
     .agent-intro { margin:0 0 var(--ui-space-6); color:var(--ui-text-muted); line-height:1.5; }
+    .default-harness-setting { display:block; max-width:var(--ui-settings-theme-grid-width); margin-bottom:var(--ui-space-3); }
     .agent-list { display:grid; gap:var(--ui-space-2); }
     .agent-card { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); overflow:hidden; }
     .agent-card summary { display:flex; align-items:center; gap:var(--ui-space-3); min-height:var(--ui-control-lg); padding:var(--ui-space-3) var(--ui-space-4); cursor:pointer; list-style:none; }
@@ -1358,6 +1362,11 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAI() {
     const st = this.aiStatus;
     return html`
+      <p class="section-title">New chats</p>
+      <mux-ui-select class="default-harness-setting" label="Default agent" .value=${this.config?.ai.defaultHarness || 'codex'}
+        .options=${DEFAULT_HARNESSES.map(harness => ({value:harness,label:sdkHarnessLabel(harness)}))}
+        @change=${(event: Event) => this._setDefaultHarness((event.target as MuxUISelect).value as ResolvedConfig['ai']['defaultHarness'])}></mux-ui-select>
+      <p class="agent-intro">New chat starts with this agent when it is available. You can choose another agent in the composer.</p>
       <p class="section-title">Coding agents</p>
       <p class="agent-intro">Choose an agent to see its setup. Ready agents are available in New chat.</p>
       <div class="agent-list">
@@ -1396,6 +1405,11 @@ export class MuxSettingsSurface extends LitElement {
         never returned by the server, and is sent only to Anthropic.
       </p>
     `;
+  }
+
+  private _setDefaultHarness(defaultHarness: ResolvedConfig['ai']['defaultHarness']): void {
+    if (!this.config) return;
+    this._emit({ ai: { ...this.config.ai, defaultHarness } });
   }
 
   private async _installAgent(harness: string): Promise<void> {

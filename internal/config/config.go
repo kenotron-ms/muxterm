@@ -25,6 +25,7 @@ type Config struct {
 	Font      FontConfig      `toml:"font"       json:"font"`
 	Terminal  TerminalConfig  `toml:"terminal"   json:"terminal"`
 	Sidebar   SidebarConfig   `toml:"sidebar"    json:"sidebar"`
+	AI        AIConfig        `toml:"ai"         json:"ai"`
 	Chat      ChatConfig      `toml:"chat" json:"chat" patch:"readonly"`
 	Keys      KeysConfig      `toml:"keys"       json:"keys" patch:"readonly"`
 	Workspace WorkspaceConfig `toml:"workspace"  json:"workspace" patch:"readonly"`
@@ -429,6 +430,11 @@ type SidebarConfig struct {
 	Preview string `toml:"preview" json:"preview"`
 }
 
+// AIConfig controls the agent preselected when a new chat opens.
+type AIConfig struct {
+	DefaultHarness string `toml:"default_harness" json:"default_harness"`
+}
+
 // ChatConfig controls where the server-side folder picker starts and where
 // ungrouped chats run when no folder is selected.
 type ChatConfig struct {
@@ -643,6 +649,7 @@ func Defaults() Config {
 		Sidebar: SidebarConfig{
 			Preview: "full",
 		},
+		AI: AIConfig{DefaultHarness: "codex"},
 		Keys: KeysConfig{
 			NextSession:    "ctrl+shift+]",
 			Split:          `ctrl+shift+\`,

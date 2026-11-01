@@ -5,7 +5,7 @@ import { apiPath } from './base-path.js';
 /**
  * Converts a TypeScript camelCase ResolvedConfig back to the Go snake_case
  * format used by PATCH /api/config. Only includes user-settable fields
- * (theme, font, terminal, sidebar) — keys, workspace, and driver are not
+ * (theme, font, terminal, sidebar, AI default) — keys, workspace, and driver are not
  * changed through the settings UI in Phase 5.
  */
 export function configToGoJSON(cfg: ResolvedConfig): Record<string, unknown> {
@@ -25,6 +25,9 @@ export function configToGoJSON(cfg: ResolvedConfig): Record<string, unknown> {
     },
     sidebar: {
       preview: cfg.sidebar.preview,
+    },
+    ai: {
+      default_harness: cfg.ai.defaultHarness,
     },
   };
 }
@@ -78,6 +81,7 @@ export interface ResolvedConfig {
     /** Live workspace preview density. 'off' also stops all preview traffic. */
     preview: 'full' | 'compact' | 'off';
   };
+  ai: { defaultHarness: 'codex' | 'claude' | 'copilot' | 'amplifier' | 'pi' | 'opencode' | 'deepseek' | 'antigravity' };
   keys: {
     nextSession: string;
     split: string;
@@ -119,6 +123,7 @@ export const DEFAULT_RESOLVED_CONFIG: ResolvedConfig = {
   sidebar: {
     preview: 'full',
   },
+  ai: { defaultHarness: 'codex' },
   keys: {
     nextSession: 'ctrl+shift+]',
     split: 'ctrl+shift+\\',
@@ -174,6 +179,12 @@ function previewMode(v: unknown, def: ResolvedConfig['sidebar']['preview']): Res
   return v === 'full' || v === 'compact' || v === 'off' ? v : def;
 }
 
+function defaultHarness(v: unknown): ResolvedConfig['ai']['defaultHarness'] {
+  return v === 'codex' || v === 'claude' || v === 'copilot' || v === 'amplifier'
+    || v === 'pi' || v === 'opencode' || v === 'deepseek' || v === 'antigravity'
+    ? v : DEFAULT_RESOLVED_CONFIG.ai.defaultHarness;
+}
+
 /**
  * parseResolvedConfig reads a raw server response (snake_case) and maps it
  * to a ResolvedConfig (camelCase). Falls back to DEFAULT_RESOLVED_CONFIG for
@@ -192,6 +203,7 @@ export function parseResolvedConfig(raw: unknown): ResolvedConfig {
   const f = obj(r['font']);
   const term = obj(r['terminal']);
   const sb = obj(r['sidebar']);
+  const ai = obj(r['ai']);
   const k = obj(r['keys']);
   const ws = obj(r['workspace']);
   const drv = obj(r['driver']);
@@ -217,6 +229,7 @@ export function parseResolvedConfig(raw: unknown): ResolvedConfig {
     sidebar: {
       preview: previewMode(sb['preview'], d.sidebar.preview),
     },
+    ai: { defaultHarness: defaultHarness(ai['default_harness']) },
     keys: {
       nextSession: str(k['next_session'], d.keys.nextSession),
       split: str(k['split'], d.keys.split),

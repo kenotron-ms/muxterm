@@ -1,5 +1,5 @@
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
-import { LitElement, css, html, nothing } from 'lit';
+import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
@@ -65,6 +65,7 @@ export class MuxNewChat extends LitElement {
   @state() private catalogError = '';
   private catalogVersion = 0;
   private startOptionsVersion = 0;
+  private userSelectedHarness = false;
   private catalogHarness = '';
   private catalogPath = '';
   private catalogTimer?: number;
@@ -237,6 +238,11 @@ export class MuxNewChat extends LitElement {
   override firstUpdated() {
     const textarea = this.shadowRoot?.querySelector('textarea');
     if (textarea) { syncTextareaSizing(textarea); textarea.focus(); }
+  }
+  protected override updated(changed: PropertyValues<this>) {
+    if (changed.has('initialHarness') && !this.userSelectedHarness && this.startOptions?.some(option => option.harness === this.initialHarness) && this.harness !== this.initialHarness) {
+      this.onHarnessChange(this.initialHarness);
+    }
   }
   private onPromptInput(event: InputEvent) {
     const textarea = event.currentTarget as HTMLTextAreaElement;
@@ -440,7 +446,7 @@ export class MuxNewChat extends LitElement {
       const options = await response.json() as StartOption[];
       if (!this.isConnected || version !== this.startOptionsVersion || host !== this.remoteHost) return;
       this.startOptions = options;
-      const selected = options.find(item => item.harness === this.initialHarness) || options[0];
+      const selected = options.find(item => item.harness === (this.userSelectedHarness ? this.harness : this.initialHarness)) || options[0];
       if (selected) this.onHarnessChange(selected.harness);
       else this.error = '';
     } catch (error) {
@@ -541,7 +547,7 @@ export class MuxNewChat extends LitElement {
           <input class="file-input" type="file" multiple aria-label="Choose files to attach" @change=${this.onPick}>
           ${chatComposerAttachment(() => this.shadowRoot?.querySelector<HTMLInputElement>('.file-input')?.click(), () => void this.pasteImageFromClipboard())}
           ${this.startOptions?.length ? html`<mux-ui-choice-picker class="agent-picker" label="Agent" .summary=${sdkHarnessLabel(this.harness)} placement="above" appearance="plain" panel-align="left">
-            <mux-ui-choice-section heading="Available agents"><mux-ui-choice-list>${this.startOptions.map(option => html`<mux-ui-choice-item .label=${sdkHarnessLabel(option.harness)} ?selected=${this.harness === option.harness} @click=${(event:Event) => { this.onHarnessChange(option.harness); (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); }}></mux-ui-choice-item>`)}</mux-ui-choice-list></mux-ui-choice-section>
+            <mux-ui-choice-section heading="Available agents"><mux-ui-choice-list>${this.startOptions.map(option => html`<mux-ui-choice-item .label=${sdkHarnessLabel(option.harness)} ?selected=${this.harness === option.harness} @click=${(event:Event) => { this.userSelectedHarness = true; this.onHarnessChange(option.harness); (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); }}></mux-ui-choice-item>`)}</mux-ui-choice-list></mux-ui-choice-section>
             <mux-ui-choice-section separated><mux-ui-choice-item label="Add or manage agents…" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); this.openAgentSettings(); }}></mux-ui-choice-item><mux-ui-choice-item label="Refresh installed agents" @click=${(event:Event) => { (event.currentTarget as HTMLElement).closest('mux-ui-choice-picker')?.close(); void this.loadStartOptions(); }}></mux-ui-choice-item></mux-ui-choice-section>
           </mux-ui-choice-picker>` : nothing}
           ${this.harness === 'amplifier' && this.catalog ? this.renderBundlePicker() : nothing}

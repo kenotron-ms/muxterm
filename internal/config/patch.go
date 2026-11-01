@@ -37,6 +37,13 @@ func (p Patch) Apply(base Config) (Config, error) {
 	if _, ok := p.fields["lanes"]; ok && base.Lanes.Approval != "prompt" && base.Lanes.Approval != "never" {
 		return Config{}, fmt.Errorf("lanes.approval: invalid value %q (want prompt or never)", base.Lanes.Approval)
 	}
+	if _, ok := p.fields["ai"]; ok {
+		switch base.AI.DefaultHarness {
+		case "codex", "claude", "copilot", "amplifier", "pi", "opencode", "deepseek", "antigravity":
+		default:
+			return Config{}, fmt.Errorf("ai.default_harness: unsupported harness %q", base.AI.DefaultHarness)
+		}
+	}
 	return base, nil
 }
 

@@ -37,6 +37,8 @@ DEV_LOCAL_ADDR ?= 127.0.0.1:8313
 #     (snapshotDir(), DefaultCompletionsPath()). Without it a dev sessiond
 #     RESTORES PRODUCTION'S WORKSPACES at boot and OVERWRITES production's
 #     restore-snapshot.json periodically and on shutdown.
+#   XDG_CONFIG_HOME  -- settings written by PATCH /api/config. Without it a
+#     dev browser changes the installed instance's config.toml.
 #   INVOCATION_ID    -- unset because it is INHERITED by every descendant of a
 #     systemd unit, including every shell in every muxterm pane. Leaving it set
 #     makes EnsureDaemon's systemd gate fire for a dev serve that genuinely
@@ -49,14 +51,15 @@ unset INVOCATION_ID; \
 XDG_RUNTIME_DIR="$${TMPDIR:-/tmp}"; \
 XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR%/}/muxterm-$(1)"; \
 XDG_DATA_HOME="$$XDG_RUNTIME_DIR/data"; \
+XDG_CONFIG_HOME="$$XDG_RUNTIME_DIR/config"; \
 MUXTERM_DEV_INSTANCE=1; \
-export XDG_RUNTIME_DIR XDG_DATA_HOME MUXTERM_DEV_INSTANCE; \
+export XDG_RUNTIME_DIR XDG_DATA_HOME XDG_CONFIG_HOME MUXTERM_DEV_INSTANCE; \
 case "$$XDG_RUNTIME_DIR" in \
   /run/user/*|"$$HOME"/.local/share*) \
     echo "refusing: dev isolation resolved to $$XDG_RUNTIME_DIR, which looks like production state"; \
     exit 1;; \
 esac; \
-mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME";
+mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME" "$$XDG_CONFIG_HOME";
 endef
 
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
@@ -111,6 +114,8 @@ dev: web-public
 #     shutdown -- silently corrupting what production would restore after a
 #     crash. Both vars must be overridden together for the isolation claim below
 #     to hold.
+#   - own config   ${TMPDIR:-/tmp}/muxterm-dev-local/config/ (XDG_CONFIG_HOME override).
+#     Browser settings writes stay in the dev instance.
 #     With both set, production's sessiond socket, logs, server.url and
 #     restore-snapshot are all out of reach of this target.
 #   - INVOCATION_ID is unset. EnsureDaemon refuses to spawn a sessiond when it
