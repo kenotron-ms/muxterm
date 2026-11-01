@@ -128,6 +128,7 @@ export class MuxSDKUtility extends LitElement {
   @property() goalState = '';
   @property({ type:Boolean }) goalHumanPaused = false;
   @property({ type:Boolean }) goalControlPending = false;
+  @property({ type:Boolean }) goalClearSupported = true;
   @property({ type:Boolean }) goalRefinePending = false;
   @property({ type:Boolean }) goalRefineDisabled = false;
   @property() goalFeedback = '';
@@ -379,16 +380,16 @@ export class MuxSDKUtility extends LitElement {
   }
   private goalView(): TemplateResult {
     const paused = this.goalHumanPaused || this.goalState === 'paused';
-    const finished = ['complete','achieved','ended','stalled','cap_hit','cancelled','error','uncertain'].includes(this.goalState);
+    const finished = ['complete','completed','achieved','ended','stalled','cap_hit','cancelled','error','uncertain'].includes(this.goalState);
     const action = paused ? 'resume' : finished ? 'resume' : 'pause';
     const label = paused ? 'Resume' : finished ? 'Reset' : 'Pause';
     const glyph = paused ? Play : finished ? RotateCcw : Pause;
     return html`<div class="viewer goal-viewer">
-      <div class="goal-toolbar"><div class="goal-toolbar-title"><strong>Goal</strong><span>${paused ? 'Paused' : finished ? this.goalState === 'achieved' || this.goalState === 'complete' ? 'Achieved' : 'Needs review' : this.goalText ? 'Current condition' : 'No active goal'}</span></div>
+      <div class="goal-toolbar"><div class="goal-toolbar-title"><strong>Goal</strong><span>${paused ? 'Paused' : finished ? ['achieved','complete','completed'].includes(this.goalState) ? 'Achieved' : 'Needs review' : this.goalText ? 'Current condition' : 'No active goal'}</span></div>
         ${this.goalText ? html`<div class="goal-toolbar-actions" role="group" aria-label="Goal actions">
           <mux-ui-button size="small" variant="secondary" ?busy=${this.goalRefinePending} ?disabled=${this.goalRefineDisabled || this.goalRefinePending || this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-refine',{bubbles:true,composed:true}))}>${icon(Sparkles,{size:14})} Refine with AI</mux-ui-button>
           <mux-ui-button size="small" variant="secondary" ?disabled=${this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-control',{detail:{action},bubbles:true,composed:true}))}>${icon(glyph,{size:14})} ${label}</mux-ui-button>
-          <mux-ui-button size="small" variant="danger" ?disabled=${this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-control',{detail:{action:'clear'},bubbles:true,composed:true}))}>${icon(Trash2,{size:14})} Clear</mux-ui-button>
+          ${this.goalClearSupported ? html`<mux-ui-button size="small" variant="danger" ?disabled=${this.goalControlPending} @click=${() => this.dispatchEvent(new CustomEvent('goal-control',{detail:{action:'clear'},bubbles:true,composed:true}))}>${icon(Trash2,{size:14})} Clear</mux-ui-button>` : nothing}
         </div>` : nothing}
       </div>
       ${this.goalFeedback ? html`<mux-ui-feedback class="goal-feedback" .kind=${this.goalFeedbackError ? 'error' : 'info'} density="compact">${this.goalFeedback}</mux-ui-feedback>` : nothing}

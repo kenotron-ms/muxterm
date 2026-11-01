@@ -442,9 +442,14 @@ export class ACPStream {
       if (this.interruptForSteer && !this.stopDuringSteer) {
         this.continuedInputIds = this.turnInputIds;
         this.emit(this.session.id, 'turn.continued');
-      } else if (result.stopReason === 'cancelled') this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: result.stopReason });
-      else if (result.stopReason === 'end_turn' && !this.turnActivity)
+      } else if (result.stopReason === 'cancelled') {
+        this.reminderCursor = 0;
+        this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: result.stopReason });
+      }
+      else if (result.stopReason === 'end_turn' && !this.turnActivity) {
+        this.reminderCursor = 0;
         this.emit(this.session.id, 'error', { inputIds: this.turnInputIds, message: `${this.session.harness} ended the ACP turn without an answer or tool activity. Check its provider credentials and agent logs.` });
+      }
       else if (result.stopReason === 'end_turn') {
         this.emit(this.session.id, 'turn.completed', { inputIds: this.turnInputIds, message: result.stopReason });
         if (this.reminderCursor) void acknowledgeInboxReminder(this.session.id, this.reminderCursor, this.session.originFile)

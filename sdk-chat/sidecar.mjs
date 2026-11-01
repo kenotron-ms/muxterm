@@ -252,6 +252,7 @@ async function command(cmd) {
   const s = sessions.get(sessionId);
   if (!s) throw new Error('Session is not resident; resume it first');
   if (op === 'goal') {
+    if (s.copilot) return await s.copilot.goal(cmd);
     if (s.harness === 'codex') {
       s.codex ||= new CodexStream(s, emit);
       const snapshot = await s.codex.goal(cmd.action, cmd.objective, cmd.paused);

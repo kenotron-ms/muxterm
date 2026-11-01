@@ -199,7 +199,11 @@ func (h *sdkChatHost) recoverPendingDeliveries() {
 		}
 		failed := false
 		for _, recipient := range plan.Inbox {
-			if h.chats[recipient.OwnerSessionID] == nil || recipient.Item.SourceEventID != plan.Event.ID {
+			if h.chats[recipient.OwnerSessionID] == nil {
+				log.Printf("pending chat delivery %s skips deleted recipient %s", plan.Event.ID, recipient.OwnerSessionID)
+				continue
+			}
+			if recipient.Item.SourceEventID != plan.Event.ID {
 				log.Printf("pending chat delivery %s has invalid recipient", plan.Event.ID)
 				failed = true
 				continue

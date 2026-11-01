@@ -32,6 +32,7 @@ export class CopilotStream {
       : await this.client.createSession({ sessionId: this.session.id, ...config });
     this.session.nativeId = this.native.sessionId;
     this.unsubscribe = this.native.on(event => void this.onEvent(event));
+    await this.publishGoal('goal.snapshot');
     this.emit(this.session.id, 'session.started', { nativeId: this.session.nativeId,
       capabilities: { approvals: false, transcript_read: false, interrupt: true, live_input: false,
         attributed_service_input: false, native_steering: true } });
@@ -58,6 +59,63 @@ export class CopilotStream {
     this.session.model = model;
     this.session.effort = effort;
     return { ...options, model, effort };
+  }
+
+  async publishGoal(type = 'goal.progress') {
+    const { state } = await this.native.rpc.autopilotObjective.getState();
+    this.emit(this.session.id, type, state
+      ? { goal: state.objective, goalState: state.status,
+          goalReason: state.pauseReason || '', goalSummary: state.completionSummary || '', raw: state }
+      : { goal: '', goalState: 'cleared' });
+    return state;
+  }
+
+  async goal(cmd) {
+    await this.ready;
+    if (cmd.action === 'clear') return { unsupported: true,
+      message: 'This Copilot runtime removed /goal clear. Pause the objective with /goal off instead.' };
+    const commands = await this.native.rpc.commands.list();
+    if (!commands.commands?.some(item => item.kind === 'builtin' &&
+      (item.name === 'goal' || item.aliases?.includes('goal'))))
+      return { unsupported: true, message: 'This Copilot runtime does not advertise the native /goal command.' };
+    if (cmd.action !== 'pause' && this.session.busy)
+      throw new Error('Finish the current Copilot turn before starting a goal');
+    const pausing = cmd.action === 'pause' || cmd.paused;
+    const args = pausing ? 'off' : cmd.objective;
+    if (!args || (!pausing && ['on', 'off', 'clear'].includes(args)))
+      throw new Error('Choose a goal condition other than a reserved /goal command');
+    const result = await this.native.rpc.commands.invoke({ name: 'goal', input: args });
+    if (result.kind !== 'agent-prompt' && result.kind !== 'completed' && result.kind !== 'text')
+      throw new Error(`Native /goal returned an unsupported result: ${result.kind}`);
+    const state = await this.publishGoal('goal.snapshot');
+    if (pausing) {
+      if (state?.status !== 'paused') throw new Error('Native Copilot goal did not pause');
+    } else if (state?.objective !== cmd.objective || state.status !== 'active') {
+      throw new Error('Native Copilot goal was not activated');
+    }
+    if (!pausing) {
+      // /goal produces a prompt on first start; refocusing an existing goal
+      // only updates native state, so explicitly resume its next turn.
+      const prompt = result.kind === 'agent-prompt' ? result.prompt
+        : `Continue the active autopilot objective: ${cmd.objective}`;
+      this.session.busy = true;
+      this.session.cancelRequested = false;
+      this.admitting = true;
+      this.pendingIdle = null;
+      try {
+        await this.native.send({ prompt,
+          displayPrompt: result.kind === 'agent-prompt' ? result.displayPrompt : `Autopilot objective: ${cmd.objective}`,
+          agentMode: 'autopilot' });
+        this.admitting = false;
+        if (this.pendingIdle) void this.finishTurn(this.pendingIdle);
+      } catch (error) {
+        this.session.busy = false;
+        this.admitting = false;
+        this.pendingIdle = null;
+        throw error;
+      }
+    }
+    return { command: { kind: result.kind }, objective: state };
   }
 
   title(cmd) {
@@ -142,6 +200,9 @@ export class CopilotStream {
     } else if (event.type === 'session.idle' && this.session.busy) {
       if (this.admitting) this.pendingIdle = data;
       else await this.finishTurn(data);
+    } else if (event.type === 'session.autopilot_objective_changed') {
+      try { await this.publishGoal(); }
+      catch (error) { this.emit(id, 'goal.capability', { message: `Copilot goal observation failed: ${error}` }); }
     } else if (event.type === 'session.error') {
       this.session.busy = false;
       this.emit(id, 'error', { inputIds: this.inputIds, message: data.message || 'Copilot session error' });
@@ -150,5 +211,12 @@ export class CopilotStream {
   }
 
   async interrupt() { await this.ready; this.session.cancelRequested = true; await this.native.abort(); return { status: 'accepted' }; }
-  async close() { this.unsubscribe?.(); await this.native?.disconnect(); await this.client.stop(); }
+  async close() {
+    this.session.busy = false;
+    this.inputIds = [];
+    this.reminder = null;
+    this.unsubscribe?.();
+    await this.native?.disconnect();
+    await this.client.stop();
+  }
 }
