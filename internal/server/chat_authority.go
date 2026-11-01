@@ -30,7 +30,23 @@ func (s *Server) agentChatRequest(r *http.Request) bool {
 		return false
 	}
 	token, ok := bearerToken(r)
-	return ok && subtle.ConstantTimeCompare([]byte(token), []byte(s.browserAssistant.localToken)) == 1 && agentChatPathAllowed(r.Method, r.URL.Path)
+	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.browserAssistant.localToken)) != 1 || !agentChatPathAllowed(r.Method, r.URL.Path) {
+		return false
+	}
+	// A session capability may change only that session's subscriptions,
+	// attention, or published topics. The same-user MCP client without a
+	// session capability acts as an external tool, as for control-send.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get("X-Muxterm-Origin") != "" {
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/sdk-chats/"), "/")
+		if strings.HasPrefix(r.URL.Path, "/api/sdk-chats/") && len(parts) > 1 &&
+			(parts[1] == "subscriptions" || parts[1] == "inbox-attention" || parts[1] == "topics") {
+			s.sdkChats.mu.Lock()
+			origin, valid := s.sdkChats.controlOriginLocked(r.Header.Get("X-Muxterm-Origin"), parts[0])
+			s.sdkChats.mu.Unlock()
+			return valid && (origin.ChatID == parts[0] || origin.Relation == "operator-to-lane" || origin.Relation == "lane-to-operator")
+		}
+	}
+	return true
 }
 
 func (s *Server) agentRemoteChatRequest(r *http.Request) bool {
@@ -46,6 +62,14 @@ func (s *Server) agentRemoteChatRequest(r *http.Request) bool {
 }
 
 func agentChatPathAllowed(method, path string) bool {
+	if path == "/api/sdk-work" {
+		return method == http.MethodGet || method == http.MethodPost
+	}
+	if strings.HasPrefix(path, "/api/sdk-work/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/api/sdk-work/"), "/")
+		return (len(parts) == 1 && parts[0] != "" && method == http.MethodGet) ||
+			(len(parts) == 2 && parts[0] != "" && parts[1] == "updates" && method == http.MethodPost)
+	}
 	if path == "/api/sdk-chats" {
 		return method == http.MethodGet || method == http.MethodPost
 	}
@@ -61,6 +85,24 @@ func agentChatPathAllowed(method, path string) bool {
 	}
 	if len(parts) == 1 {
 		return method == http.MethodGet
+	}
+	if len(parts) == 2 {
+		switch parts[1] {
+		case "subscriptions", "inbox-attention":
+			return method == http.MethodGet || method == http.MethodPost
+		case "inbox":
+			return method == http.MethodGet
+		case "topics":
+			return method == http.MethodPost
+		}
+	}
+	if len(parts) == 3 {
+		if parts[1] == "subscriptions" && parts[2] != "" && method == http.MethodDelete {
+			return true
+		}
+		if parts[1] == "inbox-attention" && parts[2] == "ack" && method == http.MethodPost {
+			return true
+		}
 	}
 	if len(parts) == 3 && parts[1] == "control-notes" && parts[2] != "" {
 		return method == http.MethodPut
@@ -105,6 +147,7 @@ func (s *Server) remoteChatBridgeRequest(r *http.Request) bool {
 		}
 	}
 	return path == "/api/sdk-chats" || strings.HasPrefix(path, "/api/sdk-chats/") ||
+		path == "/api/sdk-work" || strings.HasPrefix(path, "/api/sdk-work/") ||
 		path == "/api/sdk-projects" || strings.HasPrefix(path, "/api/sdk-projects/") ||
 		path == "/api/sdk-folders" || path == "/api/sdk-chat-start-options" ||
 		path == "/api/sdk-chat-catalog" || strings.HasPrefix(path, "/api/sdk-chat-attachments")

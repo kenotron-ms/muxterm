@@ -2,7 +2,7 @@
 
 The muxterm binary embeds this sidecar, `package.json`, and the exact npm lockfile.
 On first use it extracts them to a versioned cache and runs
-`npm ci --omit=optional --ignore-scripts` there. Node.js and npm are required;
+`npm ci --ignore-scripts` there. Node.js and npm are required;
 dependency installation errors stop chat
 creation with a clear error. Go starts the sidecar lazily and supervises it
 through a versioned NDJSON Unix socket. It uses the existing Codex and Claude login state; no settings file is
@@ -17,8 +17,8 @@ renderer. Native Codex thread IDs still resume chats.
 
 Claude uses the user's `claude` command through the Agent SDK's
 `pathToClaudeCodeExecutable` option. The SDK is a small protocol client; its
-optional platform packages, which contain another Claude executable, are not
-installed. Set `MUXTERM_CODEX_COMMAND` or `MUXTERM_CLAUDE_COMMAND` to an absolute
+optional platform packages are installed alongside the Copilot SDK runtime.
+Set `MUXTERM_CODEX_COMMAND` or `MUXTERM_CLAUDE_COMMAND` to an absolute
 path before starting muxterm if the corresponding command is outside `PATH`.
 
 The sidecar path defaults to the extracted copy embedded in the binary.
@@ -48,14 +48,21 @@ The native controls are documented in OpenAI's [App Server item and delta
 protocol](https://developers.openai.com/codex/app-server#items) and
 [`model_reasoning_summary` configuration](https://developers.openai.com/codex/config-reference).
 
+## GitHub Copilot SDK
+
+Copilot chats use `@github/copilot-sdk` and the user's Copilot login state.
+Muxterm lists the SDK's models and reasoning choices, resumes native sessions,
+streams answers and tool activity, and forwards immediate steering requests.
+It registers muxterm MCP plus enabled GitHub, Microsoft personal, and remote
+connectors. The muxterm MCP server receives a per-session origin token.
+
 ## ACP agents
 
-GitHub Copilot, Pi, OpenCode, DeepSeek Harness, Gemini CLI, and Antigravity run as local ACP agents through the official
+Pi, OpenCode, DeepSeek Harness, Gemini CLI, and Antigravity run as local ACP agents through the official
 `@agentclientprotocol/sdk` client. Install and configure each harness separately:
 
 | Chat choice | Required command | ACP launch |
 | --- | --- | --- |
-| GitHub Copilot | `copilot` | `copilot --acp --stdio` |
 | Pi | `pi` and `pi-acp` | `pi-acp` |
 | OpenCode | `opencode` | `opencode acp` |
 | DeepSeek Harness | `dsh` | `dsh --profile acp` |
@@ -65,7 +72,7 @@ GitHub Copilot, Pi, OpenCode, DeepSeek Harness, Gemini CLI, and Antigravity run 
 Muxterm offers a choice when its command is on the server's `PATH`. The agent
 uses its own provider credentials and model configuration; command presence does
 not prove that a provider is ready. To use a binary outside `PATH`, set
-`MUXTERM_ACP_COPILOT_COMMAND`, `MUXTERM_ACP_PI_COMMAND`, `MUXTERM_ACP_OPENCODE_COMMAND`, or
+`MUXTERM_ACP_PI_COMMAND`, `MUXTERM_ACP_OPENCODE_COMMAND`, or
 `MUXTERM_ACP_DEEPSEEK_COMMAND`, or `MUXTERM_ACP_GEMINI_COMMAND` to its absolute executable path before starting
 muxterm. For Pi, `pi` itself must also be on `PATH` because `pi-acp` launches it.
 

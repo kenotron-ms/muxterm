@@ -5,9 +5,9 @@ import { homedir } from 'node:os';
 import { join, dirname, delimiter, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
+import { acknowledgeInboxReminder, readInboxReminder } from './inbox-reminder.mjs';
 
 const profiles = {
-  copilot: { command: 'copilot', args: ['--acp', '--stdio'], env: 'MUXTERM_ACP_COPILOT_COMMAND', mcp: true },
   pi: { command: 'pi-acp', args: [], env: 'MUXTERM_ACP_PI_COMMAND', mcp: true },
   opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
   deepseek: { command: 'dsh', args: ['--profile', 'acp'], env: 'MUXTERM_ACP_DEEPSEEK_COMMAND', mcp: true },
@@ -17,7 +17,7 @@ const profiles = {
 
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
 
-function connectorServers(mcpBin, originFile) {
+export function connectorServers(mcpBin, originFile) {
   if (!mcpBin) return [];
   const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
   const connectionDir = join(dataHome, 'muxterm', 'sdk-chat', 'connections');
@@ -123,24 +123,6 @@ function geminiCommand() {
   return 'gemini';
 }
 
-function copilotCommand() {
-  if (process.env.MUXTERM_ACP_COPILOT_COMMAND) return process.env.MUXTERM_ACP_COPILOT_COMMAND;
-  for (const directory of [...(process.env.PATH || '').split(delimiter), join(homedir(), '.local', 'bin'), join(homedir(), '.npm-global', 'bin'), join(homedir(), '.opencode', 'bin')]) {
-    if (!isAbsolute(directory)) continue;
-    const command = join(directory, 'copilot');
-    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
-    catch { /* Try the next directory. */ }
-  }
-  const prefix = spawnSync('npm', ['config', 'get', 'prefix'], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
-  const root = prefix.stdout?.trim();
-  if (prefix.status === 0 && isAbsolute(root || '')) {
-    const command = join(root, 'bin', 'copilot');
-    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
-    catch { /* Let spawn report the unavailable CLI. */ }
-  }
-  return 'copilot';
-}
-
 function geminiEnvironment() {
   const env = { ...process.env };
   const dataHome = env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
@@ -203,7 +185,6 @@ export class ACPStream {
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
     const launch = session.harness === 'antigravity' ? antigravityLaunch() : null;
     const command = session.harness === 'gemini' ? geminiCommand()
-      : session.harness === 'copilot' ? copilotCommand()
       : launch?.command || process.env[profile.env] || profile.command;
     this.profile = profile;
     this.mcpServers = profile.mcp ? connectorServers(process.env.MUXTERM_CHAT_MCP_BIN, session.originFile) : [];
@@ -351,6 +332,17 @@ export class ACPStream {
 
   async promptBlocks(input) {
     const prompt = [{ type: 'text', text: input.content || 'Please inspect the attached files.' }];
+    if (input.kind === 'user') {
+      try {
+        const reminder = await readInboxReminder(this.session.id, this.session.originFile);
+        if (reminder) {
+          this.reminderCursor = reminder.cursor;
+          // Some ACP agents inspect only the first text block. Keep the
+          // notification with the user's request while marking it as data.
+          prompt[0].text = `${reminder.text}\n\n${prompt[0].text}`;
+        }
+      } catch (error) { console.error(`ACP inbox reminder: ${error}`); }
+    }
     for (const attachment of input.attachments || []) {
       // The upload store sniffs image bytes; filenames do not establish MIME type.
       const imageType = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(attachment.contentType)
@@ -453,7 +445,12 @@ export class ACPStream {
       } else if (result.stopReason === 'cancelled') this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: result.stopReason });
       else if (result.stopReason === 'end_turn' && !this.turnActivity)
         this.emit(this.session.id, 'error', { inputIds: this.turnInputIds, message: `${this.session.harness} ended the ACP turn without an answer or tool activity. Check its provider credentials and agent logs.` });
-      else if (result.stopReason === 'end_turn') this.emit(this.session.id, 'turn.completed', { inputIds: this.turnInputIds, message: result.stopReason });
+      else if (result.stopReason === 'end_turn') {
+        this.emit(this.session.id, 'turn.completed', { inputIds: this.turnInputIds, message: result.stopReason });
+        if (this.reminderCursor) void acknowledgeInboxReminder(this.session.id, this.reminderCursor, this.session.originFile)
+          .catch(error => console.error(`ACP inbox acknowledgement: ${error}`));
+        this.reminderCursor = 0;
+      }
       else this.emit(this.session.id, 'error', { inputIds: this.turnInputIds, message: `ACP turn stopped: ${result.stopReason}` });
     }).catch(error => {
       if (!accepted) rejectEvidence(error);

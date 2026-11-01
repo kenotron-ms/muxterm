@@ -99,7 +99,7 @@ const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
 const SETUP_AGENTS = [
   { harness:'codex', name:'Codex', description:'OpenAI coding agent', login:'codex login', docs:'https://developers.openai.com/codex/cli/' },
   { harness:'claude', name:'Claude Code', description:'Anthropic coding agent', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
-  { harness:'copilot', name:'GitHub Copilot · ACP', description:'GitHub coding agent', login:'copilot login', docs:'https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli' },
+  { harness:'copilot', name:'GitHub Copilot · SDK', description:'GitHub coding agent', login:'copilot login', docs:'https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli' },
   { harness:'opencode', name:'OpenCode · ACP', description:'Open source coding agent', login:'opencode', docs:'https://opencode.ai/docs/' },
   { harness:'pi', name:'Pi · ACP', description:'Lightweight coding agent', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
   { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
