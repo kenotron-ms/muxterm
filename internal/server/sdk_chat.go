@@ -161,6 +161,7 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 
 type sdkChatHost struct {
 	mu               sync.Mutex
+	inboxDeliveryMu  sync.Mutex
 	nameLocks        map[string]*sync.Mutex
 	dir              string
 	socket           string
@@ -418,9 +419,12 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	h.observeGoalLocked(c, event)
 	_ = h.saveLocked(c)
 	delivery := h.planSubscriptionsLocked(event)
+	pendingSaved := false
 	if len(delivery.Inbox) > 0 {
 		if err := h.savePendingDeliveryLocked(delivery); err != nil {
 			log.Printf("save pending SDK chat delivery %s: %v", event.ID, err)
+		} else {
+			pendingSaved = true
 		}
 	}
 	line, _ := json.Marshal(event)
@@ -433,13 +437,6 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		closeErr := f.Close()
 		if err == nil {
 			err = closeErr
-		}
-		if err == nil && len(delivery.Inbox) > 0 {
-			if deliveryErr := h.deliverPendingLocked(delivery); deliveryErr != nil {
-				log.Printf("deliver SDK chat event %s: %v", event.ID, deliveryErr)
-			} else if removeErr := h.removePendingDeliveryLocked(event.ID); removeErr != nil {
-				log.Printf("remove pending SDK chat delivery %s: %v", event.ID, removeErr)
-			}
 		}
 	}
 	if err != nil {
@@ -463,6 +460,15 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		h.scheduleNamingLocked(c)
 	}
 	h.mu.Unlock()
+	// The pending plan and source journal are durable before fanout. Subscriber
+	// fsyncs can be slow, so they must not hold the global chat mutex.
+	if err == nil && pendingSaved {
+		if deliveryErr := h.deliverPending(delivery); deliveryErr != nil {
+			log.Printf("deliver SDK chat event %s: %v", event.ID, deliveryErr)
+		} else if removeErr := h.removePendingDelivery(event.ID); removeErr != nil {
+			log.Printf("remove pending SDK chat delivery %s: %v", event.ID, removeErr)
+		}
+	}
 	if h.onEvent != nil {
 		h.onEvent(event)
 	}

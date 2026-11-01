@@ -48,7 +48,7 @@ func (h *sdkChatHost) savePendingDeliveryLocked(plan sdkPendingDelivery) error {
 	return atomicfile.Write(h.pendingDeliveryPath(plan.Event.ID), data, 0600)
 }
 
-func (h *sdkChatHost) removePendingDeliveryLocked(id string) error {
+func (h *sdkChatHost) removePendingDelivery(id string) error {
 	if err := os.Remove(h.pendingDeliveryPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -74,21 +74,26 @@ func appendSDKLine(path string, value any) error {
 	return errors.Join(err, f.Close())
 }
 
-// Caller holds h.mu. A failed recipient remains in the durable delivery
-// record; completed recipients are recognized by sourceEventId on replay.
-func (h *sdkChatHost) deliverPendingLocked(plan sdkPendingDelivery) error {
+// A failed recipient remains in the durable delivery record; completed
+// recipients are recognized by sourceEventId on replay. A separate mutex
+// keeps inbox file appends serialized without blocking all chat activity.
+func (h *sdkChatHost) deliverPending(plan sdkPendingDelivery) error {
+	h.inboxDeliveryMu.Lock()
+	defer h.inboxDeliveryMu.Unlock()
 	var failures []error
 	for _, recipient := range plan.Inbox {
 		if err := appendSDKLine(h.inboxPath(recipient.OwnerSessionID), recipient.Item); err != nil {
 			failures = append(failures, fmt.Errorf("inbox %s: %w", recipient.OwnerSessionID, err))
 			continue
 		}
+		h.mu.Lock()
 		for ch := range h.inboxStreams[recipient.OwnerSessionID] {
 			select {
 			case ch <- struct{}{}:
 			default:
 			}
 		}
+		h.mu.Unlock()
 	}
 	return errors.Join(failures...)
 }
@@ -214,7 +219,7 @@ func (h *sdkChatHost) recoverPendingDeliveries() {
 			}
 		}
 		if !failed {
-			if err := h.removePendingDeliveryLocked(plan.Event.ID); err != nil {
+			if err := h.removePendingDelivery(plan.Event.ID); err != nil {
 				log.Printf("remove recovered chat delivery %s: %v", plan.Event.ID, err)
 			}
 		}
