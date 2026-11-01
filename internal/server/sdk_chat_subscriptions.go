@@ -348,21 +348,17 @@ func (s *Server) handleSDKInbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *sdkChatHost) readInbox(id string, after int64, limit int) ([]sdkInboxEvent, int64, int64, error) {
-	h.mu.Lock()
 	f, err := os.Open(h.inboxPath(id))
 	if errors.Is(err, os.ErrNotExist) {
-		h.mu.Unlock()
 		if after != 0 {
 			return nil, after, 0, errInboxCursor
 		}
 		return []sdkInboxEvent{}, 0, 0, nil
 	}
 	if err != nil {
-		h.mu.Unlock()
 		return nil, after, 0, err
 	}
 	info, err := f.Stat()
-	h.mu.Unlock()
 	defer f.Close()
 	if err != nil {
 		return nil, after, 0, err

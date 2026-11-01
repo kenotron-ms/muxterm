@@ -82,6 +82,8 @@ export class MuxChatCoordination extends LitElement {
   }
   override disconnectedCallback() {
     if (this.poll) window.clearInterval(this.poll);
+    this.refreshKey++;
+    this.loading = false;
     super.disconnectedCallback();
   }
   protected override updated(changed: PropertyValues<this>) {

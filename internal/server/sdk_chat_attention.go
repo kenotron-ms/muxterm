@@ -93,6 +93,15 @@ func (s *Server) handleSDKInboxAttentionAck(w http.ResponseWriter, r *http.Reque
 	}
 	h := s.sdkChats
 	id := r.PathValue("id")
+	var inboxSize int64
+	var statErr error
+	if req.Cursor > 0 {
+		var info os.FileInfo
+		info, statErr = os.Stat(h.inboxPath(id))
+		if statErr == nil {
+			inboxSize = info.Size()
+		}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.chats[id] == nil {
@@ -105,8 +114,7 @@ func (s *Server) handleSDKInboxAttentionAck(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if req.Cursor > attention.Cursor {
-		info, err := os.Stat(h.inboxPath(id))
-		if err != nil || req.Cursor > info.Size() {
+		if statErr != nil || req.Cursor > inboxSize {
 			http.Error(w, "cursor beyond inbox", 400)
 			return
 		}
