@@ -106,6 +106,7 @@ const SETUP_AGENTS = [
   { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
   { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
+// Existing Gemini CLI chats can resume, but new chats use Antigravity.
 const DEFAULT_HARNESSES: SDKHarnessName[] = ['codex', 'claude', 'copilot', 'amplifier', 'pi', 'opencode', 'deepseek', 'antigravity'];
 
 /**
@@ -1364,7 +1365,7 @@ export class MuxSettingsSurface extends LitElement {
       <p class="section-title">New chats</p>
       <mux-ui-select class="default-harness-setting" label="Default agent" .value=${this.config?.ai.defaultHarness || 'codex'}
         .options=${DEFAULT_HARNESSES.map(harness => ({value:harness,label:sdkHarnessLabel(harness)}))}
-        @change=${(event: Event) => this._emit({ai:{defaultHarness:(event.target as MuxUISelect).value as ResolvedConfig['ai']['defaultHarness']}})}></mux-ui-select>
+        @change=${(event: Event) => this._setDefaultHarness((event.target as MuxUISelect).value as ResolvedConfig['ai']['defaultHarness'])}></mux-ui-select>
       <p class="agent-intro">New chat starts with this agent when it is available. You can choose another agent in the composer.</p>
       <p class="section-title">Coding agents</p>
       <p class="agent-intro">Choose an agent to see its setup. Ready agents are available in New chat.</p>
@@ -1404,6 +1405,11 @@ export class MuxSettingsSurface extends LitElement {
         never returned by the server, and is sent only to Anthropic.
       </p>
     `;
+  }
+
+  private _setDefaultHarness(defaultHarness: ResolvedConfig['ai']['defaultHarness']): void {
+    if (!this.config) return;
+    this._emit({ ai: { ...this.config.ai, defaultHarness } });
   }
 
   private async _installAgent(harness: string): Promise<void> {
