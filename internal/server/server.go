@@ -410,6 +410,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats/{id}/subscriptions", protect(http.HandlerFunc(s.handleSDKSubscriptions)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/subscriptions", protect(http.HandlerFunc(s.handleSDKSubscriptions)))
 	s.mux.Handle("DELETE /api/sdk-chats/{id}/subscriptions/{subscription}", protect(http.HandlerFunc(s.handleSDKSubscription)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/topics", protect(http.HandlerFunc(s.handleSDKPublishTopic)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/inbox", protect(http.HandlerFunc(s.handleSDKInbox)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/inbox-attention", protect(http.HandlerFunc(s.handleSDKInboxAttention)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/inbox-attention", protect(http.HandlerFunc(s.handleSDKInboxAttention)))
