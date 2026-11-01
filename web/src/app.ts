@@ -556,7 +556,6 @@ export class MuxApp extends LitElement {
   @state() private _sdkChatId: string | null = null;
   @state() private _terminalUtilityOpen = false;
   @state() private _connectionSelection = 'github';
-  @state() private _newChatHarness: 'codex' | 'claude' | 'amplifier' = 'codex';
   @state() private _newChatFolder = '';
   @state() private _newChatProject = '';
   @state() private _newChatRemoteHost = '';
@@ -1465,7 +1464,7 @@ export class MuxApp extends LitElement {
               </div>
               `}
           ${this._sdkChatId ? this._sdkChatId === 'new' ? keyed(this._newChatKey, html`
-            <mux-new-chat .initialHarness=${this._newChatHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialRemoteHost=${this._newChatRemoteHost} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal} @launcher-action=${this._onLauncherAction}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
+            <mux-new-chat .initialHarness=${store.config.ai.defaultHarness} .initialFolder=${this._newChatFolder} .initialProject=${this._newChatProject} .initialRemoteHost=${this._newChatRemoteHost} .initialPrompt=${this._newChatPrompt} @chat-created=${this._onChatCreated} @workspace-create=${this._onOpenCreateModal} @launcher-action=${this._onLauncherAction}></mux-new-chat>`) : this._sdkChatId === 'jobs' ? html`
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
@@ -2147,7 +2146,6 @@ export class MuxApp extends LitElement {
 
   private _onChatNew = (): void => {
     this._newChatKey++;
-    this._newChatHarness = 'codex';
     this._newChatFolder = '';
     this._newChatProject = '';
     this._newChatRemoteHost = '';
