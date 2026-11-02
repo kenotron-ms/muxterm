@@ -34,6 +34,10 @@ function harnessMark(chat: SDKChat, className = 'chat-icon') {
   return html`<span slot="icon" class="${className} harness-mark ${chat.state}" style=${`--harness-mark:url("${harnessMarks[chat.harness]}")`} title=${`${sdkHarnessLabel(chat.harness)} · ${chat.state}`}></span>`;
 }
 
+function harnessGlyph(chat: SDKChat) {
+  return html`<span class="chat-icon harness-mark ${chat.state}" style=${`--harness-mark:url("${harnessMarks[chat.harness]}")`} aria-hidden="true"></span>`;
+}
+
 const ARCHIVE_PAGE_SIZE = 25;
 const ARCHIVE_ROW_HEIGHT = 32;
 interface ChatGroup { id: string; name: string; remoteHost?: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean; archiveStart?: number; total?: number; loading?: boolean; archiveError?: string }
@@ -74,7 +78,7 @@ export class MuxChatWorkspace extends LitElement {
   private readonly onOutsidePointer = (event: PointerEvent) => {
     const path = event.composedPath();
     const menu = this.renderRoot.querySelector('mux-ui-menu');
-    const trigger = this.menuFor === 'project' ? this.renderRoot.querySelector('.row .action.more') : this.renderRoot.querySelector(`.chat-row .action.more[data-chat-id="${CSS.escape(this.menuFor)}"]`);
+    const trigger = this.menuFor === 'project' ? this.renderRoot.querySelector('.row .action.more') : this.renderRoot.querySelector(`.chat-row .chat-harness[data-chat-id="${CSS.escape(this.menuFor)}"], .chat-row .action.more[data-chat-id="${CSS.escape(this.menuFor)}"]`);
     if (this.menuFor && ![menu, trigger].some(el => el !== null && path.includes(el))) this.closeMenu();
   };
   private readonly onEscape = (event: KeyboardEvent) => {
@@ -123,7 +127,7 @@ export class MuxChatWorkspace extends LitElement {
     .chat-row .action { display:none; opacity:1; }
     .chat-row .action.more { display:none; }
     .chat-row:hover .action,.chat-row:has(.chat:focus-within) .action { display:inline-flex; }
-    .row:has(mux-ui-menu) .action.more,.chat-row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
+    .row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
     .row:has(mux-ui-menu) .host-label { display:none; }
     mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-space-8); }
@@ -133,6 +137,12 @@ export class MuxChatWorkspace extends LitElement {
     .archive-status { padding:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .chat-row[selected] { background:var(--ui-nav-selected); }
     .chat-icon { width:var(--ui-space-6); height:var(--ui-space-6); display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
+    .chat-harness { flex:none; display:inline-flex; align-items:center; justify-content:center; width:var(--ui-space-8); height:100%; min-height:var(--ui-control-md); padding:0; border-radius:var(--ui-radius-md); }
+    .chat-harness:hover,.chat-harness:focus-visible { background:var(--ui-surface-hover); }
+    .chat-harness:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
+    .chat-label-copy { display:flex; align-items:center; width:100%; min-width:0; gap:var(--ui-space-2); }
+    .chat-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .chat-host { flex:none; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:400; }
     .harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
     .harness-mark.working { color:var(--ui-success); }
     .harness-mark.blocked,.harness-mark.failed { color:var(--ui-danger); }
@@ -178,8 +188,8 @@ export class MuxChatWorkspace extends LitElement {
     this.closeMenu();
     if (!event.detail.restoreFocus) return;
     void this.updateComplete.then(() => {
-      const row = target === 'project' ? this.renderRoot.querySelector('.row') : [...this.renderRoot.querySelectorAll('.chat-row')].find(element => element.querySelector('.action.more')?.getAttribute('data-chat-id') === target);
-      (row?.querySelector<HTMLElement>('.action.more') || row?.querySelector<HTMLElement>('.chat'))?.focus();
+      const row = target === 'project' ? this.renderRoot.querySelector('.row') : [...this.renderRoot.querySelectorAll('.chat-row')].find(element => element.querySelector<HTMLElement>('[data-chat-id]')?.getAttribute('data-chat-id') === target);
+      (row?.querySelector<HTMLElement>('.chat-harness') || row?.querySelector<HTMLElement>('.action.more') || row?.querySelector<HTMLElement>('.chat'))?.focus();
     });
   }
   private showContext(event: MouseEvent, target: string) {
@@ -330,12 +340,14 @@ export class MuxChatWorkspace extends LitElement {
         ${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<mux-ui-text-field class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}></mux-ui-text-field><mux-ui-button class="rename-save" variant="quiet" size="small" icon-only accessible-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</mux-ui-button>` : html`
-            <mux-ui-list-row class="chat" label=${chat.title} tooltip=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${group.project?.managedFolder ? 'No folder' : chat.projectPath || 'Folder unknown'}`} ?selected=${this.selectedSession === chat.id} @click=${() => this.openChat(chat)}>
-              ${chat.operator || group.laneIds.has(chat.id) ? html`<span slot="icon" class="status ${chat.operator ? 'operator' : 'lane'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : `Lane · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : laneIcon(14)}</span>` : harnessMark(chat)}
+            ${chat.operator || group.laneIds.has(chat.id) ? nothing : html`<button class="chat-harness" type="button" data-chat-id=${chat.id} aria-label=${`Options for ${chat.title}`} title="Chat options" aria-haspopup="menu" aria-expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${harnessGlyph(chat)}</button>`}
+            <mux-ui-list-row class="chat" label=${chat.title} tooltip=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${group.project?.managedFolder ? 'No folder' : chat.projectPath || 'Folder unknown'}`} ?hide-icon=${!chat.operator && !group.laneIds.has(chat.id)} ?selected=${this.selectedSession === chat.id} @click=${() => this.openChat(chat)}>
+              ${chat.operator || group.laneIds.has(chat.id) ? html`<span slot="icon" class="status ${chat.operator ? 'operator' : 'lane'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : `Lane · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : laneIcon(14)}</span>` : nothing}
+              ${chat.remoteHost ? html`<span slot="label" class="chat-label-copy"><span class="chat-title">${chat.title}</span><span class="chat-host">${sdkChats.remoteHosts.find(host => host.id === chat.remoteHost)?.name || chat.remoteHost}</span></span>` : nothing}
             </mux-ui-list-row>
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} tooltip=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</mux-ui-button>
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} tooltip=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</mux-ui-button>`}
-          ${this.renamingId === chat.id ? nothing : html`<mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" data-chat-id=${chat.id} accessible-label=${`Options for ${chat.title}`} tooltip="Chat options" haspopup="menu" .expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>`}
+          ${this.renamingId === chat.id && !chat.operator && !group.laneIds.has(chat.id) ? nothing : chat.operator || group.laneIds.has(chat.id) ? html`<mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" data-chat-id=${chat.id} accessible-label=${`Options for ${chat.title}`} tooltip="Chat options" haspopup="menu" .expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>` : nothing}
           ${this.menuFor === chat.id ? this.chatMenu(chat) : nothing}
         </div>`)}
         ${group.archived ? html`<div class="archive-spacer" style=${`height:${Math.max(0,(group.total || 0) - (group.archiveStart || 0) - group.chats.length) * ARCHIVE_ROW_HEIGHT}px`}></div>${group.loading ? html`<div class="archive-status" role="status">Loading archived sessions…</div>` : group.archiveError ? html`<div class="archive-status" role="alert">${group.archiveError}</div>` : !group.total ? html`<div class="archive-status">No archived sessions</div>` : nothing}` : nothing}
@@ -366,6 +378,7 @@ export class MuxChatList extends LitElement {
   @state() private projectError = '';
   @state() private projectCreating = false;
   @property() selectedSession = '';
+  @property({ type: Boolean, reflect: true }) drawer = false;
   private unsub?: () => void;
   private readonly onChatOpen = (event: Event) => {
     const id = (event as CustomEvent<{ sessionId: string }>).detail?.sessionId;
@@ -374,7 +387,7 @@ export class MuxChatList extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { display:block; color:var(--ui-text-muted); font:var(--ui-text-sm)/1.35 var(--ui-font-sans); }
-    .heading { padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-1); font-size:inherit; font-weight:600; letter-spacing:0; text-transform:none; }
+    .heading { padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-1); font-size:var(--ui-sidebar-section-font-size,inherit); font-weight:600; letter-spacing:0; text-transform:none; }
     .heading-row { display:flex; align-items:center; justify-content:space-between; }
     .heading-actions { display:flex; align-items:center; }
     .pinned { margin-bottom:var(--ui-space-4); }

@@ -11,6 +11,7 @@ export class MuxUIListRow extends LitElement {
   @property({ reflect:true }) variant: 'item' | 'group' = 'item';
   @property({ type:Boolean, reflect:true }) selected = false;
   @property({ type:Boolean, reflect:true }) muted = false;
+  @property({ type:Boolean, reflect:true, attribute:'hide-icon' }) hideIcon = false;
   @property({ type:Boolean }) expandable = false;
   @property({ type:Boolean }) expanded = false;
 
@@ -23,6 +24,8 @@ export class MuxUIListRow extends LitElement {
     :host([selected]) button { background:var(--ui-nav-selected); }
     :host([muted]) button { color:var(--ui-text-muted); }
     .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:var(--ui-space-6); height:var(--ui-space-6); color:var(--ui-text-muted); }
+    :host([hide-icon]) .icon { display:none; }
+    :host([hide-icon]) button { gap:0; }
     .label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     @media(pointer:coarse) { button,:host([variant='group']) button { min-height:var(--ui-control-lg); } }
   `;
@@ -35,7 +38,7 @@ export class MuxUIListRow extends LitElement {
       aria-current=${this.selected ? 'true' : nothing}
       aria-expanded=${this.expandable ? String(this.expanded) : nothing}>
       <span class="icon" aria-hidden="true"><slot name="icon"></slot></span>
-      <span class="label">${this.label}</span>
+      <span class="label"><slot name="label">${this.label}</slot></span>
     </button>`;
   }
 }
