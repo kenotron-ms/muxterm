@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.BasicTextField
@@ -74,6 +75,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -568,15 +570,16 @@ private fun NodeRow(node: SatelliteNode) {
 
 @Composable
 private fun ProjectRow(project: SatelliteProject, remote: Boolean, expanded: Boolean, onToggle: () -> Unit, onNewChat: () -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(start = 19.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+    Row(modifier = Modifier.fillMaxWidth().semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+        .clickable(onClick = onToggle).padding(start = 19.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
         FolderMark(remote)
-        Column(modifier = Modifier.weight(1f).padding(start = 10.dp)) {
+        Column(modifier = Modifier.weight(1f).padding(start = 10.dp, end = 8.dp)) {
             Text(project.name, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (remote) Text("Network project", fontSize = 11.sp, color = secondary)
         }
         TextButton(onClick = onNewChat) { Text("New chat") }
-        Text(if (expanded) "⌄" else "›", color = secondary, fontSize = 21.sp, modifier = Modifier.padding(start = 3.dp))
+        ChevronIcon(rotation = if (expanded) 0f else -90f, modifier = Modifier.padding(start = 4.dp))
     }
 }
 
@@ -647,8 +650,7 @@ private fun ChatBlockRow(block: ChatBlock, all: List<ChatBlock>, index: Int, wor
                     if (block.text.isNotBlank()) Text(block.text, color = ink, fontSize = 14.sp, lineHeight = 22.sp)
                     block.attachments.forEach { item ->
                         if (item.kind == "image") NativeAttachmentImage(item, loadImage, onAttachment)
-                        else Text("📎 ${item.name}", color = blue, fontSize = 12.sp,
-                            modifier = Modifier.clickable { onAttachment(item) }.padding(top = 5.dp))
+                        else AttachmentLabel(item.name) { onAttachment(item) }
                     }
                 }
             }
@@ -690,8 +692,7 @@ private fun NativeAttachmentImage(item: ChatAttachment, loadImage: suspend (Chat
     onOpen: (ChatAttachment) -> Unit) {
     var bitmap by remember(item.id) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(item.id) { bitmap = runCatching { loadImage(item) }.getOrNull() }
-    if (bitmap == null) Text("📎 ${item.name}", color = blue, fontSize = 12.sp,
-        modifier = Modifier.clickable { onOpen(item) }.padding(top = 5.dp))
+    if (bitmap == null) AttachmentLabel(item.name) { onOpen(item) }
     else Image(bitmap!!, contentDescription = item.name, contentScale = ContentScale.Fit,
         modifier = Modifier.widthIn(max = 240.dp).heightIn(max = 180.dp).padding(top = 6.dp)
             .clickable { onOpen(item) })
@@ -736,7 +737,8 @@ private fun QuestionCard(block: ChatBlock, pending: Boolean, onAnswer: (Map<Stri
 private fun WorkDisclosure(work: List<ChatBlock>, done: Boolean, waitingQuestion: Boolean) {
     var expanded by remember(work.firstOrNull()?.turn) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp, vertical = 7.dp)) {
-        Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 7.dp),
+        Row(Modifier.fillMaxWidth().semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+            .clickable { expanded = !expanded }.padding(vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Text(if (waitingQuestion) "Waiting for your answer" else if (done)
                 work.firstNotNullOfOrNull { it.durationSeconds }?.let { seconds ->
@@ -744,7 +746,7 @@ private fun WorkDisclosure(work: List<ChatBlock>, done: Boolean, waitingQuestion
                 } ?: "Worked"
                 else "Working…",
                 color = secondary, fontSize = 12.sp, modifier = Modifier.weight(1f))
-            Text(if (expanded) "⌃" else "⌄", color = secondary, fontSize = 15.sp)
+            ChevronIcon(rotation = if (expanded) 180f else 0f)
         }
         HorizontalDivider(color = line)
         val details = work.filter { it.name != "Working" || it.text.isNotBlank() }
@@ -752,8 +754,14 @@ private fun WorkDisclosure(work: List<ChatBlock>, done: Boolean, waitingQuestion
             modifier = Modifier.padding(vertical = 8.dp))
         if (expanded) details.forEach { item ->
             Column(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
-                if (item.kind == ChatBlockKind.ACTIVITY && item.name != "Working") Text("${if (item.failed) "!" else if (item.done) "✓" else "◌"}  ${item.name}",
-                    color = secondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                if (item.kind == ChatBlockKind.ACTIVITY && item.name != "Working") Row(
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    if (!item.done && !item.failed) CircularProgressIndicator(modifier = Modifier.size(13.dp), strokeWidth = 1.5.dp)
+                    else Icon(painterResource(if (item.failed) R.drawable.ic_status_error else R.drawable.ic_status_check),
+                        contentDescription = if (item.failed) "Failed" else "Completed", tint = if (item.failed) amber else green,
+                        modifier = Modifier.size(15.dp))
+                    Text(item.name, color = secondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                }
                 if (item.kind == ChatBlockKind.STEER) Text("Your interjection", color = secondary,
                     fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 if (item.text.isNotBlank()) {
@@ -776,9 +784,14 @@ private fun ChatComposer(value: String, onChange: (String) -> Unit, enabled: Boo
             Column(Modifier.padding(start = 14.dp, end = 10.dp, top = 13.dp, bottom = 5.dp)) {
                 if (attachments.isNotEmpty()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     attachments.forEach { item ->
-                        Text("${item.name.take(16)}  ×", color = ink, fontSize = 11.sp,
+                        Row(verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.background(userTint, RoundedCornerShape(7.dp))
-                                .clickable { onRemoveAttachment(item) }.padding(horizontal = 7.dp, vertical = 5.dp))
+                                .semantics { contentDescription = "Remove attachment ${item.name}" }
+                                .clickable { onRemoveAttachment(item) }.padding(horizontal = 7.dp, vertical = 5.dp)) {
+                            Text(item.name.take(16), color = ink, fontSize = 11.sp)
+                            Icon(painterResource(R.drawable.ic_close), contentDescription = null,
+                                tint = secondary, modifier = Modifier.padding(start = 6.dp).size(12.dp))
+                        }
                     }
                 }
                 Box(Modifier.fillMaxWidth().heightIn(min = 50.dp, max = 220.dp)) {
@@ -972,6 +985,22 @@ private fun CenterState(message: String, action: String, onAction: () -> Unit) {
 private fun ErrorLine(message: String) {
     Text(message, color = Color(0xFF9A3D36), fontSize = 12.sp,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp))
+}
+
+@Composable
+private fun ChevronIcon(rotation: Float, modifier: Modifier = Modifier) {
+    Icon(painterResource(R.drawable.ic_chevron_down), contentDescription = null, tint = secondary,
+        modifier = modifier.size(18.dp).rotate(rotation))
+}
+
+@Composable
+private fun AttachmentLabel(name: String, onClick: () -> Unit) {
+    Row(Modifier.clickable(onClick = onClick).padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Icon(painterResource(R.drawable.ic_chat_paperclip), contentDescription = null, tint = blue,
+            modifier = Modifier.size(13.dp))
+        Text(name, color = blue, fontSize = 12.sp)
+    }
 }
 
 @Composable
