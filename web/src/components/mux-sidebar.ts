@@ -70,7 +70,7 @@ export class MuxSidebar extends LitElement {
     :host([drawer]) .nav-actions mux-ui-nav-item {
       --ui-nav-row-height: var(--ui-sidebar-nav-row-height);
       --ui-nav-icon-size: 20px;
-      --ui-nav-font-size: 16px;
+      --ui-nav-font-size: var(--ui-sidebar-item-font-size);
       --ui-nav-icon-label-gap: var(--ui-sidebar-nav-icon-label-gap);
       --ui-nav-horizontal-padding: var(--ui-sidebar-nav-horizontal-padding);
     }
@@ -83,8 +83,10 @@ export class MuxSidebar extends LitElement {
       border-top: 1px solid var(--ui-border);
     }
     :host([drawer]) mux-chat-list {
-      --ui-text-sm: 16px;
-      --ui-sidebar-section-font-size: 15px;
+      --ui-text-sm: var(--ui-sidebar-item-font-size);
+      --ui-list-row-font-weight: 450;
+      --ui-list-row-group-font-weight: 500;
+      --ui-sidebar-section-font-size: var(--ui-sidebar-section-label-font-size);
     }
     :host([drawer]) .drawer-footer-actions {
       position: absolute;
@@ -123,7 +125,7 @@ export class MuxSidebar extends LitElement {
       border-radius: var(--ui-radius-pill);
       background: var(--ui-accent);
       color: var(--ui-on-accent);
-      font: 500 var(--ui-text-xl)/1.25 var(--ui-font-sans);
+      font: 500 var(--ui-sidebar-item-font-size)/1.25 var(--ui-font-sans);
     }
     :host([drawer]) .drawer-new-chat::part(button):active { background: color-mix(in srgb, var(--ui-accent) 82%, black); }
     :host([drawer]) .drawer-settings {
