@@ -106,6 +106,9 @@ dependencies {
     // Car screen's session feed: a WebSocket client for /ws. org.json (already
     // on the platform) parses the six fields we need - no Moshi/Gson/kotlinx.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.commonmark:commonmark:0.31.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.31.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.31.0")
 
     // DEBUG ONLY, and the "debug" matters. The target is Android AUTO -- the
     // phone projects to the car screen -- which needs androidx.car.app:app and

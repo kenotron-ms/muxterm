@@ -3,7 +3,11 @@
 The launcher is a native Android client for SDK projects and chats. It connects to
 one muxterm server, shows that server's connected SSH nodes and their projects,
 creates managed project folders and chats on a selected node, and reads and sends
-chat messages through the server's existing API. The phone does not run muxterm,
+chat messages through the server's existing API. The native transcript shows
+user bubbles, Markdown replies, work progress and outcomes, questions, and
+session errors. The composer supports attachments, native speech dictation,
+steering, stop, and server-backed permission/model controls. Completed messages
+can be copied, edited into a new chat, or forked. The phone does not run muxterm,
 sessiond, SSH, or an agent harness. The **Workspace** action opens the original
 WebView for sign-in, terminal, voice, and settings features.
 
@@ -11,7 +15,9 @@ Android's text share sheet can send text to the satellite. Shared text stays in 
 local draft until the user chooses a chat and presses **Send**. No phone data is
 published to other nodes in the background.
 
-The WebView and its voice service remain in the app. The original wrapper design
+The WebView and its live voice service remain in the app. Native dictation uses
+Android's speech recognizer to prepare a text draft; it is separate from the
+WebView's live voice conversation. The original wrapper design
 is documented in `docs/design/webview-wrapper.md`.
 
 Reference: `docs/design/webview-wrapper.md` on branch `design/webview-wrapper`.
@@ -62,14 +68,21 @@ build-tools 34.0.0.
 
 ## Native satellite verification
 
-On an Android 14 emulator connected through `adb reverse` to isolated
-`make dev-local` on port 8313, the native app created a project, started a
-Codex chat, displayed its reply, sent a follow-up, and received another reply.
-The same project and full transcript appeared in the web client. Android text
-sharing populated a draft, and **Discard** cleared it without sending. The
-side-by-side APK installed next to the existing package and opened its own
-server sign-in screen. A connected SSH node was not available in this fixture,
-so remote project creation and remote chat relay remain device verification work.
+On an Android 14 emulator connected to isolated `make dev-local` on port 8313,
+the native app created a fresh project and Codex chat, displayed a tool turn's
+work duration and Markdown answer, uploaded and sent a file, opened the saved
+attachment, uploaded a PNG that rendered inline, forked and edited completed
+messages into new chats, and stopped a running shell turn. A separate running
+turn accepted a steering message and displayed it inside the work disclosure;
+its 16-second duration matched the browser. Playwright opened the same fresh chat in a real browser and
+confirmed the messages, work disclosure, Markdown answer, and composer controls.
+Android text sharing populated a draft, and **Discard** cleared it without
+sending. The native dictation control launched Android's speech recognizer; the
+emulator has no microphone input to verify transcription. The side-by-side APK
+installed next to the existing package. A connected SSH node was not available
+in this fixture, so remote relay still needs device verification.
+The visual comparison and interaction storyboard are in
+`docs/design-system/android-chat-storyboard.md`.
 
 ## Earlier WebView verification
 
