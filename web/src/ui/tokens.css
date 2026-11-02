@@ -76,6 +76,9 @@
   --ui-dock-dropbar-height: var(--ui-space-8);
   --ui-media-preview-max-height: 420px;
   --ui-nav-height: var(--mux-titlebar-height, var(--mux-dock-height, 44px));
+  --ui-sidebar-nav-row-height: 58px;
+  --ui-sidebar-nav-icon-label-gap: 16px;
+  --ui-sidebar-nav-horizontal-padding: 0px;
   --ui-sidebar-wordmark-size: 32px;
   --ui-sidebar-content-inset: 25px;
   --ui-sidebar-nav-divider-gap: 38px;

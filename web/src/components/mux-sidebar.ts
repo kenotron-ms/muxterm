@@ -1,4 +1,4 @@
-import { LitElement, css, html, unsafeCSS } from 'lit';
+import { LitElement, css, html, nothing, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { CalendarClock, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
@@ -68,11 +68,11 @@ export class MuxSidebar extends LitElement {
       padding: var(--ui-space-4) 0 0;
     }
     :host([drawer]) .nav-actions mux-ui-nav-item {
-      --ui-nav-row-height: 58px;
+      --ui-nav-row-height: var(--ui-sidebar-nav-row-height);
       --ui-nav-icon-size: 20px;
       --ui-nav-font-size: 16px;
-      --ui-nav-icon-label-gap: 16px;
-      --ui-nav-horizontal-padding: 0;
+      --ui-nav-icon-label-gap: var(--ui-sidebar-nav-icon-label-gap);
+      --ui-nav-horizontal-padding: var(--ui-sidebar-nav-horizontal-padding);
     }
     :host([drawer]) .tab-content {
       padding: 0 var(--ui-sidebar-content-inset) calc(var(--ui-sidebar-footer-control-size) + env(safe-area-inset-bottom, 0px) + var(--ui-space-5) + var(--ui-space-8));
@@ -178,7 +178,7 @@ export class MuxSidebar extends LitElement {
   private renderFooter() {
     if (this.drawer) {
       return html`<div class="drawer-footer-actions">
-        <mux-ui-button class="drawer-new-chat" variant="primary" size="large" accessible-label="New chat" aria-current=${this.newChatActive ? 'page' : 'false'}
+        <mux-ui-button class="drawer-new-chat" variant="primary" size="large" accessible-label="New chat" aria-current=${this.newChatActive ? 'page' : nothing}
           @click=${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}>
           ${icon(Plus, { size: 20 })}<span>New chat</span>
         </mux-ui-button>

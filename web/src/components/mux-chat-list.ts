@@ -110,12 +110,12 @@ export class MuxChatWorkspace extends LitElement {
 
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; margin:0 0 var(--ui-space-5); font:var(--ui-text-sm)/1.35 var(--ui-font-sans); color:var(--ui-text); }
+    :host { display:block; margin:0 0 var(--ui-space-5); font:var(--ui-text-sm)/var(--ui-sidebar-row-line-height,1.35) var(--ui-font-sans); color:var(--ui-text); }
     button { font:inherit; color:inherit; border:0; cursor:pointer; background:transparent; }
-    .row,.chat-row { display:flex; align-items:center; min-height:var(--ui-control-md); border-radius:var(--ui-radius-md); position:relative; }
+    .row,.chat-row { display:flex; align-items:center; min-height:var(--ui-list-row-height,var(--ui-control-md)); border-radius:var(--ui-radius-md); position:relative; }
     .row:hover,.chat-row:hover { background:var(--ui-surface-hover); }
     .folder { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:0; }
-    .folder { width:var(--ui-space-6); color:var(--ui-text-muted); }
+    .folder { width:var(--ui-list-row-icon-size,var(--ui-space-6)); color:var(--ui-text-muted); }
     .host-label { display:inline-flex; align-items:center; gap:var(--ui-space-3); margin-left:auto; max-width:50%; min-width:0; padding-right:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); white-space:nowrap; }
     .host-label > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; }
     .host-dot { width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); border-radius:50%; background:var(--ui-text-muted); }
@@ -128,6 +128,7 @@ export class MuxChatWorkspace extends LitElement {
     .chat-row .action.more { display:none; }
     .chat-row:hover .action,.chat-row:has(.chat:focus-within) .action { display:inline-flex; }
     .row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
+    .chat-row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
     .row:has(mux-ui-menu) .host-label { display:none; }
     mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-sidebar-session-indent,var(--ui-space-8)); }
@@ -137,7 +138,18 @@ export class MuxChatWorkspace extends LitElement {
     .archive-status { padding:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .chat-row[selected] { background:var(--ui-nav-selected); }
     .chat-icon { width:var(--ui-icon-md); height:var(--ui-icon-md); display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
-    .chat-harness { --ui-control-sm:var(--ui-space-8); flex:none; }
+    .chat-harness {
+      --ui-control-sm:var(--ui-sidebar-row-hit-target,var(--ui-space-8));
+      --ui-control-lg:var(--ui-sidebar-row-hit-target,var(--ui-control-lg));
+      flex:none;
+      width:var(--ui-sidebar-row-hit-target,var(--ui-space-8));
+      height:var(--ui-sidebar-row-hit-target,var(--ui-space-8));
+      margin-inline-start:calc(var(--ui-list-row-icon-size,var(--ui-space-6)) + var(--ui-list-row-icon-label-gap,var(--ui-space-4)) - var(--ui-sidebar-row-hit-target,var(--ui-space-8)));
+    }
+    .chat-harness::part(button) {
+      justify-content:flex-start;
+      padding-inline-start:calc(var(--ui-sidebar-row-hit-target,var(--ui-space-8)) - var(--ui-list-row-icon-size,var(--ui-space-6)) - var(--ui-list-row-icon-label-gap,var(--ui-space-4)));
+    }
     .chat-label-copy { display:flex; align-items:center; width:100%; min-width:0; gap:var(--ui-space-2); }
     .chat-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .chat-host { flex:none; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:400; }
@@ -384,13 +396,22 @@ export class MuxChatList extends LitElement {
   };
   static styles = css`
     ${subtleScrollbars}
-    :host { display:block; color:var(--ui-text-muted); font:var(--ui-text-sm)/1.35 var(--ui-font-sans); }
-    :host([drawer]) { --ui-sidebar-session-indent:0px; }
-    .heading { padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-1); font-size:var(--ui-sidebar-section-font-size,inherit); font-weight:600; letter-spacing:0; text-transform:none; }
+    :host { display:block; color:var(--ui-text-muted); font:var(--ui-text-sm)/var(--ui-sidebar-row-line-height,1.35) var(--ui-font-sans); }
+    :host([drawer]) {
+      --ui-sidebar-session-indent:0px;
+      --ui-list-row-height:var(--ui-sidebar-nav-row-height);
+      --ui-list-row-icon-size:var(--ui-icon-md);
+      --ui-list-row-icon-label-gap:var(--ui-sidebar-nav-icon-label-gap);
+      --ui-list-row-horizontal-padding:var(--ui-sidebar-nav-horizontal-padding);
+      --ui-list-row-vertical-padding:0px;
+      --ui-sidebar-row-hit-target:44px;
+      --ui-sidebar-row-line-height:1.25;
+    }
+    .heading { padding:var(--ui-space-4) var(--ui-list-row-horizontal-padding,var(--ui-space-2)) var(--ui-space-1); font-size:var(--ui-sidebar-section-font-size,inherit); font-weight:600; line-height:var(--ui-sidebar-row-line-height,1.35); letter-spacing:0; text-transform:none; }
     .heading-row { display:flex; align-items:center; justify-content:space-between; }
     .heading-actions { display:flex; align-items:center; }
     .pinned { margin-bottom:var(--ui-space-4); }
-    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border-radius:var(--ui-radius-md); color:var(--ui-text); }
+    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:var(--ui-list-row-height,var(--ui-control-md)); padding:var(--ui-list-row-vertical-padding,var(--ui-space-1)) var(--ui-list-row-horizontal-padding,var(--ui-space-2)); border-radius:var(--ui-radius-md); color:var(--ui-text); }
     .pin-row:hover,.pin-row:focus-within { background:var(--ui-surface-hover); }
     .pin-row[selected] { background:var(--ui-nav-selected); }
     .pin-icon { display:flex; flex:none; width:var(--ui-icon-md); height:var(--ui-icon-md); align-items:center; justify-content:center; color:var(--ui-text-muted); }
