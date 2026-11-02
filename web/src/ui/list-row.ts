@@ -17,8 +17,8 @@ export class MuxUIListRow extends LitElement {
 
   static override styles = css`
     :host { display:flex; flex:1; min-width:0; color:var(--ui-text); font:var(--ui-text-sm)/var(--ui-sidebar-row-line-height,1.35) var(--ui-font-sans); }
-    button { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-list-row-icon-label-gap,var(--ui-space-4)); width:100%; min-width:0; min-height:var(--ui-list-row-height,var(--ui-control-sm)); padding:var(--ui-list-row-vertical-padding,var(--ui-space-1)) var(--ui-list-row-horizontal-padding,var(--ui-space-2)); border:0; border-radius:var(--ui-radius-md); background:transparent; color:inherit; text-align:left; font:inherit; font-weight:550; cursor:pointer; }
-    :host([variant='group']) button { min-height:var(--ui-list-row-height,var(--ui-control-md)); padding:0 var(--ui-list-row-horizontal-padding,var(--ui-space-3)); font-weight:500; }
+    button { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-list-row-icon-label-gap,var(--ui-space-4)); width:100%; min-width:0; min-height:var(--ui-list-row-height,var(--ui-control-sm)); padding:var(--ui-list-row-vertical-padding,var(--ui-space-1)) var(--ui-list-row-horizontal-padding,var(--ui-space-2)); border:0; border-radius:var(--ui-radius-md); background:transparent; color:inherit; text-align:left; font:inherit; font-weight:var(--ui-list-row-font-weight,550); cursor:pointer; }
+    :host([variant='group']) button { min-height:var(--ui-list-row-height,var(--ui-control-md)); padding:0 var(--ui-list-row-horizontal-padding,var(--ui-space-3)); font-weight:var(--ui-list-row-group-font-weight,500); }
     button:hover { background:var(--ui-surface-hover); }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
     :host([selected]) button { background:var(--ui-nav-selected); }
