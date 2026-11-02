@@ -1985,7 +1985,7 @@ export class MuxSDKChat extends LitElement {
   private workDisclosureOpen(turn: number) {
     if (this.blocks.some(block => block.turn === turn && block.kind === 'question' && !block.done))
       return !this.workCollapsedWhileWorking.has(turn);
-    return this.turnFinished.has(turn) ? this.workExpanded.has(turn) : !this.workCollapsedWhileWorking.has(turn);
+    return this.workExpanded.has(turn) && !this.workCollapsedWhileWorking.has(turn);
   }
   private streamingWorkLabel(turn: number) {
     if (this.blocks.some(block => block.turn === turn && block.kind === 'question' && block.source === 'question.requested' && !block.done)) return 'Waiting for your answer';
@@ -2256,7 +2256,7 @@ export class MuxSDKChat extends LitElement {
       if (!this.turnFinished.has(turn) || pendingQuestion) this.workCollapsedWhileWorking.add(turn);
     } else {
       this.workCollapsedWhileWorking.delete(turn);
-      if (this.turnFinished.has(turn)) this.workExpanded.add(turn);
+      this.workExpanded.add(turn);
       if (!this.detailsLoaded) void this.loadDetails();
     }
     this.requestUpdate();

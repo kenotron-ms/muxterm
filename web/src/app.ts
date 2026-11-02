@@ -14,7 +14,7 @@ import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
-import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
+import { applyDocumentTitle, applyTitlebarColor, instanceLabel, restoreTitlebarColor } from './lib/instance-identity.js';
 import { installPwaWindowControls } from './lib/pwa-window-controls.js';
 import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
@@ -397,7 +397,7 @@ export class MuxApp extends LitElement {
 
       position: fixed;
       inset: 0 auto 0 0;
-      width: 100vw;
+      width: 87vw;
       height: 100%;
       max-width: none;
       max-height: none;
@@ -418,6 +418,7 @@ export class MuxApp extends LitElement {
       color: var(--ui-text);
       border: 0;
       border-right: 0;
+      border-radius: 0 var(--ui-radius-xl) var(--ui-radius-xl) 0;
       box-shadow: var(--ui-shadow-drawer);
       translate: -100% 0;
       transition:
@@ -448,9 +449,11 @@ export class MuxApp extends LitElement {
       justify-content: space-between;
       flex: none;
       min-height: calc(var(--ui-nav-height) + env(safe-area-inset-top, 0px));
-      padding: env(safe-area-inset-top, 0px) max(var(--ui-space-5), env(safe-area-inset-right, 0px)) 0 max(var(--ui-space-5), env(safe-area-inset-left, 0px));
+      padding: env(safe-area-inset-top, 0px) max(var(--ui-sidebar-content-inset), env(safe-area-inset-right, 0px)) 0 max(var(--ui-sidebar-content-inset), env(safe-area-inset-left, 0px));
       border-bottom: 1px solid var(--ui-border);
-      font: 600 var(--ui-text-md) var(--ui-font-sans);
+      background: var(--ui-surface-nav);
+      font-size: var(--ui-sidebar-wordmark-size);
+      font-weight: 600;
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -471,7 +474,8 @@ export class MuxApp extends LitElement {
       min-width: 0;
       max-width: none;
       border-right: 0;
-      padding-block: 0 env(safe-area-inset-bottom, 0px);
+      height: auto;
+      padding-block: 0;
       padding-left: 0;
       padding-left: env(safe-area-inset-left);
       box-sizing: border-box;
@@ -1482,7 +1486,7 @@ export class MuxApp extends LitElement {
               aria-label="Navigation"
               @toggle="${this._onDrawerPopoverToggle}"
             >
-              <div class="drawer-header"><span>Navigation</span><mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close navigation" tooltip="Close navigation" @click=${this._closeDrawer}>${icon(X,{size:20})}</mux-ui-button></div>
+              <div class="drawer-header"><span>${instanceLabel()}</span><mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close navigation" tooltip="Close navigation" @click=${this._closeDrawer}>${icon(X,{size:20})}</mux-ui-button></div>
               <mux-sidebar
                 .drawer=${true}
                 .newChatActive="${this._sdkChatId === 'new'}"

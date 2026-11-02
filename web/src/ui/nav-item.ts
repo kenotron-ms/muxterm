@@ -18,16 +18,16 @@ export class MuxUINavItem extends LitElement {
   static override styles = css`
     :host { display:block; box-sizing:border-box; font-family:var(--ui-font-sans); }
     button {
-      box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-5);
-      width:100%; min-height:var(--ui-control-md); padding:0 var(--ui-space-5);
+      box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-nav-icon-label-gap,var(--ui-space-5));
+      width:100%; min-height:var(--ui-nav-row-height,var(--ui-control-md)); padding:0 var(--ui-nav-horizontal-padding,var(--ui-space-5));
       border:0; border-radius:var(--ui-radius-md); background:transparent;
       color:var(--ui-text-muted); text-align:left;
-      font:500 var(--ui-text-md)/1.25 var(--ui-font-sans); cursor:pointer;
+      font:500 var(--ui-nav-font-size,var(--ui-text-md))/1.25 var(--ui-font-sans); cursor:pointer;
     }
     button:hover { background:var(--ui-surface-hover); color:var(--ui-text); }
     :host([active]) button { background:var(--ui-nav-selected); color:var(--ui-text); }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
-    .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:var(--ui-icon-sm); height:var(--ui-icon-sm); color:currentColor; }
+    .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:var(--ui-nav-icon-size,var(--ui-icon-sm)); height:var(--ui-nav-icon-size,var(--ui-icon-sm)); color:currentColor; }
     .icon[hidden] { display:none; }
     .copy { flex:1; min-width:0; }
     .label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -48,7 +48,7 @@ export class MuxUINavItem extends LitElement {
       :host([variant='section']) button { width:auto; min-height:var(--ui-control-lg); padding:0 var(--ui-space-5); border-bottom:2px solid transparent; white-space:nowrap; }
       :host([variant='section'][active]) button { background:transparent; box-shadow:none; border-bottom-color:var(--ui-accent); }
     }
-    @media (pointer:coarse) { button { min-height:var(--ui-control-lg); } }
+    @media (pointer:coarse) { button { min-height:var(--ui-nav-row-height,var(--ui-control-lg)); } }
   `;
 
   override focus(options?: FocusOptions): void { this.renderRoot.querySelector('button')?.focus(options); }

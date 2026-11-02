@@ -1,4 +1,4 @@
-import { LitElement, css, html, unsafeCSS } from 'lit';
+import { LitElement, css, html, nothing, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { CalendarClock, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
@@ -7,6 +7,7 @@ import { instanceLabel } from '../lib/instance-identity.js';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { fetchUpdateStatus, type UpdateStatus } from '../lib/update.js';
 import { macAppVersion } from '../lib/mac-app.js';
+import '../ui/button.js';
 import '../ui/nav-item.js';
 import './mux-chat-list.js';
 
@@ -61,6 +62,87 @@ export class MuxSidebar extends LitElement {
       flex: none;
       padding: var(--ui-space-4) var(--ui-space-3) var(--ui-space-5);
     }
+    .drawer-footer-actions { display: none; }
+    :host([drawer]) .nav-actions {
+      gap: 0;
+      padding: var(--ui-space-4) 0 0;
+    }
+    :host([drawer]) .nav-actions mux-ui-nav-item {
+      --ui-nav-row-height: var(--ui-sidebar-nav-row-height);
+      --ui-nav-icon-size: 20px;
+      --ui-nav-font-size: 16px;
+      --ui-nav-icon-label-gap: var(--ui-sidebar-nav-icon-label-gap);
+      --ui-nav-horizontal-padding: var(--ui-sidebar-nav-horizontal-padding);
+    }
+    :host([drawer]) .tab-content {
+      padding: 0 var(--ui-sidebar-content-inset) calc(var(--ui-sidebar-footer-control-size) + env(safe-area-inset-bottom, 0px) + var(--ui-space-5) + var(--ui-space-8));
+    }
+    :host([drawer]) .chat-scroll {
+      margin-top: var(--ui-sidebar-nav-divider-gap);
+      padding-top: var(--ui-space-6);
+      border-top: 1px solid var(--ui-border);
+    }
+    :host([drawer]) mux-chat-list {
+      --ui-text-sm: 16px;
+      --ui-sidebar-section-font-size: 15px;
+    }
+    :host([drawer]) .drawer-footer-actions {
+      position: absolute;
+      z-index: var(--ui-z-menu);
+      inset: auto 0 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 var(--ui-space-8) calc(env(safe-area-inset-bottom, 0px) + var(--ui-space-5));
+      isolation: isolate;
+    }
+    :host([drawer]) .drawer-footer-actions::before {
+      position: absolute;
+      z-index: var(--ui-z-backdrop);
+      inset: auto 0 calc(-1 * (env(safe-area-inset-bottom, 0px) + var(--ui-space-5)));
+      height: calc(var(--ui-sidebar-footer-control-size) + env(safe-area-inset-bottom, 0px) + var(--ui-space-5) + var(--ui-space-8));
+      background: linear-gradient(to bottom, transparent, var(--ui-surface-nav) 70%);
+      content: "";
+      pointer-events: none;
+    }
+    :host([drawer]) .drawer-footer-actions mux-ui-button {
+      flex: none;
+      height: var(--ui-sidebar-footer-control-size);
+    }
+    :host([drawer]) .drawer-new-chat {
+      width: var(--ui-sidebar-new-chat-width);
+    }
+    :host([drawer]) .drawer-new-chat::part(button) {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      min-height: 100%;
+      gap: var(--ui-space-3);
+      padding: 0 var(--ui-space-6);
+      border: 0;
+      border-radius: var(--ui-radius-pill);
+      background: var(--ui-accent);
+      color: var(--ui-on-accent);
+      font: 500 var(--ui-text-xl)/1.25 var(--ui-font-sans);
+    }
+    :host([drawer]) .drawer-new-chat::part(button):active { background: color-mix(in srgb, var(--ui-accent) 82%, black); }
+    :host([drawer]) .drawer-settings {
+      width: var(--ui-sidebar-footer-control-size);
+    }
+    :host([drawer]) .drawer-settings::part(button) {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      min-height: 100%;
+      padding: 0;
+      border: 1px solid var(--ui-border);
+      border-radius: var(--ui-radius-pill);
+      background: var(--ui-surface-raised);
+      color: var(--ui-text);
+    }
+    :host([drawer]) .drawer-new-chat .lucide-icon,
+    :host([drawer]) .drawer-settings .lucide-icon { width: var(--ui-icon-md); height: var(--ui-icon-md); }
+    :host([drawer]) .drawer-footer-actions mux-ui-button::part(button):focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
   `;
 
   @property({ type: Boolean }) newChatActive = false;
@@ -94,6 +176,18 @@ export class MuxSidebar extends LitElement {
   };
 
   private renderFooter() {
+    if (this.drawer) {
+      return html`<div class="drawer-footer-actions">
+        <mux-ui-button class="drawer-new-chat" variant="primary" size="large" accessible-label="New chat" aria-current=${this.newChatActive ? 'page' : nothing}
+          @click=${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}>
+          ${icon(Plus, { size: 20 })}<span>New chat</span>
+        </mux-ui-button>
+        <mux-ui-button class="drawer-settings" icon-only size="large" variant="secondary" accessible-label="Settings" tooltip="Settings"
+          @click=${() => this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action: 'settings' }, bubbles: true, composed: true }))}>
+          ${icon(Settings, { size: 20 })}
+        </mux-ui-button>
+      </div>`;
+    }
     const version = macAppVersion() || this.updateStatus?.currentVersion;
     const description = version ? version.startsWith('v') ? version : `v${version}` : '';
     return html`<div class="footer"><mux-ui-nav-item label="Settings" description=${description}
@@ -109,19 +203,21 @@ export class MuxSidebar extends LitElement {
       { label: 'Scheduled jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
       { label: 'Customizations', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
       { label: 'Skills', icon: Puzzle, active: this.skillsActive, event: 'skills-open' },
-    ];
+    ].filter(action => !this.drawer || action.event !== 'chat-new');
+    const nav = html`<nav class="nav-actions" aria-label="Sidebar actions">
+      ${navActions.map(action => html`
+        <mux-ui-nav-item label=${action.label} ?active=${action.active}
+          @click=${() => this.dispatchEvent(new CustomEvent(action.event, { bubbles: true, composed: true }))}>
+          <span slot="icon">${icon(action.icon, { size: this.drawer ? 20 : 16 })}</span>
+        </mux-ui-nav-item>
+      `)}
+    </nav>`;
 
     return html`
       <div class="header"><span title=${window.location.hostname}>${instanceLabel()}</span></div>
-      <nav class="nav-actions" aria-label="Sidebar actions">
-        ${navActions.map(action => html`
-          <mux-ui-nav-item label=${action.label} ?active=${action.active}
-            @click=${() => this.dispatchEvent(new CustomEvent(action.event, { bubbles: true, composed: true }))}>
-            <span slot="icon">${icon(action.icon, { size: 16 })}</span>
-          </mux-ui-nav-item>
-        `)}
-      </nav>
-      <div class="tab-content"><mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list></div>
+      ${this.drawer
+        ? html`<div class="tab-content">${nav}<div class="chat-scroll"><mux-chat-list drawer .selectedSession=${this.selectedSDKChat}></mux-chat-list></div></div>`
+        : html`${nav}<div class="tab-content"><mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list></div>`}
       ${this.renderFooter()}
     `;
   }

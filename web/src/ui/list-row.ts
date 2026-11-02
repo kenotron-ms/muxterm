@@ -11,20 +11,23 @@ export class MuxUIListRow extends LitElement {
   @property({ reflect:true }) variant: 'item' | 'group' = 'item';
   @property({ type:Boolean, reflect:true }) selected = false;
   @property({ type:Boolean, reflect:true }) muted = false;
+  @property({ type:Boolean, reflect:true, attribute:'hide-icon' }) hideIcon = false;
   @property({ type:Boolean }) expandable = false;
   @property({ type:Boolean }) expanded = false;
 
   static override styles = css`
-    :host { display:flex; flex:1; min-width:0; color:var(--ui-text); font:var(--ui-text-sm)/1.35 var(--ui-font-sans); }
-    button { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-4); width:100%; min-width:0; min-height:var(--ui-control-sm); padding:var(--ui-space-1) var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:inherit; text-align:left; font:inherit; font-weight:550; cursor:pointer; }
-    :host([variant='group']) button { min-height:var(--ui-control-md); padding:0 var(--ui-space-3); font-weight:500; }
+    :host { display:flex; flex:1; min-width:0; color:var(--ui-text); font:var(--ui-text-sm)/var(--ui-sidebar-row-line-height,1.35) var(--ui-font-sans); }
+    button { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-list-row-icon-label-gap,var(--ui-space-4)); width:100%; min-width:0; min-height:var(--ui-list-row-height,var(--ui-control-sm)); padding:var(--ui-list-row-vertical-padding,var(--ui-space-1)) var(--ui-list-row-horizontal-padding,var(--ui-space-2)); border:0; border-radius:var(--ui-radius-md); background:transparent; color:inherit; text-align:left; font:inherit; font-weight:550; cursor:pointer; }
+    :host([variant='group']) button { min-height:var(--ui-list-row-height,var(--ui-control-md)); padding:0 var(--ui-list-row-horizontal-padding,var(--ui-space-3)); font-weight:500; }
     button:hover { background:var(--ui-surface-hover); }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
     :host([selected]) button { background:var(--ui-nav-selected); }
     :host([muted]) button { color:var(--ui-text-muted); }
-    .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:var(--ui-space-6); height:var(--ui-space-6); color:var(--ui-text-muted); }
+    .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:var(--ui-list-row-icon-size,var(--ui-space-6)); height:var(--ui-list-row-icon-size,var(--ui-space-6)); color:var(--ui-text-muted); }
+    :host([hide-icon]) .icon { display:none; }
+    :host([hide-icon]) button { gap:0; padding-left:0; }
     .label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    @media(pointer:coarse) { button,:host([variant='group']) button { min-height:var(--ui-control-lg); } }
+    @media(pointer:coarse) { button,:host([variant='group']) button { min-height:var(--ui-list-row-height,var(--ui-control-lg)); } }
   `;
 
   override focus(options?: FocusOptions): void { this.renderRoot.querySelector('button')?.focus(options); }
@@ -35,7 +38,7 @@ export class MuxUIListRow extends LitElement {
       aria-current=${this.selected ? 'true' : nothing}
       aria-expanded=${this.expandable ? String(this.expanded) : nothing}>
       <span class="icon" aria-hidden="true"><slot name="icon"></slot></span>
-      <span class="label">${this.label}</span>
+      <span class="label"><slot name="label">${this.label}</slot></span>
     </button>`;
   }
 }
