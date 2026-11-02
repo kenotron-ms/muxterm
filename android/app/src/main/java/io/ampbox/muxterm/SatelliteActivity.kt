@@ -41,7 +41,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -282,16 +286,21 @@ private fun SatelliteScreen(
                 }
             } else {
                 val chat = selectedChat!!
-                ChatHeader(chat, snapshot?.nodes?.firstOrNull { it.id == chat.nodeId }?.name ?: "This server",
-                    onBack = { selectedChat = null; draft = ""; attachments = emptyList() }, openWorkspace)
+                val node = snapshot?.nodes?.firstOrNull { it.id == chat.nodeId }
+                val project = snapshot?.projects?.firstOrNull { it.id == chat.projectId && it.nodeId == chat.nodeId }
+                val working = if (history?.transcript?.blocks?.isNotEmpty() == true) history?.transcript?.running == true
+                    else chat.state == "working" || chat.state == "starting"
+                ChatHeader(chat, project?.name ?: "Project",
+                    if (chat.nodeId.isBlank()) "This server" else node?.name ?: "Remote node",
+                    node?.state == "connected",
+                    onBack = { selectedChat = null; draft = ""; attachments = emptyList() },
+                    openWorkspace = openWorkspace, serverSettings = { showServer = true })
                 if (sharedText != null) ShareBanner(sharedText, ::discardShare)
                 if (error.isNotBlank()) ErrorLine(error)
                 if (chat.state == "blocked" || chat.state == "failed")
                     ErrorLine(if (chat.state == "blocked") "This chat is blocked and needs your attention."
                         else "The last turn failed. Review the transcript before continuing.")
                 val blocks = olderBlocks + (history?.transcript?.blocks ?: emptyList())
-                val working = if (history?.transcript?.blocks?.isNotEmpty() == true) history?.transcript?.running == true
-                    else chat.state == "working" || chat.state == "starting"
                 LazyColumn(modifier = Modifier.weight(1f), reverseLayout = false) {
                     if (olderHasMore ?: (history?.hasMore == true)) item {
                         TextButton(onClick = {
@@ -453,20 +462,41 @@ private fun SatelliteScreen(
 
 @Composable
 private fun Header(server: String, connected: Boolean, serverSettings: () -> Unit, openWorkspace: () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("muxterm", fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.8).sp,
+            Text("muxterm", fontSize = 26.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1.0).sp,
                 modifier = Modifier.weight(1f))
-            TextButton(onClick = openWorkspace) { Text("Workspace") }
+            HeaderActions(openWorkspace = openWorkspace, serverSettings = serverSettings)
         }
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable(onClick = serverSettings)) {
-            StatusDot(connected)
-            Text(server.removePrefix("https://").removePrefix("http://").take(48),
-                color = secondary, fontSize = 13.sp, modifier = Modifier.padding(start = 7.dp))
-            Text("  ·  Change server", color = blue, fontSize = 13.sp)
+        Surface(color = raised, shape = RoundedCornerShape(13.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clickable(onClick = serverSettings)) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(connected)
+                Text(server.removePrefix("https://").removePrefix("http://"),
+                    color = ink, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = 10.dp))
+                Text(if (connected) "Connected" else "Unavailable", color = secondary, fontSize = 11.sp,
+                    modifier = Modifier.padding(start = 8.dp))
+            }
         }
     }
     HorizontalDivider(color = line)
+}
+
+@Composable
+private fun HeaderActions(openWorkspace: () -> Unit, serverSettings: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.size(44.dp)) {
+            Icon(painterResource(R.drawable.ic_chat_more), contentDescription = "App actions", tint = ink,
+                modifier = Modifier.size(22.dp))
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(text = { Text("Open workspace") }, onClick = { expanded = false; openWorkspace() })
+            DropdownMenuItem(text = { Text("Change server") }, onClick = { expanded = false; serverSettings() })
+        }
+    }
 }
 
 @Composable
@@ -566,15 +596,32 @@ private fun ChatListRow(chat: SatelliteChat, hasShare: Boolean, onClick: () -> U
 }
 
 @Composable
-private fun ChatHeader(chat: SatelliteChat, node: String, onBack: () -> Unit, openWorkspace: () -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 12.dp, top = 6.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = onBack) { Text("‹ Projects", fontSize = 15.sp) }
-        Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
-            Text(chat.title.ifBlank { "Untitled chat" }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("$node  ·  ${chat.harness}", color = secondary, fontSize = 11.sp)
+private fun ChatHeader(chat: SatelliteChat, project: String, node: String, connected: Boolean,
+    onBack: () -> Unit, openWorkspace: () -> Unit, serverSettings: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 15.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) {
+                Icon(painterResource(R.drawable.ic_chat_back), contentDescription = "Back to projects",
+                    tint = ink, modifier = Modifier.size(23.dp))
+            }
+            FolderMark(chat.nodeId.isNotBlank())
+            Text(project, color = secondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(start = 9.dp, end = 8.dp))
+            HeaderActions(openWorkspace = openWorkspace, serverSettings = serverSettings)
         }
-        TextButton(onClick = openWorkspace) { Text("More") }
+        Text(chat.title.ifBlank { "Untitled chat" }, color = ink, fontSize = 21.sp,
+            fontWeight = FontWeight.SemiBold, lineHeight = 25.sp, maxLines = 2,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 7.dp, top = 8.dp))
+        Row(modifier = Modifier.fillMaxWidth().padding(start = 7.dp, top = 9.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            StatusDot(connected)
+            Text(node, color = secondary, fontSize = 12.sp, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 8.dp))
+            Text(chat.harness.replaceFirstChar { it.uppercase() },
+                color = secondary, fontSize = 12.sp,
+                modifier = Modifier.padding(start = 8.dp))
+        }
     }
     HorizontalDivider(color = line)
 }

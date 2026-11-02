@@ -81,7 +81,7 @@ sending. The native dictation control launched Android's speech recognizer; the
 emulator has no microphone input to verify transcription. The side-by-side APK
 installed next to the existing package. A connected SSH node was not available
 in this fixture, so remote relay still needs device verification.
-The visual comparison and interaction storyboard are in
+The native screens and interaction storyboard are in
 `docs/design-system/android-chat-storyboard.md`.
 
 ## Earlier WebView verification
