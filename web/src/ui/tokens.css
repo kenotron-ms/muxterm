@@ -81,9 +81,9 @@
   --ui-sidebar-item-font-size: 14px;
   --ui-sidebar-section-label-font-size: 13px;
   --ui-sidebar-nav-icon-label-gap: 16px;
-  --ui-sidebar-nav-horizontal-padding: 8px;
+  --ui-sidebar-nav-horizontal-padding: 4px;
   --ui-sidebar-wordmark-size: 32px;
-  --ui-sidebar-content-inset: 25px;
+  --ui-sidebar-content-inset: 20px;
   --ui-sidebar-nav-divider-gap: 38px;
   --ui-sidebar-session-indent: var(--ui-space-8);
   --ui-sidebar-new-chat-width: 157px;
