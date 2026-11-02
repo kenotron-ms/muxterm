@@ -101,9 +101,14 @@ export class CodexStream {
         throw new Error('Choose one of the offered answers');
       response[question.id] = { answers: [answer.trim()] };
     }
+    const visibleAnswer = pending.questions.map(question => {
+      const label = question.header || (pending.questions.length > 1 ? question.question : '');
+      const answer = question.isSecret ? 'Private answer sent' : response[question.id].answers[0];
+      return label ? `${label}: ${answer}` : answer;
+    }).join('\n');
     this.userInputRequests.delete(questionId);
     this.process.stdin.write(JSON.stringify({ id: pending.rpcId, result: { answers: response } }) + '\n');
-    this.emit(this.session.id, 'question.answered', { itemId: questionId });
+    this.emit(this.session.id, 'question.answered', { itemId: questionId, text: visibleAnswer });
     return { status: 'accepted' };
   }
 
