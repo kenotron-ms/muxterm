@@ -449,10 +449,10 @@ export class MuxApp extends LitElement {
       justify-content: space-between;
       flex: none;
       min-height: calc(var(--ui-nav-height) + env(safe-area-inset-top, 0px));
-      padding: env(safe-area-inset-top, 0px) max(var(--ui-space-5), env(safe-area-inset-right, 0px)) 0 max(var(--ui-space-5), env(safe-area-inset-left, 0px));
+      padding: env(safe-area-inset-top, 0px) max(var(--ui-sidebar-content-inset), env(safe-area-inset-right, 0px)) 0 max(var(--ui-sidebar-content-inset), env(safe-area-inset-left, 0px));
       border-bottom: 1px solid var(--ui-border);
       background: var(--ui-surface-nav);
-      font-size: 32px;
+      font-size: var(--ui-sidebar-wordmark-size);
       font-weight: 600;
     }
 

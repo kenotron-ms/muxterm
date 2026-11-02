@@ -130,16 +130,14 @@ export class MuxChatWorkspace extends LitElement {
     .row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
     .row:has(mux-ui-menu) .host-label { display:none; }
     mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
-    .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-space-8); }
+    .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-sidebar-session-indent,var(--ui-space-8)); }
     .archive-list { box-sizing:border-box; max-height:var(--ui-chat-edit-max-height); overflow-y:auto; overscroll-behavior:contain; }
     .archive-list .chat-row { height:var(--ui-space-9); min-height:var(--ui-space-9); }
     .archive-spacer { pointer-events:none; }
     .archive-status { padding:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .chat-row[selected] { background:var(--ui-nav-selected); }
-    .chat-icon { width:var(--ui-space-6); height:var(--ui-space-6); display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
-    .chat-harness { flex:none; display:inline-flex; align-items:center; justify-content:center; width:var(--ui-space-8); height:100%; min-height:var(--ui-control-md); padding:0; border-radius:var(--ui-radius-md); }
-    .chat-harness:hover,.chat-harness:focus-visible { background:var(--ui-surface-hover); }
-    .chat-harness:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
+    .chat-icon { width:var(--ui-icon-md); height:var(--ui-icon-md); display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
+    .chat-harness { --ui-control-sm:var(--ui-space-8); flex:none; }
     .chat-label-copy { display:flex; align-items:center; width:100%; min-width:0; gap:var(--ui-space-2); }
     .chat-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .chat-host { flex:none; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:400; }
@@ -340,7 +338,7 @@ export class MuxChatWorkspace extends LitElement {
         ${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<mux-ui-text-field class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}></mux-ui-text-field><mux-ui-button class="rename-save" variant="quiet" size="small" icon-only accessible-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</mux-ui-button>` : html`
-            ${chat.operator || group.laneIds.has(chat.id) ? nothing : html`<button class="chat-harness" type="button" data-chat-id=${chat.id} aria-label=${`Options for ${chat.title}`} title="Chat options" aria-haspopup="menu" aria-expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${harnessGlyph(chat)}</button>`}
+            ${chat.operator || group.laneIds.has(chat.id) ? nothing : html`<mux-ui-button class="chat-harness" icon-only size="small" variant="quiet" tone="muted" data-chat-id=${chat.id} accessible-label=${`Options for ${chat.title}`} tooltip="Chat options" haspopup="menu" .expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${harnessGlyph(chat)}</mux-ui-button>`}
             <mux-ui-list-row class="chat" label=${chat.title} tooltip=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${group.project?.managedFolder ? 'No folder' : chat.projectPath || 'Folder unknown'}`} ?hide-icon=${!chat.operator && !group.laneIds.has(chat.id)} ?selected=${this.selectedSession === chat.id} @click=${() => this.openChat(chat)}>
               ${chat.operator || group.laneIds.has(chat.id) ? html`<span slot="icon" class="status ${chat.operator ? 'operator' : 'lane'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : `Lane · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : laneIcon(14)}</span>` : nothing}
               ${chat.remoteHost ? html`<span slot="label" class="chat-label-copy"><span class="chat-title">${chat.title}</span><span class="chat-host">${sdkChats.remoteHosts.find(host => host.id === chat.remoteHost)?.name || chat.remoteHost}</span></span>` : nothing}
@@ -387,6 +385,7 @@ export class MuxChatList extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { display:block; color:var(--ui-text-muted); font:var(--ui-text-sm)/1.35 var(--ui-font-sans); }
+    :host([drawer]) { --ui-sidebar-session-indent:0px; }
     .heading { padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-1); font-size:var(--ui-sidebar-section-font-size,inherit); font-weight:600; letter-spacing:0; text-transform:none; }
     .heading-row { display:flex; align-items:center; justify-content:space-between; }
     .heading-actions { display:flex; align-items:center; }
@@ -394,7 +393,7 @@ export class MuxChatList extends LitElement {
     .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border-radius:var(--ui-radius-md); color:var(--ui-text); }
     .pin-row:hover,.pin-row:focus-within { background:var(--ui-surface-hover); }
     .pin-row[selected] { background:var(--ui-nav-selected); }
-    .pin-icon { display:flex; flex:none; width:var(--ui-space-6); height:var(--ui-space-6); align-items:center; justify-content:center; color:var(--ui-text-muted); }
+    .pin-icon { display:flex; flex:none; width:var(--ui-icon-md); height:var(--ui-icon-md); align-items:center; justify-content:center; color:var(--ui-text-muted); }
     .pin-icon.harness-mark { background:currentColor; -webkit-mask:var(--harness-mark) center/contain no-repeat; mask:var(--harness-mark) center/contain no-repeat; }
     .pin-icon.harness-mark.working { color:var(--ui-success); }
     .pin-icon.harness-mark.blocked,.pin-icon.harness-mark.failed { color:var(--ui-danger); }

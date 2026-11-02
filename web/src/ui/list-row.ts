@@ -25,7 +25,7 @@ export class MuxUIListRow extends LitElement {
     :host([muted]) button { color:var(--ui-text-muted); }
     .icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:var(--ui-space-6); height:var(--ui-space-6); color:var(--ui-text-muted); }
     :host([hide-icon]) .icon { display:none; }
-    :host([hide-icon]) button { gap:0; }
+    :host([hide-icon]) button { gap:0; padding-left:0; }
     .label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     @media(pointer:coarse) { button,:host([variant='group']) button { min-height:var(--ui-control-lg); } }
   `;

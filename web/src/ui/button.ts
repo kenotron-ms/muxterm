@@ -18,6 +18,7 @@ export class MuxUIButton extends LitElement {
   @property({ type: Boolean, reflect: true, attribute: 'full-width' }) fullWidth = false;
   @property({ type: Boolean, reflect: true, attribute: 'icon-only' }) iconOnly = false;
   @property({ attribute: 'accessible-label' }) accessibleLabel = '';
+  @property({ attribute: 'aria-current' }) ariaCurrent = '';
   @property({ reflect: true }) tone: 'default' | 'muted' | 'danger' = 'default';
   @property({ reflect: true }) appearance: ButtonAppearance = 'app';
   @property() haspopup = '';
@@ -140,12 +141,12 @@ export class MuxUIButton extends LitElement {
         target=${this.target || nothing} rel=${rel || nothing} download=${this.download || (this.hasAttribute('download') ? '' : nothing)}
         role=${this.disabled || this.busy ? 'link' : nothing} aria-disabled=${this.disabled || this.busy ? 'true' : nothing}
         tabindex=${this.disabled || this.busy ? '-1' : nothing}
-        title=${this.tooltip || nothing} aria-label=${this.accessibleLabel || nothing} aria-keyshortcuts=${this.keyshortcuts || nothing}
+        title=${this.tooltip || nothing} aria-label=${this.accessibleLabel || nothing} aria-current=${this.ariaCurrent || nothing} aria-keyshortcuts=${this.keyshortcuts || nothing}
         aria-busy=${String(this.busy)}>${content}</a>`;
     }
     return html`<button part="button" type="button" ?disabled=${this.disabled || this.busy}
       title=${this.tooltip || nothing}
-      aria-label=${this.accessibleLabel || nothing} aria-keyshortcuts=${this.keyshortcuts || nothing} aria-busy=${String(this.busy)}
+      aria-label=${this.accessibleLabel || nothing} aria-current=${this.ariaCurrent || nothing} aria-keyshortcuts=${this.keyshortcuts || nothing} aria-busy=${String(this.busy)}
       aria-haspopup=${this.haspopup || nothing} aria-expanded=${this.haspopup || this.expandable ? String(this.expanded) : nothing}
       aria-pressed=${this.toggle ? String(this.pressed) : nothing}>
       ${content}
