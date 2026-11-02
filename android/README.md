@@ -1,9 +1,18 @@
-# muxterm Android wrapper
+# muxterm Android satellite
 
-A plain WebView that loads muxterm and grants it the capabilities the web app needs.
-It implements **no** muxterm feature: voice and remote sessions all
-already work in the web app. This wrapper exists to give that page a microphone that
-keeps working when the screen goes off.
+The launcher is a native Android client for SDK projects and chats. It connects to
+one muxterm server, shows that server's connected SSH nodes and their projects,
+creates managed project folders and chats on a selected node, and reads and sends
+chat messages through the server's existing API. The phone does not run muxterm,
+sessiond, SSH, or an agent harness. The **Workspace** action opens the original
+WebView for sign-in, terminal, voice, and settings features.
+
+Android's text share sheet can send text to the satellite. Shared text stays in a
+local draft until the user chooses a chat and presses **Send**. No phone data is
+published to other nodes in the background.
+
+The WebView and its voice service remain in the app. The original wrapper design
+is documented in `docs/design/webview-wrapper.md`.
 
 Reference: `docs/design/webview-wrapper.md` on branch `design/webview-wrapper`.
 
@@ -18,6 +27,11 @@ cd android && ./gradlew assemblePhone
 Output: `android/app/build/outputs/apk/phone/app-phone.apk` (debug-signed, sideloadable).
 The `assembleDebug` variant also includes an Android Automotive OS launcher for
 emulator verification. Do not install that variant on a phone.
+
+To install alongside an existing GitHub release, build with
+`./gradlew assemblePhone -PappIdSuffix=.satellite`. This uses package
+`io.ampbox.muxterm.satellite` and has separate app data. The normal debug-signed
+APK cannot update a release-signed installation in place.
 
 ## GitHub releases
 
@@ -34,7 +48,8 @@ build once. Later release APKs can update each other in place.
 
 Three ways, in precedence order:
 
-1. In-app: press **back** at the root of history -> **Change URL**.
+1. In-app: tap **Change server** under the muxterm title. The Workspace WebView also
+   has **Change URL** at the root of its history.
 2. Intent: `adb shell am start -n io.ampbox.muxterm/.MainActivity -e url https://host`
 3. Build time: `./gradlew assemblePhone -PmuxtermUrl=https://host`
 
@@ -45,7 +60,18 @@ Three ways, in precedence order:
 Gradle 8.5, AGP 8.2.2, Kotlin 1.9.22, compileSdk 34, minSdk 26, targetSdk 34,
 build-tools 34.0.0.
 
-## What was verified, and how
+## Native satellite verification
+
+On an Android 14 emulator connected through `adb reverse` to isolated
+`make dev-local` on port 8313, the native app created a project, started a
+Codex chat, displayed its reply, sent a follow-up, and received another reply.
+The same project and full transcript appeared in the web client. Android text
+sharing populated a draft, and **Discard** cleared it without sending. The
+side-by-side APK installed next to the existing package and opened its own
+server sign-in screen. A connected SSH node was not available in this fixture,
+so remote project creation and remote chat relay remain device verification work.
+
+## Earlier WebView verification
 
 Verified on an Android 14 (API 34) Pixel 6 emulator, `google_apis x86_64`.
 
