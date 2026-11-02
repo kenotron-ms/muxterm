@@ -147,7 +147,12 @@ export class MuxChatWorkspace extends LitElement {
       height:var(--ui-sidebar-row-hit-target,var(--ui-space-8));
       margin-inline-start:calc(var(--ui-list-row-icon-size,var(--ui-space-6)) + var(--ui-list-row-icon-label-gap,var(--ui-space-4)) - var(--ui-sidebar-row-hit-target,var(--ui-space-8)));
     }
-    :host([drawer]) .chat-harness { margin-inline-start:0; }
+    :host([drawer]) .chat-harness,
+    :host([drawer]) .chat-row .action.more {
+      width:var(--ui-sidebar-row-hit-target,var(--ui-control-lg));
+      height:var(--ui-sidebar-row-hit-target,var(--ui-control-lg));
+      margin-inline-start:0;
+    }
     .chat-harness::part(button) {
       justify-content:flex-start;
       padding-inline-start:calc(var(--ui-sidebar-row-hit-target,var(--ui-space-8)) - var(--ui-list-row-icon-size,var(--ui-space-6)) - var(--ui-list-row-icon-label-gap,var(--ui-space-4)));

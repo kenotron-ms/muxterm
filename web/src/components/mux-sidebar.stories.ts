@@ -25,7 +25,7 @@ function view(destination: Destination = 'newChatActive', drawer = false) {
     .selectedSDKChat=${'sidebar-claude'}
     .drawer=${drawer}
   ></mux-sidebar>`;
-  return html`<div style="box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;height:100dvh;width:${drawer ? '87vw' : '348px'};max-width:100vw;overflow:hidden;background:var(--ui-surface-nav);border-right:1px solid var(--ui-border);border-radius:${drawer ? '0 var(--ui-radius-xl) var(--ui-radius-xl) 0' : '0'}">
+  return html`<div style="box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;height:100dvh;width:${drawer ? '100vw' : '348px'};max-width:100vw;overflow:hidden;background:var(--ui-surface-nav);border-right:1px solid var(--ui-border);border-radius:0">
     ${drawer ? html`<header style="box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;flex:none;min-height:60px;padding:env(safe-area-inset-top,0px) 24px 0;background:var(--ui-surface-nav);border-bottom:1px solid var(--ui-border);font-size:32px;font-weight:600"><span>muxterm</span><button aria-label="Close navigation" style="border:0;background:transparent;color:inherit;font-size:20px">×</button></header>` : ''}
     <div style="flex:1;min-height:0">${sidebar}</div>
   </div>`;

@@ -397,7 +397,7 @@ export class MuxApp extends LitElement {
 
       position: fixed;
       inset: 0 auto 0 0;
-      width: 87vw;
+      width: 100vw;
       height: 100%;
       max-width: none;
       max-height: none;
@@ -418,7 +418,7 @@ export class MuxApp extends LitElement {
       color: var(--ui-text);
       border: 0;
       border-right: 0;
-      border-radius: 0 var(--ui-radius-xl) var(--ui-radius-xl) 0;
+      border-radius: 0;
       box-shadow: var(--ui-shadow-drawer);
       translate: -100% 0;
       transition:
