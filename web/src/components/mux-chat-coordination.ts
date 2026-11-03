@@ -23,7 +23,7 @@ export class MuxChatCoordination extends LitElement {
   static styles = css`
     :host { display:block; height:100%; overflow:auto; box-sizing:border-box; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-sm)/1.5 var(--ui-font-sans); }
     * { box-sizing:border-box; }
-    .wrap { max-width:800px; margin:0 auto; padding:var(--ui-space-7); }
+    .wrap { max-width:var(--ui-chat-content-width); margin:0 auto; padding:var(--ui-space-7); }
     h2,h3,p { margin:0; }
     h2 { font-size:var(--ui-text-xl); line-height:1.2; letter-spacing:-.02em; }
     h3 { font-size:var(--ui-text-md); }
@@ -32,18 +32,16 @@ export class MuxChatCoordination extends LitElement {
     .overview { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); margin:var(--ui-space-7) 0 var(--ui-space-5); }
     .overview p { color:var(--ui-text-muted); }
     .filters { display:flex; gap:var(--ui-space-2); margin-bottom:var(--ui-space-4); }
-    .filter { border:1px solid var(--ui-border); border-radius:var(--ui-radius-pill); background:transparent; color:var(--ui-text-muted); cursor:pointer; padding:var(--ui-space-1) var(--ui-space-3); font:inherit; }
-    .filter[aria-pressed="true"] { border-color:var(--ui-accent); background:color-mix(in srgb,var(--ui-accent) 12%,transparent); color:var(--ui-text); }
-    button:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
+    .filter[pressed] { color:var(--ui-accent); }
     .list { border-top:1px solid var(--ui-border); }
-    .issue { display:flex; align-items:flex-start; gap:var(--ui-space-4); width:100%; border:0; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-5) var(--ui-space-2); background:transparent; color:var(--ui-text); text-align:left; cursor:pointer; font:inherit; }
-    .issue:hover { background:var(--ui-surface-hover); }
-    .issue > span:nth-child(2) { flex:1; min-width:0; }
+    .issue::part(button) { display:flex; align-items:flex-start; justify-content:flex-start; gap:var(--ui-space-4); width:100%; border:0; border-bottom:1px solid var(--ui-border); border-radius:0; padding:var(--ui-space-5) var(--ui-space-2); background:transparent; color:var(--ui-text); text-align:left; white-space:normal; font:inherit; }
+    .issue:hover::part(button) { background:var(--ui-surface-hover); }
+    .issue .issue-main { flex:1; min-width:0; }
     .issue strong { display:block; font-weight:650; overflow-wrap:anywhere; }
     .summary { display:block; margin-top:var(--ui-space-1); color:var(--ui-text-muted); overflow-wrap:anywhere; }
     .meta { font-size:var(--ui-text-xs); }
     .issue .meta { display:block; margin-top:var(--ui-space-2); }
-    .status-dot { flex:none; width:11px; height:11px; margin-top:5px; border:2px solid var(--ui-border-strong); border-radius:50%; }
+    .status-dot { flex:none; width:var(--ui-space-5); height:var(--ui-space-5); margin-top:var(--ui-space-2); border:2px solid var(--ui-border-strong); border-radius:50%; }
     .status-dot.active { border-color:var(--ui-accent); background:var(--ui-accent); }
     .status-dot.blocked { border-color:var(--ui-danger); background:var(--ui-danger); }
     .status-dot.done { border-color:var(--ui-accent); background:color-mix(in srgb,var(--ui-accent) 30%,transparent); }
@@ -58,7 +56,7 @@ export class MuxChatCoordination extends LitElement {
     .entry { border-bottom:1px solid var(--ui-border); padding:var(--ui-space-4) 0; }
     .entry p { margin-top:var(--ui-space-2); white-space:pre-wrap; overflow-wrap:anywhere; }
     .error { color:var(--ui-danger); margin:var(--ui-space-3) 0; }
-    @media(max-width:550px) { .wrap { padding:var(--ui-space-5); } .issue { padding-inline:0; } .issue .status { display:none; } }
+    @media(max-width:550px) { .wrap { padding:var(--ui-space-5); } .issue::part(button) { padding-inline:0; } .issue .status { display:none; } }
   `;
 
   override connectedCallback() {
@@ -114,8 +112,8 @@ export class MuxChatCoordination extends LitElement {
     const openCount = ordered.filter(item => item.status !== 'done' && item.status !== 'cancelled').length;
     const visible = ordered.filter(item => this.filter === 'all' || (this.filter === 'done' ? item.status === 'done' || item.status === 'cancelled' : item.status !== 'done' && item.status !== 'cancelled'));
     return html`<div class="overview"><p>${openCount} open · ${this.work.length} total</p></div>
-      <div class="filters" aria-label="Filter issues">${(['open','all','done'] as const).map(filter => html`<button class="filter" type="button" aria-pressed=${this.filter === filter} @click=${() => { this.filter=filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Done'}</button>`)}</div>
-      ${visible.length ? html`<div class="list">${visible.map(item => html`<button class="issue" type="button" @click=${() => { this.detail=item; void this.refresh(); }}><span class="status-dot ${item.status}" aria-hidden="true"></span><span><strong>${item.title}</strong><span class="summary">${item.progress || item.brief || 'No progress yet'}</span><span class="meta">${this.date(item.updatedAt)} · ${[item.ownerSessionId,...item.sessionIds].length} ${[item.ownerSessionId,...item.sessionIds].length === 1 ? 'chat' : 'chats'}</span></span><span class="status">${this.statusName(item.status)}</span></button>`)}</div>` : html`<div class="empty"><strong>${this.work.length ? 'No issues in this view' : 'No issues yet'}</strong>${this.work.length ? 'Choose another filter to see them.' : 'Issues will appear here as agents record shared work.'}</div>`}`;
+      <div class="filters" aria-label="Filter issues">${(['open','all','done'] as const).map(filter => html`<mux-ui-button class="filter" size="small" variant="quiet" toggle .pressed=${this.filter === filter} @click=${() => { this.filter=filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Done'}</mux-ui-button>`)}</div>
+      ${visible.length ? html`<div class="list">${visible.map(item => html`<mux-ui-button class="issue" full-width variant="quiet" @click=${() => { this.detail=item; void this.refresh(); }}><span class="status-dot ${item.status}" aria-hidden="true"></span><span class="issue-main"><strong>${item.title}</strong><span class="summary">${item.progress || item.brief || 'No progress yet'}</span><span class="meta">${this.date(item.updatedAt)} · ${[item.ownerSessionId,...item.sessionIds].length} ${[item.ownerSessionId,...item.sessionIds].length === 1 ? 'chat' : 'chats'}</span></span><span class="status">${this.statusName(item.status)}</span></mux-ui-button>`)}</div>` : html`<div class="empty"><strong>${this.work.length ? 'No issues in this view' : 'No issues yet'}</strong>${this.work.length ? 'Choose another filter to see them.' : 'Issues will appear here as agents record shared work.'}</div>`}`;
   }
   private issueDetail() {
     const item = this.detail;
