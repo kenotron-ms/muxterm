@@ -81,7 +81,7 @@ export class CopilotStream {
     try { await this.client.ping(); }
     catch (error) { failCopilotClient(this.client, error); throw error; }
     const bin = process.env.MUXTERM_CHAT_MCP_BIN;
-    const mcpServers = Object.fromEntries(connectorServers(bin, this.session.originFile).map(server =>
+    const mcpServers = Object.fromEntries((this.session.catalog ? [] : connectorServers(bin, this.session.originFile)).map(server =>
       [server.name, { type: 'stdio', command: server.command, args: server.args,
         env: Object.fromEntries(server.env.map(({ name, value }) => [name, value])) }]));
     const config = { model: this.session.model || 'auto', workingDirectory: this.session.cwd,

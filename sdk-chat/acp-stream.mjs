@@ -247,7 +247,7 @@ export class ACPStream {
     const profile = profiles[session.harness];
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
     this.profile = profile;
-    this.mcpServers = profile.mcp ? connectorServers(process.env.MUXTERM_CHAT_MCP_BIN, session.originFile) : [];
+    this.mcpServers = profile.mcp && !session.catalog ? connectorServers(process.env.MUXTERM_CHAT_MCP_BIN, session.originFile) : [];
     this.runtime = runtime(session.harness);
     this.exited = this.runtime.exited;
     this.connection = this.runtime.connection;

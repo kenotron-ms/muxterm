@@ -18,7 +18,8 @@ try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') t
 const sessions = new Map();
 const clients = new Set();
 let shuttingDown = false;
-let claudeModels = null;
+const claudeModels = new Map();
+const claudeModelLoads = new Map();
 const originFiles = new Set();
 const originDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'origin');
 // A previous serve may have stopped abruptly. Its in-memory capabilities are
@@ -88,6 +89,26 @@ async function suggestClaudeTitle(inputs, cwd) {
   }
   return answer.trim();
 }
+async function modelsForClaude(cwd) {
+  if (claudeModels.has(cwd)) return claudeModels.get(cwd);
+  if (!claudeModelLoads.has(cwd)) {
+    const load = (async () => {
+      // A finite, empty stream asks the SDK for this folder's model catalog.
+      // Its child exits naturally after the stream ends; no chat is started.
+      async function* emptyInput() {}
+      const q = query({ prompt: emptyInput(), options: { cwd, tools: [], maxTurns: 1, persistSession: false,
+        pathToClaudeCodeExecutable: agentCommand('claude', 'MUXTERM_CLAUDE_COMMAND') } });
+      try {
+        const models = await q.supportedModels();
+        for await (const _ of q) { /* Drain the finite SDK stream. */ }
+        claudeModels.set(cwd, models);
+        return models;
+      } catch (error) { q.close(); throw error; }
+    })().finally(() => claudeModelLoads.delete(cwd));
+    claudeModelLoads.set(cwd, load);
+  }
+  return claudeModelLoads.get(cwd);
+}
 function queue(s, input) {
   s.inputs.push(inputMessage(input));
   s.wake?.(); s.wake = null;
@@ -135,7 +156,10 @@ async function runClaude(s) {
     for await (const msg of q) {
       if (msg.type === 'system' && msg.subtype === 'init') {
         s.nativeId = msg.session_id;
-        if (!claudeModels) claudeModels = await q.supportedModels().catch(() => null);
+        if (!claudeModels.has(s.cwd)) {
+          const models = await q.supportedModels().catch(() => null);
+          if (models) claudeModels.set(s.cwd, models);
+        }
         s.claudeReady?.resolve();
         emit(s.id, 'session.started', { nativeId: s.nativeId, capabilities: capabilities('claude') });
       } else if (msg.type === 'active_goal') {
@@ -256,7 +280,9 @@ async function command(cmd) {
     if (harness !== 'codex' && harness !== 'claude' && harness !== 'copilot' && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
-    const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval, originFile: originFile(sessionId, cmd.originToken), inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
+    const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval,
+      catalog: cmd.catalog === true, originFile: cmd.catalog === true ? '' : originFile(sessionId, cmd.originToken),
+      inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
     if (harness === 'copilot') {
       try {
@@ -325,7 +351,7 @@ async function command(cmd) {
       return await s.codex.options();
     }
     if (s.runPromise && !s.busy) await s.runPromise;
-    const models = (claudeModels || []).map(model => ({
+    const models = (await modelsForClaude(s.cwd)).map(model => ({
       id: model.value, label: model.displayName, efforts: model.supportedEffortLevels || [],
       defaultEffort: '',
     }));

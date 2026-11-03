@@ -1610,6 +1610,7 @@ func (s *Server) handleSDKChatCatalog(w http.ResponseWriter, r *http.Request) {
 		id := sdkID()
 		args["sessionId"] = id
 		args["approval"] = "never"
+		args["catalog"] = true
 		args["bundle"] = r.URL.Query().Get("bundle")
 		args["provider"] = amplifierProviderModule(harness, r.URL.Query().Get("provider"))
 		_, err = s.sdkChats.call(ctx, "start", args)
