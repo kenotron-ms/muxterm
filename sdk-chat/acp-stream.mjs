@@ -3,19 +3,82 @@ import { Readable, Writable } from 'node:stream';
 import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, existsSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, delimiter, isAbsolute } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 import { acknowledgeInboxReminder, readInboxReminder } from './inbox-reminder.mjs';
 
 const profiles = {
-  pi: { command: 'pi-acp', args: [], env: 'MUXTERM_ACP_PI_COMMAND', mcp: true },
-  opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
   deepseek: { command: 'dsh', args: ['--profile', 'acp'], env: 'MUXTERM_ACP_DEEPSEEK_COMMAND', mcp: true },
   gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
   antigravity: { command: 'agy_acp_server.par', args: process.platform === 'linux' ? ['--uid='] : [], env: 'MUXTERM_ACP_ANTIGRAVITY_COMMAND', mcp: true },
 };
 
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
+
+const runtimes = new Map();
+class ACPRuntime {
+  constructor(harness) {
+    this.harness = harness;
+    this.adapters = new Map();
+    this.sessionInit = Promise.resolve();
+    this.exited = new Promise(resolve => { this.resolveExit = resolve; });
+    this.stderr = '';
+    const profile = profiles[harness];
+    const launch = harness === 'antigravity' ? antigravityLaunch() : null;
+    const command = harness === 'gemini' ? geminiCommand()
+      : launch?.command || process.env[profile.env] || profile.command;
+    this.process = spawn(command, launch?.args || profile.args, {
+      env: harness === 'gemini' ? geminiEnvironment() : launch?.env || process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    this.process.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk).slice(-4000); });
+    this.process.on('error', error => this.onExit(error));
+    this.process.on('exit', (code, signal) => this.onExit(new Error(
+      `${harness} ACP process exited (${signal || code}): ${this.stderr}`)));
+    const stream = acp.ndJsonStream(Writable.toWeb(this.process.stdin), Readable.toWeb(this.process.stdout));
+    this.connection = new acp.ClientSideConnection(() => ({
+      sessionUpdate: params => this.adapters.get(params.sessionId)?.onUpdate(params),
+      requestPermission: params => this.adapters.get(params.sessionId)?.onPermission(params)
+        || { outcome: { outcome: 'cancelled' } },
+    }), stream);
+    this.ready = this.connection.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} })
+      .then(result => {
+        if (result.protocolVersion !== acp.PROTOCOL_VERSION)
+          throw new Error(`Unsupported ACP version: ${result.protocolVersion}`);
+        return result;
+      });
+  }
+
+  register(adapter) { this.adapters.set(adapter.session.nativeId, adapter); }
+  detach(adapter) {
+    if (this.adapters.get(adapter.session.nativeId) === adapter)
+      this.adapters.delete(adapter.session.nativeId);
+  }
+  onExit(error) {
+    if (this.exitError) return;
+    this.exitError = error;
+    this.resolveExit(error);
+    if (runtimes.get(this.harness) === this) runtimes.delete(this.harness);
+    for (const adapter of this.adapters.values()) adapter.onExit(error);
+    this.adapters.clear();
+  }
+  async stop() {
+    if (this.stopping) return;
+    this.stopping = true;
+    this.onExit(new Error(`${this.harness} ACP runtime stopped`));
+    this.process.stdin.end();
+    if (this.process.exitCode === null) this.process.kill('SIGTERM');
+  }
+}
+
+function runtime(harness) {
+  let current = runtimes.get(harness);
+  if (!current || current.exitError) { current = new ACPRuntime(harness); runtimes.set(harness, current); }
+  return current;
+}
+
+export async function stopACPRuntimes() {
+  await Promise.all([...runtimes.values()].map(item => item.stop()));
+}
 
 export function connectorServers(mcpBin, originFile) {
   if (!mcpBin) return [];
@@ -183,39 +246,24 @@ export class ACPStream {
     this.continuedInputIds = [];
     const profile = profiles[session.harness];
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
-    const launch = session.harness === 'antigravity' ? antigravityLaunch() : null;
-    const command = session.harness === 'gemini' ? geminiCommand()
-      : launch?.command || process.env[profile.env] || profile.command;
     this.profile = profile;
     this.mcpServers = profile.mcp ? connectorServers(process.env.MUXTERM_CHAT_MCP_BIN, session.originFile) : [];
-    const piEnv = session.harness === 'pi' && this.mcpServers.length ? {
-      PI_ACP_PI_COMMAND: fileURLToPath(new URL('./pi-mcp-wrapper.sh', import.meta.url)),
-      MUXTERM_PI_COMMAND: process.env.PI_ACP_PI_COMMAND || 'pi',
-      MUXTERM_PI_EXTENSION: fileURLToPath(new URL('./pi-mcp-extension.mjs', import.meta.url)),
-      MUXTERM_ACP_MCP_SERVERS: JSON.stringify(this.mcpServers),
-    } : {};
-    this.process = spawn(command, launch?.args || profile.args, { cwd: session.cwd,
-      env: session.harness === 'gemini' ? geminiEnvironment()
-        : { ...(launch?.env || process.env), ...piEnv },
-      stdio: ['pipe', 'pipe', 'pipe'] });
-    this.exited = new Promise(resolve => { this.resolveExit = resolve; });
-    this.stderr = '';
-    this.process.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk).slice(-4000); });
-    this.process.on('error', error => this.onExit(error));
-    this.process.on('exit', (code, signal) => this.onExit(new Error(`${session.harness} ACP process exited (${signal || code}): ${this.stderr}`)));
-    const stream = acp.ndJsonStream(Writable.toWeb(this.process.stdin), Readable.toWeb(this.process.stdout));
-    this.connection = new acp.ClientSideConnection(() => ({
-      sessionUpdate: params => this.onUpdate(params),
-      requestPermission: params => this.onPermission(params),
-    }), stream);
+    this.runtime = runtime(session.harness);
+    this.exited = this.runtime.exited;
+    this.connection = this.runtime.connection;
     this.ready = this.initialize();
   }
 
   async initialize() {
-    const result = await this.withExit(this.connection.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} }));
-    if (result.protocolVersion !== acp.PROTOCOL_VERSION) throw new Error(`Unsupported ACP version: ${result.protocolVersion}`);
+    const result = await this.withExit(this.runtime.ready);
     this.agentCapabilities = result.agentCapabilities || {};
     this.steeringExtension = result._meta?.steering?.supported === true;
+    // Some agents stall when two native sessions initialize at cold start.
+    const priorInit = this.runtime.sessionInit;
+    let releaseInit;
+    this.runtime.sessionInit = new Promise(resolve => { releaseInit = resolve; });
+    await priorInit;
+    try {
     let session;
     const params = { cwd: this.session.cwd, mcpServers: this.mcpServers,
       ...(this.session.sourceFolders.length && this.agentCapabilities.sessionCapabilities?.additionalDirectories
@@ -236,6 +284,7 @@ export class ACPStream {
       if (!session?.sessionId) throw new Error(`${this.session.harness} did not return an ACP session ID`);
       this.session.nativeId = session.sessionId;
     }
+    this.runtime.register(this);
     this.configOptions = session.configOptions || [];
     this.modes = session.modes || null;
     // Gemini CLI still publishes its model selector in the older ACP `models`
@@ -247,6 +296,7 @@ export class ACPStream {
     // selections saved with this muxterm conversation before accepting input.
     await this.applySelection(this.session.model, this.session.effort);
     this.emit(this.session.id, 'session.started', { nativeId: this.session.nativeId, capabilities: this.capabilities() });
+    } finally { releaseInit(); }
   }
 
   capabilities() {
@@ -261,7 +311,6 @@ export class ACPStream {
   onExit(error) {
     if (this.closed || this.exitError) return;
     this.exitError = error;
-    this.resolveExit(error);
     if (this.busy) this.emit(this.session.id, 'session.uncertain', { message: String(error) });
     this.onProcessExit?.();
   }
@@ -279,8 +328,7 @@ export class ACPStream {
   onUpdate(params) {
     if (params.sessionId !== this.session.nativeId || this.closed || this.loading) return;
     const update = params.update;
-    // Pi sends its startup banner after session/new returns. It is not the
-    // answer to the user's first prompt. ACP may split it across text chunks.
+    // ACP may split a native startup banner across text chunks.
     let messageText = update.content?.text;
     if (this.startupInfo && update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text') {
       const candidate = this.startupBuffer + (messageText || '');
@@ -465,7 +513,14 @@ export class ACPStream {
         this.continuedInputIds = this.turnInputIds;
         this.emit(this.session.id, 'turn.continued');
       }
-      else if (!this.exitError && !this.closed) this.emit(this.session.id, 'error', { message: String(error) });
+      else if (!this.exitError && !this.closed) {
+        // Submission may have reached the agent before its reply failed.
+        // A closed connection can reject before the process exit callback.
+        this.busy = false;
+        this.session.busy = false;
+        this.emit(this.session.id, 'session.uncertain', { inputIds: this.turnInputIds, message: String(error) });
+        if (String(error).includes('ACP connection closed')) void this.runtime.stop();
+      }
     }).finally(() => {
       this.busy = false;
       this.session.busy = false;
@@ -527,10 +582,12 @@ export class ACPStream {
     return { name: cmd.name || '', source: cmd.mode === 'manual' ? 'manual' : 'generated' };
   }
 
-  close() {
+  async close() {
+    if (this.closed) return;
     this.closed = true;
-    if (!this.exitError) this.resolveExit(new Error('ACP session closed'));
-    this.process.stdin.end();
-    this.process.kill();
+    await this.ready.catch(() => {});
+    this.runtime.detach(this);
+    if (!this.runtime.exitError && this.session.nativeId)
+      await this.withExit(this.connection.closeSession({ sessionId: this.session.nativeId }));
   }
 }

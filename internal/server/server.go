@@ -209,7 +209,7 @@ func New(cfg Config) *Server {
 
 	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken)
 	protect := func(h http.Handler) http.Handler {
-		return authMW.Wrap(s.chatAuthorityBoundary(h))
+		return authMW.Wrap(s.chatAuthorityBoundary(s.sdkChatOriginBoundary(h)))
 	}
 
 	// NOTE for the Phase 2 (MCP-over-HTTP) surface: muxterm does not yet

@@ -5,10 +5,10 @@ import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'n
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CodexStream } from './codex-stream.mjs';
-import { CopilotStream } from './copilot-stream.mjs';
+import { CodexStream, stopCodexRuntime } from './codex-stream.mjs';
+import { CopilotStream, stopCopilotClient } from './copilot-stream.mjs';
 import { agentCommand } from './agent-command.mjs';
-import { ACPStream, isACPHarness } from './acp-stream.mjs';
+import { ACPStream, isACPHarness, stopACPRuntimes } from './acp-stream.mjs';
 import { antigravityLoginStatus, startAntigravityLogin, cancelAntigravityLogin, finishAntigravityLogin } from './antigravity-login.mjs';
 import { query, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 
@@ -17,12 +17,15 @@ if (!socketPath) throw new Error('Unix socket path required');
 try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 const sessions = new Map();
 const clients = new Set();
+let shuttingDown = false;
+let claudeModels = null;
 const originFiles = new Set();
 const originDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'origin');
 // A previous serve may have stopped abruptly. Its in-memory capabilities are
 // gone, so its files cannot authenticate a new MCP process and can be pruned.
 try {
-  for (const name of readdirSync(originDir)) if (/^[0-9a-f]{32}\.token$/.test(name)) unlinkSync(join(originDir, name));
+  for (const name of readdirSync(originDir))
+    if (/^[0-9a-f]{32}(?:-[0-9a-f]{32})?\.token$/.test(name)) unlinkSync(join(originDir, name));
 } catch (error) { if (error.code !== 'ENOENT') throw error; }
 function forgetOriginFile(path) {
   if (!path) return;
@@ -30,15 +33,14 @@ function forgetOriginFile(path) {
   try { unlinkSync(path); } catch { /* The serve process invalidates capabilities on exit. */ }
 }
 process.on('exit', () => { for (const path of originFiles) forgetOriginFile(path); });
-process.on('SIGINT', () => process.exit(0));
-process.on('SIGTERM', () => process.exit(0));
 const muxtermMcpEnv = Object.fromEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
   .filter(key => process.env[key]).map(key => [key, process.env[key]]));
 function originFile(sessionId, token) {
-  if (!token) return '';
+  if (!/^[0-9a-f]{32}$/.test(sessionId) || !/^[0-9a-f]{64}$/.test(token || ''))
+    throw new Error('Invalid chat identity or capability');
   mkdirSync(originDir, { recursive: true, mode: 0o700 });
-  const path = join(originDir, `${sessionId}.token`);
-  writeFileSync(path, token, { mode: 0o600 });
+  const path = join(originDir, `${sessionId}-${randomUUID().replaceAll('-', '')}.token`);
+  writeFileSync(path, token, { mode: 0o600, flag: 'wx' });
   originFiles.add(path);
   return path;
 }
@@ -50,6 +52,9 @@ const microsoftRoot = join(process.env.XDG_DATA_HOME || join(homedir(), '.local'
 const microsoftMcpEnv = Object.fromEntries(['PATH', 'HOME', 'XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
   .filter(key => process.env[key]).map(key => [key, process.env[key]]));
 const emit = (sessionId, type, data = {}) => broadcast({ v: 1, event: { sessionId, type, ...data } });
+const codexStream = s => new CodexStream(s, emit, () => {
+  if (sessions.get(s.id) === s) { sessions.delete(s.id); forgetOriginFile(s.originFile); }
+});
 function broadcast(message) {
   const line = JSON.stringify(message) + '\n';
   for (const client of clients) if (!client.destroyed) client.write(line);
@@ -88,8 +93,9 @@ function queue(s, input) {
   s.wake?.(); s.wake = null;
 }
 async function* claudeInputs(s) {
-  while (!s.closed) {
+  while (!s.closed && !s.closeInput) {
     if (!s.inputs.length) await new Promise(resolve => { s.wake = resolve; });
+    if (s.closed || s.closeInput) break;
     while (s.inputs.length) {
       const input = s.inputs.shift();
       const pending = s.pendingInputs.get(input.uuid);
@@ -129,6 +135,8 @@ async function runClaude(s) {
     for await (const msg of q) {
       if (msg.type === 'system' && msg.subtype === 'init') {
         s.nativeId = msg.session_id;
+        if (!claudeModels) claudeModels = await q.supportedModels().catch(() => null);
+        s.claudeReady?.resolve();
         emit(s.id, 'session.started', { nativeId: s.nativeId, capabilities: capabilities('claude') });
       } else if (msg.type === 'active_goal') {
         const snapshot = msg.value
@@ -192,15 +200,44 @@ async function runClaude(s) {
           { inputIds: accepted, message: msg.is_error ? msg.result || msg.subtype : msg.subtype });
         s.cancelRequested = false;
         s.steering = false;
+        if (!s.busy) {
+          // Finite input lets the SDK child exit on its own after each turn.
+          // A later turn starts a new query with the saved native session ID.
+          s.closeInput = true;
+          s.wake?.(); s.wake = null;
+        }
       }
     }
-  } catch (error) { s.busy = false; emit(s.id, 'error', { message: String(error) }); }
+  } catch (error) {
+    s.claudeReady?.reject(error);
+    // Input yielded to the SDK may have reached the native process even if its
+    // stream dies before a result. Do not claim that its turn failed safely.
+    const accepted = [...s.inFlightInputs].filter(id => !s.pendingInputs.has(id));
+    s.busy = false;
+    s.inFlightInputs.clear();
+    emit(s.id, accepted.length ? 'session.uncertain' : 'error',
+      { inputIds: accepted, message: String(error) });
+  }
   finally {
     s.claudeEnded = true;
     s.goalControl?.reject(new Error('Claude stream ended before native command acknowledgement'));
+    s.query = null;
+    s.runPromise = null;
+    s.closeInput = false;
+    s.claudeReady = null;
     for (const pending of s.pendingInputs.values()) pending.reject(new Error('Claude stream ended before input acceptance was confirmed'));
     s.pendingInputs.clear();
+    s.inFlightInputs.clear();
   }
+}
+function startClaude(s) {
+  if (s.runPromise) return;
+  s.closeInput = false;
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  promise.catch(() => {});
+  s.claudeReady = { promise, resolve, reject };
+  s.runPromise = runClaude(s);
 }
 async function command(cmd) {
   const { op, sessionId, harness, cwd, nativeId, input } = cmd;
@@ -210,9 +247,9 @@ async function command(cmd) {
   if (op === 'antigravity-login-finish') return await finishAntigravityLogin(cmd.callbackURL);
   if (op === 'capabilities') return { capabilities: capabilities(harness) };
   if (op === 'catalog' && harness === 'codex') {
-    const catalog = new CodexStream({ cwd, sourceFolders: [], model: '', effort: '' }, () => {}, true);
+    const catalog = new CodexStream({ cwd, sourceFolders: [], model: '', effort: '' }, () => {}, null, true);
     try { return await catalog.options(); }
-    finally { catalog.close(); }
+    finally { await catalog.close(); }
   }
   if (op === 'start' || op === 'resume') {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
@@ -223,7 +260,9 @@ async function command(cmd) {
     sessions.set(sessionId, s);
     if (harness === 'copilot') {
       try {
-        s.copilot = new CopilotStream(s, emit);
+        s.copilot = new CopilotStream(s, emit, () => {
+          if (sessions.get(sessionId) === s) { sessions.delete(sessionId); forgetOriginFile(s.originFile); }
+        });
         await s.copilot.ready;
       } catch (error) {
         await s.copilot?.close(); sessions.delete(sessionId); forgetOriginFile(s.originFile);
@@ -236,30 +275,31 @@ async function command(cmd) {
         s.acp = new ACPStream(s, emit, () => {
           // A dead ACP child must be replaced on the next resume, even when
           // it exited between turns and no uncertain delivery event was needed.
-          if (sessions.get(sessionId) === s) sessions.delete(sessionId);
+          if (sessions.get(sessionId) === s) { sessions.delete(sessionId); forgetOriginFile(s.originFile); }
         });
         await s.acp.start();
       } catch (error) {
-        s.acp?.close(); sessions.delete(sessionId);
+        await s.acp?.close().catch(() => {}); sessions.delete(sessionId); forgetOriginFile(s.originFile);
         throw error;
       }
       return { sessionId, capabilities: capabilities(harness) };
     }
-    if (harness === 'claude') void runClaude(s);
     if (op === 'start') emit(sessionId, 'session.started', { capabilities: capabilities(harness), pendingNativeId: true });
     return { sessionId, capabilities: capabilities(harness) };
   }
   const s = sessions.get(sessionId);
+  if (op === 'close' && !s) return { status: 'closed' };
   if (!s) throw new Error('Session is not resident; resume it first');
   if (op === 'goal') {
     if (s.copilot) return await s.copilot.goal(cmd);
     if (s.harness === 'codex') {
-      s.codex ||= new CodexStream(s, emit);
+      s.codex ||= codexStream(s);
       const snapshot = await s.codex.goal(cmd.action, cmd.objective, cmd.paused);
       return snapshot;
     }
     if (s.harness === 'claude') {
-      if (s.claudeEnded) { s.claudeEnded = false; void runClaude(s); }
+      startClaude(s);
+      await s.claudeReady.promise;
       if (s.goalControl) throw new Error('A native goal command is already pending; inspect its receipt');
       const commands = await s.query.supportedCommands();
       if (!commands.some(item => item.name === 'goal' && item.builtin)) return { unsupported: true, message: 'The installed Claude runtime does not advertise the native goal command.' };
@@ -281,13 +321,16 @@ async function command(cmd) {
     if (s.copilot) return s.copilot.options();
     if (s.acp) return s.acp.options();
     if (s.harness === 'codex') {
-      s.codex ||= new CodexStream(s, emit);
+      s.codex ||= codexStream(s);
       return await s.codex.options();
     }
-    const models = (await s.query.supportedModels()).map(model => ({
+    if (s.runPromise && !s.busy) await s.runPromise;
+    const models = (claudeModels || []).map(model => ({
       id: model.value, label: model.displayName, efforts: model.supportedEffortLevels || [],
       defaultEffort: '',
     }));
+    if (s.model && !models.some(model => model.id === s.model))
+      models.unshift({ id: s.model, label: s.model, efforts: s.effort ? [s.effort] : [], defaultEffort: s.effort });
     return { model: s.model || models[0]?.id || '', effort: s.effort, models };
   }
   if (op === 'select') {
@@ -301,9 +344,7 @@ async function command(cmd) {
     const effort = cmd.effort || '';
     if (effort && !selected?.efforts.includes(effort)) throw new Error('Unsupported effort for this model');
     if (s.harness === 'claude') {
-      if (model !== s.model) await s.query.setModel(model || undefined);
-      if (effort !== s.effort) await s.query.applyFlagSettings({ effortLevel: effort || null });
-      if (cmd.permission && cmd.permission !== s.permission) await s.query.setPermissionMode(cmd.permission === 'read-only' ? 'plan' : 'bypassPermissions');
+      if (s.runPromise && !s.busy) await s.runPromise;
     }
     s.model = model; s.effort = effort;
     s.permission = cmd.permission || s.permission; s.mode = cmd.mode || s.mode;
@@ -313,7 +354,7 @@ async function command(cmd) {
     if (s.copilot) return s.copilot.title(cmd);
     if (s.acp) return s.acp.title(cmd);
     if (s.harness === 'codex') {
-      s.codex ||= new CodexStream(s, emit);
+      s.codex ||= codexStream(s);
       return s.codex.title(cmd.mode, cmd.name, cmd.previousName);
     }
     if (!s.nativeId) throw new Error('Claude native session ID unavailable');
@@ -340,9 +381,9 @@ async function command(cmd) {
     if (s.acp) return await s.acp.send(input);
     if (s.copilot) return await s.copilot.send(input);
     if (s.harness === 'claude') {
-      if (s.claudeEnded) { s.claudeEnded = false; void runClaude(s); }
-      if (input.model && input.model !== s.model) { await s.query.setModel(input.model); s.model = input.model; }
-      if (input.effort !== s.effort) { await s.query.applyFlagSettings({ effortLevel: input.effort || null }); s.effort = input.effort || ''; }
+      if (s.runPromise && !s.busy) await s.runPromise;
+      if (input.model && input.model !== s.model) { if (s.query) await s.query.setModel(input.model); s.model = input.model; }
+      if (input.effort !== s.effort) { if (s.query) await s.query.applyFlagSettings({ effortLevel: input.effort || null }); s.effort = input.effort || ''; }
     }
 
     if (s.harness === 'codex') {
@@ -351,7 +392,7 @@ async function command(cmd) {
       // into a false successful receipt in muxterm's durable control ledger.
       if (input.kind !== 'steer') s.busy = true;
       try {
-        s.codex ||= new CodexStream(s, emit);
+        s.codex ||= codexStream(s);
         if (input.kind === 'steer') await s.codex.steer(input);
         else await s.codex.run(input);
       } catch (error) {
@@ -360,6 +401,7 @@ async function command(cmd) {
         throw error;
       }
     } else {
+      startClaude(s);
       s.busy = true;
       s.inFlightInputs.add(input.id);
       try {
@@ -402,8 +444,11 @@ async function command(cmd) {
     return { status: 'accepted' };
   }
   if (op === 'close') {
-    s.closed = true; s.wake?.(); s.acp?.close(); await s.copilot?.close(); s.codex?.close(); s.query?.close?.(); sessions.delete(sessionId);
-    forgetOriginFile(s.originFile);
+    if (s.busy || s.acp?.busy) throw new Error('Finish the current turn before archiving this chat');
+    sessions.delete(sessionId);
+    s.closed = true; s.wake?.();
+    try { await s.acp?.close(); await s.copilot?.close(); await s.codex?.close(); await s.query?.close?.(); }
+    finally { forgetOriginFile(s.originFile); }
     return { status: 'closed' };
   }
   throw new Error(`Unknown operation: ${op}`);
@@ -428,8 +473,22 @@ const server = net.createServer(client => {
 server.listen(socketPath);
 
 async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   cancelAntigravityLogin();
-  for (const s of sessions.values()) { s.closed = true; s.wake?.(); s.acp?.close(); await s.copilot?.close(); s.codex?.close(); try { await s.query?.close?.(); } catch {} }
+  const closing = [...sessions.values()].map(async s => {
+    s.closed = true;
+    s.wake?.();
+    forgetOriginFile(s.originFile);
+    try { await s.acp?.close(); await s.copilot?.close(); await s.codex?.close(); await s.query?.close?.(); }
+    catch (error) { console.error(`SDK chat adapter shutdown: ${error}`); }
+  });
+  await Promise.allSettled(closing);
+  await Promise.allSettled([
+    stopACPRuntimes().catch(error => console.error(`ACP shutdown: ${error}`)),
+    stopCodexRuntime().catch(error => console.error(`Codex shutdown: ${error}`)),
+    stopCopilotClient().catch(error => console.error(`Copilot shutdown: ${error}`)),
+  ]);
   server.close();
   try { await unlink(socketPath); } catch {}
   process.exit(0);

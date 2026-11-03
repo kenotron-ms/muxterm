@@ -113,7 +113,6 @@ func registerConnectionSetupTools(srv *Server) {
 	})
 	srv.Register("check_connection", "Read redacted setup or connection state. Supply exactly one of setup_id or connection_id. A privately approved setup returns an opaque credential_handle for configure_connection, never client IDs or secrets. A configured connection reports existing authorization and tool-discovery state; this does not perform a fresh service check or enable tools. Connection IDs must belong to a setup created by this owner. Local server only.", map[string]any{
 		"type": "object", "additionalProperties": false, "properties": withMachine(map[string]any{"setup_id": identifier(), "connection_id": identifier()}),
-		"oneOf": []map[string]any{{"required": []string{"setup_id"}}, {"required": []string{"connection_id"}}},
 	}, func(args map[string]any) (string, error) {
 		if err := connectionSetupArguments(args, "setup_id", "connection_id"); err != nil {
 			return "", err

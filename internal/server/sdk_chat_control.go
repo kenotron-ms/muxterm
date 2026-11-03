@@ -86,6 +86,24 @@ func (h *sdkChatHost) forgetChatOriginLocked(id string) {
 	}
 }
 
+// A chat capability permits its owner and a directly linked operator/lane.
+// The existing origin relation used for display is broader (lane-to-lane),
+// so it must not be used as an authorization decision.
+func (h *sdkChatHost) authorizedControlSenderLocked(token, targetID string) (string, bool) {
+	if token == "" {
+		return "", true // External local tools keep their existing auth path.
+	}
+	senderID := h.originTokenChats[token]
+	sender := h.chats[senderID]
+	target := h.chats[targetID]
+	if sender == nil || target == nil || sender.Archived || h.originTokens[senderID] != token {
+		return "", false
+	}
+	return senderID, senderID == targetID ||
+		(sender.Operator && slices.Contains(sender.OperatorLanes, targetID)) ||
+		(target.Operator && slices.Contains(target.OperatorLanes, senderID))
+}
+
 func (h *sdkChatHost) controlOriginLocked(token, targetID string) (sdkEventOrigin, bool) {
 	if token == "" {
 		return sdkEventOrigin{Type: "external-tool", TargetChatID: targetID, Name: "External tool"}, true
@@ -113,6 +131,9 @@ func (h *sdkChatHost) controlOriginLocked(token, targetID string) (sdkEventOrigi
 
 func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	adapterLock := s.sdkChats.adapterLock(id)
+	adapterLock.Lock()
+	defer adapterLock.Unlock()
 	var req struct{ ClientRef, Content, OriginToken string }
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil ||
 		strings.TrimSpace(req.ClientRef) == "" || strings.TrimSpace(req.Content) == "" || len(req.ClientRef) > 256 {
@@ -128,6 +149,18 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		req.OriginToken = r.Header.Get("X-Muxterm-Origin")
 	}
 	h.mu.Lock()
+	originToken := r.Header.Get("X-Muxterm-Origin")
+	if r.Header.Get("X-Muxterm-Agent") == "1" && originToken == "" {
+		h.mu.Unlock()
+		http.Error(w, "chat capability required", http.StatusForbidden)
+		return
+	}
+	originChatID, authorized := h.authorizedControlSenderLocked(originToken, id)
+	if !authorized {
+		h.mu.Unlock()
+		http.Error(w, "owner or direct operator/lane capability required", http.StatusForbidden)
+		return
+	}
 	c := h.chats[id]
 	if c == nil {
 		h.mu.Unlock()
@@ -197,6 +230,11 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	// A concurrent caller may have admitted the same key while resume ran.
+	if currentOrigin, stillAuthorized := h.authorizedControlSenderLocked(originToken, id); !stillAuthorized || currentOrigin != originChatID {
+		h.mu.Unlock()
+		http.Error(w, "chat capability was revoked before dispatch", http.StatusForbidden)
+		return
+	}
 	if _, err := os.Stat(path); err == nil {
 		h.mu.Unlock()
 		http.Error(w, "clientRef admitted concurrently; query the same key again", 409)

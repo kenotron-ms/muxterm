@@ -5,19 +5,81 @@ import { connectorServers } from './acp-stream.mjs';
 import { acknowledgeInboxReminder, readInboxReminder } from './inbox-reminder.mjs';
 
 const dataDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat');
+let sharedClient;
+let sharedReady;
+let sharedStopping = Promise.resolve();
+const adapters = new Set();
+let healthTimer;
+let checkingHealth = false;
+
+function failCopilotClient(client, error) {
+  if (sharedClient !== client) return;
+  sharedClient = undefined;
+  sharedReady = undefined;
+  clearInterval(healthTimer);
+  healthTimer = undefined;
+  for (const adapter of [...adapters]) adapter.onExit(error);
+  sharedStopping = client.stop().catch(() => {});
+}
+
+function monitorCopilotClient(client) {
+  if (healthTimer) return;
+  healthTimer = setInterval(async () => {
+    if (checkingHealth || sharedClient !== client || ![...adapters].some(adapter => adapter.session.busy)) return;
+    checkingHealth = true;
+    try { await client.ping(); }
+    catch (error) { failCopilotClient(client, error); }
+    finally { checkingHealth = false; }
+  }, 2000);
+  healthTimer.unref();
+}
+
+function copilotClient() {
+  if (!sharedReady) {
+    sharedReady = sharedStopping.then(async () => {
+      const client = new CopilotClient({ baseDirectory: join(dataDir, 'copilot') });
+      sharedClient = client;
+      try {
+        await client.start();
+        monitorCopilotClient(client);
+        return client;
+      } catch (error) {
+        if (sharedClient === client) { sharedClient = undefined; sharedReady = undefined; }
+        sharedStopping = client.stop().catch(() => {});
+        await sharedStopping;
+        throw error;
+      }
+    });
+  }
+  return sharedReady;
+}
+
+export async function stopCopilotClient() {
+  const ready = sharedReady;
+  sharedReady = undefined;
+  clearInterval(healthTimer);
+  healthTimer = undefined;
+  await ready?.catch(() => {});
+  const client = sharedClient;
+  sharedClient = undefined;
+  if (client) await client.stop();
+  await sharedStopping;
+}
 
 export class CopilotStream {
-  constructor(session, emit) {
+  constructor(session, emit, onDead) {
     this.session = session;
     this.emit = emit;
+    this.onDead = onDead;
     this.seenText = new Map();
     this.inputIds = [];
-    this.client = new CopilotClient({ baseDirectory: join(dataDir, 'copilot'), workingDirectory: session.cwd });
     this.ready = this.initialize();
   }
 
   async initialize() {
-    await this.client.start();
+    this.client = await copilotClient();
+    try { await this.client.ping(); }
+    catch (error) { failCopilotClient(this.client, error); throw error; }
     const bin = process.env.MUXTERM_CHAT_MCP_BIN;
     const mcpServers = Object.fromEntries(connectorServers(bin, this.session.originFile).map(server =>
       [server.name, { type: 'stdio', command: server.command, args: server.args,
@@ -32,6 +94,7 @@ export class CopilotStream {
       : await this.client.createSession({ sessionId: this.session.id, ...config });
     this.session.nativeId = this.native.sessionId;
     this.unsubscribe = this.native.on(event => void this.onEvent(event));
+    adapters.add(this);
     await this.publishGoal('goal.snapshot');
     this.emit(this.session.id, 'session.started', { nativeId: this.session.nativeId,
       capabilities: { approvals: false, transcript_read: false, interrupt: true, live_input: false,
@@ -40,6 +103,8 @@ export class CopilotStream {
 
   async options() {
     await this.ready;
+    try { await this.client.ping(); }
+    catch (error) { failCopilotClient(this.client, error); throw error; }
     const models = (await this.client.listModels()).map(item => ({ id: item.id, label: item.name || item.id,
       efforts: item.supportedReasoningEfforts || [], defaultEffort: item.defaultReasoningEffort || '' }));
     if (!models.some(item => item.id === 'auto')) models.unshift({ id: 'auto', label: 'Auto', efforts: [], defaultEffort: '' });
@@ -125,6 +190,8 @@ export class CopilotStream {
 
   async send(input) {
     await this.ready;
+    try { await this.client.ping(); }
+    catch (error) { failCopilotClient(this.client, error); throw error; }
     if (input.kind === 'steer') return this.steer(input);
     if (this.session.busy) throw new Error('Finish the current Copilot turn before sending another message');
     if (input.kind !== 'user') throw new Error(`Copilot does not support ${input.kind} input`);
@@ -204,12 +271,16 @@ export class CopilotStream {
       try { await this.publishGoal(); }
       catch (error) { this.emit(id, 'goal.capability', { message: `Copilot goal observation failed: ${error}` }); }
     } else if (event.type === 'session.error') {
+      const inputIds = this.inputIds;
+      const wasBusy = this.session.busy;
       this.session.busy = false;
       // An errored turn may not have consumed the reminder. Leave the server's
       // attention cursor unchanged so the next turn can safely retry it.
       this.reminder = null;
-      this.emit(id, 'error', { inputIds: this.inputIds, message: data.message || 'Copilot session error' });
+      this.emit(id, wasBusy ? 'session.uncertain' : 'error', { inputIds, message: data.message || 'Copilot session error' });
       this.inputIds = [];
+      try { await this.client.ping(); }
+      catch (error) { failCopilotClient(this.client, error); }
     }
   }
 
@@ -217,13 +288,26 @@ export class CopilotStream {
   async close() {
     if (this.closePromise) return this.closePromise;
     this.closePromise = (async () => {
+      this.closed = true;
       this.session.busy = false;
       this.inputIds = [];
       this.reminder = null;
+      await this.ready.catch(() => {});
+      adapters.delete(this);
       this.unsubscribe?.();
       await this.native?.disconnect();
-      await this.client.stop();
     })();
     return this.closePromise;
+  }
+
+  onExit(error) {
+    if (this.closed) return;
+    this.closed = true;
+    adapters.delete(this);
+    this.unsubscribe?.();
+    if (this.session.busy) this.emit(this.session.id, 'session.uncertain',
+      { inputIds: this.inputIds, message: `Copilot runtime exited: ${error}` });
+    this.session.busy = false;
+    this.onDead?.();
   }
 }

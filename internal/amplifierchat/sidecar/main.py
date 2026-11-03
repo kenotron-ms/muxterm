@@ -750,6 +750,12 @@ class SDKChatSession:
             except asyncio.TimeoutError:
                 self.task.cancel()
                 await asyncio.gather(self.task, return_exceptions=True)
+        if self.finish_task:
+            await self.finish_task
+        if self.session is not None:
+            await self.session.cleanup()
+            self.session = None
+            self.runtime = None
 
 
 async def command(cmd):
@@ -771,6 +777,7 @@ async def command(cmd):
             SDK_CHAT_SESSIONS[sid] = session
         return {"sessionId": sid, "capabilities": CAPS}
     session = SDK_CHAT_SESSIONS.get(sid)
+    if op == "close" and session is None: return {"status": "closed"}
     if session is None: raise ValueError("Amplifier session is not resident; resume it first")
     if op == "goal":
         return await session.goal(cmd.get("action"), cmd.get("objective") or "", bool(cmd.get("paused")), cmd.get("revision", 0))
@@ -892,6 +899,7 @@ async def command(cmd):
         return {"status": "accepted"}
     if op == "events": return {"status": "streaming"}
     if op == "close":
+        if session.active: raise RuntimeError("Finish the current turn before archiving this chat")
         await session.close(); del SDK_CHAT_SESSIONS[sid]; return {"status": "closed"}
     raise ValueError(f"unknown operation: {op}")
 
