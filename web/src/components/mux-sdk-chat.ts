@@ -1506,6 +1506,9 @@ export class MuxSDKChat extends LitElement {
         output:event.raw });
     } else if (event.type === 'delegate.spawned' && event.childSessionId) {
       markStart(this.currentTurn);
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === 'assistant' && last.turn === this.currentTurn && last.channel !== 'voice' && !last.done)
+        blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
       if (!blocks.some(block => block.kind === 'delegate' && block.id === event.childSessionId))
         blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'delegate', text:'Running', name:event.agent || 'Agent', id:event.childSessionId });
     } else if (event.type === 'delegate.completed' && event.childSessionId) {
@@ -1520,6 +1523,7 @@ export class MuxSDKChat extends LitElement {
     } else if (event.type === 'turn.completed') {
       this.busy = false;
       this.turnFinished.set(this.currentTurn, eventTime);
+      this.workExpanded.delete(this.currentTurn);
       this.workCollapsedWhileWorking.delete(this.currentTurn);
       for (const b of blocks) if (b.kind === 'assistant' || b.kind === 'commentary') b.done = true;
       const anchor = blocks[this.turnStart]?.key;
@@ -1531,6 +1535,7 @@ export class MuxSDKChat extends LitElement {
     else if (event.type === 'turn.cancelled') {
       this.busy = false;
       this.turnFinished.set(this.currentTurn, eventTime);
+      this.workExpanded.delete(this.currentTurn);
       this.workCollapsedWhileWorking.delete(this.currentTurn);
       this.stopping = false;
       for (const b of blocks) if (b.kind === 'assistant' || b.kind === 'commentary') b.done = true;
@@ -1944,7 +1949,7 @@ export class MuxSDKChat extends LitElement {
     const inputText = kind === 'shell' && command ? `$ ${command}` : this.detail(input);
     return html`<details class="tool-entry ${this.toolFailed(block) ? 'failed' : ''}" aria-label=${`${block.name || 'Tool'} detail`} ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(kind), { size: 14 })}</span><span class="work-line" title=${label}>${label}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><div class="tool-detail-title">${heading}</div><div class="detail-label">${inputLabel}</div><pre>${inputText}</pre><div class="detail-label">${outputLabel}</div><pre>${output}</pre></div>` : nothing}</details>`;
   }
-  private workTimeline(turn: number, items: Block[]) {
+  private workTimeline(turn: number, items: Block[], agents: AgentView[]) {
     // Raw session events arrive in order. Keep each progress update at its
     // original position and collapse only the adjacent tool calls after it.
     const steps: ReturnType<typeof html>[] = [];
@@ -1967,6 +1972,7 @@ export class MuxSDKChat extends LitElement {
         if (item.kind === 'commentary') steps.push(this.commentaryEntry(item));
         else if (item.kind === 'interjection') steps.push(this.interjectionEntry(item));
         else if (item.kind === 'question') steps.push(this.questionCard(item));
+        else if (item.kind === 'delegate') steps.push(this.agentCard(item, agents));
         else if (item.kind === 'voice-input' || item.kind === 'voice-output') steps.push(html`<div class="voice-work"><span class="work-icon">${icon(Mic,{size:14})}</span><span><strong>${item.kind === 'voice-input' ? item.source === 'steer' ? 'Voice steer' : 'You said' : 'Voice replied'}</strong>${item.text ? html` · ${item.text}` : nothing}</span></div>`);
       }
     }
@@ -1985,6 +1991,7 @@ export class MuxSDKChat extends LitElement {
   private workDisclosureOpen(turn: number) {
     if (this.blocks.some(block => block.turn === turn && block.kind === 'question' && !block.done))
       return !this.workCollapsedWhileWorking.has(turn);
+    if (!this.turnFinished.has(turn)) return !this.workCollapsedWhileWorking.has(turn);
     return this.workExpanded.has(turn) && !this.workCollapsedWhileWorking.has(turn);
   }
   private streamingWorkLabel(turn: number) {
@@ -2007,27 +2014,27 @@ export class MuxSDKChat extends LitElement {
     if (this.rowsCache?.blocks === this.blocks) return this.withGoalResponse(this.rowsCache.rows);
     const work = new Map<number, Block[]>();
     const latestInput = new Map<number, number>();
-    const questionTurns = new Set(this.blocks.filter(block => block.kind === 'question').map(block => block.turn));
-    const isWork = (block: Block) => block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output' || block.kind === 'question';
+    const segmentedTurns = new Set(this.blocks.filter(block => block.kind === 'question' || block.kind === 'delegate').map(block => block.turn));
+    const isWork = (block: Block) => block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output' || block.kind === 'question' || block.kind === 'delegate';
     for (const block of this.blocks) {
       if (block.kind === 'user' || block.kind === 'chat-message') latestInput.set(block.turn, block.key);
-      if (isWork(block) && !questionTurns.has(block.turn)) {
+      if (isWork(block) && !segmentedTurns.has(block.turn)) {
         const items = work.get(block.turn) || [];
         items.push(block);
         work.set(block.turn, items);
       }
     }
     const shown = new Set<number>();
-    const questionWorkShown = new Set<number>();
+    const segmentedWorkShown = new Set<number>();
     const rows: TranscriptRow[] = [];
     for (const block of this.blocks) {
-      if (questionTurns.has(block.turn)) {
+      if (segmentedTurns.has(block.turn)) {
         if (isWork(block)) {
           const previous = rows.at(-1);
           if (previous?.work && previous.block.turn === block.turn) previous.work.push(block);
           else {
-            const key = questionWorkShown.has(block.turn) ? `work-${block.turn}-${block.key}` : `work-${block.turn}`;
-            questionWorkShown.add(block.turn);
+            const key = segmentedWorkShown.has(block.turn) ? `work-${block.turn}-${block.key}` : `work-${block.turn}`;
+            segmentedWorkShown.add(block.turn);
             rows.push({ key, block, work:[block] });
           }
         } else rows.push({ key:`block-${block.key}`, block });
@@ -2242,7 +2249,7 @@ export class MuxSDKChat extends LitElement {
       if (row.work) {
         const working = !this.turnFinished.has(block.turn);
         const open = this.workDisclosureOpen(block.turn);
-        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working}>${working && row.work.every(item => item.kind === 'progress') ? html`<div class="work-stream" role="status" aria-live="polite"><span class="pulse" aria-hidden="true"></span><span class="activity-label">${row.work.at(-1)?.text || 'Working…'}</span></div>` : html`<details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}><span class="activity-label">${working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work)}</div>` : nothing}</details>`}</div>`;
+        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working}>${working && row.work.every(item => item.kind === 'progress') ? html`<div class="work-stream" role="status" aria-live="polite"><span class="pulse" aria-hidden="true"></span><span class="activity-label">${row.work.at(-1)?.text || 'Working…'}</span></div>` : html`<details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}><span class="activity-label">${working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work, agents)}</div>` : nothing}</details>`}</div>`;
       }
       if (block.kind === 'goal') return this.goalResponse(row.key,start + offset);
       return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
