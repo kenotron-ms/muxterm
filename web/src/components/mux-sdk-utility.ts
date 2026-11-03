@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ArrowLeft, AudioLines, ChevronDown, ChevronRight, ChevronsDownUp, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Inbox, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, PanelRight, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
+import { ArrowLeft, AudioLines, ChevronDown, ChevronRight, ChevronsDownUp, CircleDot, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, PanelRight, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { remoteChatPath } from '../lib/remote-chat-routes.js';
 import { icon } from '../lib/icons.js';
@@ -74,7 +74,7 @@ type BrowserBridge = { send: (message: Record<string, unknown>) => void };
 declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge } }
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
 const BROWSER_RECENT_KEY = 'muxterm.desktop.browser.recent';
-const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, coordination:Inbox, pages:NotebookPen, meetings:AudioLines, browser:Globe2, goal:Target };
+const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, changes:GitCompare, files:Folder, status:Network, coordination:CircleDot, pages:NotebookPen, meetings:AudioLines, browser:Globe2, goal:Target };
 
 function readableSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -136,7 +136,7 @@ export class MuxSDKUtility extends LitElement {
   @property({ type: Boolean, reflect: true, attribute: 'terminal-mode' }) terminalMode = false;
   @property({ type: Boolean }) focused = false;
   @property({ attribute: false }) touched: string[] = [];
-  private tabs: UtilityTab[] = [{ id: crypto.randomUUID(), kind: 'files' }];
+  private tabs: UtilityTab[] = [{ id: crypto.randomUUID(), kind: 'new' }];
   private activeTabId = this.tabs[0].id;
   private get activeTab(): UtilityTabId { return this.tabs.find(tab => tab.id === this.activeTabId)?.kind || 'new'; }
   private get currentTab(): UtilityTab { return this.tabs.find(tab => tab.id === this.activeTabId) || this.tabs[0]; }
@@ -218,10 +218,11 @@ export class MuxSDKUtility extends LitElement {
     try {
       const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string }[]; activeTabId?: string } | null;
       const valid = new Set<string>(['new','files','status','coordination','changes','terminal','pages','meetings','web','browser','goal']);
-      if (saved?.tabs?.length && saved.tabs.length <= 30 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
+      if (saved?.tabs?.length && saved.tabs.length <= 50 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
         this.tabs = saved.tabs.map(tab => ({ id:tab.kind === 'browser' ? crypto.randomUUID() : tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title }));
-        const activeIndex = saved.tabs.findIndex(tab => tab.id === saved.activeTabId);
-        this.activeTabId = activeIndex >= 0 ? this.tabs[activeIndex].id : this.tabs[0].id;
+        let startTab = this.tabs.find(tab => tab.kind === 'new');
+        if (!startTab) { startTab = {id:crypto.randomUUID(),kind:'new'}; this.tabs = [startTab,...this.tabs]; }
+        this.activeTabId = startTab.id;
         if (saved.tabs.some(tab => tab.kind === 'web' || tab.kind === 'terminal' || tab.kind === 'browser')) this.saveTabs();
       }
       for (const key of ['files','changes','pages'] as const) {
@@ -283,7 +284,7 @@ export class MuxSDKUtility extends LitElement {
     if (tab.kind === 'pages') return 'Notes';
     if (tab.kind === 'meetings') return 'Meetings';
     if (tab.kind === 'browser') return tab.title || (tab.url ? new URL(tab.url).hostname : 'Browser');
-    return ({ status:'Status', coordination:'Coordination', changes:'Changes', goal:'Goal' } as Record<string,string>)[tab.kind] || 'Tab';
+    return ({ status:'Status', coordination:'Issues', changes:'Changes', goal:'Goal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { if (this.terminalMode) return; try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
   private migrateLegacyFile(): boolean {
@@ -370,7 +371,7 @@ export class MuxSDKUtility extends LitElement {
     return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Open a tool</h2><div class="new-tab-tools">
       <mux-ui-action-tile label="Goal" description="Read and control the current goal" @click=${() => this.chooseTool('goal')}><span slot="icon">${icon(Target,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Files" description="Browse and preview project files" @click=${() => this.chooseTool('files')}><span slot="icon">${icon(Folder,{size:18})}</span></mux-ui-action-tile>
-      <mux-ui-action-tile label="Coordination" description="Inspect work, inbox, and subscriptions" @click=${() => this.chooseTool('coordination')}><span slot="icon">${icon(Inbox,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="Issues" description="View shared work and progress" @click=${() => this.chooseTool('coordination')}><span slot="icon">${icon(CircleDot,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Status" description="See agent activity" @click=${() => this.chooseTool('status')}><span slot="icon">${icon(Network,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Changes" description="Review edits in this project" @click=${() => this.chooseTool('changes')}><span slot="icon">${icon(GitCompare,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Notes" description="Browse and edit notes for this chat" @click=${() => this.chooseTool('pages')}><span slot="icon">${icon(NotebookPen,{size:18})}</span></mux-ui-action-tile>
