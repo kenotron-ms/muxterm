@@ -214,7 +214,13 @@ async function runClaude(s) {
         // The SDK's result echoes the UUIDs of user inputs the native turn
         // consumed. A local input queue is not proof that a turn was accepted.
         const accepted = msg.user_message_uuids || (msg.user_message_uuid ? [msg.user_message_uuid] : []);
-        const steeringAbort = s.steering && !s.cancelRequested && msg.subtype !== 'success';
+        // Claude reports an acknowledged steer interrupt as either
+        // `interrupted` or `error_during_execution`. Only the result for the
+        // original input is a continuation; an error on the steer itself is not.
+        const steeringAbort = s.steering && s.steerInterruptAck && !s.cancelRequested &&
+          accepted.length > 0 && !accepted.includes(s.steerInputId) &&
+          (msg.subtype === 'interrupted' ||
+            (msg.subtype === 'error_during_execution' && msg.is_error && !msg.result));
         for (const id of accepted) s.inFlightInputs.delete(id);
         if (s.cancelRequested || (msg.subtype !== 'success' && !steeringAbort)) s.inFlightInputs.clear();
         s.busy = s.inFlightInputs.size > 0;
@@ -224,6 +230,8 @@ async function runClaude(s) {
           { inputIds: accepted, message: msg.is_error ? msg.result || msg.subtype : msg.subtype });
         s.cancelRequested = false;
         s.steering = false;
+        s.steerInputId = null;
+        s.steerInterruptAck = false;
         if (!s.busy) {
           // Finite input lets the SDK child exit on its own after each turn.
           // A later turn starts a new query with the saved native session ID.
@@ -239,6 +247,8 @@ async function runClaude(s) {
     const accepted = [...s.inFlightInputs].filter(id => !s.pendingInputs.has(id));
     s.busy = false;
     s.inFlightInputs.clear();
+    s.steerInputId = null;
+    s.steerInterruptAck = false;
     emit(s.id, accepted.length ? 'session.uncertain' : 'error',
       { inputIds: accepted, message: String(error) });
   }
@@ -436,14 +446,23 @@ async function command(cmd) {
           // queued correction. Abort that generation, then continue with the
           // correction while keeping its already-streamed transcript visible.
           s.steering = true;
+          s.steerInputId = input.id;
+          s.steerInterruptAck = false;
           await s.query.interrupt();
+          s.steerInterruptAck = true;
           if (s.cancelRequested) throw new Error('Steer was cancelled');
         }
         await new Promise((resolve, reject) => {
           s.pendingInputs.set(input.id, { input, resolve, reject });
           queue(s, input);
         });
-      } catch (error) { s.inFlightInputs.delete(input.id); s.steering = false; throw error; }
+      } catch (error) {
+        s.inFlightInputs.delete(input.id);
+        s.steering = false;
+        s.steerInputId = null;
+        s.steerInterruptAck = false;
+        throw error;
+      }
     }
     if (s.harness === 'codex' && input.kind !== 'steer') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.displayContent || input.content,
       attachments: (input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
