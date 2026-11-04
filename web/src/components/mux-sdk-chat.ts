@@ -196,6 +196,7 @@ export class MuxSDKChat extends LitElement {
   private historyUserInteracted = false;
   private olderTask?: Promise<boolean>;
   private rowHeights = new Map<string, number>();
+  private observedRows = new Set<HTMLElement>();
   private rowsCache?: { blocks: Block[]; rows: TranscriptRow[] };
   @state() private visibleStart = 0;
   @state() private visibleEnd = 0;
@@ -575,6 +576,7 @@ export class MuxSDKChat extends LitElement {
     if (this.workTimer) clearTimeout(this.workTimer);
     this.workTimer = undefined;
     this.rowObserver.disconnect();
+    this.observedRows.clear();
     this.activeSession = '';
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
     super.disconnectedCallback();
@@ -632,8 +634,10 @@ export class MuxSDKChat extends LitElement {
   }
   override updated(changed: Map<string, unknown>) {
     this.syncWorkTimer();
-    this.rowObserver.disconnect();
-    this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]').forEach(row => this.rowObserver.observe(row));
+    const rows = new Set(this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]'));
+    for (const row of this.observedRows) if (!rows.has(row)) this.rowObserver.unobserve(row);
+    for (const row of rows) if (!this.observedRows.has(row)) this.rowObserver.observe(row);
+    this.observedRows = rows;
     // The empty legacy mirror follows placeholder changes from turn and chat state.
     if (!nativeTextareaSizing && (changed.has('busy') || changed.has('chat') || changed.has('selectedAgent'))) {
       this.fitComposer(this.selectedAgent ? 'agent' : 'message');
@@ -931,12 +935,13 @@ export class MuxSDKChat extends LitElement {
     this.stopDictation();
     const textarea = event.currentTarget as HTMLTextAreaElement;
     const value = textarea.value;
+    const previousValue = this.pendingDraft ?? this.draft;
     this.pendingDraft = value;
     this.draftHasContent = !!value.trim();
     if (this.commandNotice) this.commandNotice = '';
     if (this.commandFailed) this.commandFailed = false;
     this.slashSelection = 0;
-    this.requestUpdate();
+    if (value.startsWith('/') || previousValue.startsWith('/')) this.requestUpdate();
     if (this.draftTimer) window.clearTimeout(this.draftTimer);
     this.draftTimer = window.setTimeout(() => this.flushDraft(), 700);
     syncTextareaSizing(textarea);
