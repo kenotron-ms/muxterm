@@ -62,28 +62,46 @@ One SDK client owns the Copilot runtime; archiving a chat disconnects only its
 native session. A failed runtime marks accepted work uncertain and requires an
 explicit new input to recover it.
 
+## Pi, OpenCode, and DeepSeek native SDKs
+
+Pi uses `@earendil-works/pi-coding-agent` in the sidecar. Its own session file
+is stored under muxterm's data home and resumes by that path. Pi loads its
+usual model credentials and project instructions. Muxterm registers its MCP
+connectors through Pi's SDK extension loader with the chat's origin token, and
+uses Pi's native streaming, tool events, model and thinking controls, steering,
+and cancellation.
+
+OpenCode uses `@opencode-ai/sdk` with the installed `opencode` command. Each
+chat owns an SDK-started OpenCode server on an ephemeral loopback port. Its
+server receives only that chat's MCP configuration; the server is closed when
+the chat is archived. OpenCode's session ID survives a muxterm restart and its
+SDK event stream supplies text, tool activity, and turn status.
+Steering stops the active generation and continues in the same OpenCode
+session, retaining the partial answer.
+
+DeepSeek uses `@deepseek-ai/dsh-sdk-client` and its same-version bundled `dsh`
+runtime with the `sdk` profile. Each chat owns a runtime and a launch patch
+that mounts muxterm's enabled MCP servers with its origin token. Its durable
+session ID survives a muxterm restart. The SDK confirms prompt admission and
+reports durable assistant and tool events. DeepSeek's SDK has no turn cancel
+request, so Stop closes that chat's runtime; a later message resumes its
+saved session in a new runtime. The runtime uses DeepSeek's configured provider
+credentials. A missing key appears as a failed turn rather than an empty reply.
+Steering uses the same runtime boundary, then continues the saved session with
+the new instruction.
+
+All three adapters include enabled GitHub, Microsoft personal, and remote
+connectors through the same per-chat MCP capability as the other SDK chats.
+Image uploads are passed as native image blocks when the attachment store has
+identified a supported raster MIME type.
+
 ## ACP agents
 
-DeepSeek Harness and Antigravity run as local ACP agents through the official
-`@agentclientprotocol/sdk` client. Install and configure each harness separately:
-
-| Chat choice | Required command | ACP launch |
-| --- | --- | --- |
-| DeepSeek Harness | `dsh` | `dsh --profile acp` |
-| Antigravity | muxterm-managed ACP server | `agy_acp_server.par` |
-
-Muxterm offers a choice when its command is on the server's `PATH`. The agent
-uses its own provider credentials and model configuration; command presence does
-not prove that a provider is ready. To use DeepSeek outside `PATH`, set
-`MUXTERM_ACP_DEEPSEEK_COMMAND` to its absolute executable path before starting muxterm.
-
-Pi and OpenCode are no longer new-chat choices or adapter dispatch targets.
-Their saved muxterm transcripts remain readable at
-`GET /api/sdk-chats/{id}/history?view=messages` and in
-`~/.local/share/muxterm/sdk-chat/{id}.ndjson` (or the configured data home).
-Copy either record to export it; removing a choice does not delete native
-harness history. Existing Gemini CLI chats can still resume, but new chats use
-Antigravity.
+Antigravity remains the new-chat ACP agent through `@agentclientprotocol/sdk`
+and muxterm's managed `agy_acp_server.par`. Existing Gemini CLI ACP chats can
+still resume, but new chats use Antigravity. The agent uses its own provider
+credentials and model configuration; command presence does not prove that a
+provider is ready.
 
 In **Settings → AI**, choose **Google sign-in** or **Detected API key**.
 Google sign-in uses the Google account associated with a Google AI Pro or Ultra

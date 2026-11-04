@@ -348,6 +348,8 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			event.Message = "Codex authentication failed. Run codex login in a terminal, then send a new message here."
 		case c.Harness == "claude" && (strings.Contains(event.Message, "authentication_error") || strings.Contains(event.Message, "Invalid API key")):
 			event.Message = "Claude Code authentication failed. Run claude in a terminal to sign in, then send a new message here."
+		case c.Harness == "pi" && (strings.Contains(event.Message, "invalid_api_key") || strings.Contains(event.Message, "Incorrect API key") || strings.Contains(event.Message, "API error (401)")):
+			event.Message = "Pi model authentication failed. Configure Pi's provider credentials, then send a new message here."
 		}
 	}
 	if event.NativeID != "" {
@@ -607,6 +609,11 @@ func (h *sdkChatHost) ensure(harness string) error {
 		return err
 	}
 	cmd.Env = append(os.Environ(), "MUXTERM_CHAT_MCP_BIN="+self)
+	// The OpenCode SDK launches `opencode` by name. User-level installs may
+	// be absent from the service's PATH even when we can discover the command.
+	if path, err := sdkExecutablePath("opencode"); err == nil {
+		cmd.Env = append(cmd.Env, "PATH="+filepath.Dir(path)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -1097,7 +1104,7 @@ func sdkPermissions(harness string) []string {
 	return []string{"full-permission"}
 }
 func sdkModes(harness string) []string {
-	if harness == "amplifier" || harness == "copilot" || isSDKACPHarness(harness) {
+	if harness == "amplifier" || harness == "copilot" || isSDKConfiguredHarness(harness) {
 		return []string{"agent"}
 	}
 	return []string{"agent", "plan"}
@@ -1126,38 +1133,18 @@ func sdkModeNames(value any) []string {
 
 func isSDKACPHarness(harness string) bool {
 	switch harness {
-	case "pi", "opencode", "deepseek", "gemini", "antigravity":
+	case "gemini", "antigravity":
 		return true
 	}
 	return false
 }
 
+func isSDKConfiguredHarness(harness string) bool {
+	return harness == "pi" || harness == "opencode" || harness == "deepseek" || isSDKACPHarness(harness)
+}
+
 func sdkACPExecutable(harness string) string {
 	switch harness {
-	case "pi":
-		if value := os.Getenv("MUXTERM_ACP_PI_COMMAND"); value != "" {
-			return value
-		}
-		if path, err := sdkExecutablePath("pi-acp"); err == nil {
-			return path
-		}
-		return "pi-acp"
-	case "opencode":
-		if value := os.Getenv("MUXTERM_ACP_OPENCODE_COMMAND"); value != "" {
-			return value
-		}
-		if path, err := sdkExecutablePath("opencode"); err == nil {
-			return path
-		}
-		return "opencode"
-	case "deepseek":
-		if value := os.Getenv("MUXTERM_ACP_DEEPSEEK_COMMAND"); value != "" {
-			return value
-		}
-		if path, err := sdkExecutablePath("dsh"); err == nil {
-			return path
-		}
-		return "dsh"
 	case "gemini":
 		if value := os.Getenv("MUXTERM_ACP_GEMINI_COMMAND"); value != "" {
 			return value
@@ -1195,6 +1182,13 @@ func sdkACPExecutable(harness string) string {
 		return "agy_acp_server.par"
 	}
 	return ""
+}
+
+func sdkOpenCodeExecutable() string {
+	if path, err := sdkExecutablePath("opencode"); err == nil {
+		return path
+	}
+	return "opencode"
 }
 func sdkContains(values []string, value string) bool {
 	for _, item := range values {
@@ -1516,16 +1510,20 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	options := make([]option, 0, 6)
 	codexPath, codexErr := sdkAgentExecutable("codex")
 	claudePath, claudeErr := sdkAgentExecutable("claude")
-	availableACP := make([]string, 0, 4)
-	for _, harness := range []string{"deepseek", "antigravity"} {
+	availableConfigured := make([]string, 0, 4)
+	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity"} {
 		if harness == "antigravity" {
 			if antigravityAvailable() {
-				availableACP = append(availableACP, harness)
+				availableConfigured = append(availableConfigured, harness)
 			}
 			continue
 		}
-		if _, err := exec.LookPath(sdkACPExecutable(harness)); err == nil {
-			availableACP = append(availableACP, harness)
+		if harness == "pi" || harness == "deepseek" {
+			availableConfigured = append(availableConfigured, harness)
+			continue
+		}
+		if _, err := exec.LookPath(sdkOpenCodeExecutable()); err == nil {
+			availableConfigured = append(availableConfigured, harness)
 		}
 	}
 	sdkReady := s.sdkChats.ensure("") == nil
@@ -1540,7 +1538,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	}
 	if sdkReady {
 		options = append(options, option{Harness: "copilot", Provider: "github"})
-		for _, harness := range availableACP {
+		for _, harness := range availableConfigured {
 			options = append(options, option{Harness: harness, Provider: "configured"})
 		}
 	}
@@ -1576,7 +1574,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 // returning, so changing harnesses in the composer leaves no chat behind.
 func (s *Server) handleSDKChatCatalog(w http.ResponseWriter, r *http.Request) {
 	harness := r.URL.Query().Get("harness")
-	if harness != "codex" && harness != "claude" && harness != "copilot" && harness != "amplifier" && !isSDKACPHarness(harness) {
+	if harness != "codex" && harness != "claude" && harness != "copilot" && harness != "amplifier" && !isSDKConfiguredHarness(harness) {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
@@ -1694,12 +1692,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", 400)
 		return
 	}
-	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "copilot" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness) {
+	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "copilot" && req.Harness != "amplifier" && !isSDKConfiguredHarness(req.Harness) {
 		http.Error(w, "unsupported harness", 400)
-		return
-	}
-	if req.Harness == "pi" || req.Harness == "opencode" {
-		http.Error(w, "this harness is no longer offered for new chats; saved history remains available", 400)
 		return
 	}
 	// Existing Gemini CLI chats can still resume, but new chats use Antigravity.
@@ -1752,8 +1746,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		(req.Provider == "anthropic" && req.Harness == "codex") ||
 		(req.Provider == "github" && req.Harness != "copilot") ||
 		(req.Harness == "copilot" && req.Provider != "github") ||
-		(req.Provider == "configured" && req.Harness != "amplifier" && !isSDKACPHarness(req.Harness)) ||
-		(isSDKACPHarness(req.Harness) && req.Provider != "configured") {
+		(req.Provider == "configured" && req.Harness != "amplifier" && !isSDKConfiguredHarness(req.Harness)) ||
+		(isSDKConfiguredHarness(req.Harness) && req.Provider != "configured") {
 		http.Error(w, "provider does not match harness", 400)
 		return
 	}
@@ -1822,10 +1816,13 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	// A missing runtime is a setup failure, not a conversation. Check before
 	// writing a chat record or creating a worktree.
-	if isSDKACPHarness(req.Harness) {
+	if isSDKACPHarness(req.Harness) || req.Harness == "opencode" {
 		command := sdkACPExecutable(req.Harness)
+		if req.Harness == "opencode" {
+			command = sdkOpenCodeExecutable()
+		}
 		if _, err := exec.LookPath(command); err != nil {
-			http.Error(w, "ACP harness executable unavailable: "+command, 503)
+			http.Error(w, "harness executable unavailable: "+command, 503)
 			return
 		}
 	}

@@ -16,10 +16,10 @@ import (
 // The installed binary carries the sidecar and the exact npm dependency lock.
 // Node packages are installed into a versioned cache before the sidecar starts.
 //
-//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs copilot-stream.mjs inbox-reminder.mjs antigravity-login.mjs agent-command.mjs package.json package-lock.json
+//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs copilot-stream.mjs pi-stream.mjs opencode-stream.mjs deepseek-stream.mjs native-common.mjs inbox-reminder.mjs antigravity-login.mjs agent-command.mjs package.json package-lock.json
 var files embed.FS
 
-var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "copilot-stream.mjs", "inbox-reminder.mjs", "antigravity-login.mjs", "agent-command.mjs", "package.json", "package-lock.json"}
+var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "copilot-stream.mjs", "pi-stream.mjs", "opencode-stream.mjs", "deepseek-stream.mjs", "native-common.mjs", "inbox-reminder.mjs", "antigravity-login.mjs", "agent-command.mjs", "package.json", "package-lock.json"}
 var prepareMu sync.Mutex
 
 func ready(dir string) bool {
@@ -28,6 +28,10 @@ func ready(dir string) bool {
 		"codex-stream.mjs",
 		"acp-stream.mjs",
 		"copilot-stream.mjs",
+		"pi-stream.mjs",
+		"opencode-stream.mjs",
+		"deepseek-stream.mjs",
+		"native-common.mjs",
 		"inbox-reminder.mjs",
 		"antigravity-login.mjs",
 		"agent-command.mjs",
@@ -36,6 +40,9 @@ func ready(dir string) bool {
 		"node_modules/@github/copilot-sdk/package.json",
 		"node_modules/@openai/codex-sdk/package.json",
 		"node_modules/@openai/codex/package.json",
+		"node_modules/@earendil-works/pi-coding-agent/package.json",
+		"node_modules/@opencode-ai/sdk/package.json",
+		"node_modules/@deepseek-ai/dsh-sdk-client/package.json",
 	} {
 		if info, err := os.Stat(filepath.Join(dir, name)); err != nil || !info.Mode().IsRegular() {
 			return false
@@ -98,15 +105,11 @@ func Prepare() (string, error) {
 	}
 	defer os.RemoveAll(tmp) //nolint:errcheck
 	for _, name := range names {
-		mode := os.FileMode(0600)
-		if name == "pi-mcp-wrapper.sh" {
-			mode = 0700
-		}
-		if err := os.WriteFile(filepath.Join(tmp, name), contents[name], mode); err != nil {
+		if err := os.WriteFile(filepath.Join(tmp, name), contents[name], 0600); err != nil {
 			return "", fmt.Errorf("sdk-chat: extract %s: %w", name, err)
 		}
 	}
-	installCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	installCtx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(installCtx, npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", tmp)
 	output, err := cmd.CombinedOutput()
