@@ -312,7 +312,7 @@ func Restart(restore RestoreCapability) error {
 //
 // The 20s budget covers a slow shutdown snapshot (every pane's scrollback is
 // serialized before the daemon exits) while staying well inside the browser's
-// 60s update poll, so a stuck daemon still leaves time for the web process to
+// three-minute update poll, so a stuck daemon still leaves time for the web process to
 // come back up on the new binary.
 func restartSessiond() error {
 	sock, err := sessiond.SocketPath()

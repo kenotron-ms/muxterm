@@ -16,7 +16,10 @@ import '../ui/button.js';
  *   waiting   asleep until nextAttemptAt             -> countdown, no spinner
  *   offline   the browser says there is no network   -> no promise at all
  *
- * and there is one control, Retry now, which really does force an attempt.
+ * During an intentional update, the socket still retries but the overlay
+ * holds one waiting message until the new server is ready.
+ *
+ * Outside that mode there is one control, Retry now, which forces an attempt.
  *
  * Deliberately not a dashboard: one state line, one countdown, one button. No
  * attempt counter, no history, no log. Colours come from the semantic --ui-*
@@ -156,6 +159,10 @@ export class MuxReconnectOverlay extends LitElement {
   @property({ type: String })
   detail = '';
 
+  /** An intentional server restart stays visually steady across retries. */
+  @property({ type: Boolean })
+  updating = false;
+
   @state()
   private _now = Date.now();
 
@@ -166,7 +173,9 @@ export class MuxReconnectOverlay extends LitElement {
     // 250ms, not 1000: the countdown must not appear to stall on a ladder
     // whose early rungs are 300ms long.
     this._tick = setInterval(() => {
-      this._now = Date.now();
+      if (this.phase === 'waiting' && !this.updating && !this.fatal) {
+        this._now = Date.now();
+      }
     }, 250);
   }
 
@@ -226,6 +235,17 @@ export class MuxReconnectOverlay extends LitElement {
             <div class="mark">⚠</div>
             <div class="message fatal">${this.message}</div>
             ${this.detail ? html`<div class="detail fatal">${this.detail}</div>` : nothing}
+          </div>
+        </div>
+      `;
+    }
+    if (this.updating) {
+      return html`
+        <div class="overlay" role="status" aria-live="polite">
+          <div class="container">
+            <div class="spinner"></div>
+            <div class="message">Updating muxterm</div>
+            <div class="detail">This may take a few minutes. Muxterm will reconnect automatically when it is ready.</div>
           </div>
         </div>
       `;
