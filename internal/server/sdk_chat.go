@@ -611,8 +611,14 @@ func (h *sdkChatHost) ensure(harness string) error {
 	cmd.Env = append(os.Environ(), "MUXTERM_CHAT_MCP_BIN="+self)
 	// The OpenCode SDK launches `opencode` by name. User-level installs may
 	// be absent from the service's PATH even when we can discover the command.
-	if path, err := sdkExecutablePath("opencode"); err == nil {
-		cmd.Env = append(cmd.Env, "PATH="+filepath.Dir(path)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	pathDirs := make([]string, 0, 2)
+	for _, name := range []string{"opencode", "uv"} {
+		if path, err := sdkExecutablePath(name); err == nil {
+			pathDirs = append(pathDirs, filepath.Dir(path))
+		}
+	}
+	if len(pathDirs) > 0 {
+		cmd.Env = append(cmd.Env, "PATH="+strings.Join(pathDirs, string(os.PathListSeparator))+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
 	if err := cmd.Start(); err != nil {
 		return err
@@ -1140,7 +1146,7 @@ func isSDKACPHarness(harness string) bool {
 }
 
 func isSDKConfiguredHarness(harness string) bool {
-	return harness == "pi" || harness == "opencode" || harness == "deepseek" || isSDKACPHarness(harness)
+	return harness == "pi" || harness == "opencode" || harness == "deepseek" || harness == "antigravity-sdk" || isSDKACPHarness(harness)
 }
 
 func sdkACPExecutable(harness string) string {
@@ -1511,7 +1517,15 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	codexPath, codexErr := sdkAgentExecutable("codex")
 	claudePath, claudeErr := sdkAgentExecutable("claude")
 	availableConfigured := make([]string, 0, 4)
-	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity"} {
+	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity", "antigravity-sdk"} {
+		if harness == "antigravity-sdk" {
+			if _, err := sdkExecutablePath("uv"); err == nil {
+				if _, pythonErr := sdkExecutablePath("python3"); pythonErr == nil {
+					availableConfigured = append(availableConfigured, harness)
+				}
+			}
+			continue
+		}
 		if harness == "antigravity" {
 			if antigravityAvailable() {
 				availableConfigured = append(availableConfigured, harness)
@@ -1734,7 +1748,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "configured"
 		case "copilot":
 			req.Provider = "github"
-		case "pi", "opencode", "deepseek", "gemini", "antigravity":
+		case "pi", "opencode", "deepseek", "gemini", "antigravity", "antigravity-sdk":
 			req.Provider = "configured"
 		}
 	}
@@ -1824,6 +1838,14 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		if _, err := exec.LookPath(command); err != nil {
 			http.Error(w, "harness executable unavailable: "+command, 503)
 			return
+		}
+	}
+	if req.Harness == "antigravity-sdk" {
+		for _, name := range []string{"uv", "python3"} {
+			if _, err := sdkExecutablePath(name); err != nil {
+				http.Error(w, "Antigravity SDK requires "+name, 503)
+				return
+			}
 		}
 	}
 	if err := h.ensure(req.Harness); err != nil {

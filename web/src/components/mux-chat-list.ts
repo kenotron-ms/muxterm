@@ -27,7 +27,8 @@ import geminiMark from '../assets/harness/gemini.svg?url';
 
 const harnessMarks: Record<SDKHarnessName, string> = {
   codex: codexMark, claude: claudeMark, copilot: copilotMark, amplifier: amplifierMark,
-  pi: piMark, opencode: opencodeMark, deepseek: deepseekMark, gemini: geminiMark, antigravity: geminiMark,
+  pi: piMark, opencode: opencodeMark, deepseek: deepseekMark, gemini: geminiMark,
+  antigravity: geminiMark, 'antigravity-sdk': geminiMark,
 };
 
 function harnessMark(chat: SDKChat, className = 'chat-icon') {
