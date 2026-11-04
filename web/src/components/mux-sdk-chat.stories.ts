@@ -274,6 +274,8 @@ export const DelegatedWorkOpen: Story = {
     for (let attempt = 0; attempt < 20; attempt++) {
       const card = chat?.shadowRoot?.querySelector<HTMLElement>('mux-ui-action-tile.delegate-card');
       if (card) { card.click(); return; }
+      const disclosure = chat?.shadowRoot?.querySelector<HTMLDetailsElement>('.work-disclosure');
+      if (disclosure && !disclosure.open) disclosure.querySelector('summary')?.click();
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     throw new Error('The delegated work card did not render');
