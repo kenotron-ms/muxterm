@@ -9,6 +9,9 @@ import { CodexStream, stopCodexRuntime } from './codex-stream.mjs';
 import { CopilotStream, stopCopilotClient } from './copilot-stream.mjs';
 import { agentCommand } from './agent-command.mjs';
 import { ACPStream, isACPHarness, stopACPRuntimes } from './acp-stream.mjs';
+import { PiStream } from './pi-stream.mjs';
+import { OpenCodeStream } from './opencode-stream.mjs';
+import { DeepSeekStream } from './deepseek-stream.mjs';
 import { antigravityLoginStatus, startAntigravityLogin, cancelAntigravityLogin, finishAntigravityLogin } from './antigravity-login.mjs';
 import { query, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 
@@ -64,6 +67,9 @@ const capabilities = harness => harness === 'copilot'
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: true }
   : isACPHarness(harness)
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: false }
+  : harness === 'pi' || harness === 'opencode' || harness === 'deepseek'
+  ? { approvals: false, transcript_read: false, interrupt: true, live_input: false,
+      attributed_service_input: false, native_steering: harness === 'pi' }
   : harness === 'claude'
   ? { approvals: false, transcript_read: true, interrupt: true, live_input: true, attributed_service_input: true, native_steering: false }
   : { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: true };
@@ -287,13 +293,23 @@ async function command(cmd) {
   }
   if (op === 'start' || op === 'resume') {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
-    if (harness !== 'codex' && harness !== 'claude' && harness !== 'copilot' && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
+    if (harness !== 'codex' && harness !== 'claude' && harness !== 'copilot' &&
+      !['pi', 'opencode', 'deepseek'].includes(harness) && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
     const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval,
       catalog: cmd.catalog === true, originFile: cmd.catalog === true ? '' : originFile(sessionId, cmd.originToken),
       inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
+    if (['pi', 'opencode', 'deepseek'].includes(harness)) {
+      const Adapter = { pi: PiStream, opencode: OpenCodeStream, deepseek: DeepSeekStream }[harness];
+      try { s.native = new Adapter(s, emit); await s.native.ready; }
+      catch (error) {
+        await s.native?.close().catch(() => {});
+        sessions.delete(sessionId); forgetOriginFile(s.originFile); throw error;
+      }
+      return { sessionId, capabilities: capabilities(harness) };
+    }
     if (harness === 'copilot') {
       try {
         s.copilot = new CopilotStream(s, emit, () => {
@@ -354,6 +370,7 @@ async function command(cmd) {
     throw new Error('Native goal controls unavailable for this adapter');
   }
   if (op === 'options') {
+    if (s.native) return await s.native.options();
     if (s.copilot) return s.copilot.options();
     if (s.acp) return s.acp.options();
     if (s.harness === 'codex') {
@@ -370,6 +387,7 @@ async function command(cmd) {
     return { model: s.model || models[0]?.id || '', effort: s.effort, models };
   }
   if (op === 'select') {
+    if (s.native) return await s.native.select(cmd);
     if (s.copilot) return s.copilot.select(cmd);
     if (s.acp) return await s.acp.select(cmd);
     if (s.busy) throw new Error('Finish the current turn before changing settings');
@@ -387,6 +405,7 @@ async function command(cmd) {
     return { ...options, model, effort };
   }
   if (op === 'title') {
+    if (s.native) return await s.native.title(cmd);
     if (s.copilot) return s.copilot.title(cmd);
     if (s.acp) return s.acp.title(cmd);
     if (s.harness === 'codex') {
@@ -416,6 +435,7 @@ async function command(cmd) {
     if (s.busy && input.kind !== 'steer' && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');
     if (s.acp) return await s.acp.send(input);
     if (s.copilot) return await s.copilot.send(input);
+    if (s.native) return await s.native.send(input);
     if (s.harness === 'claude') {
       if (s.runPromise && !s.busy) await s.runPromise;
       if (input.model && input.model !== s.model) { if (s.query) await s.query.setModel(input.model); s.model = input.model; }
@@ -477,6 +497,7 @@ async function command(cmd) {
     if (!s.busy) throw new Error('No active turn to stop');
     if (s.acp) return await s.acp.interrupt();
     if (s.copilot) return await s.copilot.interrupt();
+    if (s.native) return await s.native.interrupt();
     if (s.harness === 'codex') await s.codex?.interrupt();
     else {
       s.cancelRequested = true;
@@ -492,7 +513,7 @@ async function command(cmd) {
     if (s.busy || s.acp?.busy) throw new Error('Finish the current turn before archiving this chat');
     sessions.delete(sessionId);
     s.closed = true; s.wake?.();
-    try { await s.acp?.close(); await s.copilot?.close(); await s.codex?.close(); await s.query?.close?.(); }
+    try { await s.native?.close(); await s.acp?.close(); await s.copilot?.close(); await s.codex?.close(); await s.query?.close?.(); }
     finally { forgetOriginFile(s.originFile); }
     return { status: 'closed' };
   }
@@ -525,7 +546,7 @@ async function shutdown() {
     s.closed = true;
     s.wake?.();
     forgetOriginFile(s.originFile);
-    try { await s.acp?.close(); await s.copilot?.close(); await s.codex?.close(); await s.query?.close?.(); }
+    try { await s.native?.close(); await s.acp?.close(); await s.copilot?.close(); await s.codex?.close(); await s.query?.close?.(); }
     catch (error) { console.error(`SDK chat adapter shutdown: ${error}`); }
   });
   await Promise.allSettled(closing);

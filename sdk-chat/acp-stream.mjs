@@ -7,7 +7,6 @@ import * as acp from '@agentclientprotocol/sdk';
 import { acknowledgeInboxReminder, readInboxReminder } from './inbox-reminder.mjs';
 
 const profiles = {
-  deepseek: { command: 'dsh', args: ['--profile', 'acp'], env: 'MUXTERM_ACP_DEEPSEEK_COMMAND', mcp: true },
   gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
   antigravity: { command: 'agy_acp_server.par', args: process.platform === 'linux' ? ['--uid='] : [], env: 'MUXTERM_ACP_ANTIGRAVITY_COMMAND', mcp: true },
 };
