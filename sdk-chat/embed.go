@@ -16,10 +16,10 @@ import (
 // The installed binary carries the sidecar and the exact npm dependency lock.
 // Node packages are installed into a versioned cache before the sidecar starts.
 //
-//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs copilot-stream.mjs inbox-reminder.mjs antigravity-login.mjs agent-command.mjs pi-mcp-wrapper.sh pi-mcp-extension.mjs package.json package-lock.json
+//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs copilot-stream.mjs inbox-reminder.mjs antigravity-login.mjs agent-command.mjs package.json package-lock.json
 var files embed.FS
 
-var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "copilot-stream.mjs", "inbox-reminder.mjs", "antigravity-login.mjs", "agent-command.mjs", "pi-mcp-wrapper.sh", "pi-mcp-extension.mjs", "package.json", "package-lock.json"}
+var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "copilot-stream.mjs", "inbox-reminder.mjs", "antigravity-login.mjs", "agent-command.mjs", "package.json", "package-lock.json"}
 var prepareMu sync.Mutex
 
 func ready(dir string) bool {
@@ -31,11 +31,11 @@ func ready(dir string) bool {
 		"inbox-reminder.mjs",
 		"antigravity-login.mjs",
 		"agent-command.mjs",
-		"pi-mcp-wrapper.sh",
-		"pi-mcp-extension.mjs",
 		"node_modules/@anthropic-ai/claude-agent-sdk/package.json",
 		"node_modules/@agentclientprotocol/sdk/package.json",
 		"node_modules/@github/copilot-sdk/package.json",
+		"node_modules/@openai/codex-sdk/package.json",
+		"node_modules/@openai/codex/package.json",
 	} {
 		if info, err := os.Stat(filepath.Join(dir, name)); err != nil || !info.Mode().IsRegular() {
 			return false

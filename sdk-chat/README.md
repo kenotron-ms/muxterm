@@ -5,21 +5,24 @@ On first use it extracts them to a versioned cache and runs
 `npm ci --ignore-scripts` there. Node.js and npm are required;
 dependency installation errors stop chat
 creation with a clear error. Go starts the sidecar lazily and supervises it
-through a versioned NDJSON Unix socket. It uses the existing Codex and Claude login state; no settings file is
-written. The sidecar accepts `start`, `resume`, `send`, `interrupt`,
+through a versioned NDJSON Unix socket. It uses the existing Codex, Claude, and
+GitHub Copilot login state; no credentials are written. The sidecar accepts `start`, `resume`, `send`, `interrupt`,
 `capabilities`, and `close` operations. Unsupported service attribution and
 busy Codex input return explicit errors.
 
-Codex uses the user's `codex` command through its app-server protocol. Muxterm
-does not pin a Codex version or download a second CLI. The app-server's
+Codex uses the packaged native `@openai/codex` binary through its app-server
+protocol. One app-server serves all Codex chats; each native thread receives its
+own working directory and MCP configuration. The app-server's
 `item/agentMessage/delta` notifications provide live text for the existing SSE
 renderer. Native Codex thread IDs still resume chats.
 
 Claude uses the user's `claude` command through the Agent SDK's
 `pathToClaudeCodeExecutable` option. The SDK is a small protocol client; its
 optional platform packages are installed alongside the Copilot SDK runtime.
-Set `MUXTERM_CODEX_COMMAND` or `MUXTERM_CLAUDE_COMMAND` to an absolute
-path before starting muxterm if the corresponding command is outside `PATH`.
+Set `MUXTERM_CLAUDE_COMMAND` to an absolute path before starting muxterm if the
+Claude command is outside `PATH`. Claude uses a finite streaming-input query
+per turn: steering remains available during the turn, then the SDK-owned child
+exits and a later turn resumes the same native session ID.
 
 The sidecar path defaults to the extracted copy embedded in the binary.
 `MUXTERM_SDK_CHAT_SIDECAR` can point to an explicit copy.
@@ -55,26 +58,32 @@ Muxterm lists the SDK's models and reasoning choices, resumes native sessions,
 streams answers and tool activity, and forwards immediate steering requests.
 It registers muxterm MCP plus enabled GitHub, Microsoft personal, and remote
 connectors. The muxterm MCP server receives a per-session origin token.
+One SDK client owns the Copilot runtime; archiving a chat disconnects only its
+native session. A failed runtime marks accepted work uncertain and requires an
+explicit new input to recover it.
 
 ## ACP agents
 
-Pi, OpenCode, DeepSeek Harness, Gemini CLI, and Antigravity run as local ACP agents through the official
+DeepSeek Harness and Antigravity run as local ACP agents through the official
 `@agentclientprotocol/sdk` client. Install and configure each harness separately:
 
 | Chat choice | Required command | ACP launch |
 | --- | --- | --- |
-| Pi | `pi` and `pi-acp` | `pi-acp` |
-| OpenCode | `opencode` | `opencode acp` |
 | DeepSeek Harness | `dsh` | `dsh --profile acp` |
-| Gemini CLI | `gemini` | `gemini --acp` |
 | Antigravity | muxterm-managed ACP server | `agy_acp_server.par` |
 
 Muxterm offers a choice when its command is on the server's `PATH`. The agent
 uses its own provider credentials and model configuration; command presence does
-not prove that a provider is ready. To use a binary outside `PATH`, set
-`MUXTERM_ACP_PI_COMMAND`, `MUXTERM_ACP_OPENCODE_COMMAND`, or
-`MUXTERM_ACP_DEEPSEEK_COMMAND`, or `MUXTERM_ACP_GEMINI_COMMAND` to its absolute executable path before starting
-muxterm. For Pi, `pi` itself must also be on `PATH` because `pi-acp` launches it.
+not prove that a provider is ready. To use DeepSeek outside `PATH`, set
+`MUXTERM_ACP_DEEPSEEK_COMMAND` to its absolute executable path before starting muxterm.
+
+Pi and OpenCode are no longer new-chat choices or adapter dispatch targets.
+Their saved muxterm transcripts remain readable at
+`GET /api/sdk-chats/{id}/history?view=messages` and in
+`~/.local/share/muxterm/sdk-chat/{id}.ndjson` (or the configured data home).
+Copy either record to export it; removing a choice does not delete native
+harness history. Existing Gemini CLI chats can still resume, but new chats use
+Antigravity.
 
 In **Settings → AI**, choose **Google sign-in** or **Detected API key**.
 Google sign-in uses the Google account associated with a Google AI Pro or Ultra
@@ -88,17 +97,17 @@ The API-key option appears when `GEMINI_API_KEY` is in the server environment or
 for API-key chats, so choosing it leaves Google sign-in credentials untouched.
 Muxterm only passes the key to the Gemini child process and never returns it to
 the browser. An API key uses a separate billing path. After choosing a method,
-check the connection and refresh the New Chat model list. New Gemini processes
-use the current choice; chats already running keep their existing connection.
+check the connection before resuming an existing Gemini CLI chat. A running
+Gemini process keeps the auth choice with which it started.
 
-The client keeps one ACP process per chat and saves the native ACP session ID.
+The client keeps one ACP process per supported harness and saves each native
+ACP session ID. Native session initialization is serialized on a shared
+connection; established sessions can run concurrently.
 On reconnect it uses `session/resume` where advertised, then `session/load`.
 Streaming text, tool activity, cancellation, image prompts, and
 advertised model and thinking controls flow into the existing chat UI. ACP chats
 receive muxterm's local MCP server and enabled GitHub, Microsoft personal, and
 remote connector servers. The remote server carries authorized Google tools.
-Pi's ACP adapter ignores MCP server definitions, so muxterm loads a session-only
-Pi extension that registers the same servers through Pi's native MCP API.
 
 ACP v1 has no general live input method for steering an active prompt. When an
 agent advertises the ACP steering extension, muxterm sends an injected steer.

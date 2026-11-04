@@ -1,11 +1,26 @@
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import readline from 'node:readline';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { agentCommand } from './agent-command.mjs';
+const require = createRequire(import.meta.url);
+const target = {
+  'linux:x64': ['@openai/codex-linux-x64', 'x86_64-unknown-linux-musl'],
+  'linux:arm64': ['@openai/codex-linux-arm64', 'aarch64-unknown-linux-musl'],
+  'darwin:x64': ['@openai/codex-darwin-x64', 'x86_64-apple-darwin'],
+  'darwin:arm64': ['@openai/codex-darwin-arm64', 'aarch64-apple-darwin'],
+  'win32:x64': ['@openai/codex-win32-x64', 'x86_64-pc-windows-msvc'],
+  'win32:arm64': ['@openai/codex-win32-arm64', 'aarch64-pc-windows-msvc'],
+}[`${process.platform}:${process.arch}`];
+if (!target) throw new Error(`Unsupported Codex platform: ${process.platform}/${process.arch}`);
+let vendorRoot;
+try { vendorRoot = join(dirname(require.resolve(`${target[0]}/package.json`)), 'vendor'); }
+catch { vendorRoot = join(dirname(require.resolve('@openai/codex/bin/codex.js')), '..', 'vendor'); }
+const codexCLI = join(vendorRoot, target[1], 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
+if (!existsSync(codexCLI)) throw new Error(`Codex native binary is missing: ${codexCLI}`);
 function toolDetails(item) {
   if (item.type === 'commandExecution') return {
     name: 'Command', input: { command: item.command, cwd: item.cwd },
@@ -18,59 +33,54 @@ function toolDetails(item) {
   return { name: item.type, input: item, output: item };
 }
 
-// The Codex SDK's runStreamed() uses `codex exec --experimental-json`, which
-// reports completed agent messages but no text deltas. The app-server protocol
-// exposes item/agentMessage/delta while preserving the same native thread ID.
-export class CodexStream {
-  constructor(session, emit, catalogOnly = false) {
-    this.session = session;
-    this.emit = emit;
+let sharedRuntime;
+function runtime() {
+  if (!sharedRuntime || sharedRuntime.closed) sharedRuntime = new CodexRuntime();
+  return sharedRuntime;
+}
+
+function mcpConfig(session) {
+  const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
+  if (!muxterm) return {};
+  const dataDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat');
+  const env = Object.fromEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
+    .filter(key => process.env[key]).map(key => [key, process.env[key]]));
+  // App-server applies thread/start and thread/resume config to that thread's
+  // MCP connections. Keep the native MCP processes and chat identity separate
+  // even though the app-server transport is shared.
+  env.MUXTERM_CHAT_SESSION_ID = session.id;
+  env.MUXTERM_CHAT_ORIGIN_FILE = session.originFile;
+  const servers = { muxterm: { command: muxterm, args: ['mcp'], env } };
+  if (existsSync(join(dataDir, 'connections', 'github-enabled'))) {
+    const githubEnv = { ...env };
+    for (const key of ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
+      if (process.env[key]) githubEnv[key] = process.env[key];
+    }
+    servers.github = { command: muxterm, args: ['connection-mcp', 'github'], env: githubEnv };
+  }
+  if (existsSync(join(dataDir, 'connections', 'remote.json')))
+    servers.remote = { command: muxterm, args: ['connection-mcp', 'remote'], env };
+  const microsoftRoot = join(dataDir, 'connections', 'microsoft-graph');
+  if (existsSync(join(microsoftRoot, 'personal', 'enabled'))) {
+    const microsoftEnv = { ...env };
+    for (const key of ['PATH', 'HOME']) if (process.env[key]) microsoftEnv[key] = process.env[key];
+    servers.microsoft_personal = { command: muxterm, args: ['connection-mcp', 'microsoft-personal'], env: microsoftEnv };
+  }
+  return { mcp_servers: servers };
+}
+
+class CodexRuntime {
+  constructor() {
     this.pending = new Map();
-    this.userInputRequests = new Map();
+    this.adapters = new Set();
+    this.byThread = new Map();
     this.nextId = 0;
-    this.textByItem = new Map();
-    this.phaseByItem = new Map();
-    this.inputIds = [];
-    this.cancelRequested = false;
-    this.childThreads = new Map();
-    this.goalSequence = 0;
-    this.catalogOnly = catalogOnly;
-    const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
-    const mcpConfig = muxterm ? ['-c', `mcp_servers.muxterm.command=${JSON.stringify(muxterm)}`,
-      '-c', 'mcp_servers.muxterm.args=["mcp"]'] : [];
-    if (muxterm && session.originFile) mcpConfig.push('-c', `mcp_servers.muxterm.env.MUXTERM_CHAT_ORIGIN_FILE=${JSON.stringify(session.originFile)}`);
-    const githubMarker = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'github-enabled');
-    const githubEnabled = !!muxterm && existsSync(githubMarker);
-    if (githubEnabled) mcpConfig.push('-c', `mcp_servers.github.command=${JSON.stringify(muxterm)}`,
-      '-c', 'mcp_servers.github.args=["connection-mcp","github"]');
-    const remoteConnectionFile = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'remote.json');
-    const remoteConfigured = !!muxterm && existsSync(remoteConnectionFile);
-    if (remoteConfigured) mcpConfig.push('-c', `mcp_servers.remote.command=${JSON.stringify(muxterm)}`,
-      '-c', 'mcp_servers.remote.args=["connection-mcp","remote"]');
-    const microsoftRoot = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'microsoft-graph');
-    const microsoftPersonal = !!muxterm && existsSync(join(microsoftRoot, 'personal', 'enabled'));
-    if (microsoftPersonal) mcpConfig.push('-c', `mcp_servers.microsoft_personal.command=${JSON.stringify(muxterm)}`,
-      '-c', 'mcp_servers.microsoft_personal.args=["connection-mcp","microsoft-personal"]');
-    for (const key of ['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']) {
-      if (process.env[key]) {
-        const value = JSON.stringify(process.env[key]);
-        mcpConfig.push('-c', `mcp_servers.muxterm.env.${key}=${value}`);
-        if (githubEnabled) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${value}`);
-        if (remoteConfigured) mcpConfig.push('-c', `mcp_servers.remote.env.${key}=${value}`);
-        if (microsoftPersonal) mcpConfig.push('-c', `mcp_servers.microsoft_personal.env.${key}=${value}`);
-      }
-    }
-    for (const key of ['PATH', 'HOME']) if (process.env[key]) {
-      const value = JSON.stringify(process.env[key]);
-      if (microsoftPersonal) mcpConfig.push('-c', `mcp_servers.microsoft_personal.env.${key}=${value}`);
-    }
-    if (githubEnabled) for (const key of ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
-      if (process.env[key]) mcpConfig.push('-c', `mcp_servers.github.env.${key}=${JSON.stringify(process.env[key])}`);
-    }
-    this.process = spawn(agentCommand('codex', 'MUXTERM_CODEX_COMMAND'), ['app-server', '--stdio', '-c', 'model_reasoning_summary="none"', '-c', 'tools.update_plan.enabled=true', ...mcpConfig], {
-      cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    this.closed = false;
+    this.stopping = false;
     this.stderr = '';
+    this.process = spawn(codexCLI, ['app-server', '--stdio', '-c', 'model_reasoning_summary="none"', '-c', 'tools.update_plan.enabled=true'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     this.process.stderr.on('data', data => { this.stderr = (this.stderr + data).slice(-4000); });
     readline.createInterface({ input: this.process.stdout }).on('line', line => this.onLine(line));
     this.process.on('error', error => this.fail(error));
@@ -80,7 +90,7 @@ export class CodexStream {
   }
 
   request(method, params) {
-    if (this.process.exitCode !== null || this.process.stdin.destroyed)
+    if (this.closed || this.process.exitCode !== null || this.process.stdin.destroyed)
       return Promise.reject(new Error('Codex app-server is closed'));
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
@@ -88,6 +98,90 @@ export class CodexStream {
       this.process.stdin.write(JSON.stringify({ id, method, params }) + '\n');
     });
   }
+
+  async initialize() {
+    await this.request('initialize', { clientInfo: { name: 'muxterm', title: 'muxterm SDK chat', version: '1' }, capabilities: { experimentalApi: true } });
+    this.process.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
+  }
+
+  onLine(line) {
+    let message;
+    try { message = JSON.parse(line); } catch { return; }
+    if (message.id !== undefined) {
+      if (message.method) {
+        const adapter = this.byThread.get(message.params?.threadId);
+        if (adapter) adapter.onServerRequest(message);
+        else this.process.stdin.write(JSON.stringify({ id: message.id, error: { code: -32601, message: 'Unsupported request' } }) + '\n');
+        return;
+      }
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      this.pending.delete(message.id);
+      if (message.error) pending.reject(new Error(message.error.message || JSON.stringify(message.error)));
+      else pending.resolve(message.result);
+      return;
+    }
+    const threadId = message.params?.threadId;
+    const adapter = this.byThread.get(threadId) || [...this.adapters].find(item => item.childThreads.has(threadId));
+    adapter?.onNotification(message.method, message.params);
+  }
+
+  register(adapter, threadId) {
+    if (this.closed) throw new Error('Codex app-server is closed');
+    this.adapters.add(adapter);
+    this.byThread.set(threadId, adapter);
+  }
+
+  async detach(adapter) {
+    this.adapters.delete(adapter);
+    if (this.byThread.get(adapter.session.nativeId) === adapter)
+      this.byThread.delete(adapter.session.nativeId);
+    if (!this.closed && adapter.session.nativeId)
+      await this.request('thread/unsubscribe', { threadId: adapter.session.nativeId });
+  }
+
+  fail(error) {
+    if (this.closed) return;
+    this.closed = true;
+    if (sharedRuntime === this) sharedRuntime = undefined;
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    for (const adapter of this.adapters) adapter.fail(error);
+    this.adapters.clear();
+    this.byThread.clear();
+  }
+
+  async stop() {
+    if (this.stopping) return;
+    this.stopping = true;
+    this.fail(new Error('Codex app-server stopped'));
+    this.process.stdin.end();
+    if (this.process.exitCode === null) this.process.kill('SIGTERM');
+  }
+}
+
+export async function stopCodexRuntime() {
+  await sharedRuntime?.stop();
+}
+
+export class CodexStream {
+  constructor(session, emit, onFailure = null, catalogOnly = false) {
+    this.session = session;
+    this.emit = emit;
+    this.onFailure = onFailure;
+    this.catalogOnly = catalogOnly;
+    this.runtime = runtime();
+    this.userInputRequests = new Map();
+    this.textByItem = new Map();
+    this.phaseByItem = new Map();
+    this.inputIds = [];
+    this.cancelRequested = false;
+    this.childThreads = new Map();
+    this.goalSequence = 0;
+    this.ready = this.initialize().catch(error => { this.fail(error); throw error; });
+  }
+
+  request(method, params) { return this.runtime.request(method, params); }
 
   answerUserInput(questionId, answers) {
     const pending = this.userInputRequests.get(questionId);
@@ -102,19 +196,19 @@ export class CodexStream {
       response[question.id] = { answers: [answer.trim()] };
     }
     this.userInputRequests.delete(questionId);
-    this.process.stdin.write(JSON.stringify({ id: pending.rpcId, result: { answers: response } }) + '\n');
+    this.runtime.process.stdin.write(JSON.stringify({ id: pending.rpcId, result: { answers: response } }) + '\n');
     this.emit(this.session.id, 'question.answered', { itemId: questionId });
     return { status: 'accepted' };
   }
 
   async initialize() {
-    await this.request('initialize', { clientInfo: { name: 'muxterm', title: 'muxterm SDK chat', version: '1' }, capabilities: { experimentalApi: true } });
-    this.process.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
+    await this.runtime.ready;
     if (this.catalogOnly) return;
-    const options = { cwd: this.session.cwd, additionalDirectories: this.session.sourceFolders, approvalPolicy: 'never', sandbox: this.sandboxName() };
+    const options = { cwd: this.session.cwd, additionalDirectories: this.session.sourceFolders, approvalPolicy: 'never', sandbox: this.sandboxName(), config: mcpConfig(this.session) };
     const result = await this.request(this.session.nativeId ? 'thread/resume' : 'thread/start',
       this.session.nativeId ? { threadId: this.session.nativeId, ...options } : options);
     this.session.nativeId = result.thread.id;
+    this.runtime.register(this, result.thread.id);
     this.session.model ||= result.thread.model || '';
     this.session.effort ||= result.thread.reasoningEffort || '';
     this.emit(this.session.id, 'session.started', { nativeId: result.thread.id,
@@ -239,33 +333,22 @@ export class CodexStream {
     }
   }
 
-  onLine(line) {
-    let message;
-    try { message = JSON.parse(line); } catch { return; }
-    if (message.id !== undefined) {
-      if (message.method) {
+  onServerRequest(message) {
         if (message.method === 'item/tool/requestUserInput' && message.params?.threadId === this.session.nativeId) {
           const questions = message.params.questions;
           if (!Array.isArray(questions) || !questions.length || questions.length > 3 ||
               questions.some(question => typeof question.id !== 'string' || typeof question.question !== 'string')) {
-            this.process.stdin.write(JSON.stringify({ id: message.id, error: { code: -32602, message: 'Invalid questions' } }) + '\n');
+            this.runtime.process.stdin.write(JSON.stringify({ id: message.id, error: { code: -32602, message: 'Invalid questions' } }) + '\n');
             return;
           }
           const questionId = randomUUID();
           this.userInputRequests.set(questionId, { rpcId: message.id, questions, turnId: message.params.turnId });
           this.emit(this.session.id, 'question.requested', { itemId: questionId,
             raw: { questions, isBlocking: message.params.isBlocking !== false } });
-        } else this.process.stdin.write(JSON.stringify({ id: message.id, error: { code: -32601, message: 'Unsupported request' } }) + '\n');
-        return;
-      }
-      const pending = this.pending.get(message.id);
-      if (!pending) return;
-      this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message || JSON.stringify(message.error)));
-      else pending.resolve(message.result);
-      return;
-    }
-    const { method, params: p } = message;
+        } else this.runtime.process.stdin.write(JSON.stringify({ id: message.id, error: { code: -32601, message: 'Unsupported request' } }) + '\n');
+  }
+
+  onNotification(method, p) {
     if (!p) return;
     if (method === 'serverRequest/resolved' && p.threadId === this.session.nativeId) {
       for (const [questionId, request] of this.userInputRequests) {
@@ -389,15 +472,22 @@ export class CodexStream {
     return { name, source: mode === 'manual' ? 'manual' : 'generated' };
   }
 
-  close() { this.userInputRequests.clear(); this.process.kill('SIGTERM'); }
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.userInputRequests.clear();
+    await this.ready.catch(() => {});
+    await this.runtime.detach(this);
+  }
 
   fail(error) {
     this.steeringResolve?.();
-    for (const pending of this.pending.values()) pending.reject(error);
-    this.pending.clear();
+    this.userInputRequests.clear();
     if (this.session.busy) {
       this.session.busy = false;
-      this.emit(this.session.id, 'error', { message: String(error) });
+      this.emit(this.session.id, 'session.uncertain', { inputIds: this.inputIds,
+        message: `Codex app-server stopped before the turn completed: ${error}. The input was not replayed.` });
     }
+    this.onFailure?.();
   }
 }
