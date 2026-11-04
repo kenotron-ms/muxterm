@@ -112,15 +112,25 @@ export async function applyUpdate(): Promise<{ version: string }> {
 }
 
 let installing: Promise<void> | null = null;
+// A daemon snapshot and restart can outlast the socket's ordinary retry ladder.
+const UPDATE_RECONNECT_ATTEMPTS = 180;
 
 export function installUpdate(previousVersion: string): Promise<void> {
-  installing ??= waitForUpdate(previousVersion).finally(() => { installing = null; });
+  if (!installing) {
+    window.dispatchEvent(new Event('muxterm-update-started'));
+    installing = waitForUpdate(previousVersion)
+      .catch(error => {
+        window.dispatchEvent(new Event('muxterm-update-failed'));
+        throw error;
+      })
+      .finally(() => { installing = null; });
+  }
   return installing;
 }
 
 async function waitForUpdate(previousVersion: string): Promise<void> {
   await applyUpdate();
-  for (let attempt = 0; attempt < 60; attempt++) {
+  for (let attempt = 0; attempt < UPDATE_RECONNECT_ATTEMPTS; attempt++) {
     await new Promise(resolve => window.setTimeout(resolve, 1000));
     try {
       const status = await fetchUpdateStatus();

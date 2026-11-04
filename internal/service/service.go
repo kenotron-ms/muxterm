@@ -59,8 +59,8 @@ Environment=PATH={{.SafePATH}}
 # shutdown snapshot has already read them, not concurrently with it.
 KillMode=mixed
 # TimeoutStopSec=20s (not systemd's inherited 90s default): the browser's
-# self-update flow polls for the server to come back for 60s
-# (UPDATE_POLL_INTERVAL_MS x UPDATE_POLL_MAX_ATTEMPTS in mux-sidebar.ts) and
+# self-update flow polls for the server to come back for 3 minutes
+# (UPDATE_RECONNECT_ATTEMPTS in web/src/lib/update.ts) and
 # then reports failure. A daemon that took the full 90s to stop would blow
 # past that budget and read to the user as a failed update even though it
 # eventually succeeded. 20s still leaves ample room for the shutdown snapshot

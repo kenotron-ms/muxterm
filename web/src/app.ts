@@ -493,6 +493,9 @@ export class MuxApp extends LitElement {
   _showReconnectOverlay = false;
 
   @state()
+  _updatePending = false;
+
+  @state()
   _reconnectMessage = '';
 
   /** The socket's real phase, so the overlay can stop claiming to be busy
@@ -742,8 +745,19 @@ export class MuxApp extends LitElement {
     this._showReconnectOverlay = true;
   }
 
+  private _onUpdateStarted = (): void => {
+    this._updatePending = true;
+  };
+
+  private _onUpdateFailed = (): void => {
+    this._updatePending = false;
+    if (this._connectionStatus === 'connected') this._showReconnectOverlay = false;
+  };
+
   connectedCallback(): void {
     super.connectedCallback();
+    window.addEventListener('muxterm-update-started', this._onUpdateStarted);
+    window.addEventListener('muxterm-update-failed', this._onUpdateFailed);
     this._unsubscribeChats = sdkChats.subscribe(() => {
       this._reconcileBootChat();
       this.requestUpdate();
@@ -1108,7 +1122,9 @@ export class MuxApp extends LitElement {
       }
     };
     this._socket.onReconnect = () => {
-      this._showReconnectOverlay = false;
+      // A socket may briefly reconnect to the old server during a service
+      // restart. Keep the update wait visible until the version poll reloads.
+      if (!this._updatePending) this._showReconnectOverlay = false;
       // A successful attach is the only thing that disproves the diagnosis.
       this._daemonUnreachable = false;
       this._reconnectDetail = '';
@@ -1137,6 +1153,8 @@ export class MuxApp extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    window.removeEventListener('muxterm-update-started', this._onUpdateStarted);
+    window.removeEventListener('muxterm-update-failed', this._onUpdateFailed);
     this._unsubscribeChats?.();
     this._unsubscribeChats = null;
     window.removeEventListener('open-launcher', this._onOpenSettings);
@@ -1569,7 +1587,8 @@ export class MuxApp extends LitElement {
         ? html`<mux-reconnect-overlay
             message="${this._reconnectMessage}"
             detail="${this._reconnectDetail}"
-            ?fatal="${this._daemonUnreachable}"
+            ?fatal="${this._daemonUnreachable && !this._updatePending}"
+            ?updating="${this._updatePending}"
             phase="${this._reconnectPhase}"
             .nextAttemptAt="${this._reconnectNextAttemptAt}"
             @retry-now="${this._onRetryNow}"
