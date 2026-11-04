@@ -73,11 +73,12 @@ export class CopilotStream {
     this.onDead = onDead;
     this.seenText = new Map();
     this.inputIds = [];
-    this.ready = this.initialize();
+    this.ready = this.initialize().catch(error => { adapters.delete(this); throw error; });
   }
 
   async initialize() {
     this.client = await copilotClient();
+    adapters.add(this);
     try { await this.client.ping(); }
     catch (error) { failCopilotClient(this.client, error); throw error; }
     const bin = process.env.MUXTERM_CHAT_MCP_BIN;
@@ -94,7 +95,6 @@ export class CopilotStream {
       : await this.client.createSession({ sessionId: this.session.id, ...config });
     this.session.nativeId = this.native.sessionId;
     this.unsubscribe = this.native.on(event => void this.onEvent(event));
-    adapters.add(this);
     await this.publishGoal('goal.snapshot');
     this.emit(this.session.id, 'session.started', { nativeId: this.session.nativeId,
       capabilities: { approvals: false, transcript_read: false, interrupt: true, live_input: false,
