@@ -20,6 +20,7 @@ import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing
 import { chatCommandSuggestions, parseChatCommand, type ChatCommandInvocation } from '../lib/chat-commands.js';
 import { laneIcon } from '../lib/lane-icon.js';
 import './mux-sdk-utility.js';
+import './mux-chat-visualization.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import '../ui/button.js';
@@ -218,7 +219,7 @@ export class MuxSDKChat extends LitElement {
     }
   });
   private unsubscribeChats?: () => void;
-  private parsers = new Map<number, MarkdownStream>();
+  private parsers = new Map<string, MarkdownStream>();
   private preventFileNavigation = (event: DragEvent) => { if (this.hasFiles(event)) event.preventDefault(); };
   private readonly stopVoiceOnEscape = (event: KeyboardEvent) => {
     if (event.key === 'Escape' && this.voiceState !== 'idle') {
@@ -290,6 +291,7 @@ export class MuxSDKChat extends LitElement {
     .scroll-bottom::part(button):hover { background:var(--ui-surface-hover); }
     .virtual-spacer { width:var(--ui-divider-thickness); flex:none; pointer-events:none; }
     .block { max-width:var(--ui-chat-transcript-width); width:100%; align-self:center; margin-bottom:var(--ui-space-9); box-sizing:border-box; }
+    .block.assistant:has(mux-chat-visualization[mode="wide"]) { max-width:min(var(--ui-chat-visualization-wide-width),100%); }
     .block.work { margin-top:calc(-1 * var(--ui-space-5)); margin-bottom:var(--ui-space-7); }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1589,19 +1591,56 @@ export class MuxSDKChat extends LitElement {
     });
   }
   private markdown(block: Block, index: number, preserveNewlines = false) {
-    let parser = this.parsers.get(index);
-    if (!parser) { parser = new MarkdownStream(); this.parsers.set(index, parser); }
-    const segments = parser.update(block.text, !block.done);
-    if (!preserveNewlines) return renderSegments(segments, chatMarkdownPolicy);
-    let hasContent = false;
-    return html`${segments.map(segment => segment.tokens.map((token, tokenIndex) => {
-      if (token.type === 'space') {
-        const blankLines = Math.max(0, (token.raw.match(/\n/g)?.length || 0) - Number(hasContent));
-        return blankLines ? html`<div aria-hidden="true" style=${`height:${blankLines}lh`}></div>` : nothing;
+    const markerStart = 'visualize';
+    const markerEnd = '';
+    const pieces: unknown[] = [];
+    let position = 0;
+    let searchFrom = 0;
+    let part = 0;
+    const markdownPart = (source: string) => {
+      const key = `${index}:${part++}`;
+      let parser = this.parsers.get(key);
+      if (!parser) { parser = new MarkdownStream(); this.parsers.set(key, parser); }
+      const segments = parser.update(source, !block.done);
+      if (!preserveNewlines) return renderSegments(segments, chatMarkdownPolicy);
+      let hasContent = false;
+      return html`${segments.map(segment => segment.tokens.map((token, tokenIndex) => {
+        if (token.type === 'space') {
+          const blankLines = Math.max(0, (token.raw.match(/\n/g)?.length || 0) - Number(hasContent));
+          return blankLines ? html`<div aria-hidden="true" style=${`height:${blankLines}lh`}></div>` : nothing;
+        }
+        hasContent = true;
+        return keyed(`${segment.key}:${tokenIndex}`, renderSegments([{ ...segment, tokens:[token] }], chatMarkdownPolicy));
+      }))}`;
+    };
+    while (position < block.text.length) {
+      const start = block.text.indexOf(markerStart, searchFrom);
+      if (start < 0) break;
+      const end = block.text.indexOf(markerEnd, start + markerStart.length);
+      if (end < 0) break;
+      const payload = block.text.slice(start + markerStart.length, end);
+      let reference: { path?: unknown; mode?: unknown } | null = null;
+      if (payload.length <= 4096) {
+        try { reference = JSON.parse(payload) as { path?: unknown; mode?: unknown }; }
+        catch { /* Malformed markers remain readable as text. */ }
       }
-      hasContent = true;
-      return keyed(`${segment.key}:${tokenIndex}`, renderSegments([{ ...segment, tokens:[token] }], chatMarkdownPolicy));
-    }))}`;
+      if (typeof reference?.path !== 'string' || !reference.path.startsWith('/')) {
+        searchFrom = end + markerEnd.length;
+        continue;
+      }
+      pieces.push(markdownPart(block.text.slice(position, start)));
+      pieces.push(html`<mux-chat-visualization
+        .path=${reference.path}
+        .projectPath=${this.chat?.projectPath || ''}
+        .sessionId=${this.sessionId}
+        .remoteHost=${this.chat?.remoteHost || ''}
+        mode=${reference.mode === 'wide' ? 'wide' : ''}
+      ></mux-chat-visualization>`);
+      position = end + markerEnd.length;
+      searchFrom = position;
+    }
+    pieces.push(markdownPart(block.text.slice(position)));
+    return html`${pieces}`;
   }
   private userBubble(block: Block) {
     return html`<div class="bubble">${block.text}${block.attachments?.map(attachment => attachment.kind === 'image'
