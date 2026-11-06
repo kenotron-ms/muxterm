@@ -89,8 +89,20 @@ function previewDocument(source: string, theme: string): string {
   const themeBridge = `<script>window.addEventListener('message',event=>{if(event.source===parent&&event.data?.type==='muxterm.visualization.theme'&&typeof event.data.css==='string')document.getElementById('muxterm-visualization-theme').textContent=event.data.css});document.addEventListener('DOMContentLoaded',()=>{const report=()=>parent.postMessage({type:'muxterm.visualization.height',height:document.body.scrollHeight},'*');new ResizeObserver(report).observe(document.body);report()})</script>`;
   const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">${PREVIEW_CSP}<style id="muxterm-visualization-theme">${theme}</style><style>${PREVIEW_STYLES}</style>${themeBridge}`;
   const doctype = /^\s*<!doctype[^>]*>/i.exec(source)?.[0];
-  if (doctype) return doctype + head + source.slice(doctype.length);
-  if (/^\s*<html\b/i.test(source)) return '<!doctype html>' + head + source;
+  if (doctype || /^\s*<html\b/i.test(source)) {
+    const document = doctype ? source : '<!doctype html>' + source;
+    const headTag = /<head(?:\s[^>]*)?>/i.exec(document);
+    if (headTag) {
+      const at = headTag.index + headTag[0].length;
+      return document.slice(0, at) + head + document.slice(at);
+    }
+    const htmlTag = /<html(?:\s[^>]*)?>/i.exec(document);
+    if (htmlTag) {
+      const at = htmlTag.index + htmlTag[0].length;
+      return document.slice(0, at) + `<head>${head}</head>` + document.slice(at);
+    }
+    return doctype + `<html><head>${head}</head><body>` + source.slice(doctype!.length) + '</body></html>';
+  }
   return `<!doctype html><html><head>${head}</head><body>${source}</body></html>`;
 }
 
@@ -106,6 +118,7 @@ export class MuxChatVisualization extends LitElement {
   private theme = '';
   private request?: AbortController;
   private themeObserver?: MutationObserver;
+  private reconnectLoad = false;
 
   static styles = css`
     :host { display:block; margin:var(--ui-space-6) 0 var(--ui-space-8); max-width:100%; }
@@ -122,11 +135,13 @@ export class MuxChatVisualization extends LitElement {
     this.themeObserver = new MutationObserver(() => { this.theme = previewTheme(this); this.sendTheme(); });
     this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
     window.addEventListener('message', this.onFrameMessage);
-    if (this.hasUpdated) void this.load();
+    if (this.hasUpdated) { this.reconnectLoad = true; this.requestUpdate(); }
   }
   override disconnectedCallback() { this.request?.abort(); this.themeObserver?.disconnect(); window.removeEventListener('message', this.onFrameMessage); super.disconnectedCallback(); }
   override willUpdate(changed: Map<string, unknown>) {
-    if (this.isConnected && (changed.has('path') || changed.has('projectPath') || changed.has('sessionId') || changed.has('remoteHost'))) void this.load();
+    const shouldLoad = this.reconnectLoad || changed.has('path') || changed.has('projectPath') || changed.has('sessionId') || changed.has('remoteHost');
+    this.reconnectLoad = false;
+    if (this.isConnected && shouldLoad) void this.load();
   }
 
   private relativePath(): string | null {
