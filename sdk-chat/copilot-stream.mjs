@@ -1,10 +1,10 @@
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CopilotClient } from '@github/copilot-sdk';
 import { connectorServers } from './acp-stream.mjs';
 import { acknowledgeInboxReminder, readInboxReminder } from './inbox-reminder.mjs';
+import { instanceDataHome } from './instance-xdg.mjs';
 
-const dataDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat');
+const dataDir = join(instanceDataHome(), 'muxterm', 'sdk-chat');
 let sharedClient;
 let sharedReady;
 let sharedStopping = Promise.resolve();

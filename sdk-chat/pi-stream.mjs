@@ -2,9 +2,9 @@ import { createAgentSession, createMcpExtension, createCodemodeExtension,
   createToolSearchExtension, DefaultResourceLoader, getAgentDir, SessionManager,
   SettingsManager } from '@earendil-works/pi-coding-agent';
 import { mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { nativeConnectors, inputText, nativeImageBlocks, acceptInput, simpleTitle } from './native-common.mjs';
+import { instanceDataHome } from './instance-xdg.mjs';
 
 export class PiStream {
   constructor(session, emit) {
@@ -16,8 +16,7 @@ export class PiStream {
   async initialize() {
     const s = this.session;
     const agentDir = getAgentDir();
-    const sessionDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'),
-      'muxterm', 'sdk-chat', 'pi', s.id);
+    const sessionDir = join(instanceDataHome(), 'muxterm', 'sdk-chat', 'pi', s.id);
     mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
     const settingsManager = SettingsManager.create(s.cwd, agentDir);
     const servers = nativeConnectors(s).map(item => ({ name: item.name, scope: 'extension', source: 'muxterm',

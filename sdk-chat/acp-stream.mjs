@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { join, dirname, delimiter, isAbsolute } from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 import { acknowledgeInboxReminder, readInboxReminder } from './inbox-reminder.mjs';
+import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
 
 const profiles = {
   gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
@@ -81,11 +82,11 @@ export async function stopACPRuntimes() {
 
 export function connectorServers(mcpBin, originFile) {
   if (!mcpBin) return [];
-  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  const dataHome = instanceDataHome();
   const connectionDir = join(dataHome, 'muxterm', 'sdk-chat', 'connections');
   const envEntries = keys => keys.filter(name => process.env[name])
     .map(name => ({ name, value: process.env[name] }));
-  const localEnv = envEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']);
+  const localEnv = Object.entries(instanceMcpEnv()).map(([name, value]) => ({ name, value }));
   const servers = [{ name: 'muxterm', command: mcpBin, args: ['mcp'],
     env: [...localEnv, ...(originFile ? [{ name: 'MUXTERM_CHAT_ORIGIN_FILE', value: originFile }] : [])] }];
   if (existsSync(join(connectionDir, 'github-enabled')))
@@ -101,14 +102,14 @@ export function connectorServers(mcpBin, originFile) {
 
 export function antigravityCommand() {
   if (process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND) return process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND;
-  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  const dataHome = instanceDataHome();
   // Keep this version in sync with antigravityACPVersion in internal/server/antigravity_install.go.
   const managed = join(dataHome, 'muxterm', 'antigravity-acp', '1.4.3', 'agy_acp_server.par');
   try { accessSync(managed, constants.X_OK); return managed; } catch { return 'agy_acp_server.par'; }
 }
 
 export function antigravityMode() {
-  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  const dataHome = instanceDataHome();
   try { return readFileSync(join(dataHome, 'muxterm', 'antigravity-auth-mode'), 'utf8').trim() === 'api-key' ? 'api-key' : 'google'; }
   catch { return 'google'; }
 }

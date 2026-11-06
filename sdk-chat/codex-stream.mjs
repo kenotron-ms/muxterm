@@ -2,9 +2,9 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import readline from 'node:readline';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
 
 const require = createRequire(import.meta.url);
 const target = {
@@ -42,9 +42,8 @@ function runtime() {
 function mcpConfig(session) {
   const muxterm = process.env.MUXTERM_CHAT_MCP_BIN;
   if (!muxterm) return {};
-  const dataDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat');
-  const env = Object.fromEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
-    .filter(key => process.env[key]).map(key => [key, process.env[key]]));
+  const dataDir = join(instanceDataHome(), 'muxterm', 'sdk-chat');
+  const env = { ...instanceMcpEnv() };
   // App-server applies thread/start and thread/resume config to that thread's
   // MCP connections. Keep the native MCP processes and chat identity separate
   // even though the app-server transport is shared.

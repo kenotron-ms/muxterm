@@ -2,10 +2,10 @@
 import net from 'node:net';
 import { unlink } from 'node:fs/promises';
 import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CodexStream, stopCodexRuntime } from './codex-stream.mjs';
+import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
 import { CopilotStream, stopCopilotClient } from './copilot-stream.mjs';
 import { agentCommand } from './agent-command.mjs';
 import { ACPStream, isACPHarness, stopACPRuntimes } from './acp-stream.mjs';
@@ -25,7 +25,7 @@ let shuttingDown = false;
 const claudeModels = new Map();
 const claudeModelLoads = new Map();
 const originFiles = new Set();
-const originDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'origin');
+const originDir = join(instanceDataHome(), 'muxterm', 'sdk-chat', 'origin');
 // A previous serve may have stopped abruptly. Its in-memory capabilities are
 // gone, so its files cannot authenticate a new MCP process and can be pruned.
 try {
@@ -38,8 +38,7 @@ function forgetOriginFile(path) {
   try { unlinkSync(path); } catch { /* The serve process invalidates capabilities on exit. */ }
 }
 process.on('exit', () => { for (const path of originFiles) forgetOriginFile(path); });
-const muxtermMcpEnv = Object.fromEntries(['XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
-  .filter(key => process.env[key]).map(key => [key, process.env[key]]));
+const muxtermMcpEnv = instanceMcpEnv();
 function originFile(sessionId, token) {
   if (!/^[0-9a-f]{32}$/.test(sessionId) || !/^[0-9a-f]{64}$/.test(token || ''))
     throw new Error('Invalid chat identity or capability');
@@ -49,13 +48,20 @@ function originFile(sessionId, token) {
   originFiles.add(path);
   return path;
 }
-const githubMcpEnv = Object.fromEntries(['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR', 'XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
-  .filter(key => process.env[key]).map(key => [key, process.env[key]]));
-const githubMarker = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'github-enabled');
-const remoteConnectionFile = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'remote.json');
-const microsoftRoot = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'connections', 'microsoft-graph');
-const microsoftMcpEnv = Object.fromEntries(['PATH', 'HOME', 'XDG_RUNTIME_DIR', 'XDG_DATA_HOME']
-  .filter(key => process.env[key]).map(key => [key, process.env[key]]));
+// gh reads its config from the USER's XDG_CONFIG_HOME (so a sandboxed instance
+// must not hide it), but the connection subprocess still routes to THIS
+// instance via the instance XDG runtime/data dirs.
+const githubMcpEnv = Object.fromEntries([
+  ...Object.entries(instanceMcpEnv()),
+  ...['PATH', 'HOME', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR'].filter(key => process.env[key]).map(key => [key, process.env[key]]),
+]);
+const githubMarker = join(instanceDataHome(), 'muxterm', 'sdk-chat', 'connections', 'github-enabled');
+const remoteConnectionFile = join(instanceDataHome(), 'muxterm', 'sdk-chat', 'connections', 'remote.json');
+const microsoftRoot = join(instanceDataHome(), 'muxterm', 'sdk-chat', 'connections', 'microsoft-graph');
+const microsoftMcpEnv = Object.fromEntries([
+  ...Object.entries(instanceMcpEnv()),
+  ...['PATH', 'HOME'].filter(key => process.env[key]).map(key => [key, process.env[key]]),
+]);
 const emit = (sessionId, type, data = {}) => broadcast({ v: 1, event: { sessionId, type, ...data } });
 const codexStream = s => new CodexStream(s, emit, () => {
   if (sessions.get(s.id) === s) { sessions.delete(s.id); forgetOriginFile(s.originFile); }

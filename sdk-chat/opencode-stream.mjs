@@ -27,7 +27,10 @@ export class OpenCodeStream {
       type: 'local', command: [item.command, ...item.args],
       environment: Object.fromEntries(item.env.map(value => [value.name, value.value])) }]));
     // OpenCode applies MCP configuration to a server, so each muxterm chat owns
-    // its own server and only receives its own origin capability.
+    // its own server and only receives its own origin capability. The server
+    // inherits the sidecar's environment, which carries the user's XDG dirs so
+    // OpenCode resolves the user's real config, providers, and auth
+    // (sdkSidecarXDGEnv in internal/server/sdk_chat.go).
     const { server, client } = await createOpencode({ port: 0, timeout: 15000, config: { mcp } });
     this.server = server;
     this.client = client;

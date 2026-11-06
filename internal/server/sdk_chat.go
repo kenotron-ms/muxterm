@@ -574,6 +574,58 @@ func sdkExecutablePath(command string) (string, error) {
 	}
 	return "", exec.ErrNotFound
 }
+
+// isMuxtermSandboxPath reports whether value points inside a muxterm instance
+// sandbox: any path segment starting with "muxterm-" (the desktop app's
+// <config>/muxterm-desktop/local/*, make dev's ${TMPDIR}/muxterm-dev*/...).
+func isMuxtermSandboxPath(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, segment := range strings.FieldsFunc(value, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if strings.HasPrefix(segment, "muxterm-") {
+			return true
+		}
+	}
+	return false
+}
+
+// sdkSidecarXDGEnv returns the XDG environment for the SDK sidecar.
+//
+// The sidecar's process.env is what every agent harness child it spawns
+// (opencode, codex, claude, copilot, pi, deepseek, gemini, antigravity)
+// inherits, and those CLIs resolve their config, credentials, and session
+// history from XDG_CONFIG_HOME/XDG_DATA_HOME. When an instance sandboxes those
+// values (the desktop app does, to keep its muxterm state apart from a
+// separately installed instance), the agents would look at an empty private
+// copy and never see the user's real providers, models, and logins. So
+// sandboxed values are replaced with the standard HOME-based locations the
+// user's agent CLIs use from their terminals.
+//
+// Muxterm's own state must stay sandboxed: the instance's original values
+// travel as MUXTERM_INSTANCE_XDG_*, and the sidecar uses them for its own files
+// and for routing `muxterm mcp` back to this instance (sdk-chat/instance-xdg.mjs).
+// For an unsandboxed instance the two are identical, so nothing changes.
+func sdkSidecarXDGEnv() []string {
+	home, _ := os.UserHomeDir()
+	originals := [][2]string{
+		{"CONFIG_HOME", filepath.Join(home, ".config")},
+		{"DATA_HOME", filepath.Join(home, ".local", "share")},
+		{"RUNTIME_DIR", ""},
+	}
+	entries := make([]string, 0, 6)
+	for _, pair := range originals {
+		name, userValue := pair[0], pair[1]
+		instance := os.Getenv("XDG_" + name)
+		if instance != "" {
+			entries = append(entries, "MUXTERM_INSTANCE_XDG_"+name+"="+instance)
+		}
+		if isMuxtermSandboxPath(instance) {
+			entries = append(entries, "XDG_"+name+"="+userValue)
+		}
+	}
+	return entries
+}
 func (h *sdkChatHost) ensure(harness string) error {
 	if harness == "amplifier" {
 		return h.ensureAmplifier()
@@ -608,7 +660,7 @@ func (h *sdkChatHost) ensure(harness string) error {
 	if err != nil {
 		return err
 	}
-	cmd.Env = append(os.Environ(), "MUXTERM_CHAT_MCP_BIN="+self)
+	cmd.Env = append(append(os.Environ(), "MUXTERM_CHAT_MCP_BIN="+self), sdkSidecarXDGEnv()...)
 	// The OpenCode SDK launches `opencode` by name. User-level installs may
 	// be absent from the service's PATH even when we can discover the command.
 	pathDirs := make([]string, 0, 2)
