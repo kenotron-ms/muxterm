@@ -159,6 +159,12 @@ export const CitationUnavailable: Story = {
   args:{sessionId:'storybook-chat-citation'},
   parameters:{apiFixture:chatFixture('storybook-chat-citation','ready','none','citation')},
 };
+export const PhoneCitationUnavailable: Story = {
+  ...CitationUnavailable,
+  args:{sessionId:'storybook-chat-phone-citation'},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-citation','ready','none','citation')},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+};
 export const ScrollToBottom: Story = {
   args:{sessionId:'storybook-chat-scroll-bottom'},
   parameters:{apiFixture:chatFixture('storybook-chat-scroll-bottom')},

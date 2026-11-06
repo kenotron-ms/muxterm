@@ -7,7 +7,7 @@ const RASTER_IMAGE = /\.(?:png|jpe?g|gif|webp|avif)$/i;
 const CHAT_HASH = /^#chat=([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f-]{27,})(?:&host=[^&#]+)?$/i;
 const CHAT_MENTION = /[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[“"][^”"]{1,160}[”"]/gi;
 // Codex app-server exposes these IDs in message text without a URL mapping.
-const CODEX_CITATION = /cite(turn\d+(?:search|view)\d+(?:turn\d+(?:search|view)\d+){0,7})/g;
+const CODEX_CITATION = /cite(turn\d+(?:search|view)\d+(?:turn\d+(?:search|view)\d+)*)/g;
 
 function chatForSession(value: string): SDKChat | undefined {
   return sdkChats.chats.find(chat => chat.id.toLowerCase() === value.toLowerCase() || chat.nativeId?.toLowerCase() === value.toLowerCase());
