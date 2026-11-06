@@ -40,6 +40,11 @@ const mermaidTranscript: ChatEvent[] = [
   {at:at(2),type:'assistant.delta',text:'Here is the chat flow:\n\n```mermaid\nflowchart LR\n  Draft --> Send\n  Send --> Agent\n  Agent --> Reply\n```\n\nThe reply appears in the session.'},
   {at:at(3),type:'turn.completed',inputIds:['diagram-1']},
 ];
+const citationTranscript: ChatEvent[] = [
+  {at:at(1),type:'input.accepted',kind:'user',source:'browser',inputId:'citation-1',text:'Show the citation marker in context.'},
+  {at:at(2),type:'assistant.delta',text:'The cited result appears here. citeturn912394view0turn272550view1\n\nCodex supplied reference IDs without source URLs.'},
+  {at:at(3),type:'turn.completed',inputIds:['citation-1']},
+];
 const goalify: ChatEvent[] = [
   ...transcript,
   {at:at(24),type:'input.accepted',kind:'user',source:'goalify',inputId:'goalify-1',text:'Refine goal with goalify'},
@@ -77,7 +82,7 @@ const settings = {
   ],
 };
 
-function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal'|'cleared' = 'none', scenario:'default'|'delegated'|'reports'|'failed-report'|'goalify'|'mermaid' = 'default'): ApiFixture {
+function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal'|'cleared' = 'none', scenario:'default'|'delegated'|'reports'|'failed-report'|'goalify'|'mermaid'|'citation' = 'default'): ApiFixture {
   let historyRequests = 0;
   const chat: SDKChat = {
     id, title:'Component library review', workspaceId:'project-1',
@@ -105,7 +110,7 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     ],
     observations:goalState === 'none' ? [] : [{at:at(4),event:{type:'goal.started',goalState:'active',goalSummary:'The native harness acknowledged revision 1.'}}],
   };
-  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : scenario === 'goalify' ? goalify : scenario === 'mermaid' ? mermaidTranscript : state === 'working' ? running : transcript;
+  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : scenario === 'goalify' ? goalify : scenario === 'mermaid' ? mermaidTranscript : scenario === 'citation' ? citationTranscript : state === 'working' ? running : transcript;
   const messages = events.filter(event => event.type !== 'tool.started' && event.type !== 'tool.completed');
   return ({url,method,init}) => {
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON(goalState === 'proposal' ? [chat,operator] : [chat]);
@@ -149,6 +154,16 @@ export const Conversation: Story = {};
 export const MermaidDiagram: Story = {
   args:{sessionId:'storybook-chat-mermaid'},
   parameters:{apiFixture:chatFixture('storybook-chat-mermaid','ready','none','mermaid')},
+};
+export const CitationUnavailable: Story = {
+  args:{sessionId:'storybook-chat-citation'},
+  parameters:{apiFixture:chatFixture('storybook-chat-citation','ready','none','citation')},
+};
+export const PhoneCitationUnavailable: Story = {
+  ...CitationUnavailable,
+  args:{sessionId:'storybook-chat-phone-citation'},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-citation','ready','none','citation')},
+  globals:{viewport:{value:'phone390',isRotated:false}},
 };
 export const ScrollToBottom: Story = {
   args:{sessionId:'storybook-chat-scroll-bottom'},

@@ -406,6 +406,7 @@ export class MuxSDKChat extends LitElement {
     .text .md-pre code { color:inherit; font:var(--ui-text-lg)/1.6 var(--ui-font-mono); white-space:pre; }
     .text .md-pre[data-streaming] { border-bottom-color:var(--ui-accent); }
     .text .md-link { color:var(--ui-accent); text-decoration:underline; text-underline-offset:3px; }
+    .text .citation-unavailable { color:var(--ui-text-muted); font-size:var(--ui-text-sm); white-space:nowrap; border-bottom:1px dotted currentColor; cursor:help; }
     .text .md-chat-link { display:inline-flex; align-items:baseline; gap:var(--ui-space-2); max-width:100%; padding:var(--ui-space-px) var(--ui-space-3); border:1px solid color-mix(in srgb,var(--ui-accent) 48%,transparent); border-radius:var(--ui-radius-md); background:color-mix(in srgb,var(--ui-accent) 12%,transparent); font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
     .text .md-chat-link:hover { background:color-mix(in srgb,var(--ui-accent) 22%,transparent); text-decoration:underline; }
     .text .md-image-link { display:inline-block; max-width:100%; }
