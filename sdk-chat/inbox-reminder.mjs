@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { instanceRuntimeDir } from './instance-xdg.mjs';
 
 async function chatRequest(path, method = 'GET', body, originFile) {
-  const runtime = process.env.XDG_RUNTIME_DIR || `/tmp/muxterm-${process.getuid()}`;
+  const runtime = instanceRuntimeDir();
   const handoff = (await readFile(join(runtime, 'muxterm', 'server.url'), 'utf8')).trim();
   let address = handoff;
   let token = '';

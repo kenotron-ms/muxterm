@@ -1,10 +1,10 @@
 import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
 import { nativeConnectors, inputText, nativeImageBlocks, acceptInput, simpleTitle } from './native-common.mjs';
+import { instanceDataHome } from './instance-xdg.mjs';
 
-const patchDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muxterm', 'sdk-chat', 'deepseek-patches');
+const patchDir = join(instanceDataHome(), 'muxterm', 'sdk-chat', 'deepseek-patches');
 
 export class DeepSeekStream {
   constructor(session, emit) {

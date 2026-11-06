@@ -16,10 +16,10 @@ import (
 // The installed binary carries the sidecar and the exact npm dependency lock.
 // Node packages are installed into a versioned cache before the sidecar starts.
 //
-//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs copilot-stream.mjs pi-stream.mjs opencode-stream.mjs deepseek-stream.mjs antigravity-sdk-stream.mjs antigravity-sdk-host.py native-common.mjs inbox-reminder.mjs antigravity-login.mjs agent-command.mjs package.json package-lock.json
+//go:embed sidecar.mjs codex-stream.mjs acp-stream.mjs copilot-stream.mjs pi-stream.mjs opencode-stream.mjs deepseek-stream.mjs antigravity-sdk-stream.mjs antigravity-sdk-host.py native-common.mjs inbox-reminder.mjs antigravity-login.mjs agent-command.mjs instance-xdg.mjs package.json package-lock.json
 var files embed.FS
 
-var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "copilot-stream.mjs", "pi-stream.mjs", "opencode-stream.mjs", "deepseek-stream.mjs", "antigravity-sdk-stream.mjs", "antigravity-sdk-host.py", "native-common.mjs", "inbox-reminder.mjs", "antigravity-login.mjs", "agent-command.mjs", "package.json", "package-lock.json"}
+var names = []string{"sidecar.mjs", "codex-stream.mjs", "acp-stream.mjs", "copilot-stream.mjs", "pi-stream.mjs", "opencode-stream.mjs", "deepseek-stream.mjs", "antigravity-sdk-stream.mjs", "antigravity-sdk-host.py", "native-common.mjs", "inbox-reminder.mjs", "antigravity-login.mjs", "agent-command.mjs", "instance-xdg.mjs", "package.json", "package-lock.json"}
 var prepareMu sync.Mutex
 
 func ready(dir string) bool {
@@ -37,6 +37,7 @@ func ready(dir string) bool {
 		"inbox-reminder.mjs",
 		"antigravity-login.mjs",
 		"agent-command.mjs",
+		"instance-xdg.mjs",
 		"node_modules/@anthropic-ai/claude-agent-sdk/package.json",
 		"node_modules/@agentclientprotocol/sdk/package.json",
 		"node_modules/@github/copilot-sdk/package.json",
