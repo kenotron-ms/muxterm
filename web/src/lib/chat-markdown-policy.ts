@@ -6,6 +6,8 @@ import { sdkChats, type SDKChat } from './sdk-chats.js';
 const RASTER_IMAGE = /\.(?:png|jpe?g|gif|webp|avif)$/i;
 const CHAT_HASH = /^#chat=([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f-]{27,})(?:&host=[^&#]+)?$/i;
 const CHAT_MENTION = /[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[“"][^”"]{1,160}[”"]/gi;
+// Codex app-server exposes these IDs in message text without a URL mapping.
+const CODEX_CITATION = /cite(turn\d+(?:search|view)\d+(?:turn\d+(?:search|view)\d+){0,7})/g;
 
 function chatForSession(value: string): SDKChat | undefined {
   return sdkChats.chats.find(chat => chat.id.toLowerCase() === value.toLowerCase() || chat.nativeId?.toLowerCase() === value.toLowerCase());
@@ -68,6 +70,23 @@ function linkedChatMentions(text: string): unknown {
   return parts;
 }
 
+function linkedChatReferences(text: string): unknown {
+  const parts: unknown[] = [];
+  let end = 0;
+  for (const match of text.matchAll(CODEX_CITATION)) {
+    if (match.index === undefined) continue;
+    if (match.index > end) parts.push(linkedChatMentions(text.slice(end, match.index)));
+    const references = match[1].split('');
+    parts.push(html`<span class="citation-unavailable" role="note"
+      title=${`Codex did not provide source links for ${references.join(', ')}`}
+      aria-label=${`${references.length} source link${references.length === 1 ? '' : 's'} unavailable`}>[${references.length === 1 ? 'source' : `${references.length} sources`} unavailable]</span>`);
+    end = match.index + match[0].length;
+  }
+  if (!parts.length) return linkedChatMentions(text);
+  if (end < text.length) parts.push(linkedChatMentions(text.slice(end)));
+  return parts;
+}
+
 /** Resolve a local Markdown image through the existing authenticated viewer. */
 function localImage(raw: string): string | null {
   const value = raw.trim();
@@ -88,5 +107,5 @@ export const chatMarkdownPolicy: MdLinkPolicy = {
     const chat = chatFromHref(href);
     return chat ? chatLink(chat, label || chat.title) : null;
   },
-  referenceText: linkedChatMentions,
+  referenceText: linkedChatReferences,
 };
