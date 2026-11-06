@@ -20,9 +20,8 @@ class Bridge:
         self.agent = None
         self.response = None
         self.active = None
+        self.active_turn = None
         self.busy = False
-        self.steering = False
-        self.stopping = False
         self.input_ids = []
         self.pending_tools = {}
         self.lock = asyncio.Lock()
@@ -74,7 +73,7 @@ class Bridge:
                   ("image/png", "image/jpeg", "image/webp", "image/gif")]
         return [text, *images] if images else text
 
-    async def consume(self, response):
+    async def consume(self, response, turn):
         try:
             async for chunk in response.chunks:
                 if isinstance(chunk, types.Text) and chunk.text:
@@ -85,19 +84,25 @@ class Bridge:
                     self.pending_tools.setdefault(name, []).append(tool_id)
                     self.event("tool.started", toolId=tool_id, name=name,
                                raw=chunk.args)
-            if not self.steering and not self.stopping:
+            if not turn["cancel_reason"]:
                 self.busy = False
                 self.event("turn.completed", inputIds=self.input_ids)
         except types.AntigravityCancelledError:
-            if not self.steering:
+            if turn["cancel_reason"] not in ("steer", "close"):
                 self.busy = False
                 self.event("turn.cancelled", inputIds=self.input_ids)
+        except asyncio.CancelledError:
+            if turn["cancel_reason"] in ("steer", "close"):
+                return
+            self.busy = False
+            self.event("turn.cancelled", inputIds=self.input_ids)
         except Exception as error:
             self.busy = False
             self.event("error", inputIds=self.input_ids, message=str(error))
         finally:
             if self.active is asyncio.current_task():
                 self.active = None
+                self.active_turn = None
 
     async def send(self, command):
         async with self.lock:
@@ -107,14 +112,14 @@ class Bridge:
             response = await self.agent.chat(content)
             self.response = response
             self.busy = True
-            self.stopping = False
             self.input_ids = [command["inputId"]]
             self.event("turn.started")
             self.event("input.accepted", inputId=command["inputId"], kind="user",
                        source=command.get("source", "browser"), text=command.get("displayContent") or command.get("content", ""),
                        attachments=[{key: item[key] for key in ("id", "name", "kind") if key in item}
                                     for item in command.get("attachments", [])])
-            self.active = asyncio.create_task(self.consume(response))
+            self.active_turn = {"cancel_reason": None}
+            self.active = asyncio.create_task(self.consume(response, self.active_turn))
             return {"status": "accepted", "inputId": command["inputId"]}
 
     async def steer(self, command):
@@ -122,7 +127,10 @@ class Bridge:
             if not self.busy or not self.active:
                 raise ValueError("No Antigravity SDK turn available to steer")
             content = self.content(command)
-            self.steering = True
+            turn = self.active_turn
+            if turn is None:
+                raise RuntimeError("Antigravity turn state unavailable")
+            turn["cancel_reason"] = "steer"
             try:
                 active = self.active
                 await self.response.cancel()
@@ -137,7 +145,8 @@ class Bridge:
                            attachments=[{key: item[key] for key in ("id", "name", "kind") if key in item}
                                         for item in command.get("attachments", [])])
                 self.event("turn.continued", inputIds=self.input_ids)
-                self.active = asyncio.create_task(self.consume(response))
+                self.active_turn = {"cancel_reason": None}
+                self.active = asyncio.create_task(self.consume(response, self.active_turn))
                 return {"status": "accepted", "inputId": command["inputId"]}
             except Exception:
                 if self.busy:
@@ -145,25 +154,27 @@ class Bridge:
                     self.event("session.uncertain", inputIds=self.input_ids,
                                message="Antigravity SDK could not continue the stopped turn")
                 raise
-            finally:
-                self.steering = False
 
     async def interrupt(self):
         async with self.lock:
             if not self.busy or not self.active:
                 raise ValueError("No active Antigravity SDK turn to stop")
-            self.stopping = True
+            turn = self.active_turn
+            if turn is None:
+                raise RuntimeError("Antigravity turn state unavailable")
+            turn["cancel_reason"] = "stop"
             active = self.active
             await self.response.cancel()
             await active
             if self.busy:
                 self.busy = False
                 self.event("turn.cancelled", inputIds=self.input_ids)
-            self.stopping = False
             return {"status": "accepted"}
 
     async def close(self):
         if self.active and self.busy:
+            if self.active_turn:
+                self.active_turn["cancel_reason"] = "close"
             active = self.active
             await self.response.cancel()
             await active
