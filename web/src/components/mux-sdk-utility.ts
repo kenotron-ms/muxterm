@@ -323,6 +323,7 @@ export class MuxSDKUtility extends LitElement {
       if (this.sessionId !== parent || !this.isConnected) return;
       const closed = this.closedSideChats();
       let changed = false;
+      let skipped = false;
       for (const chat of chats) {
         if (closed.has(chat.id)) continue;
         rememberChatHost(chat.id, this.remoteHost);
@@ -332,10 +333,13 @@ export class MuxSDKUtility extends LitElement {
         } else if (this.tabs.length < 50) {
           this.tabs.push({id:crypto.randomUUID(), kind:'side', sideChatId:chat.id, title:chat.title});
           changed = true;
-        }
+        } else skipped = true;
       }
       if (changed) { this.saveTabs(); this.paintAll(); }
-      try { localStorage.setItem(migrationKey, '1'); localStorage.removeItem(retryKey); } catch { /* private browsing */ }
+      try {
+        if (skipped) localStorage.setItem(retryKey, String(Date.now() + 5 * 60_000));
+        else { localStorage.setItem(migrationKey, '1'); localStorage.removeItem(retryKey); }
+      } catch { /* private browsing */ }
     } catch {
       // Preserve legacy chats for a later migration without fetching on every reload.
       try { localStorage.setItem(retryKey, String(Date.now() + 5 * 60_000)); } catch { /* private browsing */ }
