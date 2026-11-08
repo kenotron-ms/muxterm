@@ -310,9 +310,13 @@ export class MuxSDKUtility extends LitElement {
     if (!parent) return;
     const migrationKey = `${TABS_KEY}${parent}.side-chat-migrated`;
     const retryKey = `${migrationKey}.retry-after`;
+    let retryAfter = 0;
     try {
       if (localStorage.getItem(migrationKey) === '1') return;
-      if (Date.now() < Number(localStorage.getItem(retryKey) || 0)) return;
+      retryAfter = Number(localStorage.getItem(retryKey) || 0);
+    } catch { /* Private browsing can still load side chats for this session. */ }
+    if (Date.now() < retryAfter) return;
+    try {
       const response = await fetch(apiPath(remoteChatPath(this.remoteHost, `/api/sdk-chats?sideParentId=${encodeURIComponent(parent)}&archived=false`)));
       if (!response.ok) throw new Error('Side chats are unavailable');
       const chats = await response.json() as SDKChat[];
@@ -331,8 +335,7 @@ export class MuxSDKUtility extends LitElement {
         }
       }
       if (changed) { this.saveTabs(); this.paintAll(); }
-      localStorage.setItem(migrationKey, '1');
-      localStorage.removeItem(retryKey);
+      try { localStorage.setItem(migrationKey, '1'); localStorage.removeItem(retryKey); } catch { /* private browsing */ }
     } catch {
       // Preserve legacy chats for a later migration without fetching on every reload.
       try { localStorage.setItem(retryKey, String(Date.now() + 5 * 60_000)); } catch { /* private browsing */ }
