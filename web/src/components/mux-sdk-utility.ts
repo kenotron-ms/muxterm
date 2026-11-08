@@ -356,7 +356,7 @@ export class MuxSDKUtility extends LitElement {
   async showSideChat(prompt = ''): Promise<void> {
     this.showPanel('side');
     await this.updateComplete;
-    this.querySelector<MuxSideChat>('mux-side-chat')?.prepareQuestion(prompt);
+    this.renderRoot.querySelector<MuxSideChat>('mux-side-chat')?.prepareQuestion(prompt);
   }
   async showNote(id: string): Promise<void> {
     this.showPanel('pages');

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,6 +20,17 @@ func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
+	// A streaming main chat may be appending its last event while we read.
+	// Only newline-terminated records belong to this snapshot.
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if end := bytes.IndexByte(data, '\n'); end >= 0 {
+			return end + 1, data[:end], nil
+		}
+		if atEOF {
+			return len(data), nil, nil
+		}
+		return 0, nil, nil
+	})
 	var completed []string
 	var turn []string
 	var assistant string
@@ -32,8 +44,6 @@ func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
 			if event.Kind == "user" && event.Origin == nil && event.Text != "" {
 				turn = append(turn, "User: "+event.Text)
 			}
-		case "tool.started":
-			assistant = ""
 		case "assistant.delta":
 			assistant += event.Text
 		case "turn.completed":
