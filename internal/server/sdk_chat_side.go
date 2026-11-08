@@ -58,7 +58,7 @@ func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
 	}
 	context := strings.Join(completed, "\n\n")
 	if len(context) > 24000 {
-		context = "…" + context[len(context)-24000:]
+		context = "…" + strings.ToValidUTF8(context[len(context)-24000:], "")
 	}
 	return "You are answering a side question about a separate, ongoing main chat. Use the following completed conversation as context. Keep this side conversation focused on explanation; do not alter the main chat or its goal.\n\nMain chat:\n" + context, nil
 }

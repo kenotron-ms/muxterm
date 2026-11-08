@@ -44,7 +44,7 @@ export class MuxSideChat extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    void this.loadChats();
+    if (this.hasUpdated) void this.loadChats();
   }
 
   override willUpdate(changed: Map<string, unknown>) {
