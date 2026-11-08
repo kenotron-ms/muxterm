@@ -92,7 +92,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { Archive, ArchiveRestore, ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, Ellipsis, FilePenLine, Folder, GitFork, Globe, Menu, Mic, Network, PanelRight, Pencil, Pin, PinOff, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
+import { Archive, ArchiveRestore, ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, Ellipsis, FilePenLine, Folder, GitFork, Globe, Menu, MessageCircleQuestionMark, Mic, Network, PanelRight, Pencil, Pin, PinOff, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
 
 type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
@@ -100,6 +100,7 @@ type Attachment = { localId: string; file: File; id?: string; kind?: string; pre
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
+  @property({ type: Boolean, reflect: true, attribute: 'side-mode' }) sideMode = false;
   @property({ type: Boolean, reflect: true }) compact = false;
   @state() private chat?: SDKChat;
   @state() private goalDocument?: GoalDocument;
@@ -242,6 +243,8 @@ export class MuxSDKChat extends LitElement {
   private parentScrollTop = 0;
   static styles = css`
     ${subtleScrollbars}
+    :host([side-mode]) .chat-screen-header { display:none; }
+    :host([side-mode]) mux-sdk-chat-settings { display:none; }
     :host { position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-content-font-size)/1.55 var(--ui-content-font-family); }
     .chat-screen-header.with-utility { width:calc(100% - var(--utility-width)); --ui-screen-header-padding-right:var(--ui-space-5); }
     .topbar-actions { display:flex; align-items:center; gap:var(--ui-space-4); }
@@ -2240,13 +2243,22 @@ export class MuxSDKChat extends LitElement {
     } catch (error) { this.error = String(error); }
     finally { this.actionPending = false; }
   }
+  private async askInSideChat(block: Block) {
+    const selection = window.getSelection()?.toString().trim() || '';
+    const excerpt = (selection && block.text.includes(selection) ? selection : block.text).slice(0, 4000);
+    const prompt = `Explain this from the main chat:\n\n> ${excerpt.replaceAll('\n', '\n> ')}`;
+    this.setPaneMode('split');
+    await this.updateComplete;
+    await this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showSideChat(prompt);
+  }
   private messageActions(block: Block) {
     const copied = this.copiedKey === block.key;
     const completed = this.turnFinished.has(block.turn) && !this.busy && this.chat?.state !== 'uncertain';
-    const canBranch = completed && !this.chat?.goal && !this.chat?.operator;
+    const canBranch = completed && !this.sideMode && !this.chat?.goal && !this.chat?.operator;
     const finalAssistant = block.kind === 'assistant' && block.channel !== 'voice' && !this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key);
     return html`<div class="message-actions" role="group" aria-label=${`${block.kind === 'user' ? 'Your' : 'Assistant'} message actions`}>
       <mux-ui-button variant="quiet" size="small" icon-only accessible-label=${copied ? 'Message copied' : `Copy ${block.kind} message`} tooltip=${copied ? 'Copied' : 'Copy message'} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.copyMessage(block); }}>${icon(copied ? Check : Copy, { size:14 })}<span class="sr-only" aria-live="polite">${copied ? 'Copied' : ''}</span></mux-ui-button>
+      ${!this.sideMode && (block.kind === 'user' || block.kind === 'assistant') ? html`<mux-ui-button variant="quiet" size="small" icon-only accessible-label="Ask in side chat" tooltip="Ask in side chat" @click=${(event: MouseEvent) => { event.stopPropagation(); void this.askInSideChat(block); }}>${icon(MessageCircleQuestionMark,{size:14})}</mux-ui-button>` : nothing}
       ${block.kind === 'user' && block.id && canBranch ? html`<mux-ui-button variant="quiet" size="small" icon-only accessible-label="Edit message in a new chat" tooltip="Edit in new chat" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); this.editingKey = block.key; this.editDraft = block.text; this.editDraftHasContent = !!block.text.trim(); void this.updateComplete.then(() => { const textarea = this.shadowRoot?.querySelector<HTMLTextAreaElement>('.message-edit textarea'); if (textarea) { syncTextareaSizing(textarea); textarea.focus(); } }); }}>${icon(FilePenLine, { size:14 })}</mux-ui-button>` : nothing}
       ${finalAssistant && canBranch ? html`<mux-ui-button variant="quiet" size="small" icon-only accessible-label="Fork chat from this assistant message" tooltip="Fork from here" ?disabled=${this.actionPending} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.branchMessage(block, 'fork'); }}>${icon(GitFork, { size:14 })}</mux-ui-button>` : nothing}
       ${this.messageTime(block)}
@@ -2421,6 +2433,14 @@ export class MuxSDKChat extends LitElement {
     this.stopDictation();
     const originalDraft = this.flushDraft();
     const content = originalDraft.trim();
+    const sideCommand = /^\/side(?:\s+([\s\S]*))?$/.exec(content);
+    if (sideCommand && !this.sideMode) {
+      this.setPaneMode('split');
+      await this.updateComplete;
+      await this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showSideChat(sideCommand[1]?.trim() || '');
+      this.setDraft('');
+      return;
+    }
     const command = parseChatCommand(content);
     if (command) {
       await this.executeChatCommand(command, originalDraft);
