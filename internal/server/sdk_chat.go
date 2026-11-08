@@ -29,6 +29,7 @@ import (
 // SDK chats are Go-owned records. Native harness IDs are resume pointers only.
 type sdkChat struct {
 	ID                  string        `json:"id"`
+	SideParentID        string        `json:"sideParentId,omitempty"`
 	WorkspaceID         string        `json:"workspaceId,omitempty"`
 	TerminalWorkspaceID string        `json:"terminalWorkspaceId,omitempty"`
 	ProjectPath         string        `json:"projectPath"`
@@ -1705,6 +1706,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		filtering := r.URL.Query().Has("archived")
 		archived := r.URL.Query().Get("archived") == "true"
+		sideParentID := r.URL.Query().Get("sideParentId")
 		query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 		if len(query) > 512 {
 			http.Error(w, "query too long", http.StatusBadRequest)
@@ -1714,6 +1716,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		rows := make([]sdkChat, 0, len(h.chats))
 		archivedCount := 0
 		for _, c := range h.chats {
+			if (sideParentID == "" && c.SideParentID != "") || (sideParentID != "" && c.SideParentID != sideParentID) {
+				continue
+			}
 			if c.Archived {
 				archivedCount++
 			}
@@ -1751,12 +1756,43 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, OperatorID string
-		Attachments                                                                                                      []string `json:"attachments"`
+		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, OperatorID, SideParentID string
+		Attachments                                                                                                                    []string `json:"attachments"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
+	}
+	var sideContext string
+	var sideSourceFolders []string
+	if req.SideParentID != "" {
+		h.mu.Lock()
+		parentRecord := h.chats[req.SideParentID]
+		var parent sdkChat
+		if parentRecord != nil {
+			parent = *parentRecord
+			req.WorkspaceID, req.ProjectPath = parent.WorkspaceID, parent.ProjectPath
+			req.Harness, req.Provider, req.Bundle = parent.Harness, parent.Provider, parent.Bundle
+			req.Model, req.Effort = parent.Model, parent.Effort
+			sideSourceFolders = append([]string(nil), parent.SourceFolders...)
+		}
+		h.mu.Unlock()
+		if parentRecord == nil || parent.SideParentID != "" || parent.Archived {
+			http.Error(w, "main chat unavailable", http.StatusUnprocessableEntity)
+			return
+		}
+		if req.Goal != "" || req.OperatorID != "" || req.WorkMode == "worktree" || len(req.Attachments) != 0 || strings.TrimSpace(req.Prompt) == "" {
+			http.Error(w, "side chat requires a question without attachments or goal", http.StatusBadRequest)
+			return
+		}
+		req.WorkMode = "local"
+		req.WorkspaceID = ""
+		var err error
+		sideContext, err = h.sideChatContext(req.SideParentID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
 	}
 	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "copilot" && req.Harness != "amplifier" && !isSDKConfiguredHarness(req.Harness) {
 		http.Error(w, "unsupported harness", 400)
@@ -1828,6 +1864,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 	}
 	sourceFolders := []string{}
+	if req.SideParentID != "" {
+		sourceFolders = sideSourceFolders
+	}
 	managedFolder := false
 	if req.WorkspaceID != "" {
 		h.mu.Lock()
@@ -1932,7 +1971,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
-	c := &sdkChat{ID: chatID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Bundle: req.Bundle, Model: req.Model, Effort: req.Effort, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
+	c := &sdkChat{ID: chatID, SideParentID: req.SideParentID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Bundle: req.Bundle, Model: req.Model, Effort: req.Effort, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
 	if req.OperatorID != "" {
 		operator := h.chats[req.OperatorID]
@@ -1977,7 +2016,11 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	openingID := sdkID()
-	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": h.laneInput(c.ID, req.Prompt), "displayContent": req.Prompt, "goal": req.Goal, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
+	openingContent := h.laneInput(c.ID, req.Prompt)
+	if sideContext != "" {
+		openingContent = sideContext + "\n\nSide question: " + req.Prompt
+	}
+	result, err := h.call(ctx, "send", map[string]any{"sessionId": c.ID, "input": map[string]any{"kind": "user", "source": "browser", "id": openingID, "content": openingContent, "displayContent": req.Prompt, "goal": req.Goal, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
 	if err == nil {
 		var ack struct{ Status, InputID string }
 		err = json.Unmarshal(result, &ack)

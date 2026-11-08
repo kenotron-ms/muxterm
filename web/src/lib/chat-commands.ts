@@ -27,7 +27,7 @@ const commands: CommandDefinition[] = [{
 export function chatCommandSuggestions(draft: string) {
   if (!draft.startsWith('/') || draft.includes('\n')) return [];
   const query = draft.toLowerCase();
-  if (!/\s/.test(draft)) return commands.map(command => command.suggestions[0]).filter(item => item.label.startsWith(query));
+  if (!/\s/.test(draft)) return [...commands.map(command => command.suggestions[0]), { label:'/side', description:'Ask in a side chat', insert:'/side ' }].filter(item => item.label.startsWith(query));
   const command = commands.find(item => query.startsWith(`/${item.name} `));
   return command?.suggestions.slice(1).filter(item => item.label.startsWith(query)) || [];
 }
