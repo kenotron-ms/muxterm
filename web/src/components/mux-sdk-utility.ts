@@ -297,10 +297,12 @@ export class MuxSDKUtility extends LitElement {
     const parent = this.sessionId;
     if (!parent) return;
     const migrationKey = `${TABS_KEY}${parent}.side-chat-migrated`;
+    const retryKey = `${migrationKey}.retry-after`;
     try {
       if (localStorage.getItem(migrationKey) === '1') return;
+      if (Date.now() < Number(localStorage.getItem(retryKey) || 0)) return;
       const response = await fetch(apiPath(remoteChatPath(this.remoteHost, `/api/sdk-chats?sideParentId=${encodeURIComponent(parent)}&archived=false`)));
-      if (!response.ok) return;
+      if (!response.ok) throw new Error('Side chats are unavailable');
       const chats = await response.json() as SDKChat[];
       if (this.sessionId !== parent || !this.isConnected) return;
       let changed = false;
@@ -316,7 +318,11 @@ export class MuxSDKUtility extends LitElement {
       }
       if (changed) { this.saveTabs(); this.paintAll(); }
       localStorage.setItem(migrationKey, '1');
-    } catch { /* Keep saved tabs when the chat list is unavailable. */ }
+      localStorage.removeItem(retryKey);
+    } catch {
+      // Preserve legacy chats for a later migration without fetching on every reload.
+      try { localStorage.setItem(retryKey, String(Date.now() + 5 * 60_000)); } catch { /* private browsing */ }
+    }
   }
   private updateSideDraft({tabId,draft}: {tabId:string;draft:string}) {
     const tab = this.tabs.find(item => item.id === tabId && item.kind === 'side');
@@ -354,9 +360,9 @@ export class MuxSDKUtility extends LitElement {
     try { localStorage.removeItem(this.fileKey()); } catch { /* private browsing */ }
     return inserted;
   }
-  private addTab(kind: UtilityTabId = 'new'): UtilityTab {
+  private addTab(kind: UtilityTabId = 'new', draft = ''): UtilityTab {
     if (this.activeTab === 'browser') this.hideBrowser();
-    const tab: UtilityTab = { id:crypto.randomUUID(), kind };
+    const tab: UtilityTab = { id:crypto.randomUUID(), kind, ...(draft ? {draft} : {}) };
     this.tabs = [...this.tabs,tab]; this.activeTabId = tab.id; this.saveTabs();
     void this.activateTab(tab); this.paintAll(); return tab;
   }
@@ -397,9 +403,7 @@ export class MuxSDKUtility extends LitElement {
     else this.addTab(id);
   }
   async showSideChat(prompt = ''): Promise<void> {
-    const tab = this.addTab('side');
-    tab.draft = prompt;
-    this.saveTabs(); this.paintAll();
+    this.addTab('side', prompt);
     await this.updateComplete;
     this.renderRoot.querySelector<MuxSideChat>('mux-side-chat')?.focusQuestion();
   }
@@ -419,6 +423,7 @@ export class MuxSDKUtility extends LitElement {
     current.kind = kind;
     this.activateTab(current);
     this.saveTabs(); this.paintAll();
+    if (kind === 'side') void this.updateComplete.then(() => this.querySelector<MuxSideChat>('mux-side-chat')?.focusQuestion());
   }
   private newTabView(): TemplateResult {
     return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Open a tool</h2><div class="new-tab-tools">
