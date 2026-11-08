@@ -1716,7 +1716,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		rows := make([]sdkChat, 0, len(h.chats))
 		archivedCount := 0
 		for _, c := range h.chats {
-			if sideParentID == "" && c.SideParentID != "" || sideParentID != "" && c.SideParentID != sideParentID {
+			if (sideParentID == "" && c.SideParentID != "") || (sideParentID != "" && c.SideParentID != sideParentID) {
 				continue
 			}
 			if c.Archived {
