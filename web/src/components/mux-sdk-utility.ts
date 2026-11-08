@@ -2,7 +2,8 @@ import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { ArrowLeft, AudioLines, ChevronDown, ChevronRight, ChevronsDownUp, CircleDot, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, PanelRight, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
-import { remoteChatPath } from '../lib/remote-chat-routes.js';
+import { rememberChatHost, remoteChatPath } from '../lib/remote-chat-routes.js';
+import type { SDKChat } from '../lib/sdk-chats.js';
 import { icon } from '../lib/icons.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
@@ -70,7 +71,7 @@ function legacyPageContent(blocks: PageBlock[], remoteHost = ''): PartialBlock[]
   return converted.length ? converted : [{type:'paragraph'}];
 }
 type UtilityTabId = 'new' | 'side' | 'files' | 'status' | 'coordination' | 'changes' | 'pages' | 'meetings' | 'browser' | 'goal';
-type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string; url?: string; title?: string };
+type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string; url?: string; title?: string; sideChatId?: string; draft?: string };
 type BrowserState = { tabs?: { id:string; url:string; title:string; canGoBack:boolean; canGoForward:boolean }[]; error?:string };
 type BrowserBridge = { send: (message: Record<string, unknown>) => void };
 declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge } }
@@ -218,10 +219,10 @@ export class MuxSDKUtility extends LitElement {
       return;
     }
     try {
-      const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string }[]; activeTabId?: string } | null;
+      const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string; sideChatId?:string; draft?:string }[]; activeTabId?: string } | null;
       const valid = new Set<string>(['new','side','files','status','coordination','changes','terminal','pages','meetings','web','browser','goal']);
       if (saved?.tabs?.length && saved.tabs.length <= 50 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
-        this.tabs = saved.tabs.map(tab => ({ id:tab.kind === 'browser' ? crypto.randomUUID() : tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title }));
+        this.tabs = saved.tabs.map(tab => ({ id:tab.kind === 'browser' ? crypto.randomUUID() : tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title, sideChatId:tab.sideChatId, draft:tab.draft }));
         let startTab = this.tabs.find(tab => tab.kind === 'new');
         if (!startTab) { startTab = {id:crypto.randomUUID(),kind:'new'}; this.tabs = [startTab,...this.tabs]; }
         this.activeTabId = startTab.id;
@@ -240,6 +241,7 @@ export class MuxSDKUtility extends LitElement {
       if (draft) { this.conflictDraft = JSON.parse(draft) as NoteConflictDraft; this.pagesConflict = true; }
     } catch { /* private browsing */ }
     void this.restoreExplorer(folder);
+    void this.restoreSideChats();
     if (this.currentTab.kind === 'files' && this.currentTab.filePath) void this.loadFile(this.currentTab.filePath);
     if (this.activeTab === 'changes') void this.loadChanges();
     if (this.activeTab === 'pages') void this.loadPages();
@@ -269,7 +271,7 @@ export class MuxSDKUtility extends LitElement {
   override render() {
     if (this.terminalMode) return html`<style>${this.surfaceCSS}</style><div class="terminal-files-header"><strong>Files</strong><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Close file explorer" tooltip="Close file explorer" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(X,{size:16})}</mux-ui-button></div><div class="utility-body" aria-label="Files">${this.filesView()}</div>`;
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style>${this.mobileHeader()}<mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="mobile-tab-picker"><mux-ui-select aria-label="Chat tools tab" .options=${this.tabs.map(item => ({value:item.id,label:this.tabTitle(item)}))} .value=${tab.id} @change=${(event:Event) => this.selectTab((event.target as MuxUISelect).value)}></mux-ui-select><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.addTab()}>${icon(Plus,{size:18})}</mux-ui-button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'meetings' ? nothing : tab.kind === 'new' ? this.newTabView() : tab.kind === 'side' ? html`<mux-side-chat .sessionId=${this.sessionId} .remoteHost=${this.remoteHost}></mux-side-chat>` : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'coordination' ? html`<mux-chat-coordination .sessionId=${this.sessionId} .remoteHost=${this.remoteHost}></mux-chat-coordination>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}<mux-meetings .sessionId=${this.sessionId} ?hidden=${tab.kind !== 'meetings'} @meeting-open-note=${(event:CustomEvent<{id:string}>) => void this.showNote(event.detail.id)}></mux-meetings></div>`;
+    return html`<style>${this.surfaceCSS}</style>${this.mobileHeader()}<mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.addTab()}></mux-ui-tab-strip><div class="mobile-tab-picker"><mux-ui-select aria-label="Chat tools tab" .options=${this.tabs.map(item => ({value:item.id,label:this.tabTitle(item)}))} .value=${tab.id} @change=${(event:Event) => this.selectTab((event.target as MuxUISelect).value)}></mux-ui-select><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button><mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.addTab()}>${icon(Plus,{size:18})}</mux-ui-button></div><div class="utility-body" role="tabpanel" aria-label=${this.tabTitle(tab)}>${tab.kind === 'meetings' ? nothing : tab.kind === 'new' ? this.newTabView() : tab.kind === 'side' ? html`<mux-side-chat .sessionId=${this.sessionId} .remoteHost=${this.remoteHost} .tabId=${tab.id} .chatId=${tab.sideChatId || ''} .draft=${tab.draft || ''} .onChatCreated=${(tabId:string,chat:SDKChat) => this.sideChatCreated({tabId,chat})} @side-chat-draft=${(event:CustomEvent<{tabId:string;draft:string}>) => this.updateSideDraft(event.detail)}></mux-side-chat>` : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'coordination' ? html`<mux-chat-coordination .sessionId=${this.sessionId} .remoteHost=${this.remoteHost}></mux-chat-coordination>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}<mux-meetings .sessionId=${this.sessionId} ?hidden=${tab.kind !== 'meetings'} @meeting-open-note=${(event:CustomEvent<{id:string}>) => void this.showNote(event.detail.id)}></mux-meetings></div>`;
   }
   private mobileHeader(): TemplateResult {
     if (this.currentTab.kind === 'files') {
@@ -282,7 +284,7 @@ export class MuxSDKUtility extends LitElement {
   }
   private tabTitle(tab: UtilityTab): string {
     if (tab.kind === 'new') return 'New tab';
-    if (tab.kind === 'side') return 'Side chat';
+    if (tab.kind === 'side') return tab.title || 'Side chat';
     if (tab.kind === 'files') return tab.filePath?.split('/').pop() || 'Files';
     if (tab.kind === 'pages') return 'Notes';
     if (tab.kind === 'meetings') return 'Meetings';
@@ -290,6 +292,49 @@ export class MuxSDKUtility extends LitElement {
     return ({ status:'Status', coordination:'Issues', changes:'Changes', goal:'Goal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { if (this.terminalMode) return; try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
+  private async restoreSideChats() {
+    const parent = this.sessionId;
+    if (!parent) return;
+    const migrationKey = `${TABS_KEY}${parent}.side-chat-migrated`;
+    try {
+      if (localStorage.getItem(migrationKey) === '1') return;
+      const response = await fetch(apiPath(remoteChatPath(this.remoteHost, `/api/sdk-chats?sideParentId=${encodeURIComponent(parent)}&archived=false`)));
+      if (!response.ok) return;
+      const chats = await response.json() as SDKChat[];
+      if (this.sessionId !== parent || !this.isConnected) return;
+      let changed = false;
+      for (const chat of chats) {
+        rememberChatHost(chat.id, this.remoteHost);
+        const tab = this.tabs.find(item => item.kind === 'side' && item.sideChatId === chat.id);
+        if (tab) {
+          if (tab.title !== chat.title) { tab.title = chat.title; changed = true; }
+        } else if (this.tabs.length < 50) {
+          this.tabs.push({id:crypto.randomUUID(), kind:'side', sideChatId:chat.id, title:chat.title});
+          changed = true;
+        }
+      }
+      if (changed) { this.saveTabs(); this.paintAll(); }
+      localStorage.setItem(migrationKey, '1');
+    } catch { /* Keep saved tabs when the chat list is unavailable. */ }
+  }
+  private updateSideDraft({tabId,draft}: {tabId:string;draft:string}) {
+    const tab = this.tabs.find(item => item.id === tabId && item.kind === 'side');
+    if (!tab || tab.sideChatId) return;
+    tab.draft = draft;
+    this.saveTabs();
+  }
+  private sideChatCreated({tabId,chat}: {tabId:string;chat:SDKChat}) {
+    let tab = this.tabs.find(item => item.id === tabId && item.kind === 'side');
+    if (!tab) {
+      tab = {id:crypto.randomUUID(),kind:'side'};
+      this.tabs = [...this.tabs,tab];
+    }
+    tab.sideChatId = chat.id;
+    tab.title = chat.title;
+    tab.draft = '';
+    this.saveTabs();
+    this.paintAll();
+  }
   private migrateLegacyFile(): boolean {
     if (this.terminalMode) return false;
     if (!this.sessionId) return false;
@@ -354,9 +399,11 @@ export class MuxSDKUtility extends LitElement {
     else this.addTab(id);
   }
   async showSideChat(prompt = ''): Promise<void> {
-    this.showPanel('side');
+    const tab = this.addTab('side');
+    tab.draft = prompt;
+    this.saveTabs(); this.paintAll();
     await this.updateComplete;
-    this.renderRoot.querySelector<MuxSideChat>('mux-side-chat')?.prepareQuestion(prompt);
+    this.renderRoot.querySelector<MuxSideChat>('mux-side-chat')?.focusQuestion();
   }
   async showNote(id: string): Promise<void> {
     this.showPanel('pages');
