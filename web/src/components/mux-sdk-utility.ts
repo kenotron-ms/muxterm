@@ -209,6 +209,18 @@ export class MuxSDKUtility extends LitElement {
   private fileKey() { return `muxterm.sdk.utility.file.${this.sessionId}`; }
   private pageKey() { return `muxterm.sdk.utility.page.${this.sessionId}`; }
   private conflictKey() { return `muxterm.sdk.utility.note-conflict.${this.sessionId}`; }
+  private closedSideChatsKey() { return `${TABS_KEY}${this.sessionId}.closed-side-chats`; }
+  private closedSideChats(): Set<string> {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(this.closedSideChatsKey()) || '[]');
+      return new Set(Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : []);
+    } catch { return new Set(); }
+  }
+  private rememberClosedSideChat(id: string) {
+    const closed = this.closedSideChats();
+    closed.add(id);
+    try { localStorage.setItem(this.closedSideChatsKey(), JSON.stringify([...closed])); } catch { /* private browsing */ }
+  }
 
   override createRenderRoot() { return this; }
   override connectedCallback() {
@@ -305,8 +317,10 @@ export class MuxSDKUtility extends LitElement {
       if (!response.ok) throw new Error('Side chats are unavailable');
       const chats = await response.json() as SDKChat[];
       if (this.sessionId !== parent || !this.isConnected) return;
+      const closed = this.closedSideChats();
       let changed = false;
       for (const chat of chats) {
+        if (closed.has(chat.id)) continue;
         rememberChatHost(chat.id, this.remoteHost);
         const tab = this.tabs.find(item => item.kind === 'side' && item.sideChatId === chat.id);
         if (tab) {
@@ -332,7 +346,7 @@ export class MuxSDKUtility extends LitElement {
   }
   private sideChatCreated({tabId,chat}: {tabId:string;chat:SDKChat}) {
     const tab = this.tabs.find(item => item.id === tabId && item.kind === 'side');
-    if (!tab) return;
+    if (!tab) { this.rememberClosedSideChat(chat.id); return; }
     tab.sideChatId = chat.id;
     tab.title = chat.title;
     tab.draft = '';
@@ -373,6 +387,7 @@ export class MuxSDKUtility extends LitElement {
   }
   private closeTab(id: string) {
     const index = this.tabs.findIndex(tab => tab.id === id); if (index < 0) return;
+    if (this.tabs[index].kind === 'side' && this.tabs[index].sideChatId) this.rememberClosedSideChat(this.tabs[index].sideChatId);
     if (this.tabs[index].kind === 'browser') {
       if (this.activeTabId === id) this.hideBrowser();
       if (this.browserOpened.delete(id)) this.browserSend({type:'close', id});
