@@ -235,10 +235,12 @@ export class MuxSDKUtility extends LitElement {
       const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string; sideChatId?:string; draft?:string }[]; activeTabId?: string } | null;
       const valid = new Set<string>(['new','side','files','status','coordination','changes','terminal','pages','meetings','web','browser','goal']);
       if (saved?.tabs?.length && saved.tabs.length <= 50 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
+        const activeIndex = saved.tabs.findIndex(tab => tab.id === saved.activeTabId);
         this.tabs = saved.tabs.map(tab => ({ id:tab.kind === 'browser' ? crypto.randomUUID() : tab.id, kind:(tab.kind === 'web' || tab.kind === 'terminal' ? 'new' : tab.kind) as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title, sideChatId:tab.sideChatId, draft:tab.draft }));
+        const activeTabId = this.tabs[activeIndex]?.id;
         let startTab = this.tabs.find(tab => tab.kind === 'new');
         if (!startTab) { startTab = {id:crypto.randomUUID(),kind:'new'}; this.tabs = [startTab,...this.tabs]; }
-        this.activeTabId = startTab.id;
+        this.activeTabId = activeTabId || startTab.id;
         if (saved.tabs.some(tab => tab.kind === 'web' || tab.kind === 'terminal' || tab.kind === 'browser')) this.saveTabs();
       }
       for (const key of ['files','changes','pages'] as const) {
