@@ -10,7 +10,7 @@ import { pastedImageFiles, readClipboardImageFiles } from '../lib/clipboard-imag
 import '../lib/mermaid-diagram.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
-import { chatHost, remoteChatPath } from '../lib/remote-chat-routes.js';
+import { chatHost, rememberChatHost, remoteChatPath } from '../lib/remote-chat-routes.js';
 import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
 import { voiceInputController, type ComposerDictationCapture, type VoiceTranscriptPayload } from '../lib/voice-input-controller.js';
@@ -101,6 +101,11 @@ type Attachment = { localId: string; file: File; id?: string; kind?: string; pre
 export class MuxSDKChat extends LitElement {
   @property() sessionId = '';
   @property({ type: Boolean, reflect: true, attribute: 'side-mode' }) sideMode = false;
+  @property() sideParentId = '';
+  @property() sideRemoteHost = '';
+  @property() sideTabId = '';
+  @property() initialSideDraft = '';
+  @property({ attribute:false }) onSideChatCreated?: (tabId: string, chat: SDKChat) => void;
   @property({ type: Boolean, reflect: true }) compact = false;
   @state() private chat?: SDKChat;
   @state() private goalDocument?: GoalDocument;
@@ -132,6 +137,7 @@ export class MuxSDKChat extends LitElement {
   @state() private draft = '';
   @state() private draftHasContent = false;
   @state() private error = '';
+  @state() private startingSideChat = false;
   @state() private clipboardError = '';
   @state() private editingKey = 0;
   @state() private editDraft = '';
@@ -287,6 +293,9 @@ export class MuxSDKChat extends LitElement {
     .layout.preview-focused .drawer-resizer { display:none; }
     .chat { flex:1; min-width:0; display:flex; flex-direction:column; }
     .body { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-10) var(--ui-space-8) var(--ui-space-11); display:flex; flex-direction:column; scrollbar-width:none; overflow-anchor:none; }
+    .side-empty { justify-content:center; text-align:center; }
+    .side-empty h2 { margin:0 0 var(--ui-space-2); font:600 var(--ui-text-lg)/1.35 var(--ui-font-sans); }
+    .side-empty p { margin:0; color:var(--ui-text-muted); }
     .body::-webkit-scrollbar { display:none; }
     .scroll-bottom-row { position:relative; z-index:var(--ui-z-local); height:0; }
     .scroll-bottom { position:absolute; left:50%; bottom:var(--ui-space-5); transform:translateX(-50%); }
@@ -627,7 +636,13 @@ export class MuxSDKChat extends LitElement {
     this.idleSuspended = false;
     this.retryConnection();
   };
-  override willUpdate(changed: Map<string, unknown>) { if (changed.has('sessionId')) { this.connect(); void this.loadScheduledJob(); } }
+  override willUpdate(changed: Map<string, unknown>) {
+    if (changed.has('sessionId')) { this.connect(); void this.loadScheduledJob(); }
+    if (!this.sessionId && changed.has('initialSideDraft')) {
+      this.draft = this.initialSideDraft;
+      this.draftHasContent = !!this.draft.trim();
+    }
+  }
   private async loadScheduledJob() {
     const id = this.sessionId;
     this.scheduledJob = undefined;
@@ -933,6 +948,8 @@ export class MuxSDKChat extends LitElement {
       const key = draftKey(this.activeSession, 'message');
       this.draftRevisions.set(key, (this.draftRevisions.get(key) || 0) + 1);
       writeDraft(this.activeSession, 'message', value);
+    } else if (this.sideParentId) {
+      this.dispatchSideDraft(value);
     }
     if (resize) {
       void this.updateComplete.then(() => this.fitComposer('message'));
@@ -944,6 +961,7 @@ export class MuxSDKChat extends LitElement {
     const value = textarea.value;
     const previousValue = this.pendingDraft ?? this.draft;
     this.pendingDraft = value;
+    if (this.sideParentId && !this.sessionId) this.dispatchSideDraft(value);
     this.draftHasContent = !!value.trim();
     if (this.commandNotice) this.commandNotice = '';
     if (this.commandFailed) this.commandFailed = false;
@@ -954,6 +972,7 @@ export class MuxSDKChat extends LitElement {
     syncTextareaSizing(textarea);
   }
   private slashSuggestions() {
+    if (this.sideParentId && !this.sessionId) return [];
     const value = this.pendingDraft ?? this.draft;
     return value === this.slashDismissedFor ? [] : chatCommandSuggestions(value);
   }
@@ -967,6 +986,10 @@ export class MuxSDKChat extends LitElement {
     });
   }
   private onMessageKeyDown(event: KeyboardEvent) {
+    if (this.sideParentId && !this.sessionId) {
+      if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void this.send(); }
+      return;
+    }
     const suggestions = this.slashSuggestions();
     const next = listboxIndexForKey(event.key, this.slashSelection, suggestions.length);
     if (next !== null) {
@@ -995,6 +1018,12 @@ export class MuxSDKChat extends LitElement {
     const value = this.pendingDraft;
     this.setDraft(value, false);
     return value;
+  }
+  private dispatchSideDraft(draft: string) {
+    this.dispatchEvent(new CustomEvent('side-chat-draft', { detail:{tabId:this.sideTabId,draft}, bubbles:true, composed:true }));
+  }
+  focusComposer() {
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
   }
   private setAgentDraft(value: string, resize = true) {
     if (this.agentDraftTimer) window.clearTimeout(this.agentDraftTimer);
@@ -1658,6 +1687,7 @@ export class MuxSDKChat extends LitElement {
   private onDrop(event: DragEvent) {
     if (!this.hasFiles(event)) return;
     event.preventDefault(); event.stopPropagation(); this.resetDrop();
+    if (this.sideParentId && !this.sessionId) return;
     this.addFiles(Array.from(event.dataTransfer?.files || []));
   }
   private onPick(event: Event) {
@@ -1665,6 +1695,7 @@ export class MuxSDKChat extends LitElement {
     this.addFiles(Array.from(input.files || [])); input.value = '';
   }
   private onPaste(event: ClipboardEvent) {
+    if (this.sideParentId && !this.sessionId) return;
     if (this.voiceState !== 'idle') return;
     const images = pastedImageFiles(event);
     if (!images.length) return;
@@ -2433,6 +2464,10 @@ export class MuxSDKChat extends LitElement {
     this.stopDictation();
     const originalDraft = this.flushDraft();
     const content = originalDraft.trim();
+    if (this.sideParentId && !this.sessionId) {
+      await this.startSideChat(content);
+      return;
+    }
     const sideCommand = /^\/side(?:\s+([\s\S]*))?$/.exec(content);
     if (sideCommand && !this.sideMode) {
       this.setPaneMode('split');
@@ -2492,6 +2527,29 @@ export class MuxSDKChat extends LitElement {
     } finally {
       this.submittingSessions.delete(sessionId);
       if (this.activeSession === sessionId && this.detailsDeferred) void this.loadDetails();
+    }
+  }
+  private async startSideChat(prompt: string) {
+    if (!prompt || this.startingSideChat) return;
+    const tabId = this.sideTabId;
+    const parentId = this.sideParentId;
+    const remoteHost = this.sideRemoteHost;
+    this.startingSideChat = true;
+    this.error = '';
+    try {
+      const response = await fetch(apiPath(remoteChatPath(remoteHost, '/api/sdk-chats')), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sideParentId:parentId, prompt}),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const chat = await response.json() as SDKChat;
+      rememberChatHost(chat.id, remoteHost);
+      this.onSideChatCreated?.(tabId, chat);
+    } catch (error) {
+      if (this.sideTabId === tabId && this.sideParentId === parentId && !this.sessionId)
+        this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (this.sideTabId === tabId) this.startingSideChat = false;
     }
   }
   private prepareRecovery() {
@@ -2554,9 +2612,11 @@ export class MuxSDKChat extends LitElement {
     catch (error) { this.error = error instanceof Error ? error.message : 'Voice could not start.'; }
   }
   private sendVoiceButton() {
-    const mode = this.voiceState !== 'idle' ? 'voice-stop' : this.draftHasContent || this.attachments.length ? this.busy ? 'steer' : 'send' : this.busy ? 'task-stop' : 'voice-start';
+    const sideStart = this.sideParentId && !this.sessionId;
+    const mode = sideStart ? 'send' : this.voiceState !== 'idle' ? 'voice-stop' : this.draftHasContent || this.attachments.length ? this.busy ? 'steer' : 'send' : this.busy ? 'task-stop' : 'voice-start';
     const label = mode === 'voice-stop' ? 'Stop voice mode' : mode === 'task-stop' ? 'Stop current task' : mode === 'steer' ? this.chat?.harness === 'antigravity-sdk' ? 'Stop and continue with this message' : 'Steer current task' : mode === 'send' ? 'Send message' : this.chat?.branchPending ? 'Send a text message to start this branch before using voice' : this.voiceAvailable ? 'Start voice mode' : 'Voice mode unavailable; check Voice settings';
-    const disabled = mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending || this.dictationActive || !!this.chat?.branchPending
+    const disabled = sideStart ? !this.draftHasContent || this.startingSideChat
+      : mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending || this.dictationActive || !!this.chat?.branchPending
       : mode === 'task-stop' ? this.stopping
       : mode === 'send' || mode === 'steer' ? this.stopping || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || !!a.error) || (this.busy && this.attachments.length > 0)
       : false;
@@ -2649,6 +2709,7 @@ export class MuxSDKChat extends LitElement {
   override render() {
     const agents = this.agents();
     const slashSuggestions = this.selectedAgent ? [] : this.slashSuggestions();
+    const sideStart = this.sideMode && !!this.sideParentId && !this.sessionId;
     const parentOperator = sdkChats.chats.find(chat => chat.operator && chat.operatorLanes?.includes(this.sessionId));
     const workspaceName = sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped';
     return html`
@@ -2666,9 +2727,9 @@ export class MuxSDKChat extends LitElement {
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.recoveryRequired ? html`<mux-ui-feedback class="recovery" kind="warning" appearance="panel"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><mux-ui-button slot="action" variant="secondary" size="small" @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</mux-ui-button></mux-ui-feedback>` : nothing}
-      <div class="body" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
-      ${this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
-      ${!this.selectedAgent && !this.blocks.length ? this.goalResponse() : nothing}
+      <div class="body ${sideStart ? 'side-empty' : ''}" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
+      ${sideStart ? html`<div><h2>Ask about this chat</h2><p>Start a side conversation while the main chat continues.</p></div>` : this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
+      ${!sideStart && !this.selectedAgent && !this.blocks.length ? this.goalResponse() : nothing}
       ${this.error ? html`<mux-ui-feedback class="block" kind="error" appearance="panel" density="compact">${this.error}${this.reconnectFailed ? html`<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryConnection}>Retry now</mux-ui-button>` : nothing}</mux-ui-feedback>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><mux-ui-button class="scroll-bottom" variant="secondary" size="small" accessible-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</mux-ui-button></div>` : nothing}<div class="composer-wrap">
       ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions">${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
@@ -2680,7 +2741,7 @@ export class MuxSDKChat extends LitElement {
       ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
       <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy ? this.chat?.harness === 'antigravity-sdk' ? 'Stop and continue turn' : 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-haspopup="listbox" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy ? this.chat?.harness === 'antigravity-sdk' ? 'Stop and continue with a new instruction…' : 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       ${this.busy && this.chat?.harness === 'antigravity-sdk' ? html`<div class="steer-notice">Sending stops the current response, then continues this chat.</div>` : nothing}
-      <div class="composer-controls">${this.attachmentPicker()}<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>${this.dictationButton()}${this.sendVoiceButton()}</div>`}
+      <div class="composer-controls">${sideStart ? nothing : this.attachmentPicker()}${sideStart ? nothing : html`<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>`}${this.dictationButton()}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><div class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></div><mux-sdk-utility .sessionId=${this.sessionId} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility></aside>`) : nothing}
