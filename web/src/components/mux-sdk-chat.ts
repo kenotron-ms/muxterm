@@ -460,6 +460,7 @@ export class MuxSDKChat extends LitElement {
     .goal-response { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); padding:var(--ui-space-6); background:var(--ui-surface-raised); }
     .goal-response header { display:flex; align-items:center; gap:var(--ui-space-3); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
     .goal-response header svg { color:var(--ui-accent); }
+    .goal-response-state { margin-left:auto; color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:400; text-align:right; }
     .goal-response .text { margin:var(--ui-space-4) 0 0; overflow-wrap:anywhere; }
     .goal-response .text > :first-child { margin-top:0; }
     .goal-response .text > :last-child { margin-bottom:0; }
@@ -2176,13 +2177,25 @@ export class MuxSDKChat extends LitElement {
     for (let i = before - 1; i >= 0; i--) {
       if (result[i].work) { workIndex = i; break; }
     }
-    if (workIndex < 0) workIndex = result.findIndex(row => !!row.work);
+    if (workIndex >= 0 && Number.isFinite(stamp)) {
+      const finished = this.turnFinished.get(result[workIndex].block.turn);
+      if (finished !== undefined && finished < stamp) workIndex = -1;
+    }
+    if (workIndex < 0 && Number.isFinite(stamp)) {
+      // A goal that starts a turn may arrive just before its work row. Older
+      // goals stay at their own timestamp instead of joining unrelated work.
+      workIndex = result.findIndex((row, i) => {
+        if (i < before || !row.work) return false;
+        const started = this.turnStarted.get(row.block.turn) ?? Date.parse(row.block.at || '');
+        return Number.isFinite(started) && started >= stamp && started - stamp <= 30_000;
+      });
+    }
     if (workIndex >= 0) {
       const row = result[workIndex];
       goal.turn = row.block.turn;
       result[workIndex] = {...row, work:[...row.work!, goal]};
     } else {
-      goal.turn = result.at(-1)?.block.turn ?? this.currentTurn;
+      goal.turn = -1;
       result.splice(before, 0, {key:`work-goal-${receipt?.id || 'current'}`,block:goal,work:[goal]});
     }
     return result;
@@ -2399,7 +2412,16 @@ export class MuxSDKChat extends LitElement {
     const cleared = this.goalDocument?.state === 'cleared' && !condition;
     if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice) return nothing;
     const title = this.commandFailed ? 'Goal command failed' : cleared ? 'Goal cleared' : 'Goal';
-    return html`<section class="goal-response" aria-label="Goal response"><header>${icon(Target,{size:16})}<strong>${title}</strong></header>
+    const record = this.goalDocument;
+    const state = record?.humanPaused ? 'Paused by you'
+      : record?.receipts.some(receipt => receipt.status === 'dispatching') ? 'Applying goal change…'
+      : record && record.requestedRevision > record.appliedRevision ? 'Goal change requested'
+      : record?.state === 'active' || record?.state === 'continuing' ? 'Pursuing goal'
+      : record?.state === 'complete' || record?.state === 'completed' || record?.state === 'achieved' ? 'Goal achieved'
+      : record?.state === 'uncertain' || record?.state === 'error' ? 'Goal needs review'
+      : record?.state === 'ended' ? 'Goal ended · outcome unknown'
+      : record?.state === 'paused' ? 'Paused goal' : '';
+    return html`<section class="goal-response" aria-label="Goal response"><header>${icon(Target,{size:16})}<strong>${title}</strong>${state ? html`<span class="goal-response-state">${state}</span>` : nothing}</header>
       ${condition ? html`<div class="text">${renderSegments(parseMarkdown(condition),chatMarkdownPolicy)}</div>` : nothing}
       ${this.commandNotice ? html`<p class="goal-response-note" role=${this.commandFailed ? 'alert' : 'status'}>${this.commandNotice}</p>` : nothing}
       ${this.goalNotice ? html`<p class="goal-response-note" role="alert">${this.goalNotice}</p>` : nothing}
