@@ -469,7 +469,7 @@ func registerChatControlTools(srv *Server) {
 		srv.Register("create_chat", "Create a Chat with an opening prompt in a project, or Ungrouped. Use project_id from list_projects; set machine for a connected remote.", map[string]any{"type": "object", "properties": withMachine(map[string]any{"project": map[string]any{"type": "string"}, "project_id": map[string]any{"type": "string"}, "harness": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}}), "required": []string{"harness", "prompt"}}, spawn.fn)
 	}
 
-	srv.Register("get_chat_transcript", "Read a page of persisted Chat transcript events. Pass the returned from cursor as before to read older pages. view=messages coalesces assistant text; view=raw includes tool events. Set machine to a connected remote ID to read there.",
+	srv.Register("get_chat_transcript", "Read a page of persisted Chat transcript events. A side chat can read its main chat's transcript. Pass the returned from cursor as before to read older pages. view=messages coalesces assistant text; view=raw includes tool events. Set machine to a connected remote ID to read there.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"session_id": map[string]any{"type": "string"},
 			"before":     map[string]any{"type": "string", "description": "optional byte cursor returned as from by the previous page"},
