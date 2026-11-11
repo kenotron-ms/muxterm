@@ -70,5 +70,5 @@ func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
 	if len(context) > 24000 {
 		context = "…" + strings.ToValidUTF8(context[len(context)-24000:], "")
 	}
-	return "This side chat is linked to an ongoing main chat. Use its completed conversation as context.\n\nMain chat:\n" + context, nil
+	return "This side chat is linked to an ongoing main chat.\nMain chat ID (sideParentId): " + parentID + "\nUse its completed conversation as context.\n\nMain chat:\n" + context, nil
 }
