@@ -2056,16 +2056,7 @@ func (s *Server) handleSDKChatContentSearch(w http.ResponseWriter, r *http.Reque
 	h.mu.Unlock()
 	sort.Strings(ids)
 	matches := []string{}
-	originToken := r.Header.Get("X-Muxterm-Origin")
 	for _, id := range ids {
-		if originToken != "" {
-			h.mu.Lock()
-			_, allowed := h.authorizedControlSenderLocked(originToken, id)
-			h.mu.Unlock()
-			if !allowed {
-				continue
-			}
-		}
 		file, err := os.Open(filepath.Join(h.dir, id+".ndjson"))
 		if errors.Is(err, os.ErrNotExist) {
 			continue

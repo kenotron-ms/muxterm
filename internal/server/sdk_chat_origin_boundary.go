@@ -6,10 +6,9 @@ import (
 )
 
 // SDK-owned MCP processes attach the chat capability to every local request.
-// Keep a chat's history, pages, settings, and controls within that chat or an
-// already established direct operator/lane relationship. A side chat may also
-// read its main chat's transcript. Browser and external local clients keep
-// their existing authentication path.
+// A live chat can address any other chat, regardless of project or side-chat
+// relationship. Browser and external local clients keep their existing
+// authentication path. Goal and operator mutations have separate controls.
 func (s *Server) sdkChatOriginBoundary(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("X-Muxterm-Origin")
@@ -33,11 +32,7 @@ func (s *Server) sdkChatOriginBoundary(next http.Handler) http.Handler {
 			if targetID == "self" {
 				targetID = senderID
 			}
-			_, allowed = h.authorizedControlSenderLocked(token, targetID)
-			if !allowed && r.Method == http.MethodGet && path == targetID+"/history" {
-				target := h.chats[targetID]
-				allowed = target != nil && target.SideParentID == "" && sender.SideParentID == targetID
-			}
+			_, allowed = h.authorizedChatSenderLocked(token, targetID)
 			if allowed && path == targetID+"/operator" {
 				// Only a human may enable operator mode or replace its lane set.
 				// An enabled operator may still link a lane through its dedicated

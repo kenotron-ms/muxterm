@@ -29,8 +29,8 @@ func (s *Server) handleSDKNoteControl(w http.ResponseWriter, r *http.Request) {
 	exists := s.sdkChats.chats[chatID] != nil
 	if exists && !humanBrowserRequest(r) {
 		token := r.Header.Get("X-Muxterm-Origin")
-		origin, valid := s.sdkChats.controlOriginLocked(token, chatID)
-		exists = token != "" && valid && (origin.ChatID == chatID || origin.Relation == "operator-to-lane" || origin.Relation == "lane-to-operator")
+		_, valid := s.sdkChats.authorizedChatSenderLocked(token, chatID)
+		exists = token != "" && valid
 	}
 	s.sdkChats.mu.Unlock()
 	if !exists {
