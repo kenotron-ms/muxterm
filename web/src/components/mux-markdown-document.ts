@@ -1,6 +1,7 @@
 import { LitElement, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
+import '../ui/button.js';
 import { parseMarkdown, type MdSegment } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 
