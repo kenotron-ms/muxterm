@@ -86,10 +86,10 @@ func (h *sdkChatHost) forgetChatOriginLocked(id string) {
 	}
 }
 
-// A chat capability permits its owner and a directly linked operator/lane.
-// The existing origin relation used for display is broader (lane-to-lane),
-// so it must not be used as an authorization decision.
-func (h *sdkChatHost) authorizedControlSenderLocked(token, targetID string) (string, bool) {
+// A live chat capability may address any chat on this muxterm server. The
+// origin relation describes the sender for display; goal and operator controls
+// enforce their own, narrower authority separately.
+func (h *sdkChatHost) authorizedChatSenderLocked(token, targetID string) (string, bool) {
 	if token == "" {
 		return "", true // External local tools keep their existing auth path.
 	}
@@ -99,9 +99,7 @@ func (h *sdkChatHost) authorizedControlSenderLocked(token, targetID string) (str
 	if sender == nil || target == nil || sender.Archived || h.originTokens[senderID] != token {
 		return "", false
 	}
-	return senderID, senderID == targetID ||
-		(sender.Operator && slices.Contains(sender.OperatorLanes, targetID)) ||
-		(target.Operator && slices.Contains(target.OperatorLanes, senderID))
+	return senderID, true
 }
 
 func (h *sdkChatHost) controlOriginLocked(token, targetID string) (sdkEventOrigin, bool) {
@@ -155,10 +153,10 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "chat capability required", http.StatusForbidden)
 		return
 	}
-	originChatID, authorized := h.authorizedControlSenderLocked(originToken, id)
+	originChatID, authorized := h.authorizedChatSenderLocked(originToken, id)
 	if !authorized {
 		h.mu.Unlock()
-		http.Error(w, "owner or direct operator/lane capability required", http.StatusForbidden)
+		http.Error(w, "valid chat capability required", http.StatusForbidden)
 		return
 	}
 	c := h.chats[id]
@@ -230,7 +228,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	// A concurrent caller may have admitted the same key while resume ran.
-	if currentOrigin, stillAuthorized := h.authorizedControlSenderLocked(originToken, id); !stillAuthorized || currentOrigin != originChatID {
+	if currentOrigin, stillAuthorized := h.authorizedChatSenderLocked(originToken, id); !stillAuthorized || currentOrigin != originChatID {
 		h.mu.Unlock()
 		http.Error(w, "chat capability was revoked before dispatch", http.StatusForbidden)
 		return

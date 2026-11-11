@@ -33,17 +33,17 @@ func (s *Server) agentChatRequest(r *http.Request) bool {
 	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.browserAssistant.localToken)) != 1 || !agentChatPathAllowed(r.Method, r.URL.Path) {
 		return false
 	}
-	// A session capability may change only that session's subscriptions,
-	// attention, or published topics. The same-user MCP client without a
-	// session capability acts as an external tool, as for control-send.
+	// The same-user MCP client without a session capability acts as an
+	// external tool, as for control-send. A live chat capability can address
+	// another chat's coordination endpoints.
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get("X-Muxterm-Origin") != "" {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/sdk-chats/"), "/")
 		if strings.HasPrefix(r.URL.Path, "/api/sdk-chats/") && len(parts) > 1 &&
 			(parts[1] == "subscriptions" || parts[1] == "inbox-attention" || parts[1] == "topics") {
 			s.sdkChats.mu.Lock()
-			origin, valid := s.sdkChats.controlOriginLocked(r.Header.Get("X-Muxterm-Origin"), parts[0])
+			_, valid := s.sdkChats.authorizedChatSenderLocked(r.Header.Get("X-Muxterm-Origin"), parts[0])
 			s.sdkChats.mu.Unlock()
-			return valid && (origin.ChatID == parts[0] || origin.Relation == "operator-to-lane" || origin.Relation == "lane-to-operator")
+			return valid
 		}
 	}
 	return true
@@ -166,7 +166,16 @@ func (s *Server) chatAuthorityBoundary(next http.Handler) http.Handler {
 		path := r.URL.Path
 		goalRoute := strings.HasPrefix(path, "/api/sdk-chats/") && strings.HasSuffix(path, "/goal")
 		sendRoute := strings.HasPrefix(path, "/api/sdk-chats/") && strings.HasSuffix(path, "/control-send")
-		if goalRoute || sendRoute {
+		if sendRoute {
+			token := r.Header.Get("X-Muxterm-Origin")
+			s.sdkChats.mu.Lock()
+			_, valid := s.sdkChats.authorizedChatSenderLocked(token, r.PathValue("id"))
+			s.sdkChats.mu.Unlock()
+			if token == "" || !valid {
+				http.Error(w, "valid chat capability required", 403)
+				return
+			}
+		} else if goalRoute {
 			token := r.Header.Get("X-Muxterm-Origin")
 			s.sdkChats.mu.Lock()
 			origin, valid := s.sdkChats.controlOriginLocked(token, r.PathValue("id"))
@@ -175,7 +184,7 @@ func (s *Server) chatAuthorityBoundary(next http.Handler) http.Handler {
 				origin, valid = s.sdkChats.controlOriginLocked(token, origin.ChatID)
 			}
 			s.sdkChats.mu.Unlock()
-			if token == "" || !valid || (origin.ChatID != r.PathValue("id") && origin.Relation != "operator-to-lane" && origin.Relation != "lane-to-operator") {
+			if token == "" || !valid || (r.Method != http.MethodGet && origin.ChatID != r.PathValue("id") && origin.Relation != "operator-to-lane" && origin.Relation != "lane-to-operator") {
 				http.Error(w, "owner or direct operator/lane capability required", 403)
 				return
 			}
