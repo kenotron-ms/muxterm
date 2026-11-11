@@ -9,6 +9,7 @@ import { parseMarkdown } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import type { PartialBlock } from '@blocknote/core';
 import './mux-sdk-pdf-preview.js';
+import './mux-markdown-document.js';
 import './mux-monaco-source.js';
 import './mux-monaco-diff.js';
 import './mux-operator-status.js';
@@ -44,6 +45,7 @@ type Artifact = {
 type Entry = { name: string; dir: boolean; size: number; modified: number };
 type Listing = { root: string; path: string; entries: Entry[]; truncated: boolean };
 type FileSnapshot = { artifact: Artifact; localSource: string; pdfBytes: Uint8Array<ArrayBuffer> | null };
+const MAX_FILE_SNAPSHOTS = 4;
 type SearchResult = { path: string; name: string; size: number };
 type ChangeRepo = { root: string; name: string; branch: string };
 type ChangedFile = { repo: string; path: string; status: string };
@@ -707,6 +709,7 @@ export class MuxSDKUtility extends LitElement {
     this.selected = path; this.fileError = '';
     this.fileMode = this.fileModes.get(path) || 'preview'; this.interactivePreview = false;
     const snapshot = !refresh ? this.fileSnapshots.get(path) : undefined;
+    if (snapshot) this.rememberFileSnapshot(path, snapshot);
     this.artifact = snapshot?.artifact;
     this.localSource = snapshot?.localSource || '';
     this.pdfBytes = snapshot?.pdfBytes || null;
@@ -719,7 +722,7 @@ export class MuxSDKUtility extends LitElement {
       const result = await response.json() as Artifact;
       if (current !== this.pendingFile || controller.signal.aborted) return;
       this.artifact = result;
-      this.fileSnapshots.set(path, { artifact: result, localSource: '', pdfBytes: null });
+      this.rememberFileSnapshot(path, { artifact: result, localSource: '', pdfBytes: null });
       this.paintAll();
       const ext = result.name.toLowerCase().split('.').pop();
       if (!result.tooLarge && result.size <= 2 * 1024 * 1024 && (ext === 'html' || ext === 'htm' || ext === 'svg')) {
@@ -729,7 +732,7 @@ export class MuxSDKUtility extends LitElement {
         if (current === this.pendingFile && !controller.signal.aborted) {
           try { this.localSource = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
           catch { this.fileError = 'This file is not UTF-8 text.'; }
-          this.fileSnapshots.set(path, { artifact: result, localSource: this.localSource, pdfBytes: null });
+          this.rememberFileSnapshot(path, { artifact: result, localSource: this.localSource, pdfBytes: null });
         }
       } else if (!result.tooLarge && result.size <= 8 * 1024 * 1024 && ext === 'pdf') {
         const raw = await fetch(this.previewURL(path, 8 * 1024 * 1024), { signal: controller.signal });
@@ -737,11 +740,19 @@ export class MuxSDKUtility extends LitElement {
         const bytes = new Uint8Array(await raw.arrayBuffer());
         if (current === this.pendingFile && !controller.signal.aborted) {
           this.pdfBytes = bytes;
-          this.fileSnapshots.set(path, { artifact: result, localSource: '', pdfBytes: bytes });
+          this.rememberFileSnapshot(path, { artifact: result, localSource: '', pdfBytes: bytes });
         }
       }
     } catch (error) { if (current === this.pendingFile && !controller.signal.aborted) this.fileError = error instanceof Error ? error.message : String(error); }
     this.paintAll();
+  }
+  private rememberFileSnapshot(path: string, snapshot: FileSnapshot) {
+    this.fileSnapshots.delete(path);
+    this.fileSnapshots.set(path, snapshot);
+    if (this.fileSnapshots.size > MAX_FILE_SNAPSHOTS) {
+      const oldest = this.fileSnapshots.keys().next().value;
+      if (oldest) this.fileSnapshots.delete(oldest);
+    }
   }
   private resetFileView() {
     this.fileAbort?.abort(); this.pendingFile++;
@@ -868,7 +879,7 @@ export class MuxSDKUtility extends LitElement {
       const data = tableRows(file.text, extension === 'tsv' ? '\t' : ',');
       return html`<div class="table-view"><table><tbody>${data.rows.map((row, index) => html`<tr>${row.map(value => index === 0 ? html`<th>${value}</th>` : html`<td>${value}</td>`)}</tr>`)}</tbody></table>${data.truncated ? html`<p class="empty">Showing the first 200 rows.</p>` : nothing}</div>`;
     }
-    if (file.kind === 'markdown') return html`<article class="document-view" aria-label=${`Preview of ${file.name}`}>${renderSegments(parseMarkdown(file.text))}</article>`;
+    if (file.kind === 'markdown') return html`<mux-markdown-document .source=${file.text} .name=${file.name}></mux-markdown-document>`;
     return this.sourceView(file.text);
   }
   private treeRows(folder: string, depth = 0): TemplateResult[] {
@@ -1324,6 +1335,9 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .file-status span:first-child { color:var(--ui-accent); }
     mux-sdk-utility kbd { border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm); padding:calc(var(--ui-space-1) / 2) var(--ui-space-2); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
     mux-sdk-utility .document-view { box-sizing:border-box; width:100%; max-width:var(--ui-utility-document-width); margin:0 auto; padding:clamp(var(--ui-space-7),4vw,var(--ui-space-11)) clamp(var(--ui-space-7),5vw,var(--ui-space-12)) var(--ui-space-13); color:var(--ui-text); font:var(--ui-text-xl)/1.65 var(--ui-font-sans); overflow-wrap:break-word; }
+    mux-sdk-utility mux-markdown-document { display:block; width:100%; }
+    mux-sdk-utility mux-markdown-chunk { display:block; content-visibility:auto; contain-intrinsic-size:auto 300px; }
+    mux-sdk-utility .markdown-more { display:flex; justify-content:center; padding:var(--ui-space-5); }
     mux-sdk-utility .document-view > :first-child { margin-top:0; }
     mux-sdk-utility .document-view > :last-child { margin-bottom:0; }
     mux-sdk-utility .document-view .md-p { margin:0 0 var(--ui-space-7); }
