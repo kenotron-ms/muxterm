@@ -51,6 +51,7 @@ export class MuxMarkdownDocument extends LitElement {
     this.worker?.terminate();
     this.worker = undefined;
     this.observer?.disconnect();
+    this.observer = undefined;
     this.chunks = [];
     this.visibleChunks = 0;
     this.error = '';
