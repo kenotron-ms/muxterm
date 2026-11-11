@@ -460,6 +460,7 @@ export class MuxSDKChat extends LitElement {
     .goal-response { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); padding:var(--ui-space-6); background:var(--ui-surface-raised); }
     .goal-response header { display:flex; align-items:center; gap:var(--ui-space-3); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
     .goal-response header svg { color:var(--ui-accent); }
+    .goal-response-state { margin-left:auto; color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:400; text-align:right; }
     .goal-response .text { margin:var(--ui-space-4) 0 0; overflow-wrap:anywhere; }
     .goal-response .text > :first-child { margin-top:0; }
     .goal-response .text > :last-child { margin-bottom:0; }
@@ -473,11 +474,7 @@ export class MuxSDKChat extends LitElement {
     /* The border extends 15px beyond each 760px transcript edge so typed text aligns with replies. */
     .composer { box-sizing:border-box; width:min(100%,var(--ui-chat-transcript-width)); margin:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background:var(--ui-surface-raised); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); box-shadow:var(--ui-shadow-control); transition:border-color .15s,box-shadow .15s; }
     .composer-row { display:flex; }
-    .goal-banner { display:flex; min-width:0; margin-bottom:var(--ui-space-4); }
-    .goal-banner::part(button) { justify-content:flex-start; min-width:0; border:0; border-bottom:1px solid var(--ui-border); border-radius:0; padding:0 0 var(--ui-space-3); text-align:left; font:var(--ui-text-sm)/1.5 var(--ui-font-sans); }
-    .goal-banner:hover .goal-condition { text-decoration:underline; text-underline-offset:3px; }
-    .goal-condition { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:0; }
-    .goal-state { flex-shrink:0; color:var(--ui-text-muted); font-size:var(--ui-text-xs); max-width:36%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .work-items .goal-response { margin:var(--ui-space-5) 0 var(--ui-space-4); }
     .composer-controls { display:flex; align-items:center; gap:var(--ui-space-1); margin-top:var(--ui-space-2); min-height:var(--ui-control-md); }
     .composer-controls .attach-picker,.voice-compose-row .attach-picker { width:var(--ui-control-md); height:var(--ui-control-md); }
     .composer-controls mux-sdk-chat-settings { flex:0 1 auto; }
@@ -2056,6 +2053,7 @@ export class MuxSDKChat extends LitElement {
         else if (item.kind === 'delegate') steps.push(this.agentCard(item, agents));
         else if (item.kind === 'lane-report') steps.push(this.laneCard(item));
         else if (item.kind === 'chat-message') steps.push(this.chatMessageCard(item));
+        else if (item.kind === 'goal') steps.push(html`${this.goalResponse()}`);
         else if (item.kind === 'status' || item.kind === 'error') steps.push(html`<div class="${item.kind}">${item.text}</div>`);
         else if (item.kind === 'voice-input' || item.kind === 'voice-output') steps.push(html`<div class="voice-work"><span class="work-icon">${icon(Mic,{size:14})}</span><span><strong>${item.kind === 'voice-input' ? item.source === 'steer' ? 'Voice steer' : 'You said' : 'Voice replied'}</strong>${item.text ? html` · ${item.text}` : nothing}</span></div>`);
       }
@@ -2172,9 +2170,34 @@ export class MuxSDKChat extends LitElement {
       const rowStamp = row.work ? this.turnStarted.get(row.block.turn) ?? blockStamp : Number.isFinite(blockStamp) ? blockStamp : this.turnStarted.get(row.block.turn) ?? this.turnFinished.get(row.block.turn);
       return rowStamp !== undefined && Number.isFinite(rowStamp) && rowStamp > stamp;
     }) : -1;
-    const goal: TranscriptRow = {key:`goal-response-${receipt?.id || 'current'}`,block:{key:-1,turn:-1,kind:'goal',text:'',at}};
+    const goal: Block = {key:-1,turn:this.currentTurn,kind:'goal',text:'',at};
     const result = [...rows];
-    result.splice(index < 0 ? result.length : index,0,goal);
+    const before = index < 0 ? result.length : index;
+    let workIndex = -1;
+    for (let i = before - 1; i >= 0; i--) {
+      if (result[i].work) { workIndex = i; break; }
+    }
+    if (workIndex >= 0 && Number.isFinite(stamp)) {
+      const finished = this.turnFinished.get(result[workIndex].block.turn);
+      if (finished !== undefined && finished < stamp) workIndex = -1;
+    }
+    if (workIndex < 0 && Number.isFinite(stamp)) {
+      // A goal that starts a turn may arrive just before its work row. Older
+      // goals stay at their own timestamp instead of joining unrelated work.
+      workIndex = result.findIndex((row, i) => {
+        if (i < before || !row.work) return false;
+        const started = this.turnStarted.get(row.block.turn) ?? Date.parse(row.block.at || '');
+        return Number.isFinite(started) && started >= stamp && started - stamp <= 30_000;
+      });
+    }
+    if (workIndex >= 0) {
+      const row = result[workIndex];
+      goal.turn = row.block.turn;
+      result[workIndex] = {...row, work:[...row.work!, goal]};
+    } else {
+      goal.turn = -1;
+      result.splice(before, 0, {key:`work-goal-${receipt?.id || 'current'}`,block:goal,work:[goal]});
+    }
     return result;
   }
   private rowHeight(row: TranscriptRow) { return this.rowHeights.get(row.key) ?? (row.work ? 50 : row.block.kind === 'user' ? 75 : 118); }
@@ -2359,9 +2382,9 @@ export class MuxSDKChat extends LitElement {
       if (row.work) {
         const working = !this.turnFinished.has(block.turn);
         const open = this.workDisclosureOpen(block.turn);
-        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work, agents)}</div>` : nothing}</details></div>`;
+        const goalOnly = row.work.every(item => item.kind === 'goal');
+        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working && !goalOnly}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working && !goalOnly ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${goalOnly ? 'Goal update' : working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work, agents)}</div>` : nothing}</details></div>`;
       }
-      if (block.kind === 'goal') return this.goalResponse(row.key,start + offset);
       return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
@@ -2384,12 +2407,21 @@ export class MuxSDKChat extends LitElement {
     else this.stepExpanded.add(key);
     this.requestUpdate();
   }
-  private goalResponse(rowKey?: string, rowIndex?: number) {
+  private goalResponse() {
     const condition = this.currentGoalText();
     const cleared = this.goalDocument?.state === 'cleared' && !condition;
     if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice) return nothing;
     const title = this.commandFailed ? 'Goal command failed' : cleared ? 'Goal cleared' : 'Goal';
-    return html`<section class="block goal-response" aria-label="Goal response" data-row-key=${rowKey || ''} data-row-index=${rowIndex ?? ''}><header>${icon(Target,{size:16})}<strong>${title}</strong></header>
+    const record = this.goalDocument;
+    const state = record?.humanPaused ? 'Paused by you'
+      : record?.receipts.some(receipt => receipt.status === 'dispatching') ? 'Applying goal change…'
+      : record && record.requestedRevision > record.appliedRevision ? 'Goal change requested'
+      : record?.state === 'active' || record?.state === 'continuing' ? 'Pursuing goal'
+      : record?.state === 'complete' || record?.state === 'completed' || record?.state === 'achieved' ? 'Goal achieved'
+      : record?.state === 'uncertain' || record?.state === 'error' ? 'Goal needs review'
+      : record?.state === 'ended' ? 'Goal ended · outcome unknown'
+      : record?.state === 'paused' ? 'Paused goal' : '';
+    return html`<section class="goal-response" aria-label="Goal response"><header>${icon(Target,{size:16})}<strong>${title}</strong>${state ? html`<span class="goal-response-state">${state}</span>` : nothing}</header>
       ${condition ? html`<div class="text">${renderSegments(parseMarkdown(condition),chatMarkdownPolicy)}</div>` : nothing}
       ${this.commandNotice ? html`<p class="goal-response-note" role=${this.commandFailed ? 'alert' : 'status'}>${this.commandNotice}</p>` : nothing}
       ${this.goalNotice ? html`<p class="goal-response-note" role="alert">${this.goalNotice}</p>` : nothing}
@@ -2660,21 +2692,6 @@ export class MuxSDKChat extends LitElement {
     this.setPaneMode('split');
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('goal'));
   }
-  private goalBanner() {
-    const condition = this.currentGoalText();
-    if (!condition.trim()) return nothing;
-    const record = this.goalDocument;
-    const state = record?.humanPaused ? 'Paused by you'
-      : record?.receipts.some(receipt => receipt.status === 'dispatching') ? 'Applying goal change…'
-      : record && record.requestedRevision > record.appliedRevision ? 'Goal change requested'
-      : record?.state === 'active' || record?.state === 'continuing' ? 'Pursuing goal'
-      : record?.state === 'complete' || record?.state === 'completed' || record?.state === 'achieved' ? 'Goal achieved'
-      : record?.state === 'uncertain' || record?.state === 'error' ? 'Goal needs review'
-      : record?.state === 'ended' ? 'Goal ended · outcome unknown'
-      : record?.state === 'paused' ? 'Paused goal'
-      : 'Goal';
-    return html`<mux-ui-button class="goal-banner" variant="quiet" full-width accessible-label="View goal" @click=${this.openGoalTab}><span aria-hidden="true">${icon(Target,{size:14})}</span><span class="goal-condition" title=${condition}>${condition}</span><span class="goal-state">${state}</span></mux-ui-button>`;
-  }
   private laneCard(block: Block) {
     const name = sdkChats.chats.find(chat => chat.id === block.id)?.title || block.name || 'Linked lane';
     const state = block.laneState === 'failed' ? 'Failed' : block.laneState === 'uncertain' ? 'Uncertain' : block.laneState === 'stopped' ? 'Stopped' : block.laneState === 'starting' ? 'Starting' : block.laneState === 'ready' ? 'Ready' : 'Working';
@@ -2728,13 +2745,11 @@ export class MuxSDKChat extends LitElement {
       ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.recoveryRequired ? html`<mux-ui-feedback class="recovery" kind="warning" appearance="panel"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><mux-ui-button slot="action" variant="secondary" size="small" @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</mux-ui-button></mux-ui-feedback>` : nothing}
       <div class="body ${sideStart ? 'side-empty' : ''}" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
-      ${sideStart ? html`<div><h2>Ask about this chat</h2><p>Start a side conversation while the main chat continues.</p></div>` : this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
-      ${!sideStart && !this.selectedAgent && !this.blocks.length ? this.goalResponse() : nothing}
+      ${sideStart ? html`<div><h2>Ask about this chat</h2><p>Start a side conversation while the main chat continues.</p></div>` : this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length || this.goalDocument?.revisions.length || this.commandNotice || this.goalNotice ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
       ${this.error ? html`<mux-ui-feedback class="block" kind="error" appearance="panel" density="compact">${this.error}${this.reconnectFailed ? html`<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryConnection}>Retry now</mux-ui-button>` : nothing}</mux-ui-feedback>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><mux-ui-button class="scroll-bottom" variant="secondary" size="small" accessible-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</mux-ui-button></div>` : nothing}<div class="composer-wrap">
       ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions">${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
       <div class="composer" @paste=${this.onPaste}>
-      ${this.goalBanner()}
       ${this.clipboardError ? html`<mux-ui-feedback kind="error" density="compact">${this.clipboardError}</mux-ui-feedback>` : nothing}
       ${this.dictationError ? html`<mux-ui-feedback kind="error" density="compact">${this.dictationError}</mux-ui-feedback>` : nothing}
       ${this.voiceState !== 'idle' ? html`<div class="voice-compose-row">${this.attachmentPicker()}<span class="voice-label" role="status" aria-live="polite">${this.voiceState === 'connecting' ? 'Connecting…' : this.voiceState === 'speaking' ? 'Speaking…' : 'Listening…'}</span><span class="voice-meter" aria-hidden="true"><mux-ui-voice-bars></mux-ui-voice-bars></span>${this.sendVoiceButton()}</div>` : this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.dictationButton()}${this.sendAgentButton()}</div>` : html`
