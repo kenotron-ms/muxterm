@@ -45,13 +45,20 @@ class SDKChatStore {
     if (!response.ok || !projects.ok) return;
     const [localChats, localProjects] = await Promise.all([response.json() as Promise<SDKChat[]>, projects.json() as Promise<SDKProject[]>]);
     const remoteRows = remotes.ok ? await remotes.json() as {connected?:SDKRemoteHost[];discovered?:SDKRemoteHost[];errors?:SDKRemoteHost[]} : {};
-    const hosts = [...(remoteRows.connected || []), ...(remoteRows.discovered || []), ...(remoteRows.errors || [])];
+    // Discovery is not a chat connection. Only hosts with a live daemon link
+    // may contribute chats or projects to the sidebar.
+    const hosts = (remoteRows.connected || []).filter(host => host.state === 'connected');
     if (generation !== this.refreshGeneration) return;
     this.remoteHosts = hosts;
     this.archivedCount = Number(response.headers.get('X-Archived-Count') || 0);
     for (const chat of localChats) this.archivedCache.delete(chat.id);
-    const previousChats = this.chats.filter(chat => chat.remoteHost && hosts.some(host => host.id === chat.remoteHost));
-    const previousProjects = this.projects.filter(project => project.remoteHost && hosts.some(host => host.id === project.remoteHost));
+    const oldChats = this.chats;
+    const oldProjects = this.projects;
+    const previousChats = oldChats.filter(chat => chat.remoteHost && hosts.some(host => host.id === chat.remoteHost));
+    const previousProjects = oldProjects.filter(project => project.remoteHost && hosts.some(host => host.id === project.remoteHost));
+    for (const [id, chat] of this.archivedCache) {
+      if (chat.remoteHost && !hosts.some(host => host.id === chat.remoteHost)) this.archivedCache.delete(id);
+    }
     this.chats = [...localChats, ...this.archivedCache.values(), ...previousChats];
     this.projects = [...localProjects, ...previousProjects];
     for (const fn of this.listeners) fn();
@@ -76,6 +83,12 @@ class SDKChatStore {
     this.inventoryReady = true;
     this.remoteInventoryReady = remotes.ok;
     this.projects = [...localProjects, ...remoteResults.flatMap(result => result.projects.map(project => ({...project, remoteHost: result.host.id})))];
+    for (const chat of oldChats) {
+      if (!this.chats.some(current => current.id === chat.id)) rememberChatHost(chat.id, '');
+    }
+    for (const project of oldProjects) {
+      if (!this.projects.some(current => current.id === project.id)) rememberProjectHost(project.id, '');
+    }
     for (const chat of this.chats) rememberChatHost(chat.id, chat.remoteHost || '');
     for (const project of this.projects) rememberProjectHost(project.id, project.remoteHost || '');
     for (const fn of this.listeners) fn();

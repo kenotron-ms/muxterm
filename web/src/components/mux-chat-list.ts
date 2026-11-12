@@ -1,4 +1,5 @@
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { apiPath } from '../lib/base-path.js';
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
@@ -6,6 +7,7 @@ import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlu
 import { icon } from '../lib/icons.js';
 import { laneIcon } from '../lib/lane-icon.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
+import { remotesStore } from '../lib/remotes-store.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIMenu } from '../ui/menu.js';
@@ -278,6 +280,18 @@ export class MuxChatWorkspace extends LitElement {
     try { await sdkChats.updateProject(this.model.id, { pinned: !this.model.project?.pinned }); this.error = ''; }
     catch (error) { this.error = errorMessage(error); }
   }
+  private async disconnectRemote() {
+    const host = this.model.remoteHost || this.model.project?.remoteHost;
+    if (!host) return;
+    this.closeMenu();
+    try {
+      const response = await fetch(apiPath(`/api/remotes/${encodeURIComponent(host)}/disconnect`), {method:'POST'});
+      if (!response.ok) throw new Error((await response.text()).trim() || `Disconnect failed (${response.status})`);
+      remotesStore.forget(host);
+      this.error = '';
+      await sdkChats.refresh();
+    } catch (error) { this.error = `Could not disconnect: ${errorMessage(error)}`; }
+  }
   private async pinChat(chat: SDKChat) {
     this.closeMenu();
     try { await sdkChats.setPinned(chat.id, !chat.pinned); this.error = ''; }
@@ -314,7 +328,14 @@ export class MuxChatWorkspace extends LitElement {
       <mux-ui-menu-item @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit folder</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => void this.pinProject()}>${icon(p.pinned ? PinOff : Pin,{size:14})} ${p.pinned ? 'Unpin project' : 'Pin project'}</mux-ui-menu-item>
+      ${p.remoteHost ? html`<mux-ui-menu-item @click=${() => void this.disconnectRemote()}>${icon(Network,{size:14})} Disconnect ${sdkChats.remoteHosts.find(host => host.id === p.remoteHost)?.name || p.remoteHost}</mux-ui-menu-item>` : nothing}
       <mux-ui-menu-item tone="danger" @click=${() => this.requestRemoveProject()}>${icon(Trash2,{size:14})} Remove from Sessions</mux-ui-menu-item>
+    </mux-ui-menu>`;
+  }
+  private remoteMenu() {
+    const host = this.model.remoteHost!;
+    return html`<mux-ui-menu label="Remote actions" @menu-dismiss=${this.dismissMenu}>
+      <mux-ui-menu-item @click=${() => void this.disconnectRemote()}>${icon(Network,{size:14})} Disconnect ${sdkChats.remoteHosts.find(item => item.id === host)?.name || host}</mux-ui-menu-item>
     </mux-ui-menu>`;
   }
   private chatMenu(chat: SDKChat) {
@@ -334,7 +355,7 @@ export class MuxChatWorkspace extends LitElement {
   override render() {
     const group = this.model;
     return html`
-      <div class="row ${group.archived ? 'archived' : ''}" @contextmenu=${(e:MouseEvent) => { if (group.project) this.showContext(e, 'project'); }}>
+      <div class="row ${group.archived ? 'archived' : ''}" @contextmenu=${(e:MouseEvent) => { if (group.project || group.remoteHost) this.showContext(e, 'project'); }}>
         <mux-ui-list-row class="group" variant="group" label=${group.name} tooltip=${group.project?.managedFolder ? group.name : group.project?.path || group.name} expandable .expanded=${this.open} ?muted=${group.archived} @click=${() => { this.open = !this.open; this.closeMenu(); if (group.archived) this.dispatchEvent(new CustomEvent(this.open ? 'archive-open' : 'archive-close', { bubbles:true, composed:true })); }}>
           <span slot="icon" class="folder">${icon(group.project?.remoteHost || group.remoteHost ? Network : group.archived ? Archive : group.id === 'ungrouped' ? MessageCircle : this.open ? FolderOpen : Folder, { size: 16 })}</span>
         </mux-ui-list-row>
@@ -343,8 +364,8 @@ export class MuxChatWorkspace extends LitElement {
           ${group.project ? html`
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${group.project.pinned ? 'Unpin' : 'Pin'} ${group.name}`} tooltip=${group.project.pinned ? 'Unpin project' : 'Pin project'} @click=${() => void this.pinProject()}>${icon(group.project.pinned ? PinOff : Pin,{size:14})}</mux-ui-button>
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Edit ${group.name}`} tooltip="Edit project" @click=${() => this.startEdit()}>${icon(Pencil,{size:14})}</mux-ui-button>
-            <mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Project options for ${group.name}`} tooltip="Project options" haspopup="menu" .expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>` : nothing}
-        ${this.menuFor === 'project' && group.project ? this.projectMenu() : nothing}
+            <mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Project options for ${group.name}`} tooltip="Project options" haspopup="menu" .expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>` : group.remoteHost ? html`<mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`Remote options for ${group.remoteHost}`} tooltip="Remote options" haspopup="menu" .expanded=${this.menuFor === 'project'} @click=${() => { this.menuFor = this.menuFor === 'project' ? '' : 'project'; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>` : nothing}
+        ${this.menuFor === 'project' ? group.project ? this.projectMenu() : group.remoteHost ? this.remoteMenu() : nothing : nothing}
       </div>
       ${this.editing && group.project ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Edit folder" open @dismiss=${() => { this.editing=false; this.error=''; }}><div class="editor">
         <div class="editor-head"><h2>Edit folder</h2><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Close folder editor" @click=${() => { this.editing=false; this.error=''; }}>${icon(X,{size:18})}</mux-ui-button></div>
