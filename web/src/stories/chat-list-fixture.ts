@@ -31,6 +31,7 @@ export function resetChatListFixture(empty = false, linkedLane = false, failProj
   archived = empty ? [] : initialArchived.map(chat => ({...chat}));
   sdkChats.projects = projects;
   sdkChats.chats = [...chats, ...archived];
+  sdkChats.remoteHosts = [];
 }
 
 export function chatListStoryModel(projectId = 'atlas') {

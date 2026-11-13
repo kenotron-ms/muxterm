@@ -30,25 +30,16 @@ func (s *Server) handleRemoteChatProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	registry := s.hub.Remotes()
+	// SSH discovery is not consent to keep using a machine. Chat traffic must
+	// obey the same explicit connection boundary as terminal traffic.
+	state, _, _ := registry.Observed(hostID)
+	if state != HostConnected {
+		http.Error(w, "remote host is not connected", http.StatusConflict)
+		return
+	}
 	host, ok := registry.Get(hostID)
 	if !ok {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-		if registry.Transport() != nil {
-			found, err := registry.Transport().Discover(ctx)
-			if err == nil {
-				for _, candidate := range found {
-					if candidate.ID == hostID {
-						host = candidate
-						ok = true
-						break
-					}
-				}
-			}
-		}
-	}
-	if !ok {
-		http.Error(w, "SSH machine not found in remote settings", http.StatusNotFound)
+		http.Error(w, "remote host is not connected", http.StatusConflict)
 		return
 	}
 	dialer, ok := registry.Transport().(remoteChatDialer)

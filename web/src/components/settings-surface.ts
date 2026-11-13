@@ -19,7 +19,7 @@ import '../ui/text-field.js';
 import '../ui/theme-choice.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
-import { sdkHarnessLabel, type SDKHarnessName } from '../lib/sdk-chats.js';
+import { sdkChats, sdkHarnessLabel, type SDKHarnessName } from '../lib/sdk-chats.js';
 import {
   instanceLabel,
   restoreTitlebarColor,
@@ -1796,7 +1796,7 @@ export class MuxSettingsSurface extends LitElement {
       row.id,
       `/api/remotes/${encodeURIComponent(row.id)}/disconnect`,
       'POST',
-      () => remotesStore.forget(row.id),
+      () => { remotesStore.forget(row.id); void sdkChats.refresh(); },
     );
   }
 
@@ -1809,8 +1809,10 @@ export class MuxSettingsSurface extends LitElement {
    * its raw HostRef.ID, because the tail frame carries no name.
    */
   private _remove(row: RemoteRow): void {
-    void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}`, 'DELETE', () =>
-      remotesStore.forget(row.id),
+    void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}`, 'DELETE', () => {
+      remotesStore.forget(row.id);
+      void sdkChats.refresh();
+    },
     );
   }
 
@@ -1878,9 +1880,8 @@ export class MuxSettingsSurface extends LitElement {
         </div>
         <div class="r-actions">
           ${dropped ? html`<span class="r-state">reconnecting</span>` : ''}
-          ${dropped
-            ? html`<mux-ui-button size="small" variant="secondary" ?disabled="${busy}" @click="${() => this._retry(row)}">Retry</mux-ui-button>`
-            : html`<mux-ui-button size="small" variant="danger" ?disabled="${busy}" @click="${() => this._disconnect(row)}">Disconnect</mux-ui-button>`}
+          ${dropped ? html`<mux-ui-button size="small" variant="secondary" ?disabled="${busy}" @click="${() => this._retry(row)}">Retry</mux-ui-button>` : ''}
+          <mux-ui-button size="small" variant="danger" ?disabled="${busy}" @click="${() => this._disconnect(row)}">Disconnect</mux-ui-button>
           ${this._renderRemoveBtn(row)}
         </div>
       </div>

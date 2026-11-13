@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import { chatListFixture, resetChatListFixture } from '../stories/chat-list-fixture.js';
+import { sdkChats, type SDKChat, type SDKProject } from '../lib/sdk-chats.js';
 import type { MuxChatList, MuxChatWorkspace } from './mux-chat-list.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIButton } from '../ui/button.js';
@@ -41,6 +42,36 @@ const openProjectActions = async ({canvasElement}: {canvasElement: HTMLElement})
 };
 export const ProjectActions: Story = { play:openProjectActions };
 export const PhoneProjectActions: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true),play:ProjectActions.play };
+const remoteProjectView = (phone = false) => {
+  resetChatListFixture();
+  const project: SDKProject = {id:'remote-build',name:'Build workspace',path:'/home/demo/build',remoteHost:'ssh:build-box'};
+  sdkChats.remoteHosts = [{id:'ssh:build-box',name:'build-box',state:'connected'}];
+  return html`<div style="box-sizing:border-box;width:${phone ? '335px' : '348px'};max-width:100vw;min-height:844px;padding:var(--ui-space-4);background:var(--ui-surface-nav);color:var(--ui-text)">
+    <mux-chat-workspace .model=${{id:project.id,name:project.name,project,remoteHost:project.remoteHost,chats:[],laneIds:new Set<string>()}}></mux-chat-workspace>
+  </div>`;
+};
+const openRemoteProjectActions = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+  const project = canvasElement.querySelector<MuxChatWorkspace>('mux-chat-workspace');
+  await project?.updateComplete;
+  project?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Project options for Build workspace"]')?.click();
+};
+export const RemoteProjectActions: Story = {render:() => remoteProjectView(),play:openRemoteProjectActions};
+export const PhoneRemoteProjectActions: Story = {globals:{viewport:{value:'phone390',isRotated:false}},render:() => remoteProjectView(true),play:openRemoteProjectActions};
+const remoteChatView = (phone = false) => {
+  resetChatListFixture();
+  sdkChats.remoteHosts = [{id:'ssh:build-box',name:'build-box',state:'connected'}];
+  const chat: SDKChat = {id:'remote-chat',remoteHost:'ssh:build-box',projectPath:'/home/demo',title:'Build status',harness:'codex',state:'idle',createdAt:'2026-11-12T10:00:00Z'};
+  return html`<div style="box-sizing:border-box;width:${phone ? '335px' : '348px'};max-width:100vw;min-height:844px;padding:var(--ui-space-4);background:var(--ui-surface-nav);color:var(--ui-text)">
+    <mux-chat-workspace .model=${{id:'ungrouped:ssh:build-box',name:'Chat',remoteHost:'ssh:build-box',chats:[chat],laneIds:new Set<string>()}}></mux-chat-workspace>
+  </div>`;
+};
+const openRemoteChatActions = async ({canvasElement}: {canvasElement: HTMLElement}) => {
+  const group = canvasElement.querySelector<MuxChatWorkspace>('mux-chat-workspace');
+  await group?.updateComplete;
+  group?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Remote options for ssh:build-box"]')?.click();
+};
+export const RemoteChatActions: Story = {render:() => remoteChatView(),play:openRemoteChatActions};
+export const PhoneRemoteChatActions: Story = {globals:{viewport:{value:'phone390',isRotated:false}},render:() => remoteChatView(true),play:openRemoteChatActions};
 const showProjectActionError = async (context: {canvasElement: HTMLElement}) => {
   await openProjectActions(context);
   const list = context.canvasElement.querySelector<MuxChatList>('mux-chat-list');

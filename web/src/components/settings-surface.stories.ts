@@ -286,6 +286,12 @@ export const VoiceAzureKeyMissing: Story = {
   parameters: { apiFixture:fixtureForVoice(azureKeyMissing) },
 };
 export const Remotes: Story = { args: { section:'remotes' } };
+const reconnectingBaseFixture = fixtureForVoice(DEFAULT_VOICE_STATUS);
+const remotesReconnectingFixture: ApiFixture = request => request.url.pathname.endsWith('/api/remotes') && request.method === 'GET'
+  ? fixtureJSON({...remotes,connected:[{...remotes.connected[0],state:'reconnecting'}]})
+  : reconnectingBaseFixture(request);
+export const RemotesReconnecting: Story = {args:{section:'remotes'},parameters:{apiFixture:remotesReconnectingFixture}};
+export const PhoneRemotesReconnecting: Story = {args:{section:'remotes'},globals:{viewport:{value:'phone390',isRotated:false}},parameters:{apiFixture:remotesReconnectingFixture},render:renderPhonePage};
 export const RemotesLoadError: Story = { args:{section:'remotes'}, parameters:{apiFixture:remotesLoadFailureFixture()} };
 export const PhoneRemotesLoadError: Story = { args:{section:'remotes'}, globals:{viewport:{value:'phone390',isRotated:false}}, parameters:{apiFixture:remotesLoadFailureFixture()}, render:renderPhonePage };
 export const PhoneRemotesAddError: Story = { args:{section:'remotes'}, globals:{viewport:{value:'phone390',isRotated:false}}, parameters:{apiFixture:remotesAddFailureFixture()}, render:renderPhonePage, play:async ({canvasElement}) => submitRejectedHost(canvasElement) };
