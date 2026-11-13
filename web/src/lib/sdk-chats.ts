@@ -45,8 +45,8 @@ class SDKChatStore {
     if (!response.ok || !projects.ok) return;
     const [localChats, localProjects] = await Promise.all([response.json() as Promise<SDKChat[]>, projects.json() as Promise<SDKProject[]>]);
     const remoteRows = remotes.ok ? await remotes.json() as {connected?:SDKRemoteHost[];discovered?:SDKRemoteHost[];errors?:SDKRemoteHost[]} : {};
-    // Discovery is not a chat connection. Only hosts with a live daemon link
-    // may contribute chats or projects to the sidebar.
+    // Discovery and reconnection are not chat connections. Hide remote rows
+    // until the daemon link is live again, including after transient drops.
     const hosts = (remoteRows.connected || []).filter(host => host.state === 'connected');
     if (generation !== this.refreshGeneration) return;
     this.remoteHosts = hosts;

@@ -334,7 +334,7 @@ export class MuxChatWorkspace extends LitElement {
   }
   private remoteMenu() {
     const host = this.model.remoteHost!;
-    return html`<mux-ui-menu label="Remote actions" @menu-dismiss=${this.dismissMenu}>
+    return html`<mux-ui-menu class=${this.contextMenu ? 'context' : ''} label="Remote actions" @menu-dismiss=${this.dismissMenu}>
       <mux-ui-menu-item @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => void this.disconnectRemote()}>${icon(Network,{size:14})} Disconnect ${sdkChats.remoteHosts.find(item => item.id === host)?.name || host}</mux-ui-menu-item>
     </mux-ui-menu>`;
