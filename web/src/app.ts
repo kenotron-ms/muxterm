@@ -344,6 +344,10 @@ export class MuxApp extends LitElement {
       --ui-screen-header-padding-left: calc(var(--ui-collapsed-title-inset) + var(--ui-control-lg) + var(--ui-space-1));
     }
     .main-pane.sidebar-collapsed > mux-title-bar { padding-left:var(--ui-screen-header-padding-left); }
+    .main-pane.sidebar-collapsed mux-dock .dv-dockview > .dv-branch-node > .dv-split-view-container > .dv-view-container > .dv-view:first-child .dv-tabs-and-actions-container {
+      box-sizing:border-box;
+      padding-left:var(--ui-screen-header-padding-left);
+    }
     .sidebar-restore {
       position:absolute;
       top:0;
