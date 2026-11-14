@@ -44,12 +44,6 @@ export class MuxSidebar extends LitElement {
       font: var(--ui-text-md)/1.25 var(--ui-font-sans);
     }
     .header .history { display:flex; align-items:center; gap:var(--ui-space-1); margin-left:auto; }
-    :host([collapsed]) { width:var(--ui-control-lg); min-width:var(--ui-control-lg); max-width:var(--ui-control-lg); border-right:1px solid var(--ui-shell-divider); }
-    :host([collapsed]) .header { padding:0; justify-content:center; }
-    :host([collapsed]) .history,
-    :host([collapsed]) .nav-actions,
-    :host([collapsed]) .tab-content,
-    :host([collapsed]) .footer { display:none; }
     :host([drawer]) .header { display: none; }
     .nav-actions {
       display: flex;
@@ -154,7 +148,6 @@ export class MuxSidebar extends LitElement {
   `;
 
   @property({ type: Boolean }) newChatActive = false;
-  @property({ type: Boolean, reflect: true }) collapsed = false;
   @property({ type: Boolean }) terminalActive = false;
   @property({ type: Boolean }) jobsActive = false;
   @property({ type: Boolean }) connectionsActive = false;
@@ -224,7 +217,7 @@ export class MuxSidebar extends LitElement {
 
     return html`
       <div class="header">
-        <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label=${this.collapsed ? 'Show sidebar' : 'Hide sidebar'} tooltip=${this.collapsed ? 'Show sidebar' : 'Hide sidebar'} @click=${() => this.dispatchEvent(new CustomEvent('sidebar-toggle', { bubbles:true, composed:true }))}>${icon(PanelLeft,{size:17})}</mux-ui-button>
+        <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Hide sidebar" tooltip="Hide sidebar" @click=${() => this.dispatchEvent(new CustomEvent('sidebar-toggle', { bubbles:true, composed:true }))}>${icon(PanelLeft,{size:17})}</mux-ui-button>
         <div class="history">
           <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back" tooltip="Back" @click=${() => window.history.back()}>${icon(ChevronLeft,{size:17})}</mux-ui-button>
           <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Forward" tooltip="Forward" @click=${() => window.history.forward()}>${icon(ChevronRight,{size:17})}</mux-ui-button>

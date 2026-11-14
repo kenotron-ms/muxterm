@@ -91,7 +91,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 		case "back", "forward", "reload":
 			actionErr = c.browserAction(message.ID, message.Type, "")
 		case "external":
-			address, err := c.prepareBrowserURL(message.URL)
+			address, err := prepareExternalURL(message.URL)
 			actionErr = err
 			if actionErr == nil {
 				actionErr = c.app.Browser.OpenURL(address.String())
