@@ -339,24 +339,25 @@ export class MuxApp extends LitElement {
          as an absolute overlay rather than replacing the dock — see render(). */
       position: relative;
     }
-    .main-pane.sidebar-collapsed {
-      --ui-collapsed-title-inset: max(var(--ui-space-3), var(--wco-left-inset, 0px));
-      --ui-screen-header-padding-left: calc(var(--ui-collapsed-title-inset) + var(--ui-control-lg) + var(--ui-space-1));
+    .main-pane.sidebar-toggle-visible {
+      --ui-sidebar-trigger-inset: var(--ui-space-3);
+      --ui-screen-header-padding-left: calc(var(--ui-sidebar-trigger-inset) + var(--ui-control-lg) + var(--ui-space-5));
       /* A native PWA drag region can swallow clicks on an overlapping sibling. */
       --ui-screen-header-app-region: no-drag;
       --ui-title-bar-app-region: no-drag;
       --ui-screen-header-content-app-region: drag;
       --ui-title-bar-content-app-region: drag;
     }
-    .main-pane.sidebar-collapsed > mux-title-bar { padding-left:var(--ui-screen-header-padding-left); }
-    .main-pane.sidebar-collapsed mux-dock .dv-dockview > .dv-branch-node > .dv-split-view-container > .dv-view-container > .dv-view:first-child .dv-tabs-and-actions-container {
+    .main-pane.sidebar-collapsed { --ui-sidebar-trigger-inset:max(var(--ui-space-3),var(--wco-left-inset,0px)); }
+    .main-pane.sidebar-toggle-visible > mux-title-bar { padding-left:var(--ui-screen-header-padding-left); }
+    .main-pane.sidebar-toggle-visible mux-dock .dv-dockview > .dv-branch-node > .dv-split-view-container > .dv-view-container > .dv-view:first-child .dv-tabs-and-actions-container {
       box-sizing:border-box;
       padding-left:var(--ui-screen-header-padding-left);
     }
-    .sidebar-restore {
+    .sidebar-toggle {
       position:absolute;
       top:0;
-      left:var(--ui-collapsed-title-inset);
+      left:var(--ui-sidebar-trigger-inset);
       z-index:var(--ui-z-drag-overlay);
       width:var(--ui-control-lg);
       height:var(--ui-nav-height);
@@ -366,7 +367,7 @@ export class MuxApp extends LitElement {
       -webkit-app-region:no-drag;
       app-region:no-drag;
     }
-    .sidebar-restore::part(button) { -webkit-app-region:no-drag; app-region:no-drag; }
+    .sidebar-toggle::part(button) { -webkit-app-region:no-drag; app-region:no-drag; }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
     .terminal-utility { box-sizing:border-box; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-shell-divider); background:var(--ui-surface-base); color:var(--ui-text); }
@@ -1456,11 +1457,10 @@ export class MuxApp extends LitElement {
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
-            @sidebar-toggle=${() => { this._sidebarCollapsed = true; }}
           ></mux-sidebar>
         ` : ''}
-        <div class="main-pane ${isWide && this._sidebarCollapsed ? 'sidebar-collapsed' : ''}">
-          ${isWide && this._sidebarCollapsed ? html`<mux-ui-button class="sidebar-restore" icon-only size="small" variant="quiet" tone="muted" accessible-label="Show sidebar" tooltip="Show sidebar" @click=${() => { this._sidebarCollapsed = false; }}>${icon(PanelLeft,{size:17})}</mux-ui-button>` : ''}
+        <div class="main-pane ${isWide ? 'sidebar-toggle-visible' : ''} ${isWide && this._sidebarCollapsed ? 'sidebar-collapsed' : ''}">
+          ${isWide ? html`<mux-ui-button class="sidebar-toggle" icon-only size="small" variant="quiet" tone="muted" accessible-label=${this._sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} tooltip=${this._sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} @click=${() => { this._sidebarCollapsed = !this._sidebarCollapsed; }}>${icon(PanelLeft,{size:17})}</mux-ui-button>` : ''}
           ${isWide && !this._sdkChatId && panes.length === 0
             ? html`<mux-title-bar
                 desktop
