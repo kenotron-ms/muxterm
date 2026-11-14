@@ -359,7 +359,7 @@ export class MuxApp extends LitElement {
       top: 0;
       bottom: 0;
       right: 0;
-      width: 1px;
+      width: var(--ui-divider-thickness);
       background: var(--ui-shell-divider);
       pointer-events: none;
     }

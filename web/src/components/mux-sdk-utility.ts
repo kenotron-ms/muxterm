@@ -1378,7 +1378,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .document-frame { display:block; box-sizing:border-box; flex:1; width:100%; min-height:var(--ui-utility-document-frame-min-height); border:0; background:var(--ui-document-surface); }
     mux-sdk-utility mux-sdk-pdf-preview { display:block; flex:1; min-height:0; }
     mux-sdk-utility .vertical-resizer { position:relative; cursor:col-resize; background:transparent; touch-action:none; }
-    mux-sdk-utility .vertical-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc(50% - .5px); width:1px; background:var(--ui-shell-divider); pointer-events:none; }
+    mux-sdk-utility .vertical-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc(50% - .5px); width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
     mux-sdk-utility .vertical-resizer:hover, mux-sdk-utility .vertical-resizer:focus-visible { outline:0; }
     mux-sdk-utility .vertical-resizer:hover::after, mux-sdk-utility .vertical-resizer:focus-visible::after { background:var(--ui-accent); }
     mux-sdk-utility .changes-list { grid-column:3; grid-row:1; min-width:0; min-height:0; overflow:auto; background:var(--ui-surface-base); }
