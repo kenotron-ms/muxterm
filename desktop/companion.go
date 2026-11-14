@@ -322,7 +322,7 @@ func prepareExternalURL(rawURL string) (*url.URL, error) {
 			return nil, errors.New("invalid external web link")
 		}
 	case "mailto":
-		if u.Opaque == "" && u.Path == "" {
+		if u.Opaque == "" && u.Path == "" && u.RawQuery == "" {
 			return nil, errors.New("invalid email link")
 		}
 	default:
