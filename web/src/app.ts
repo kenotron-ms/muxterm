@@ -8,7 +8,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { ChevronLeft, ChevronRight, MonitorX, Plus, X } from 'lucide';
+import { ChevronLeft, ChevronRight, MonitorX, PanelLeft, Plus, X } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
@@ -338,6 +338,24 @@ export class MuxApp extends LitElement {
       /* Containing block for the chat view, which covers the pane
          as an absolute overlay rather than replacing the dock — see render(). */
       position: relative;
+    }
+    .main-pane.sidebar-collapsed {
+      --ui-collapsed-title-inset: max(var(--ui-space-3), var(--wco-left-inset, 0px));
+      --ui-screen-header-padding-left: calc(var(--ui-collapsed-title-inset) + var(--ui-control-lg) + var(--ui-space-1));
+    }
+    .main-pane.sidebar-collapsed > mux-title-bar { padding-left:var(--ui-screen-header-padding-left); }
+    .sidebar-restore {
+      position:absolute;
+      top:0;
+      left:var(--ui-collapsed-title-inset);
+      z-index:var(--ui-z-drag-overlay);
+      width:var(--ui-control-lg);
+      height:var(--ui-nav-height);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      -webkit-app-region:no-drag;
+      app-region:no-drag;
     }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
@@ -1409,9 +1427,8 @@ export class MuxApp extends LitElement {
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
       <div class="content-area" ?inert=${settingsPage}>
-        ${isWide ? html`
+        ${isWide && !this._sidebarCollapsed ? html`
           <mux-sidebar
-            .collapsed=${this._sidebarCollapsed}
             .newChatActive="${this._sdkChatId === 'new'}"
             .terminalActive="${this._sdkChatId === null}"
             .jobsActive="${this._sdkChatId === 'jobs'}"
@@ -1430,10 +1447,11 @@ export class MuxApp extends LitElement {
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
-            @sidebar-toggle=${() => { this._sidebarCollapsed = !this._sidebarCollapsed; }}
+            @sidebar-toggle=${() => { this._sidebarCollapsed = true; }}
           ></mux-sidebar>
         ` : ''}
-        <div class="main-pane">
+        <div class="main-pane ${isWide && this._sidebarCollapsed ? 'sidebar-collapsed' : ''}">
+          ${isWide && this._sidebarCollapsed ? html`<mux-ui-button class="sidebar-restore" icon-only size="small" variant="quiet" tone="muted" accessible-label="Show sidebar" tooltip="Show sidebar" @click=${() => { this._sidebarCollapsed = false; }}>${icon(PanelLeft,{size:17})}</mux-ui-button>` : ''}
           ${isWide && !this._sdkChatId && panes.length === 0
             ? html`<mux-title-bar
                 desktop

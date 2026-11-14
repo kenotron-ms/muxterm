@@ -8,6 +8,20 @@
   window.__muxtermDesktopReceive = (state) => {
     window.dispatchEvent(new CustomEvent('muxterm-browser-state', { detail: state }));
   };
+  // WKWebView does not create a new tab for target="_blank" links on its own.
+  // Chat Markdown uses that target for web links, so send those clicks to the
+  // existing native external-browser action. composedPath crosses the chat's
+  // shadow root without changing ordinary in-app navigation.
+  document.addEventListener('click', (event) => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    const path = event.composedPath();
+    if (!path.some((node) => node instanceof Element && node.localName === 'mux-sdk-chat')) return;
+    const anchor = path.find((node) => node instanceof HTMLAnchorElement);
+    if (!anchor || anchor.target !== '_blank') return;
+    if (anchor.protocol !== 'http:' && anchor.protocol !== 'https:') return;
+    event.preventDefault();
+    window.__muxtermDesktopBrowser.send({ type: 'external', url: anchor.href });
+  }, true);
   // The server page lives in its own origin, so Wails' drag helper is not
   // available here. Ask the native window to drag only from empty chrome.
   let dragStart = null;
