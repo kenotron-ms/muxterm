@@ -821,7 +821,7 @@ export class MuxSDKUtility extends LitElement {
     const panel = (event.currentTarget as HTMLElement).closest<HTMLElement>('.split-panel');
     if (!panel) return;
     const box = panel.getBoundingClientRect();
-    const distance = this.resizingRail === 'files' ? box.right - event.clientX : event.clientX - box.left;
+    const distance = box.right - event.clientX;
     const width = Math.round(Math.max(160, Math.min(box.width - 230, distance)));
     this.railWidths[this.resizingRail] = width;
     panel.style.setProperty('--rail-width', `${width}px`);
@@ -839,7 +839,7 @@ export class MuxSDKUtility extends LitElement {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
     const direction = event.key === 'ArrowRight' ? 20 : -20;
-    this.railWidths[key] = Math.max(160, Math.min(900, this.railWidths[key] + (key === 'files' ? -direction : direction)));
+    this.railWidths[key] = Math.max(160, Math.min(900, this.railWidths[key] - direction));
     (event.currentTarget as HTMLElement).closest<HTMLElement>('.split-panel')?.style.setProperty('--rail-width', `${this.railWidths[key]}px`);
     (event.currentTarget as HTMLElement).setAttribute('aria-valuenow', String(this.railWidths[key]));
     try { localStorage.setItem(`muxterm.sdk.utility.rail.${key}.${this.sessionId}`, String(this.railWidths[key])); } catch { /* private browsing */ }
@@ -1247,21 +1247,22 @@ export class MuxSDKUtility extends LitElement {
     </section>`;
   }
   private surfaceCSS = `
-    mux-sdk-utility { display:flex; flex-direction:column; min-width:0; height:100%; background:var(--ui-surface-raised); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
+    mux-sdk-utility { display:flex; flex-direction:column; min-width:0; height:100%; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
+    mux-sdk-utility mux-ui-tab-strip { --ui-tab-strip-background:transparent; }
     mux-sdk-utility * { scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--ui-text-muted) 34%,transparent) transparent; }
     mux-sdk-utility *::-webkit-scrollbar { width:var(--ui-utility-scrollbar-size); height:var(--ui-utility-scrollbar-size); }
     mux-sdk-utility *::-webkit-scrollbar-track { background:transparent; }
     mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--ui-text-muted) 34%,transparent); border-radius:var(--ui-radius-pill); }
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--ui-text-muted) 58%,transparent); }
     mux-sdk-utility .mobile-tab-picker { display:none; }
-    @media(max-width:767.98px) { mux-sdk-utility mux-ui-tab-strip { display:none; } mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-height:var(--ui-nav-height); padding:var(--ui-space-2) var(--ui-space-4); border-bottom:1px solid var(--ui-border); } mux-sdk-utility .mobile-tab-picker mux-ui-select { flex:1; min-width:0; } }
+    @media(max-width:767.98px) { mux-sdk-utility mux-ui-tab-strip { display:none; } mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-height:var(--ui-nav-height); padding:var(--ui-space-2) var(--ui-space-4); } mux-sdk-utility .mobile-tab-picker mux-ui-select { flex:1; min-width:0; } }
     mux-sdk-utility .new-tab-surface { box-sizing:border-box; width:100%; height:100%; padding:var(--ui-space-9) 0; background:var(--ui-surface-base); container-type:inline-size; }
     mux-sdk-utility .new-tab-home { width:min(var(--ui-utility-home-width),calc(100% - var(--ui-utility-home-gutter))); margin:0 auto; }
     mux-sdk-utility .new-tab-home h2 { margin:0 0 var(--ui-space-6); color:var(--ui-text); font:600 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
     mux-sdk-utility .new-tab-tools { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--ui-space-4); }
     @container(max-width:560px) { mux-sdk-utility .new-tab-tools { grid-template-columns:minmax(0,1fr); } }
     mux-sdk-utility .native-browser { display:flex; flex-direction:column; height:100%; min-width:0; background:var(--ui-surface-base); }
-    mux-sdk-utility .native-browser-toolbar { position:relative; z-index:var(--ui-z-local); display:flex; align-items:center; gap:var(--ui-space-3); box-sizing:border-box; min-height:var(--ui-control-lg); padding:var(--ui-space-2) var(--ui-space-4); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-raised); }
+    mux-sdk-utility .native-browser-toolbar { position:relative; z-index:var(--ui-z-local); display:flex; align-items:center; gap:var(--ui-space-3); box-sizing:border-box; min-height:var(--ui-control-lg); padding:var(--ui-space-2) var(--ui-space-4); }
     mux-sdk-utility .native-browser-history, mux-sdk-utility .native-browser-actions { display:flex; align-items:center; flex:none; gap:var(--ui-space-1); }
     mux-sdk-utility .native-browser-address { flex:1; min-width:0; }
     mux-sdk-utility .native-browser-address::part(input) { border-radius:var(--ui-radius-pill); background:var(--ui-surface-base); }
@@ -1285,13 +1286,13 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility mux-meetings[hidden] { display:none; }
     mux-sdk-utility .utility-placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--ui-text-muted); }
     mux-sdk-utility .empty { color:var(--ui-text-muted); line-height:1.6; } mux-sdk-utility a { color:var(--ui-accent); }
-    mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { display:grid; grid-template-columns:clamp(var(--ui-utility-rail-min-width),var(--rail-width),45%) var(--ui-utility-rail-resizer-width) minmax(0,1fr); height:100%; min-width:0; overflow:hidden; position:relative; background:var(--ui-surface-base); }
+    mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { display:grid; grid-template-columns:minmax(0,1fr) var(--ui-utility-rail-resizer-width) clamp(var(--ui-utility-rail-min-width),var(--rail-width),45%); height:100%; min-width:0; overflow:hidden; position:relative; background:var(--ui-surface-base); }
     mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr) var(--ui-divider-thickness) clamp(180px,var(--rail-width),45%); grid-template-rows:auto minmax(0,1fr); }
     mux-sdk-utility .files-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
     mux-sdk-utility .files-panel > .viewer-header { grid-column:1 / -1; grid-row:1; }
     mux-sdk-utility .files-panel > .viewer { grid-column:1; grid-row:2; }
     mux-sdk-utility .files-panel > .vertical-resizer { grid-column:2; grid-row:2; z-index:var(--ui-z-local); width:var(--ui-chat-resize-handle-width); margin-left:calc(-.5 * (var(--ui-chat-resize-handle-width) - var(--ui-divider-thickness))); background:transparent; }
-    mux-sdk-utility .files-panel > .vertical-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc(.5 * (var(--ui-chat-resize-handle-width) - var(--ui-divider-thickness))); width:var(--ui-divider-thickness); background:var(--ui-border); pointer-events:none; }
+    mux-sdk-utility .files-panel > .vertical-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc(.5 * (var(--ui-chat-resize-handle-width) - var(--ui-divider-thickness))); width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
     mux-sdk-utility .files-panel > .vertical-resizer:hover, mux-sdk-utility .files-panel > .vertical-resizer:focus-visible { background:transparent; }
     mux-sdk-utility .files-panel > .vertical-resizer:hover::after, mux-sdk-utility .files-panel > .vertical-resizer:focus-visible::after { background:var(--ui-accent); }
     mux-sdk-utility .files-panel > .browser { grid-column:3; grid-row:2; }
@@ -1314,13 +1315,13 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility mux-ui-feedback.rail-feedback { margin:var(--ui-space-1) var(--ui-space-2); }
     mux-sdk-utility .viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--ui-surface-base); }
     mux-sdk-utility .goal-viewer { height:100%; }
-    mux-sdk-utility .goal-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--ui-space-3) var(--ui-space-5); padding:var(--ui-space-4) var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-raised); }
+    mux-sdk-utility .goal-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--ui-space-3) var(--ui-space-5); padding:var(--ui-space-4) var(--ui-space-6); }
     mux-sdk-utility .goal-toolbar-title { display:flex; align-items:baseline; gap:var(--ui-space-3); min-width:0; }
     mux-sdk-utility .goal-toolbar-title strong { font:650 var(--ui-text-sm) var(--ui-font-sans); }
     mux-sdk-utility .goal-toolbar-title span { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .goal-toolbar-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
     mux-sdk-utility mux-ui-feedback.goal-feedback { margin:var(--ui-space-3) var(--ui-space-6) 0; }
-    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; border-bottom:1px solid var(--ui-border); padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:transparent; }
+    mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:transparent; }
     mux-sdk-utility .mobile-utility-header, mux-sdk-utility .viewer-header.mobile-file-header { display:none; }
     mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; margin-left:auto; }
     mux-sdk-utility .file-open-wrap { position:relative; }
@@ -1376,39 +1377,41 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .sandbox-note { display:flex; align-items:center; gap:var(--ui-space-4); padding:var(--ui-space-4) var(--ui-space-5); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     mux-sdk-utility .document-frame { display:block; box-sizing:border-box; flex:1; width:100%; min-height:var(--ui-utility-document-frame-min-height); border:0; background:var(--ui-document-surface); }
     mux-sdk-utility mux-sdk-pdf-preview { display:block; flex:1; min-height:0; }
-    mux-sdk-utility .vertical-resizer { position:relative; cursor:col-resize; background:var(--ui-border); touch-action:none; }
-    mux-sdk-utility .vertical-resizer:hover, mux-sdk-utility .vertical-resizer:focus-visible { background:var(--ui-accent); outline:0; }
-    mux-sdk-utility .changes-list { min-width:0; min-height:0; overflow:auto; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
-    mux-sdk-utility .changes-list > header { display:flex; justify-content:space-between; align-items:center; height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); letter-spacing:.1em; }
+    mux-sdk-utility .vertical-resizer { position:relative; cursor:col-resize; background:transparent; touch-action:none; }
+    mux-sdk-utility .vertical-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc(50% - .5px); width:1px; background:var(--ui-shell-divider); pointer-events:none; }
+    mux-sdk-utility .vertical-resizer:hover, mux-sdk-utility .vertical-resizer:focus-visible { outline:0; }
+    mux-sdk-utility .vertical-resizer:hover::after, mux-sdk-utility .vertical-resizer:focus-visible::after { background:var(--ui-accent); }
+    mux-sdk-utility .changes-list { grid-column:3; grid-row:1; min-width:0; min-height:0; overflow:auto; background:var(--ui-surface-base); }
+    mux-sdk-utility .changes-panel > .vertical-resizer { grid-column:2; grid-row:1; }
+    mux-sdk-utility .changes-list > header { display:flex; justify-content:space-between; align-items:center; height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); letter-spacing:.1em; }
     mux-sdk-utility .changes-list > header div { display:flex; align-items:center; gap:var(--ui-space-4); }
     mux-sdk-utility .changes-list > header span { border-radius:var(--ui-radius-lg); padding:calc(var(--ui-space-1) / 2) var(--ui-space-3); background:var(--ui-surface-hover); }
     mux-sdk-utility .change-repo-title { display:flex; flex-direction:column; gap:var(--ui-space-1); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-4); color:var(--ui-text); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .change-repo-title span { color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-mono); }
-    mux-sdk-utility .change-viewer { display:flex; flex-direction:column; min-width:0; min-height:0; }
-    mux-sdk-utility .change-viewer > header { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); min-height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-5); border-bottom:1px solid var(--ui-border); font:var(--ui-text-xs) var(--ui-font-mono); }
+    mux-sdk-utility .change-viewer { grid-column:1; grid-row:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
+    mux-sdk-utility .change-viewer > header { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); min-height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-5); font:var(--ui-text-xs) var(--ui-font-mono); }
     mux-sdk-utility .change-viewer > header span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     mux-sdk-utility .change-viewer > header small { color:var(--ui-accent); }
     mux-sdk-utility mux-ui-feedback.change-feedback { margin:auto; max-width:var(--ui-empty-state-width); }
     mux-sdk-utility mux-monaco-diff { display:block; flex:1; min-height:0; min-width:0; }
     mux-sdk-utility mux-monaco-diff .monaco-diff-host { width:100%; height:100%; }
-    mux-sdk-utility .pages-list { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
+    mux-sdk-utility .pages-list { grid-column:3; grid-row:1; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:var(--ui-surface-base); }
+    mux-sdk-utility .pages-panel > .vertical-resizer { grid-column:2; grid-row:1; }
     mux-sdk-utility .pages-list .browser-heading { flex:none; }
     mux-sdk-utility .notes-search { display:block; margin:0 var(--ui-space-4) var(--ui-space-3); }
     mux-sdk-utility .page-list-rows { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-1) 0 var(--ui-space-5); }
-    mux-sdk-utility .page-editor { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:auto; }
+    mux-sdk-utility .page-editor { grid-column:1; grid-row:1; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:auto; }
     mux-sdk-utility .note-conflict-banner { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ui-space-2); padding:var(--ui-space-3) var(--ui-space-5); border-bottom:1px solid var(--ui-warning-border,var(--ui-border)); background:var(--ui-surface-raised); font-size:var(--ui-text-xs); }
     mux-sdk-utility .note-conflict-banner span { flex:1 1 180px; color:var(--ui-text-muted); }
-    mux-sdk-utility .page-editor-top { display:flex; align-items:center; justify-content:space-between; min-height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-7); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
+    mux-sdk-utility .page-editor-top { display:flex; align-items:center; justify-content:space-between; min-height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-7); color:var(--ui-text-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .page-editor-top span:first-child { display:flex; align-items:center; gap:var(--ui-space-4); }
     mux-sdk-utility .page-paper { width:min(var(--ui-utility-page-width),100%); box-sizing:border-box; margin:0 auto; padding:var(--ui-space-11) clamp(var(--ui-space-7),8%,var(--ui-space-14)) var(--ui-space-15); }
     mux-sdk-utility .page-title { display:block; width:100%; min-height:var(--ui-utility-page-title-min-height); resize:none; overflow:hidden; border:0; outline:0; margin-bottom:var(--ui-space-8); background:transparent; color:var(--ui-text); font:700 clamp(var(--ui-text-3xl),3vw,var(--ui-text-5xl))/1.3 var(--ui-font-sans); }
     mux-sdk-utility .page-new-button { margin-top:var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); padding:var(--ui-space-4) var(--ui-space-5); background:var(--ui-surface-raised); color:var(--ui-text); cursor:pointer; }
     mux-sdk-utility .pages-panel { background:var(--ui-document-surface); color:var(--ui-document-text); }
     mux-sdk-utility .pages-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
-    mux-sdk-utility .pages-panel .vertical-resizer { background:var(--ui-border); }
-    mux-sdk-utility .pages-panel .vertical-resizer:hover, mux-sdk-utility .pages-panel .vertical-resizer:focus-visible { background:var(--ui-accent); }
     mux-sdk-utility .page-editor { background:var(--ui-document-surface); color:var(--ui-document-text); }
-    mux-sdk-utility .page-toolbar { display:flex; justify-content:space-between; align-items:center; flex:none; min-height:var(--ui-utility-page-toolbar-height); padding:0 var(--ui-space-6); border-bottom:1px solid var(--ui-document-border); color:var(--ui-document-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
+    mux-sdk-utility .page-toolbar { display:flex; justify-content:space-between; align-items:center; flex:none; min-height:var(--ui-utility-page-toolbar-height); padding:0 var(--ui-space-6); color:var(--ui-document-muted); font:var(--ui-text-xs) var(--ui-font-sans); }
     mux-sdk-utility .page-toolbar > div { display:flex; align-items:center; gap:var(--ui-space-4); min-width:0; }
     mux-sdk-utility .page-toolbar-actions { flex:none; }
     @container(max-width:430px) { mux-sdk-utility .page-toolbar.nested .page-save-state:not([data-saving]) { display:none; } }
@@ -1420,12 +1423,12 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .page-delete-dialog h2 { margin:0; font-size:var(--ui-text-xl); }
     mux-sdk-utility .page-delete-dialog p { margin:var(--ui-space-4) 0 var(--ui-space-7); color:var(--ui-text-muted); }
     mux-sdk-utility .page-delete-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); }
-    @container(max-width:650px) { mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) minmax(170px,38%); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:auto minmax(0,1fr); } mux-sdk-utility .files-panel > .browser { grid-column:1; grid-row:3; border-left:0; border-top:1px solid var(--ui-border); } mux-sdk-utility .files-panel .vertical-resizer { display:none; } }
+    @container(max-width:420px) { mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) minmax(170px,38%); } mux-sdk-utility .files-panel.rail-closed { grid-template-rows:auto minmax(0,1fr); } mux-sdk-utility .files-panel > .browser { grid-column:1; grid-row:3; border-left:0; border-top:1px solid var(--ui-shell-divider); } mux-sdk-utility .files-panel .vertical-resizer { display:none; } }
     @container(max-width:430px) { mux-sdk-utility .viewer-header { flex-wrap:wrap; padding-top:var(--ui-space-2); padding-bottom:var(--ui-space-2); } mux-sdk-utility .viewer-header mux-ui-breadcrumb { flex:1 1 100%; } mux-sdk-utility .viewer-header .file-header-actions { margin-left:auto; } }
     @container(max-width:430px) { mux-sdk-utility .file-action-button span { display:none; } }
     @media(pointer:coarse) { mux-sdk-utility .browser-heading, mux-sdk-utility .files-panel .browser-heading { height:auto; min-height:var(--ui-control-lg); } }
-    @container(max-width:520px) { mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(170px,38%) minmax(0,1fr); } mux-sdk-utility .pages-panel { grid-template-rows:minmax(96px,min(18%,144px)) minmax(0,1fr); } mux-sdk-utility .pages-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .pages-panel .page-paper { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-13); } mux-sdk-utility .pages-panel .page-title { margin-bottom:var(--ui-space-8); font-size:var(--ui-text-3xl); } mux-sdk-utility .changes-panel .vertical-resizer, mux-sdk-utility .pages-panel .vertical-resizer { display:none; } mux-sdk-utility .changes-list, mux-sdk-utility .pages-list { border-bottom:1px solid var(--ui-border); } }
-    mux-sdk-utility[terminal-mode] .terminal-files-header { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 max(var(--ui-space-4),var(--wco-right-inset,0px)) 0 var(--ui-space-6); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); font:650 var(--ui-text-sm) var(--ui-font-sans); }
+    @container(max-width:420px) { mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) minmax(170px,38%); } mux-sdk-utility .pages-panel { grid-template-rows:minmax(0,1fr) minmax(96px,min(18%,144px)); } mux-sdk-utility .pages-panel.rail-closed { grid-template-rows:minmax(0,1fr); } mux-sdk-utility .changes-list, mux-sdk-utility .pages-list { grid-column:1; grid-row:2; border-top:1px solid var(--ui-shell-divider); } mux-sdk-utility .change-viewer, mux-sdk-utility .page-editor { grid-column:1; grid-row:1; } mux-sdk-utility .pages-panel .page-paper { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-13); } mux-sdk-utility .pages-panel .page-title { margin-bottom:var(--ui-space-8); font-size:var(--ui-text-3xl); } mux-sdk-utility .changes-panel .vertical-resizer, mux-sdk-utility .pages-panel .vertical-resizer { display:none; } }
+    mux-sdk-utility[terminal-mode] .terminal-files-header { box-sizing:border-box; height:var(--ui-nav-height); flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 max(var(--ui-space-4),var(--wco-right-inset,0px)) 0 var(--ui-space-6); font:650 var(--ui-text-sm) var(--ui-font-sans); }
     mux-sdk-utility[terminal-mode] .files-panel { display:block; }
     mux-sdk-utility[terminal-mode] .files-panel > .vertical-resizer { display:none; }
     mux-sdk-utility[terminal-mode] .files-panel > .browser { height:100%; border:0; }
@@ -1433,7 +1436,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility[terminal-mode] .files-panel.terminal-preview > .browser { display:none; }
     mux-sdk-utility[terminal-mode] .files-panel.terminal-preview > .viewer { display:flex; }
     @media(max-width:767.98px) {
-      mux-sdk-utility .mobile-utility-header, mux-sdk-utility .viewer-header.mobile-file-header { box-sizing:border-box; display:flex; align-items:center; flex:none; min-height:var(--ui-nav-height); padding:0 var(--ui-space-4) 0 var(--ui-space-5); border-bottom:1px solid var(--ui-border); }
+      mux-sdk-utility .mobile-utility-header, mux-sdk-utility .viewer-header.mobile-file-header { box-sizing:border-box; display:flex; align-items:center; flex:none; min-height:var(--ui-nav-height); padding:0 var(--ui-space-4) 0 var(--ui-space-5); }
       mux-sdk-utility .mobile-utility-header { justify-content:space-between; font:600 var(--ui-text-md) var(--ui-font-sans); }
       mux-sdk-utility .viewer-header.mobile-file-header { flex-wrap:nowrap; gap:var(--ui-space-2); }
       mux-sdk-utility .viewer-header.mobile-file-header mux-ui-breadcrumb { flex:1 1 auto; min-width:0; }

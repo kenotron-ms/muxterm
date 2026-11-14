@@ -19,10 +19,11 @@ export class MuxUITabStrip extends LitElement {
   @property({ attribute: 'accessible-label' }) accessibleLabel = 'Tabs';
 
   static override styles = css`
-    :host { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-width:0; height:var(--ui-nav-height); padding:0 max(var(--ui-space-4),var(--wco-right-inset,0px)) 0 var(--ui-space-4); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-nav); color:var(--ui-text); font:var(--ui-text-sm) var(--ui-font-sans); }
+    :host { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-width:0; height:var(--ui-nav-height); padding:0 max(var(--ui-space-4),var(--wco-right-inset,0px)) 0 var(--ui-space-4); background:var(--ui-tab-strip-background,var(--ui-surface-nav)); color:var(--ui-text); font:var(--ui-text-sm) var(--ui-font-sans); }
     .tabs { display:flex; align-items:center; flex:1; min-width:0; gap:var(--ui-space-2); overflow-x:auto; }
-    .tab { box-sizing:border-box; display:flex; align-items:center; flex:0 1 var(--ui-tab-max-width); min-width:var(--ui-tab-min-width); min-height:var(--ui-control-md); color:var(--ui-text-muted); }
-    .tab:not(:first-child) { border-left:1px solid var(--ui-border); }
+    .tab { box-sizing:border-box; display:flex; align-items:center; flex:0 1 var(--ui-tab-max-width); min-width:var(--ui-tab-min-width); min-height:var(--ui-control-md); border:1px solid transparent; border-radius:var(--ui-radius-md); color:var(--ui-text-muted); }
+    .tab.active { border-color:var(--ui-shell-divider); background:var(--ui-surface-raised); }
+    .tab:not(.active):hover { background:var(--ui-surface-hover); }
     .tab:hover,.tab.active { color:var(--ui-text); }
     .tab.active .select { font-weight:600; }
     button { box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; flex:none; min-height:var(--ui-control-sm); padding:0; border:0; border-radius:var(--ui-radius-md); background:transparent; color:inherit; font:inherit; cursor:pointer; }

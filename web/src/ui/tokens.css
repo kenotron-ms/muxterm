@@ -226,6 +226,7 @@
   --ui-nav-selected: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface-raised));
   --ui-surface-overlay: var(--chrome-body);
   --ui-border: var(--chrome-border);
+  --ui-shell-divider: color-mix(in srgb, var(--ui-border) 72%, var(--ui-surface-base));
   --ui-border-strong: color-mix(in srgb, var(--ui-border) 40%, var(--ui-text-muted));
   --ui-text: var(--chrome-text-bright);
   --ui-text-muted: color-mix(in srgb, var(--chrome-text-bright) 70%, var(--chrome-body));

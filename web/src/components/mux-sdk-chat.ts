@@ -252,6 +252,7 @@ export class MuxSDKChat extends LitElement {
     :host([side-mode]) .chat-screen-header { display:none; }
     :host([side-mode]) mux-sdk-chat-settings { display:none; }
     :host { position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-content-font-size)/1.55 var(--ui-content-font-family); }
+    .chat-screen-header { --ui-screen-header-background:transparent; }
     .chat-screen-header.with-utility { width:calc(100% - var(--utility-width)); --ui-screen-header-padding-right:var(--ui-space-5); }
     .topbar-actions { display:flex; align-items:center; gap:var(--ui-space-4); }
     .chat-actions-wrap { position:relative; display:flex; align-items:center; }
@@ -506,7 +507,7 @@ export class MuxSDKChat extends LitElement {
     }
     @media (prefers-reduced-motion:reduce) { .send-icon { animation:none; } }
     .status { color:color-mix(in srgb,var(--ui-warning) 70%,var(--ui-text)); font-size:var(--ui-content-font-size); }
-    .drawer { position:relative; z-index:var(--ui-z-drawer); flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); border-left:1px solid var(--ui-border); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
+    .drawer { position:relative; z-index:var(--ui-z-drawer); flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); border-left:1px solid var(--ui-shell-divider); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
     .drawer-resizer { position:absolute; z-index:var(--ui-z-local); left:calc(-.5 * var(--ui-chat-resize-handle-width)); top:0; bottom:0; width:var(--ui-chat-resize-handle-width); cursor:col-resize; touch-action:none; }
     .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--ui-accent) 25%,transparent); outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
