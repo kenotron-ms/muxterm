@@ -47,6 +47,7 @@ export class MuxUISelect extends LitElement {
     select:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
     :host([invalid]) select { border-color:var(--ui-danger); }
     select:disabled { opacity:.5; cursor:default; }
+    :host([disabled]) .select-wrap::after { opacity:.5; }
     .description,.error { margin:var(--ui-space-3) 0 0; font-size:var(--ui-text-sm); }
     .description { color:var(--ui-text-muted); }
     .error { color:var(--ui-danger-text); }

@@ -124,7 +124,7 @@ func latestNPMPackageVersion(ctx context.Context, packageName string) string {
 	if err != nil {
 		return ""
 	}
-	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return ""
 	}
@@ -147,11 +147,13 @@ func olderAgentVersion(current, latest string) bool {
 	if current == "" || latest == "" || agentSemver.FindString(current) != current || agentSemver.FindString(latest) != latest {
 		return false
 	}
-	currentParts := strings.Split(strings.SplitN(current, "-", 2)[0], ".")
-	latestParts := strings.Split(strings.SplitN(latest, "-", 2)[0], ".")
+	currentParts := strings.SplitN(strings.SplitN(current, "+", 2)[0], "-", 2)
+	latestParts := strings.SplitN(strings.SplitN(latest, "+", 2)[0], "-", 2)
+	currentNumbers := strings.Split(currentParts[0], ".")
+	latestNumbers := strings.Split(latestParts[0], ".")
 	for i := range 3 {
-		a, _ := strconv.Atoi(currentParts[i])
-		b, _ := strconv.Atoi(latestParts[i])
+		a, _ := strconv.Atoi(currentNumbers[i])
+		b, _ := strconv.Atoi(latestNumbers[i])
 		if a != b {
 			return a < b
 		}
@@ -166,6 +168,7 @@ func (s *Server) handleCodingAgentVersions(w http.ResponseWriter, _ *http.Reques
 func (s *Server) handleCodingAgentVersionRefresh(w http.ResponseWriter, r *http.Request) {
 	s.agentVersions.refresh(r.Context())
 	if r.Context().Err() != nil {
+		http.Error(w, "scan cancelled", http.StatusServiceUnavailable)
 		return
 	}
 	s.handleCodingAgentVersions(w, r)
