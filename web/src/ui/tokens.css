@@ -134,6 +134,7 @@
   --ui-picker-trigger-width: 290px;
   --ui-picker-trigger-compact-width: 170px;
   --ui-chat-content-width: 790px;
+  --ui-new-chat-starter-min-height: 112px;
   --ui-chat-transcript-width: 760px;
   --ui-chat-visualization-wide-width: 1024px;
   --ui-chat-report-width: 720px;
@@ -226,6 +227,7 @@
   --ui-nav-selected: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-surface-raised));
   --ui-surface-overlay: var(--chrome-body);
   --ui-border: var(--chrome-border);
+  --ui-shell-divider: color-mix(in srgb, var(--ui-border) 72%, var(--ui-surface-base));
   --ui-border-strong: color-mix(in srgb, var(--ui-border) 40%, var(--ui-text-muted));
   --ui-text: var(--chrome-text-bright);
   --ui-text-muted: color-mix(in srgb, var(--chrome-text-bright) 70%, var(--chrome-body));

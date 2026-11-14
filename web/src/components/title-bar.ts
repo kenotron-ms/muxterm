@@ -27,7 +27,6 @@ export class MuxTitleBar extends LitElement {
       align-items: center;
       gap: var(--ui-space-1);
       background: var(--ui-surface-nav);
-      border-bottom: 1px solid var(--ui-border);
       /* D9. viewport-fit=cover has been set for as long as index.html has had
          a viewport meta and env(safe-area-inset-*) appeared in zero files; on
          a notched phone in landscape this bar started under the notch. The

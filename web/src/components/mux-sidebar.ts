@@ -1,9 +1,8 @@
 import { LitElement, css, html, nothing, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { CalendarClock, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
+import { CalendarClock, ChevronLeft, ChevronRight, PanelLeft, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { icon } from '../lib/icons.js';
-import { instanceLabel } from '../lib/instance-identity.js';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { fetchUpdateStatus, type UpdateStatus } from '../lib/update.js';
 import { macAppVersion } from '../lib/mac-app.js';
@@ -27,7 +26,7 @@ export class MuxSidebar extends LitElement {
       min-width: ${unsafeCSS(String(SIDEBAR_MIN_WIDTH))}px;
       max-width: ${unsafeCSS(String(SIDEBAR_MAX_WIDTH))}px;
       height: 100%;
-      border-right: 1px solid var(--ui-border);
+      border-right: 0;
       background: var(--ui-surface-raised);
       color: var(--ui-text);
       font-family: var(--ui-font-sans);
@@ -38,12 +37,19 @@ export class MuxSidebar extends LitElement {
       align-items: center;
       flex: none;
       height: var(--ui-nav-height);
-      padding: 0 var(--ui-space-5) 0 max(var(--ui-space-5), var(--wco-left-inset, 0px));
-      border-bottom: 1px solid var(--ui-border);
+      gap: var(--ui-space-1);
+      padding: 0 var(--ui-space-3) 0 max(var(--ui-space-3), var(--wco-left-inset, 0px));
       background: var(--ui-surface-nav);
       color: var(--ui-text);
-      font: 700 var(--ui-text-md)/1.25 var(--ui-font-sans);
+      font: var(--ui-text-md)/1.25 var(--ui-font-sans);
     }
+    .header .history { display:flex; align-items:center; gap:var(--ui-space-1); margin-left:auto; }
+    :host([collapsed]) { width:var(--ui-control-lg); min-width:var(--ui-control-lg); max-width:var(--ui-control-lg); border-right:1px solid var(--ui-shell-divider); }
+    :host([collapsed]) .header { padding:0; justify-content:center; }
+    :host([collapsed]) .history,
+    :host([collapsed]) .nav-actions,
+    :host([collapsed]) .tab-content,
+    :host([collapsed]) .footer { display:none; }
     :host([drawer]) .header { display: none; }
     .nav-actions {
       display: flex;
@@ -148,6 +154,7 @@ export class MuxSidebar extends LitElement {
   `;
 
   @property({ type: Boolean }) newChatActive = false;
+  @property({ type: Boolean, reflect: true }) collapsed = false;
   @property({ type: Boolean }) terminalActive = false;
   @property({ type: Boolean }) jobsActive = false;
   @property({ type: Boolean }) connectionsActive = false;
@@ -216,7 +223,13 @@ export class MuxSidebar extends LitElement {
     </nav>`;
 
     return html`
-      <div class="header"><span title=${window.location.hostname}>${instanceLabel()}</span></div>
+      <div class="header">
+        <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label=${this.collapsed ? 'Show sidebar' : 'Hide sidebar'} tooltip=${this.collapsed ? 'Show sidebar' : 'Hide sidebar'} @click=${() => this.dispatchEvent(new CustomEvent('sidebar-toggle', { bubbles:true, composed:true }))}>${icon(PanelLeft,{size:17})}</mux-ui-button>
+        <div class="history">
+          <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back" tooltip="Back" @click=${() => window.history.back()}>${icon(ChevronLeft,{size:17})}</mux-ui-button>
+          <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Forward" tooltip="Forward" @click=${() => window.history.forward()}>${icon(ChevronRight,{size:17})}</mux-ui-button>
+        </div>
+      </div>
       ${this.drawer
         ? html`<div class="tab-content">${nav}<div class="chat-scroll"><mux-chat-list drawer .selectedSession=${this.selectedSDKChat}></mux-chat-list></div></div>`
         : html`${nav}<div class="tab-content"><mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list></div>`}

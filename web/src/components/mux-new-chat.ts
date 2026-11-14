@@ -4,7 +4,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import { remoteChatPath } from '../lib/remote-chat-routes.js';
-import { ArrowLeft, ArrowUp, Check, ChevronDown, Folder, MessageCircle, Network, Plus } from 'lucide';
+import { ArrowLeft, ArrowUp, Check, ChevronDown, FileSearch, Folder, ListTodo, MessageCircle, Network, Plus, SquareTerminal } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { chatComposerAttachment } from './chat-composer-attachment.js';
 import '../ui/button.js';
@@ -98,8 +98,17 @@ export class MuxNewChat extends LitElement {
   static styles = css`
     ${subtleScrollbars}
     :host { position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
+    mux-ui-screen-header { --ui-screen-header-background:transparent; }
     .main { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:var(--ui-space-8); overflow:auto; }
     .main.setup { justify-content:flex-start; }
+    .identity { display:flex; justify-content:center; margin:0 0 var(--ui-space-11); }
+    .identity img { width:var(--ui-space-14); height:var(--ui-space-14); border-radius:var(--ui-radius-xl); }
+    .starter-prompts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--ui-space-5); margin-top:var(--ui-space-11); }
+    .starter-prompt { display:flex; flex-direction:column; align-items:flex-start; gap:var(--ui-space-6); min-height:var(--ui-new-chat-starter-min-height); padding:var(--ui-space-6); border:1px solid var(--ui-shell-divider); border-radius:var(--ui-radius-xl); background:var(--ui-surface-base); color:var(--ui-text); text-align:left; font:var(--ui-text-md)/1.45 var(--ui-font-sans); cursor:pointer; }
+    .starter-prompt::part(button) { display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-start; gap:var(--ui-space-6); width:100%; min-height:0; padding:0; border:0; border-radius:0; background:transparent; color:inherit; font:inherit; white-space:normal; text-align:left; }
+    .starter-prompt .lucide-icon { color:var(--ui-text-muted); }
+    .starter-prompt:hover { background:var(--ui-surface-hover); border-color:var(--ui-border); }
+    .starter-prompt:focus-within { outline:2px solid var(--ui-focus); outline-offset:2px; }
     .content { width:min(100%,var(--ui-chat-content-width)); }
     h1 { font-size:var(--ui-text-4xl); font-weight:600; margin:0 0 var(--ui-space-7); }
     .controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); padding-bottom:var(--ui-space-4); border-bottom:1px solid var(--ui-border); }
@@ -146,6 +155,11 @@ export class MuxNewChat extends LitElement {
     .location-note { margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     @media(max-width:550px) {
       .main { padding:var(--ui-space-6); }
+      .identity { margin-bottom:var(--ui-space-8); }
+      .identity img { width:var(--ui-space-12); height:var(--ui-space-12); }
+      .starter-prompts { grid-template-columns:1fr; gap:var(--ui-space-3); margin-top:var(--ui-space-8); }
+      .starter-prompt { min-height:0; flex-direction:row; align-items:center; gap:var(--ui-space-4); padding:var(--ui-space-4); }
+      .starter-prompt::part(button) { flex-direction:row; align-items:center; gap:var(--ui-space-4); }
       h1 { font-size:var(--ui-text-3xl); }
       .controls { position:relative; gap:var(--ui-space-3); }
       .location-trigger::part(button) { min-height:var(--ui-control-lg); }
@@ -520,6 +534,17 @@ export class MuxNewChat extends LitElement {
     return html`<mux-ui-screen-header .section=${projectName} heading="New chat" label="New chat" with-section-icon><span slot="section-icon">${icon(this.remoteHost ? Network : this.projectId === 'ungrouped' ? MessageCircle : Folder,{size:14})}</span></mux-ui-screen-header>`;
   }
 
+  private useStarterPrompt(prompt: string): void {
+    if (this.promptTimer) { window.clearTimeout(this.promptTimer); this.promptTimer = undefined; }
+    this.prompt = prompt;
+    this.pendingPrompt = prompt;
+    this.promptHasContent = true;
+    void this.updateComplete.then(() => {
+      const textarea = this.shadowRoot?.querySelector('textarea');
+      if (textarea) { syncTextareaSizing(textarea); textarea.focus(); }
+    });
+  }
+
   override render() {
     const selectedProject = sdkChats.projects.find(project => project.id === this.projectId && (project.remoteHost || '') === this.remoteHost);
     const projectName = selectedProject?.name || (this.remoteHost ? sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'Remote chat' : 'Chat');
@@ -538,7 +563,7 @@ export class MuxNewChat extends LitElement {
     return html`
     ${this.renderTopbar(projectName)}
     <div class="main"><div class="content">
-      <h1>What would you like to do?</h1>
+      <div class="identity"><img src=${apiPath('/icons/icon.svg')} alt="Muxterm"></div>
       <div class="composer" @paste=${this.onPaste} @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}>
         ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
         ${this.clipboardError ? html`<mux-ui-feedback kind="error" density="compact">${this.clipboardError}</mux-ui-feedback>` : nothing}
@@ -582,6 +607,11 @@ export class MuxNewChat extends LitElement {
         </div>` : nothing}</div>
         <div class="spacer"></div>
         <mux-ui-switch label="Worktree" accessible-label="Use a separate Git worktree" .checked=${this.workMode === 'worktree'} .tooltip=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? 'Choose a project with a Git folder to use a worktree' : 'Start this chat in a separate Git worktree'} ?disabled=${this.projectId === 'ungrouped' || !!selectedProject?.managedFolder} @change=${(event:CustomEvent<{checked:boolean}>) => { this.workMode = event.detail.checked ? 'worktree' : 'local'; }}></mux-ui-switch>
+      </div>
+      <div class="starter-prompts" aria-label="Starting points">
+        <mux-ui-button class="starter-prompt" variant="quiet" @click=${() => this.useStarterPrompt('Help me understand this codebase and where to start.')}>${icon(FileSearch,{size:18})}<span>Understand a codebase</span></mux-ui-button>
+        <mux-ui-button class="starter-prompt" variant="quiet" @click=${() => this.useStarterPrompt('Help me debug a failing command in my terminal.')}>${icon(SquareTerminal,{size:18})}<span>Debug a terminal command</span></mux-ui-button>
+        <mux-ui-button class="starter-prompt" variant="quiet" @click=${() => this.useStarterPrompt('Help me plan and implement a change in this project.')}>${icon(ListTodo,{size:18})}<span>Plan a project change</span></mux-ui-button>
       </div>
       ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New project folder" .dismissable=${!this.projectCreating} @dismiss=${this.closeProjectDialog}><div class="new-folder-form">
         <h2>New project folder${this.remoteHost ? ` on ${sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'remote machine'}` : ''}</h2>

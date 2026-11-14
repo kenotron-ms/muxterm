@@ -8,13 +8,13 @@ import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { MonitorX, Plus, X } from 'lucide';
+import { ChevronLeft, ChevronRight, MonitorX, Plus, X } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
-import { applyDocumentTitle, applyTitlebarColor, instanceLabel, restoreTitlebarColor } from './lib/instance-identity.js';
+import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
 import { installPwaWindowControls } from './lib/pwa-window-controls.js';
 import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
@@ -341,40 +341,31 @@ export class MuxApp extends LitElement {
     }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
-    .terminal-utility { box-sizing:border-box; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); }
+    .terminal-utility { box-sizing:border-box; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-shell-divider); background:var(--ui-surface-base); color:var(--ui-text); }
     .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,var(--ui-terminal-utility-width)); min-width:0; box-shadow:var(--ui-shadow-side); } }
 
-    /* Keep the 4px resize target, but continue the title bar across its top.
-       Painting the whole gutter as chrome-body leaves a visible stripe between
-       the sidebar header and the breadcrumb header. */
+    /* Keep the resize target while drawing only a quiet column seam. */
     .sidebar-gutter {
       width: var(--ui-space-2);
       position: relative;
       cursor: col-resize;
-      background: linear-gradient(to bottom,
-        var(--ui-surface-nav) 0 var(--ui-nav-height),
-        var(--ui-surface-base) var(--ui-nav-height) 100%);
-      transition: background 0.15s;
+      background: var(--ui-surface-raised);
     }
 
-    /* Carry the shared header rule across the full resize target. */
     .sidebar-gutter::after {
       content: '';
       position: absolute;
       top: 0;
-      left: 0;
+      bottom: 0;
       right: 0;
-      box-sizing: border-box;
-      height: var(--ui-nav-height);
-      border-bottom: 1px solid var(--ui-border);
+      width: var(--ui-divider-thickness);
+      background: var(--ui-shell-divider);
       pointer-events: none;
     }
 
     .sidebar-gutter:hover {
-      background: linear-gradient(to bottom,
-        var(--ui-surface-nav) 0 var(--ui-nav-height),
-        color-mix(in srgb, var(--ui-accent) 40%, var(--ui-surface-base)) var(--ui-nav-height) 100%);
+      background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-surface-raised));
     }
 
     /* ── Surface 1: the workspace drawer ─────────────────────────────────
@@ -450,11 +441,11 @@ export class MuxApp extends LitElement {
       flex: none;
       min-height: calc(var(--ui-nav-height) + env(safe-area-inset-top, 0px));
       padding: env(safe-area-inset-top, 0px) max(var(--ui-sidebar-content-inset), env(safe-area-inset-right, 0px)) 0 max(var(--ui-sidebar-content-inset), env(safe-area-inset-left, 0px));
-      border-bottom: 1px solid var(--ui-border);
       background: var(--ui-surface-nav);
       font-size: var(--ui-sidebar-wordmark-size);
       font-weight: 600;
     }
+    .drawer-history { display:flex; align-items:center; gap:var(--ui-space-1); }
 
     @media (prefers-reduced-motion: reduce) {
       .drawer {
@@ -676,6 +667,7 @@ export class MuxApp extends LitElement {
   /** The fixed pixel width the sidebar should render at; updated only in
    *  onDragEnd, otherwise held constant across container resizes. */
   private _sidebarWidthPx = SIDEBAR_DEFAULT_WIDTH;
+  @state() private _sidebarCollapsed = false;
   /** True while a Split.js drag gesture is in progress; consulted by the
    *  ResizeObserver callback (skip recompute mid-drag) and by
    *  _destroySplit() (force a synthetic mouseup before teardown). */
@@ -1218,7 +1210,7 @@ export class MuxApp extends LitElement {
     // given and writes inline widths onto it; releasing it here is what stops
     // those widths, and Split's global drag listeners, from following the
     // sidebar into a drawer that has no gutter and no second pane.
-    if (changedProperties.has('_layoutMode') && this._layoutMode === 'narrow' && this._split) {
+    if (((changedProperties.has('_layoutMode') && this._layoutMode === 'narrow') || (changedProperties.has('_sidebarCollapsed') && this._sidebarCollapsed)) && this._split) {
       this._destroySplit();
     }
   }
@@ -1228,7 +1220,7 @@ export class MuxApp extends LitElement {
     // Narrow→wide: init Split.js AFTER Lit has placed the sidebar/main-pane
     // elements back in the DOM (updated fires post-render) — see
     // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
-    if (changed.has('_layoutMode') && this._layoutMode === 'wide' && !this._split) {
+    if ((changed.has('_layoutMode') || changed.has('_sidebarCollapsed')) && this._layoutMode === 'wide' && !this._sidebarCollapsed && !this._split) {
       this._initSplit();
     }
     // An overlay panel opening dismisses the drawer.
@@ -1419,6 +1411,7 @@ export class MuxApp extends LitElement {
       <div class="content-area" ?inert=${settingsPage}>
         ${isWide ? html`
           <mux-sidebar
+            .collapsed=${this._sidebarCollapsed}
             .newChatActive="${this._sdkChatId === 'new'}"
             .terminalActive="${this._sdkChatId === null}"
             .jobsActive="${this._sdkChatId === 'jobs'}"
@@ -1437,6 +1430,7 @@ export class MuxApp extends LitElement {
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
+            @sidebar-toggle=${() => { this._sidebarCollapsed = !this._sidebarCollapsed; }}
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
@@ -1504,7 +1498,7 @@ export class MuxApp extends LitElement {
               aria-label="Navigation"
               @toggle="${this._onDrawerPopoverToggle}"
             >
-              <div class="drawer-header"><span>${instanceLabel()}</span><mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close navigation" tooltip="Close navigation" @click=${this._closeDrawer}>${icon(X,{size:20})}</mux-ui-button></div>
+              <div class="drawer-header"><div class="drawer-history"><mux-ui-button icon-only size="large" variant="quiet" accessible-label="Back" tooltip="Back" @click=${() => window.history.back()}>${icon(ChevronLeft,{size:20})}</mux-ui-button><mux-ui-button icon-only size="large" variant="quiet" accessible-label="Forward" tooltip="Forward" @click=${() => window.history.forward()}>${icon(ChevronRight,{size:20})}</mux-ui-button></div><mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close navigation" tooltip="Close navigation" @click=${this._closeDrawer}>${icon(X,{size:20})}</mux-ui-button></div>
               <mux-sidebar
                 .drawer=${true}
                 .newChatActive="${this._sdkChatId === 'new'}"
@@ -2155,6 +2149,11 @@ export class MuxApp extends LitElement {
   private _selectMainSurface(view: string | null, history: 'push' | 'replace' | 'none' = 'push'): void {
     if (history === 'push') this._rememberHistorySurface(this._sdkChatId);
     const chatId = view && !UTILITY_TITLES.has(view) ? view : null;
+    // Utility screens share a URL with the terminal. Give each navigation a
+    // history entry so the sidebar Back/Forward controls can revisit them.
+    if (history === 'push' && view !== this._sdkChatId && !chatId && !chatFromHash()) {
+      window.history.pushState(window.history.state, '', window.location.href);
+    }
     this._bootChatId = null;
     this._bootChatHost = '';
     this._sdkChatId = view;

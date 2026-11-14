@@ -875,14 +875,14 @@ export class MuxMeetings extends LitElement {
 
 const styles = `
   mux-meetings { color:var(--ui-text); background:var(--ui-surface-base); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
-  mux-meetings .meeting-layout { display:grid; grid-template-columns:clamp(220px,32%,340px) 1px minmax(0,1fr); height:100%; min-width:0; }
-  mux-meetings .meeting-rail { min-width:0; min-height:0; display:flex; flex-direction:column; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
+  mux-meetings .meeting-layout { display:grid; grid-template-columns:minmax(0,1fr) 1px clamp(220px,32%,340px); height:100%; min-width:0; }
+  mux-meetings .meeting-rail { grid-column:3; grid-row:1; min-width:0; min-height:0; display:flex; flex-direction:column; background:var(--ui-surface-base); }
   mux-meetings .meeting-heading { height:var(--ui-utility-browser-heading-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); display:flex; align-items:center; justify-content:space-between; color:var(--ui-text-muted); font-size:var(--ui-text-xs); letter-spacing:.13em; }
   mux-meetings mux-ui-text-field { margin:0 var(--ui-space-4) var(--ui-space-3); }
   mux-meetings .meeting-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin:0 var(--ui-space-4) var(--ui-space-4); }
   mux-meetings .meeting-rows { overflow:auto; flex:1; }
-  mux-meetings .meeting-divider { background:var(--ui-border); }
-  mux-meetings .meeting-viewer { overflow:auto; min-width:0; padding:var(--ui-space-5); }
+  mux-meetings .meeting-divider { grid-column:2; grid-row:1; background:var(--ui-shell-divider); }
+  mux-meetings .meeting-viewer { grid-column:1; grid-row:1; overflow:auto; min-width:0; padding:var(--ui-space-5); }
   mux-meetings .meeting-detail { max-width:680px; margin:var(--ui-space-8) auto; }
   mux-meetings .meeting-detail h2 { font:600 var(--ui-text-xl)/1.2 var(--ui-font-sans); margin:var(--ui-space-3) 0; }
   mux-meetings .meeting-detail p { color:var(--ui-text-muted); }
@@ -942,6 +942,6 @@ const styles = `
   mux-meetings .call-network strong { font-size:var(--ui-text-sm); }
   mux-meetings .call-network span, mux-meetings .call-network p { color:var(--ui-text-muted); font-size:var(--ui-text-xs); margin:0; }
   mux-meetings .record-live { margin:var(--ui-space-3) 0; }
-  @container(max-width:620px) { mux-meetings .meeting-layout { display:flex; flex-direction:column; } mux-meetings .meeting-rail { min-height:160px; max-height:36%; } mux-meetings .meeting-divider { height:1px; } mux-meetings .meeting-viewer { flex:1; } }
+  @container(max-width:420px) { mux-meetings .meeting-layout { display:flex; flex-direction:column; } mux-meetings .meeting-viewer { order:1; flex:1; } mux-meetings .meeting-divider { order:2; height:1px; } mux-meetings .meeting-rail { order:3; min-height:160px; max-height:36%; } }
   @container(max-width:620px) { mux-meetings .call-stage, mux-meetings .call-stage.sharing { display:flex; flex-direction:column; } mux-meetings .call-screen-tile { aspect-ratio:16/10 !important; } mux-meetings .call-video-tile { aspect-ratio:16/9 !important; } }
 `;
