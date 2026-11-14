@@ -62,7 +62,11 @@ function fixtureForVoice(initialVoice: VoiceStatus): ApiFixture {
     ]);
     if (url.pathname.endsWith('/api/ai/antigravity/auth') && method === 'GET') return fixtureJSON({mode:'google',apiKeyDetected:false,installed:false,installSupported:true});
     if (url.pathname.endsWith('/api/ai/antigravity/login') && method === 'GET') return fixtureJSON({state:'idle'});
-    if (url.pathname.includes('/api/ai/agents/') && url.pathname.endsWith('/install') && method === 'POST') return fixtureJSON({installed:true});
+    if (url.pathname.endsWith('/api/ai/agents/versions') && method === 'GET') return fixtureJSON({agents:[
+      {harness:'codex',installed:true,version:'0.150.0',latestVersion:'0.160.0',updateAvailable:true,checkedAt:'2026-11-14T07:00:00Z'},
+      {harness:'amplifier',installed:true,version:'0.1.0',updateAvailable:false,checkedAt:'2026-11-14T07:00:00Z'},
+      ...['claude','copilot','opencode','pi','deepseek'].map(harness => ({harness,installed:false,updateAvailable:false,checkedAt:'2026-11-14T07:00:00Z'})),
+    ]});
     if (url.pathname.endsWith('/api/update/status') && method === 'GET') return fixtureJSON({
       currentVersion:'0.14.0', latestVersion:'0.14.0', updateAvailable:false,
       canUpdate:false, devBuild:true, method:'unsupported', reason:'Development build',

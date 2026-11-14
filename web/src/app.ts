@@ -1389,6 +1389,7 @@ export class MuxApp extends LitElement {
       @config-change=${this._onConfigChange}
       @ai-status-change=${this._onAIStatusChange}
       @terminal-open=${this._onSettingsTerminalOpen}
+      @agent-command=${this._onSettingsAgentCommand}
     ></mux-settings-surface>`;
   }
 
@@ -2215,6 +2216,36 @@ export class MuxApp extends LitElement {
   private _onSettingsTerminalOpen = (): void => {
     this._overlayPanel = null;
     this._onTerminalOpen();
+  };
+  private _onSettingsAgentCommand = (event: CustomEvent<{ name: string; action: 'install' | 'update'; cmd: string[] }>): void => {
+    const { name, action, cmd } = event.detail;
+    this._overlayPanel = null;
+    this._selectMainSurface(null);
+    this._closeDrawer();
+
+    if (store.attached) {
+      this._spawnPane(cmd);
+      return;
+    }
+
+    // A pane can only be created after the daemon confirms an attachment.
+    // The composer dispatch already correlates workspace creation and waits
+    // for its composition before spawning a command pane.
+    if (this._pendingDispatch) this._dropPendingDispatch('another session was started');
+    const prompt = `${action === 'install' ? 'Install' : 'Update'} ${name}`;
+    const existing = store.workspaces[0];
+    if (existing) {
+      this._pendingDispatch = { workspaceId: existing.workspaceId, cmd, prompt, clientRef: '' };
+      this._socket?.attachWithBreakpoint(existing.workspaceId, currentLayoutMode());
+      return;
+    }
+    const clientRef = mintClientRef();
+    this._pendingDispatch = { workspaceId: null, cmd, prompt, clientRef };
+    this._terminalCreateRef = clientRef;
+    if (!this._socket?.createWorkspace('Terminal', clientRef)) {
+      this._terminalCreateRef = '';
+      this._dropPendingDispatch('the terminal could not be created');
+    }
   };
   private _onConnectionSetupChat = (event: CustomEvent<{prompt:string}>): void => {
     this._onChatNew();

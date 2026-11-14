@@ -56,6 +56,7 @@ import {
 export type SettingsSection = 'appearance' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
 type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean };
 type AntigravityLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
+type AgentVersion = { harness: string; installed: boolean; version?: string; latestVersion?: string; updateAvailable: boolean; checkedAt?: string };
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> = [
   { id: 'appearance', label: 'Appearance' },
@@ -98,13 +99,13 @@ const LIGHT_THEMES: ThemeCard[] = [
  */
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
 const SETUP_AGENTS = [
-  { harness:'codex', name:'Codex', description:'OpenAI coding agent', login:'codex login', docs:'https://developers.openai.com/codex/cli/' },
-  { harness:'claude', name:'Claude Code', description:'Anthropic coding agent', login:'claude', docs:'https://code.claude.com/docs/en/setup' },
-  { harness:'copilot', name:'GitHub Copilot · SDK', description:'GitHub coding agent', login:'copilot login', docs:'https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli' },
-  { harness:'opencode', name:'OpenCode · ACP', description:'Open source coding agent', login:'opencode', docs:'https://opencode.ai/docs/' },
-  { harness:'pi', name:'Pi · ACP', description:'Lightweight coding agent', login:'pi', docs:'https://github.com/svkozak/pi-acp' },
-  { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', login:'dsh web', docs:'https://github.com/deepseek-ai/deepseek-harness' },
-  { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', login:'amplifier init', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
+  { harness:'codex', name:'Codex', description:'OpenAI coding agent', install:'npm install -g @openai/codex@latest', update:'npm install -g @openai/codex@latest', start:'codex', docs:'https://developers.openai.com/codex/cli/' },
+  { harness:'claude', name:'Claude Code', description:'Anthropic coding agent', install:'curl -fsSL https://claude.ai/install.sh | bash', update:'claude update', start:'claude', docs:'https://code.claude.com/docs/en/setup' },
+  { harness:'copilot', name:'GitHub Copilot · SDK', description:'GitHub coding agent', install:'npm install -g @github/copilot', update:'npm install -g @github/copilot@latest', start:'copilot', docs:'https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli' },
+  { harness:'opencode', name:'OpenCode · ACP', description:'Open source coding agent', install:'curl -fsSL https://opencode.ai/install | bash', update:'curl -fsSL https://opencode.ai/install | bash', start:'opencode', docs:'https://opencode.ai/docs/' },
+  { harness:'pi', name:'Pi · ACP', description:'Lightweight coding agent', install:'npm install -g @earendil-works/pi-coding-agent pi-acp', update:'npm install -g @earendil-works/pi-coding-agent@latest pi-acp@latest', start:'pi', docs:'https://github.com/svkozak/pi-acp' },
+  { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', install:'npm install -g @deepseek-ai/dsh', update:'npm install -g @deepseek-ai/dsh@latest', start:'dsh', docs:'https://github.com/deepseek-ai/deepseek-harness' },
+  { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', install:'uv tool install git+https://github.com/microsoft/amplifier', update:'uv tool upgrade amplifier', start:'amplifier', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
 // Existing Gemini CLI chats can resume, but new chats use Antigravity.
 const DEFAULT_HARNESSES: SDKHarnessName[] = ['codex', 'claude', 'copilot', 'amplifier', 'pi', 'opencode', 'deepseek', 'antigravity'];
@@ -661,13 +662,12 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _aiBusy = false;
   @state() private _aiMessage = '';
   @state() private _aiMessageKind: FeedbackKind = 'info';
-  @state() private _installingAgent = '';
-  @state() private _installedAgent = '';
-  @state() private _agentInstallError = '';
-  @state() private _agentInstallErrorMessage = '';
+  @state() private _agentVersions: ReadonlyMap<string, AgentVersion> = new Map();
   @state() private _readyAgents: ReadonlySet<string> | null = null;
   @state() private _agentStatusError = false;
   private _agentStatusEpoch = 0;
+  private _agentVersionTimer?: number;
+  private _agentVersionRetry?: number;
   @state() private _antigravityAuth: AntigravityAuth = { mode:'google', apiKeyDetected:false, installed:false, installSupported:false };
   @state() private _antigravityLogin: AntigravityLoginStatus = { state:'idle' };
   @state() private _antigravityStatus: 'checking' | 'missing' | 'sign-in' | 'connected' | 'error' = 'checking';
@@ -738,6 +738,8 @@ export class MuxSettingsSurface extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.clearTimeout(this._antigravityPollTimer);
+    window.clearInterval(this._agentVersionTimer);
+    window.clearTimeout(this._agentVersionRetry);
     ++this._antigravityEpoch;
     ++this._agentStatusEpoch;
     this._unsubRemotes?.();
@@ -775,7 +777,11 @@ export class MuxSettingsSurface extends LitElement {
 
   private _setSection(section: SettingsSection): boolean {
     if (this._section === section) return false;
-    if (this._section === 'ai') ++this._agentStatusEpoch;
+    if (this._section === 'ai') {
+      ++this._agentStatusEpoch;
+      window.clearInterval(this._agentVersionTimer);
+      window.clearTimeout(this._agentVersionRetry);
+    }
     this._section = section;
     if (section === 'about') void this._checkVersion();
     return true;
@@ -1150,6 +1156,26 @@ export class MuxSettingsSurface extends LitElement {
   private _loadAIConnections(): void {
     void this._loadAntigravity();
     void this._loadAgentAvailability();
+    void this._loadAgentVersions();
+    window.clearInterval(this._agentVersionTimer);
+    this._agentVersionTimer = window.setInterval(() => void this._loadAgentVersions(), 60_000);
+  }
+
+  private async _loadAgentVersions(): Promise<void> {
+    try {
+      const response = await fetch(apiPath('/api/ai/agents/versions'));
+      if (!response.ok) return;
+      const data = await response.json() as { agents?: AgentVersion[] };
+      if (this.isConnected && this._section === 'ai' && Array.isArray(data.agents)) {
+        this._agentVersions = new Map(data.agents.map(agent => [agent.harness, agent]));
+        if (data.agents.length === 0) {
+          window.clearTimeout(this._agentVersionRetry);
+          this._agentVersionRetry = window.setTimeout(() => void this._loadAgentVersions(), 2_000);
+        } else {
+          window.clearTimeout(this._agentVersionRetry);
+        }
+      }
+    } catch { /* keep the last background snapshot */ }
   }
 
   private async _loadAgentAvailability(): Promise<void> {
@@ -1167,8 +1193,9 @@ export class MuxSettingsSurface extends LitElement {
 
   private _agentStatus(harness: string) {
     const ready = this._readyAgents?.has(harness) ?? false;
-    const label = this._agentStatusError ? 'Status unavailable' : this._readyAgents === null ? 'Checking' : ready ? 'Ready' : 'Set up';
-    return html`<mux-ui-status-badge appearance="plain" tone=${ready ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge>`;
+    const updateAvailable = this._agentVersions.get(harness)?.updateAvailable ?? false;
+    const label = updateAvailable ? 'Update available' : this._agentStatusError ? 'Status unavailable' : this._readyAgents === null ? 'Checking' : ready ? 'Ready' : 'Set up';
+    return html`<mux-ui-status-badge appearance="plain" tone=${ready && !updateAvailable ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge>`;
   }
 
   private async _loadAntigravity(): Promise<void> {
@@ -1368,10 +1395,10 @@ export class MuxSettingsSurface extends LitElement {
         @change=${(event: Event) => this._setDefaultHarness((event.target as MuxUISelect).value as ResolvedConfig['ai']['defaultHarness'])}></mux-ui-select>
       <p class="agent-intro">New chat starts with this agent when it is available. You can choose another agent in the composer.</p>
       <p class="section-title">Coding agents</p>
-      <p class="agent-intro">Choose an agent to see its setup. Ready agents are available in New chat.</p>
+      <p class="agent-intro">Choose an agent to see its setup. Versions are checked automatically every 15 minutes. Ready agents are available in New chat.</p>
       <div class="agent-list">
         ${this._renderAntigravity()}
-        ${SETUP_AGENTS.map(agent => html`<details class="agent-card"><summary><span class="agent-identity"><span class="agent-title">${agent.name}</span><span class="agent-description">${agent.description}</span></span>${this._agentStatus(agent.harness)}<span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary><div class="agent-body"><p>Install ${agent.name} on this computer, then run <strong>${agent.login}</strong> in a terminal to connect your account.</p><div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${!!this._installingAgent} @click=${() => void this._installAgent(agent.harness)}>${this._installingAgent === agent.harness ? 'Installing…' : 'Install'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>${this._installedAgent === agent.harness ? html`<mux-ui-feedback kind="success" density="compact">Installed. Connect your account, then refresh New chat.</mux-ui-feedback>` : nothing}${this._agentInstallError === agent.harness ? html`<mux-ui-feedback kind="error" density="compact">${this._agentInstallErrorMessage}</mux-ui-feedback>` : nothing}</div></details>`)}
+        ${SETUP_AGENTS.map(agent => this._renderSetupAgent(agent))}
       </div>
       <p class="section-title section-gap">Built-in Anthropic AI</p>
       <p class="ai-status">
@@ -1412,23 +1439,30 @@ export class MuxSettingsSurface extends LitElement {
     this._emit({ ai: { ...this.config.ai, defaultHarness } });
   }
 
-  private async _installAgent(harness: string): Promise<void> {
-    if (this._installingAgent) return;
-    this._installingAgent = harness;
-    this._installedAgent = '';
-    this._agentInstallError = '';
-    this._agentInstallErrorMessage = '';
-    try {
-      const response = await fetch(apiPath(`/api/ai/agents/${harness}/install`), {method:'POST'});
-      if (!response.ok) throw new Error((await response.text()).trim() || 'Installation failed.');
-      this._installedAgent = harness;
-      await this._loadAgentAvailability();
-    } catch (error) {
-      this._agentInstallError = harness;
-      this._agentInstallErrorMessage = error instanceof Error ? error.message : 'Installation failed.';
-    } finally {
-      this._installingAgent = '';
-    }
+  private _renderSetupAgent(agent: typeof SETUP_AGENTS[number]) {
+    const version = this._agentVersions.get(agent.harness);
+    const known = version !== undefined;
+    const installed = version?.installed ?? false;
+    return html`<details class="agent-card">
+      <summary><span class="agent-identity"><span class="agent-title">${agent.name}</span><span class="agent-description">${agent.description}</span></span>${this._agentStatus(agent.harness)}<span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <div class="agent-body">
+        <p>${!known ? 'Checking installation…' : installed ? `Installed ${version.version ? `v${version.version}` : '(version unavailable)'}.` : 'Not installed on this computer.'}${version?.latestVersion ? ` Latest v${version.latestVersion}.` : ''}</p>
+        <p>${installed ? 'Update in a terminal pane when you choose.' : `Install ${agent.name} in a terminal pane. The agent will guide you through sign-in.`}</p>
+        <div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${!known} @click=${() => this._runAgentCommand(agent, installed ? 'update' : 'install')}>${installed ? 'Update in terminal' : 'Install in terminal'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
+      </div>
+    </details>`;
+  }
+
+  private _runAgentCommand(agent: typeof SETUP_AGENTS[number], action: 'install' | 'update'): void {
+    const step = action === 'install' ? `${agent.install} && ${agent.start}` : agent.update;
+    // Keep output and any sign-in prompt in one PTY. Preserve the user's PATH
+    // (including nvm/uv shims); a login shell replaces it on some machines.
+    const command = `set -o pipefail; ${step}; exec "${'${SHELL:-/bin/bash}'}" -l`;
+    this.dispatchEvent(new CustomEvent('agent-command', {
+      detail: { name: agent.name, action, cmd: ['bash', '-ic', command] },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   // ── Voice ───────────────────────────────────────────────────────────────────
