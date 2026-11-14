@@ -721,6 +721,7 @@ export class MuxSettingsSurface extends LitElement {
     window.clearTimeout(this._antigravityPollTimer);
     window.clearInterval(this._agentVersionTimer);
     window.clearTimeout(this._agentVersionRetry);
+    this._agentVersionRefreshQueued = false;
     ++this._agentVersionRequest;
     ++this._antigravityEpoch;
     ++this._agentStatusEpoch;
@@ -762,6 +763,7 @@ export class MuxSettingsSurface extends LitElement {
     if (this._section === 'ai') {
       ++this._agentStatusEpoch;
       ++this._agentVersionRequest;
+      this._agentVersionRefreshQueued = false;
       window.clearInterval(this._agentVersionTimer);
       window.clearTimeout(this._agentVersionRetry);
     }
