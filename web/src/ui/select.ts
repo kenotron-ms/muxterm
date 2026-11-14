@@ -30,7 +30,7 @@ export class MuxUISelect extends LitElement {
     .select-wrap { position:relative; }
     .select-wrap::after {
       content:''; position:absolute; right:var(--ui-space-5); top:50%;
-      width:7px; height:7px; border-right:1.5px solid var(--ui-text-muted);
+      width:var(--ui-space-4); height:var(--ui-space-4); border-right:1.5px solid var(--ui-text-muted);
       border-bottom:1.5px solid var(--ui-text-muted); transform:translateY(-70%) rotate(45deg);
       pointer-events:none;
     }
