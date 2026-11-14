@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -84,6 +83,7 @@ func (c *Companion) startLocalMuxterm() (string, error) {
 			return "", c.localFailure(fmt.Errorf("open local server log: %w", err))
 		}
 		cmd := exec.Command(serverPath, "app-serve", "--addr", addr)
+		configureLocalServerProcess(cmd)
 		cmd.Env = localServerEnv(root, filepath.Dir(executable))
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
@@ -186,13 +186,11 @@ func (c *Companion) stopLocalMuxterm() {
 	if running == nil {
 		return
 	}
-	if err := running.cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		_ = running.cmd.Process.Kill()
-	}
+	terminateLocalServerProcess(running.cmd)
 	select {
 	case <-running.done:
-	case <-time.After(3 * time.Second):
-		_ = running.cmd.Process.Kill()
-		<-running.done
+		return
+	case <-time.After(750 * time.Millisecond):
+		forceStopLocalServerProcess(running.cmd)
 	}
 }

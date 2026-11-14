@@ -31,6 +31,9 @@
     #status { min-height: 22px; margin-top: 18px; color: #a9d9ac; }
     #status.error { color: #ff9da1; }
     .hint { font-size: 13px; margin: 12px 0 0; }
+    .checkbox-row { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+    .checkbox-row input { width: auto; margin: 3px 0 0; }
+    .checkbox-row span { line-height: 1.4; }
   </style>
 </head>
 <body>
@@ -43,6 +46,12 @@
       <h2>Local muxterm</h2>
       <p id="local-status">Checking the local server…</p>
       <button id="open-window">Open local muxterm</button>
+    </section>
+
+    <section>
+      <h2>When quitting</h2>
+      <label class="checkbox-row" for="keep-sessions-on-quit"><input id="keep-sessions-on-quit" type="checkbox"><span>Keep terminal sessions running after Quit</span></label>
+      <p class="hint">The local server closes when the app quits. Keep this on if terminal jobs should continue in the background. If you have not chosen yet, Muxterm asks the first time you quit with sessions running.</p>
     </section>
 
     <section>
@@ -85,10 +94,16 @@
     ));
     $('open-window').addEventListener('click', () => act(() => call('OpenMuxtermWindow'), 'Opened local muxterm.'));
     $('open-remote').addEventListener('click', () => act(() => call('OpenRemoteMuxtermWindow'), 'Opened remote muxterm.'));
+    $('keep-sessions-on-quit').addEventListener('change', async () => {
+      const checkbox = $('keep-sessions-on-quit');
+      try { await call('SaveQuitPreference', checkbox.checked); status('Quit preference saved.'); }
+      catch (error) { checkbox.checked = !checkbox.checked; status(error?.message || String(error), true); }
+    });
     try {
       const settings = await call('GetSettings');
       $('server-url').value = settings.serverURL || '';
       $('ssh-host').value = settings.sshHost || '';
+      $('keep-sessions-on-quit').checked = settings.keepSessionsOnQuit === true;
       const local = await call('GetLocalStatus');
       $('local-status').textContent = local.url ? `Running at ${local.url}` : (local.error || 'Not running. Click Open local muxterm to retry.');
     } catch (error) { status(error?.message || String(error), true); }
