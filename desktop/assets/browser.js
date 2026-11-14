@@ -8,20 +8,40 @@
   window.__muxtermDesktopReceive = (state) => {
     window.dispatchEvent(new CustomEvent('muxterm-browser-state', { detail: state }));
   };
-  // WKWebView does not create a new tab for target="_blank" links on its own.
-  // Chat Markdown uses that target for web links, so send those clicks to the
-  // existing native external-browser action. composedPath crosses the chat's
-  // shadow root without changing ordinary in-app navigation.
+  const externalURL = (raw) => {
+    if ((typeof raw !== 'string' && !(raw instanceof URL)) || !String(raw).trim()) return null;
+    try {
+      const url = new URL(raw, document.baseURI);
+      return ['http:', 'https:', 'mailto:'].includes(url.protocol) ? url : null;
+    } catch {
+      return null;
+    }
+  };
+  const openExternal = (raw) => {
+    const url = externalURL(raw);
+    if (!url) return false;
+    window.__muxtermDesktopBrowser.send({ type: 'external', url: url.href });
+    return true;
+  };
+  // WebKit does not create a browser window for new-tab links. Handle links
+  // across the app, including links inside Lit shadow roots, while keeping
+  // same-origin navigation in the muxterm window.
   document.addEventListener('click', (event) => {
     if (event.defaultPrevented || event.button !== 0) return;
-    const path = event.composedPath();
-    if (!path.some((node) => node instanceof Element && node.localName === 'mux-sdk-chat')) return;
-    const anchor = path.find((node) => node instanceof HTMLAnchorElement);
-    if (!anchor || anchor.target !== '_blank') return;
-    if (!['http:', 'https:', 'mailto:'].includes(anchor.protocol)) return;
+    const anchor = event.composedPath().find((node) => node instanceof HTMLAnchorElement);
+    if (!anchor) return;
+    const url = externalURL(anchor.href);
+    if (!url || (anchor.target.toLowerCase() !== '_blank' && url.protocol !== 'mailto:' && url.origin === window.location.origin)) return;
     event.preventDefault();
-    window.__muxtermDesktopBrowser.send({ type: 'external', url: anchor.href });
-  }, true);
+    openExternal(url.href);
+  });
+  // xterm's WebLinksAddon and file actions use window.open instead of anchors.
+  // Leave blob URLs and other schemes with WebKit, where their data exists.
+  const webkitOpen = window.open;
+  window.open = function (url, target, features) {
+    if ((!target || String(target).toLowerCase() === '_blank') && openExternal(url)) return null;
+    return webkitOpen.call(window, url, target, features);
+  };
   // The server page lives in its own origin, so Wails' drag helper is not
   // available here. Ask the native window to drag only from empty chrome.
   let dragStart = null;
