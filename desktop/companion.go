@@ -309,6 +309,28 @@ func (c *Companion) prepareBrowserURL(rawURL string) (*url.URL, error) {
 	return u, nil
 }
 
+// External links use the system browser or mail handler, not the in-app tab.
+// Keep the tab's HTTPS-only rule separate from links the chat renderer allows.
+func prepareExternalURL(rawURL string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.User != nil {
+		return nil, errors.New("invalid external link")
+	}
+	switch u.Scheme {
+	case "http", "https":
+		if u.Host == "" {
+			return nil, errors.New("invalid external web link")
+		}
+	case "mailto":
+		if u.Opaque == "" && u.Path == "" {
+			return nil, errors.New("invalid email link")
+		}
+	default:
+		return nil, errors.New("unsupported external link")
+	}
+	return u, nil
+}
+
 func (c *Companion) ListForwards(token string) ([]Forward, error) {
 	if err := c.authorize(token); err != nil {
 		return nil, err

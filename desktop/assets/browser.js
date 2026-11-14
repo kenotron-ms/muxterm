@@ -18,7 +18,7 @@
     if (!path.some((node) => node instanceof Element && node.localName === 'mux-sdk-chat')) return;
     const anchor = path.find((node) => node instanceof HTMLAnchorElement);
     if (!anchor || anchor.target !== '_blank') return;
-    if (anchor.protocol !== 'http:' && anchor.protocol !== 'https:') return;
+    if (!['http:', 'https:', 'mailto:'].includes(anchor.protocol)) return;
     event.preventDefault();
     window.__muxtermDesktopBrowser.send({ type: 'external', url: anchor.href });
   }, true);
