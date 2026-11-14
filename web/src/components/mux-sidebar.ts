@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { CalendarClock, ChevronLeft, ChevronRight, PanelLeft, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
+import { CalendarClock, ChevronLeft, ChevronRight, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { icon } from '../lib/icons.js';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
@@ -217,7 +217,6 @@ export class MuxSidebar extends LitElement {
 
     return html`
       <div class="header">
-        <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Hide sidebar" tooltip="Hide sidebar" @click=${() => this.dispatchEvent(new CustomEvent('sidebar-toggle', { bubbles:true, composed:true }))}>${icon(PanelLeft,{size:17})}</mux-ui-button>
         <div class="history">
           <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back" tooltip="Back" @click=${() => window.history.back()}>${icon(ChevronLeft,{size:17})}</mux-ui-button>
           <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Forward" tooltip="Forward" @click=${() => window.history.forward()}>${icon(ChevronRight,{size:17})}</mux-ui-button>
