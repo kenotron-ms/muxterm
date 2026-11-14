@@ -1,7 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from '../lib/config.js';
-import { DEFAULT_AI_STATUS, type AIStatus } from '../lib/ai.js';
 import { DEFAULT_VOICE_STATUS, type VoiceStatus } from '../lib/voice-settings.js';
 import { fixtureJSON, type ApiFixture } from '../stories/api-fixture.js';
 import '../ui/dialog.js';
@@ -62,7 +61,11 @@ function fixtureForVoice(initialVoice: VoiceStatus): ApiFixture {
     ]);
     if (url.pathname.endsWith('/api/ai/antigravity/auth') && method === 'GET') return fixtureJSON({mode:'google',apiKeyDetected:false,installed:false,installSupported:true});
     if (url.pathname.endsWith('/api/ai/antigravity/login') && method === 'GET') return fixtureJSON({state:'idle'});
-    if (url.pathname.includes('/api/ai/agents/') && url.pathname.endsWith('/install') && method === 'POST') return fixtureJSON({installed:true});
+    if (url.pathname.endsWith('/api/ai/agents/versions') && method === 'GET') return fixtureJSON({agents:[
+      {harness:'codex',installed:true,version:'0.150.0',latestVersion:'0.160.0',updateAvailable:true,checkedAt:'2026-11-14T07:00:00Z'},
+      {harness:'amplifier',installed:true,version:'0.1.0',updateAvailable:false,checkedAt:'2026-11-14T07:00:00Z'},
+      ...['claude','copilot','opencode','pi','deepseek'].map(harness => ({harness,installed:false,updateAvailable:false,checkedAt:'2026-11-14T07:00:00Z'})),
+    ]});
     if (url.pathname.endsWith('/api/update/status') && method === 'GET') return fixtureJSON({
       currentVersion:'0.14.0', latestVersion:'0.14.0', updateAvailable:false,
       canUpdate:false, devBuild:true, method:'unsupported', reason:'Development build',
@@ -94,15 +97,6 @@ function fixtureForVoice(initialVoice: VoiceStatus): ApiFixture {
       }
       return fixtureJSON({ ok:true, detail:'The Storybook sign-in fixture responded.' });
     }
-    if (url.pathname.endsWith('/api/ai/key') && method === 'PUT') {
-      return fixtureJSON({ enabled:true, source:'settings', keyHint:'demo' });
-    }
-    if (url.pathname.endsWith('/api/ai/key') && method === 'DELETE') {
-      return fixtureJSON(DEFAULT_AI_STATUS);
-    }
-    if (url.pathname.endsWith('/api/ai/ping') && method === 'POST') {
-      return fixtureJSON({ ok:true });
-    }
     return fixtureJSON({ error:`No Storybook fixture for ${method} ${url.pathname}` }, 501);
   };
 }
@@ -126,10 +120,10 @@ function remotesAddFailureFixture(): ApiFixture {
     : base(request);
 }
 
-function aiConnectionFailureFixture(): ApiFixture {
+function agentScanFailureFixture(): ApiFixture {
   const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
-  return request => request.url.pathname.endsWith('/api/ai/ping') && request.method === 'POST'
-    ? fixtureJSON({ ok:false, error:'provider_unreachable' }, 503)
+  return request => request.url.pathname.endsWith('/api/ai/agents/versions/refresh') && request.method === 'POST'
+    ? fixtureJSON({ error:'Agent scan unavailable.' }, 503)
     : base(request);
 }
 
@@ -160,13 +154,12 @@ function onConfigChange(event: Event): void {
     (event as CustomEvent<{ config: ResolvedConfig }>).detail.config;
 }
 
-interface SettingsArgs { section: SettingsSection; aiStatus: AIStatus }
+interface SettingsArgs { section: SettingsSection }
 
 const renderPhonePage = (args: SettingsArgs) => html`<div style="height:100dvh;display:flex;background:var(--ui-surface-base)">
   <mux-settings-surface
     page-mode
     .config=${DEFAULT_RESOLVED_CONFIG}
-    .aiStatus=${args.aiStatus}
     .openSection=${args.section}
     serverAddr="muxterm.example.test"
     @config-change=${onConfigChange}
@@ -177,17 +170,15 @@ const meta = {
   title: 'Screens/Settings',
   tags: ['autodocs'],
   parameters: { layout:'fullscreen', apiFixture:fixtureForVoice(DEFAULT_VOICE_STATUS) },
-  args: { section:'appearance' as SettingsSection, aiStatus:DEFAULT_AI_STATUS },
+  args: { section:'appearance' as SettingsSection },
   argTypes: {
-    section: { control:'select', options:['appearance','notifications','workspaces','ai','voice','remotes','shortcuts','about'] },
-    aiStatus: { control:false },
+    section: { control:'select', options:['appearance','terminal','notifications','workspaces','ai','voice','remotes','shortcuts','about'] },
   },
   render: (args: SettingsArgs) => html`
     <mux-ui-dialog open size="wide" label="Settings">
       <div style="flex:1;min-height:0;overflow:hidden">
         <mux-settings-surface
           .config=${DEFAULT_RESOLVED_CONFIG}
-          .aiStatus=${args.aiStatus}
           .openSection=${args.section}
           serverAddr="muxterm.example.test"
           @config-change=${onConfigChange}
@@ -201,6 +192,8 @@ export default meta;
 type Story = StoryObj<SettingsArgs>;
 export const Appearance: Story = {};
 export const PhoneAppearance: Story = { globals:{viewport:{value:'phone390',isRotated:false}}, render:renderPhonePage };
+export const Terminal: Story = { args:{section:'terminal'} };
+export const PhoneTerminal: Story = { args:{section:'terminal'}, globals:{viewport:{value:'phone390',isRotated:false}}, render:renderPhonePage };
 export const LightAppearance: Story = {
   globals:{palette:'github-light'},
   play:async ({canvasElement}) => {
@@ -254,18 +247,15 @@ export const AIAgentInstall: Story = {
     (claude as HTMLElement).click();
   },
 };
-export const AIConfigured: Story = {
-  args: { section:'ai', aiStatus:{ enabled:true, source:'settings', keyHint:'demo' } },
-};
-export const AIConnectionError: Story = {
-  args:{section:'ai',aiStatus:{enabled:true,source:'settings',keyHint:'demo'}},
-  parameters:{apiFixture:aiConnectionFailureFixture()},
+export const AIAgentScanError: Story = {
+  args:{section:'ai'},
+  parameters:{apiFixture:agentScanFailureFixture()},
   play:async ({canvasElement}) => {
     const settings = canvasElement.querySelector<MuxSettingsSurface>('mux-settings-surface');
     await settings?.updateComplete;
-    const test = [...(settings?.shadowRoot?.querySelectorAll('mux-ui-button') ?? [])].find(button => button.textContent?.trim() === 'Test connection');
-    if (!test) throw new Error('Test connection action is missing');
-    test.click();
+    const refresh = [...(settings?.shadowRoot?.querySelectorAll('mux-ui-button') ?? [])].find(button => button.textContent?.trim() === 'Refresh agent scan');
+    if (!refresh) throw new Error('Refresh agent scan action is missing');
+    refresh.click();
   },
 };
 export const VoiceOpenAIKey: Story = {
@@ -305,7 +295,6 @@ export const RemotesPageMode: Story = {
     <mux-settings-surface
       page-mode
       .config=${DEFAULT_RESOLVED_CONFIG}
-      .aiStatus=${args.aiStatus}
       .openSection=${args.section}
       serverAddr="muxterm.example.test"
       @config-change=${onConfigChange}

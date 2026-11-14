@@ -18,7 +18,7 @@ import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './
 import { installPwaWindowControls } from './lib/pwa-window-controls.js';
 import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
-import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
+import { fetchAIStatus, parseAIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
@@ -1380,15 +1380,14 @@ export class MuxApp extends LitElement {
   private _renderSettings(pageMode = false) {
     return html`<mux-settings-surface
       .config=${store.config}
-      .aiStatus=${store.aiStatus}
       .openSection=${this._settingsOpenSection}
       .pageMode=${pageMode}
       serverAddr=${window.location.host}
       @close=${this._closeOverlayPanel}
       @launcher-action=${this._onLauncherAction}
       @config-change=${this._onConfigChange}
-      @ai-status-change=${this._onAIStatusChange}
       @terminal-open=${this._onSettingsTerminalOpen}
+      @agent-command=${this._onSettingsAgentCommand}
     ></mux-settings-surface>`;
   }
 
@@ -2216,6 +2215,36 @@ export class MuxApp extends LitElement {
     this._overlayPanel = null;
     this._onTerminalOpen();
   };
+  private _onSettingsAgentCommand = (event: CustomEvent<{ name: string; action: 'install' | 'update'; cmd: string[] }>): void => {
+    const { name, action, cmd } = event.detail;
+    this._overlayPanel = null;
+    this._selectMainSurface(null);
+    this._closeDrawer();
+
+    if (store.attached) {
+      this._spawnPane(cmd);
+      return;
+    }
+
+    // A pane can only be created after the daemon confirms an attachment.
+    // The composer dispatch already correlates workspace creation and waits
+    // for its composition before spawning a command pane.
+    if (this._pendingDispatch) this._dropPendingDispatch('another session was started');
+    const prompt = `${action === 'install' ? 'Install' : 'Update'} ${name}`;
+    const existing = store.workspaces[0];
+    if (existing) {
+      this._pendingDispatch = { workspaceId: existing.workspaceId, cmd, prompt, clientRef: '' };
+      this._socket?.attachWithBreakpoint(existing.workspaceId, currentLayoutMode());
+      return;
+    }
+    const clientRef = mintClientRef();
+    this._pendingDispatch = { workspaceId: null, cmd, prompt, clientRef };
+    this._terminalCreateRef = clientRef;
+    if (!this._socket?.createWorkspace('Terminal', clientRef)) {
+      this._terminalCreateRef = '';
+      this._dropPendingDispatch('the terminal could not be created');
+    }
+  };
   private _onConnectionSetupChat = (event: CustomEvent<{prompt:string}>): void => {
     this._onChatNew();
     this._newChatPrompt = event.detail.prompt;
@@ -2424,15 +2453,6 @@ export class MuxApp extends LitElement {
     // Persist the change: debounced PATCH /api/config → server merges,
     // writes to disk, and broadcasts to all connected clients.
     patchConfig(configToGoJSON(cfg));
-  };
-
-  /** Mirrors _onConfigChange's style: settings surface emits the new AI
-   *  status after a save/clear round-trip; push it straight into the store
-   *  (no debounced persistence here — the settings surface already made the
-   *  HTTP call that changed server-side state). */
-  private _onAIStatusChange = (e: Event): void => {
-    const { status } = (e as CustomEvent<{ status: AIStatus }>).detail;
-    store.setAIStatus(status);
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {

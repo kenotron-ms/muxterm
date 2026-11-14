@@ -140,8 +140,9 @@ type Server struct {
 	// version is the running binary's version string, used by the
 	// /api/update/* routes. updating serializes apply requests so two
 	// concurrent clients cannot both rewrite the binary.
-	version  string
-	updating atomic.Bool
+	version       string
+	updating      atomic.Bool
+	agentVersions *codingAgentVersionCache
 
 	sdkChats              *sdkChatHost
 	pagesMu               sync.Map // chat ID -> *sync.Mutex; page writes never hold the global chat lock
@@ -178,6 +179,7 @@ func New(cfg Config) *Server {
 		version:        cfg.Version,
 	}
 	s.sdkChats = newSDKChatHost()
+	s.agentVersions = &codingAgentVersionCache{}
 	s.sdkChats.goals.onChange = s.hub.BroadcastGoalChanged
 	s.sdkJobs = newSDKJobs(s.sdkChats)
 	s.connections = newServiceConnections()
@@ -295,7 +297,8 @@ func New(cfg Config) *Server {
 	s.mux.Handle("DELETE /api/ai/antigravity/login", protect(http.HandlerFunc(s.handleAntigravityLogin)))
 	s.mux.Handle("POST /api/ai/antigravity/login/callback", protect(http.HandlerFunc(s.handleAntigravityLoginCallback)))
 	s.mux.Handle("POST /api/ai/antigravity/install", protect(http.HandlerFunc(s.handleAntigravityInstall)))
-	s.mux.Handle("POST /api/ai/agents/{harness}/install", protect(http.HandlerFunc(s.handleCodingAgentInstall)))
+	s.mux.Handle("GET /api/ai/agents/versions", protect(http.HandlerFunc(s.handleCodingAgentVersions)))
+	s.mux.Handle("POST /api/ai/agents/versions/refresh", protect(http.HandlerFunc(s.handleCodingAgentVersionRefresh)))
 
 	// Opt-in realtime voice for SDK chats.
 	if s.cfg.Voice.Enabled {
@@ -511,6 +514,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	jobContext, stopJobs := context.WithCancel(ctx)
 	s.meetingJobContext = jobContext
+	go s.agentVersions.run(jobContext)
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()

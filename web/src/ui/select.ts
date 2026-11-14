@@ -27,18 +27,27 @@ export class MuxUISelect extends LitElement {
   static override styles = css`
     :host { display:block; min-width:0; color:var(--ui-text); font:var(--ui-text-md)/1.4 var(--ui-font-sans); }
     label { display:block; margin-bottom:var(--ui-space-3); font-weight:600; }
+    .select-wrap { position:relative; }
+    .select-wrap::after {
+      content:''; position:absolute; right:var(--ui-space-5); top:50%;
+      width:var(--ui-space-4); height:var(--ui-space-4); border-right:1.5px solid var(--ui-text-muted);
+      border-bottom:1.5px solid var(--ui-text-muted); transform:translateY(-70%) rotate(45deg);
+      pointer-events:none;
+    }
     select {
       box-sizing:border-box; display:block; width:100%; min-width:0;
-      min-height:var(--ui-control-md); padding:0 var(--ui-space-5);
+      min-height:var(--ui-control-md); padding:0 var(--ui-space-10) 0 var(--ui-space-5);
       border:1px solid var(--ui-border); border-radius:var(--ui-radius-md);
       outline:none; background:var(--ui-surface-raised); color:var(--ui-text);
-      font:inherit; cursor:pointer;
+      font:inherit; cursor:pointer; appearance:none;
     }
     select:hover:not(:disabled) { border-color:var(--ui-text-muted); }
-    :host([size='small']) select { min-height:var(--ui-control-sm); padding:0 var(--ui-space-4); font-size:var(--ui-text-sm); }
+    :host([size='small']) select { min-height:var(--ui-control-sm); padding:0 var(--ui-space-9) 0 var(--ui-space-4); font-size:var(--ui-text-sm); }
+    :host([size='small']) .select-wrap::after { right:var(--ui-space-4); }
     select:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
     :host([invalid]) select { border-color:var(--ui-danger); }
     select:disabled { opacity:.5; cursor:default; }
+    :host([disabled]) .select-wrap::after { opacity:.5; }
     .description,.error { margin:var(--ui-space-3) 0 0; font-size:var(--ui-text-sm); }
     .description { color:var(--ui-text-muted); }
     .error { color:var(--ui-danger-text); }
@@ -86,11 +95,11 @@ export class MuxUISelect extends LitElement {
     const describedBy = [this.description && 'description', this.error && 'error'].filter(Boolean).join(' ');
     return html`
       ${this.label ? html`<label for="field">${this.label}${this.required ? ' *' : ''}</label>` : nothing}
-      <select id="field" .value=${this.value} ?disabled=${this.disabled} ?required=${this.required}
+      <div class="select-wrap"><select id="field" .value=${this.value} ?disabled=${this.disabled} ?required=${this.required}
         aria-label=${this.accessibleLabel || nothing} aria-invalid=${String(Boolean(this.error))}
         aria-describedby=${describedBy || nothing} @change=${this.onChange}>
         ${this.options.map(option=>html`<option value=${option.value} ?disabled=${option.disabled} ?selected=${option.value===this.value}>${option.label}</option>`)}
-      </select>
+      </select></div>
       ${this.description ? html`<p id="description" class="description">${this.description}</p>` : nothing}
       ${this.error ? html`<p id="error" class="error">${this.error}</p>` : nothing}
     `;
