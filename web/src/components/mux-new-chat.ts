@@ -108,7 +108,7 @@ export class MuxNewChat extends LitElement {
     .starter-prompt::part(button) { display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-start; gap:var(--ui-space-6); width:100%; min-height:0; padding:0; border:0; border-radius:0; background:transparent; color:inherit; font:inherit; white-space:normal; text-align:left; }
     .starter-prompt .lucide-icon { color:var(--ui-text-muted); }
     .starter-prompt:hover { background:var(--ui-surface-hover); border-color:var(--ui-border); }
-    .starter-prompt:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .starter-prompt:focus-within { outline:2px solid var(--ui-focus); outline-offset:2px; }
     .content { width:min(100%,var(--ui-chat-content-width)); }
     h1 { font-size:var(--ui-text-4xl); font-weight:600; margin:0 0 var(--ui-space-7); }
     .controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); padding-bottom:var(--ui-space-4); border-bottom:1px solid var(--ui-border); }
@@ -535,6 +535,7 @@ export class MuxNewChat extends LitElement {
   }
 
   private useStarterPrompt(prompt: string): void {
+    if (this.promptTimer) { window.clearTimeout(this.promptTimer); this.promptTimer = undefined; }
     this.prompt = prompt;
     this.pendingPrompt = prompt;
     this.promptHasContent = true;
