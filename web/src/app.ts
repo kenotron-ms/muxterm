@@ -342,6 +342,11 @@ export class MuxApp extends LitElement {
     .main-pane.sidebar-collapsed {
       --ui-collapsed-title-inset: max(var(--ui-space-3), var(--wco-left-inset, 0px));
       --ui-screen-header-padding-left: calc(var(--ui-collapsed-title-inset) + var(--ui-control-lg) + var(--ui-space-1));
+      /* A native PWA drag region can swallow clicks on an overlapping sibling. */
+      --ui-screen-header-app-region: no-drag;
+      --ui-title-bar-app-region: no-drag;
+      --ui-screen-header-content-app-region: drag;
+      --ui-title-bar-content-app-region: drag;
     }
     .main-pane.sidebar-collapsed > mux-title-bar { padding-left:var(--ui-screen-header-padding-left); }
     .main-pane.sidebar-collapsed mux-dock .dv-dockview > .dv-branch-node > .dv-split-view-container > .dv-view-container > .dv-view:first-child .dv-tabs-and-actions-container {
@@ -361,6 +366,7 @@ export class MuxApp extends LitElement {
       -webkit-app-region:no-drag;
       app-region:no-drag;
     }
+    .sidebar-restore::part(button) { -webkit-app-region:no-drag; app-region:no-drag; }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
     .terminal-utility { box-sizing:border-box; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-shell-divider); background:var(--ui-surface-base); color:var(--ui-text); }

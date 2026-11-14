@@ -34,7 +34,7 @@ export class MuxUIScreenHeader extends LitElement {
       :host([show-on-phone]) header { gap:var(--ui-space-3); padding-left:var(--ui-space-5); padding-right:var(--ui-space-5); }
       :host([show-on-phone]) header { height:calc(var(--ui-nav-height) + env(safe-area-inset-top, 0px)); padding-top:env(safe-area-inset-top, 0px); }
     }
-    @media (display-mode:window-controls-overlay) { header { -webkit-app-region:drag; } }
+    @media (display-mode:window-controls-overlay) { header { -webkit-app-region:var(--ui-screen-header-app-region, drag); } .section,.divider,.heading { -webkit-app-region:var(--ui-screen-header-content-app-region, inherit); } }
     @media (display-mode:window-controls-overlay) { slot[name='actions']::slotted(*),slot[name='leading']::slotted(*) { -webkit-app-region:no-drag; } }
   `;
 
