@@ -298,6 +298,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/ai/antigravity/login/callback", protect(http.HandlerFunc(s.handleAntigravityLoginCallback)))
 	s.mux.Handle("POST /api/ai/antigravity/install", protect(http.HandlerFunc(s.handleAntigravityInstall)))
 	s.mux.Handle("GET /api/ai/agents/versions", protect(http.HandlerFunc(s.handleCodingAgentVersions)))
+	s.mux.Handle("POST /api/ai/agents/versions/refresh", protect(http.HandlerFunc(s.handleCodingAgentVersionRefresh)))
 
 	// Opt-in realtime voice for SDK chats.
 	if s.cfg.Voice.Enabled {

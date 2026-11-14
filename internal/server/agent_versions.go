@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,14 +36,16 @@ type codingAgentVersion struct {
 	Harness         string `json:"harness"`
 	Installed       bool   `json:"installed"`
 	Version         string `json:"version,omitempty"`
+	InstallMethod   string `json:"installMethod,omitempty"`
 	LatestVersion   string `json:"latestVersion,omitempty"`
 	UpdateAvailable bool   `json:"updateAvailable"`
 	CheckedAt       string `json:"checkedAt"`
 }
 
 type codingAgentVersionCache struct {
-	mu     sync.RWMutex
-	agents []codingAgentVersion
+	mu        sync.RWMutex
+	refreshMu sync.Mutex
+	agents    []codingAgentVersion
 }
 
 func (c *codingAgentVersionCache) snapshot() []codingAgentVersion {
@@ -66,6 +69,8 @@ func (c *codingAgentVersionCache) run(ctx context.Context) {
 }
 
 func (c *codingAgentVersionCache) refresh(ctx context.Context) {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
 	agents := make([]codingAgentVersion, len(codingAgentVersions))
 	var workers sync.WaitGroup
 	for i, info := range codingAgentVersions {
@@ -88,6 +93,13 @@ func inspectCodingAgent(ctx context.Context, harness, executable, npmPackage str
 	status := codingAgentVersion{Harness: harness, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
 	if path, err := exec.LookPath(executable); err == nil {
 		status.Installed = true
+		if harness == "codex" {
+			if target, err := filepath.EvalSymlinks(path); err == nil && strings.Contains(filepath.ToSlash(target), "/.codex/packages/standalone/") {
+				status.InstallMethod = "standalone"
+			} else {
+				status.InstallMethod = "npm"
+			}
+		}
 		commandCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		cmd := exec.CommandContext(commandCtx, path, "--version")
 		cmd.Dir = os.TempDir()
@@ -132,7 +144,7 @@ func latestNPMPackageVersion(ctx context.Context, packageName string) string {
 func olderAgentVersion(current, latest string) bool {
 	current = strings.TrimPrefix(current, "v")
 	latest = strings.TrimPrefix(latest, "v")
-	if agentSemver.FindString(current) != current || agentSemver.FindString(latest) != latest {
+	if current == "" || latest == "" || agentSemver.FindString(current) != current || agentSemver.FindString(latest) != latest {
 		return false
 	}
 	currentParts := strings.Split(strings.SplitN(current, "-", 2)[0], ".")
@@ -149,4 +161,12 @@ func olderAgentVersion(current, latest string) bool {
 
 func (s *Server) handleCodingAgentVersions(w http.ResponseWriter, _ *http.Request) {
 	writeSDKJSON(w, http.StatusOK, map[string]any{"agents": s.agentVersions.snapshot()})
+}
+
+func (s *Server) handleCodingAgentVersionRefresh(w http.ResponseWriter, r *http.Request) {
+	s.agentVersions.refresh(r.Context())
+	if r.Context().Err() != nil {
+		return
+	}
+	s.handleCodingAgentVersions(w, r)
 }

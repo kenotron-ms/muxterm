@@ -18,7 +18,7 @@ import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './
 import { installPwaWindowControls } from './lib/pwa-window-controls.js';
 import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
-import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
+import { fetchAIStatus, parseAIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
@@ -1380,14 +1380,12 @@ export class MuxApp extends LitElement {
   private _renderSettings(pageMode = false) {
     return html`<mux-settings-surface
       .config=${store.config}
-      .aiStatus=${store.aiStatus}
       .openSection=${this._settingsOpenSection}
       .pageMode=${pageMode}
       serverAddr=${window.location.host}
       @close=${this._closeOverlayPanel}
       @launcher-action=${this._onLauncherAction}
       @config-change=${this._onConfigChange}
-      @ai-status-change=${this._onAIStatusChange}
       @terminal-open=${this._onSettingsTerminalOpen}
       @agent-command=${this._onSettingsAgentCommand}
     ></mux-settings-surface>`;
@@ -2455,15 +2453,6 @@ export class MuxApp extends LitElement {
     // Persist the change: debounced PATCH /api/config → server merges,
     // writes to disk, and broadcasts to all connected clients.
     patchConfig(configToGoJSON(cfg));
-  };
-
-  /** Mirrors _onConfigChange's style: settings surface emits the new AI
-   *  status after a save/clear round-trip; push it straight into the store
-   *  (no debounced persistence here — the settings surface already made the
-   *  HTTP call that changed server-side state). */
-  private _onAIStatusChange = (e: Event): void => {
-    const { status } = (e as CustomEvent<{ status: AIStatus }>).detail;
-    store.setAIStatus(status);
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {

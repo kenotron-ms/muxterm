@@ -5,7 +5,6 @@ import { PALETTES, isLightTheme } from '../lib/theme.js';
 import '../ui/button.js';
 import '../ui/color-picker.js';
 import '../ui/feedback.js';
-import type { FeedbackKind } from '../ui/feedback.js';
 import '../ui/nav-item.js';
 import '../ui/radio-group.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
@@ -29,13 +28,6 @@ import {
   LIGHT_TITLEBAR_CRAYONS,
   type TitlebarCrayon,
 } from '../lib/instance-identity.js';
-import {
-  DEFAULT_AI_STATUS,
-  saveAIKey,
-  clearAIKey,
-  pingAI,
-  type AIStatus,
-} from '../lib/ai.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
@@ -53,13 +45,14 @@ import {
   type VoiceMode,
 } from '../lib/voice-settings.js';
 
-export type SettingsSection = 'appearance' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
+export type SettingsSection = 'appearance' | 'terminal' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
 type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean };
 type AntigravityLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
-type AgentVersion = { harness: string; installed: boolean; version?: string; latestVersion?: string; updateAvailable: boolean; checkedAt?: string };
+type AgentVersion = { harness: string; installed: boolean; version?: string; latestVersion?: string; installMethod?: string; updateAvailable: boolean; checkedAt?: string };
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> = [
   { id: 'appearance', label: 'Appearance' },
+  { id: 'terminal', label: 'Terminal' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'workspaces', label: 'Workspaces' },
   { id: 'ai', label: 'AI' },
@@ -99,7 +92,7 @@ const LIGHT_THEMES: ThemeCard[] = [
  */
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
 const SETUP_AGENTS = [
-  { harness:'codex', name:'Codex', description:'OpenAI coding agent', install:'npm install -g @openai/codex@latest', update:'npm install -g @openai/codex@latest', start:'codex', docs:'https://developers.openai.com/codex/cli/' },
+  { harness:'codex', name:'Codex', description:'OpenAI coding agent', install:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', update:'npm install -g @openai/codex@latest', start:'codex', docs:'https://developers.openai.com/codex/cli/' },
   { harness:'claude', name:'Claude Code', description:'Anthropic coding agent', install:'curl -fsSL https://claude.ai/install.sh | bash', update:'claude update', start:'claude', docs:'https://code.claude.com/docs/en/setup' },
   { harness:'copilot', name:'GitHub Copilot · SDK', description:'GitHub coding agent', install:'npm install -g @github/copilot', update:'npm install -g @github/copilot@latest', start:'copilot', docs:'https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli' },
   { harness:'opencode', name:'OpenCode · ACP', description:'Open source coding agent', install:'curl -fsSL https://opencode.ai/install | bash', update:'curl -fsSL https://opencode.ai/install | bash', start:'opencode', docs:'https://opencode.ai/docs/' },
@@ -404,6 +397,7 @@ export class MuxSettingsSurface extends LitElement {
 
     /* ── Coding agent guides in AI settings ── */
     .agent-intro { margin:0 0 var(--ui-space-6); color:var(--ui-text-muted); line-height:1.5; }
+    .agent-scan-actions { margin:calc(-1 * var(--ui-space-3)) 0 var(--ui-space-5); }
     .default-harness-setting { display:block; max-width:var(--ui-settings-theme-grid-width); margin-bottom:var(--ui-space-3); }
     .agent-list { display:grid; gap:var(--ui-space-2); }
     .agent-card { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); overflow:hidden; }
@@ -428,11 +422,6 @@ export class MuxSettingsSurface extends LitElement {
     .ai-auth-switch { display:block; margin-top:var(--ui-space-4); }
     .ai-login-link { display:inline-block; margin-top:var(--ui-space-4); color:var(--ui-accent); overflow-wrap:anywhere; }
     .ai-login-code { display:block; width:100%; margin-top:var(--ui-space-4); }
-    .ai-status {
-      margin: 0 0 var(--ui-space-5);
-      color: var(--ui-text);
-    }
-
     .ai-actions {
       display: flex;
       flex-wrap: wrap;
@@ -442,13 +431,6 @@ export class MuxSettingsSurface extends LitElement {
 
     .settings-feedback {
       margin-top: var(--ui-space-5);
-    }
-
-    .ai-note {
-      margin-top: var(--ui-space-6);
-      font-size: var(--ui-text-sm);
-      line-height: 1.5;
-      color: var(--ui-text-muted);
     }
 
     /* ── Voice section ──────────────────────────────────────────────────
@@ -645,7 +627,6 @@ export class MuxSettingsSurface extends LitElement {
 
   @property({ attribute: false }) config: ResolvedConfig | null = null;
   @property({ type: String }) serverAddr = '';
-  @property({ attribute: false }) aiStatus: AIStatus = DEFAULT_AI_STATUS;
   @property({ attribute: false }) openSection: SettingsSection | null = null;
   @property({ type: Boolean, attribute: 'page-mode', reflect: true }) pageMode = false;
 
@@ -658,11 +639,11 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _updateError = '';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
-  @state() private _aiKeyInput = '';
-  @state() private _aiBusy = false;
-  @state() private _aiMessage = '';
-  @state() private _aiMessageKind: FeedbackKind = 'info';
   @state() private _agentVersions: ReadonlyMap<string, AgentVersion> = new Map();
+  @state() private _refreshingAgentVersions = false;
+  @state() private _agentVersionError = '';
+  private _agentVersionRequest = 0;
+  private _agentVersionRefreshQueued = false;
   @state() private _readyAgents: ReadonlySet<string> | null = null;
   @state() private _agentStatusError = false;
   private _agentStatusEpoch = 0;
@@ -740,6 +721,7 @@ export class MuxSettingsSurface extends LitElement {
     window.clearTimeout(this._antigravityPollTimer);
     window.clearInterval(this._agentVersionTimer);
     window.clearTimeout(this._agentVersionRetry);
+    ++this._agentVersionRequest;
     ++this._antigravityEpoch;
     ++this._agentStatusEpoch;
     this._unsubRemotes?.();
@@ -779,6 +761,7 @@ export class MuxSettingsSurface extends LitElement {
     if (this._section === section) return false;
     if (this._section === 'ai') {
       ++this._agentStatusEpoch;
+      ++this._agentVersionRequest;
       window.clearInterval(this._agentVersionTimer);
       window.clearTimeout(this._agentVersionRetry);
     }
@@ -1073,13 +1056,28 @@ export class MuxSettingsSurface extends LitElement {
       ${this._renderThemeCards()}
 
       <div class="section-gap">
-        <p class="section-title">Font</p>
-        ${this._renderFontPicker()}
-      </div>
-
-      <div class="section-gap">
         <p class="section-title">Title Bar Color</p>
         ${this._renderTitlebarColorPicker()}
+      </div>
+    `;
+  }
+
+  private _renderTerminal() {
+    const cfg = this.config;
+    if (!cfg) return html``;
+    return html`
+      <p class="section-title">Font</p>
+      ${this._renderFontPicker()}
+
+      <div class="section-gap">
+        <p class="section-title">Bell</p>
+        <mux-ui-radio-group aria-label="Bell" name="bell" .value=${cfg.terminal.bell}
+          .options=${[
+            {value:'visual',label:'Visual',description:'Flash the pane tab'},
+            {value:'audible',label:'Audible',description:'Play the system bell sound'},
+            {value:'off',label:'Off',description:'Silence all bell events'},
+          ]}
+          @change=${(event: CustomEvent<{value:string}>) => this._setBell(event.detail.value as ResolvedConfig['terminal']['bell'])}></mux-ui-radio-group>
       </div>
     `;
   }
@@ -1118,10 +1116,6 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _renderNotifications() {
-    const cfg = this.config;
-    if (!cfg) return html``;
-    const bell = cfg.terminal.bell;
-
     return html`
       <div class="notif-block">
         <p class="section-title">Desktop Alerts</p>
@@ -1131,42 +1125,26 @@ export class MuxSettingsSurface extends LitElement {
         ${this._renderNotifPermission()}
       </div>
 
-      <div class="divider"></div>
-
-      <p class="section-title">Bell</p>
-      <mux-ui-radio-group aria-label="Bell" name="bell" .value=${bell}
-        .options=${[
-          {value:'visual',label:'Visual',description:'Flash the pane tab'},
-          {value:'audible',label:'Audible',description:'Play the system bell sound'},
-          {value:'off',label:'Off',description:'Silence all bell events'},
-        ]}
-        @change=${(event: CustomEvent<{value:string}>) => this._setBell(event.detail.value as ResolvedConfig['terminal']['bell'])}></mux-ui-radio-group>
     `;
-  }
-
-  private _emitAIStatus(status: AIStatus): void {
-    this.aiStatus = status;
-    this.dispatchEvent(new CustomEvent('ai-status-change', {
-      detail: { status },
-      bubbles: true,
-      composed: true,
-    }));
   }
 
   private _loadAIConnections(): void {
     void this._loadAntigravity();
     void this._loadAgentAvailability();
-    void this._loadAgentVersions();
+    this._agentVersions = new Map();
+    void this._refreshAgentVersions();
     window.clearInterval(this._agentVersionTimer);
     this._agentVersionTimer = window.setInterval(() => void this._loadAgentVersions(), 60_000);
   }
 
   private async _loadAgentVersions(): Promise<void> {
+    if (this._refreshingAgentVersions) return;
+    const request = ++this._agentVersionRequest;
     try {
       const response = await fetch(apiPath('/api/ai/agents/versions'));
       if (!response.ok) return;
       const data = await response.json() as { agents?: AgentVersion[] };
-      if (this.isConnected && this._section === 'ai' && Array.isArray(data.agents)) {
+      if (request === this._agentVersionRequest && this.isConnected && this._section === 'ai' && Array.isArray(data.agents)) {
         this._agentVersions = new Map(data.agents.map(agent => [agent.harness, agent]));
         if (data.agents.length === 0) {
           window.clearTimeout(this._agentVersionRetry);
@@ -1176,6 +1154,38 @@ export class MuxSettingsSurface extends LitElement {
         }
       }
     } catch { /* keep the last background snapshot */ }
+  }
+
+  private async _refreshAgentVersions(): Promise<void> {
+    if (this._refreshingAgentVersions) {
+      this._agentVersionRefreshQueued = true;
+      return;
+    }
+    const request = ++this._agentVersionRequest;
+    this._refreshingAgentVersions = true;
+    this._agentVersionError = '';
+    try {
+      const response = await fetch(apiPath('/api/ai/agents/versions/refresh'), { method: 'POST' });
+      if (!response.ok) throw new Error('Could not scan agents');
+      const data = await response.json() as { agents?: AgentVersion[] };
+      if (!Array.isArray(data.agents)) throw new Error('Invalid agent status');
+      if (request === this._agentVersionRequest && this.isConnected && this._section === 'ai') {
+        this._agentVersions = new Map(data.agents.map(agent => [agent.harness, agent]));
+        void this._loadAgentAvailability();
+      }
+    } catch {
+      if (request === this._agentVersionRequest && this.isConnected && this._section === 'ai') {
+        this._agentVersionError = 'Could not refresh agent status. Try again.';
+      }
+    } finally {
+      this._refreshingAgentVersions = false;
+      if (this._agentVersionRefreshQueued && this.isConnected && this._section === 'ai') {
+        this._agentVersionRefreshQueued = false;
+        void this._refreshAgentVersions();
+      } else if (this._agentVersionError && this.isConnected && this._section === 'ai') {
+        void this._loadAgentVersions();
+      }
+    }
   }
 
   private async _loadAgentAvailability(): Promise<void> {
@@ -1328,66 +1338,7 @@ export class MuxSettingsSurface extends LitElement {
     </details>`;
   }
 
-  private async _saveAIKey(): Promise<void> {
-    const key = this._aiKeyInput.trim();
-    if (!key || this._aiBusy) return;
-    this._aiBusy = true;
-    this._aiMessage = '';
-    try {
-      this._emitAIStatus(await saveAIKey(key));
-      this._aiKeyInput = '';
-      this._aiMessage = 'Key saved.';
-      this._aiMessageKind = 'success';
-    } catch {
-      this._aiMessage = 'Could not save the key -- it was not stored.';
-      this._aiMessageKind = 'error';
-    } finally {
-      this._aiBusy = false;
-    }
-  }
-
-  private async _removeAIKey(): Promise<void> {
-    if (this._aiBusy) return;
-    this._aiBusy = true;
-    this._aiMessage = '';
-    try {
-      this._emitAIStatus(await clearAIKey());
-      this._aiKeyInput = '';
-      this._aiMessage = 'Key removed.';
-      this._aiMessageKind = 'success';
-    } catch {
-      this._aiMessage = 'Could not remove the key.';
-      this._aiMessageKind = 'error';
-    } finally {
-      this._aiBusy = false;
-    }
-  }
-
-  private async _testAI(): Promise<void> {
-    if (this._aiBusy) return;
-    this._aiBusy = true;
-    this._aiMessage = 'Testing...';
-    this._aiMessageKind = 'loading';
-    try {
-      const res = await pingAI();
-      this._aiMessageKind = res.ok ? 'success' : 'error';
-      this._aiMessage = res.ok
-        ? 'Connected to Anthropic.'
-        : res.error === 'ai_disabled'
-          ? 'AI is off -- save a key first.'
-          : res.error === 'provider_unreachable'
-            ? 'Could not reach Anthropic. Check your connection.'
-            : 'Anthropic rejected the request. Check the key.';
-    } catch {
-      this._aiMessage = 'Test failed -- check your connection.';
-      this._aiMessageKind = 'error';
-    } finally {
-      this._aiBusy = false;
-    }
-  }
-
   private _renderAI() {
-    const st = this.aiStatus;
     return html`
       <p class="section-title">New chats</p>
       <mux-ui-select class="default-harness-setting" label="Default agent" .value=${this.config?.ai.defaultHarness || 'codex'}
@@ -1396,41 +1347,12 @@ export class MuxSettingsSurface extends LitElement {
       <p class="agent-intro">New chat starts with this agent when it is available. You can choose another agent in the composer.</p>
       <p class="section-title">Coding agents</p>
       <p class="agent-intro">Choose an agent to see its setup. Versions are checked automatically every 15 minutes. Ready agents are available in New chat.</p>
+      <div class="agent-scan-actions"><mux-ui-button size="small" variant="secondary" ?disabled=${this._refreshingAgentVersions} @click=${() => void this._refreshAgentVersions()}>${this._refreshingAgentVersions ? 'Scanning…' : 'Refresh agent scan'}</mux-ui-button></div>
+      ${this._agentVersionError ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._agentVersionError}</mux-ui-feedback>` : nothing}
       <div class="agent-list">
         ${this._renderAntigravity()}
         ${SETUP_AGENTS.map(agent => this._renderSetupAgent(agent))}
       </div>
-      <p class="section-title section-gap">Built-in Anthropic AI</p>
-      <p class="ai-status">
-        ${st.enabled
-          ? `Anthropic features enabled -- key ending ${st.keyHint} (from ${st.source}).`
-          : 'Anthropic features are off -- add an API key to enable them.'}
-      </p>
-      <mux-ui-text-field
-        label="API key"
-        type="password"
-        autocomplete="off"
-        placeholder="sk-ant-..."
-        .value="${this._aiKeyInput}"
-        @input="${(e: Event) => { this._aiKeyInput = (e.target as HTMLInputElement).value; }}"
-      ></mux-ui-text-field>
-      <div class="ai-actions">
-        <mux-ui-button size="small" variant="primary"
-          ?disabled="${this._aiBusy || this._aiKeyInput.trim() === ''}"
-          @click="${this._saveAIKey}"
-        >Save</mux-ui-button>
-        ${st.source === 'settings'
-          ? html`<mux-ui-button size="small" variant="danger" ?disabled="${this._aiBusy}" @click="${this._removeAIKey}">Remove</mux-ui-button>`
-          : ''}
-        <mux-ui-button size="small" ?disabled="${this._aiBusy}" @click="${this._testAI}">Test connection</mux-ui-button>
-      </div>
-      ${this._aiMessage ? html`<mux-ui-feedback class="settings-feedback" kind=${this._aiMessageKind} appearance=${this._aiMessageKind === 'error' ? 'panel' : 'plain'} density="compact">${this._aiMessage}</mux-ui-feedback>` : ''}
-      <p class="ai-note">
-        The key is stored locally at <code>$XDG_CONFIG_HOME/muxterm/anthropic_key</code>
-        (defaults to <code>~/.config/muxterm/anthropic_key</code> when
-        <code>XDG_CONFIG_HOME</code> is unset) with owner-only permissions, is
-        never returned by the server, and is sent only to Anthropic.
-      </p>
     `;
   }
 
@@ -1454,7 +1376,10 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _runAgentCommand(agent: typeof SETUP_AGENTS[number], action: 'install' | 'update'): void {
-    const step = action === 'install' ? `${agent.install} && ${agent.start}` : agent.update;
+    const update = agent.harness === 'codex' && this._agentVersions.get('codex')?.installMethod === 'standalone'
+      ? 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+      : agent.update;
+    const step = action === 'install' ? `${agent.install} && ${agent.start}` : update;
     // Keep output and any sign-in prompt in one PTY. Preserve the user's PATH
     // (including nvm/uv shims); a login shell replaces it on some machines.
     const command = `set -o pipefail; ${step}; exec "${'${SHELL:-/bin/bash}'}" -l`;
@@ -2026,6 +1951,8 @@ export class MuxSettingsSurface extends LitElement {
         <div class="content">
           ${this._section === 'appearance'
             ? this._renderAppearance()
+            : this._section === 'terminal'
+              ? this._renderTerminal()
             : this._section === 'about'
               ? this._renderAbout()
             : this._section === 'workspaces'
