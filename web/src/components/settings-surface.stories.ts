@@ -130,10 +130,10 @@ function remotesAddFailureFixture(): ApiFixture {
     : base(request);
 }
 
-function aiConnectionFailureFixture(): ApiFixture {
+function agentScanFailureFixture(): ApiFixture {
   const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
-  return request => request.url.pathname.endsWith('/api/ai/ping') && request.method === 'POST'
-    ? fixtureJSON({ ok:false, error:'provider_unreachable' }, 503)
+  return request => request.url.pathname.endsWith('/api/ai/agents/versions/refresh') && request.method === 'POST'
+    ? fixtureJSON({ error:'Agent scan unavailable.' }, 503)
     : base(request);
 }
 
@@ -261,15 +261,15 @@ export const AIAgentInstall: Story = {
 export const AIConfigured: Story = {
   args: { section:'ai', aiStatus:{ enabled:true, source:'settings', keyHint:'demo' } },
 };
-export const AIConnectionError: Story = {
-  args:{section:'ai',aiStatus:{enabled:true,source:'settings',keyHint:'demo'}},
-  parameters:{apiFixture:aiConnectionFailureFixture()},
+export const AIAgentScanError: Story = {
+  args:{section:'ai'},
+  parameters:{apiFixture:agentScanFailureFixture()},
   play:async ({canvasElement}) => {
     const settings = canvasElement.querySelector<MuxSettingsSurface>('mux-settings-surface');
     await settings?.updateComplete;
-    const test = [...(settings?.shadowRoot?.querySelectorAll('mux-ui-button') ?? [])].find(button => button.textContent?.trim() === 'Test connection');
-    if (!test) throw new Error('Test connection action is missing');
-    test.click();
+    const refresh = [...(settings?.shadowRoot?.querySelectorAll('mux-ui-button') ?? [])].find(button => button.textContent?.trim() === 'Refresh agent scan');
+    if (!refresh) throw new Error('Refresh agent scan action is missing');
+    refresh.click();
   },
 };
 export const VoiceOpenAIKey: Story = {
