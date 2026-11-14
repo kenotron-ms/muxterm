@@ -354,7 +354,7 @@ export class MuxApp extends LitElement {
       box-sizing:border-box;
       padding-left:var(--ui-screen-header-padding-left);
     }
-    .sidebar-toggle {
+    .sidebar-toggle-position {
       position:absolute;
       top:0;
       left:var(--ui-sidebar-trigger-inset);
@@ -367,7 +367,7 @@ export class MuxApp extends LitElement {
       -webkit-app-region:no-drag;
       app-region:no-drag;
     }
-    .sidebar-toggle::part(button) { -webkit-app-region:no-drag; app-region:no-drag; }
+    .sidebar-toggle-position mux-ui-button::part(button) { -webkit-app-region:no-drag; app-region:no-drag; }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
     .terminal-utility { box-sizing:border-box; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-shell-divider); background:var(--ui-surface-base); color:var(--ui-text); }
@@ -1460,7 +1460,7 @@ export class MuxApp extends LitElement {
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane ${isWide ? 'sidebar-toggle-visible' : ''} ${isWide && this._sidebarCollapsed ? 'sidebar-collapsed' : ''}">
-          ${isWide ? html`<mux-ui-button class="sidebar-toggle" icon-only size="small" variant="quiet" tone="muted" accessible-label=${this._sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} tooltip=${this._sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} @click=${() => { this._sidebarCollapsed = !this._sidebarCollapsed; }}>${icon(PanelLeft,{size:17})}</mux-ui-button>` : ''}
+          ${isWide ? html`<div class="sidebar-toggle-position"><mux-ui-button icon-only size="small" variant="quiet" toggle .pressed=${!this._sidebarCollapsed} accessible-label=${this._sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} tooltip=${this._sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} @click=${() => { this._sidebarCollapsed = !this._sidebarCollapsed; }}>${icon(PanelLeft,{size:17})}</mux-ui-button></div>` : ''}
           ${isWide && !this._sdkChatId && panes.length === 0
             ? html`<mux-title-bar
                 desktop
