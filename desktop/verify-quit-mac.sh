@@ -31,6 +31,10 @@ app_exited() {
   [[ -z "$state" || "$state" == Z* ]]
 }
 
+app_registered() {
+  [[ "$(osascript -e 'tell application id "io.ampbox.muxterm.desktop" to get running' 2>/dev/null)" == true ]]
+}
+
 wait_for() {
   local description="$1"; shift
   for _ in {1..100}; do
@@ -67,7 +71,10 @@ for keep in true false; do
   "$app" > "$RUNNER_TEMP/muxterm-quit-app-$keep.log" 2>&1 &
   app_pid=$!
   wait_for 'Mac app window and local server' test -e "$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
-  sleep 1
+  if ! wait_for 'Mac app registration' app_registered; then
+    cat "$RUNNER_TEMP/muxterm-quit-app-$keep.log" >&2
+    exit 1
+  fi
   quit_started="$(python3 -c 'import time; print(time.monotonic_ns())')"
   osascript -e 'tell application id "io.ampbox.muxterm.desktop" to quit'
   wait_for_quick_exit "$app_pid"
