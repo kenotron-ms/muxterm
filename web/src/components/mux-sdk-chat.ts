@@ -319,11 +319,8 @@ export class MuxSDKChat extends LitElement {
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .work-stream .pulse { width:var(--ui-chat-pulse-size); height:var(--ui-chat-pulse-size); flex:none; border-radius:50%; background:var(--ui-accent); animation:activity-pulse 1.35s ease-in-out infinite; }
-    .work-disclosure > summary { display:inline-flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-chat-activity-row-height); padding:0 var(--ui-space-2); margin-left:calc(-1 * var(--ui-space-2)); border-radius:var(--ui-radius-sm); color:var(--ui-text-muted); font-size:var(--ui-text-sm); list-style:none; cursor:pointer; }
-    .work-disclosure > summary:hover { background:color-mix(in srgb,var(--ui-surface-raised) 55%,transparent); color:var(--ui-text); }
-    .work-disclosure .activity-label { flex:none; font-weight:500; }
-    .work-disclosure .activity-count { color:var(--ui-text-muted); white-space:nowrap; }
-    .work-disclosure .activity-count::before { content:'·'; margin-right:var(--ui-space-2); }
+    .work-disclosure > summary { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); padding:0 0 var(--ui-space-4); border-bottom:1px solid color-mix(in srgb,var(--ui-border) 58%,transparent); color:var(--ui-text-muted); font-size:var(--ui-text-lg); list-style:none; cursor:pointer; }
+    .work-disclosure .activity-label { flex:none; }
     .work-disclosure .activity-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .work-disclosure > summary > svg { flex:none; }
     .work-disclosure .pulse { width:var(--ui-chat-pulse-size); height:var(--ui-chat-pulse-size); flex:none; border-radius:50%; background:var(--ui-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 14%,transparent); animation:activity-pulse 1.35s ease-in-out infinite; }
@@ -333,7 +330,7 @@ export class MuxSDKChat extends LitElement {
     .work-disclosure > summary:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; border-radius:var(--ui-radius-sm); }
     .work-disclosure > summary svg { opacity:.7; transition:transform .15s ease; }
     .work-disclosure[open] > summary svg { transform:rotate(180deg); }
-    .work-items { margin-left:var(--ui-space-1); padding:var(--ui-space-3) 0 var(--ui-space-1) var(--ui-space-5); border-left:1px solid color-mix(in srgb,var(--ui-border) 75%,transparent); }
+    .work-items { padding:var(--ui-space-5) 0 var(--ui-space-1); }
     .interjection-entry { margin:var(--ui-space-4) 0 var(--ui-space-5); }
     .work-item { margin-bottom:var(--ui-space-3); }
     .voice-work { display:flex; align-items:flex-start; gap:var(--ui-space-4); margin:var(--ui-space-3) 0; color:var(--ui-text-muted); font-size:var(--ui-text-lg); line-height:1.5; }
@@ -2429,9 +2426,8 @@ export class MuxSDKChat extends LitElement {
         const working = !this.turnFinished.has(block.turn);
         const open = this.workDisclosureOpen(block.turn);
         const goalOnly = row.work.every(item => item.kind === 'goal');
-        const toolCount = row.work.filter(item => item.kind === 'tool').length;
         const timeline = open ? this.workTimeline(block.turn, row.work, agents) : nothing;
-        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working && !goalOnly}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working && !goalOnly ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${goalOnly ? 'Goal update' : working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${toolCount ? html`<span class="activity-count">${toolCount} ${toolCount === 1 ? 'tool' : 'tools'}</span>` : nothing}${icon(ChevronDown, { size: 14 })}</summary>${timeline === nothing ? nothing : html`<div class="work-items">${timeline}</div>`}</details></div>`;
+        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working && !goalOnly}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working && !goalOnly ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${goalOnly ? 'Goal update' : working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${timeline === nothing ? nothing : html`<div class="work-items">${timeline}</div>`}</details></div>`;
       }
       return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
