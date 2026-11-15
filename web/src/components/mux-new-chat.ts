@@ -222,7 +222,7 @@ export class MuxNewChat extends LitElement {
     .folder-dialog .folder-new { display:flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-control-sm); padding:0 var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; font-size:var(--ui-text-sm); cursor:pointer; }
     .folder-dialog .folder-new:hover { background:var(--ui-surface-hover); }
     .folder-dialog .folder-new:disabled { opacity:.5; cursor:default; }
-    .folder-dialog .folder-list { min-height:220px; max-height:min(46dvh,420px); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); }
+    .folder-dialog .folder-list { min-height:var(--ui-folder-dialog-list-min-height); max-height:min(46dvh,var(--ui-folder-dialog-list-max-height)); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); }
     .folder-dialog .folder-row { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-height:var(--ui-control-md); padding:var(--ui-space-2) var(--ui-space-3); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); font:inherit; text-align:left; cursor:pointer; }
     .folder-dialog .folder-row:hover { background:var(--ui-surface-hover); }
     .folder-dialog .folder-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -734,8 +734,8 @@ export class MuxNewChat extends LitElement {
             <button class="project-option" role="menuitemradio" aria-checked=${this.projectId === 'ungrouped' && !this.remoteHost} ?selected=${this.projectId === 'ungrouped' && !this.remoteHost} @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy">Chat</span>${this.projectId === 'ungrouped' && !this.remoteHost ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>
             ${sdkChats.projects.filter(project => (project.remoteHost || '') === this.remoteHost).map(project => html`<button class="project-option" role="menuitemradio" aria-checked=${this.projectId === project.id} ?selected=${this.projectId === project.id} title=${project.path} @click=${() => this.selectExistingProject(project)}>${icon(Folder,{size:16})}<span class="option-copy">${project.name}</span>${this.projectId === project.id ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>`)}
             <div class="project-divider"></div>
-            <button class="project-option" role="menuitem" @click=${() => void this.addLocalFolder()}>${icon(Plus,{size:16})}<span class="option-copy">${this.remoteHost ? 'Add folder on this machine…' : 'Add local folder…'}</span></button>
-            ${sdkChats.remoteHosts.length ? html`<button class="project-option" role="menuitem" @click=${() => { this.nodePickerOpen = true; }}>${icon(Network,{size:16})}<span class="option-copy">Choose machine…</span></button>` : nothing}
+            <mux-ui-menu-item @click=${() => void this.addLocalFolder()}>${icon(Plus,{size:16})}<span class="option-copy">${this.remoteHost ? 'Add folder on this machine…' : 'Add local folder…'}</span></mux-ui-menu-item>
+            ${sdkChats.remoteHosts.length ? html`<mux-ui-menu-item @click=${() => { this.nodePickerOpen = true; }}>${icon(Network,{size:16})}<span class="option-copy">Choose machine…</span></mux-ui-menu-item>` : nothing}
           `}
         </div>` : nothing}</div>
         <div class="spacer"></div>

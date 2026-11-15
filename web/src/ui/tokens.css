@@ -134,6 +134,8 @@
   --ui-picker-compact-height: 340px;
   --ui-picker-trigger-width: 290px;
   --ui-picker-trigger-compact-width: 170px;
+  --ui-folder-dialog-list-min-height: 220px;
+  --ui-folder-dialog-list-max-height: 420px;
   --ui-chat-content-width: 790px;
   --ui-new-chat-starter-min-height: 112px;
   --ui-chat-transcript-width: 760px;
