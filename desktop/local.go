@@ -192,5 +192,6 @@ func (c *Companion) stopLocalMuxterm() {
 		return
 	case <-time.After(750 * time.Millisecond):
 		forceStopLocalServerProcess(running.cmd)
+		<-running.done
 	}
 }
