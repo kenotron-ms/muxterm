@@ -3,7 +3,7 @@ set -euo pipefail
 
 # This runs only on the disposable macos-15 GitHub runner, after build-mac.sh.
 # HOME isolates the app's own Application Support and runtime directories.
-export HOME="${RUNNER_TEMP}/muxterm-quit-verification"
+export HOME="/tmp/mq-${GITHUB_RUN_ID}"
 mkdir -p "$HOME/Library/Application Support/muxterm-desktop/local/runtime"
 settings="$HOME/Library/Application Support/muxterm-desktop/settings.json"
 socket="$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/sessiond.sock"
@@ -41,12 +41,25 @@ wait_for() {
   return 1
 }
 
+wait_for_quick_exit() {
+  local app_pid="$1"
+  for _ in {1..30}; do
+    if app_exited "$app_pid"; then return 0; fi
+    sleep 0.1
+  done
+  echo 'Mac app did not quit within 3 seconds' >&2
+  return 1
+}
+
 printf '{"keepSessionsOnQuit":true}\n' > "$settings"
 env XDG_RUNTIME_DIR="$HOME/Library/Application Support/muxterm-desktop/local/runtime" \
   XDG_CONFIG_HOME="$HOME/Library/Application Support/muxterm-desktop/local/config" \
   XDG_DATA_HOME="$HOME/Library/Application Support/muxterm-desktop/local/data" \
   "$server" sessiond > "$RUNNER_TEMP/muxterm-quit-sessiond.log" 2>&1 &
-wait_for 'private sessiond socket' socket_alive
+wait_for 'private sessiond socket' socket_alive || {
+  cat "$RUNNER_TEMP/muxterm-quit-sessiond.log" >&2
+  exit 1
+}
 
 for keep in true false; do
   printf '{"keepSessionsOnQuit":%s}\n' "$keep" > "$settings"
@@ -54,8 +67,9 @@ for keep in true false; do
   "$app" > "$RUNNER_TEMP/muxterm-quit-app-$keep.log" 2>&1 &
   app_pid=$!
   wait_for 'Mac app window and local server' test -e "$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
+  sleep 1
   osascript -e 'tell application id "io.ampbox.muxterm.desktop" to quit'
-  wait_for 'Mac app exit' app_exited "$app_pid"
+  wait_for_quick_exit "$app_pid"
   if [[ "$keep" == true ]]; then
     socket_alive || { echo 'Session daemon stopped despite Keep Running' >&2; exit 1; }
   else
