@@ -10,6 +10,20 @@ socket="$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/
 server="$(pwd)/desktop/bin/Muxterm.app/Contents/MacOS/muxterm-server"
 app="$(pwd)/desktop/bin/Muxterm.app/Contents/MacOS/muxterm"
 
+diagnose_failure() {
+  local result=$?
+  if [[ "$result" -ne 0 ]]; then
+    echo "Mac Quit verification failed (exit $result)" >&2
+    if [[ -n "${app_pid:-}" ]]; then
+      ps -p "$app_pid" -o pid=,state=,command= >&2 || true
+    fi
+    if [[ -n "${keep:-}" ]]; then
+      cat "$RUNNER_TEMP/muxterm-quit-app-$keep.log" >&2 || true
+    fi
+  fi
+}
+trap diagnose_failure EXIT
+
 socket_alive() {
   python3 - "$socket" <<'PY'
 import socket, sys
@@ -73,6 +87,10 @@ for keep in true false; do
   wait_for 'Mac app window and local server' test -e "$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
   if ! wait_for 'Mac app registration' app_registered; then
     cat "$RUNNER_TEMP/muxterm-quit-app-$keep.log" >&2
+    exit 1
+  fi
+  if app_exited "$app_pid"; then
+    echo 'Mac app exited before Quit was requested' >&2
     exit 1
   fi
   quit_started="$(python3 -c 'import time; print(time.monotonic_ns())')"
