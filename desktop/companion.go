@@ -487,13 +487,13 @@ func (c *Companion) close() {
 	c.mu.Lock()
 	forwards := c.forwards
 	c.forwards = make(map[int]*runningForward)
-	keep := c.settings.KeepSessionsOnQuit != nil && *c.settings.KeepSessionsOnQuit
+	stopSessions := c.settings.KeepSessionsOnQuit != nil && !*c.settings.KeepSessionsOnQuit
 	c.mu.Unlock()
 	for _, running := range forwards {
 		_ = running.cmd.Process.Kill()
 	}
 	c.stopLocalMuxterm()
-	if !keep {
+	if stopSessions {
 		stopOwnedSessiond()
 	}
 }

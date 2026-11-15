@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -139,7 +140,11 @@ func (c *Companion) startLocalMuxterm() (string, error) {
 		case <-running.done:
 		case <-time.After(2 * time.Second):
 			forceStopLocalServerProcess(cmd)
-			<-running.done
+			select {
+			case <-running.done:
+			case <-time.After(time.Second):
+				log.Print("local server did not exit after SIGKILL during startup")
+			}
 		}
 		return "", c.localFailure(fmt.Errorf("local muxterm did not become ready; see %s", logPath))
 	nextPort:
@@ -192,6 +197,10 @@ func (c *Companion) stopLocalMuxterm() {
 		return
 	case <-time.After(750 * time.Millisecond):
 		forceStopLocalServerProcess(running.cmd)
-		<-running.done
+		select {
+		case <-running.done:
+		case <-time.After(time.Second):
+			log.Print("local server did not exit after SIGKILL during Quit")
+		}
 	}
 }

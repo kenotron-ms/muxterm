@@ -86,6 +86,7 @@ wait_for 'private sessiond socket' socket_alive || {
 }
 
 for keep in true false; do
+  socket_alive || { echo 'Private session daemon stopped before Quit verification' >&2; exit 1; }
   printf '{"keepSessionsOnQuit":%s}\n' "$keep" > "$settings"
   rm -f "$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
   open -n --env "HOME=$HOME" \
