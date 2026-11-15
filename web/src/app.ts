@@ -342,14 +342,18 @@ export class MuxApp extends LitElement {
     .main-pane.sidebar-toggle-visible {
       --ui-sidebar-trigger-inset: var(--ui-space-3);
       --ui-screen-header-padding-left: calc(var(--ui-sidebar-trigger-inset) + var(--ui-control-lg) + var(--ui-space-5));
+      --ui-screen-header-clearance: var(--ui-screen-header-padding-left);
       /* A native PWA drag region can swallow clicks on an overlapping sibling. */
-      --ui-screen-header-app-region: no-drag;
-      --ui-title-bar-app-region: no-drag;
-      --ui-screen-header-content-app-region: drag;
-      --ui-title-bar-content-app-region: drag;
+      --ui-screen-header-wco-padding-left: 0px;
     }
     .main-pane.sidebar-collapsed { --ui-sidebar-trigger-inset:max(var(--ui-space-3),var(--wco-left-inset,0px)); }
     .main-pane.sidebar-toggle-visible > mux-title-bar { padding-left:var(--ui-screen-header-padding-left); }
+    @media (display-mode:window-controls-overlay) {
+      .main-pane.sidebar-toggle-visible > mux-title-bar {
+        margin-left:var(--ui-screen-header-clearance);
+        padding-left:0;
+      }
+    }
     .main-pane.sidebar-toggle-visible mux-dock .dv-dockview > .dv-branch-node > .dv-split-view-container > .dv-view-container > .dv-view:first-child .dv-tabs-and-actions-container {
       box-sizing:border-box;
       padding-left:var(--ui-screen-header-padding-left);
@@ -370,16 +374,19 @@ export class MuxApp extends LitElement {
     .sidebar-toggle-position mux-ui-button::part(button) { -webkit-app-region:no-drag; app-region:no-drag; }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
-    .terminal-utility { box-sizing:border-box; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:1px solid var(--ui-shell-divider); background:var(--ui-surface-base); color:var(--ui-text); }
+    .terminal-utility { box-sizing:border-box; position:relative; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:var(--ui-pane-divider-track-width) solid var(--ui-surface-raised); background:var(--ui-surface-base); color:var(--ui-text); }
+    .terminal-utility::before { content:''; position:absolute; top:0; bottom:0; left:calc(-1 * var(--ui-divider-thickness)); width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
     .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,var(--ui-terminal-utility-width)); min-width:0; box-shadow:var(--ui-shadow-side); } }
 
     /* Keep the resize target while drawing only a quiet column seam. */
     .sidebar-gutter {
-      width: var(--ui-space-2);
+      width: var(--ui-pane-divider-track-width);
       position: relative;
       cursor: col-resize;
       background: var(--ui-surface-raised);
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
     }
 
     .sidebar-gutter::after {

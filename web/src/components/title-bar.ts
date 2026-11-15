@@ -66,8 +66,7 @@ export class MuxTitleBar extends LitElement {
     :host([window-chrome]) .brand { font-weight: 500; }
     :host([window-chrome]) .brand-sha { display: none; }
     @media (display-mode: window-controls-overlay) {
-      :host { -webkit-app-region: var(--ui-title-bar-app-region, drag); }
-      .brand { -webkit-app-region: var(--ui-title-bar-content-app-region, inherit); }
+      :host, .brand, .chat-title { -webkit-app-region: drag; }
       mux-ui-button, mux-pane-picker, mux-mic-button {
         -webkit-app-region: no-drag;
       }

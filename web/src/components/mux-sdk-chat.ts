@@ -262,7 +262,10 @@ export class MuxSDKChat extends LitElement {
     .chat-action-dialog h2 { margin:0 0 var(--ui-space-4); font-size:var(--ui-text-xl); }
     .chat-action-dialog p { margin:0 0 var(--ui-space-6); color:var(--ui-text-muted); }
     .chat-action-dialog-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-3); margin-top:var(--ui-space-6); }
-    @media (display-mode: window-controls-overlay) { .chat-screen-header mux-ui-button { -webkit-app-region:no-drag; } }
+    @media (display-mode: window-controls-overlay) {
+      .chat-screen-header.with-utility { width:calc(100% - var(--utility-width) - var(--ui-screen-header-clearance,0px)); }
+      .chat-screen-header mux-ui-button { -webkit-app-region:no-drag; }
+    }
     .breadcrumbs { min-width:0; flex:1; }
     .agent-history-error { align-self:center; width:calc(100% - var(--ui-space-11)); max-width:var(--ui-chat-transcript-width); margin:var(--ui-space-5) auto 0; }
     .delegate-card { display:block; width:100%; max-width:var(--ui-chat-delegate-card-width); }
@@ -507,9 +510,12 @@ export class MuxSDKChat extends LitElement {
     }
     @media (prefers-reduced-motion:reduce) { .send-icon { animation:none; } }
     .status { color:color-mix(in srgb,var(--ui-warning) 70%,var(--ui-text)); font-size:var(--ui-content-font-size); }
-    .drawer { position:relative; z-index:var(--ui-z-drawer); flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); border-left:1px solid var(--ui-shell-divider); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
-    .drawer-resizer { position:absolute; z-index:var(--ui-z-local); left:calc(-.5 * var(--ui-chat-resize-handle-width)); top:0; bottom:0; width:var(--ui-chat-resize-handle-width); cursor:col-resize; touch-action:none; }
-    .drawer-resizer:hover, .drawer-resizer:focus-visible { background:color-mix(in srgb,var(--ui-accent) 25%,transparent); outline:none; }
+    .drawer { position:relative; z-index:var(--ui-z-drawer); flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
+    .drawer-resizer { position:absolute; z-index:var(--ui-z-local); left:calc(var(--ui-pane-divider-track-width) - var(--ui-chat-resize-handle-width)); top:0; bottom:0; width:var(--ui-chat-resize-handle-width); cursor:col-resize; touch-action:none; -webkit-app-region:no-drag; app-region:no-drag; }
+    .drawer-resizer::before { content:''; position:absolute; top:0; bottom:0; left:calc((var(--ui-chat-resize-handle-width) - var(--ui-pane-divider-track-width)) / 2); width:var(--ui-pane-divider-track-width); background:var(--ui-surface-raised); pointer-events:none; }
+    .drawer-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc((var(--ui-chat-resize-handle-width) + var(--ui-pane-divider-track-width)) / 2 - var(--ui-divider-thickness)); width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
+    .drawer-resizer:hover::before, .drawer-resizer:focus-visible::before { background:color-mix(in srgb,var(--ui-accent) 10%,var(--ui-surface-raised)); }
+    .drawer-resizer:focus-visible { outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
     @media(max-width:767.98px) { .chat-screen-header,.chat-screen-header.with-utility { width:100%; --ui-screen-header-padding-right:var(--ui-space-5); } }
     @media(max-width:767.98px) { .body { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-9); } .composer-wrap { padding:0 var(--ui-space-5) var(--ui-space-5); } .drawer,.layout.preview-focused .drawer { box-sizing:border-box; display:flex; flex-direction:column; position:fixed; inset:0; z-index:var(--ui-z-sheet); width:100vw; height:100dvh; margin:0; border:0; box-shadow:var(--ui-shadow-side-strong); padding-top:env(safe-area-inset-top, 0px); } .drawer mux-sdk-utility { flex:1; min-height:0; height:auto; } .drawer-resizer { display:none; } .topbar-actions { gap:var(--ui-space-1); } .chat-screen-header .mobile-nav, .chat-screen-header .chat-menu-trigger, .chat-screen-header .pane-controls mux-ui-button { width:var(--ui-control-lg); height:var(--ui-control-lg); } }

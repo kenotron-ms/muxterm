@@ -1287,14 +1287,11 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .utility-placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--ui-text-muted); }
     mux-sdk-utility .empty { color:var(--ui-text-muted); line-height:1.6; } mux-sdk-utility a { color:var(--ui-accent); }
     mux-sdk-utility .files-panel, mux-sdk-utility .changes-panel, mux-sdk-utility .pages-panel { display:grid; grid-template-columns:minmax(0,1fr) var(--ui-utility-rail-resizer-width) clamp(var(--ui-utility-rail-min-width),var(--rail-width),45%); height:100%; min-width:0; overflow:hidden; position:relative; background:var(--ui-surface-base); }
-    mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr) var(--ui-divider-thickness) clamp(180px,var(--rail-width),45%); grid-template-rows:auto minmax(0,1fr); }
+    mux-sdk-utility .files-panel { grid-template-columns:minmax(0,1fr) var(--ui-utility-rail-resizer-width) clamp(180px,var(--rail-width),45%); grid-template-rows:auto minmax(0,1fr); }
     mux-sdk-utility .files-panel.rail-closed { grid-template-columns:minmax(0,1fr); }
     mux-sdk-utility .files-panel > .viewer-header { grid-column:1 / -1; grid-row:1; }
     mux-sdk-utility .files-panel > .viewer { grid-column:1; grid-row:2; }
-    mux-sdk-utility .files-panel > .vertical-resizer { grid-column:2; grid-row:2; z-index:var(--ui-z-local); width:var(--ui-chat-resize-handle-width); margin-left:calc(-.5 * (var(--ui-chat-resize-handle-width) - var(--ui-divider-thickness))); background:transparent; }
-    mux-sdk-utility .files-panel > .vertical-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc(.5 * (var(--ui-chat-resize-handle-width) - var(--ui-divider-thickness))); width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
-    mux-sdk-utility .files-panel > .vertical-resizer:hover, mux-sdk-utility .files-panel > .vertical-resizer:focus-visible { background:transparent; }
-    mux-sdk-utility .files-panel > .vertical-resizer:hover::after, mux-sdk-utility .files-panel > .vertical-resizer:focus-visible::after { background:var(--ui-accent); }
+    mux-sdk-utility .files-panel > .vertical-resizer { grid-column:2; grid-row:2; }
     mux-sdk-utility .files-panel > .browser { grid-column:3; grid-row:2; }
     mux-sdk-utility .browser { display:flex; flex-direction:column; min-width:0; min-height:0; background:color-mix(in srgb,var(--ui-surface-base) 78%,var(--ui-surface-raised)); }
     mux-sdk-utility .files-panel .browser { background:var(--ui-surface-base); }
@@ -1377,10 +1374,11 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .sandbox-note { display:flex; align-items:center; gap:var(--ui-space-4); padding:var(--ui-space-4) var(--ui-space-5); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     mux-sdk-utility .document-frame { display:block; box-sizing:border-box; flex:1; width:100%; min-height:var(--ui-utility-document-frame-min-height); border:0; background:var(--ui-document-surface); }
     mux-sdk-utility mux-sdk-pdf-preview { display:block; flex:1; min-height:0; }
-    mux-sdk-utility .vertical-resizer { position:relative; cursor:col-resize; background:transparent; touch-action:none; }
-    mux-sdk-utility .vertical-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc(50% - .5px); width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
+    mux-sdk-utility .vertical-resizer { position:relative; z-index:var(--ui-z-local); width:var(--ui-chat-resize-handle-width); margin-left:calc((var(--ui-utility-rail-resizer-width) - var(--ui-chat-resize-handle-width)) / 2); cursor:col-resize; background:transparent; touch-action:none; -webkit-app-region:no-drag; app-region:no-drag; }
+    mux-sdk-utility .vertical-resizer::before { content:''; position:absolute; top:0; bottom:0; left:calc((var(--ui-chat-resize-handle-width) - var(--ui-pane-divider-track-width)) / 2); width:var(--ui-pane-divider-track-width); background:var(--ui-surface-raised); pointer-events:none; }
+    mux-sdk-utility .vertical-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc((var(--ui-chat-resize-handle-width) + var(--ui-pane-divider-track-width)) / 2 - var(--ui-divider-thickness)); width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
     mux-sdk-utility .vertical-resizer:hover, mux-sdk-utility .vertical-resizer:focus-visible { outline:0; }
-    mux-sdk-utility .vertical-resizer:hover::after, mux-sdk-utility .vertical-resizer:focus-visible::after { background:var(--ui-accent); }
+    mux-sdk-utility .vertical-resizer:hover::before, mux-sdk-utility .vertical-resizer:focus-visible::before { background:color-mix(in srgb,var(--ui-accent) 10%,var(--ui-surface-raised)); }
     mux-sdk-utility .changes-list { grid-column:3; grid-row:1; min-width:0; min-height:0; overflow:auto; background:var(--ui-surface-base); }
     mux-sdk-utility .changes-panel > .vertical-resizer { grid-column:2; grid-row:1; }
     mux-sdk-utility .changes-list > header { display:flex; justify-content:space-between; align-items:center; height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); letter-spacing:.1em; }

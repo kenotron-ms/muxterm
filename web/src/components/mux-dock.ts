@@ -895,7 +895,7 @@ export class MuxDock extends LitElement {
           --dv-inactivegroup-hiddenpanel-tab-color: var(--ui-text-muted);
 
           /* Hairline separators kept subtle. */
-          --dv-separator-border: var(--ui-border);
+          --dv-separator-border: var(--ui-shell-divider);
           --dv-tab-divider-color: var(--ui-surface-nav);
 
           /* Resize sash: invisible track, accent only while dragging. */
