@@ -8,6 +8,7 @@ package main
 #include <libproc.h>
 
 static int askQuitPreference(void) {
+    // Wails calls ShouldQuit from NSApplication's main-thread terminate hook.
     @autoreleasepool {
         NSAlert *alert = [[NSAlert alloc] init];
         [alert setMessageText:@"Keep terminal sessions running after Quit?"];

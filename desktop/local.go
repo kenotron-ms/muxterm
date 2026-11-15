@@ -134,11 +134,11 @@ func (c *Companion) startLocalMuxterm() (string, error) {
 			}
 			time.Sleep(75 * time.Millisecond)
 		}
-		_ = cmd.Process.Signal(os.Interrupt)
+		terminateLocalServerProcess(cmd)
 		select {
 		case <-running.done:
 		case <-time.After(2 * time.Second):
-			_ = cmd.Process.Kill()
+			forceStopLocalServerProcess(cmd)
 			<-running.done
 		}
 		return "", c.localFailure(fmt.Errorf("local muxterm did not become ready; see %s", logPath))
