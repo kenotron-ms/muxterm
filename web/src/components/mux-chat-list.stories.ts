@@ -84,7 +84,9 @@ export const PhoneProjectActionError: Story = { globals:{viewport:{value:'phone3
 const showPinnedActionError = async ({canvasElement}: {canvasElement: HTMLElement}) => {
   const list = canvasElement.querySelector<MuxChatList>('mux-chat-list');
   await list?.updateComplete;
-  list?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Unpin project Atlas"]')?.click();
+  list?.shadowRoot?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Project options for Atlas"]')?.click();
+  await list?.updateComplete;
+  [...(list?.shadowRoot?.querySelectorAll<MuxUIMenuItem>('mux-ui-menu-item') ?? [])].find(item => item.textContent?.includes('Unpin project'))?.click();
 };
 export const PinnedActionError: Story = { render:() => view('chat-editor',false,false,false,true), play:showPinnedActionError };
 export const PhonePinnedActionError: Story = { globals:{viewport:{value:'phone390',isRotated:false}},render:() => view('chat-editor',true,false,false,true), play:showPinnedActionError };
