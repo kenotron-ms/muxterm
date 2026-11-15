@@ -50,8 +50,8 @@
     const inSidebar = path.some((node) => node instanceof Element && node.localName === 'mux-sidebar');
     for (const node of path) {
       if (!(node instanceof Element)) continue;
-      if (node.matches('button, a, input, select, textarea, [role="button"], [contenteditable="true"], mux-ui-button, mux-ui-breadcrumb, mux-ui-tab-strip, mux-pane-picker, mux-mic-button, .dv-tab, .mux-header-btn')) return false;
-      if (node.matches('mux-ui-screen-header, mux-title-bar, .sidebar-gutter, .dv-void-container') ||
+      if (node.matches('button, a, input, select, textarea, [role="button"], [role="separator"], [contenteditable="true"], mux-ui-button, mux-ui-breadcrumb, mux-ui-tab-strip, mux-pane-picker, mux-mic-button, .dv-tab, .mux-header-btn, .sidebar-gutter, .drawer-resizer, .vertical-resizer')) return false;
+      if (node.matches('mux-ui-screen-header, mux-title-bar, .dv-void-container') ||
           (inSidebar && node.matches('.header'))) return true;
     }
     return false;
