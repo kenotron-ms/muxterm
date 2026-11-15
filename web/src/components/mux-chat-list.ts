@@ -600,6 +600,7 @@ export class MuxChatList extends LitElement {
     this.pinnedMovingChatId = '';
   }
   private showPinnedContext(event: MouseEvent, item: PinnedItem) {
+    if (this.pinnedRenamingChatId === item.id) return;
     event.preventDefault();
     this.pinnedMenuFor = `${item.kind}:${item.id}`;
     this.pinnedMenuContext = true;
