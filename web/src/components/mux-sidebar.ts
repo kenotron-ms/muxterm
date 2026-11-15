@@ -6,6 +6,7 @@ import { icon } from '../lib/icons.js';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { fetchUpdateStatus, type UpdateStatus } from '../lib/update.js';
 import { macAppVersion } from '../lib/mac-app.js';
+import type { MuxChatList } from './mux-chat-list.js';
 import '../ui/button.js';
 import '../ui/nav-item.js';
 import './mux-chat-list.js';
@@ -30,6 +31,12 @@ export class MuxSidebar extends LitElement {
       background: var(--ui-surface-raised);
       color: var(--ui-text);
       font-family: var(--ui-font-sans);
+      --ui-nav-horizontal-padding: var(--ui-space-4);
+      --ui-nav-icon-size: var(--ui-space-7);
+      --ui-nav-icon-label-gap: var(--ui-space-5);
+      --ui-list-row-horizontal-padding: var(--ui-space-4);
+      --ui-list-row-icon-size: var(--ui-space-7);
+      --ui-list-row-icon-label-gap: var(--ui-space-5);
     }
     .header {
       box-sizing: border-box;
@@ -45,12 +52,18 @@ export class MuxSidebar extends LitElement {
     }
     .header .history { display:flex; align-items:center; gap:var(--ui-space-1); margin-left:auto; }
     :host([drawer]) .header { display: none; }
+    .fixed-actions,
     .nav-actions {
       display: flex;
       flex-direction: column;
       flex: none;
       gap: var(--ui-space-1);
+    }
+    .fixed-actions {
       padding: var(--ui-space-5) var(--ui-space-3) 0;
+    }
+    .nav-actions {
+      padding-top: var(--ui-space-2);
     }
     .tab-content {
       flex: 1;
@@ -63,9 +76,10 @@ export class MuxSidebar extends LitElement {
       padding: var(--ui-space-4) var(--ui-space-3) var(--ui-space-5);
     }
     .drawer-footer-actions { display: none; }
+    :host([drawer]) .fixed-actions { display: none; }
     :host([drawer]) .nav-actions {
       gap: 0;
-      padding: var(--ui-space-4) 0 0;
+      padding-top: var(--ui-space-4);
     }
     :host([drawer]) .nav-actions mux-ui-nav-item {
       --ui-nav-row-height: var(--ui-sidebar-nav-row-height);
@@ -177,6 +191,11 @@ export class MuxSidebar extends LitElement {
     this.updateStatus = (event as CustomEvent<UpdateStatus>).detail;
   };
 
+  private onContentScroll = (event: Event): void => {
+    const viewport = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    this.renderRoot.querySelector<MuxChatList>('mux-chat-list')?.onSidebarScroll(viewport);
+  };
+
   private renderFooter() {
     if (this.drawer) {
       return html`<div class="drawer-footer-actions">
@@ -200,12 +219,11 @@ export class MuxSidebar extends LitElement {
 
   override render() {
     const navActions = [
-      { label: 'New Chat', icon: Plus, active: this.newChatActive, event: 'chat-new' },
       { label: 'Terminal', icon: SquareTerminal, active: this.terminalActive, event: 'terminal-open' },
       { label: 'Scheduled jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
       { label: 'Customizations', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
       { label: 'Skills', icon: Puzzle, active: this.skillsActive, event: 'skills-open' },
-    ].filter(action => !this.drawer || action.event !== 'chat-new');
+    ];
     const nav = html`<nav class="nav-actions" aria-label="Sidebar actions">
       ${navActions.map(action => html`
         <mux-ui-nav-item label=${action.label} ?active=${action.active}
@@ -222,9 +240,16 @@ export class MuxSidebar extends LitElement {
           <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Forward" tooltip="Forward" @click=${() => window.history.forward()}>${icon(ChevronRight,{size:17})}</mux-ui-button>
         </div>
       </div>
-      ${this.drawer
-        ? html`<div class="tab-content">${nav}<div class="chat-scroll"><mux-chat-list drawer .selectedSession=${this.selectedSDKChat}></mux-chat-list></div></div>`
-        : html`${nav}<div class="tab-content"><mux-chat-list .selectedSession=${this.selectedSDKChat}></mux-chat-list></div>`}
+      ${!this.drawer ? html`<nav class="fixed-actions" aria-label="New chat">
+        <mux-ui-nav-item label="New Chat" ?active=${this.newChatActive}
+          @click=${() => this.dispatchEvent(new CustomEvent('chat-new', { bubbles: true, composed: true }))}>
+          <span slot="icon">${icon(Plus, { size: 16 })}</span>
+        </mux-ui-nav-item>
+      </nav>` : nothing}
+      <div class="tab-content" @scroll=${this.onContentScroll}>
+        ${nav}
+        <div class="chat-scroll"><mux-chat-list .drawer=${this.drawer} .selectedSession=${this.selectedSDKChat}></mux-chat-list></div>
+      </div>
       ${this.renderFooter()}
     `;
   }
