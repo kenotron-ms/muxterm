@@ -308,10 +308,10 @@ export class MuxSDKChat extends LitElement {
     .scroll-bottom::part(button):hover { background:var(--ui-surface-hover); }
     .virtual-spacer { width:var(--ui-divider-thickness); flex:none; pointer-events:none; }
     .block { max-width:var(--ui-chat-transcript-width); width:100%; align-self:center; margin-bottom:var(--ui-space-8); box-sizing:border-box; }
-    .block.user { margin-bottom:var(--ui-space-9); }
-    .block.assistant { position:relative; margin-bottom:var(--ui-space-9); --ui-text:var(--ui-chat-assistant-text); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); box-shadow:0 2px 8px color-mix(in srgb,black 8%,transparent); }
+    .block.user { margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); }
+    .block.assistant { position:relative; margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); --ui-text:var(--ui-chat-assistant-text); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); box-shadow:0 2px 8px color-mix(in srgb,black 8%,transparent); }
     .block.assistant:has(mux-chat-visualization[mode="wide"]) { max-width:min(var(--ui-chat-visualization-wide-width),100%); }
-    .block.work { margin-top:calc(-1 * var(--ui-space-5)); margin-bottom:var(--ui-space-7); }
+    .block.work { margin-bottom:var(--ui-space-7); }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .work-stream .pulse { width:var(--ui-chat-pulse-size); height:var(--ui-chat-pulse-size); flex:none; border-radius:50%; background:var(--ui-accent); animation:activity-pulse 1.35s ease-in-out infinite; }
@@ -408,6 +408,7 @@ export class MuxSDKChat extends LitElement {
     .message-edit textarea,.message-edit .textarea-mirror { min-height:var(--ui-chat-edit-min-height); max-height:var(--ui-chat-edit-max-height); }
     .message-edit-controls { display:flex; justify-content:flex-end; gap:var(--ui-space-4); margin-top:var(--ui-space-4); }
     @media (hover:none) { .message-actions { opacity:1; } }
+    @media (pointer:coarse) { .block.user,.block.assistant { margin-bottom:calc(var(--ui-control-lg) + var(--ui-space-8)); } }
     @media (prefers-reduced-motion:reduce) { .message-actions { transition:none; } }
     .speaker { color:var(--ui-text-muted); font-size:var(--ui-text-lg); font-weight:600; margin-bottom:var(--ui-space-5); text-transform:capitalize; }
     .text { color:var(--ui-text); font-size:var(--ui-text-lg); line-height:1.68; overflow-wrap:anywhere; }
