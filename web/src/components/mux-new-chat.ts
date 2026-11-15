@@ -74,6 +74,7 @@ export class MuxNewChat extends LitElement {
   @state() private promptHasContent = false;
   private promptTimer?: number;
   private pendingPrompt?: string;
+  private pendingFolderChoose?: () => void;
   @state() private listing?: FolderListing;
   @state() private pickerOpen = false;
   @state() private folderDialogOpen = false;
@@ -273,6 +274,7 @@ export class MuxNewChat extends LitElement {
   }
   override disconnectedCallback() {
     this.flushPrompt();
+    this.pendingFolderChoose?.();
     this.unsub?.();
     document.removeEventListener('pointerdown', this.closeDropdowns);
     window.removeEventListener('dragover', this.preventFileNavigation);
@@ -426,13 +428,20 @@ export class MuxNewChat extends LitElement {
     this.pickerOpen = false;
     const desktop = (window as Window & { __muxtermDesktopBrowser?: { chooseChatFolder?: boolean; send: (message: unknown) => void } }).__muxtermDesktopBrowser;
     if (desktop?.chooseChatFolder && !this.remoteHost) {
+      if (this.pendingFolderChoose) return;
       const id = crypto.randomUUID();
       const result = await new Promise<{path?:string;error?:string;fallback?:boolean}>(resolve => {
         const receive = (event: Event) => {
           const detail = (event as CustomEvent<{id:string;path?:string;error?:string;fallback?:boolean}>).detail;
           if (detail.id !== id) return;
           window.removeEventListener('muxterm-folder-chosen', receive);
+          this.pendingFolderChoose = undefined;
           resolve(detail);
+        };
+        this.pendingFolderChoose = () => {
+          window.removeEventListener('muxterm-folder-chosen', receive);
+          this.pendingFolderChoose = undefined;
+          resolve({});
         };
         window.addEventListener('muxterm-folder-chosen', receive);
         desktop.send({type:'choose-chat-folder', id});
