@@ -375,7 +375,6 @@ export function applyChromeTokens(
 
 /** Match browser-owned PWA controls to the surface underneath them. */
 export function syncPwaThemeColor(root: HTMLElement = document.documentElement): void {
-  const color = root.style.getPropertyValue('--mux-titlebar-bg') ||
-    root.style.getPropertyValue('--chrome-bar') || CHROME_DARK.bar;
+  const color = root.style.getPropertyValue('--chrome-bar') || CHROME_DARK.bar;
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', color);
 }

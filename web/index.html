@@ -34,7 +34,7 @@
         root.style.setProperty('--mux-page-bg', light ? '#f4f6f7' : '#1b2025');
         root.style.setProperty('--mux-page-fg', light ? '#26343b' : '#e5ecf0');
         document.querySelector('meta[name="theme-color"]').content =
-          localStorage.getItem('mux-titlebar-color') || (light ? '#ffffff' : '#262d33');
+          light ? '#ffffff' : '#262d33';
       } catch { /* Browser storage may be unavailable. */ }
     </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

@@ -223,7 +223,7 @@
 
   --ui-surface-base: var(--chrome-body);
   --ui-surface-raised: var(--chrome-bar);
-  --ui-surface-nav: var(--mux-titlebar-bg, var(--chrome-bar));
+  --ui-surface-nav: var(--chrome-bar);
   --ui-surface-hover: var(--chrome-hover);
   --ui-surface-tinted: color-mix(in srgb, var(--ui-accent) 9%, var(--ui-surface-raised));
   --ui-connection-scrim: color-mix(in srgb, var(--ui-surface-base) 85%, transparent);
@@ -249,6 +249,7 @@
   --ui-terminal-surface: var(--mux-bg);
   --ui-chat-backdrop-color: var(--ui-surface-base);
   --ui-chat-backdrop-image: none;
+  --ui-chat-backdrop-wash: transparent;
   --ui-chat-user-surface: color-mix(in srgb, var(--ui-accent) 14%, var(--ui-surface-base));
   --ui-chat-assistant-surface: var(--ui-surface-raised);
   --ui-chat-assistant-text: var(--ui-text);

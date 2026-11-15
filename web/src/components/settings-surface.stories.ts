@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from '../lib/config.js';
-import { APP_THEMES } from '../lib/app-appearance.js';
+import { APP_THEMES, CHAT_BACKDROPS } from '../lib/app-appearance.js';
 import { isLightTheme } from '../lib/theme.js';
 import { DEFAULT_VOICE_STATUS, type VoiceStatus } from '../lib/voice-settings.js';
 import { fixtureJSON, type ApiFixture } from '../stories/api-fixture.js';
@@ -162,7 +162,8 @@ function storyConfig(globals: Record<string, unknown>): ResolvedConfig {
   const app = APP_THEMES.find(theme => theme.id === globals['appTheme'])?.id ?? 'neutral';
   const mode = globals['appMode'] === 'light' || globals['appMode'] === 'dark'
     ? globals['appMode'] : isLightTheme(String(globals['palette'] || 'tokyo-night')) ? 'light' : 'dark';
-  return { ...DEFAULT_RESOLVED_CONFIG, theme:{ ...DEFAULT_RESOLVED_CONFIG.theme, app, mode } };
+  const backdrop = CHAT_BACKDROPS.find(item => item.id === globals['chatBackdrop'])?.id ?? 'neutral';
+  return { ...DEFAULT_RESOLVED_CONFIG, theme:{ ...DEFAULT_RESOLVED_CONFIG.theme, app, mode, backdrop } };
 }
 
 const renderPhonePage = (args: SettingsArgs, context: { globals: Record<string, unknown> }) => html`<div style="height:100dvh;display:flex;background:var(--ui-surface-base)">
