@@ -1,6 +1,7 @@
 (() => {
   if (window.__muxtermDesktopBrowser) return;
   window.__muxtermDesktopBrowser = {
+    chooseChatFolder: true,
     send(message) {
       window.webkit.messageHandlers.external.postMessage('muxterm.desktop:' + JSON.stringify(message));
     },

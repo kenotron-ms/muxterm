@@ -4,7 +4,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import { remoteChatPath } from '../lib/remote-chat-routes.js';
-import { ArrowLeft, ArrowUp, Check, ChevronDown, FileSearch, Folder, ListTodo, MessageCircle, Network, Plus, SquareTerminal } from 'lucide';
+import { ArrowLeft, ArrowUp, Check, ChevronDown, ChevronRight, FileSearch, Folder, ListTodo, MessageCircle, Network, Plus, SquareTerminal, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { chatComposerAttachment } from './chat-composer-attachment.js';
 import '../ui/button.js';
@@ -76,6 +76,15 @@ export class MuxNewChat extends LitElement {
   private pendingPrompt?: string;
   @state() private listing?: FolderListing;
   @state() private pickerOpen = false;
+  @state() private folderDialogOpen = false;
+  @state() private folderDialogListing?: FolderListing;
+  @state() private folderDialogPath = '';
+  @state() private folderDialogLoading = false;
+  @state() private folderDialogError = '';
+  @state() private showHiddenFolders = false;
+  @state() private newFolderOpen = false;
+  @state() private newFolderName = '';
+  @state() private newFolderCreating = false;
   @state() private busy = false;
   @state() private error = '';
   @state() private clipboardError = '';
@@ -190,7 +199,7 @@ export class MuxNewChat extends LitElement {
     .project-trigger:hover,.project-trigger[aria-expanded="true"] { background:var(--ui-surface-hover); color:var(--ui-text); }
     .project-trigger:focus-visible { outline:2px solid var(--ui-focus); }
     .project-trigger span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .project-options { position:absolute; z-index:var(--ui-z-menu); bottom:calc(100% + var(--ui-space-2)); left:0; box-sizing:border-box; width:min(var(--ui-mobile-drawer-width),calc(100vw - var(--ui-control-lg))); max-height:min(var(--ui-dialog-height),75dvh); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-overlay); box-shadow:var(--ui-shadow-menu); --folder-list-height:var(--ui-new-chat-location-width); }
+    .project-options { position:absolute; z-index:var(--ui-z-menu); top:calc(100% + var(--ui-space-2)); left:0; box-sizing:border-box; width:min(var(--ui-mobile-drawer-width),calc(100vw - var(--ui-control-lg))); max-height:min(var(--ui-dialog-height),75dvh); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-overlay); box-shadow:var(--ui-shadow-menu); --folder-list-height:var(--ui-new-chat-location-width); }
     .project-options mux-folder-picker { display:block; width:100%; }
     .project-options mux-folder-picker::part(menu) { border:0; }
     .project-option { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-height:var(--ui-control-md); padding:var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); text-align:left; font:inherit; cursor:pointer; }
@@ -203,6 +212,30 @@ export class MuxNewChat extends LitElement {
     .remote-status { width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); flex:none; border-radius:50%; background:var(--ui-text-muted); }
     .remote-status.connected { background:var(--ui-success); }
     .project-divider { height:var(--ui-divider-thickness); margin:var(--ui-space-2) 0; background:var(--ui-border); }
+    .folder-dialog { box-sizing:border-box; display:grid; gap:var(--ui-space-4); width:100%; min-width:0; padding:var(--ui-space-6); color:var(--ui-text); }
+    .folder-dialog h2 { margin:0; font-size:var(--ui-text-xl); font-weight:600; }
+    .folder-dialog .folder-path { display:flex; gap:var(--ui-space-2); align-items:center; }
+    .folder-dialog .folder-path input { box-sizing:border-box; flex:1; min-width:0; height:var(--ui-control-md); padding:0 var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; font-size:var(--ui-text-sm); }
+    .folder-dialog .folder-path input:focus-visible,.folder-dialog button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .folder-dialog .folder-up { display:grid; place-items:center; width:var(--ui-control-md); height:var(--ui-control-md); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); cursor:pointer; }
+    .folder-dialog .folder-list-toolbar { display:flex; align-items:center; justify-content:space-between; min-height:var(--ui-control-sm); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .folder-dialog .folder-new { display:flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-control-sm); padding:0 var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; font-size:var(--ui-text-sm); cursor:pointer; }
+    .folder-dialog .folder-new:hover { background:var(--ui-surface-hover); }
+    .folder-dialog .folder-new:disabled { opacity:.5; cursor:default; }
+    .folder-dialog .folder-list { min-height:220px; max-height:min(46dvh,420px); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); }
+    .folder-dialog .folder-row { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-height:var(--ui-control-md); padding:var(--ui-space-2) var(--ui-space-3); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); font:inherit; text-align:left; cursor:pointer; }
+    .folder-dialog .folder-row:hover { background:var(--ui-surface-hover); }
+    .folder-dialog .folder-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .folder-dialog .folder-row svg { color:var(--ui-text-muted); }
+    .folder-dialog .folder-row.editing { background:var(--ui-surface-hover); cursor:default; }
+    .folder-dialog .folder-row.editing input { box-sizing:border-box; flex:1; min-width:0; height:var(--ui-control-sm); padding:0 var(--ui-space-2); border:1px solid var(--ui-focus); border-radius:var(--ui-radius-sm); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; }
+    .folder-dialog .folder-row.editing input:focus { outline:0; }
+    .folder-dialog .folder-row.editing button { display:grid; place-items:center; flex:none; width:var(--ui-control-sm); height:var(--ui-control-sm); padding:0; border:0; border-radius:var(--ui-radius-sm); background:transparent; color:var(--ui-text-muted); cursor:pointer; }
+    .folder-dialog .folder-row.editing button:hover { background:var(--ui-surface-raised); color:var(--ui-text); }
+    .folder-dialog .folder-empty { padding:var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .folder-dialog .folder-options { display:flex; align-items:center; min-height:var(--ui-control-sm); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .folder-dialog .folder-options label { display:flex; flex-direction:row; align-items:center; gap:var(--ui-space-2); cursor:pointer; }
+    .folder-dialog .folder-actions { display:flex; align-items:center; justify-content:flex-end; gap:var(--ui-space-3); padding-top:var(--ui-space-2); }
     .new-folder-form { display:grid; gap:var(--ui-space-5); padding:var(--ui-space-6); color:var(--ui-text); }
     .new-folder-form h2 { margin:0; font-size:var(--ui-text-xl); }
     .new-folder-form .field-label { display:grid; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
@@ -214,6 +247,7 @@ export class MuxNewChat extends LitElement {
       .composer-actions .chat-picker { max-width:var(--ui-dock-rename-max-width); }
       .context-bar { min-height:var(--ui-control-lg); }
       .project-trigger,.project-option { min-height:var(--ui-control-lg); }
+      .folder-dialog { min-width:0; padding:var(--ui-space-5); }
     }
   `;
 
@@ -307,6 +341,107 @@ export class MuxNewChat extends LitElement {
       void this.loadCatalog();
     } catch (error) { this.error = error instanceof Error ? error.message : String(error); }
     finally { this.folderSelecting = false; }
+  }
+  private selectExistingProject(project: {id:string;path:string}) {
+    this.projectId = project.id;
+    this.folder = project.path;
+    this.workMode = 'local';
+    this.pickerOpen = false;
+    void this.loadCatalog();
+  }
+  private async browseFolder(path: string) {
+    this.folderDialogLoading = true;
+    this.folderDialogError = '';
+    try {
+      const listing = await sdkChats.folders(path, this.remoteHost);
+      if (!this.folderDialogOpen) return;
+      this.folderDialogListing = listing;
+      this.folderDialogPath = listing.path;
+    } catch (error) {
+      this.folderDialogError = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.folderDialogLoading = false;
+    }
+  }
+  private async confirmFolder() {
+    if (this.folderDialogLoading || this.folderSelecting) return;
+    const path = this.folderDialogPath.trim();
+    if (!path) return;
+    if (path !== this.folderDialogListing?.path) {
+      this.folderDialogLoading = true;
+      this.folderDialogError = '';
+      try {
+        const listing = await sdkChats.folders(path, this.remoteHost);
+        if (listing.path !== path.replace(/\/+$/, '') && !(path === '/' && listing.path === '/')) {
+          this.folderDialogError = 'That folder does not exist. Choose an existing folder.';
+          return;
+        }
+        this.folderDialogPath = listing.path;
+      } catch (error) {
+        this.folderDialogError = error instanceof Error ? error.message : String(error);
+        return;
+      } finally {
+        this.folderDialogLoading = false;
+      }
+    }
+    this.folderDialogOpen = false;
+    await this.selectFolder(this.folderDialogPath);
+  }
+  private openNewFolder() {
+    this.newFolderName = '';
+    this.folderDialogError = '';
+    this.newFolderOpen = true;
+    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLInputElement>('.folder-row.editing input')?.focus());
+  }
+  private async createNewFolder() {
+    const parent = this.folderDialogListing?.path;
+    let name = this.newFolderName.trim();
+    if (!name) {
+      name = 'New folder';
+      for (let number = 2; this.folderDialogListing?.folders.includes(name); number++) name = `New folder ${number}`;
+    }
+    if (!parent || !this.validNewFolderName(name) || this.newFolderCreating) return;
+    this.newFolderCreating = true;
+    this.folderDialogError = '';
+    try {
+      const path = `${parent.replace(/\/$/, '')}/${name}`;
+      await sdkChats.createProject(path, name, [], true, false, this.remoteHost);
+      this.newFolderOpen = false;
+      await this.browseFolder(path);
+    } catch (error) {
+      this.folderDialogError = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.newFolderCreating = false;
+    }
+  }
+  private openFolderDialog() {
+    this.pickerOpen = false;
+    this.folderDialogOpen = true;
+    this.folderDialogListing = undefined;
+    this.showHiddenFolders = false;
+    this.newFolderOpen = false;
+    void this.browseFolder(this.folder || this.listing?.base || '');
+  }
+  private async addLocalFolder() {
+    this.pickerOpen = false;
+    const desktop = (window as Window & { __muxtermDesktopBrowser?: { chooseChatFolder?: boolean; send: (message: unknown) => void } }).__muxtermDesktopBrowser;
+    if (desktop?.chooseChatFolder && !this.remoteHost) {
+      const id = crypto.randomUUID();
+      const result = await new Promise<{path?:string;error?:string;fallback?:boolean}>(resolve => {
+        const receive = (event: Event) => {
+          const detail = (event as CustomEvent<{id:string;path?:string;error?:string;fallback?:boolean}>).detail;
+          if (detail.id !== id) return;
+          window.removeEventListener('muxterm-folder-chosen', receive);
+          resolve(detail);
+        };
+        window.addEventListener('muxterm-folder-chosen', receive);
+        desktop.send({type:'choose-chat-folder', id});
+      });
+      if (result.path) { await this.selectFolder(result.path); return; }
+      if (result.error) { this.error = result.error; return; }
+      if (!result.fallback) return;
+    }
+    this.openFolderDialog();
   }
   private openProjectDialog() {
     this.pickerOpen = false;
@@ -596,13 +731,11 @@ export class MuxNewChat extends LitElement {
             <div class="project-divider"></div>
             <mux-ui-menu-item @click=${this.openRemoteSettings}>${icon(Plus,{size:16})}<span>Set up SSH machine…</span></mux-ui-menu-item>
           ` : html`
-            <button class="project-option" role="menuitemradio" aria-checked=${this.projectId === 'ungrouped' && !this.remoteHost} ?selected=${this.projectId === 'ungrouped' && !this.remoteHost} @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy"><strong>Chat</strong><small>No project folder</small></span>${this.projectId === 'ungrouped' && !this.remoteHost ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>
+            <button class="project-option" role="menuitemradio" aria-checked=${this.projectId === 'ungrouped' && !this.remoteHost} ?selected=${this.projectId === 'ungrouped' && !this.remoteHost} @click=${this.selectChat}>${icon(MessageCircle,{size:16})}<span class="option-copy">Chat</span>${this.projectId === 'ungrouped' && !this.remoteHost ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>
+            ${sdkChats.projects.filter(project => (project.remoteHost || '') === this.remoteHost).map(project => html`<button class="project-option" role="menuitemradio" aria-checked=${this.projectId === project.id} ?selected=${this.projectId === project.id} title=${project.path} @click=${() => this.selectExistingProject(project)}>${icon(Folder,{size:16})}<span class="option-copy">${project.name}</span>${this.projectId === project.id ? html`<span class="selected-icon">${icon(Check,{size:15})}</span>` : nothing}</button>`)}
             <div class="project-divider"></div>
-            <mux-folder-picker inline label="Folders" .remoteHost=${this.remoteHost} .value=${this.projectId === 'ungrouped' || selectedProject?.managedFolder ? '' : this.folder} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => void this.selectFolder(event.detail.path)}></mux-folder-picker>
-            <div class="project-divider"></div>
-            <mux-ui-menu-item @click=${this.openProjectDialog}>${icon(Plus,{size:16})}<strong>New project folder${this.remoteHost ? ` on ${sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'remote machine'}` : ''}</strong></mux-ui-menu-item>
-            <mux-ui-menu-item @click=${() => { this.nodePickerOpen = true; }}>${icon(Network,{size:16})}<span class="option-copy"><strong>Choose machine…</strong><small>${this.remoteHost ? sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'Remote machine' : 'This machine'}</small></span></mux-ui-menu-item>
-            <mux-ui-menu-item @click=${this.openRemoteSettings}>${icon(Plus,{size:16})}<span>Set up SSH machine…</span></mux-ui-menu-item>
+            <button class="project-option" role="menuitem" @click=${() => void this.addLocalFolder()}>${icon(Plus,{size:16})}<span class="option-copy">${this.remoteHost ? 'Add folder on this machine…' : 'Add local folder…'}</span></button>
+            ${sdkChats.remoteHosts.length ? html`<button class="project-option" role="menuitem" @click=${() => { this.nodePickerOpen = true; }}>${icon(Network,{size:16})}<span class="option-copy">Choose machine…</span></button>` : nothing}
           `}
         </div>` : nothing}</div>
         <div class="spacer"></div>
@@ -613,6 +746,19 @@ export class MuxNewChat extends LitElement {
         <mux-ui-button class="starter-prompt" variant="quiet" @click=${() => this.useStarterPrompt('Help me debug a failing command in my terminal.')}>${icon(SquareTerminal,{size:18})}<span>Debug a terminal command</span></mux-ui-button>
         <mux-ui-button class="starter-prompt" variant="quiet" @click=${() => this.useStarterPrompt('Help me plan and implement a change in this project.')}>${icon(ListTodo,{size:18})}<span>Plan a project change</span></mux-ui-button>
       </div>
+
+      ${this.folderDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="Choose a folder" .dismissable=${!this.newFolderCreating} @dismiss=${() => { this.folderDialogOpen = false; }}><div class="folder-dialog">
+        <h2>Choose a folder</h2>
+        <div class="folder-path"><button class="folder-up" type="button" aria-label="Parent folder" ?disabled=${!this.folderDialogListing || this.folderDialogListing.path === this.folderDialogListing.parent} @click=${() => void this.browseFolder(this.folderDialogListing?.parent || '')}>${icon(ArrowLeft,{size:17})}</button><input aria-label="Folder path" .value=${this.folderDialogPath} @input=${(event:Event) => { this.folderDialogPath = (event.target as HTMLInputElement).value; }} @keydown=${(event:KeyboardEvent) => { if (event.key === 'Enter') void this.browseFolder(this.folderDialogPath); }}><mux-ui-button size="small" variant="secondary" @click=${() => void this.browseFolder(this.folderDialogPath)}>Go</mux-ui-button></div>
+        <div class="folder-list-toolbar"><span>Folders</span><button class="folder-new" type="button" ?disabled=${!this.folderDialogListing || this.folderDialogLoading || this.newFolderCreating || this.newFolderOpen} @click=${this.openNewFolder}>${icon(Plus,{size:15})}<span>New folder</span></button></div>
+        <div class="folder-list" role="list" aria-label="Folders">
+          ${this.newFolderOpen ? html`<div class="folder-row editing" role="listitem">${icon(Folder,{size:17})}<input aria-label="New folder name" placeholder="New folder" .value=${this.newFolderName} ?disabled=${this.newFolderCreating} @input=${(event:Event) => { this.newFolderName = (event.target as HTMLInputElement).value; }} @keydown=${(event:KeyboardEvent) => { if (event.key === 'Enter') { event.preventDefault(); void this.createNewFolder(); } else if (event.key === 'Escape') { event.stopPropagation(); this.newFolderOpen = false; this.folderDialogError = ''; } }}><button type="button" aria-label="Create folder" title="Create folder" ?disabled=${this.newFolderCreating || !this.validNewFolderName(this.newFolderName.trim() || 'New folder')} @click=${() => void this.createNewFolder()}>${icon(Check,{size:16})}</button><button type="button" aria-label="Cancel new folder" title="Cancel" ?disabled=${this.newFolderCreating} @click=${() => { this.newFolderOpen = false; this.folderDialogError = ''; }}>${icon(X,{size:16})}</button></div>` : nothing}
+          ${this.folderDialogLoading ? html`<div class="folder-empty">Loading folders…</div>` : this.folderDialogListing?.folders.filter(name => this.showHiddenFolders || !name.startsWith('.')).length ? this.folderDialogListing.folders.filter(name => this.showHiddenFolders || !name.startsWith('.')).sort((a,b) => a.localeCompare(b)).map(name => html`<button class="folder-row" role="listitem" type="button" @click=${() => void this.browseFolder(`${this.folderDialogListing!.path.replace(/\/$/,'')}/${name}`)}>${icon(Folder,{size:17})}<span>${name}</span>${icon(ChevronRight,{size:16})}</button>`) : this.newFolderOpen ? nothing : html`<div class="folder-empty">No folders here</div>`}
+        </div>
+        <div class="folder-options"><label><input type="checkbox" .checked=${this.showHiddenFolders} @change=${(event:Event) => { this.showHiddenFolders = (event.target as HTMLInputElement).checked; }}>Show hidden folders</label></div>
+        ${this.folderDialogError ? html`<mux-ui-feedback kind="error" density="compact">${this.folderDialogError}</mux-ui-feedback>` : nothing}
+        <div class="folder-actions"><mux-ui-button variant="quiet" ?disabled=${this.newFolderCreating} @click=${() => { this.folderDialogOpen = false; }}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${!this.folderDialogPath.trim() || this.folderDialogLoading || this.folderSelecting || this.newFolderOpen} @click=${() => void this.confirmFolder()}>Use this folder</mux-ui-button></div>
+      </div></mux-ui-dialog>` : nothing}
       ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New project folder" .dismissable=${!this.projectCreating} @dismiss=${this.closeProjectDialog}><div class="new-folder-form">
         <h2>New project folder${this.remoteHost ? ` on ${sdkChats.remoteHosts.find(host => host.id === this.remoteHost)?.name || 'remote machine'}` : ''}</h2>
         <label class="field-label">Parent folder<mux-folder-picker inline label="Parent folder" .remoteHost=${this.remoteHost} .value=${this.projectParent} .base=${this.listing?.base || ''} @folder-selected=${(event:CustomEvent<{path:string}>) => { this.projectParent = event.detail.path; }}></mux-folder-picker></label>
