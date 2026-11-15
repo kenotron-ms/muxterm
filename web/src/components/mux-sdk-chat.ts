@@ -16,6 +16,7 @@ import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js
 import { voiceInputController, type ComposerDictationCapture, type VoiceTranscriptPayload } from '../lib/voice-input-controller.js';
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { scrollEdgeFadeStyles, syncScrollEdgeFade } from '../lib/scroll-edge-fade.js';
 import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
 import { chatCommandSuggestions, parseChatCommand, type ChatCommandInvocation } from '../lib/chat-commands.js';
 import { laneIcon } from '../lib/lane-icon.js';
@@ -206,6 +207,8 @@ export class MuxSDKChat extends LitElement {
   private rowHeights = new Map<string, number>();
   private observedRows = new Set<HTMLElement>();
   private rowsCache?: { blocks: Block[]; rows: TranscriptRow[] };
+  private scrollFadeBody?: HTMLElement;
+  private readonly scrollFadeObserver = new ResizeObserver(() => this.updateScrollFade());
   @state() private visibleStart = 0;
   @state() private visibleEnd = 0;
   private rowObserver = new ResizeObserver(entries => {
@@ -249,6 +252,7 @@ export class MuxSDKChat extends LitElement {
   private parentScrollTop = 0;
   static styles = css`
     ${subtleScrollbars}
+    ${scrollEdgeFadeStyles}
     :host([side-mode]) .chat-screen-header { display:none; }
     :host([side-mode]) mux-sdk-chat-settings { display:none; }
     :host { position:absolute; inset:0; z-index:var(--ui-z-screen); display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-content-font-size)/1.55 var(--ui-content-font-family); }
@@ -527,6 +531,7 @@ export class MuxSDKChat extends LitElement {
   `;
   override connectedCallback() {
     super.connectedCallback();
+    void this.updateComplete.then(() => { if (this.isConnected) this.observeScrollFade(); });
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     document.addEventListener('pointerdown', this.onChatMenuOutsidePointer);
     document.addEventListener('keydown', this.onChatMenuEscape);
@@ -601,6 +606,8 @@ export class MuxSDKChat extends LitElement {
     if (this.workTimer) clearTimeout(this.workTimer);
     this.workTimer = undefined;
     this.rowObserver.disconnect();
+    this.scrollFadeObserver.disconnect();
+    this.scrollFadeBody = undefined;
     this.observedRows.clear();
     this.activeSession = '';
     for (const a of this.attachments) if (a.preview) URL.revokeObjectURL(a.preview);
@@ -665,6 +672,7 @@ export class MuxSDKChat extends LitElement {
   }
   override updated(changed: Map<string, unknown>) {
     this.syncWorkTimer();
+    this.observeScrollFade();
     const rows = new Set(this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]'));
     for (const row of this.observedRows) if (!rows.has(row)) this.rowObserver.unobserve(row);
     for (const row of rows) if (!this.observedRows.has(row)) this.rowObserver.observe(row);
@@ -2253,12 +2261,26 @@ export class MuxSDKChat extends LitElement {
     // its row mounted until the restoration finishes.
     if (!this.restoringScroll) this.updateVisibleRows();
     if (!this.restoringScroll) this.updateScrollBottomVisibility();
+    this.updateScrollFade();
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     if (!this.restoringScroll && !this.fillingRecent && body && body.scrollHeight > body.clientHeight && body.scrollTop < 450 && this.hasOlder) void this.loadOlder();
   }
   private updateScrollBottomVisibility() {
     const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
     this.showScrollBottom = !!body && body.scrollHeight - body.scrollTop - body.clientHeight > 100;
+  }
+  private updateScrollFade() {
+    const body = this.shadowRoot?.querySelector<HTMLElement>('.body');
+    if (body) syncScrollEdgeFade(body, 48);
+  }
+  private observeScrollFade() {
+    const body = this.shadowRoot?.querySelector<HTMLElement>('.body') ?? undefined;
+    if (body !== this.scrollFadeBody) {
+      this.scrollFadeObserver.disconnect();
+      this.scrollFadeBody = body;
+      if (body) this.scrollFadeObserver.observe(body);
+    }
+    this.updateScrollFade();
   }
   private async scrollToBottom() {
     const session = this.activeSession;
@@ -2756,7 +2778,7 @@ export class MuxSDKChat extends LitElement {
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       ${this.recoveryRequired ? html`<mux-ui-feedback class="recovery" kind="warning" appearance="panel"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><mux-ui-button slot="action" variant="secondary" size="small" @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</mux-ui-button></mux-ui-feedback>` : nothing}
-      <div class="body ${sideStart ? 'side-empty' : ''}" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
+      <div class="body scroll-edge-fade ${sideStart ? 'side-empty' : ''}" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${sideStart ? html`<div><h2>Ask about this chat</h2><p>Start a side conversation while the main chat continues.</p></div>` : this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length || this.goalDocument?.revisions.length || this.commandNotice || this.goalNotice ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
       ${this.error ? html`<mux-ui-feedback class="block" kind="error" appearance="panel" density="compact">${this.error}${this.reconnectFailed ? html`<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryConnection}>Retry now</mux-ui-button>` : nothing}</mux-ui-feedback>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><mux-ui-button class="scroll-bottom" variant="secondary" size="small" accessible-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</mux-ui-button></div>` : nothing}<div class="composer-wrap">
