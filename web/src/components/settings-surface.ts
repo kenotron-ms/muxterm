@@ -2,6 +2,7 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
+import { APP_THEMES, appThemeScheme, type AppThemeId, type AppThemeMode } from '../lib/app-appearance.js';
 import '../ui/button.js';
 import '../ui/color-picker.js';
 import '../ui/feedback.js';
@@ -335,6 +336,29 @@ export class MuxSettingsSurface extends LitElement {
       margin-bottom: var(--ui-space-2);
     }
     .theme-light-heading { margin-top:var(--ui-space-6); }
+    .appearance-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--ui-space-6); margin-bottom:var(--ui-space-6); }
+    .appearance-heading .section-title { margin-bottom:var(--ui-space-2); }
+    .appearance-help { margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.45; }
+    .mode-toggle { display:flex; flex:none; padding:var(--ui-space-1); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
+    .mode-toggle button { border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-3) var(--ui-space-5); background:transparent; color:var(--ui-text-muted); font:600 var(--ui-text-sm) var(--ui-font-sans); cursor:pointer; }
+    .mode-toggle button[aria-pressed='true'] { background:var(--ui-nav-selected); color:var(--ui-text); }
+    .mode-toggle button:focus-visible,.appearance-choice:focus-visible,.terminal-theme-details summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .appearance-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--ui-space-5); }
+    .appearance-choice { min-width:0; padding:var(--ui-space-2); border:2px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; cursor:pointer; font:inherit; }
+    .appearance-choice[aria-pressed='true'] { border-color:var(--ui-accent); }
+    .appearance-preview { display:flex; height:var(--ui-space-16); overflow:hidden; border-radius:var(--ui-radius-md); background:var(--preview-chat) var(--preview-image) center/cover no-repeat; }
+    .appearance-preview-side { box-sizing:border-box; width:28%; flex:none; padding:var(--ui-space-4); border-right:1px solid var(--preview-border); background:var(--preview-side); }
+    .appearance-preview-side span { display:block; height:var(--ui-space-2); margin-bottom:var(--ui-space-3); border-radius:var(--ui-radius-pill); background:var(--preview-border); }
+    .appearance-preview-side span:first-child { width:var(--ui-space-5); height:var(--ui-space-5); margin-bottom:var(--ui-space-6); border-radius:var(--ui-radius-sm); background:var(--preview-accent); }
+    .appearance-preview-chat { flex:1; min-width:0; padding:var(--ui-space-4); }
+    .appearance-preview-user { width:46%; height:var(--ui-space-4); margin:0 0 var(--ui-space-4) auto; border-radius:var(--ui-radius-md); background:var(--preview-user); }
+    .appearance-preview-reply { width:78%; height:var(--ui-space-9); padding:var(--ui-space-4); border-radius:var(--ui-radius-md); background:var(--preview-assistant); }
+    .appearance-preview-reply span { display:block; width:100%; height:var(--ui-space-2); margin-bottom:var(--ui-space-3); border-radius:var(--ui-radius-pill); background:var(--preview-border); }
+    .appearance-preview-reply span:last-child { width:65%; }
+    .appearance-choice-label { display:flex; align-items:center; gap:var(--ui-space-3); padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-2); font-weight:650; }
+    .appearance-choice-label::before { content:''; width:var(--ui-space-5); height:var(--ui-space-5); flex:none; border:1px solid var(--ui-border-strong); border-radius:50%; }
+    .appearance-choice[aria-pressed='true'] .appearance-choice-label::before { border:4px solid var(--ui-accent); box-sizing:border-box; }
+    .appearance-choice-description { display:block; padding:0 var(--ui-space-2) var(--ui-space-3) calc(var(--ui-space-5) + var(--ui-space-5)); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
 
     /* ── Font size slider ── */
     mux-ui-range-field.font-size { margin-top:var(--ui-space-2); }
@@ -618,6 +642,8 @@ export class MuxSettingsSurface extends LitElement {
       }
       .content { min-width: 0; padding: var(--ui-space-7) var(--ui-space-6) var(--ui-space-9); }
       .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: var(--ui-settings-theme-grid-width); }
+      .appearance-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .appearance-heading { flex-wrap:wrap; }
       .r-row { flex-wrap: wrap; }
       .r-main { flex: 1 1 calc(100% - var(--ui-space-7)); }
       .r-actions { flex: 1 1 100%; justify-content: flex-end; }
@@ -899,7 +925,18 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _setTheme(palette: string): void {
-    this._emit({ theme: { palette } });
+    if (!this.config) return;
+    this._emit({ theme: { ...this.config.theme, palette } });
+  }
+
+  private _setAppTheme(app: AppThemeId): void {
+    if (!this.config) return;
+    this._emit({ theme: { ...this.config.theme, app } });
+  }
+
+  private _setAppMode(mode: AppThemeMode): void {
+    if (!this.config) return;
+    this._emit({ theme: { ...this.config.theme, mode } });
   }
 
   private _setFontFamily(family: string): void {
@@ -1053,10 +1090,25 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAppearance() {
     const cfg = this.config;
     if (!cfg) return html``;
+    const mode = cfg.theme.mode;
     return html`
-      <p class="section-title">Theme</p>
-      ${this._renderThemeCards()}
-
+      <div class="appearance-heading">
+        <div><p class="section-title">App theme</p><p class="appearance-help">Choose colors and a quiet pattern for chats, navigation, and utility panels.</p></div>
+        <div class="mode-toggle" role="group" aria-label="App color mode">
+          <button type="button" aria-pressed=${mode === 'light'} @click=${() => this._setAppMode('light')}>Light</button>
+          <button type="button" aria-pressed=${mode === 'dark'} @click=${() => this._setAppMode('dark')}>Dark</button>
+        </div>
+      </div>
+      <div class="appearance-grid" role="group" aria-label="App theme">
+        ${APP_THEMES.map(theme => {
+          const sample = appThemeScheme(theme.id, mode);
+          const preview = `--preview-chat:${sample.chat};--preview-side:${sample.raised};--preview-border:${sample.border};--preview-accent:${sample.accent};--preview-user:${sample.user};--preview-assistant:${sample.assistant};--preview-image:url("${sample.image}")`;
+          return html`<button type="button" class="appearance-choice" style=${preview} aria-pressed=${cfg.theme.app === theme.id} @click=${() => this._setAppTheme(theme.id)}>
+            <span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-side"><span></span><span></span><span></span></span><span class="appearance-preview-chat"><span class="appearance-preview-user"></span><span class="appearance-preview-reply"><span></span><span></span></span></span></span>
+            <span class="appearance-choice-label">${theme.label}</span><span class="appearance-choice-description">${theme.description}</span>
+          </button>`;
+        })}
+      </div>
       <div class="section-gap">
         <p class="section-title">Title Bar Color</p>
         ${this._renderTitlebarColorPicker()}
@@ -1068,8 +1120,10 @@ export class MuxSettingsSurface extends LitElement {
     const cfg = this.config;
     if (!cfg) return html``;
     return html`
-      <p class="section-title">Font</p>
-      ${this._renderFontPicker()}
+      <p class="section-title">Terminal colors</p>
+      ${this._renderThemeCards()}
+      <div class="section-gap"><p class="section-title">Font</p>
+      ${this._renderFontPicker()}</div>
 
       <div class="section-gap">
         <p class="section-title">Bell</p>

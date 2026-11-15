@@ -247,6 +247,12 @@
   --ui-message-external: #8773b0;
   --ui-remote: var(--remote, #bb9af7);
   --ui-terminal-surface: var(--mux-bg);
+  --ui-chat-backdrop-color: var(--ui-surface-base);
+  --ui-chat-backdrop-image: none;
+  --ui-chat-user-surface: color-mix(in srgb, var(--ui-accent) 14%, var(--ui-surface-base));
+  --ui-chat-assistant-surface: var(--ui-surface-raised);
+  --ui-chat-assistant-text: var(--ui-text);
+  --ui-chat-composer-surface: var(--ui-surface-raised);
   --ui-focus: var(--chrome-accent);
   --ui-backdrop: color-mix(in srgb, black 65%, transparent);
   --ui-backdrop-sheet: color-mix(in srgb, var(--ui-surface-base) 62%, transparent);
