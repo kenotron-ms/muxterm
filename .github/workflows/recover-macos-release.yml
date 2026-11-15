@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing published release tag missing its Mac DMG
+        description: Existing published release tag missing its Mac assets
         required: true
         type: string
       release_commit:
@@ -40,9 +40,10 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,assets > release.json
-          jq -e --arg asset "Muxterm-${RELEASE_TAG#v}-macos-arm64.dmg" '
+          jq -e --arg dmg "Muxterm-${RELEASE_TAG#v}-macos-arm64.dmg" \
+            --arg zip "Muxterm-${RELEASE_TAG#v}-macos-arm64.zip" '
             .isDraft == false and .isPrerelease == false and
-            ([.assets[].name] | index($asset) == null) and
+            ([.assets[].name] | index($dmg) == null and index($zip) == null and index("macos-checksums.txt") == null) and
             ([.assets[].name] | index("checksums.txt") != null)
           ' release.json
 
@@ -81,9 +82,10 @@ jobs:
           APPLE_NOTARY_APPLE_ID: ${{ vars.APPLE_NOTARY_APPLE_ID }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          MUXTERM_RELEASE_CLEAN_BUILD_DEPS: '1'
         run: bash tooling/desktop/release-mac.sh "${RELEASE_TAG#v}" "$GITHUB_WORKSPACE/source"
 
-      - name: Verify tag and attach missing asset without replacement
+      - name: Verify tag and attach missing Mac assets without replacement
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -92,6 +94,8 @@ jobs:
           set -euo pipefail
           git -C source fetch origin "refs/tags/$RELEASE_TAG"
           [[ "$(git -C source rev-parse 'FETCH_HEAD^{commit}')" == "$RELEASE_COMMIT" ]]
-          asset="source/desktop/bin/Muxterm-${RELEASE_TAG#v}-macos-arm64.dmg"
-          gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
-          shasum -a 256 "$asset" >> "$GITHUB_STEP_SUMMARY"
+          dmg="source/desktop/bin/Muxterm-${RELEASE_TAG#v}-macos-arm64.dmg"
+          zip="source/desktop/bin/Muxterm-${RELEASE_TAG#v}-macos-arm64.zip"
+          checksums="source/desktop/bin/macos-checksums.txt"
+          gh release upload "$RELEASE_TAG" "$dmg" "$zip" "$checksums" --repo "$GITHUB_REPOSITORY"
+          shasum -a 256 "$dmg" "$zip" >> "$GITHUB_STEP_SUMMARY"

@@ -72,6 +72,7 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_NOTARY_APPLE_ID: ${{ vars.APPLE_NOTARY_APPLE_ID }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          MUXTERM_RELEASE_CLEAN_BUILD_DEPS: '1'
         run: bash desktop/release-mac.sh "${GITHUB_REF_NAME#v}"
 
       - name: Attach Mac app to GitHub Release
