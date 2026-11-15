@@ -136,7 +136,7 @@ export class MuxNewChat extends LitElement {
     .folder-line { display:flex; align-items:center; gap:var(--ui-space-3); }
     .folder-line mux-ui-text-field { flex:1; min-width:0; }
     mux-ui-folder-browser { margin-bottom:var(--ui-space-4); }
-    .composer { position:relative; display:flex; flex-direction:column; gap:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-surface-raised); padding:var(--ui-space-6) var(--ui-space-6) var(--ui-space-5); transition:border-color var(--ui-motion-fast),box-shadow var(--ui-motion-fast); }
+    .composer { position:relative; display:flex; flex-direction:column; gap:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-2xl); background:var(--ui-surface-raised); padding:var(--ui-space-6) var(--ui-space-6) var(--ui-space-5); transition:border-color var(--ui-motion-fast),box-shadow var(--ui-motion-fast); }
     .textarea-sizing { position:relative; width:100%; min-width:0; min-height:var(--ui-composer-input-min-height); max-height:var(--ui-composer-input-max-height); font:var(--ui-text-xl)/1.55 var(--ui-font-sans); }
     textarea { box-sizing:border-box; display:block; width:100%; min-width:0; min-height:var(--ui-composer-input-min-height); max-height:var(--ui-composer-input-max-height); resize:none; border:0; outline:0; padding:var(--ui-space-1) 0; color:inherit; background:transparent; font:inherit; overflow-y:auto; }
     .native-textarea-sizing textarea { field-sizing:content; height:auto; }
@@ -178,7 +178,7 @@ export class MuxNewChat extends LitElement {
     }
     .content { width:min(100%,var(--ui-chat-transcript-width)); }
     h1 { margin-bottom:var(--ui-space-6); }
-    .composer { gap:var(--ui-space-3); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) 0 0; box-shadow:var(--ui-shadow-control); }
+    .composer { gap:var(--ui-space-3); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); border-radius:var(--ui-radius-2xl) var(--ui-radius-2xl) 0 0; box-shadow:var(--ui-shadow-control); }
     .composer-actions { gap:var(--ui-space-2); min-height:var(--ui-control-md); padding:0; border:0; }
     .composer-actions .attach-picker,.composer-actions .send { width:var(--ui-control-md); height:var(--ui-control-md); }
     .composer-actions .send::part(button) { width:var(--ui-control-sm); height:var(--ui-control-sm); min-height:var(--ui-control-sm); margin:auto; border-radius:50%; }

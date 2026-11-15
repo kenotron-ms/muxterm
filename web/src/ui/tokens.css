@@ -6,6 +6,7 @@
   --ui-content-font-family: var(--mux-font-family, var(--ui-font-sans));
   --ui-content-font-size: var(--mux-font-size, var(--ui-text-xl));
 
+  --ui-text-preview: 8px;
   --ui-text-xs: 11px;
   --ui-text-sm: 12px;
   --ui-text-md: 13px;

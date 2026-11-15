@@ -330,28 +330,29 @@ export class MuxSettingsSurface extends LitElement {
     .appearance-heading .section-title { margin-bottom:var(--ui-space-2); }
     .appearance-help { margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.45; }
     .mode-toggle { display:flex; flex:none; padding:var(--ui-space-1); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
-    .mode-toggle button { border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-3) var(--ui-space-5); background:transparent; color:var(--ui-text-muted); font:600 var(--ui-text-sm) var(--ui-font-sans); cursor:pointer; }
-    .mode-toggle button[aria-pressed='true'] { background:var(--ui-nav-selected); color:var(--ui-text); }
-    .mode-toggle button:focus-visible,.appearance-choice:focus-visible,.terminal-theme-details summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .mode-toggle mux-ui-button::part(button) { min-height:0; border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-3) var(--ui-space-5); background:transparent; color:var(--ui-text-muted); font:600 var(--ui-text-sm) var(--ui-font-sans); }
+    .mode-toggle mux-ui-button[pressed]::part(button) { background:var(--ui-nav-selected); color:var(--ui-text); }
+    .mode-toggle mux-ui-button::part(button):focus-visible,.appearance-choice::part(button):focus-visible,.terminal-theme-details summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
     .appearance-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--ui-space-5); }
-    .appearance-choice { min-width:0; padding:var(--ui-space-2); border:2px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; cursor:pointer; font:inherit; }
-    .appearance-choice[aria-pressed='true'] { border-color:var(--ui-accent); }
-    .appearance-preview { display:flex; height:80px; overflow:hidden; border-radius:8px; background:var(--preview-chat); }
-    .appearance-preview-side { box-sizing:border-box; width:28%; flex:none; padding:10px 7px; border-right:1px solid var(--preview-border); background:var(--preview-side); }
-    .appearance-preview-side span { display:block; height:3px; width:80%; margin:0 0 7px; border-radius:3px; background:var(--preview-border); }
-    .appearance-preview-side span:first-child { width:11px; height:11px; margin-bottom:13px; border-radius:3px; background:var(--preview-accent); }
+    .appearance-choice { display:block; min-width:0; }
+    .appearance-choice::part(button) { display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; gap:0; min-height:0; width:100%; height:100%; padding:var(--ui-space-2); border:2px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; white-space:normal; font:inherit; }
+    .appearance-choice[pressed]::part(button) { border-color:var(--ui-accent); }
+    .appearance-preview { display:flex; height:var(--ui-space-15); overflow:hidden; border-radius:var(--ui-radius-md); background:var(--preview-chat); }
+    .appearance-preview-side { box-sizing:border-box; width:28%; flex:none; padding:calc(var(--ui-space-4) + var(--ui-space-1)) var(--ui-radius-md); border-right:1px solid var(--preview-border); background:var(--preview-side); }
+    .appearance-preview-side span { display:block; height:calc(var(--ui-space-1) + var(--ui-space-px)); width:80%; margin:0 0 var(--ui-radius-md); border-radius:var(--ui-radius-sm); background:var(--preview-border); }
+    .appearance-preview-side span:first-child { width:calc(var(--ui-space-5) - var(--ui-space-px)); height:calc(var(--ui-space-5) - var(--ui-space-px)); margin-bottom:calc(var(--ui-space-5) + var(--ui-space-px)); border-radius:var(--ui-radius-sm); background:var(--preview-accent); }
     .appearance-preview-side span:last-child { width:60%; }
-    .appearance-preview-chat { position:relative; flex:1; min-width:0; color:var(--preview-text); font:8px/1.2 var(--ui-font-sans); }
+    .appearance-preview-chat { position:relative; flex:1; min-width:0; color:var(--preview-text); font:var(--ui-text-preview)/1.2 var(--ui-font-sans); }
     .appearance-preview-user,.appearance-preview-reply,.appearance-preview-composer { position:absolute; box-sizing:border-box; display:block; white-space:nowrap; overflow:hidden; }
-    .appearance-preview-user { top:8px; right:7px; max-width:70%; padding:4px 6px; border-radius:8px 2px 8px 8px; background:var(--preview-user); }
-    .appearance-preview-reply { top:30px; left:7px; max-width:78%; padding:4px 6px; border-radius:2px 8px 8px 8px; background:var(--preview-assistant); color:var(--preview-assistant-text); }
-    .appearance-preview-composer { bottom:7px; left:7px; right:7px; height:13px; border:1px solid var(--preview-border); border-radius:2px 7px 7px 7px; background:var(--preview-assistant); }
+    .appearance-preview-user { top:var(--ui-space-4); right:var(--ui-radius-md); max-width:70%; padding:var(--ui-space-2) var(--ui-space-3); border-radius:var(--ui-radius-lg) var(--ui-space-1) var(--ui-radius-lg) var(--ui-radius-lg); background:var(--preview-user); }
+    .appearance-preview-reply { top:calc(var(--ui-space-8) + var(--ui-space-3)); left:var(--ui-radius-md); max-width:78%; padding:var(--ui-space-2) var(--ui-space-3); border-radius:var(--ui-space-1) var(--ui-radius-lg) var(--ui-radius-lg) var(--ui-radius-lg); background:var(--preview-assistant); color:var(--preview-assistant-text); }
+    .appearance-preview-composer { bottom:var(--ui-radius-md); left:var(--ui-radius-md); right:var(--ui-radius-md); height:calc(var(--ui-space-5) + var(--ui-space-px)); border:1px solid var(--preview-border); border-radius:var(--ui-radius-md); background:var(--preview-assistant); }
     .backdrop-heading { margin-top:var(--ui-space-8); }
-    .backdrop-choice .backdrop-preview { display:block; height:84px; border-radius:8px; background-image:linear-gradient(var(--ui-chat-backdrop-wash),var(--ui-chat-backdrop-wash)),var(--backdrop-image); background-position:center; background-size:cover; background-repeat:no-repeat; }
+    .backdrop-choice .backdrop-preview { display:block; height:calc(var(--ui-space-15) + var(--ui-space-2)); border-radius:var(--ui-radius-md); background-image:linear-gradient(var(--ui-chat-backdrop-wash),var(--ui-chat-backdrop-wash)),var(--backdrop-image); background-position:center; background-size:cover; background-repeat:no-repeat; }
     .backdrop-choice .appearance-choice-label { padding-bottom:var(--ui-space-3); }
     .appearance-choice-label { display:flex; align-items:center; gap:var(--ui-space-3); padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-2); font-weight:650; }
     .appearance-choice-label::before { content:''; width:var(--ui-space-5); height:var(--ui-space-5); flex:none; border:1px solid var(--ui-border-strong); border-radius:50%; }
-    .appearance-choice[aria-pressed='true'] .appearance-choice-label::before { border:4px solid var(--ui-accent); box-sizing:border-box; }
+    .appearance-choice[pressed] .appearance-choice-label::before { border:4px solid var(--ui-accent); box-sizing:border-box; }
     .appearance-choice-description { display:block; padding:0 var(--ui-space-2) var(--ui-space-3) calc(var(--ui-space-5) + var(--ui-space-5)); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
 
     /* ── Font size slider ── */
@@ -1070,27 +1071,27 @@ export class MuxSettingsSurface extends LitElement {
       <div class="appearance-heading">
         <div><p class="section-title">App theme</p><p class="appearance-help">Choose colors for chats, navigation, and utility panels.</p></div>
         <div class="mode-toggle" role="group" aria-label="App color mode">
-          <button type="button" aria-pressed=${mode === 'light'} @click=${() => this._setAppMode('light')}>Light</button>
-          <button type="button" aria-pressed=${mode === 'dark'} @click=${() => this._setAppMode('dark')}>Dark</button>
+          <mux-ui-button variant="quiet" size="small" toggle ?pressed=${mode === 'light'} @click=${() => this._setAppMode('light')}>Light</mux-ui-button>
+          <mux-ui-button variant="quiet" size="small" toggle ?pressed=${mode === 'dark'} @click=${() => this._setAppMode('dark')}>Dark</mux-ui-button>
         </div>
       </div>
       <div class="appearance-grid" role="group" aria-label="App theme">
         ${APP_THEMES.map(theme => {
           const sample = appThemeScheme(theme.id, mode);
           const preview = `--preview-chat:${sample.chat};--preview-side:${sample.raised};--preview-border:${sample.border};--preview-accent:${sample.accent};--preview-user:${sample.user};--preview-assistant:${sample.assistant};--preview-text:${sample.text};--preview-assistant-text:${sample.assistantText}`;
-          return html`<button type="button" class="appearance-choice" style=${preview} aria-pressed=${cfg.theme.app === theme.id} @click=${() => this._setAppTheme(theme.id)}>
+          return html`<mux-ui-button class="appearance-choice" style=${preview} toggle ?pressed=${cfg.theme.app === theme.id} @click=${() => this._setAppTheme(theme.id)}>
             <span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-side"><span></span><span></span><span></span></span><span class="appearance-preview-chat"><span class="appearance-preview-user">Hello there</span><span class="appearance-preview-reply">Happy to help</span><span class="appearance-preview-composer"></span></span></span>
             <span class="appearance-choice-label">${theme.label}</span><span class="appearance-choice-description">${theme.description}</span>
-          </button>`;
+          </mux-ui-button>`;
         })}
       </div>
       <div class="appearance-heading backdrop-heading">
         <div><p class="section-title">Chat backdrop</p><p class="appearance-help">Choose one of six quiet patterns. Each has a light and dark version.</p></div>
       </div>
       <div class="appearance-grid" role="group" aria-label="Chat backdrop">
-        ${CHAT_BACKDROPS.map(backdrop => html`<button type="button" class="appearance-choice backdrop-choice" style=${`--backdrop-image:url("${chatBackdropImage(backdrop.id, mode)}")`} aria-pressed=${cfg.theme.backdrop === backdrop.id} @click=${() => this._setBackdrop(backdrop.id)}>
+        ${CHAT_BACKDROPS.map(backdrop => html`<mux-ui-button class="appearance-choice backdrop-choice" style=${`--backdrop-image:url("${chatBackdropImage(backdrop.id, mode)}")`} toggle ?pressed=${cfg.theme.backdrop === backdrop.id} @click=${() => this._setBackdrop(backdrop.id)}>
           <span class="backdrop-preview" aria-hidden="true"></span><span class="appearance-choice-label">${backdrop.label}</span>
-        </button>`)}
+        </mux-ui-button>`)}
       </div>
     `;
   }
