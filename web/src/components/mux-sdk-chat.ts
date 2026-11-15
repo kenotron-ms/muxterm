@@ -316,15 +316,14 @@ export class MuxSDKChat extends LitElement {
     .block.assistant { position:relative; margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); --ui-text:var(--ui-chat-assistant-text); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); box-shadow:0 2px 8px color-mix(in srgb,black 8%,transparent); }
     .block.assistant:has(mux-chat-visualization[mode="wide"]) { max-width:min(var(--ui-chat-visualization-wide-width),100%); }
     .block.work { margin-bottom:var(--ui-space-7); }
-    .work-disclosure { overflow:hidden; border:1px solid color-mix(in srgb,var(--ui-border) 80%,transparent); border-radius:var(--ui-radius-lg); background:color-mix(in srgb,var(--ui-surface-raised) 90%,transparent); box-shadow:0 1px 3px color-mix(in srgb,black 5%,transparent); }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .work-stream .pulse { width:var(--ui-chat-pulse-size); height:var(--ui-chat-pulse-size); flex:none; border-radius:50%; background:var(--ui-accent); animation:activity-pulse 1.35s ease-in-out infinite; }
-    .work-disclosure > summary { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); padding:var(--ui-space-2) var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-lg); list-style:none; cursor:pointer; }
-    .work-disclosure > summary:hover { background:color-mix(in srgb,var(--ui-accent) 5%,transparent); }
-    .work-disclosure[open]:has(.work-items) > summary { border-bottom:1px solid color-mix(in srgb,var(--ui-border) 65%,transparent); }
-    .work-disclosure .activity-label { flex:none; color:var(--ui-text); font-weight:600; }
-    .work-disclosure .activity-count { margin-left:auto; color:var(--ui-text-muted); font-size:var(--ui-text-sm); white-space:nowrap; }
+    .work-disclosure > summary { display:inline-flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-chat-activity-row-height); padding:0 var(--ui-space-2); margin-left:calc(-1 * var(--ui-space-2)); border-radius:var(--ui-radius-sm); color:var(--ui-text-muted); font-size:var(--ui-text-sm); list-style:none; cursor:pointer; }
+    .work-disclosure > summary:hover { background:color-mix(in srgb,var(--ui-surface-raised) 55%,transparent); color:var(--ui-text); }
+    .work-disclosure .activity-label { flex:none; font-weight:500; }
+    .work-disclosure .activity-count { color:var(--ui-text-muted); white-space:nowrap; }
+    .work-disclosure .activity-count::before { content:'·'; margin-right:var(--ui-space-2); }
     .work-disclosure .activity-preview { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .work-disclosure > summary > svg { flex:none; }
     .work-disclosure .pulse { width:var(--ui-chat-pulse-size); height:var(--ui-chat-pulse-size); flex:none; border-radius:50%; background:var(--ui-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 14%,transparent); animation:activity-pulse 1.35s ease-in-out infinite; }
@@ -334,7 +333,7 @@ export class MuxSDKChat extends LitElement {
     .work-disclosure > summary:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; border-radius:var(--ui-radius-sm); }
     .work-disclosure > summary svg { opacity:.7; transition:transform .15s ease; }
     .work-disclosure[open] > summary svg { transform:rotate(180deg); }
-    .work-items { padding:var(--ui-space-4) var(--ui-space-5) var(--ui-space-2); }
+    .work-items { margin-left:var(--ui-space-1); padding:var(--ui-space-3) 0 var(--ui-space-1) var(--ui-space-5); border-left:1px solid color-mix(in srgb,var(--ui-border) 75%,transparent); }
     .interjection-entry { margin:var(--ui-space-4) 0 var(--ui-space-5); }
     .work-item { margin-bottom:var(--ui-space-3); }
     .voice-work { display:flex; align-items:flex-start; gap:var(--ui-space-4); margin:var(--ui-space-3) 0; color:var(--ui-text-muted); font-size:var(--ui-text-lg); line-height:1.5; }
@@ -1564,13 +1563,13 @@ export class MuxSDKChat extends LitElement {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
       const existing = blocks.findIndex(b => b.kind === 'tool' && b.id === event.toolId && !b.done);
-      if (existing >= 0) blocks[existing] = { ...blocks[existing], name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input, summary:event.summary || blocks[existing].summary };
+      if (existing >= 0) blocks[existing] = { ...blocks[existing], lightweight:false, name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input, summary:event.summary || blocks[existing].summary };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw, summary:event.summary });
     }
     else if (event.type === 'tool.completed') {
       markStart(this.currentTurn);
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId && !blocks[i].done) { index = i; break; }
-      if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:event.failed ? 'Failed' : 'Completed', failed:event.failed, summary:event.summary || blocks[index].summary,
+      if (index >= 0) blocks[index] = { ...blocks[index], done:true, lightweight:false, text:event.failed ? 'Failed' : 'Completed', failed:event.failed, summary:event.summary || blocks[index].summary,
         output:event.raw };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:event.failed ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, failed:event.failed, summary:event.summary,
         output:event.raw });
@@ -2098,7 +2097,7 @@ export class MuxSDKChat extends LitElement {
       return html`<div class="work-item">Waiting for your answer.</div>`;
     // Lightweight message history intentionally omits raw thought and tool
     // payloads. Do not display its flattened activity summary as a timeline.
-    if (this.loadingDetails) return html`<div class="work-item">Loading work details…</div>`;
+    if (this.loadingDetails) return nothing;
     if (!this.turnFinished.has(turn)) return nothing;
     if (!this.detailsLoaded) return html`<div class="work-item">Work details are not loaded. <mux-ui-button size="small" variant="secondary" @click=${() => void this.loadDetails()}>Load work details</mux-ui-button></div>`;
     return html`<div class="work-item">No work details were reported.</div>`;
