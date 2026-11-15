@@ -61,6 +61,7 @@ xcrun notarytool submit "$work/Muxterm.zip" \
   --password "$APPLE_APP_PASSWORD" \
   --team-id "$APPLE_TEAM_ID" \
   --wait --timeout 2h
+rm -f "$work/Muxterm.zip"
 stapler_with_retry() {
   local attempt staple_status delay
   for attempt in 1 2 3; do
@@ -96,8 +97,15 @@ mkdir -p "$work/zip-check"
 ditto -x -k "$zip" "$work/zip-check"
 codesign --verify --deep --strict "$work/zip-check/Muxterm.app"
 spctl --assess --type execute "$work/zip-check/Muxterm.app"
+rm -rf "$work/zip-check"
 shasum -a 256 "$zip" | awk -v name="$(basename "$zip")" '{ print $1 "  " name }' \
   > "$root/desktop/bin/macos-checksums.txt"
+
+# CI has finished compiling the app; release packaging needs the disk space.
+if [[ "${MUXTERM_RELEASE_CLEAN_BUILD_DEPS:-0}" == 1 ]]; then
+  rm -rf "$root/web/node_modules" "$root/web/dist"
+  go clean -cache
+fi
 
 mkdir -p "$work/dmg"
 ditto "$app" "$work/dmg/Muxterm.app"
