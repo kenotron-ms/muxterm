@@ -371,6 +371,7 @@ export class MuxNewChat extends LitElement {
     if (this.folderDialogLoading || this.folderSelecting) return;
     const path = this.folderDialogPath.trim();
     if (!path) return;
+    let selectedPath = path;
     if (path !== this.folderDialogListing?.path) {
       this.folderDialogLoading = true;
       this.folderDialogError = '';
@@ -381,6 +382,7 @@ export class MuxNewChat extends LitElement {
           return;
         }
         this.folderDialogPath = listing.path;
+        selectedPath = listing.path;
       } catch (error) {
         this.folderDialogError = error instanceof Error ? error.message : String(error);
         return;
@@ -389,7 +391,7 @@ export class MuxNewChat extends LitElement {
       }
     }
     this.folderDialogOpen = false;
-    await this.selectFolder(this.folderDialogPath);
+    await this.selectFolder(selectedPath);
   }
   private openNewFolder() {
     this.newFolderName = '';
