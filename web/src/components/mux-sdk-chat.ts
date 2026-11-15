@@ -2086,7 +2086,7 @@ export class MuxSDKChat extends LitElement {
     // Lightweight message history intentionally omits raw thought and tool
     // payloads. Do not display its flattened activity summary as a timeline.
     if (this.loadingDetails) return html`<div class="work-item">Loading work details…</div>`;
-    if (!this.turnFinished.has(turn)) return html`<div class="work-item">Working on your request…</div>`;
+    if (!this.turnFinished.has(turn)) return nothing;
     if (!this.detailsLoaded) return html`<div class="work-item">Work details are not loaded. <mux-ui-button size="small" variant="secondary" @click=${() => void this.loadDetails()}>Load work details</mux-ui-button></div>`;
     return html`<div class="work-item">No work details were reported.</div>`;
   }
@@ -2417,7 +2417,8 @@ export class MuxSDKChat extends LitElement {
         const working = !this.turnFinished.has(block.turn);
         const open = this.workDisclosureOpen(block.turn);
         const goalOnly = row.work.every(item => item.kind === 'goal');
-        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working && !goalOnly}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working && !goalOnly ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${goalOnly ? 'Goal update' : working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${open ? html`<div class="work-items">${this.workTimeline(block.turn, row.work, agents)}</div>` : nothing}</details></div>`;
+        const timeline = open ? this.workTimeline(block.turn, row.work, agents) : nothing;
+        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working && !goalOnly}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working && !goalOnly ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${goalOnly ? 'Goal update' : working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${timeline === nothing ? nothing : html`<div class="work-items">${timeline}</div>`}</details></div>`;
       }
       return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
