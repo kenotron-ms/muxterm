@@ -5,7 +5,12 @@ html, body {
 }
 
 /* Reserve the native traffic lights inside muxterm's own sidebar header. */
-:root { --wco-left-inset: 116px; }
+:root {
+  --wco-left-inset: 116px;
+  /* Let WKWebView use the 6px WebKit thumb and transparent track. */
+  --ui-scrollbar-width: auto;
+  --ui-scrollbar-color: auto;
+}
 
 mux-app {
   box-sizing: border-box !important;

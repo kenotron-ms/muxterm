@@ -112,6 +112,17 @@ export class MuxChatWorkspace extends LitElement {
   }
   reveal() { this.open = true; this.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
 
+  onSidebarScroll(viewport: DOMRect): void {
+    if (!this.model.archived || !this.open) return;
+    const list = this.renderRoot.querySelector<HTMLElement>('.archive-list');
+    if (!list) return;
+    const bounds = list.getBoundingClientRect();
+    if (bounds.bottom <= viewport.top || bounds.top >= viewport.bottom) return;
+    const visibleEnd = Math.max(0, Math.ceil((Math.min(bounds.bottom, viewport.bottom) - bounds.top) / ARCHIVE_ROW_HEIGHT) - 1);
+    const index = Math.min((this.model.total || 1) - 1, visibleEnd);
+    this.dispatchEvent(new CustomEvent('archive-visible', { detail:{index}, bubbles:true, composed:true }));
+  }
+
   static styles = css`
     ${subtleScrollbars}
     :host { display:block; margin:0 0 var(--ui-space-5); font:var(--ui-text-sm)/var(--ui-sidebar-row-line-height,1.35) var(--ui-font-sans); color:var(--ui-text); }
@@ -136,7 +147,7 @@ export class MuxChatWorkspace extends LitElement {
     .row:has(mux-ui-menu) .host-label { display:none; }
     mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0 0 var(--ui-space-2); padding-left:var(--ui-sidebar-session-indent,var(--ui-space-8)); }
-    .archive-list { box-sizing:border-box; max-height:var(--ui-chat-edit-max-height); overflow-y:auto; overscroll-behavior:contain; }
+    .archive-list { box-sizing:border-box; }
     .archive-list .chat-row { height:var(--ui-space-9); min-height:var(--ui-space-9); }
     .archive-spacer { pointer-events:none; }
     .archive-status { padding:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
@@ -383,7 +394,7 @@ export class MuxChatWorkspace extends LitElement {
         <div class="confirmation-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingConfirmation=undefined; }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => void this.confirmPendingAction()}>${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project' : 'Archive chat'}</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
       ${this.error && !this.editing ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.error}</mux-ui-feedback>` : nothing}
-      ${this.open ? html`<div class=${group.archived ? 'chats archive-list' : 'chats'} role=${group.archived ? 'region' : nothing} aria-label=${group.archived ? 'Archived sessions' : nothing} @scroll=${group.archived ? (event:Event) => this.dispatchEvent(new CustomEvent('archive-visible', {detail:{index:Math.floor((event.target as HTMLElement).scrollTop / ARCHIVE_ROW_HEIGHT)},bubbles:true,composed:true})) : nothing}>
+      ${this.open ? html`<div class=${group.archived ? 'chats archive-list' : 'chats'} role=${group.archived ? 'region' : nothing} aria-label=${group.archived ? 'Archived sessions' : nothing}>
         ${group.archived ? html`<div class="archive-spacer" style=${`height:${(group.archiveStart || 0) * ARCHIVE_ROW_HEIGHT}px`}></div>` : nothing}
         ${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
@@ -452,8 +463,7 @@ export class MuxChatList extends LitElement {
     .heading-row { display:flex; align-items:center; justify-content:space-between; }
     .heading-actions { display:flex; align-items:center; }
     .pinned { margin-bottom:var(--ui-space-4); }
-    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:var(--ui-list-row-height,var(--ui-control-md)); padding:var(--ui-list-row-vertical-padding,var(--ui-space-1)) var(--ui-list-row-horizontal-padding,var(--ui-space-2)); border-radius:var(--ui-radius-md); color:var(--ui-text); }
-    :host([drawer]) .pin-row { padding-inline-start:0; }
+    .pin-row { box-sizing:border-box; width:100%; display:flex; align-items:center; min-height:var(--ui-list-row-height,var(--ui-control-md)); padding-block:var(--ui-list-row-vertical-padding,var(--ui-space-1)); border-radius:var(--ui-radius-md); color:var(--ui-text); }
     .pin-row:hover,.pin-row:focus-within { background:var(--ui-surface-hover); }
     .pin-row[selected] { background:var(--ui-nav-selected); }
     .pin-icon { display:flex; flex:none; width:var(--ui-icon-md); height:var(--ui-icon-md); align-items:center; justify-content:center; color:var(--ui-text-muted); }
@@ -535,6 +545,9 @@ export class MuxChatList extends LitElement {
     void this.ensureArchivePage(page);
     if (index % ARCHIVE_PAGE_SIZE >= 8) void this.ensureArchivePage(page + 1);
     if (index % ARCHIVE_PAGE_SIZE <= 5) void this.ensureArchivePage(page - 1);
+  }
+  onSidebarScroll(viewport: DOMRect): void {
+    this.renderRoot.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace').forEach(workspace => workspace.onSidebarScroll(viewport));
   }
   private closeArchive() {
     this.archiveExpanded = false; this.archiveGeneration++;
