@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { CalendarClock, ChevronLeft, ChevronRight, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { scrollEdgeFadeStyles, syncScrollEdgeFade } from '../lib/scroll-edge-fade.js';
 import { icon } from '../lib/icons.js';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { fetchUpdateStatus, type UpdateStatus } from '../lib/update.js';
@@ -16,6 +17,7 @@ import './mux-chat-list.js';
 export class MuxSidebar extends LitElement {
   static override styles = css`
     ${subtleScrollbars}
+    ${scrollEdgeFadeStyles}
     :host {
       display: flex;
       flex-direction: column;
@@ -170,14 +172,30 @@ export class MuxSidebar extends LitElement {
   /** The phone drawer has a title bar of its own above this component. */
   @property({ type: Boolean, reflect: true }) drawer = false;
   @state() private updateStatus: UpdateStatus | null = null;
+  private readonly scrollFadeObserver = new ResizeObserver(() => this.updateScrollFade());
+
+  private updateScrollFade(): void {
+    const viewport = this.renderRoot.querySelector<HTMLElement>('.tab-content');
+    if (viewport) syncScrollEdgeFade(viewport, 32);
+  }
+
+  private observeScrollFade(): void {
+    const viewport = this.renderRoot.querySelector<HTMLElement>('.tab-content');
+    const content = this.renderRoot.querySelector<HTMLElement>('.chat-scroll');
+    if (viewport) this.scrollFadeObserver.observe(viewport);
+    if (content) this.scrollFadeObserver.observe(content);
+    this.updateScrollFade();
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener('muxterm-update-checked', this.onUpdateChecked);
+    void this.updateComplete.then(() => { if (this.isConnected) this.observeScrollFade(); });
   }
 
   override disconnectedCallback(): void {
     window.removeEventListener('muxterm-update-checked', this.onUpdateChecked);
+    this.scrollFadeObserver.disconnect();
     super.disconnectedCallback();
   }
 
@@ -192,8 +210,9 @@ export class MuxSidebar extends LitElement {
   };
 
   private onContentScroll = (event: Event): void => {
-    const viewport = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    this.renderRoot.querySelector<MuxChatList>('mux-chat-list')?.onSidebarScroll(viewport);
+    const viewport = event.currentTarget as HTMLElement;
+    syncScrollEdgeFade(viewport, 32);
+    this.renderRoot.querySelector<MuxChatList>('mux-chat-list')?.onSidebarScroll(viewport.getBoundingClientRect());
   };
 
   private renderFooter() {
@@ -246,7 +265,7 @@ export class MuxSidebar extends LitElement {
           <span slot="icon">${icon(Plus, { size: 16 })}</span>
         </mux-ui-nav-item>
       </nav>` : nothing}
-      <div class="tab-content" @scroll=${this.onContentScroll}>
+      <div class="tab-content scroll-edge-fade" @scroll=${this.onContentScroll}>
         ${nav}
         <div class="chat-scroll"><mux-chat-list .drawer=${this.drawer} .selectedSession=${this.selectedSDKChat}></mux-chat-list></div>
       </div>
