@@ -17,6 +17,23 @@ type browserMessage struct {
 	Rect    browserRect `json:"rect"`
 }
 
+func (c *Companion) chooseChatFolder(window application.Window, requestID string) {
+	if requestID == "" {
+		return
+	}
+	path, err := c.app.Dialog.OpenFile().AttachToWindow(window).SetTitle("Choose a folder for your chat").CanChooseFiles(false).CanChooseDirectories(true).PromptForSingleSelection()
+	result := struct {
+		ID    string `json:"id"`
+		Path  string `json:"path,omitempty"`
+		Error string `json:"error,omitempty"`
+	}{ID: requestID, Path: path}
+	if err != nil {
+		result.Error = err.Error()
+	}
+	encoded, _ := json.Marshal(result)
+	c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-folder-chosen', {detail:" + string(encoded) + "}))")
+}
+
 func (c *Companion) evalMuxtermJS(script string) {
 	if window, ok := c.app.Window.GetByName("muxterm"); ok {
 		window.ExecJS(script)
@@ -54,6 +71,20 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 				c.runMacUpdate(message.Type)
 			} else {
 				c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-mac-update', {detail:{phase:'error',error:'Mac updates require the local Muxterm workspace.'}}))")
+			}
+			return
+		}
+		if message.Type == "choose-chat-folder" {
+			allowed := serverURL == localURL && localURL != ""
+			c.bridgeMu.Unlock()
+			if allowed {
+				c.chooseChatFolder(window, message.ID)
+			} else {
+				encoded, _ := json.Marshal(struct {
+					ID       string `json:"id"`
+					Fallback bool   `json:"fallback"`
+				}{ID: message.ID, Fallback: true})
+				c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-folder-chosen', {detail:" + string(encoded) + "}))")
 			}
 			return
 		}
