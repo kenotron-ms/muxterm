@@ -82,6 +82,7 @@ export class MuxNewChat extends LitElement {
   @state() private folderDialogPath = '';
   @state() private folderDialogLoading = false;
   @state() private folderDialogError = '';
+  private folderBrowseVersion = 0;
   @state() private showHiddenFolders = false;
   @state() private newFolderOpen = false;
   @state() private newFolderName = '';
@@ -352,17 +353,18 @@ export class MuxNewChat extends LitElement {
     void this.loadCatalog();
   }
   private async browseFolder(path: string) {
+    const version = ++this.folderBrowseVersion;
     this.folderDialogLoading = true;
     this.folderDialogError = '';
     try {
       const listing = await sdkChats.folders(path, this.remoteHost);
-      if (!this.folderDialogOpen) return;
+      if (!this.folderDialogOpen || version !== this.folderBrowseVersion) return;
       this.folderDialogListing = listing;
       this.folderDialogPath = listing.path;
     } catch (error) {
-      this.folderDialogError = error instanceof Error ? error.message : String(error);
+      if (this.folderDialogOpen && version === this.folderBrowseVersion) this.folderDialogError = error instanceof Error ? error.message : String(error);
     } finally {
-      this.folderDialogLoading = false;
+      if (version === this.folderBrowseVersion) this.folderDialogLoading = false;
     }
   }
   private async confirmFolder() {
@@ -745,6 +747,7 @@ export class MuxNewChat extends LitElement {
             <div class="project-divider"></div>
             <mux-ui-menu-item @click=${() => void this.addLocalFolder()}>${icon(Plus,{size:16})}<span class="option-copy">${this.remoteHost ? 'Add folder on this machine…' : 'Add local folder…'}</span></mux-ui-menu-item>
             ${sdkChats.remoteHosts.length ? html`<mux-ui-menu-item @click=${() => { this.nodePickerOpen = true; }}>${icon(Network,{size:16})}<span class="option-copy">Choose machine…</span></mux-ui-menu-item>` : nothing}
+            ${!sdkChats.remoteHosts.length ? html`<mux-ui-menu-item @click=${this.openRemoteSettings}>${icon(Network,{size:16})}<span class="option-copy">Set up SSH machine…</span></mux-ui-menu-item>` : nothing}
           `}
         </div>` : nothing}</div>
         <div class="spacer"></div>
