@@ -68,8 +68,16 @@ for keep in true false; do
   app_pid=$!
   wait_for 'Mac app window and local server' test -e "$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
   sleep 1
+  quit_started="$(python3 -c 'import time; print(time.monotonic_ns())')"
   osascript -e 'tell application id "io.ampbox.muxterm.desktop" to quit'
   wait_for_quick_exit "$app_pid"
+  python3 - "$quit_started" <<'PY'
+import sys, time
+seconds = (time.monotonic_ns() - int(sys.argv[1])) / 1_000_000_000
+print(f'Mac app quit in {seconds:.2f}s')
+if seconds > 3:
+    raise SystemExit('Mac app took longer than 3 seconds to quit')
+PY
   if [[ "$keep" == true ]]; then
     socket_alive || { echo 'Session daemon stopped despite Keep Running' >&2; exit 1; }
   else
