@@ -524,6 +524,9 @@ export class MuxChatList extends LitElement {
     void sdkChats.refresh();
   }
   override disconnectedCallback() { this.removeEventListener('chat-open', this.onChatOpen); document.removeEventListener('pointerdown', this.onPinnedOutsidePointer); document.removeEventListener('keydown', this.onPinnedEscape); this.unsub?.(); super.disconnectedCallback(); }
+  override updated(changed: Map<string, unknown>) {
+    if (changed.has('pinnedMovingChatId') && this.pinnedMenuFor) requestAnimationFrame(() => this.renderRoot.querySelector<MuxUIMenu>('.pin-row mux-ui-menu')?.focusFirst());
+  }
   private openArchive() {
     this.archiveExpanded = true;
     this.archiveAnchorPage = 0;
