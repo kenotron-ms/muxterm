@@ -1,6 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from '../lib/config.js';
+import { APP_THEMES, CHAT_BACKDROPS } from '../lib/app-appearance.js';
+import { isLightTheme } from '../lib/theme.js';
 import { DEFAULT_VOICE_STATUS, type VoiceStatus } from '../lib/voice-settings.js';
 import { fixtureJSON, type ApiFixture } from '../stories/api-fixture.js';
 import '../ui/dialog.js';
@@ -156,10 +158,18 @@ function onConfigChange(event: Event): void {
 
 interface SettingsArgs { section: SettingsSection }
 
-const renderPhonePage = (args: SettingsArgs) => html`<div style="height:100dvh;display:flex;background:var(--ui-surface-base)">
+function storyConfig(globals: Record<string, unknown>): ResolvedConfig {
+  const app = APP_THEMES.find(theme => theme.id === globals['appTheme'])?.id ?? 'neutral';
+  const mode = globals['appMode'] === 'light' || globals['appMode'] === 'dark'
+    ? globals['appMode'] : isLightTheme(String(globals['palette'] || 'tokyo-night')) ? 'light' : 'dark';
+  const backdrop = CHAT_BACKDROPS.find(item => item.id === globals['chatBackdrop'])?.id ?? 'neutral';
+  return { ...DEFAULT_RESOLVED_CONFIG, theme:{ ...DEFAULT_RESOLVED_CONFIG.theme, app, mode, backdrop } };
+}
+
+const renderPhonePage = (args: SettingsArgs, context: { globals: Record<string, unknown> }) => html`<div style="height:100dvh;display:flex;background:var(--ui-surface-base)">
   <mux-settings-surface
     page-mode
-    .config=${DEFAULT_RESOLVED_CONFIG}
+    .config=${storyConfig(context.globals)}
     .openSection=${args.section}
     serverAddr="muxterm.example.test"
     @config-change=${onConfigChange}
@@ -174,11 +184,11 @@ const meta = {
   argTypes: {
     section: { control:'select', options:['appearance','terminal','notifications','workspaces','ai','voice','remotes','shortcuts','about'] },
   },
-  render: (args: SettingsArgs) => html`
+  render: (args: SettingsArgs, context: { globals: Record<string, unknown> }) => html`
     <mux-ui-dialog open size="wide" label="Settings">
       <div style="flex:1;min-height:0;overflow:hidden">
         <mux-settings-surface
-          .config=${DEFAULT_RESOLVED_CONFIG}
+          .config=${storyConfig(context.globals)}
           .openSection=${args.section}
           serverAddr="muxterm.example.test"
           @config-change=${onConfigChange}
@@ -194,19 +204,10 @@ export const Appearance: Story = {};
 export const PhoneAppearance: Story = { globals:{viewport:{value:'phone390',isRotated:false}}, render:renderPhonePage };
 export const Terminal: Story = { args:{section:'terminal'} };
 export const PhoneTerminal: Story = { args:{section:'terminal'}, globals:{viewport:{value:'phone390',isRotated:false}}, render:renderPhonePage };
-export const LightAppearance: Story = {
-  globals:{palette:'github-light'},
-  play:async ({canvasElement}) => {
-    const settings = canvasElement.querySelector<MuxSettingsSurface>('mux-settings-surface');
-    await settings?.updateComplete;
-    settings?.shadowRoot?.querySelector<HTMLElement>('mux-ui-theme-choice[label="GitHub"]')?.click();
-    await settings?.updateComplete;
-  },
-};
+export const LightAppearance: Story = { globals:{palette:'github-light',appMode:'light'} };
 export const PhoneLightAppearance: Story = {
-  globals:{palette:'github-light',viewport:{value:'phone390',isRotated:false}},
+  globals:{palette:'github-light',appMode:'light',viewport:{value:'phone390',isRotated:false}},
   render:renderPhonePage,
-  play:LightAppearance.play,
 };
 export const Notifications: Story = { args: { section:'notifications' } };
 export const PhoneNotifications: Story = { args:{section:'notifications'}, globals:{viewport:{value:'phone390',isRotated:false}}, render:renderPhonePage };
@@ -291,10 +292,10 @@ export const AboutDevelopmentBuild: Story = { args: { section:'about' } };
 export const AboutCheckError: Story = { args:{section:'about'}, parameters:{apiFixture:updateCheckFailureFixture()} };
 export const RemotesPageMode: Story = {
   args: { section:'remotes' },
-  render: (args: SettingsArgs) => html`<div style="height:100vh;min-height:500px">
+  render: (args: SettingsArgs, context: { globals: Record<string, unknown> }) => html`<div style="height:100vh;min-height:500px">
     <mux-settings-surface
       page-mode
-      .config=${DEFAULT_RESOLVED_CONFIG}
+      .config=${storyConfig(context.globals)}
       .openSection=${args.section}
       serverAddr="muxterm.example.test"
       @config-change=${onConfigChange}

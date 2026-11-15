@@ -1,9 +1,9 @@
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { PALETTES, isLightTheme } from '../lib/theme.js';
+import { PALETTES } from '../lib/theme.js';
+import { APP_THEMES, CHAT_BACKDROPS, appThemeScheme, chatBackdropImage, type AppThemeId, type AppThemeMode, type ChatBackdropId } from '../lib/app-appearance.js';
 import '../ui/button.js';
-import '../ui/color-picker.js';
 import '../ui/feedback.js';
 import '../ui/nav-item.js';
 import '../ui/radio-group.js';
@@ -19,15 +19,6 @@ import '../ui/theme-choice.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
 import { sdkChats, sdkHarnessLabel, type SDKHarnessName } from '../lib/sdk-chats.js';
-import {
-  instanceLabel,
-  restoreTitlebarColor,
-  persistTitlebarColor,
-  applyTitlebarColor,
-  DARK_TITLEBAR_CRAYONS,
-  LIGHT_TITLEBAR_CRAYONS,
-  type TitlebarCrayon,
-} from '../lib/instance-identity.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
@@ -335,6 +326,34 @@ export class MuxSettingsSurface extends LitElement {
       margin-bottom: var(--ui-space-2);
     }
     .theme-light-heading { margin-top:var(--ui-space-6); }
+    .appearance-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--ui-space-6); margin-bottom:var(--ui-space-6); }
+    .appearance-heading .section-title { margin-bottom:var(--ui-space-2); }
+    .appearance-help { margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.45; }
+    .mode-toggle { display:flex; flex:none; padding:var(--ui-space-1); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
+    .mode-toggle mux-ui-button::part(button) { min-height:0; border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-3) var(--ui-space-5); background:transparent; color:var(--ui-text-muted); font:600 var(--ui-text-sm) var(--ui-font-sans); }
+    .mode-toggle mux-ui-button[pressed]::part(button) { background:var(--ui-nav-selected); color:var(--ui-text); }
+    .mode-toggle mux-ui-button::part(button):focus-visible,.appearance-choice::part(button):focus-visible,.terminal-theme-details summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .appearance-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--ui-space-5); }
+    .appearance-choice { display:block; min-width:0; }
+    .appearance-choice::part(button) { display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; gap:0; min-height:0; width:100%; height:100%; padding:var(--ui-space-2); border:2px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; white-space:normal; font:inherit; }
+    .appearance-choice[pressed]::part(button) { border-color:var(--ui-accent); }
+    .appearance-preview { display:flex; height:var(--ui-space-15); overflow:hidden; border-radius:var(--ui-radius-md); background:var(--preview-chat); }
+    .appearance-preview-side { box-sizing:border-box; width:28%; flex:none; padding:calc(var(--ui-space-4) + var(--ui-space-1)) var(--ui-radius-md); border-right:1px solid var(--preview-border); background:var(--preview-side); }
+    .appearance-preview-side span { display:block; height:calc(var(--ui-space-1) + var(--ui-space-px)); width:80%; margin:0 0 var(--ui-radius-md); border-radius:var(--ui-radius-sm); background:var(--preview-border); }
+    .appearance-preview-side span:first-child { width:calc(var(--ui-space-5) - var(--ui-space-px)); height:calc(var(--ui-space-5) - var(--ui-space-px)); margin-bottom:calc(var(--ui-space-5) + var(--ui-space-px)); border-radius:var(--ui-radius-sm); background:var(--preview-accent); }
+    .appearance-preview-side span:last-child { width:60%; }
+    .appearance-preview-chat { position:relative; flex:1; min-width:0; color:var(--preview-text); font:var(--ui-text-preview)/1.2 var(--ui-font-sans); }
+    .appearance-preview-user,.appearance-preview-reply,.appearance-preview-composer { position:absolute; box-sizing:border-box; display:block; white-space:nowrap; overflow:hidden; }
+    .appearance-preview-user { top:var(--ui-space-4); right:var(--ui-radius-md); max-width:70%; padding:var(--ui-space-2) var(--ui-space-3); border-radius:var(--ui-radius-lg) var(--ui-space-1) var(--ui-radius-lg) var(--ui-radius-lg); background:var(--preview-user); }
+    .appearance-preview-reply { top:calc(var(--ui-space-8) + var(--ui-space-3)); left:var(--ui-radius-md); max-width:78%; padding:var(--ui-space-2) var(--ui-space-3); border-radius:var(--ui-space-1) var(--ui-radius-lg) var(--ui-radius-lg) var(--ui-radius-lg); background:var(--preview-assistant); color:var(--preview-assistant-text); }
+    .appearance-preview-composer { bottom:var(--ui-radius-md); left:var(--ui-radius-md); right:var(--ui-radius-md); height:calc(var(--ui-space-5) + var(--ui-space-px)); border:1px solid var(--preview-border); border-radius:var(--ui-radius-md); background:var(--preview-assistant); }
+    .backdrop-heading { margin-top:var(--ui-space-8); }
+    .backdrop-choice .backdrop-preview { display:block; height:calc(var(--ui-space-15) + var(--ui-space-2)); border-radius:var(--ui-radius-md); background-image:linear-gradient(var(--ui-chat-backdrop-wash),var(--ui-chat-backdrop-wash)),var(--backdrop-image); background-position:center; background-size:cover; background-repeat:no-repeat; }
+    .backdrop-choice .appearance-choice-label { padding-bottom:var(--ui-space-3); }
+    .appearance-choice-label { display:flex; align-items:center; gap:var(--ui-space-3); padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-2); font-weight:650; }
+    .appearance-choice-label::before { content:''; width:var(--ui-space-5); height:var(--ui-space-5); flex:none; border:1px solid var(--ui-border-strong); border-radius:50%; }
+    .appearance-choice[pressed] .appearance-choice-label::before { border:4px solid var(--ui-accent); box-sizing:border-box; }
+    .appearance-choice-description { display:block; padding:0 var(--ui-space-2) var(--ui-space-3) calc(var(--ui-space-5) + var(--ui-space-5)); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
 
     /* ── Font size slider ── */
     mux-ui-range-field.font-size { margin-top:var(--ui-space-2); }
@@ -387,12 +406,6 @@ export class MuxSettingsSurface extends LitElement {
       height: var(--ui-divider-thickness);
       background: var(--ui-border);
       margin: var(--ui-space-8) 0;
-    }
-
-    .titlebar-hint {
-      font-size: var(--ui-text-sm);
-      color: var(--ui-text-muted);
-      margin: var(--ui-space-4) 0 0;
     }
 
     /* ── Coding agent guides in AI settings ── */
@@ -618,6 +631,8 @@ export class MuxSettingsSurface extends LitElement {
       }
       .content { min-width: 0; padding: var(--ui-space-7) var(--ui-space-6) var(--ui-space-9); }
       .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: var(--ui-settings-theme-grid-width); }
+      .appearance-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .appearance-heading { flex-wrap:wrap; }
       .r-row { flex-wrap: wrap; }
       .r-main { flex: 1 1 calc(100% - var(--ui-space-7)); }
       .r-actions { flex: 1 1 100%; justify-content: flex-end; }
@@ -682,10 +697,6 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _voiceMessage = '';
   /** 'ok' | 'bad' | '' — drives the typographic marker, never colour alone. */
   @state() private _voiceMessageKind: 'ok' | 'bad' | '' = '';
-  // Per-browser (localStorage), not server config — distinguishes this
-  // machine's window/PWA from other muxterm instances. See instance-identity.ts.
-  @state() private _titlebarColor: string | null = restoreTitlebarColor();
-
   @state() private _remotes: RemotesList = EMPTY_REMOTES;
   @state() private _remotesError = '';
   @state() private _addTarget = '';
@@ -899,7 +910,18 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _setTheme(palette: string): void {
-    this._emit({ theme: { palette } });
+    if (!this.config) return;
+    this._emit({ theme: { ...this.config.theme, palette } });
+  }
+
+  private _setAppTheme(app: AppThemeId): void {
+    if (!this.config) return;
+    this._emit({ theme: { ...this.config.theme, app } });
+  }
+
+  private _setAppMode(mode: AppThemeMode): void {
+    if (!this.config) return;
+    this._emit({ theme: { ...this.config.theme, mode } });
   }
 
   private _setFontFamily(family: string): void {
@@ -917,18 +939,9 @@ export class MuxSettingsSurface extends LitElement {
     this._emit({ terminal: { ...this.config.terminal, bell } });
   }
 
-  /** Applies + persists a new title-bar accent color immediately (no server round trip). */
-  private _setTitlebarColor(color: string): void {
-    this._titlebarColor = color;
-    persistTitlebarColor(color);
-    applyTitlebarColor(color);
-  }
-
-  /** Clears the custom title-bar color, reverting to the current theme's default. */
-  private _resetTitlebarColor(): void {
-    this._titlebarColor = null;
-    persistTitlebarColor(null);
-    applyTitlebarColor(null);
+  private _setBackdrop(backdrop: ChatBackdropId): void {
+    if (!this.config) return;
+    this._emit({ theme: { ...this.config.theme, backdrop } });
   }
 
   private _sendTestNotification(): void {
@@ -1053,13 +1066,32 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAppearance() {
     const cfg = this.config;
     if (!cfg) return html``;
+    const mode = cfg.theme.mode;
     return html`
-      <p class="section-title">Theme</p>
-      ${this._renderThemeCards()}
-
-      <div class="section-gap">
-        <p class="section-title">Title Bar Color</p>
-        ${this._renderTitlebarColorPicker()}
+      <div class="appearance-heading">
+        <div><p class="section-title">App theme</p><p class="appearance-help">Choose colors for chats, navigation, and utility panels.</p></div>
+        <div class="mode-toggle" role="group" aria-label="App color mode">
+          <mux-ui-button variant="quiet" size="small" toggle ?pressed=${mode === 'light'} @click=${() => this._setAppMode('light')}>Light</mux-ui-button>
+          <mux-ui-button variant="quiet" size="small" toggle ?pressed=${mode === 'dark'} @click=${() => this._setAppMode('dark')}>Dark</mux-ui-button>
+        </div>
+      </div>
+      <div class="appearance-grid" role="group" aria-label="App theme">
+        ${APP_THEMES.map(theme => {
+          const sample = appThemeScheme(theme.id, mode);
+          const preview = `--preview-chat:${sample.chat};--preview-side:${sample.raised};--preview-border:${sample.border};--preview-accent:${sample.accent};--preview-user:${sample.user};--preview-assistant:${sample.assistant};--preview-text:${sample.text};--preview-assistant-text:${sample.assistantText}`;
+          return html`<mux-ui-button class="appearance-choice" style=${preview} toggle ?pressed=${cfg.theme.app === theme.id} @click=${() => this._setAppTheme(theme.id)}>
+            <span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-side"><span></span><span></span><span></span></span><span class="appearance-preview-chat"><span class="appearance-preview-user">Hello there</span><span class="appearance-preview-reply">Happy to help</span><span class="appearance-preview-composer"></span></span></span>
+            <span class="appearance-choice-label">${theme.label}</span><span class="appearance-choice-description">${theme.description}</span>
+          </mux-ui-button>`;
+        })}
+      </div>
+      <div class="appearance-heading backdrop-heading">
+        <div><p class="section-title">Chat backdrop</p><p class="appearance-help">Choose one of six quiet patterns. Each has a light and dark version.</p></div>
+      </div>
+      <div class="appearance-grid" role="group" aria-label="Chat backdrop">
+        ${CHAT_BACKDROPS.map(backdrop => html`<mux-ui-button class="appearance-choice backdrop-choice" style=${`--backdrop-image:url("${chatBackdropImage(backdrop.id, mode)}")`} toggle ?pressed=${cfg.theme.backdrop === backdrop.id} @click=${() => this._setBackdrop(backdrop.id)}>
+          <span class="backdrop-preview" aria-hidden="true"></span><span class="appearance-choice-label">${backdrop.label}</span>
+        </mux-ui-button>`)}
       </div>
     `;
   }
@@ -1068,8 +1100,10 @@ export class MuxSettingsSurface extends LitElement {
     const cfg = this.config;
     if (!cfg) return html``;
     return html`
-      <p class="section-title">Font</p>
-      ${this._renderFontPicker()}
+      <p class="section-title">Terminal colors</p>
+      ${this._renderThemeCards()}
+      <div class="section-gap"><p class="section-title">Font</p>
+      ${this._renderFontPicker()}</div>
 
       <div class="section-gap">
         <p class="section-title">Bell</p>
@@ -1081,39 +1115,6 @@ export class MuxSettingsSurface extends LitElement {
           ]}
           @change=${(event: CustomEvent<{value:string}>) => this._setBell(event.detail.value as ResolvedConfig['terminal']['bell'])}></mux-ui-radio-group>
       </div>
-    `;
-  }
-
-  /** Live --chrome-bar value (theme's current default), as a fallback swatch
-   *  seed when no custom title-bar color has been picked yet. Native
-   *  The native color picker requires an exact 6-digit hex, which is what every
-   *  built-in theme's `bar` token already is (see theme.ts CHROME_DARK/LIGHT). */
-  private get _currentChromeBarHex(): string {
-    const v = getComputedStyle(document.documentElement).getPropertyValue('--chrome-bar').trim();
-    return /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#16161e';
-  }
-
-  /** Crayon set is chosen by the CURRENT theme's brightness, not a fixed
-   *  default — the header's text color (--chrome-text-bright) stays fixed
-   *  regardless of the custom background, so light themes need pastel
-   *  crayons (dark text on top) and dark themes need deep crayons (near-
-   *  white text on top). See instance-identity.ts for the contrast rationale. */
-  private get _crayons(): TitlebarCrayon[] {
-    const palette = this.config?.theme.palette ?? 'tokyo-night';
-    return isLightTheme(palette) ? LIGHT_TITLEBAR_CRAYONS : DARK_TITLEBAR_CRAYONS;
-  }
-
-  private _renderTitlebarColorPicker() {
-    return html`
-      <mux-ui-color-picker .options=${this._crayons.map(crayon => ({label:crayon.name,color:crayon.hex}))}
-        .value=${this._titlebarColor?.toLowerCase() || ''} .fallbackColor=${this._currentChromeBarHex}
-        inputLabel="Pick a custom title bar color"
-        @color-change=${(event: CustomEvent<{color:string}>) => this._setTitlebarColor(event.detail.color)}
-        @color-reset=${() => this._resetTitlebarColor()}></mux-ui-color-picker>
-      <p class="titlebar-hint">
-        Only affects this browser on <strong>${instanceLabel()}</strong> — handy for
-        telling multiple muxterm instances apart at a glance.
-      </p>
     `;
   }
 

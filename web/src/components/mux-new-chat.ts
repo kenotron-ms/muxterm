@@ -178,7 +178,7 @@ export class MuxNewChat extends LitElement {
     }
     .content { width:min(100%,var(--ui-chat-transcript-width)); }
     h1 { margin-bottom:var(--ui-space-6); }
-    .composer { gap:var(--ui-space-3); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); border-radius:var(--ui-radius-xl) var(--ui-radius-xl) 0 0; box-shadow:var(--ui-shadow-control); }
+    .composer { gap:var(--ui-space-3); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); border-radius:var(--ui-radius-2xl) var(--ui-radius-2xl) 0 0; box-shadow:var(--ui-shadow-control); }
     .composer-actions { gap:var(--ui-space-2); min-height:var(--ui-control-md); padding:0; border:0; }
     .composer-actions .attach-picker,.composer-actions .send { width:var(--ui-control-md); height:var(--ui-control-md); }
     .composer-actions .send::part(button) { width:var(--ui-control-sm); height:var(--ui-control-sm); min-height:var(--ui-control-sm); margin:auto; border-radius:50%; }
@@ -194,7 +194,7 @@ export class MuxNewChat extends LitElement {
     .composer-actions.has-bundle .bundle-picker { grid-column:1/3; grid-row:2; }
     .composer-actions.has-bundle .settings-picker { grid-column:3/5; grid-row:2; }
     .composer-actions.has-bundle .chat-picker { width:100%; max-width:none; }
-    .context-bar { display:flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border:1px solid var(--ui-border); border-top:0; border-radius:0 0 var(--ui-radius-xl) var(--ui-radius-xl); background:var(--ui-surface-raised); }
+    .context-bar { display:flex; align-items:center; gap:var(--ui-space-2); min-height:var(--ui-control-md); padding:var(--ui-space-1) var(--ui-space-2); border:1px solid var(--ui-border); border-top:0; border-radius:0 0 var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-surface-raised); }
     .context-bar .spacer { flex:1; }
     .project-picker { position:relative; min-width:0; }
     .project-trigger { display:flex; align-items:center; gap:var(--ui-space-2); max-width:var(--ui-new-chat-location-width); min-height:var(--ui-control-sm); padding:0 var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text-muted); font:inherit; font-size:var(--ui-text-sm); cursor:pointer; }

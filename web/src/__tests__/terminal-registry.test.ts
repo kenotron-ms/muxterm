@@ -472,7 +472,7 @@ describe('buildTerminalConfig', () => {
   it('returns overrides when given a custom config', () => {
     const custom = {
       ...DEFAULT_RESOLVED_CONFIG,
-      theme: { palette: 'gruvbox' },
+      theme: { ...DEFAULT_RESOLVED_CONFIG.theme, palette: 'gruvbox' },
       font: { family: 'Iosevka', size: 18 },
       terminal: {
         ...DEFAULT_RESOLVED_CONFIG.terminal,

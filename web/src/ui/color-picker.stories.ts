@@ -1,16 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
-import { DARK_TITLEBAR_CRAYONS, LIGHT_TITLEBAR_CRAYONS } from '../lib/instance-identity.js';
 import type { ColorChoiceOption } from './color-picker.js';
 import './color-picker.js';
 
-const dark: ColorChoiceOption[] = DARK_TITLEBAR_CRAYONS.map(item => ({label:item.name,color:item.hex}));
-const light: ColorChoiceOption[] = LIGHT_TITLEBAR_CRAYONS.map(item => ({label:item.name,color:item.hex}));
+const dark: ColorChoiceOption[] = [{label:'Ocean',color:'#2b5889'},{label:'Clover',color:'#296144'},{label:'Grape',color:'#6b4290'}];
+const light: ColorChoiceOption[] = [{label:'Sky',color:'#aed9f2'},{label:'Honeydew',color:'#c9e4a8'},{label:'Orchid',color:'#ddbbea'}];
 interface Args { value:string; options:ColorChoiceOption[]; fallbackColor:string }
 const meta = {
   title:'Primitives/Color picker', tags:['autodocs'],
   args:{value:'#2b5889',options:dark,fallbackColor:'#16161e'},
-  render:(args:Args) => html`<div style="width:min(440px,100%)"><mux-ui-color-picker .value=${args.value} .options=${args.options} .fallbackColor=${args.fallbackColor} inputLabel="Pick a custom title bar color"></mux-ui-color-picker></div>`,
+  render:(args:Args) => html`<div style="width:min(440px,100%)"><mux-ui-color-picker .value=${args.value} .options=${args.options} .fallbackColor=${args.fallbackColor} inputLabel="Pick a custom color"></mux-ui-color-picker></div>`,
 } satisfies Meta<Args>;
 export default meta;
 type Story = StoryObj<Args>;

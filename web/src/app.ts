@@ -14,7 +14,8 @@ import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
-import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
+import { applyAppAppearance } from './lib/app-appearance.js';
+import { applyDocumentTitle } from './lib/instance-identity.js';
 import { installPwaWindowControls } from './lib/pwa-window-controls.js';
 import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
@@ -829,12 +830,12 @@ export class MuxApp extends LitElement {
     // Apply default theme tokens immediately so --mux-* and --chrome-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     applyChromeTokens(store.config.theme.palette);
+    applyAppAppearance(store.config.theme.app, store.config.theme.mode, store.config.theme.backdrop);
     // Reflect which machine this instance is running on — document title
     // (PWA window title / browser tab / Alt-Tab preview) and, if the user
     // picked one in Settings, a distinguishing title-bar accent color.
     // Per-browser (localStorage), not server config — see instance-identity.ts.
     applyDocumentTitle();
-    applyTitlebarColor(restoreTitlebarColor());
     this._disposePwaWindowControls = installPwaWindowControls();
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
     disposeKeys = installKeybindings(uiActions);
@@ -1772,6 +1773,7 @@ export class MuxApp extends LitElement {
       store.setConfig(cfg);
       applyThemeTokens(resolvePalette(cfg.theme.palette));
       applyChromeTokens(cfg.theme.palette);
+      applyAppAppearance(cfg.theme.app, cfg.theme.mode, cfg.theme.backdrop);
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
@@ -2458,6 +2460,7 @@ export class MuxApp extends LitElement {
     store.setConfig(cfg);
     applyThemeTokens(resolvePalette(cfg.theme.palette));
     applyChromeTokens(cfg.theme.palette);
+    applyAppAppearance(cfg.theme.app, cfg.theme.mode, cfg.theme.backdrop);
     configureTerminals(cfg);
     disposeKeys?.();
     disposeKeys = installKeybindings(uiActions);

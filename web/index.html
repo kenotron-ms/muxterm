@@ -23,19 +23,18 @@
     <meta name="theme-color" content="#16161e" />
     <meta name="color-scheme" content="dark" />
     <script>
-      // The server sends the authoritative palette after connection. This
-      // local hint paints the previous palette before the first app frame.
+      // The server sends the authoritative app appearance after connection.
+      // This local hint paints its previous color mode before the first frame.
       try {
-        const light = ['solarized-light', 'one-light', 'github-light']
-          .includes(localStorage.getItem('mux-theme-palette'));
+        const light = localStorage.getItem('mux-app-mode') === 'light';
         const root = document.documentElement;
         const scheme = light ? 'light' : 'dark';
         root.style.colorScheme = scheme;
         document.querySelector('meta[name="color-scheme"]').content = scheme;
-        root.style.setProperty('--mux-page-bg', light ? '#f2f2f7' : '#1a1b26');
-        root.style.setProperty('--mux-page-fg', light ? '#1c1c1e' : '#c0caf5');
+        root.style.setProperty('--mux-page-bg', light ? '#f4f6f7' : '#1b2025');
+        root.style.setProperty('--mux-page-fg', light ? '#26343b' : '#e5ecf0');
         document.querySelector('meta[name="theme-color"]').content =
-          localStorage.getItem('mux-titlebar-color') || (light ? '#e8e8ed' : '#16161e');
+          light ? '#ffffff' : '#262d33';
       } catch { /* Browser storage may be unavailable. */ }
     </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

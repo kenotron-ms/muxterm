@@ -401,7 +401,10 @@ func (s ServerConfig) BaseURL() string {
 
 // ThemeConfig controls visual palette selection.
 type ThemeConfig struct {
-	Palette string `toml:"palette" json:"palette"`
+	Palette  string `toml:"palette" json:"palette"`
+	App      string `toml:"app"     json:"app"`
+	Mode     string `toml:"mode"    json:"mode"`
+	Backdrop string `toml:"backdrop" json:"backdrop"`
 }
 
 // FontConfig controls the terminal font family and size.
@@ -544,6 +547,15 @@ func Merge(base, partial Config) Config {
 	if partial.Theme.Palette != "" {
 		result.Theme.Palette = partial.Theme.Palette
 	}
+	if partial.Theme.App != "" {
+		result.Theme.App = partial.Theme.App
+	}
+	if partial.Theme.Mode != "" {
+		result.Theme.Mode = partial.Theme.Mode
+	}
+	if partial.Theme.Backdrop != "" {
+		result.Theme.Backdrop = partial.Theme.Backdrop
+	}
 	if partial.Font.Family != "" {
 		result.Font.Family = partial.Font.Family
 	}
@@ -630,7 +642,10 @@ func Defaults() Config {
 	return Config{
 		Lanes: LanesConfig{Approval: "prompt"},
 		Theme: ThemeConfig{
-			Palette: "tokyo-night",
+			Palette:  "tokyo-night",
+			App:      "neutral",
+			Mode:     "dark",
+			Backdrop: "neutral",
 		},
 		Font: FontConfig{
 			// Default to the server-bundled JetBrains Mono Nerd Font.
