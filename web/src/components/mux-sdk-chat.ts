@@ -522,10 +522,9 @@ export class MuxSDKChat extends LitElement {
     @media (prefers-reduced-motion:reduce) { .send-icon { animation:none; } }
     .status { color:color-mix(in srgb,var(--ui-warning) 70%,var(--ui-text)); font-size:var(--ui-content-font-size); }
     .drawer { position:relative; z-index:var(--ui-z-drawer); flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
-    .drawer-resizer { position:absolute; z-index:var(--ui-z-local); left:calc(var(--ui-pane-divider-track-width) - var(--ui-chat-resize-handle-width)); top:0; bottom:0; width:var(--ui-chat-resize-handle-width); cursor:col-resize; touch-action:none; -webkit-app-region:no-drag; app-region:no-drag; }
-    .drawer-resizer::before { content:''; position:absolute; top:0; bottom:0; left:calc((var(--ui-chat-resize-handle-width) - var(--ui-pane-divider-track-width)) / 2); width:var(--ui-pane-divider-track-width); background:var(--ui-surface-raised); pointer-events:none; }
-    .drawer-resizer::after { content:''; position:absolute; top:0; bottom:0; left:calc((var(--ui-chat-resize-handle-width) + var(--ui-pane-divider-track-width)) / 2 - var(--ui-divider-thickness)); width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
-    .drawer-resizer:hover::before, .drawer-resizer:focus-visible::before { background:color-mix(in srgb,var(--ui-accent) 10%,var(--ui-surface-raised)); }
+    .drawer-resizer { position:absolute; z-index:var(--ui-z-local); left:calc(-.5 * var(--ui-chat-resize-handle-width)); top:0; bottom:0; width:var(--ui-chat-resize-handle-width); cursor:col-resize; touch-action:none; -webkit-app-region:no-drag; app-region:no-drag; }
+    .drawer-resizer::after { content:''; position:absolute; top:0; bottom:0; left:50%; width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
+    .drawer-resizer:hover::after, .drawer-resizer:focus-visible::after { background:var(--ui-accent); }
     .drawer-resizer:focus-visible { outline:none; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
     @media(max-width:767.98px) { .chat-screen-header,.chat-screen-header.with-utility { width:100%; --ui-screen-header-padding-right:var(--ui-space-5); } }
