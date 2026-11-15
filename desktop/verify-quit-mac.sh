@@ -8,7 +8,8 @@ mkdir -p "$HOME/Library/Application Support/muxterm-desktop/local/runtime"
 settings="$HOME/Library/Application Support/muxterm-desktop/settings.json"
 socket="$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/sessiond.sock"
 server="$(pwd)/desktop/bin/Muxterm.app/Contents/MacOS/muxterm-server"
-app="$(pwd)/desktop/bin/Muxterm.app/Contents/MacOS/muxterm"
+bundle="$(pwd)/desktop/bin/Muxterm.app"
+app="$bundle/Contents/MacOS/muxterm"
 
 diagnose_failure() {
   local result=$?
@@ -49,6 +50,11 @@ app_registered() {
   [[ "$(osascript -e 'tell application id "io.ampbox.muxterm.desktop" to get running' 2>/dev/null)" == true ]]
 }
 
+find_app_pid() {
+  app_pid="$(ps -axo pid=,command= | awk -v app="$app" '$2 == app { print $1; exit }')"
+  [[ -n "$app_pid" ]]
+}
+
 wait_for() {
   local description="$1"; shift
   for _ in {1..100}; do
@@ -82,8 +88,10 @@ wait_for 'private sessiond socket' socket_alive || {
 for keep in true false; do
   printf '{"keepSessionsOnQuit":%s}\n' "$keep" > "$settings"
   rm -f "$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
-  "$app" > "$RUNNER_TEMP/muxterm-quit-app-$keep.log" 2>&1 &
-  app_pid=$!
+  open -n --env "HOME=$HOME" \
+    --stdout "$RUNNER_TEMP/muxterm-quit-app-$keep.log" \
+    --stderr "$RUNNER_TEMP/muxterm-quit-app-$keep.log" -a "$bundle"
+  wait_for 'Mac app process' find_app_pid
   wait_for 'Mac app window and local server' test -e "$HOME/Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
   if ! wait_for 'Mac app registration' app_registered; then
     cat "$RUNNER_TEMP/muxterm-quit-app-$keep.log" >&2
