@@ -1,9 +1,9 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -84,6 +84,7 @@ func (c *Companion) startLocalMuxterm() (string, error) {
 			return "", c.localFailure(fmt.Errorf("open local server log: %w", err))
 		}
 		cmd := exec.Command(serverPath, "app-serve", "--addr", addr)
+		configureLocalServerProcess(cmd)
 		cmd.Env = localServerEnv(root, filepath.Dir(executable))
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
@@ -134,12 +135,16 @@ func (c *Companion) startLocalMuxterm() (string, error) {
 			}
 			time.Sleep(75 * time.Millisecond)
 		}
-		_ = cmd.Process.Signal(os.Interrupt)
+		terminateLocalServerProcess(cmd)
 		select {
 		case <-running.done:
 		case <-time.After(2 * time.Second):
-			_ = cmd.Process.Kill()
-			<-running.done
+			forceStopLocalServerProcess(cmd)
+			select {
+			case <-running.done:
+			case <-time.After(time.Second):
+				log.Print("local server did not exit after SIGKILL during startup")
+			}
 		}
 		return "", c.localFailure(fmt.Errorf("local muxterm did not become ready; see %s", logPath))
 	nextPort:
@@ -186,13 +191,16 @@ func (c *Companion) stopLocalMuxterm() {
 	if running == nil {
 		return
 	}
-	if err := running.cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		_ = running.cmd.Process.Kill()
-	}
+	terminateLocalServerProcess(running.cmd)
 	select {
 	case <-running.done:
-	case <-time.After(3 * time.Second):
-		_ = running.cmd.Process.Kill()
-		<-running.done
+		return
+	case <-time.After(750 * time.Millisecond):
+		forceStopLocalServerProcess(running.cmd)
+		select {
+		case <-running.done:
+		case <-time.After(time.Second):
+			log.Print("local server did not exit after SIGKILL during Quit")
+		}
 	}
 }

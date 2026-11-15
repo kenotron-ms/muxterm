@@ -21,8 +21,9 @@ import (
 )
 
 type Settings struct {
-	ServerURL string `json:"serverURL"`
-	SSHHost   string `json:"sshHost"`
+	ServerURL          string `json:"serverURL"`
+	SSHHost            string `json:"sshHost"`
+	KeepSessionsOnQuit *bool  `json:"keepSessionsOnQuit,omitempty"`
 }
 
 type Forward struct {
@@ -125,9 +126,18 @@ func (c *Companion) SaveSettings(token string, s Settings) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	s.KeepSessionsOnQuit = c.settings.KeepSessionsOnQuit
 	if s.SSHHost != c.settings.SSHHost && len(c.forwards) > 0 {
 		return errors.New("stop current port forwards before changing the SSH host")
 	}
+	if err := writeSettings(s); err != nil {
+		return err
+	}
+	c.settings = s
+	return nil
+}
+
+func writeSettings(s Settings) error {
 	path := settingsPath()
 	if path == "" {
 		return errors.New("cannot find user configuration directory")
@@ -142,8 +152,42 @@ func (c *Companion) SaveSettings(token string, s Settings) error {
 	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (c *Companion) SaveQuitPreference(token string, keep bool) error {
+	if err := c.authorize(token); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s := c.settings
+	s.KeepSessionsOnQuit = &keep
+	if err := writeSettings(s); err != nil {
+		return err
+	}
 	c.settings = s
 	return nil
+}
+
+func (c *Companion) shouldQuit() bool {
+	c.mu.Lock()
+	preference := c.settings.KeepSessionsOnQuit
+	c.mu.Unlock()
+	if preference != nil || !localSessiondAlive() {
+		return true
+	}
+	keep, chosen := promptQuitPreference()
+	if !chosen {
+		return false
+	}
+	if err := c.SaveQuitPreference(c.token, keep); err != nil {
+		// Apply the choice for this Quit even when persistence fails.
+		c.mu.Lock()
+		c.settings.KeepSessionsOnQuit = &keep
+		c.mu.Unlock()
+	}
+	return true
 }
 
 func (c *Companion) OpenMuxtermWindow(token string) error {
@@ -443,9 +487,13 @@ func (c *Companion) close() {
 	c.mu.Lock()
 	forwards := c.forwards
 	c.forwards = make(map[int]*runningForward)
+	stopSessions := c.settings.KeepSessionsOnQuit != nil && !*c.settings.KeepSessionsOnQuit
 	c.mu.Unlock()
 	for _, running := range forwards {
 		_ = running.cmd.Process.Kill()
 	}
 	c.stopLocalMuxterm()
+	if stopSessions {
+		stopOwnedSessiond()
+	}
 }

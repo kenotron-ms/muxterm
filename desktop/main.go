@@ -36,6 +36,7 @@ func main() {
 		Services:          []application.Service{application.NewService(companion)},
 		Assets:            application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
 		RawMessageHandler: companion.browserMessage,
+		ShouldQuit:        companion.shouldQuit,
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},

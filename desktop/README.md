@@ -4,6 +4,10 @@ This Wails app bundles the full muxterm server and opens it locally in a Mac
 window. It starts its own loopback listener when the app launches, with config,
 terminal sessions, and durable data in `~/Library/Application Support/muxterm-desktop/local`.
 The native title bar shares muxterm's colors, including when the theme changes.
+**Muxterm → Connection and ports… → When quitting** controls whether terminal
+sessions continue after the app closes. On the first Quit with sessions running,
+the app asks and saves the choice. The bundled web server and SSH forwards stop
+on every Quit; the app-owned terminal daemon stops unless Keep Running is chosen.
 Remote muxterm URLs and SSH port forwarding remain available in **Connection
 and ports…**; they are optional. The app does not install a system service.
 
@@ -60,4 +64,4 @@ For optional remote muxterm or dev server forwarding, set the SSH host to an
 alias from `~/.ssh/config` or to `user@host`. Set the remote muxterm URL to its
 HTTPS address, or to `http://localhost:<port>/` to forward its port over SSH.
 
-The port forward stops when the app quits.
+Port forwards stop when the app quits.

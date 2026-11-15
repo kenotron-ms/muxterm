@@ -46,6 +46,9 @@ jobs:
             'desktop/bin/Muxterm.app' \
             'desktop/bin/Muxterm-macos-arm64.zip'
 
+      - name: Verify Mac Quit and background session choice
+        run: bash desktop/verify-quit-mac.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: muxterm-macos-arm64
