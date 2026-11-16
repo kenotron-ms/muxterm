@@ -113,7 +113,7 @@ func (h *sdkVoiceHost) interpretDelegation(ctx context.Context, main sdkChat, ne
 					if handoff.Message == "" {
 						return sdkVoiceHandoff{}, errors.New("voice operator message empty")
 					}
-			case "status", "end_voice", "none":
+				case "status", "end_voice", "none":
 				default:
 					return sdkVoiceHandoff{}, errors.New("voice operator action unavailable")
 				}
