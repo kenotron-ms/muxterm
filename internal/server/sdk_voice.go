@@ -378,8 +378,9 @@ func (c *sdkVoiceCall) endVoice() {
 	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
 	defer cancel()
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.conn.Write(ctx, websocket.MessageText, data); err != nil {
+	err := c.conn.Write(ctx, websocket.MessageText, data)
+	c.mu.Unlock()
+	if err != nil && c.ctx.Err() == nil {
 		log.Printf("sdk voice: close request failed: %v", err)
 		c.host.chats.appendEvent(sdkEvent{SessionID: c.chatID, Type: "voice.session.error",
 			GenerationID: c.providerID, Message: "Voice could not close cleanly. Start voice again to continue."})
@@ -510,11 +511,12 @@ func (c *sdkVoiceCall) delegateAfterTranscripts(id string, from, to int64) {
 }
 
 func (c *sdkVoiceCall) delegate(id string, handoff sdkVoiceHandoff) {
-	prompt := handoff.Message
 	if handoff.Action == "end_voice" {
+		// The session is ending, so there is no delegation reply to send.
 		c.endVoice()
 		return
 	}
+	prompt := handoff.Message
 	chat, ok := c.host.chat(c.chatID)
 	if !ok {
 		return
