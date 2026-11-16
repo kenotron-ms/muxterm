@@ -64,8 +64,8 @@ func (h *sdkVoiceHost) interpretDelegation(ctx context.Context, main sdkChat, ne
 		"The voice transcript is noisy, may contain corrections or incomplete words, and can interleave with the voice assistant. The speech near delegation may include several utterances; use dialogue order to identify the latest request. Earlier utterances and assistant replies are context, not new instructions. " +
 		"Use the main chat context to resolve references. Summarize the user's intent as one concise, actionable message on their behalf. Preserve their words verbatim when an exact quote is useful. " +
 		"Do not invent a request or claim an action succeeded. Do not perform the task, call tools, edit files, or contact any chat. " +
-		"Reply with ONLY JSON: {\"action\":\"send|status|cancel|none\",\"message\":\"...\"}. " +
-		"Use status for a question about task progress, cancel only for an explicit request to stop the task, and none when the latest request is unclear. " +
+		"Reply with ONLY JSON: {\"action\":\"send|status|cancel|end_voice|none\",\"message\":\"...\"}. " +
+		"Use status for a question about task progress, cancel only for an explicit request to stop the task, and end_voice when the user says goodbye, says stop as a standalone request, or asks to stop or pause this voice conversation. End_voice leaves the main task running. Use none when the latest request is unclear. " +
 		"For send, message must be the actual instruction or update to deliver, not a description of the conversation.\n\n" +
 		mainContext + "\n\nLatest main and voice events:\n" + h.history(main.ID) +
 		"\n\nVoice exchange:\n" + voiceContext +
@@ -113,7 +113,7 @@ func (h *sdkVoiceHost) interpretDelegation(ctx context.Context, main sdkChat, ne
 					if handoff.Message == "" {
 						return sdkVoiceHandoff{}, errors.New("voice operator message empty")
 					}
-				case "status", "none":
+				case "status", "end_voice", "none":
 				default:
 					return sdkVoiceHandoff{}, errors.New("voice operator action unavailable")
 				}
