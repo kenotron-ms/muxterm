@@ -2336,12 +2336,6 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
-		defer cancel()
-		if err := h.resume(ctx, c); err != nil {
-			http.Error(w, err.Error(), 502)
-			return
-		}
 		content := req.Content
 		displayContent := req.Content
 		if req.Source == "recovery" {
@@ -2358,6 +2352,12 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Source == "goalify" {
 			displayContent = "Refine goal with goalify"
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+		defer cancel()
+		if err := h.resume(ctx, c); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
 		}
 		h.mu.Lock()
 		branchPending, branchContext := c.BranchPending, c.BranchContext

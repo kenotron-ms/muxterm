@@ -24,6 +24,9 @@ const sdkMessageHistoryPageTurns = 4
 func sdkLastRecoverableInput(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
 		return "", err
 	}
 	defer file.Close()
@@ -46,7 +49,7 @@ func sdkLastRecoverableInput(path string) (string, error) {
 				continue
 			}
 			var event sdkEvent
-			if json.Unmarshal(lines[i], &event) != nil || event.Type != "input.accepted" || event.Kind != "user" || event.Source == "recovery" || event.Source == "operator-lane" || event.Source == "chat-message" || event.Origin != nil {
+			if json.Unmarshal(lines[i], &event) != nil || event.Type != "input.accepted" || event.Kind != "user" || event.Source == "recovery" || event.Source == "goalify" || event.Source == "operator-lane" || event.Source == "chat-message" || event.Origin != nil {
 				continue
 			}
 			request := []rune(strings.TrimSpace(event.Text))
