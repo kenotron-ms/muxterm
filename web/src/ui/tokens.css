@@ -60,7 +60,6 @@
   --ui-status-dot-size: var(--ui-space-3);
   --ui-status-dot-lg: var(--ui-space-4);
   --ui-divider-thickness: var(--ui-space-px);
-  --ui-pane-divider-track-width: var(--ui-space-2);
   --ui-progress-height: 10px;
   --ui-progress-compact-height: 5px;
   --ui-switch-track-width: 32px;

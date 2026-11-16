@@ -86,7 +86,7 @@ type LauncherAction = 'settings' | 'shortcuts' | 'about' | 'reconnect' | 'new-wo
  *  `Split(...)` in `_initSplit()` below and as the half-gutter compensation
  *  in `widthPxToSplitPercent()` — defined once so the two can never drift
  *  out of sync if the gutter size is ever changed. */
-const SIDEBAR_GUTTER_SIZE = 4;
+const SIDEBAR_GUTTER_SIZE = 1;
 /** Small positive bias (px) that makes Split's percentage renderer round to
  *  the requested whole pixel instead of occasionally landing 1/64px short. */
 const SIDEBAR_SUBPIXEL_ROUNDING_BIAS = 0.001;
@@ -1312,10 +1312,9 @@ export class MuxApp extends LitElement {
       // hand-rolled handler clamped only at the exact boundaries, so disable
       // snapping to retain smooth, pointer-tracking behavior until then.
       snapOffset: 0,
-      gutterSize: SIDEBAR_GUTTER_SIZE,        // matches removed .resize-handle width
+      gutterSize: SIDEBAR_GUTTER_SIZE,        // one-pixel layout seam; the shared control supplies the hit target
       gutter: () => {
         const g = document.createElement('mux-ui-pane-divider');
-        g.setAttribute('compact', '');
         g.setAttribute('aria-label', 'Resize sidebar');
         g.setAttribute('role', 'separator');
         g.setAttribute('aria-orientation', 'vertical');

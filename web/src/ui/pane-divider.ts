@@ -9,8 +9,9 @@ export class MuxUIPaneDivider extends LitElement {
       box-sizing: border-box;
       display: block;
       position: relative;
+      z-index: var(--ui-z-drag-overlay);
       flex: none;
-      width: var(--ui-chat-resize-handle-width);
+      width: var(--ui-divider-thickness);
       min-width: 0;
       height: 100%;
       background: transparent;
@@ -19,25 +20,29 @@ export class MuxUIPaneDivider extends LitElement {
       -webkit-app-region: no-drag;
       app-region: no-drag;
     }
+    :host::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: calc((var(--ui-divider-thickness) - var(--ui-chat-resize-handle-width)) / 2);
+      width: var(--ui-chat-resize-handle-width);
+      background: transparent;
+    }
     :host::after {
       content: '';
       position: absolute;
       top: 0;
       bottom: 0;
-      left: calc(50% - var(--ui-divider-thickness) / 2);
+      left: 0;
       width: var(--ui-divider-thickness);
       background: var(--ui-shell-divider);
       pointer-events: none;
     }
     :host(:hover)::after, :host(:focus-visible)::after { background: var(--ui-accent); }
     :host(:focus-visible) { outline: none; }
-    :host([compact]) {
-      width: var(--ui-pane-divider-track-width);
-      background: var(--ui-surface-raised);
-    }
-    :host([compact])::after { left: auto; right: 0; }
-    :host([fixed]) { width: var(--ui-divider-thickness); cursor: default; touch-action: auto; }
-    :host([fixed])::after { left: 0; }
+    :host([fixed]) { cursor: default; touch-action: auto; }
+    :host([fixed])::before { display: none; }
   `;
 
   override render() { return html``; }

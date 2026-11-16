@@ -1390,7 +1390,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .sandbox-note { display:flex; align-items:center; gap:var(--ui-space-4); padding:var(--ui-space-4) var(--ui-space-5); border-bottom:1px solid var(--ui-border); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     mux-sdk-utility .document-frame { display:block; box-sizing:border-box; flex:1; width:100%; min-height:var(--ui-utility-document-frame-min-height); border:0; background:var(--ui-document-surface); }
     mux-sdk-utility mux-sdk-pdf-preview { display:block; flex:1; min-height:0; }
-    mux-sdk-utility .vertical-resizer { position:relative; z-index:var(--ui-z-local); margin-left:calc((var(--ui-utility-rail-resizer-width) - var(--ui-chat-resize-handle-width)) / 2); }
+    mux-sdk-utility .vertical-resizer { position:relative; }
     mux-sdk-utility .changes-list { grid-column:3; grid-row:1; min-width:0; min-height:0; overflow:auto; background:var(--ui-surface-base); }
     mux-sdk-utility .changes-panel > .vertical-resizer { grid-column:2; grid-row:1; }
     mux-sdk-utility .changes-list > header { display:flex; justify-content:space-between; align-items:center; height:var(--ui-utility-section-header-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); color:var(--ui-text-muted); font:600 var(--ui-text-xs) var(--ui-font-sans); letter-spacing:.1em; }
