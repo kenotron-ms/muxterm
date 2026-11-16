@@ -1640,7 +1640,9 @@ export class MuxSDKChat extends LitElement {
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:'Task cancellation requested.' });
     }
     else if (event.type === 'voice.session.error') {
-      this.voiceEntries = [...this.voiceEntries, { role:'error', text:event.message || 'Voice connection lost.', at:event.at }];
+      const message = event.message || 'Voice connection lost.';
+      this.voiceEntries = [...this.voiceEntries, { role:'error', text:message, at:event.at }];
+      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:message, at:event.at });
       if (!this.replaying && event.generationId && this.voice?.providerSessionId === event.generationId) this.voice.stop();
     }
     else if (event.type === 'session.renamed') { if (!this.replaying) void sdkChats.refresh(); }
@@ -2793,7 +2795,7 @@ export class MuxSDKChat extends LitElement {
     const relation = block.relation || 'chat-to-chat';
     const name = block.name || (relation === 'external-tool' ? 'External tool' : 'Chat');
     if (relation === 'chat-to-chat') {
-      const isVoice = block.source === 'voice' || (!block.id && name === 'voice');
+      const isVoice = block.source === 'voice';
       const targetId = isVoice ? this.sessionId : block.id;
       const host = targetId && !isVoice ? chatHost(targetId) : '';
       return html`<article class="linked-chat-message" aria-label=${`Message from ${name}`}>
