@@ -362,8 +362,6 @@ export class MuxSDKChat extends LitElement {
     .linked-chat-message { box-sizing:border-box; width:100%; min-width:0; }
     .work-items > .linked-chat-message + .linked-chat-message { margin-top:var(--ui-space-5); }
     .linked-chat-sender { margin-bottom:var(--ui-space-3); font-size:var(--ui-content-font-size); }
-    .linked-chat-sender .md-chat-link { align-items:center; }
-    .linked-chat-sender .md-chat-link svg { flex:none; }
     .linked-chat-sender .md-chat-link:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
     .linked-chat-body { --ui-text:var(--ui-chat-assistant-text); box-sizing:border-box; padding:var(--ui-space-5) var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); font-size:var(--ui-text-lg); line-height:1.55; overflow-wrap:anywhere; }
     .chat-message-card.external-tool { background:color-mix(in srgb,var(--ui-message-external) 8%,var(--ui-surface-raised)); }
@@ -441,6 +439,8 @@ export class MuxSDKChat extends LitElement {
     .text .citation-unavailable { color:var(--ui-text-muted); font-size:var(--ui-text-sm); white-space:nowrap; border-bottom:1px dotted currentColor; cursor:help; }
     .text .md-chat-link { display:inline-flex; align-items:baseline; gap:var(--ui-space-2); max-width:100%; padding:var(--ui-space-px) var(--ui-space-3); border:1px solid color-mix(in srgb,var(--ui-accent) 48%,transparent); border-radius:var(--ui-radius-md); background:color-mix(in srgb,var(--ui-accent) 12%,transparent); font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
     .text .md-chat-link:hover { background:color-mix(in srgb,var(--ui-accent) 22%,transparent); text-decoration:underline; }
+    .text .linked-chat-sender .md-chat-link { align-items:center; gap:var(--ui-space-1); padding:var(--ui-space-px) var(--ui-space-2); font-size:var(--ui-text-md); line-height:1.2; }
+    .text .linked-chat-sender .md-chat-link svg { display:block; flex:none; width:13px; height:13px; }
     .text .md-image-link { display:inline-block; max-width:100%; }
     .text .md-img { display:block; max-width:100%; max-height:min(var(--ui-media-preview-max-height),55vh); width:auto; height:auto; object-fit:contain; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); }
     .text .md-ul, .text .md-ol { margin:0 0 var(--ui-space-6); padding-left:var(--ui-space-8); }
