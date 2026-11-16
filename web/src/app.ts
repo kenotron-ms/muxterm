@@ -3,6 +3,7 @@ import './ui/tokens.css';
 import './ui/dialog.js';
 import './ui/button.js';
 import './ui/feedback.js';
+import './ui/pane-divider.js';
 import { LitElement, html, css } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
@@ -375,35 +376,10 @@ export class MuxApp extends LitElement {
     .sidebar-toggle-position mux-ui-button::part(button) { -webkit-app-region:no-drag; app-region:no-drag; }
     .terminal-session { flex:1; min-height:0; min-width:0; display:flex; position:relative; }
     .terminal-session > mux-dock { width:0; min-width:0; flex:1 1 auto; }
-    .terminal-utility { box-sizing:border-box; position:relative; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; border-left:var(--ui-pane-divider-track-width) solid var(--ui-surface-raised); background:var(--ui-surface-base); color:var(--ui-text); }
-    .terminal-utility::before { content:''; position:absolute; top:0; bottom:0; left:calc(-1 * var(--ui-divider-thickness)); width:var(--ui-divider-thickness); background:var(--ui-shell-divider); pointer-events:none; }
+    .terminal-utility { box-sizing:border-box; position:relative; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); }
+    .terminal-utility > mux-ui-pane-divider { position:absolute; top:0; bottom:0; left:0; z-index:var(--ui-z-local); }
     .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,var(--ui-terminal-utility-width)); min-width:0; box-shadow:var(--ui-shadow-side); } }
-
-    /* Keep the resize target while drawing only a quiet column seam. */
-    .sidebar-gutter {
-      width: var(--ui-pane-divider-track-width);
-      position: relative;
-      cursor: col-resize;
-      background: var(--ui-surface-raised);
-      -webkit-app-region: no-drag;
-      app-region: no-drag;
-    }
-
-    .sidebar-gutter::after {
-      content: '';
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      right: 0;
-      width: var(--ui-divider-thickness);
-      background: var(--ui-shell-divider);
-      pointer-events: none;
-    }
-
-    .sidebar-gutter:hover {
-      background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-surface-raised));
-    }
 
     /* ── Surface 1: the workspace drawer ─────────────────────────────────
        The drawer IS <mux-sidebar>. Not a new component, not a mobile port —
@@ -1338,8 +1314,11 @@ export class MuxApp extends LitElement {
       snapOffset: 0,
       gutterSize: SIDEBAR_GUTTER_SIZE,        // matches removed .resize-handle width
       gutter: () => {
-        const g = document.createElement('div');
-        g.className = 'sidebar-gutter'; // styled above to match old .resize-handle
+        const g = document.createElement('mux-ui-pane-divider');
+        g.setAttribute('compact', '');
+        g.setAttribute('aria-label', 'Resize sidebar');
+        g.setAttribute('role', 'separator');
+        g.setAttribute('aria-orientation', 'vertical');
         return g;
       },
       onDragStart: () => {
@@ -1509,6 +1488,7 @@ export class MuxApp extends LitElement {
                 ></mux-dock>
                 ${this._terminalUtilityOpen && !this._sdkChatId ? html`
                   <aside class="terminal-utility" aria-label="File explorer">
+                    <mux-ui-pane-divider fixed aria-hidden="true"></mux-ui-pane-divider>
                     <mux-sdk-utility terminal-mode .sessionId=${'terminal'} @close="${() => { this._terminalUtilityOpen = false; }}"></mux-sdk-utility>
                   </aside>
                 ` : ''}

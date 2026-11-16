@@ -165,7 +165,7 @@
   --ui-side-chat-start-width: 576px;
   --ui-utility-home-gutter: 44px;
   --ui-utility-rail-min-width: 180px;
-  --ui-utility-rail-resizer-width: var(--ui-pane-divider-track-width);
+  --ui-utility-rail-resizer-width: var(--ui-divider-thickness);
   --ui-utility-file-header-height: 42px;
   --ui-utility-browser-heading-height: 34px;
   --ui-utility-file-glyph-width: 17px;
