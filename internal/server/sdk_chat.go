@@ -378,7 +378,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.LastOutput = ""
 		c.LaneReport = ""
 		c.LaneTodos = nil
-		if event.Kind == "user" && event.Origin == nil && event.Source != "operator-lane" {
+		if event.Kind == "user" && event.Origin == nil && event.Source != "operator-lane" && event.Source != "recovery" {
 			c.UserTurns++
 		}
 	case "tool.started":
@@ -2284,6 +2284,10 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "goalify requires a human browser message without attachments", http.StatusForbidden)
 			return
 		}
+		if req.Source == "recovery" && (!humanBrowserRequest(r) || req.Kind != "user" || req.Content != "" || len(req.Attachments) != 0) {
+			http.Error(w, "recovery requires a human browser action without message content or attachments", http.StatusForbidden)
+			return
+		}
 		if req.Kind == "service" && c.Harness == "codex" {
 			http.Error(w, "unsupported: attributed service input", 422)
 			return
@@ -2313,7 +2317,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 422)
 			return
 		}
-		if strings.TrimSpace(req.Content) == "" && len(attachments) == 0 {
+		if req.Source != "recovery" && strings.TrimSpace(req.Content) == "" && len(attachments) == 0 {
 			http.Error(w, "message or attachment required", 422)
 			return
 		}
@@ -2323,6 +2327,15 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		adapterLock := h.adapterLock(id)
 		adapterLock.Lock()
 		defer adapterLock.Unlock()
+		if req.Source == "recovery" {
+			h.mu.Lock()
+			uncertain := c.State == "uncertain"
+			h.mu.Unlock()
+			if !uncertain {
+				http.Error(w, "This turn is no longer interrupted. Refresh the chat to see its current state.", http.StatusConflict)
+				return
+			}
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 		defer cancel()
 		if err := h.resume(ctx, c); err != nil {
@@ -2331,6 +2344,18 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		}
 		content := req.Content
 		displayContent := req.Content
+		if req.Source == "recovery" {
+			lastRequest, readErr := sdkLastRecoverableInput(filepath.Join(h.dir, id+".ndjson"))
+			if readErr != nil {
+				http.Error(w, "Could not read the interrupted turn. Try again.", http.StatusInternalServerError)
+				return
+			}
+			content = "The previous turn was interrupted. Inspect the conversation and current work before acting. Continue only unfinished work, and verify before repeating an action. Briefly note the interruption in your response."
+			if lastRequest != "" {
+				content += "\n\nPrevious user request for reference:\n" + lastRequest
+			}
+			displayContent = "Continue after interruption"
+		}
 		if req.Source == "goalify" {
 			displayContent = "Refine goal with goalify"
 		}

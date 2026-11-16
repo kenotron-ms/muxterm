@@ -35,6 +35,10 @@ const running: ChatEvent[] = [
   {at:at(25),type:'input.accepted',kind:'user',source:'browser',inputId:'message-3',text:'Now inspect the phone composer and report any seams.'},
   {at:at(26),type:'commentary.delta',itemId:'progress-3',text:'I’m comparing the phone composer with the shared controls.',complete:true},
 ];
+const interrupted: ChatEvent[] = [
+  ...running,
+  {at:at(27),type:'session.uncertain',text:'The SDK sidecar stopped before the turn reached a terminal event. The accepted input was not replayed.'},
+];
 const mermaidTranscript: ChatEvent[] = [
   {at:at(1),type:'input.accepted',kind:'user',source:'browser',inputId:'diagram-1',text:'Show the path from a new chat to a rendered answer.'},
   {at:at(2),type:'assistant.delta',text:'Here is the chat flow:\n\n```mermaid\nflowchart LR\n  Draft --> Send\n  Send --> Agent\n  Agent --> Reply\n```\n\nThe reply appears in the session.'},
@@ -110,7 +114,7 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     ],
     observations:goalState === 'none' ? [] : [{at:at(4),event:{type:'goal.started',goalState:'active',goalSummary:'The native harness acknowledged revision 1.'}}],
   };
-  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : scenario === 'goalify' ? goalify : scenario === 'mermaid' ? mermaidTranscript : scenario === 'citation' ? citationTranscript : state === 'working' ? running : transcript;
+  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : scenario === 'goalify' ? goalify : scenario === 'mermaid' ? mermaidTranscript : scenario === 'citation' ? citationTranscript : state === 'working' ? running : state === 'uncertain' ? interrupted : transcript;
   const messages = events.filter(event => event.type !== 'tool.started' && event.type !== 'tool.completed');
   return ({url,method,init}) => {
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON(goalState === 'proposal' ? [chat,operator] : [chat]);

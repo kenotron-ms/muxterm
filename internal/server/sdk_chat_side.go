@@ -41,7 +41,7 @@ func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
 		}
 		switch event.Type {
 		case "input.accepted":
-			if event.Kind == "user" && event.Origin == nil && event.Text != "" {
+			if event.Kind == "user" && event.Origin == nil && event.Source != "recovery" && event.Text != "" {
 				turn = append(turn, "User: "+event.Text)
 			}
 		case "assistant.delta":
