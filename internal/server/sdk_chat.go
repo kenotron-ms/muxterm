@@ -63,6 +63,7 @@ type sdkChat struct {
 	LastActivity        string        `json:"lastActivity,omitempty"`
 	LastOutput          string        `json:"lastOutput,omitempty"`
 	HasVoiceHistory     bool          `json:"hasVoiceHistory,omitempty"`
+	VoiceHandoff        bool          `json:"voiceHandoff,omitempty"`
 	BranchContext       string        `json:"-"`
 	BranchPending       bool          `json:"branchPending,omitempty"`
 	Operator            bool          `json:"operator,omitempty"`
@@ -228,6 +229,11 @@ func newSDKChatHost() *sdkChatHost {
 		}
 		var chat sdkChat
 		if json.Unmarshal(data, &chat) == nil && chat.ID != "" {
+			if chat.VoiceHandoff {
+				_ = os.Remove(filepath.Join(h.dir, e.Name()))
+				_ = os.Remove(filepath.Join(h.dir, chat.ID+".ndjson"))
+				continue
+			}
 			chat.Approval = "never"
 			if chat.State == "working" || chat.State == "starting" {
 				chat.State = "uncertain"
@@ -1716,6 +1722,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		rows := make([]sdkChat, 0, len(h.chats))
 		archivedCount := 0
 		for _, c := range h.chats {
+			if c.VoiceHandoff {
+				continue
+			}
 			if (sideParentID == "" && c.SideParentID != "") || (sideParentID != "" && c.SideParentID != sideParentID) {
 				continue
 			}
