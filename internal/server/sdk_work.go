@@ -26,6 +26,8 @@ type sdkWorkItem struct {
 	Brief            string          `json:"brief"`
 	Status           string          `json:"status"`
 	OwnerSessionID   string          `json:"ownerSessionId"`
+	ProjectIDs       []string        `json:"projectIds"`
+	CreateProjectIDs []string        `json:"createProjectIds"`
 	SessionIDs       []string        `json:"sessionIds"`
 	CreateSessionIDs []string        `json:"createSessionIds"`
 	Progress         string          `json:"progress,omitempty"`
@@ -47,6 +49,24 @@ type sdkWorkUpdate struct {
 	Outcome         string    `json:"outcome,omitempty"`
 	Evidence        []string  `json:"evidence,omitempty"`
 	LinkedSessionID string    `json:"linkedSessionId,omitempty"`
+	ProjectIDs      *[]string `json:"projectIds,omitempty"`
+}
+
+// A missing projectIds field means the work item predates folder tags.
+func (h *sdkChatHost) workProjectIDsLocked(item *sdkWorkItem) []string {
+	if item.ProjectIDs != nil {
+		return item.ProjectIDs
+	}
+	if owner := h.chats[item.OwnerSessionID]; owner != nil && owner.WorkspaceID != "" {
+		return []string{owner.WorkspaceID}
+	}
+	return []string{}
+}
+
+func normalizeWorkProjectIDs(ids []string) []string {
+	ids = slices.Clone(ids)
+	sort.Strings(ids)
+	return slices.Compact(ids)
 }
 
 func validWorkStatus(status string) bool {
@@ -101,6 +121,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == http.MethodGet {
 		owner := r.URL.Query().Get("session_id")
+		projectID := r.URL.Query().Get("project_id")
 		status := r.URL.Query().Get("status")
 		if status != "" && !validWorkStatus(status) {
 			http.Error(w, "invalid work status", 400)
@@ -109,6 +130,10 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		rows := make([]sdkWorkItem, 0, len(h.workItems))
 		for _, item := range h.workItems {
+			projectIDs := h.workProjectIDsLocked(item)
+			if projectID != "" && !slices.Contains(projectIDs, projectID) {
+				continue
+			}
 			if owner != "" && item.OwnerSessionID != owner && !slices.Contains(item.SessionIDs, owner) {
 				continue
 			}
@@ -116,6 +141,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			copy := *item
+			copy.ProjectIDs = slices.Clone(projectIDs)
 			copy.Updates = nil
 			rows = append(rows, copy)
 		}
@@ -125,13 +151,14 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ClientRef      string   `json:"clientRef"`
-		Title          string   `json:"title"`
-		Brief          string   `json:"brief"`
-		OwnerSessionID string   `json:"ownerSessionId"`
-		SessionIDs     []string `json:"sessionIds"`
+		ClientRef      string    `json:"clientRef"`
+		Title          string    `json:"title"`
+		Brief          string    `json:"brief"`
+		OwnerSessionID string    `json:"ownerSessionId"`
+		SessionIDs     []string  `json:"sessionIds"`
+		ProjectIDs     *[]string `json:"projectIds"`
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || req.OwnerSessionID == "" || len(req.SessionIDs) > 32 {
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || req.OwnerSessionID == "" || len(req.SessionIDs) > 32 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) {
 		http.Error(w, "clientRef, title, and ownerSessionId required", 400)
 		return
 	}
@@ -142,6 +169,19 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 		http.Error(w, "unknown owner session", 422)
 		return
+	}
+	projectIDs := []string{}
+	if req.ProjectIDs != nil {
+		projectIDs = normalizeWorkProjectIDs(*req.ProjectIDs)
+	} else if id := h.chats[req.OwnerSessionID].WorkspaceID; id != "" {
+		projectIDs = []string{id}
+	}
+	for _, id := range projectIDs {
+		if h.projects[id] == nil {
+			h.mu.Unlock()
+			http.Error(w, "unknown project folder: "+id, 422)
+			return
+		}
 	}
 	for _, id := range req.SessionIDs {
 		if h.chats[id] == nil {
@@ -156,12 +196,17 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 			if createdWith == nil {
 				createdWith = item.SessionIDs // older records predate the create snapshot
 			}
-			if item.Title != req.Title || item.Brief != req.Brief || !slices.Equal(createdWith, req.SessionIDs) {
+			createdProjects := item.CreateProjectIDs
+			if createdProjects == nil {
+				createdProjects = h.workProjectIDsLocked(item)
+			}
+			if item.Title != req.Title || item.Brief != req.Brief || !slices.Equal(createdWith, req.SessionIDs) || !slices.Equal(createdProjects, projectIDs) {
 				h.mu.Unlock()
 				http.Error(w, "clientRef already used for different work", 409)
 				return
 			}
 			copy := *item
+			copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 			h.mu.Unlock()
 			writeSDKJSON(w, 200, copy)
 			return
@@ -169,7 +214,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	item := &sdkWorkItem{ID: sdkID(), ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief,
-		Status: "open", OwnerSessionID: req.OwnerSessionID, SessionIDs: req.SessionIDs,
+		Status: "open", OwnerSessionID: req.OwnerSessionID, ProjectIDs: projectIDs, CreateProjectIDs: slices.Clone(projectIDs), SessionIDs: req.SessionIDs,
 		CreateSessionIDs: append([]string{}, req.SessionIDs...),
 		Revision:         1, CreatedAt: now, UpdatedAt: now, Updates: []sdkWorkUpdate{}}
 	if err := h.saveWorkLocked(item); err != nil {
@@ -189,6 +234,7 @@ func (s *Server) handleSDKWorkItem(w http.ResponseWriter, r *http.Request) {
 	var copy sdkWorkItem
 	if item != nil {
 		copy = *item
+		copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 	}
 	h.mu.Unlock()
 	if item == nil {
@@ -200,16 +246,17 @@ func (s *Server) handleSDKWorkItem(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ClientRef       string   `json:"clientRef"`
-		SessionID       string   `json:"sessionId"`
-		Text            string   `json:"text"`
-		Status          string   `json:"status"`
-		Progress        string   `json:"progress"`
-		Outcome         string   `json:"outcome"`
-		Evidence        []string `json:"evidence"`
-		LinkedSessionID string   `json:"linkedSessionId"`
+		ClientRef       string    `json:"clientRef"`
+		SessionID       string    `json:"sessionId"`
+		Text            string    `json:"text"`
+		Status          string    `json:"status"`
+		Progress        string    `json:"progress"`
+		Outcome         string    `json:"outcome"`
+		Evidence        []string  `json:"evidence"`
+		LinkedSessionID string    `json:"linkedSessionId"`
+		ProjectIDs      *[]string `json:"projectIds"`
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || len(req.Text) > 16<<10 || len(req.Progress) > 4096 || len(req.Outcome) > 16<<10 || len(req.Evidence) > 20 || (req.Status != "" && !validWorkStatus(req.Status)) || (req.Text == "" && req.Status == "" && req.Progress == "" && req.Outcome == "" && req.LinkedSessionID == "") {
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || len(req.Text) > 16<<10 || len(req.Progress) > 4096 || len(req.Outcome) > 16<<10 || len(req.Evidence) > 20 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) || (req.Status != "" && !validWorkStatus(req.Status)) || (req.Text == "" && req.Status == "" && req.Progress == "" && req.Outcome == "" && req.LinkedSessionID == "" && req.ProjectIDs == nil) {
 		http.Error(w, "clientRef and a valid work update required", 400)
 		return
 	}
@@ -238,22 +285,38 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown participant session", 422)
 		return
 	}
+	if req.ProjectIDs != nil {
+		ids := normalizeWorkProjectIDs(*req.ProjectIDs)
+		for _, projectID := range ids {
+			if h.projects[projectID] == nil {
+				h.mu.Unlock()
+				http.Error(w, "unknown project folder: "+projectID, 422)
+				return
+			}
+		}
+		req.ProjectIDs = &ids
+	}
 	for _, prior := range item.Updates {
 		if prior.ClientRef == req.ClientRef {
-			if prior.SessionID != req.SessionID || prior.Text != req.Text || prior.Status != req.Status || prior.Progress != req.Progress || prior.Outcome != req.Outcome || prior.LinkedSessionID != req.LinkedSessionID || !slices.Equal(prior.Evidence, req.Evidence) {
+			if prior.SessionID != req.SessionID || prior.Text != req.Text || prior.Status != req.Status || prior.Progress != req.Progress || prior.Outcome != req.Outcome || prior.LinkedSessionID != req.LinkedSessionID || !slices.Equal(prior.Evidence, req.Evidence) || (prior.ProjectIDs == nil) != (req.ProjectIDs == nil) || (prior.ProjectIDs != nil && !slices.Equal(*prior.ProjectIDs, *req.ProjectIDs)) {
 				h.mu.Unlock()
 				http.Error(w, "clientRef already used for different update", 409)
 				return
 			}
 			copy := *item
+			copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 			h.mu.Unlock()
 			writeSDKJSON(w, 200, copy)
 			return
 		}
 	}
 	copy := *item
+	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: req.ClientRef, At: time.Now().UTC(), SessionID: req.SessionID,
-		Text: req.Text, Status: req.Status, Progress: req.Progress, Outcome: req.Outcome, Evidence: req.Evidence, LinkedSessionID: req.LinkedSessionID})
+		Text: req.Text, Status: req.Status, Progress: req.Progress, Outcome: req.Outcome, Evidence: req.Evidence, LinkedSessionID: req.LinkedSessionID, ProjectIDs: req.ProjectIDs})
+	if req.ProjectIDs != nil {
+		copy.ProjectIDs = slices.Clone(*req.ProjectIDs)
+	}
 	if req.LinkedSessionID != "" && !slices.Contains(copy.SessionIDs, req.LinkedSessionID) && req.LinkedSessionID != copy.OwnerSessionID {
 		copy.SessionIDs = append(slices.Clone(copy.SessionIDs), req.LinkedSessionID)
 		sort.Strings(copy.SessionIDs)

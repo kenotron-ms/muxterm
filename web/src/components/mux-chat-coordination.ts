@@ -6,15 +6,17 @@ import { sdkChats } from '../lib/sdk-chats.js';
 import '../ui/button.js';
 
 type WorkUpdate = { id:string; at:string; sessionId?:string; linkedSessionId?:string; text:string; status?:string; progress?:string; outcome?:string; evidence?:string[] };
-type WorkItem = { id:string; title:string; brief:string; status:string; progress?:string; outcome?:string; ownerSessionId:string; sessionIds:string[]; updatedAt:string; updates?:WorkUpdate[] };
+type WorkItem = { id:string; title:string; brief:string; status:string; progress?:string; outcome?:string; ownerSessionId:string; sessionIds:string[]; projectIds:string[]; updatedAt:string; updates?:WorkUpdate[] };
 
 @customElement('mux-chat-coordination')
 export class MuxChatCoordination extends LitElement {
   @property() sessionId = '';
+  @property() projectId = '';
   @property() remoteHost = '';
   @state() private work: WorkItem[] = [];
   @state() private detail?: WorkItem;
   @state() private filter: 'open' | 'all' | 'done' = 'open';
+  @state() private scope: 'folder' | 'all' = 'folder';
   @state() private error = '';
   private poll?: number;
   private loading = false;
@@ -29,8 +31,9 @@ export class MuxChatCoordination extends LitElement {
     h3 { font-size:var(--ui-text-md); }
     .intro,.meta { color:var(--ui-text-muted); }
     .intro { margin-top:var(--ui-space-2); }
-    .overview { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); margin:var(--ui-space-7) 0 var(--ui-space-5); }
+    .overview { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:var(--ui-space-4); margin:var(--ui-space-7) 0 var(--ui-space-5); }
     .overview p { color:var(--ui-text-muted); }
+    .overview .filters { margin-bottom:0; }
     .filters { display:flex; gap:var(--ui-space-2); margin-bottom:var(--ui-space-4); }
     .filter[pressed] { color:var(--ui-accent); }
     .list { border-top:1px solid var(--ui-border); }
@@ -71,11 +74,12 @@ export class MuxChatCoordination extends LitElement {
     super.disconnectedCallback();
   }
   protected override updated(changed: PropertyValues<this>) {
-    if (changed.has('sessionId') || changed.has('remoteHost')) {
+    if (changed.has('sessionId') || changed.has('projectId') || changed.has('remoteHost')) {
       this.refreshKey++;
       this.work = [];
       this.detail = undefined;
       this.filter = 'open';
+      this.scope = 'folder';
       this.loading = false;
       void this.refresh();
     }
@@ -91,7 +95,8 @@ export class MuxChatCoordination extends LitElement {
     const key = this.refreshKey;
     this.loading = true;
     try {
-      const result = await this.request<{work:WorkItem[]}>('/api/sdk-work');
+      const query = this.scope === 'all' ? '' : this.projectId ? `?project_id=${encodeURIComponent(this.projectId)}` : `?session_id=${encodeURIComponent(this.sessionId)}`;
+      const result = await this.request<{work:WorkItem[]}>(`/api/sdk-work${query}`);
       if (key !== this.refreshKey) return;
       this.work = result.work;
       if (this.detail) {
@@ -106,14 +111,26 @@ export class MuxChatCoordination extends LitElement {
   private date(value: string) { return new Date(value).toLocaleString(undefined, {dateStyle:'medium',timeStyle:'short'}); }
   private statusName(status: string) { return ({active:'In progress',open:'Open',blocked:'Blocked',done:'Done',cancelled:'Cancelled'} as Record<string,string>)[status] || status; }
   private sessionTitle(id:string) { return sdkChats.chats.find(chat => chat.id === id)?.title || id.slice(0,8); }
+  private selectScope(scope:'folder' | 'all') {
+    if (scope === this.scope) return;
+    this.refreshKey++;
+    this.loading = false;
+    this.scope = scope;
+    this.work = [];
+    this.detail = undefined;
+    void this.refresh();
+  }
+  private projectNames(item:WorkItem) {
+    return item.projectIds?.length ? item.projectIds.map(id => sdkChats.projects.find(project => project.id === id && (project.remoteHost || '') === this.remoteHost)?.name || id.slice(0,8)).join(', ') : 'No folder';
+  }
 
   private issueList() {
     const ordered = [...this.work].sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
     const openCount = ordered.filter(item => item.status !== 'done' && item.status !== 'cancelled').length;
     const visible = ordered.filter(item => this.filter === 'all' || (this.filter === 'done' ? item.status === 'done' || item.status === 'cancelled' : item.status !== 'done' && item.status !== 'cancelled'));
-    return html`<div class="overview"><p>${openCount} open · ${this.work.length} total</p></div>
+    return html`<div class="overview"><p>${openCount} open · ${this.work.length} total</p><div class="filters" aria-label="Issue scope"><mux-ui-button size="small" variant="quiet" toggle .pressed=${this.scope === 'folder'} @click=${() => this.selectScope('folder')}>${this.projectId ? 'This folder' : 'This chat'}</mux-ui-button><mux-ui-button size="small" variant="quiet" toggle .pressed=${this.scope === 'all'} @click=${() => this.selectScope('all')}>All issues</mux-ui-button></div></div>
       <div class="filters" aria-label="Filter issues">${(['open','all','done'] as const).map(filter => html`<mux-ui-button class="filter" size="small" variant="quiet" toggle .pressed=${this.filter === filter} @click=${() => { this.filter=filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Done'}</mux-ui-button>`)}</div>
-      ${visible.length ? html`<div class="list">${visible.map(item => html`<mux-ui-button class="issue" full-width variant="quiet" @click=${() => { this.detail=item; void this.refresh(); }}><span class="status-dot ${item.status}" aria-hidden="true"></span><span class="issue-main"><strong>${item.title}</strong><span class="summary">${item.progress || item.brief || 'No progress yet'}</span><span class="meta">${this.date(item.updatedAt)} · ${[item.ownerSessionId,...item.sessionIds].length} ${[item.ownerSessionId,...item.sessionIds].length === 1 ? 'chat' : 'chats'}</span></span><span class="status">${this.statusName(item.status)}</span></mux-ui-button>`)}</div>` : html`<div class="empty"><strong>${this.work.length ? 'No issues in this view' : 'No issues yet'}</strong>${this.work.length ? 'Choose another filter to see them.' : 'Issues will appear here as agents record shared work.'}</div>`}`;
+      ${visible.length ? html`<div class="list">${visible.map(item => html`<mux-ui-button class="issue" full-width variant="quiet" @click=${() => { this.detail=item; void this.refresh(); }}><span class="status-dot ${item.status}" aria-hidden="true"></span><span class="issue-main"><strong>${item.title}</strong><span class="summary">${item.progress || item.brief || 'No progress yet'}</span><span class="meta">${this.date(item.updatedAt)} · ${[item.ownerSessionId,...item.sessionIds].length} ${[item.ownerSessionId,...item.sessionIds].length === 1 ? 'chat' : 'chats'} · ${this.projectNames(item)}</span></span><span class="status">${this.statusName(item.status)}</span></mux-ui-button>`)}</div>` : html`<div class="empty"><strong>${this.work.length ? 'No issues in this view' : 'No issues yet'}</strong>${this.work.length ? 'Choose another filter to see them.' : 'Issues will appear here as agents record shared work.'}</div>`}`;
   }
   private issueDetail() {
     const item = this.detail;
@@ -122,7 +139,7 @@ export class MuxChatCoordination extends LitElement {
     return html`<div class="detail-head"><mux-ui-button size="small" variant="quiet" @click=${() => { this.detail=undefined; }}>← All issues</mux-ui-button><span class="status">${this.statusName(item.status)}</span></div>
       <h2>${item.title}</h2><p class="detail-lead">${item.brief || 'No description yet.'}</p>
       <div class="progress"><strong>Current progress</strong><p>${item.progress || 'No progress recorded yet.'}</p>${item.outcome ? html`<p><strong>Outcome:</strong> ${item.outcome}</p>` : nothing}</div>
-      <p class="meta">Updated ${this.date(item.updatedAt)} · ${[item.ownerSessionId,...item.sessionIds].map(id => this.sessionTitle(id)).join(', ')}</p>
+      <p class="meta">Updated ${this.date(item.updatedAt)} · ${[item.ownerSessionId,...item.sessionIds].map(id => this.sessionTitle(id)).join(', ')}</p><p class="meta">Folders: ${this.projectNames(item)}</p>
       <section class="timeline"><h3>Activity</h3>${updates.length ? updates.map(update => html`<div class="entry"><div class="meta">${this.date(update.at)} · ${update.sessionId ? this.sessionTitle(update.sessionId) : 'User'}${update.status ? ` · ${this.statusName(update.status)}` : ''}</div><p>${update.text || update.progress || update.outcome || (update.linkedSessionId ? `Linked ${this.sessionTitle(update.linkedSessionId)}` : 'Update recorded')}</p>${update.evidence?.length ? html`<p class="meta">Evidence: ${update.evidence.join(', ')}</p>` : nothing}</div>`) : html`<div class="empty">No activity yet.</div>`}</section>`;
   }
   override render() {
