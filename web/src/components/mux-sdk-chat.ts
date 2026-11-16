@@ -2568,7 +2568,7 @@ export class MuxSDKChat extends LitElement {
       await this.executeChatCommand(command, originalDraft);
       return;
     }
-    if (this.voiceState !== 'idle' || (!content && !this.attachments.length) || this.stopping || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || a.error) || (this.busy && this.attachments.length > 0)) return;
+    if (this.voiceState !== 'idle' || (!content && !this.attachments.length) || this.stopping || this.recoveryPending || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || a.error) || (this.busy && this.attachments.length > 0)) return;
     const kind = this.busy ? 'steer' : 'user';
     const sessionId = this.activeSession;
     this.submittingSessions.add(sessionId);
@@ -2643,6 +2643,7 @@ export class MuxSDKChat extends LitElement {
     if (!this.recoveryRequired || this.recoveryPending || this.busy) return;
     if (this.selectedAgent) this.returnToParent();
     const sessionId = this.activeSession;
+    const turn = this.currentTurn;
     this.recoveryPending = true;
     this.recoveryError = '';
     this.recoveryErrorDetail = '';
@@ -2652,7 +2653,11 @@ export class MuxSDKChat extends LitElement {
         body:JSON.stringify({kind:'user',source:'recovery',id:crypto.randomUUID()}),
       });
       if (!response.ok) throw new Error((await response.text()).trim() || 'Could not continue this turn');
-      if (sessionId === this.activeSession) this.recoveryRequired = false;
+      if (sessionId === this.activeSession && this.currentTurn === turn) {
+        this.recoveryRequired = false;
+        this.busy = true;
+        if (!this.turnStarted.has(turn)) this.turnStarted.set(turn, Date.now());
+      }
     } catch (error) {
       if (sessionId === this.activeSession) {
         this.recoveryError = 'Could not continue · Try again';
@@ -2718,7 +2723,7 @@ export class MuxSDKChat extends LitElement {
     const disabled = sideStart ? !this.draftHasContent || this.startingSideChat
       : mode === 'voice-start' ? !this.voiceAvailable || this.settingsPending || this.dictationActive || !!this.chat?.branchPending
       : mode === 'task-stop' ? this.stopping
-      : mode === 'send' || mode === 'steer' ? this.stopping || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || !!a.error) || (this.busy && this.attachments.length > 0)
+      : mode === 'send' || mode === 'steer' ? this.stopping || this.recoveryPending || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || !!a.error) || (this.busy && this.attachments.length > 0)
       : false;
     const glyph = mode === 'voice-start' ? html`<mux-ui-voice-bars></mux-ui-voice-bars>` : icon(mode === 'send' || mode === 'steer' ? ArrowUp : Square,{size:16});
     return html`<mux-ui-button class="send" size="small" variant="primary" icon-only accessible-label=${label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'voice-start' || mode === 'voice-stop' ? void this.toggleVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</mux-ui-button>`;
