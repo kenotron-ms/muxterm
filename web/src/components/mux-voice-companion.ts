@@ -24,11 +24,10 @@ export class MuxVoiceCompanion extends LitElement {
     .empty { flex:1; display:flex; align-items:center; justify-content:center; color:var(--ui-text-muted); text-align:center; }
     .entry { max-width:86%; overflow-wrap:anywhere; }
     .speaker { margin-bottom:var(--ui-space-1); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    .message { padding:var(--ui-space-3) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); white-space:pre-wrap; }
+    .message { padding:var(--ui-space-3) var(--ui-space-4); border:1px solid var(--ui-border); white-space:pre-wrap; }
     .user { align-self:flex-end; }
-    .user .speaker { text-align:right; }
-    .user .message { background:var(--ui-surface-raised); }
-    .assistant .message { background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); }
+    .user .message { border:0; border-radius:var(--ui-radius-2xl) var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-user-surface); }
+    .assistant .message { border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); }
     .task { align-self:stretch; max-width:none; color:var(--ui-text-muted); }
     .task .speaker { display:flex; align-items:center; gap:var(--ui-space-2); margin-bottom:0; min-height:var(--ui-chat-tool-row-height); }
     .task .message { margin-left:calc(15px + var(--ui-space-2)); border:0; background:none; padding:0; color:var(--ui-text); }
@@ -88,7 +87,7 @@ export class MuxVoiceCompanion extends LitElement {
     const elapsed = `${Math.floor(this.seconds / 60)}:${String(this.seconds % 60).padStart(2, '0')}`;
     return html`<div class="conversation" aria-label="Voice conversation">
       ${this.entries.length ? this.entries.map(entry => html`<div class="entry ${entry.role}">
-        <div class="speaker">${entry.role === 'user' ? 'You' : entry.role === 'assistant' ? 'Voice' : entry.role === 'task' ? html`${icon(MessageSquare,{size:15})} Sent to task chat` : 'Voice'}</div>
+        ${entry.role === 'task' ? html`<div class="speaker">${icon(MessageSquare,{size:15})} Sent to task chat</div>` : nothing}
         <div class="message">${entry.text.trimEnd()}</div>
       </div>`) : html`<div class="empty">${this.available ? 'Start speaking to Voice' : 'Voice is unavailable'}</div>`}
       ${this.error ? html`<div class="entry error" role="alert">${this.error}</div>` : nothing}

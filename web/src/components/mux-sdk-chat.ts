@@ -93,7 +93,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { Archive, ArchiveRestore, ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, Ellipsis, FilePenLine, Folder, GitFork, Globe, Menu, MessageCircleQuestionMark, Mic, Network, PanelRight, Pencil, Pin, PinOff, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
+import { Archive, ArchiveRestore, ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, Ellipsis, FilePenLine, Folder, GitFork, Globe, Menu, MessageCircleQuestionMark, MessageSquare, Mic, Network, PanelRight, Pencil, Pin, PinOff, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
 
 type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
@@ -360,10 +360,11 @@ export class MuxSDKChat extends LitElement {
     .chat-message-card.lane-to-lane { background:color-mix(in srgb,var(--ui-success) 8%,var(--ui-surface-raised)); }
     .chat-message-card.lane-to-operator { background:color-mix(in srgb,var(--ui-message-lane-to-operator) 8%,var(--ui-surface-raised)); }
     .linked-chat-message { box-sizing:border-box; width:100%; min-width:0; }
-    .linked-chat-sender { margin-bottom:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
-    .linked-chat-sender a { color:inherit; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
-    .linked-chat-sender a:hover { color:var(--ui-text); }
-    .linked-chat-sender a:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; border-radius:var(--ui-radius-sm); }
+    .work-items > .linked-chat-message + .linked-chat-message { margin-top:var(--ui-space-5); }
+    .linked-chat-sender { margin-bottom:var(--ui-space-3); font-size:var(--ui-content-font-size); }
+    .linked-chat-sender .md-chat-link { align-items:center; }
+    .linked-chat-sender .md-chat-link svg { flex:none; }
+    .linked-chat-sender .md-chat-link:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
     .linked-chat-body { --ui-text:var(--ui-chat-assistant-text); box-sizing:border-box; padding:var(--ui-space-5) var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); font-size:var(--ui-text-lg); line-height:1.55; overflow-wrap:anywhere; }
     .chat-message-card.external-tool { background:color-mix(in srgb,var(--ui-message-external) 8%,var(--ui-surface-raised)); }
     .chat-message-card .lane-report-toggle { gap:var(--ui-space-5); }
@@ -1511,7 +1512,7 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'input.accepted' && event.source === 'voice') {
       this.voiceEntries = [...this.voiceEntries, { role:'task', text:event.text || '', at:event.at }];
-      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'chat-message', name:'voice', relation:'chat-to-chat', text:event.text || '', at:event.at, done:true });
+      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'chat-message', name:'voice', relation:'chat-to-chat', source:'voice', text:event.text || '', at:event.at, done:true });
       this.busy = true;
       markStart(this.currentTurn);
     }
@@ -2791,10 +2792,18 @@ export class MuxSDKChat extends LitElement {
   private chatMessageCard(block: Block) {
     const relation = block.relation || 'chat-to-chat';
     const name = block.name || (relation === 'external-tool' ? 'External tool' : 'Chat');
-    if (relation === 'chat-to-chat') return html`<article class="linked-chat-message" aria-label=${`Message from ${name}`}>
-      <div class="linked-chat-sender">${block.id ? html`<a href=${`#chat=${encodeURIComponent(block.id)}`} @click=${(event:MouseEvent) => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true})); }}>${name}</a>` : name}</div>
-      <div class="text linked-chat-body">${this.markdown(block, block.key, true)}</div>
-    </article>`;
+    if (relation === 'chat-to-chat') {
+      const isVoice = block.source === 'voice' || (!block.id && name === 'voice');
+      const targetId = isVoice ? this.sessionId : block.id;
+      const host = targetId && !isVoice ? chatHost(targetId) : '';
+      return html`<article class="linked-chat-message" aria-label=${`Message from ${name}`}>
+        <div class="text linked-chat-body">
+          <div class="linked-chat-sender">${targetId ? html`<a class="md-link md-chat-link" href=${`#chat=${encodeURIComponent(targetId)}${host ? `&host=${encodeURIComponent(host)}` : ''}`} draggable="false" title=${isVoice ? 'Open Voice' : `Open chat: ${name}`} aria-label=${isVoice ? 'Open Voice' : `Open chat: ${name}`}
+            @click=${(event:MouseEvent) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); if (isVoice) this.showVoice(); else this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:targetId},bubbles:true,composed:true})); }}>${icon(MessageSquare,{size:14})}<span>${name}</span></a>` : html`<span class="md-chat-link">${icon(MessageSquare,{size:14})}<span>${name}</span></span>`}</div>
+          ${this.markdown(block, block.key, true)}
+        </div>
+      </article>`;
+    }
     const label = relation === 'operator-to-lane' ? 'Operator → Lane' : relation === 'lane-to-lane' ? 'Lane → Lane'
       : relation === 'lane-to-operator' ? 'Lane → Operator' : relation === 'external-tool' ? 'External tool' : '';
     const expanded = this.laneReportsExpanded.has(block.key);
