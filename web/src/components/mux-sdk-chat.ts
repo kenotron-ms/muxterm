@@ -2728,6 +2728,7 @@ export class MuxSDKChat extends LitElement {
   private showVoice() {
     if (this.sideMode) return;
     this.setPaneMode('split');
+    if (this.voiceState === 'idle') void this.toggleVoice();
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('voice'));
   }
   private sendVoiceButton() {
