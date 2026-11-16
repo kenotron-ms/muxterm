@@ -7,6 +7,7 @@ import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/empty-state.js';
 import '../ui/feedback.js';
+import '../ui/pane-divider.js';
 import '../ui/rail-row.js';
 import '../ui/text-field.js';
 import type { MuxUITextField } from '../ui/text-field.js';
@@ -864,7 +865,7 @@ export class MuxMeetings extends LitElement {
         <mux-ui-text-field type="search" size="small" aria-label="Search meetings" placeholder="Search meetings" .value=${this.query} @input=${(event:Event) => { this.query = (event.target as MuxUITextField).liveValue; this.requestUpdate(); }}></mux-ui-text-field>
         <div class="meeting-actions"><mux-ui-button size="small" variant="secondary" @click=${() => void this.prepare()}>${icon(Mic,{size:15})} Record</mux-ui-button><mux-ui-button size="small" variant="secondary" @click=${() => void this.prepareCall()}>${icon(Video,{size:15})} Start call</mux-ui-button></div>
         <div class="meeting-rows">${this.loading ? html`<mux-ui-feedback kind="loading" density="compact">Loading meetings…</mux-ui-feedback>` : filtered.length ? filtered.map(meeting => html`<mux-ui-rail-row label=${meeting.title} detail=${new Date(meeting.startedAt).toLocaleString()} ?selected=${meeting.id === this.selectedId} @click=${() => this.selectMeeting(meeting)}><span slot="icon">${icon(meeting.kind === 'call' ? Video : AudioLines,{size:15})}</span></mux-ui-rail-row>`) : html`<mux-ui-feedback kind="empty" density="compact">${this.query ? 'No meetings match this search.' : 'No meetings yet.'}</mux-ui-feedback>`}</div>
-      </aside><div class="meeting-divider"></div><main class="meeting-viewer">
+      </aside><mux-ui-pane-divider class="meeting-divider" fixed aria-hidden="true"></mux-ui-pane-divider><main class="meeting-viewer">
         ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
         ${this.captureError ? html`<mux-ui-feedback kind="warning" density="compact">${this.captureError}</mux-ui-feedback>` : nothing}
         ${this.meetingBody(selected)}
@@ -875,14 +876,13 @@ export class MuxMeetings extends LitElement {
 
 const styles = `
   mux-meetings { color:var(--ui-text); background:var(--ui-surface-base); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
-  mux-meetings .meeting-layout { display:grid; grid-template-columns:minmax(0,1fr) var(--ui-pane-divider-track-width) clamp(220px,32%,340px); height:100%; min-width:0; }
+  mux-meetings .meeting-layout { display:grid; grid-template-columns:minmax(0,1fr) var(--ui-divider-thickness) clamp(220px,32%,340px); height:100%; min-width:0; }
   mux-meetings .meeting-rail { grid-column:3; grid-row:1; min-width:0; min-height:0; display:flex; flex-direction:column; background:var(--ui-surface-base); }
   mux-meetings .meeting-heading { height:var(--ui-utility-browser-heading-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); display:flex; align-items:center; justify-content:space-between; color:var(--ui-text-muted); font-size:var(--ui-text-xs); letter-spacing:.13em; }
   mux-meetings mux-ui-text-field { margin:0 var(--ui-space-4) var(--ui-space-3); }
   mux-meetings .meeting-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin:0 var(--ui-space-4) var(--ui-space-4); }
   mux-meetings .meeting-rows { overflow:auto; flex:1; }
-  mux-meetings .meeting-divider { grid-column:2; grid-row:1; position:relative; background:var(--ui-surface-raised); }
-  mux-meetings .meeting-divider::after { content:''; position:absolute; top:0; bottom:0; right:0; width:var(--ui-divider-thickness); background:var(--ui-shell-divider); }
+  mux-meetings .meeting-divider { grid-column:2; grid-row:1; }
   mux-meetings .meeting-viewer { grid-column:1; grid-row:1; overflow:auto; min-width:0; padding:var(--ui-space-5); }
   mux-meetings .meeting-detail { max-width:680px; margin:var(--ui-space-8) auto; }
   mux-meetings .meeting-detail h2 { font:600 var(--ui-text-xl)/1.2 var(--ui-font-sans); margin:var(--ui-space-3) 0; }
@@ -943,6 +943,6 @@ const styles = `
   mux-meetings .call-network strong { font-size:var(--ui-text-sm); }
   mux-meetings .call-network span, mux-meetings .call-network p { color:var(--ui-text-muted); font-size:var(--ui-text-xs); margin:0; }
   mux-meetings .record-live { margin:var(--ui-space-3) 0; }
-  @container(max-width:420px) { mux-meetings .meeting-layout { display:flex; flex-direction:column; } mux-meetings .meeting-viewer { order:1; flex:1; } mux-meetings .meeting-divider { order:2; height:1px; background:var(--ui-shell-divider); } mux-meetings .meeting-divider::after { display:none; } mux-meetings .meeting-rail { order:3; min-height:160px; max-height:36%; } }
+  @container(max-width:420px) { mux-meetings .meeting-layout { display:flex; flex-direction:column; } mux-meetings .meeting-viewer { order:1; flex:1; } mux-meetings .meeting-divider { order:2; width:100%; height:1px; background:var(--ui-shell-divider); } mux-meetings .meeting-rail { order:3; min-height:160px; max-height:36%; } }
   @container(max-width:620px) { mux-meetings .call-stage, mux-meetings .call-stage.sharing { display:flex; flex-direction:column; } mux-meetings .call-screen-tile { aspect-ratio:16/10 !important; } mux-meetings .call-video-tile { aspect-ratio:16/9 !important; } }
 `;

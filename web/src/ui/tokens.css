@@ -60,7 +60,6 @@
   --ui-status-dot-size: var(--ui-space-3);
   --ui-status-dot-lg: var(--ui-space-4);
   --ui-divider-thickness: var(--ui-space-px);
-  --ui-pane-divider-track-width: var(--ui-space-2);
   --ui-progress-height: 10px;
   --ui-progress-compact-height: 5px;
   --ui-switch-track-width: 32px;
@@ -165,7 +164,7 @@
   --ui-side-chat-start-width: 576px;
   --ui-utility-home-gutter: 44px;
   --ui-utility-rail-min-width: 180px;
-  --ui-utility-rail-resizer-width: var(--ui-pane-divider-track-width);
+  --ui-utility-rail-resizer-width: var(--ui-divider-thickness);
   --ui-utility-file-header-height: 42px;
   --ui-utility-browser-heading-height: 34px;
   --ui-utility-file-glyph-width: 17px;
