@@ -18,6 +18,51 @@ import (
 const sdkHistoryPageSize = 150
 const sdkMessageHistoryPageTurns = 4
 
+// The accepted input is already in the server journal even if the harness
+// stopped before saving its own turn. Keep the reference in the model call,
+// while the browser shows only a compact continuation action.
+func sdkLastRecoverableInput(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	for end := info.Size(); end > 0; {
+		start, err := sdkPageStart(file, end, sdkHistoryPageSize)
+		if err != nil {
+			return "", err
+		}
+		data := make([]byte, end-start)
+		if _, err := file.ReadAt(data, start); err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		lines := bytes.Split(data, []byte{'\n'})
+		for i := len(lines) - 1; i >= 0; i-- {
+			if !bytes.Contains(lines[i], []byte(`"input.accepted"`)) {
+				continue
+			}
+			var event sdkEvent
+			if json.Unmarshal(lines[i], &event) != nil || event.Type != "input.accepted" || event.Kind != "user" || event.Source == "recovery" || event.Source == "goalify" || event.Source == "operator-lane" || event.Source == "chat-message" || event.Origin != nil {
+				continue
+			}
+			request := []rune(strings.TrimSpace(event.Text))
+			if len(request) > 8000 {
+				request = append(request[:8000], []rune("…")...)
+			}
+			return string(request), nil
+		}
+		end = start
+	}
+	return "", nil
+}
+
 // Event-log byte offsets are stable cursors because the log is append-only.
 // Reading backward avoids scanning an entire long conversation to open its tail.
 func sdkPageStart(file *os.File, end int64, limit int) (int64, error) {
@@ -72,7 +117,7 @@ func sdkMessagePageStart(file *os.File, end int64) (int64, error) {
 					Kind   string `json:"kind"`
 					Source string `json:"source"`
 				}
-				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" && header.Kind == "user" && header.Source != "operator-lane" && header.Source != "chat-message" {
+				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" && header.Kind == "user" && header.Source != "operator-lane" && header.Source != "chat-message" && header.Source != "recovery" {
 					turns++
 				}
 			}

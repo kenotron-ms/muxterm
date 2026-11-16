@@ -134,7 +134,9 @@ export class MuxSDKChat extends LitElement {
   @state() private agentDraftHasContent = false;
   @state() private agentNotice = '';
   @state() private recoveryRequired = false;
-  @state() private recoveryPrepared = false;
+  @state() private recoveryPending = false;
+  @state() private recoveryError = '';
+  private recoveryErrorDetail = '';
   @state() private draft = '';
   @state() private draftHasContent = false;
   @state() private error = '';
@@ -284,10 +286,7 @@ export class MuxSDKChat extends LitElement {
     .agent-step pre { margin:var(--ui-space-3) 0 0; max-height:var(--ui-chat-agent-step-max-height); overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:var(--ui-content-font-size)/1.5 var(--ui-font-mono); }
     .agent-notice,.steer-notice { color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
     .steer-notice { margin-top:var(--ui-space-1); }
-    .recovery { max-width:var(--ui-chat-transcript-width); width:calc(100% - var(--ui-space-11)); align-self:center; margin:var(--ui-space-5) auto 0; }
-    .recovery + .body, .agent-history-error + .body { margin-top:var(--ui-space-5); }
-    .recovery strong { display:block; margin-bottom:var(--ui-space-2); }
-    .recovery p { margin:0 0 var(--ui-space-4); }
+    .agent-history-error + .body { margin-top:var(--ui-space-5); }
     h1 { font-size:var(--ui-content-font-size); margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     button { font:inherit; cursor:pointer; }
     .pane-controls { display:inline-flex; align-items:center; flex:none; }
@@ -313,7 +312,8 @@ export class MuxSDKChat extends LitElement {
     .virtual-spacer { width:var(--ui-divider-thickness); flex:none; pointer-events:none; }
     .block { max-width:var(--ui-chat-transcript-width); width:100%; align-self:center; margin-bottom:var(--ui-space-8); box-sizing:border-box; }
     .block.user { margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); }
-    .block.assistant { position:relative; margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); --ui-text:var(--ui-chat-assistant-text); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); box-shadow:0 2px 8px color-mix(in srgb,black 8%,transparent); }
+    .block.assistant,.work-assistant { --ui-text:var(--ui-chat-assistant-text); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); }
+    .block.assistant { position:relative; margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); }
     .block.assistant:has(mux-chat-visualization[mode="wide"]) { max-width:min(var(--ui-chat-visualization-wide-width),100%); }
     .block.work { margin-bottom:var(--ui-space-7); }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
@@ -471,6 +471,11 @@ export class MuxSDKChat extends LitElement {
     .detail pre { margin:0; padding:var(--ui-space-4) var(--ui-space-5); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); white-space:pre-wrap; overflow-wrap:anywhere; max-height:var(--ui-chat-tool-detail-max-height); overflow:auto; color:var(--ui-text); font:var(--ui-text-lg)/1.5 var(--ui-font-mono); }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { position:relative; padding:0 var(--ui-space-7) var(--ui-space-7); }
+    .recovery-row { box-sizing:border-box; width:min(100%,var(--ui-chat-transcript-width)); min-height:var(--ui-control-md); margin:0 auto var(--ui-space-2); display:flex; align-items:center; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .recovery-row::before { content:''; flex:none; width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); border-radius:50%; background:var(--ui-warning); }
+    .recovery-row span { min-width:0; flex:1; }
+    .recovery-row mux-ui-button { flex:none; }
+    .recovery-error { color:var(--ui-danger); }
     .slash-menu { --ui-listbox-width:var(--ui-chat-content-width); }
     .goal-response { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); padding:var(--ui-space-6); background:var(--ui-surface-raised); }
     .goal-response header { display:flex; align-items:center; gap:var(--ui-space-3); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
@@ -880,7 +885,7 @@ export class MuxSDKChat extends LitElement {
     this.fillingRecent = false; this.restoringScroll = false; this.historyUserInteracted = false; this.olderTask = undefined;
     this.rowHeights.clear(); this.visibleStart = 0; this.visibleEnd = 0;
     this.selectedAgent = ''; this.parentScrollTop = 0; this.agentEvents = null; this.agentHistoryError = '';
-    this.recoveryPrepared = false;
+    this.recoveryPending = false; this.recoveryError = ''; this.recoveryErrorDetail = '';
     this.error = ''; this.settingsPending = false; this.showScrollBottom = false;
     const retained = retainedChatViews.get(this.sessionId);
     if (retained) {
@@ -1506,33 +1511,39 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'input.accepted') {
       this.recoveryRequired = false;
-      this.recoveryPrepared = false;
-      const pendingKey = event.inputId ? this.pendingInputs.get(event.inputId) : undefined;
-      if (event.inputId) this.pendingInputs.delete(event.inputId);
-      const pendingIndex = pendingKey === undefined ? -1 : blocks.findIndex(block => block.key === pendingKey);
-      if (pendingIndex >= 0) {
-        blocks[pendingIndex] = { ...blocks[pendingIndex], kind:event.kind === 'steer' ? 'interjection' : 'user', text:event.text || blocks[pendingIndex].text, source:event.source, id:event.kind === 'user' ? event.inputId : undefined, at:event.at, attachments:event.attachments || blocks[pendingIndex].attachments };
-      } else
-      if (event.kind === 'steer') {
-        const last = blocks[blocks.length - 1];
-        if (last?.kind === 'assistant') blocks[blocks.length - 1] = { ...last, done:true };
+      this.recoveryError = '';
+      this.recoveryErrorDetail = '';
+      if (event.source === 'recovery') {
+        this.busy = true;
         markStart(this.currentTurn);
-        blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'interjection', at:event.at, text:event.text || '' });
       } else {
-        // The harness can stream a fast reply before its send receipt arrives.
-        const anchor = event.inputId ? this.completedInputAnchors.get(event.inputId) : undefined;
-        const anchoredTurn = anchor === undefined ? undefined : blocks.find(b => b.key === anchor)?.turn;
-        let at = anchor === undefined ? (blocks.slice(this.turnStart).some(b => b.channel === 'voice') ? blocks.length : this.turnStart) : blocks.findIndex(b => b.key === anchor);
-        if (at < 0) at = this.turnStart;
-        while (blocks[at]?.kind === 'user') at++;
-        const turn = anchoredTurn ?? blocks[at]?.turn ?? this.currentTurn;
-        markStart(turn);
-        blocks.splice(at, 0, { key:++this.nextBlockKey, turn, kind:'user', source:event.source, id:event.inputId, at:event.at, text:event.text || '', attachments:event.attachments || [] });
-        if (at < this.turnStart) this.turnStart++;
-        if (turn === this.currentTurn) this.busy = true;
+        const pendingKey = event.inputId ? this.pendingInputs.get(event.inputId) : undefined;
+        if (event.inputId) this.pendingInputs.delete(event.inputId);
+        const pendingIndex = pendingKey === undefined ? -1 : blocks.findIndex(block => block.key === pendingKey);
+        if (pendingIndex >= 0) {
+          blocks[pendingIndex] = { ...blocks[pendingIndex], kind:event.kind === 'steer' ? 'interjection' : 'user', text:event.text || blocks[pendingIndex].text, source:event.source, id:event.kind === 'user' ? event.inputId : undefined, at:event.at, attachments:event.attachments || blocks[pendingIndex].attachments };
+        } else
+        if (event.kind === 'steer') {
+          const last = blocks[blocks.length - 1];
+          if (last?.kind === 'assistant') blocks[blocks.length - 1] = { ...last, done:true };
+          markStart(this.currentTurn);
+          blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'interjection', at:event.at, text:event.text || '' });
+        } else {
+          // The harness can stream a fast reply before its send receipt arrives.
+          const anchor = event.inputId ? this.completedInputAnchors.get(event.inputId) : undefined;
+          const anchoredTurn = anchor === undefined ? undefined : blocks.find(b => b.key === anchor)?.turn;
+          let at = anchor === undefined ? (blocks.slice(this.turnStart).some(b => b.channel === 'voice') ? blocks.length : this.turnStart) : blocks.findIndex(b => b.key === anchor);
+          if (at < 0) at = this.turnStart;
+          while (blocks[at]?.kind === 'user') at++;
+          const turn = anchoredTurn ?? blocks[at]?.turn ?? this.currentTurn;
+          markStart(turn);
+          blocks.splice(at, 0, { key:++this.nextBlockKey, turn, kind:'user', source:event.source, id:event.inputId, at:event.at, text:event.text || '', attachments:event.attachments || [] });
+          if (at < this.turnStart) this.turnStart++;
+          if (turn === this.currentTurn) this.busy = true;
+        }
+        markStart(this.currentTurn);
+        if (event.kind === 'steer') this.busy = true;
       }
-      markStart(this.currentTurn);
-      if (event.kind === 'steer') this.busy = true;
     }
     else if (event.type === 'assistant.delta') {
       markStart(this.currentTurn);
@@ -1626,8 +1637,8 @@ export class MuxSDKChat extends LitElement {
       if (!this.replaying && event.generationId && this.voice?.providerSessionId === event.generationId) this.voice.stop();
     }
     else if (event.type === 'session.renamed') { if (!this.replaying) void sdkChats.refresh(); }
-    else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); this.workExpanded.delete(this.currentTurn); this.workCollapsedWhileWorking.delete(this.currentTurn); blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
-    if (event.type === 'input.accepted' && event.source !== 'voice') {
+    else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); this.workExpanded.delete(this.currentTurn); this.workCollapsedWhileWorking.delete(this.currentTurn); if (event.type === 'error') blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
+    if (event.type === 'input.accepted' && event.source !== 'voice' && event.source !== 'recovery') {
       if (!blocks.some(block => block.turn === this.currentTurn && block.kind === 'progress'))
         blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'progress', text:'Message sent · Working…', at:event.at });
       for (const block of blocks) if (block.turn === this.currentTurn && block.kind === 'progress') block.text = 'Message sent · Working…';
@@ -2628,15 +2639,28 @@ export class MuxSDKChat extends LitElement {
       if (this.sideTabId === tabId) this.startingSideChat = false;
     }
   }
-  private prepareRecovery() {
+  private async continueInterruptedTurn() {
+    if (!this.recoveryRequired || this.recoveryPending || this.busy) return;
     if (this.selectedAgent) this.returnToParent();
-    if (!this.recoveryPrepared) {
-      const lastRequest = [...this.blocks].reverse().find(block => block.kind === 'user' && block.turn === this.currentTurn - 1)?.text.trim();
-      const instruction = 'The previous turn stopped unexpectedly. Inspect the current state and recent work before acting. Continue only what remains from my previous request; verify before repeating any action. Tell me what you recovered.';
-      this.setDraft(`${instruction}${lastRequest ? `\n\nPrevious request for reference:\n${lastRequest}` : ''}${this.draft.trim() ? `\n\nAdditional note:\n${this.draft.trim()}` : ''}`);
-      this.recoveryPrepared = true;
+    const sessionId = this.activeSession;
+    this.recoveryPending = true;
+    this.recoveryError = '';
+    this.recoveryErrorDetail = '';
+    try {
+      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}`), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({kind:'user',source:'recovery',id:crypto.randomUUID()}),
+      });
+      if (!response.ok) throw new Error((await response.text()).trim() || 'Could not continue this turn');
+      if (sessionId === this.activeSession) this.recoveryRequired = false;
+    } catch (error) {
+      if (sessionId === this.activeSession) {
+        this.recoveryError = 'Could not continue · Try again';
+        this.recoveryErrorDetail = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (sessionId === this.activeSession) this.recoveryPending = false;
     }
-    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
   }
   private async stop() {
     if (!this.busy || this.stopping) return;
@@ -2787,11 +2811,11 @@ export class MuxSDKChat extends LitElement {
     ${this.archiveChatConfirm ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Archive chat" open @dismiss=${() => { this.archiveChatConfirm = false; }}><div class="chat-action-dialog"><h2>Archive chat?</h2><p>Archive “${this.chat?.title || 'Chat'}”? It will be removed from its operator's lanes.</p><div class="chat-action-dialog-actions"><mux-ui-button variant="quiet" @click=${() => { this.archiveChatConfirm = false; }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => { this.archiveChatConfirm = false; void this.runChatAction(() => sdkChats.setArchived(this.sessionId, true)); }}>Archive chat</mux-ui-button></div></div></mux-ui-dialog>` : nothing}
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
-      ${this.recoveryRequired ? html`<mux-ui-feedback class="recovery" kind="warning" appearance="panel"><strong>Turn interrupted</strong><p>The harness stopped before confirming how the last turn ended. Some work may have happened. Review a recovery message, then send it to continue this chat.</p><mux-ui-button slot="action" variant="secondary" size="small" @click=${this.prepareRecovery}>${this.recoveryPrepared ? 'Review recovery draft' : 'Prepare recovery message'}</mux-ui-button></mux-ui-feedback>` : nothing}
       <div class="body scroll-edge-fade ${sideStart ? 'side-empty' : ''}" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
       ${sideStart ? html`<div><h2>Ask about this chat</h2><p>Start a side conversation while the main chat continues.</p></div>` : this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length || this.goalDocument?.revisions.length || this.commandNotice || this.goalNotice ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
       ${this.error ? html`<mux-ui-feedback class="block" kind="error" appearance="panel" density="compact">${this.error}${this.reconnectFailed ? html`<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryConnection}>Retry now</mux-ui-button>` : nothing}</mux-ui-feedback>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><mux-ui-button class="scroll-bottom" variant="secondary" size="small" accessible-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</mux-ui-button></div>` : nothing}<div class="composer-wrap">
+      ${this.recoveryRequired ? html`<div class="recovery-row" role="status"><span class=${this.recoveryError ? 'recovery-error' : ''} title=${this.recoveryErrorDetail || 'Work may have changed before the interruption.'}>${this.recoveryError || 'Turn interrupted · Work may have changed'}</span><mux-ui-button variant="secondary" size="small" ?disabled=${this.recoveryPending} accessible-label="Continue interrupted turn" tooltip="Check recent work, then continue only what remains" @click=${() => void this.continueInterruptedTurn()}>${this.recoveryPending ? 'Continuing…' : 'Continue'}</mux-ui-button></div>` : nothing}
       ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions">${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
       <div class="composer" @paste=${this.onPaste}>
       ${this.clipboardError ? html`<mux-ui-feedback kind="error" density="compact">${this.clipboardError}</mux-ui-feedback>` : nothing}

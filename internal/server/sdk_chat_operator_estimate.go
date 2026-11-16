@@ -190,7 +190,7 @@ func sdkCompletedTurnSamples(dir string) []sdkEffortSample {
 			switch event.Type {
 			case "input.accepted":
 				started, category = time.Time{}, ""
-				if event.Kind == "user" && event.Origin == nil && event.Source != "operator-lane" && event.Source != "chat-message" && event.At.After(cutoff) {
+				if event.Kind == "user" && event.Origin == nil && event.Source != "operator-lane" && event.Source != "chat-message" && event.Source != "recovery" && event.At.After(cutoff) {
 					started, category = event.At, sdkEffortCategory(event.Text)
 				}
 			case "turn.completed":
@@ -241,7 +241,7 @@ func sdkLatestLaneRequest(dir, id string) string {
 		var event struct {
 			Type, Kind, Source, Text string
 		}
-		if json.Unmarshal(scan.Bytes(), &event) == nil && event.Type == "input.accepted" && event.Kind == "user" {
+		if json.Unmarshal(scan.Bytes(), &event) == nil && event.Type == "input.accepted" && event.Kind == "user" && event.Source != "recovery" {
 			latest = event.Text
 		}
 	}
