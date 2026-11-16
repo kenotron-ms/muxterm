@@ -34,8 +34,8 @@ export class MuxVoiceCompanion extends LitElement {
     .task .message { margin-left:calc(var(--ui-voice-task-icon-size) + var(--ui-space-2)); border:0; background:none; padding:0; color:var(--ui-text); }
     .error { align-self:stretch; max-width:none; color:var(--ui-danger); }
     .control-wrap { padding:var(--ui-space-3) var(--ui-space-4) var(--ui-space-7); }
-    .control { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:100%; height:var(--ui-voice-control-height); padding:var(--ui-voice-control-padding-y) var(--ui-voice-control-padding-x) var(--ui-voice-control-padding-y) var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-pill); background:var(--ui-surface-raised); color:var(--ui-text-muted); box-shadow:var(--ui-shadow-control); }
-    .label { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font:400 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
+    .control { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:max-content; max-width:100%; margin-inline:auto; height:var(--ui-voice-control-height); padding:var(--ui-voice-control-padding-y) var(--ui-voice-control-padding-x) var(--ui-voice-control-padding-y) var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-pill); background:var(--ui-surface-raised); color:var(--ui-text-muted); box-shadow:var(--ui-shadow-control); }
+    .label { flex:0 1 auto; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font:400 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
     .wave { display:flex; align-items:center; justify-content:center; gap:var(--ui-voice-wave-gap); height:var(--ui-voice-wave-height); flex:none; color:var(--ui-accent); }
     .wave i { display:block; width:var(--ui-voice-wave-bar-width); height:var(--ui-voice-wave-bar-rest-height); border-radius:var(--ui-voice-wave-bar-width); background:currentColor; transition:height .07s ease-out; }
     .time { min-width:var(--ui-voice-time-width); font:400 var(--ui-text-sm)/1.3 var(--ui-font-sans); font-variant-numeric:tabular-nums; }
