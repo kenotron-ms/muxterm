@@ -187,6 +187,17 @@
   --ui-voice-meter-rest-2: 13px;
   --ui-voice-meter-rest-3: var(--ui-space-6);
   --ui-voice-meter-rest-4: 10px;
+  --ui-voice-task-icon-size: 15px;
+  --ui-voice-control-height: 50px;
+  --ui-voice-control-padding-y: 5px;
+  --ui-voice-control-padding-x: 6px;
+  --ui-voice-wave-gap: 2px;
+  --ui-voice-wave-height: 26px;
+  --ui-voice-wave-bar-width: 2px;
+  --ui-voice-wave-bar-rest-height: 5px;
+  --ui-voice-time-width: 34px;
+  --ui-voice-action-size: 38px;
+  --ui-voice-record-dot-size: 12px;
   --ui-lane-progress-column-width: 196px;
   --ui-lane-progress-column-phone-width: 112px;
   --ui-lane-action-column-width: 52px;
