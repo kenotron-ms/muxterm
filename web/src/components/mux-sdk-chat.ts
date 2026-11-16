@@ -93,7 +93,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
   return undefined;
 }
 import { icon } from '../lib/icons.js';
-import { Archive, ArchiveRestore, ArrowUp, ArrowUpRight, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, Ellipsis, FilePenLine, Folder, GitFork, Globe, Menu, MessageCircleQuestionMark, Mic, Network, PanelRight, Pencil, Pin, PinOff, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
+import { Archive, ArchiveRestore, ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, Ellipsis, FilePenLine, Folder, GitFork, Globe, Menu, MessageCircleQuestionMark, Mic, Network, PanelRight, Pencil, Pin, PinOff, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
 
 type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
@@ -315,7 +315,7 @@ export class MuxSDKChat extends LitElement {
     .virtual-spacer { width:var(--ui-divider-thickness); flex:none; pointer-events:none; }
     .block { max-width:var(--ui-chat-transcript-width); width:100%; align-self:center; margin-bottom:var(--ui-space-8); box-sizing:border-box; }
     .block.user { margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); }
-    .block.assistant,.work-assistant { --ui-text:var(--ui-chat-assistant-text); padding:var(--ui-space-5) var(--ui-space-6) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); }
+    .block.assistant,.work-assistant { --ui-text:var(--ui-chat-assistant-text); padding:var(--ui-space-5) var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); }
     .block.assistant { position:relative; margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); }
     .block.assistant:has(mux-chat-visualization[mode="wide"]) { max-width:min(var(--ui-chat-visualization-wide-width),100%); }
     .block.work { margin-bottom:var(--ui-space-7); }
@@ -359,12 +359,12 @@ export class MuxSDKChat extends LitElement {
     .chat-message-card.operator-to-lane { background:color-mix(in srgb,var(--ui-accent) 7%,var(--ui-surface-raised)); }
     .chat-message-card.lane-to-lane { background:color-mix(in srgb,var(--ui-success) 8%,var(--ui-surface-raised)); }
     .chat-message-card.lane-to-operator { background:color-mix(in srgb,var(--ui-message-lane-to-operator) 8%,var(--ui-surface-raised)); }
-    .chat-message-card.chat-to-chat { background:color-mix(in srgb,var(--ui-text-muted) 6%,var(--ui-surface-raised)); }
-    .linked-chat-message { box-sizing:border-box; width:100%; max-width:var(--ui-chat-report-width); min-width:0; padding:var(--ui-space-4) var(--ui-space-5); border-left:2px solid var(--ui-accent); border-radius:0 var(--ui-radius-md) var(--ui-radius-md) 0; background:color-mix(in srgb,var(--ui-text-muted) 6%,var(--ui-surface-raised)); }
-    .linked-chat-sender { display:flex; align-items:center; gap:var(--ui-space-2); margin-bottom:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
-    .linked-chat-sender strong { color:var(--ui-text); font-weight:600; }
-    .linked-chat-sender mux-ui-button { margin-left:auto; }
-    .linked-chat-message .linked-chat-body { padding:0; border:0; background:none; }
+    .linked-chat-message { box-sizing:border-box; width:100%; min-width:0; }
+    .linked-chat-sender { margin-bottom:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-content-font-size); }
+    .linked-chat-sender a { color:inherit; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
+    .linked-chat-sender a:hover { color:var(--ui-text); }
+    .linked-chat-sender a:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; border-radius:var(--ui-radius-sm); }
+    .linked-chat-body { --ui-text:var(--ui-chat-assistant-text); box-sizing:border-box; padding:var(--ui-space-5) var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); font-size:var(--ui-text-lg); line-height:1.55; overflow-wrap:anywhere; }
     .chat-message-card.external-tool { background:color-mix(in srgb,var(--ui-message-external) 8%,var(--ui-surface-raised)); }
     .chat-message-card .lane-report-toggle { gap:var(--ui-space-5); }
     .chat-message-mark { display:grid; place-items:center; flex:none; width:var(--ui-icon-lg); height:var(--ui-icon-lg); border-radius:var(--ui-radius-md); background:var(--ui-surface-hover); color:var(--ui-text-muted); }
@@ -424,8 +424,6 @@ export class MuxSDKChat extends LitElement {
     @media (prefers-reduced-motion:reduce) { .message-actions { transition:none; } }
     .speaker { color:var(--ui-text-muted); font-size:var(--ui-text-lg); font-weight:600; margin-bottom:var(--ui-space-5); text-transform:capitalize; }
     .text { color:var(--ui-text); font-size:var(--ui-text-lg); line-height:1.68; overflow-wrap:anywhere; }
-    .text > :first-child { margin-top:0; }
-    .text > :last-child { margin-bottom:0; }
     .text .md-p { margin:0 0 var(--ui-space-6); }
     .text .md-h { line-height:1.32; margin:var(--ui-space-8) 0 var(--ui-space-5); font-weight:650; color:var(--ui-text); }
     .text h1.md-h { font-size:var(--ui-content-heading-1); }
@@ -456,6 +454,8 @@ export class MuxSDKChat extends LitElement {
     .text .md-th, .text .md-td { padding:var(--ui-space-4) var(--ui-space-5); border:1px solid var(--ui-border); text-align:left; vertical-align:top; overflow-wrap:break-word; word-break:normal; }
     .text .md-table .md-link, .text .md-table .md-code { overflow-wrap:break-word; }
     .text .md-th { background:var(--ui-surface-raised); }
+    .text > :first-child { margin-top:0; }
+    .text > :last-child { margin-bottom:0; }
     .work-assistant { margin:var(--ui-space-5) 0 var(--ui-space-7); }
     .tool-activity, .tool-entry { color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .tool-activity > summary, .tool-entry > summary { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-tool-row-height); list-style:none; cursor:pointer; }
@@ -1511,7 +1511,7 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'input.accepted' && event.source === 'voice') {
       this.voiceEntries = [...this.voiceEntries, { role:'task', text:event.text || '', at:event.at }];
-      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'chat-message', name:'Voice companion', relation:'chat-to-chat', text:event.text || '', at:event.at, done:true });
+      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'chat-message', name:'voice', relation:'chat-to-chat', text:event.text || '', at:event.at, done:true });
       this.busy = true;
       markStart(this.currentTurn);
     }
@@ -2792,8 +2792,8 @@ export class MuxSDKChat extends LitElement {
     const relation = block.relation || 'chat-to-chat';
     const name = block.name || (relation === 'external-tool' ? 'External tool' : 'Chat');
     if (relation === 'chat-to-chat') return html`<article class="linked-chat-message" aria-label=${`Message from ${name}`}>
-      <div class="linked-chat-sender">${icon(Bot,{size:15})}<strong>${name}</strong>${block.id ? html`<mux-ui-button variant="quiet" size="small" icon-only accessible-label=${`Open source chat: ${name}`} tooltip="Open source chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${icon(ArrowUpRight,{size:15})}</mux-ui-button>` : nothing}</div>
-      <div class="lane-report-detail input-message-detail linked-chat-body">${this.markdown(block, block.key, true)}</div>
+      <div class="linked-chat-sender">${block.id ? html`<a href=${`#chat=${encodeURIComponent(block.id)}`} @click=${(event:MouseEvent) => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true})); }}>${name}</a>` : name}</div>
+      <div class="text linked-chat-body">${this.markdown(block, block.key, true)}</div>
     </article>`;
     const label = relation === 'operator-to-lane' ? 'Operator → Lane' : relation === 'lane-to-lane' ? 'Lane → Lane'
       : relation === 'lane-to-operator' ? 'Lane → Operator' : relation === 'external-tool' ? 'External tool' : '';

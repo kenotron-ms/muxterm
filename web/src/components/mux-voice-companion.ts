@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { ArrowUpRight, Square } from 'lucide';
+import { MessageSquare, Square } from 'lucide';
 import { icon } from '../lib/icons.js';
 import type { SDKVoiceState } from '../lib/sdk-voice-session.js';
 
@@ -29,11 +29,11 @@ export class MuxVoiceCompanion extends LitElement {
     .user .speaker { text-align:right; }
     .user .message { background:var(--ui-surface-raised); }
     .assistant .message { background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); }
-    .task { align-self:stretch; max-width:none; border-left:2px solid var(--ui-accent); padding:var(--ui-space-1) 0 var(--ui-space-1) var(--ui-space-4); }
-    .task .speaker { display:flex; align-items:center; gap:var(--ui-space-1); color:var(--ui-accent); }
-    .task .message { border:0; background:none; padding:0; }
+    .task { align-self:stretch; max-width:none; color:var(--ui-text-muted); }
+    .task .speaker { display:flex; align-items:center; gap:var(--ui-space-2); margin-bottom:0; min-height:var(--ui-chat-tool-row-height); }
+    .task .message { margin-left:calc(15px + var(--ui-space-2)); border:0; background:none; padding:0; color:var(--ui-text); }
     .error { align-self:stretch; max-width:none; color:var(--ui-danger); }
-    .control-wrap { padding:var(--ui-space-3) var(--ui-space-4) var(--ui-space-4); border-top:1px solid var(--ui-border); }
+    .control-wrap { padding:var(--ui-space-3) var(--ui-space-4) var(--ui-space-4); }
     .control { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:100%; height:50px; padding:5px 6px 5px var(--ui-space-5); border:1px solid var(--ui-border); border-radius:999px; background:var(--ui-surface-raised); color:var(--ui-text-muted); box-shadow:var(--ui-shadow-control); }
     .label { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font:400 14px/1.3 var(--ui-font-sans); }
     .wave { display:flex; align-items:center; justify-content:center; gap:2px; height:26px; flex:none; color:var(--ui-accent); }
@@ -88,8 +88,8 @@ export class MuxVoiceCompanion extends LitElement {
     const elapsed = `${Math.floor(this.seconds / 60)}:${String(this.seconds % 60).padStart(2, '0')}`;
     return html`<div class="conversation" aria-label="Voice conversation">
       ${this.entries.length ? this.entries.map(entry => html`<div class="entry ${entry.role}">
-        <div class="speaker">${entry.role === 'user' ? 'You' : entry.role === 'assistant' ? 'Voice' : entry.role === 'task' ? html`Sent to task chat ${icon(ArrowUpRight,{size:13})}` : 'Voice'}</div>
-        <div class="message">${entry.text}</div>
+        <div class="speaker">${entry.role === 'user' ? 'You' : entry.role === 'assistant' ? 'Voice' : entry.role === 'task' ? html`${icon(MessageSquare,{size:15})} Sent to task chat` : 'Voice'}</div>
+        <div class="message">${entry.text.trimEnd()}</div>
       </div>`) : html`<div class="empty">${this.available ? 'Start speaking to Voice' : 'Voice is unavailable'}</div>`}
       ${this.error ? html`<div class="entry error" role="alert">${this.error}</div>` : nothing}
     </div><div class="control-wrap"><div class="control">
