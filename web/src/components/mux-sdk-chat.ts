@@ -440,7 +440,7 @@ export class MuxSDKChat extends LitElement {
     .text .md-chat-link { display:inline-flex; align-items:baseline; gap:var(--ui-space-2); max-width:100%; padding:var(--ui-space-px) var(--ui-space-3); border:1px solid color-mix(in srgb,var(--ui-accent) 48%,transparent); border-radius:var(--ui-radius-md); background:color-mix(in srgb,var(--ui-accent) 12%,transparent); font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
     .text .md-chat-link:hover { background:color-mix(in srgb,var(--ui-accent) 22%,transparent); text-decoration:underline; }
     .text .linked-chat-sender .md-chat-link { align-items:center; gap:var(--ui-space-1); padding:var(--ui-space-px) var(--ui-space-2); font-size:var(--ui-text-md); line-height:1.2; }
-    .text .linked-chat-sender .md-chat-link svg { display:block; flex:none; width:13px; height:13px; }
+    .text .linked-chat-sender .md-chat-link svg { display:block; flex:none; }
     .text .md-image-link { display:inline-block; max-width:100%; }
     .text .md-img { display:block; max-width:100%; max-height:min(var(--ui-media-preview-max-height),55vh); width:auto; height:auto; object-fit:contain; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); }
     .text .md-ul, .text .md-ol { margin:0 0 var(--ui-space-6); padding-left:var(--ui-space-8); }

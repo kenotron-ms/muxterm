@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { MessageSquare, Square } from 'lucide';
 import { icon } from '../lib/icons.js';
 import type { SDKVoiceState } from '../lib/sdk-voice-session.js';
+import '../ui/button.js';
 
 export type VoiceEntry = { role: 'user' | 'assistant' | 'task' | 'error'; text: string; at?: string };
 
@@ -30,18 +31,17 @@ export class MuxVoiceCompanion extends LitElement {
     .assistant .message { border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); }
     .task { align-self:stretch; max-width:none; color:var(--ui-text-muted); }
     .task .speaker { display:flex; align-items:center; gap:var(--ui-space-2); margin-bottom:0; min-height:var(--ui-chat-tool-row-height); }
-    .task .message { margin-left:calc(15px + var(--ui-space-2)); border:0; background:none; padding:0; color:var(--ui-text); }
+    .task .message { margin-left:calc(var(--ui-voice-task-icon-size) + var(--ui-space-2)); border:0; background:none; padding:0; color:var(--ui-text); }
     .error { align-self:stretch; max-width:none; color:var(--ui-danger); }
     .control-wrap { padding:var(--ui-space-3) var(--ui-space-4) var(--ui-space-4); }
-    .control { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:100%; height:50px; padding:5px 6px 5px var(--ui-space-5); border:1px solid var(--ui-border); border-radius:999px; background:var(--ui-surface-raised); color:var(--ui-text-muted); box-shadow:var(--ui-shadow-control); }
-    .label { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font:400 14px/1.3 var(--ui-font-sans); }
-    .wave { display:flex; align-items:center; justify-content:center; gap:2px; height:26px; flex:none; color:var(--ui-accent); }
-    .wave i { display:block; width:2px; height:5px; border-radius:2px; background:currentColor; transition:height .07s ease-out; }
-    .time { min-width:34px; font:400 12px/1.3 var(--ui-font-sans); font-variant-numeric:tabular-nums; }
-    button { display:grid; place-items:center; flex:none; width:38px; height:38px; border:0; border-radius:50%; background:var(--ui-danger); color:white; cursor:pointer; }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    button:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
-    .record-dot { display:block; width:12px; height:12px; border-radius:50%; background:currentColor; }
+    .control { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:100%; height:var(--ui-voice-control-height); padding:var(--ui-voice-control-padding-y) var(--ui-voice-control-padding-x) var(--ui-voice-control-padding-y) var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-pill); background:var(--ui-surface-raised); color:var(--ui-text-muted); box-shadow:var(--ui-shadow-control); }
+    .label { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font:400 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
+    .wave { display:flex; align-items:center; justify-content:center; gap:var(--ui-voice-wave-gap); height:var(--ui-voice-wave-height); flex:none; color:var(--ui-accent); }
+    .wave i { display:block; width:var(--ui-voice-wave-bar-width); height:var(--ui-voice-wave-bar-rest-height); border-radius:var(--ui-voice-wave-bar-width); background:currentColor; transition:height .07s ease-out; }
+    .time { min-width:var(--ui-voice-time-width); font:400 var(--ui-text-sm)/1.3 var(--ui-font-sans); font-variant-numeric:tabular-nums; }
+    .toggle { flex:none; width:var(--ui-voice-action-size); height:var(--ui-voice-action-size); }
+    .toggle::part(button) { border-radius:var(--ui-radius-pill); }
+    .record-dot { display:block; width:var(--ui-voice-record-dot-size); height:var(--ui-voice-record-dot-size); border-radius:50%; background:currentColor; }
     @media (prefers-reduced-motion:reduce) { .wave i { transition:none; } }
   `;
 
@@ -94,9 +94,9 @@ export class MuxVoiceCompanion extends LitElement {
     </div><div class="control-wrap"><div class="control">
       <span class="label" role="status" aria-live="polite">${label}</span>
       ${active ? html`<span class="wave" aria-hidden="true">${Array.from({length:18}, () => html`<i></i>`)}</span><span class="time" aria-label=${`${this.seconds} seconds`}>${elapsed}</span>` : nothing}
-      <button type="button" aria-label=${active ? 'Stop voice mode' : 'Start voice mode'} title=${active ? 'Stop voice mode' : 'Start voice mode'} ?disabled=${!active && (!this.available || !this.canStart)} @click=${this.toggle}>
+      <mux-ui-button class="toggle" icon-only variant="danger" accessible-label=${active ? 'Stop voice mode' : 'Start voice mode'} tooltip=${active ? 'Stop voice mode' : 'Start voice mode'} ?disabled=${!active && (!this.available || !this.canStart)} @click=${this.toggle}>
         ${active ? icon(Square,{size:16}) : html`<span class="record-dot"></span>`}
-      </button>
+      </mux-ui-button>
     </div></div>`;
   }
 }
