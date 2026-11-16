@@ -471,7 +471,7 @@ export class MuxSDKChat extends LitElement {
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { position:relative; padding:0 var(--ui-space-7) var(--ui-space-7); }
     .recovery-row { box-sizing:border-box; width:min(100%,var(--ui-chat-transcript-width)); min-height:var(--ui-control-md); margin:0 auto var(--ui-space-2); display:flex; align-items:center; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
-    .recovery-row::before { content:''; flex:none; width:6px; height:6px; border-radius:50%; background:var(--ui-warning); }
+    .recovery-row::before { content:''; flex:none; width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); border-radius:50%; background:var(--ui-warning); }
     .recovery-row span { min-width:0; flex:1; }
     .recovery-row mux-ui-button { flex:none; }
     .recovery-error { color:var(--ui-danger); }
