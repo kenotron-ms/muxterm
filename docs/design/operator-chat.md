@@ -1,5 +1,8 @@
 # Operator chat
 
+Retired in November 2026. This document records the former design; operator
+mode, linked lanes, automatic reports, and its Status tab are no longer active.
+
 An operator is a regular chat promoted in place. Its harness, history, project,
 and composer stay the same. The operator gains durable links to up to twelve
 other chats, which may use different harnesses. A linked chat can itself be an

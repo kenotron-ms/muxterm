@@ -41,9 +41,6 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
   return ({url,method}) => {
     const base = `/api/sdk-chats/${id}/utility/`;
     if (method === 'GET' && url.pathname === '/api/sdk-chats') return fixtureJSON([]);
-    if (method === 'GET' && url.pathname === `/api/sdk-chats/${id}/operator`) return fixtureJSON({
-      operator:{id,title:'Component library review',harness:'codex',state:'ready',operator:true,operatorLanes:[],workspaceId:'project-1',projectPath:root},lanes:[],
-    });
     if (method === 'GET' && url.pathname === `${base}files`) {
       if (id.endsWith('-tree-error') || (id.endsWith('-tree-recovery') && treeRequests++ === 0)) return fixtureJSON({error:'Folder unavailable'},503);
       return listing(url.searchParams.get('path') || '.');
@@ -280,10 +277,6 @@ export const NotesRecovery: Story = {
 export const EmptyNotes: Story = {
   args:{sessionId:sessionId('empty-pages')},parameters:{apiFixture:utilityFixture(sessionId('empty-pages'),true)},
   play:async ({canvasElement}) => { target(canvasElement)?.showPanel('pages'); },
-};
-export const Status: Story = {
-  args:{sessionId:sessionId('status')},parameters:{apiFixture:utilityFixture(sessionId('status'))},
-  play:async ({canvasElement}) => { target(canvasElement)?.showPanel('status'); },
 };
 export const NewTab: Story = {
   args:{sessionId:sessionId('new')},parameters:{apiFixture:utilityFixture(sessionId('new'))},

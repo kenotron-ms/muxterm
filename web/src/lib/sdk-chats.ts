@@ -5,8 +5,7 @@ export type SDKHarnessName = 'codex' | 'claude' | 'copilot' | 'amplifier' | 'amp
 export function sdkHarnessLabel(harness: SDKHarnessName): string {
   return { codex:'Codex', claude:'Claude Code', copilot:'GitHub Copilot', amplifier:'Amplifier', 'amplifier-unified':'Amplifier Unified', pi:'Pi', opencode:'OpenCode', deepseek:'DeepSeek Harness', gemini:'Gemini CLI', antigravity:'Antigravity', 'antigravity-sdk':'Antigravity SDK' }[harness];
 }
-export interface SDKLaneTiming { category: 'review' | 'focused' | 'cross_stack' | 'operational'; classification: 'openai_decisions' | 'anthropic' | 'historical_only'; sampleSize: number; broadHistory?: boolean; effortLowSeconds?: number; effortHighSeconds?: number; elapsedSeconds?: number; remainingLowSeconds?: number; remainingHighSeconds?: number; survivorCount?: number; actualSeconds?: number }
-export interface SDKChat { id: string; sideParentId?: string; remoteHost?: string; workspaceId?: string; terminalWorkspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: SDKHarnessName; provider?: string; nativeId?: string; state: string; createdAt: string; updatedAt?: string; lastActivity?: string; lastOutput?: string; lastTurnOutcome?: 'completed' | 'cancelled'; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string; operator?: boolean; operatorLanes?: string[]; laneTodos?: {text:string;status:string}[]; laneReport?: string; timing?: SDKLaneTiming; branchPending?: boolean }
+export interface SDKChat { id: string; sideParentId?: string; remoteHost?: string; workspaceId?: string; terminalWorkspaceId?: string; projectPath: string; sourceFolders?: string[]; title: string; harness: SDKHarnessName; provider?: string; nativeId?: string; state: string; createdAt: string; updatedAt?: string; lastActivity?: string; lastOutput?: string; lastTurnOutcome?: 'completed' | 'cancelled'; archived?: boolean; pinned?: boolean; workMode?: 'local' | 'worktree'; approval?: string; goal?: string; goalState?: string; goalReason?: string; goalSummary?: string; branchPending?: boolean }
 export interface SDKProject { id: string; remoteHost?: string; name: string; path: string; managedFolder?: boolean; sourceFolders?: string[]; pinned?: boolean }
 export interface SDKRemoteHost { id: string; name: string; state: string }
 export interface FolderListing { path: string; base: string; parent: string; folders: string[] }
@@ -124,7 +123,7 @@ class SDKChatStore {
     this.chats = [...this.chats.filter(chat => !chat.archived), ...this.archivedCache.values()];
     return {chats,total:available.reduce((sum,result) => sum + result.total,0)};
   }
-  async create(request: { remoteHost?: string; workspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; bundle?: string; model?: string; effort?: string; prompt: string; attachments?: string[]; operatorId?: string }) {
+  async create(request: { remoteHost?: string; workspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; bundle?: string; model?: string; effort?: string; prompt: string; attachments?: string[] }) {
     const host = request.remoteHost || (request.workspaceId ? projectHost(request.workspaceId) : '');
     const response = await fetch(apiPath(remoteChatPath(host, '/api/sdk-chats')), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
     if (!response.ok) throw new Error(await response.text());
@@ -152,20 +151,6 @@ class SDKChatStore {
     const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({terminalWorkspaceId}) });
     if (!response.ok) throw new Error(await response.text());
     await this.refresh();
-  }
-  async operator(id: string, change: { enabled?: boolean; laneIds?: string[] }): Promise<SDKChat> {
-    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}/operator`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(change) });
-    if (!response.ok) throw new Error(await response.text());
-    const chat = await response.json() as SDKChat;
-    await this.refresh();
-    return chat;
-  }
-  async unlinkOperatorLane(operatorId: string, laneId: string): Promise<SDKChat> {
-    const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(operatorId)}/operator`), { method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({laneId}) });
-    if (!response.ok) throw new Error(await response.text());
-    const operator = await response.json() as SDKChat;
-    await this.refresh();
-    return operator;
   }
   async createProject(path: string, name = '', sourceFolders: string[] = [], createFolder = false, managedFolder = false, host = '') {
     const response = await fetch(apiPath(remoteChatPath(host, '/api/sdk-projects')), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, name, sourceFolders, createFolder, managedFolder }) });

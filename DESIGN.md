@@ -6,7 +6,7 @@ The terminal is the main work surface. Chrome should make navigation, attention,
 
 - **Workspaces and panes** organize terminal work. Dockview provides split layouts; xterm.js renders terminal content.
 - **Sidebar and Dashboard** make workspaces and agent sessions visible. Agent sessions remain identifiable when they have no terminal attachment.
-- **Mission Control** is the persistent Operator conversation and applet host. Its conversation is shared across workspaces.
+- **Chat** is the conversation surface for agent work. Side and voice chats can hand off context to the main chat.
 - **Separate agent chats** have their own creation and history flow.
 - **Narrow layouts** keep the same underlying surfaces and adapt their navigation, pane picker, and Mission Control sheet.
 

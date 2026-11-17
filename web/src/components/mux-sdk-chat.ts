@@ -96,7 +96,7 @@ function readTranscriptCache(id: string): CachedTranscript | undefined {
 import { icon } from '../lib/icons.js';
 import { Archive, ArchiveRestore, ArrowUp, BookOpen, Bot, Check, ChevronDown, ChevronRight, Copy, Ellipsis, FilePenLine, Folder, GitFork, Globe, Menu, MessageCircleQuestionMark, MessageSquare, Mic, Network, PanelRight, Pencil, Pin, PinOff, Search, Square, Target, Terminal, Wrench, type IconNode } from 'lucide';
 
-type GoalDocument = { schema:number; chatId:string; harness:string; operatorId?:string; policy?:{operatorStart?:{operatorId:string;revision:number;grantedBy:string;consumedBy?:string}}; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
+type GoalDocument = { schema:number; chatId:string; harness:string; version:number; controlVersion:number; requestedRevision:number; appliedRevision:number; humanPaused:boolean; state:string; gap?:string; revisions:{revision:number;condition:string;provenance:string;at:string}[]; receipts:{id:string;action:string;revision:number;actor:string;status:string;detail?:string;objective?:string;proposalId?:string;evidence?:string[];at:string}[]; observations:{at:string;nativeId?:string;event:{type:string;goalState?:string;goalReason?:string;goalSummary?:string}}[] };
 
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
@@ -155,7 +155,6 @@ export class MuxSDKChat extends LitElement {
   @state() private movingChat = false;
   @state() private renameChatOpen = false;
   @state() private renameChatDraft = '';
-  @state() private archiveChatConfirm = false;
   @state() private chatActionError = '';
   @state() private previewFocused = false;
   @state() private drawerWidth = 0;
@@ -736,7 +735,7 @@ export class MuxSDKChat extends LitElement {
         <mux-ui-menu-item @click=${() => void this.runChatAction(() => sdkChats.setPinned(chat.id, !chat.pinned))}>${icon(chat.pinned ? PinOff : Pin,{size:14})} ${chat.pinned ? 'Unpin chat' : 'Pin chat'}</mux-ui-menu-item>
         <mux-ui-menu-item @click=${() => { this.closeChatMenu(); this.renameChatDraft = chat.title; this.renameChatOpen = true; void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>('.chat-rename-field')?.focus()); }}>${icon(Pencil,{size:14})} Rename chat</mux-ui-menu-item>
         <mux-ui-menu-item @click=${() => { this.movingChat = true; }}>Move to project…</mux-ui-menu-item>
-        <mux-ui-menu-item @click=${() => { this.closeChatMenu(); if (!chat.archived && sdkChats.chats.some(parent => parent.operator && parent.operatorLanes?.includes(chat.id))) this.archiveChatConfirm = true; else void this.runChatAction(() => sdkChats.setArchived(chat.id, !chat.archived)); }}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})} ${chat.archived ? 'Restore chat' : 'Archive chat'}</mux-ui-menu-item>
+        <mux-ui-menu-item @click=${() => { this.closeChatMenu(); void this.runChatAction(() => sdkChats.setArchived(chat.id, !chat.archived)); }}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})} ${chat.archived ? 'Restore chat' : 'Archive chat'}</mux-ui-menu-item>
       `}
     </mux-ui-menu>`;
   }
@@ -787,14 +786,7 @@ export class MuxSDKChat extends LitElement {
     const utility = this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility');
     if (action === 'file' && path) await utility?.showFile(path);
     else if (action === 'note' && noteId) await utility?.showNote(noteId);
-    else if (action === 'tab' && (tab === 'status' || tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'notes' || tab === 'meetings' || tab === 'goal')) utility?.showPanel(tab === 'notes' ? 'pages' : tab);
-  }
-  private async operatorChanged(chat: SDKChat) {
-    this.chat = {...chat, remoteHost: chatHost(chat.id) || undefined};
-    if (!chat.operator) return;
-    this.setPaneMode('split');
-    await this.updateComplete;
-    this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('status');
+    else if (action === 'tab' && (tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'notes' || tab === 'meetings' || tab === 'goal')) utility?.showPanel(tab === 'notes' ? 'pages' : tab);
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
     this.stopDictation();
@@ -1414,6 +1406,7 @@ export class MuxSDKChat extends LitElement {
       }
     }
   }
+  // Retain display of reports already stored in older chat transcripts.
   private upsertLaneCard(blocks: Block[], event: SDKEvent, done: boolean) {
     const name = event.origin?.name || event.name || 'Linked lane';
     const state = event.origin?.status || event.kind || (done ? 'ready' : 'working');
@@ -2322,7 +2315,7 @@ export class MuxSDKChat extends LitElement {
   private messageActions(block: Block) {
     const copied = this.copiedKey === block.key;
     const completed = this.turnFinished.has(block.turn) && !this.busy && this.chat?.state !== 'uncertain';
-    const canBranch = completed && !this.sideMode && !this.chat?.goal && !this.chat?.operator;
+    const canBranch = completed && !this.sideMode && !this.chat?.goal;
     const finalAssistant = block.kind === 'assistant' && block.channel !== 'voice' && !this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key);
     return html`<div class="message-actions" role="group" aria-label=${`${block.kind === 'user' ? 'Your' : 'Assistant'} message actions`}>
       <mux-ui-button variant="quiet" size="small" icon-only accessible-label=${copied ? 'Message copied' : `Copy ${block.kind} message`} tooltip=${copied ? 'Copied' : 'Copy message'} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.copyMessage(block); }}>${icon(copied ? Check : Copy, { size:14 })}<span class="sr-only" aria-live="polite">${copied ? 'Copied' : ''}</span></mux-ui-button>
@@ -2791,20 +2784,18 @@ export class MuxSDKChat extends LitElement {
     const agents = this.agents();
     const slashSuggestions = this.selectedAgent ? [] : this.slashSuggestions();
     const sideStart = this.sideMode && !!this.sideParentId && !this.sessionId;
-    const parentOperator = sdkChats.chats.find(chat => chat.operator && chat.operatorLanes?.includes(this.sessionId));
     const workspaceName = sdkChats.projects.find(project => project.id === this.chat?.workspaceId)?.name || 'Ungrouped';
     return html`
     <mux-ui-screen-header class="chat-screen-header ${this.drawerOpen ? 'with-utility' : ''}" style=${this.drawerOpen ? `--utility-width:${this.drawerWidth}px` : ''} .section=${workspaceName} .heading=${this.scheduledJob?.name || this.chat?.title || 'Chat'} .label=${this.chat?.title || 'Chat'} with-section-icon with-actions ?with-leading=${this.compact} show-on-phone>
       ${this.compact ? html`<mux-ui-button slot="leading" class="mobile-nav" icon-only size="large" variant="quiet" accessible-label="Open navigation" tooltip="Navigation" @click=${() => this.dispatchEvent(new CustomEvent('drawer-toggle',{bubbles:true,composed:true}))}>${icon(Menu,{size:20})}</mux-ui-button>` : nothing}
       <span slot="section-icon">${icon(Folder,{size:14})}</span>
-      ${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div slot="heading" class="chat-title">${parentOperator && !this.compact ? html`<mux-ui-button class="operator-parent" variant="quiet" size="small" icon-only accessible-label=${`Open operator chat: ${parentOperator.title}`} tooltip=${`Open operator chat: ${parentOperator.title}`} @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:parentOperator.id},bubbles:true,composed:true}))}>${icon(Network,{size:15})}</mux-ui-button><span class="operator-crumb" aria-hidden="true">${icon(ChevronRight,{size:13})}</span>` : nothing}<h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}
+      ${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div slot="heading" class="chat-title"><h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}
       <div slot="actions" class="topbar-actions">
       ${this.compact ? html`<div class="chat-actions-wrap"><mux-ui-button class="chat-menu-trigger" icon-only size="large" variant="quiet" accessible-label="Chat options" tooltip="Chat options" haspopup="menu" .expanded=${this.chatMenuOpen} @click=${() => { this.chatMenuOpen = !this.chatMenuOpen; this.movingChat = false; }}>${icon(Ellipsis,{size:20})}</mux-ui-button>${this.chatActionsMenu()}</div>` : nothing}
       <div class="pane-controls"><mux-ui-button variant="quiet" size=${this.compact ? 'large' : 'small'} icon-only toggle .pressed=${this.drawerOpen} accessible-label=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} tooltip=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} @click=${() => this.setPaneMode(this.drawerOpen ? 'chat' : 'split')}>${icon(PanelRight,{size:this.compact ? 20 : 17})}</mux-ui-button></div></div>
     </mux-ui-screen-header>
     ${this.chatActionError ? html`<mux-ui-feedback class="chat-action-error" kind="error" density="compact">${this.chatActionError}</mux-ui-feedback>` : nothing}
     ${this.renameChatOpen ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Rename chat" open @dismiss=${() => { this.renameChatOpen = false; }}><div class="chat-action-dialog"><h2>Rename chat</h2><mux-ui-text-field class="chat-rename-field" label="Chat name" .value=${this.renameChatDraft} @input=${(event: Event) => { this.renameChatDraft = (event.target as MuxUITextField).value; }} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') void this.saveChatName(); }}></mux-ui-text-field><div class="chat-action-dialog-actions"><mux-ui-button variant="quiet" @click=${() => { this.renameChatOpen = false; }}>Cancel</mux-ui-button><mux-ui-button variant="primary" ?disabled=${!this.renameChatDraft.trim()} @click=${() => void this.saveChatName()}>Save</mux-ui-button></div></div></mux-ui-dialog>` : nothing}
-    ${this.archiveChatConfirm ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Archive chat" open @dismiss=${() => { this.archiveChatConfirm = false; }}><div class="chat-action-dialog"><h2>Archive chat?</h2><p>Archive “${this.chat?.title || 'Chat'}”? It will be removed from its operator's lanes.</p><div class="chat-action-dialog-actions"><mux-ui-button variant="quiet" @click=${() => { this.archiveChatConfirm = false; }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => { this.archiveChatConfirm = false; void this.runChatAction(() => sdkChats.setArchived(this.sessionId, true)); }}>Archive chat</mux-ui-button></div></div></mux-ui-dialog>` : nothing}
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       <div class="body scroll-edge-fade ${sideStart ? 'side-empty' : ''}" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
@@ -2823,7 +2814,7 @@ export class MuxSDKChat extends LitElement {
       ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
       <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy ? this.chat?.harness === 'antigravity-sdk' ? 'Stop and continue turn' : 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-haspopup="listbox" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy ? this.chat?.harness === 'antigravity-sdk' ? 'Stop and continue with a new instruction…' : 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       ${this.busy && this.chat?.harness === 'antigravity-sdk' ? html`<div class="steer-notice">Sending stops the current response, then continues this chat.</div>` : nothing}
-      <div class="composer-controls">${sideStart ? nothing : this.attachmentPicker()}${sideStart ? nothing : html`<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .operator=${!!this.chat?.operator} .turnBusy=${this.busy} @operator-changed=${(e: CustomEvent<SDKChat>) => void this.operatorChanged(e.detail)} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>`}${this.dictationButton()}${this.sendVoiceButton()}</div>`}
+      <div class="composer-controls">${sideStart ? nothing : this.attachmentPicker()}${sideStart ? nothing : html`<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>`}${this.dictationButton()}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><mux-ui-pane-divider class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></mux-ui-pane-divider><mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.settingsPending && !this.dictationActive && !this.chat?.branchPending} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility></aside>`) : nothing}

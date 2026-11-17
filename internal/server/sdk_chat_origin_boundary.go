@@ -8,7 +8,7 @@ import (
 // SDK-owned MCP processes attach the chat capability to every local request.
 // A live chat can address any other chat, regardless of project or side-chat
 // relationship. Browser and external local clients keep their existing
-// authentication path. Goal and operator mutations have separate controls.
+// authentication path. Goal mutations have separate controls.
 func (s *Server) sdkChatOriginBoundary(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("X-Muxterm-Origin")
@@ -33,15 +33,7 @@ func (s *Server) sdkChatOriginBoundary(next http.Handler) http.Handler {
 				targetID = senderID
 			}
 			_, allowed = h.authorizedChatSenderLocked(token, targetID)
-			if allowed && path == targetID+"/operator" {
-				// Only a human may enable operator mode or replace its lane set.
-				// An enabled operator may still link a lane through its dedicated
-				// POST route, as the operator tool contract requires.
-				if r.Method == http.MethodPatch ||
-					(r.Method == http.MethodPost && (senderID != targetID || !sender.Operator)) {
-					allowed = false
-				}
-			}
+
 		}
 		h.mu.Unlock()
 		if !allowed {

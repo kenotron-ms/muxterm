@@ -17,5 +17,5 @@ type Story = StoryObj<SwitchArgs>;
 export const Off: Story = {};
 export const On: Story = { args:{checked:true} };
 export const Disabled: Story = { args:{disabled:true} };
-export const DescribedRow: Story = { args:{label:'Operator mode',description:'Coordinate other chats as lanes',layout:'row'} };
-export const PhoneRow: Story = { args:{label:'Operator mode',description:'Coordinate other chats as lanes',layout:'row'}, globals:{viewport:{value:'phone390',isRotated:false}} };
+export const DescribedRow: Story = { args:{label:'Use worktree',description:'Create a separate worktree for this chat',layout:'row'} };
+export const PhoneRow: Story = { args:{label:'Use worktree',description:'Create a separate worktree for this chat',layout:'row'}, globals:{viewport:{value:'phone390',isRotated:false}} };

@@ -138,7 +138,7 @@ existing project rows remain visible in the current client until it reloads.
 - **Push deploy** — `muxterm deploy user@host` copies the binary and installs remotely
 - **Agent integration (MCP)** — connect any MCP-compatible AI agent to drive workspaces, panes, and terminals
 - **Agent sessions** — Claude, Codex, and Amplifier report native lifecycle hooks into one durable fleet, with terminals as optional attachments
-- **Mission Control** — one persistent Operator conversation alongside the terminal and agent fleet
+- **Chat coordination** — explicit side and voice handoffs to the main chat, with durable issues and goal records
 - **Browser Assistant (developer preview)** — pair your local Chrome browser with self-hosted Muxterm for scoped agent interaction and real-browser verification
 
 ## Browser Assistant

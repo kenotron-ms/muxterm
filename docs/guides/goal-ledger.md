@@ -40,7 +40,7 @@ The SQLite driver is pure Go, including the CGO-disabled Darwin release builds;
 the ledger file format is unchanged.
 SQLite stores one versioned JSON document per chat; relational fields are identity and a transactional
 compare-and-swap version only. Documents contain human condition revisions,
-ownership/operator association, requested/applied revisions, human pause holds,
+ownership, requested/applied revisions, human pause holds,
 idempotent control receipts, native execution references and observations, and
 agent evidence/proposals. Native chat metadata remains a display projection,
 not an independent condition editor.
@@ -63,7 +63,7 @@ being reported as human authorization decisions.
 On restart, pending receipts become uncertain and active state becomes uncertain.
 Nothing is replayed. Human pause holds survive restart, including failed or
 uncertain native acknowledgements. Reconcile before making another request.
-Passive settings/title loads and queued operator reports cannot restart an
+Passive settings/title loads cannot restart an
 uncertain goal. Legacy native conditions without a human ledger revision require
 explicit adoption through the `/goal` command, not inferred provenance.
 
@@ -76,10 +76,10 @@ Claude, and Amplifier, including Amplifier replacement sessions.
 
 Agents use `get_chat_goal` (`session_id=self` is supported), `control_chat_goal`,
 and `report_goal_evidence`. Mutations use the ledger's `controlVersion` as
-`expected_version`. Evidence is scoped to the caller’s own goal; proposals may
-also target its directly owned lanes. Both are inert records, not instructions
-or notifications to peers. Only the owner or direct
-operator can control execution, and neither can release a human pause.
+`expected_version`. Evidence and proposals are scoped to the caller’s own
+goal. Both are inert records, not instructions or notifications to peers.
+The owner may request pause or resume of its own authorized revision; only a
+human may start it or release a human pause.
 
 New MCP tools require an authority audit: `scopedChatTool` currently excludes
 known alternative write/topology tools and registers other tools by default.
@@ -87,32 +87,22 @@ Keep that exclusion list and the server authority boundary aligned.
 
 ## Proposals and changeable policy
 
-Proposing and authorizing are separate typed operations. An agent proposal is an
-inert receipt. Through authorized goal control, a human may approve and start it, or approve
-its exact condition and authorize the direct operator to start that revision.
-The authorization is a JSON policy record scoped to operator identity and human
-revision, consumed on one admitted start, and explicitly revocable. Relinking or
-revising a condition does not transfer that authority. Operators cannot grant
-themselves authority or release a human pause. Ordinary messages are not grants.
-Human approval with “Approve and start” explicitly releases that human hold;
-granting operator permission alone does not. Agents may resume their own pause
-of an already authorized revision, but restarting a finished goal requires a
-fresh human start or operator authorization.
-The current policy is a revisable product choice, not a prompt-text classifier.
-Harness adapters implement mechanisms; policy records decide who may invoke them.
+Proposing and approving are separate typed operations. An agent proposal is an
+inert receipt. A human may approve the exact condition and start it, or approve
+it for a later human start. Ordinary messages do not grant execution authority.
+Human approval with “Approve and start” releases a human pause. Agents may
+resume their own pause of an already authorized revision, but restarting a
+finished goal requires a human start.
 
 Claude's native ProposeGoal tool is intercepted at its native PreToolUse hook and
 recorded as an inert proposal instead of allowing its direct-setting option to
 bypass muxterm consent. The agent chooses what to propose; a human chooses what
 may execute. The native goal evaluator, not muxterm, judges its condition.
 
-Agent sends require a server-issued sender capability and a direct
-operator-to-lane or lane-to-operator edge. Peers, unrelated chats, missing or
-mismatched identities, relinking, ordinary-send/page-write bypasses, native
-session sends, terminal input, and app-mediated browser control are denied.
-Unrelated read and administration tools retain their existing behavior. Human
-browser controls remain available. Agent creation/relinking of chats is not
-supported by this increment; humans establish the topology.
+Agent sends require a server-issued sender capability. Explicit side and voice
+handoffs to the main chat remain available. Goal controls require the owner
+chat's capability or a human browser; only humans set conditions and start
+approved revisions.
 
 This is an application authority boundary, **not OS isolation**. A harness with
 an unrestricted shell under the same OS user can read capability files, forge

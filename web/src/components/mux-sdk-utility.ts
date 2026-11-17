@@ -1,6 +1,6 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { ArrowLeft, AudioLines, ChevronDown, ChevronRight, ChevronsDownUp, CircleDot, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, Network, NotebookPen, PanelRight, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
+import { ArrowLeft, AudioLines, ChevronDown, ChevronRight, ChevronsDownUp, CircleDot, Code2, Copy, Download, Ellipsis, ExternalLink, File, FileImage, FileJson, FileText, Folder, FolderOpen, GitCompare, Globe2, Maximize2, MessageCircleQuestionMark, Minimize2, NotebookPen, PanelRight, Pause, Play, Plus, RefreshCw, RotateCcw, Search, Sparkles, Target, Trash2, X, type IconNode } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { rememberChatHost, remoteChatPath } from '../lib/remote-chat-routes.js';
 import type { SDKChat } from '../lib/sdk-chats.js';
@@ -12,7 +12,6 @@ import './mux-sdk-pdf-preview.js';
 import './mux-markdown-document.js';
 import './mux-monaco-source.js';
 import './mux-monaco-diff.js';
-import './mux-operator-status.js';
 import './mux-chat-coordination.js';
 import './mux-side-chat.js';
 import './mux-voice-companion.js';
@@ -76,14 +75,14 @@ function legacyPageContent(blocks: PageBlock[], remoteHost = ''): PartialBlock[]
   });
   return converted.length ? converted : [{type:'paragraph'}];
 }
-type UtilityTabId = 'new' | 'side' | 'voice' | 'files' | 'status' | 'coordination' | 'changes' | 'pages' | 'meetings' | 'browser' | 'goal';
+type UtilityTabId = 'new' | 'side' | 'voice' | 'files' | 'coordination' | 'changes' | 'pages' | 'meetings' | 'browser' | 'goal';
 type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string; url?: string; title?: string; sideChatId?: string; draft?: string };
 type BrowserState = { tabs?: { id:string; url:string; title:string; canGoBack:boolean; canGoForward:boolean }[]; error?:string };
 type BrowserBridge = { send: (message: Record<string, unknown>) => void };
 declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge } }
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
 const BROWSER_RECENT_KEY = 'muxterm.desktop.browser.recent';
-const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, side:MessageCircleQuestionMark, voice:AudioLines, changes:GitCompare, files:Folder, status:Network, coordination:CircleDot, pages:NotebookPen, meetings:AudioLines, browser:Globe2, goal:Target };
+const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, side:MessageCircleQuestionMark, voice:AudioLines, changes:GitCompare, files:Folder, coordination:CircleDot, pages:NotebookPen, meetings:AudioLines, browser:Globe2, goal:Target };
 
 function readableSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -246,7 +245,7 @@ export class MuxSDKUtility extends LitElement {
     }
     try {
       const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string; sideChatId?:string; draft?:string }[]; activeTabId?: string } | null;
-      const valid = new Set<string>(['new','side','voice','files','status','coordination','changes','terminal','pages','meetings','web','browser','goal']);
+      const valid = new Set<string>(['new','side','voice','files','coordination','changes','terminal','pages','meetings','web','browser','goal']);
       if (saved?.tabs && saved.tabs.length <= 50 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
         const active = saved.tabs.find(tab => tab.id === saved.activeTabId);
         const restored = saved.tabs.filter(tab => !['new','web','terminal'].includes(tab.kind));
@@ -297,7 +296,7 @@ export class MuxSDKUtility extends LitElement {
   override render() {
     if (this.terminalMode) return html`<style>${this.surfaceCSS}</style><div class="terminal-files-header"><strong>Files</strong><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Close file explorer" tooltip="Close file explorer" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(X,{size:16})}</mux-ui-button></div><div class="utility-body" aria-label="Files">${this.filesView()}</div>`;
     const tab = this.currentTab;
-    return html`<style>${this.surfaceCSS}</style>${this.mobileHeader()}<mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.openNewTabView()}></mux-ui-tab-strip><div class="mobile-tab-picker">${this.tabs.length ? html`<mux-ui-select aria-label="Chat tools tab" .options=${[{value:'',label:'Open a tool',disabled:true},...this.tabs.map(item => ({value:item.id,label:this.tabTitle(item)}))]} .value=${tab.id} @change=${(event:Event) => this.selectTab((event.target as MuxUISelect).value)}></mux-ui-select>` : nothing}${tab.id ? html`<mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button>` : nothing}<mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.openNewTabView()}>${icon(Plus,{size:18})}</mux-ui-button></div><div class="utility-body" role="tabpanel" aria-label=${tab.kind === 'new' ? 'Open a tool' : this.tabTitle(tab)}>${tab.kind === 'meetings' ? nothing : tab.kind === 'new' ? this.newTabView() : tab.kind === 'side' ? html`<mux-side-chat .sessionId=${this.sessionId} .remoteHost=${this.remoteHost} .tabId=${tab.id} .chatId=${tab.sideChatId || ''} .draft=${tab.draft || ''} .onChatCreated=${this.onSideChatCreated} @side-chat-draft=${(event:CustomEvent<{tabId:string;draft:string}>) => this.updateSideDraft(event.detail)}></mux-side-chat>` : tab.kind === 'voice' ? html`<mux-voice-companion .entries=${this.voiceEntries} .voiceState=${this.voiceState} .startedAt=${this.voiceStartedAt} .available=${this.voiceAvailable} .canStart=${this.voiceCanStart} .error=${this.voiceError}></mux-voice-companion>` : tab.kind === 'files' ? this.filesView() : tab.kind === 'status' ? html`<mux-operator-status .sessionId=${this.sessionId}></mux-operator-status>` : tab.kind === 'coordination' ? html`<mux-chat-coordination .sessionId=${this.sessionId} .projectId=${this.projectId} .remoteHost=${this.remoteHost}></mux-chat-coordination>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}<mux-meetings .sessionId=${this.sessionId} ?hidden=${tab.kind !== 'meetings'} @meeting-open-note=${(event:CustomEvent<{id:string}>) => void this.showNote(event.detail.id)}></mux-meetings></div>`;
+    return html`<style>${this.surfaceCSS}</style>${this.mobileHeader()}<mux-ui-tab-strip accessible-label="Chat tools" .tabs=${this.tabs.map((item):TabStripItem => ({id:item.id,label:this.tabTitle(item),title:item.filePath || this.tabTitle(item),icon:icon(item.kind === 'files' && item.filePath ? fileGlyph(item.filePath) : TAB_GLYPHS[item.kind],{size:14})}))} .activeId=${tab.id} @tab-select=${(event:CustomEvent<{id:string}>) => this.selectTab(event.detail.id)} @tab-close=${(event:CustomEvent<{id:string}>) => this.closeTab(event.detail.id)} @tab-add=${() => this.openNewTabView()}></mux-ui-tab-strip><div class="mobile-tab-picker">${this.tabs.length ? html`<mux-ui-select aria-label="Chat tools tab" .options=${[{value:'',label:'Open a tool',disabled:true},...this.tabs.map(item => ({value:item.id,label:this.tabTitle(item)}))]} .value=${tab.id} @change=${(event:Event) => this.selectTab((event.target as MuxUISelect).value)}></mux-ui-select>` : nothing}${tab.id ? html`<mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button>` : nothing}<mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.openNewTabView()}>${icon(Plus,{size:18})}</mux-ui-button></div><div class="utility-body" role="tabpanel" aria-label=${tab.kind === 'new' ? 'Open a tool' : this.tabTitle(tab)}>${tab.kind === 'meetings' ? nothing : tab.kind === 'new' ? this.newTabView() : tab.kind === 'side' ? html`<mux-side-chat .sessionId=${this.sessionId} .remoteHost=${this.remoteHost} .tabId=${tab.id} .chatId=${tab.sideChatId || ''} .draft=${tab.draft || ''} .onChatCreated=${this.onSideChatCreated} @side-chat-draft=${(event:CustomEvent<{tabId:string;draft:string}>) => this.updateSideDraft(event.detail)}></mux-side-chat>` : tab.kind === 'voice' ? html`<mux-voice-companion .entries=${this.voiceEntries} .voiceState=${this.voiceState} .startedAt=${this.voiceStartedAt} .available=${this.voiceAvailable} .canStart=${this.voiceCanStart} .error=${this.voiceError}></mux-voice-companion>` : tab.kind === 'files' ? this.filesView() : tab.kind === 'coordination' ? html`<mux-chat-coordination .sessionId=${this.sessionId} .projectId=${this.projectId} .remoteHost=${this.remoteHost}></mux-chat-coordination>` : tab.kind === 'changes' ? this.changesView() : tab.kind === 'goal' ? this.goalView() : tab.kind === 'browser' ? this.browserView(tab) : this.pagesView()}<mux-meetings .sessionId=${this.sessionId} ?hidden=${tab.kind !== 'meetings'} @meeting-open-note=${(event:CustomEvent<{id:string}>) => void this.showNote(event.detail.id)}></mux-meetings></div>`;
   }
   private mobileHeader(): TemplateResult {
     if (this.currentTab.kind === 'files') {
@@ -316,7 +315,7 @@ export class MuxSDKUtility extends LitElement {
     if (tab.kind === 'pages') return 'Notes';
     if (tab.kind === 'meetings') return 'Meetings';
     if (tab.kind === 'browser') return tab.title || (tab.url ? new URL(tab.url).hostname : 'Browser');
-    return ({ status:'Status', coordination:'Issues', changes:'Changes', goal:'Goal' } as Record<string,string>)[tab.kind] || 'Tab';
+    return ({ coordination:'Issues', changes:'Changes', goal:'Goal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { if (this.terminalMode) return; try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
   private async restoreSideChats() {
@@ -460,7 +459,7 @@ export class MuxSDKUtility extends LitElement {
     }
     this.selectPage(id);
   }
-  private chooseTool(kind: 'side' | 'voice' | 'files' | 'status' | 'coordination' | 'changes' | 'pages' | 'meetings' | 'browser' | 'goal') {
+  private chooseTool(kind: 'side' | 'voice' | 'files' | 'coordination' | 'changes' | 'pages' | 'meetings' | 'browser' | 'goal') {
     if (kind === 'voice') this.showPanel('voice');
     else this.addTab(kind);
     if (kind === 'side') void this.updateComplete.then(() => this.querySelector<MuxSideChat>('mux-side-chat')?.focusQuestion());
@@ -472,7 +471,6 @@ export class MuxSDKUtility extends LitElement {
       <mux-ui-action-tile label="Goal" description="Read and control the current goal" @click=${() => this.chooseTool('goal')}><span slot="icon">${icon(Target,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Files" description="Browse and preview project files" @click=${() => this.chooseTool('files')}><span slot="icon">${icon(Folder,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Issues" description="View shared work and progress" @click=${() => this.chooseTool('coordination')}><span slot="icon">${icon(CircleDot,{size:18})}</span></mux-ui-action-tile>
-      <mux-ui-action-tile label="Status" description="See agent activity" @click=${() => this.chooseTool('status')}><span slot="icon">${icon(Network,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Changes" description="Review edits in this project" @click=${() => this.chooseTool('changes')}><span slot="icon">${icon(GitCompare,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Notes" description="Browse and edit notes for this chat" @click=${() => this.chooseTool('pages')}><span slot="icon">${icon(NotebookPen,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Meetings" description="Record or invite someone to a call" @click=${() => this.chooseTool('meetings')}><span slot="icon">${icon(AudioLines,{size:18})}</span></mux-ui-action-tile>
@@ -593,7 +591,6 @@ export class MuxSDKUtility extends LitElement {
     </div>${this.browserError ? html`<div class="native-browser-error" role="alert">${this.browserError}</div>` : nothing}<div class="native-browser-viewport">${!tab.url ? html`<div class="native-browser-home"><h2>Tools</h2><div class="native-browser-tool-grid">
       <mux-ui-button size="small" variant="secondary" full-width @click=${() => this.chooseTool('changes')}>${icon(GitCompare,{size:16})}<span>Changes</span></mux-ui-button>
       <mux-ui-button size="small" variant="secondary" full-width @click=${() => this.chooseTool('files')}>${icon(Folder,{size:16})}<span>Files</span></mux-ui-button>
-      <mux-ui-button size="small" variant="secondary" full-width @click=${() => this.chooseTool('status')}>${icon(Network,{size:16})}<span>Status</span></mux-ui-button>
       <mux-ui-button size="small" variant="secondary" full-width @click=${() => this.chooseTool('pages')}>${icon(NotebookPen,{size:16})}<span>New page</span></mux-ui-button>
     </div>${this.browserRecent.length ? html`<h2>Recent pages</h2><div class="native-browser-recent">${this.browserRecent.slice(0,4).map(entry => html`<mux-ui-button variant="quiet" full-width tooltip=${entry.url} @click=${() => this.navigateBrowser(tab,entry.url)}>${icon(Globe2,{size:23})}<span>${entry.title}</span></mux-ui-button>`)}</div>` : nothing}</div>` : nothing}</div></section>`;
   }

@@ -127,8 +127,7 @@ func agentChatPathAllowed(method, path string) bool {
 
 // A remote chat bridge is reached only after the home server has accepted a
 // human browser request. Its same-user helper token is scoped here to chat and
-// project operations; goal controls and operator authority stay on their
-// existing, narrower paths.
+// project operations; goal controls stay on their narrower path.
 func (s *Server) remoteChatBridgeRequest(r *http.Request) bool {
 	if r.Header.Get("X-Muxterm-Remote-Chat") != "1" || r.Header.Get("Sec-Fetch-Site") != "same-origin" || r.Header.Get("X-Muxterm-Agent") != "" || s.browserAssistant.localToken == "" {
 		return false
@@ -142,7 +141,7 @@ func (s *Server) remoteChatBridgeRequest(r *http.Request) bool {
 		if strings.HasSuffix(path, "/goal") {
 			return r.Method == http.MethodGet
 		}
-		if strings.HasSuffix(path, "/control-send") || strings.HasSuffix(path, "/operator") {
+		if strings.HasSuffix(path, "/control-send") {
 			return false
 		}
 	}
@@ -184,8 +183,8 @@ func (s *Server) chatAuthorityBoundary(next http.Handler) http.Handler {
 				origin, valid = s.sdkChats.controlOriginLocked(token, origin.ChatID)
 			}
 			s.sdkChats.mu.Unlock()
-			if token == "" || !valid || (r.Method != http.MethodGet && origin.ChatID != r.PathValue("id") && origin.Relation != "operator-to-lane" && origin.Relation != "lane-to-operator") {
-				http.Error(w, "owner or direct operator/lane capability required", 403)
+			if token == "" || !valid || origin.ChatID != r.PathValue("id") {
+				http.Error(w, "owner chat capability required", 403)
 				return
 			}
 		} else if ((strings.HasPrefix(path, "/api/sdk-") || strings.HasPrefix(path, "/api/browser-assistant")) && r.Method != http.MethodGet && r.Method != http.MethodHead) || r.Header.Get("Upgrade") != "" {

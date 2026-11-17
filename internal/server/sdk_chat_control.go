@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -87,7 +86,7 @@ func (h *sdkChatHost) forgetChatOriginLocked(id string) {
 }
 
 // A live chat capability may address any chat on this muxterm server. The
-// origin relation describes the sender for display; goal and operator controls
+// origin relation describes the sender for display; goal controls
 // enforce their own, narrower authority separately.
 func (h *sdkChatHost) authorizedChatSenderLocked(token, targetID string) (string, bool) {
 	if token == "" {
@@ -110,21 +109,7 @@ func (h *sdkChatHost) controlOriginLocked(token, targetID string) (sdkEventOrigi
 	if sender == nil {
 		return sdkEventOrigin{}, false
 	}
-	origin := sdkEventOrigin{Type: "chat-message", ChatID: sender.ID, TargetChatID: targetID, Name: sender.Title, Harness: sender.Harness, Status: sender.State, Relation: "chat-to-chat"}
-	target := h.chats[targetID]
-	if sender.Operator && slices.Contains(sender.OperatorLanes, targetID) {
-		origin.Relation = "operator-to-lane"
-	} else if target != nil && target.Operator && slices.Contains(target.OperatorLanes, sender.ID) {
-		origin.Relation = "lane-to-operator"
-	} else {
-		for _, operator := range h.chats {
-			if operator.Operator && slices.Contains(operator.OperatorLanes, sender.ID) && slices.Contains(operator.OperatorLanes, targetID) {
-				origin.Relation = "lane-to-lane"
-				break
-			}
-		}
-	}
-	return origin, true
+	return sdkEventOrigin{Type: "chat-message", ChatID: sender.ID, TargetChatID: targetID, Name: sender.Title, Harness: sender.Harness, Status: sender.State, Relation: "chat-to-chat"}, true
 }
 
 func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +245,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	if s.sdkVoice != nil {
 		voiceContext = h.recentVoiceContext(id)
 	}
-	content := h.operatorInputFrom(id, sdkTaskInputWithVoiceContext(req.Content, voiceContext), "Message from another chat")
+	content := sdkTaskInputWithVoiceContext(req.Content, voiceContext)
 	result, err := h.call(ctx, "send", map[string]any{"sessionId": id,
 		"input": map[string]any{"kind": kind, "source": "chat-message", "id": receipt.InputID,
 			"content": content, "displayContent": req.Content}})

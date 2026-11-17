@@ -166,7 +166,7 @@ async function runClaude(s) {
       if (typeof input.tool_input?.condition === 'string') emit(s.id, 'goal.proposal', {
         inputId: input.tool_use_id || randomUUID(), message: input.tool_input.condition });
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
-        permissionDecisionReason: 'Proposal recorded in muxterm. A human must approve it or authorize the direct operator to start it. Do not start or replace the goal yourself.' } };
+        permissionDecisionReason: 'Proposal recorded in muxterm. A human must approve and start it. Do not start or replace the goal yourself.' } };
     }] }] },
     thinking: { type: 'adaptive', display: 'summarized' }, effort: s.effort || 'high', maxTurns: 20 } });
     s.query = q;

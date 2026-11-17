@@ -23,11 +23,10 @@ let chats: SDKChat[] = [];
 let archived: SDKChat[] = [];
 let rejectProjectUpdate = false;
 
-export function resetChatListFixture(empty = false, linkedLane = false, failProjectUpdate = false): void {
+export function resetChatListFixture(empty = false, _linkedLane = false, failProjectUpdate = false): void {
   rejectProjectUpdate = failProjectUpdate;
   projects = empty ? [] : initialProjects.map(project => ({...project, sourceFolders:[...(project.sourceFolders ?? [])]}));
   chats = empty ? [] : initialChats.map(chat => ({...chat}));
-  if (linkedLane) chats.unshift({ id:'chat-operator', workspaceId:'atlas', projectPath:'/home/demo/atlas', title:'Coordinate workspace navigation', harness:'codex', state:'working', operator:true, operatorLanes:['chat-build'], createdAt:'2026-10-21T13:00:00Z' });
   archived = empty ? [] : initialArchived.map(chat => ({...chat}));
   sdkChats.projects = projects;
   sdkChats.chats = [...chats, ...archived];
@@ -36,7 +35,7 @@ export function resetChatListFixture(empty = false, linkedLane = false, failProj
 
 export function chatListStoryModel(projectId = 'atlas') {
   const project = projects.find(row => row.id === projectId)!;
-  return { id:project.id, name:project.name, project, chats:chats.filter(chat => chat.workspaceId === project.id), laneIds:new Set<string>() };
+  return { id:project.id, name:project.name, project, chats:chats.filter(chat => chat.workspaceId === project.id) };
 }
 
 export const chatListFixture: ApiFixture = ({url,method,init}) => {
@@ -75,7 +74,6 @@ export const chatListFixture: ApiFixture = ({url,method,init}) => {
     if (change.archived === true) {
       const row = chats.find(chat => chat.id === chatId);
       if (row) { archived = [...archived,row]; chats = chats.filter(chat => chat.id !== chatId); }
-      chats = chats.map(chat => chat.operatorLanes?.includes(chatId) ? {...chat,operatorLanes:chat.operatorLanes.filter(id => id !== chatId)} : chat);
     }
     if (change.archived === false) { const row = archived.find(chat => chat.id === chatId); if (row) { chats = [...chats,row]; archived = archived.filter(chat => chat.id !== chatId); } }
     return fixtureJSON({ok:true});

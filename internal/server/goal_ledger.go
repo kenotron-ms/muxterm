@@ -36,17 +36,6 @@ type goalReceipt struct {
 	StartBy    string          `json:"startBy,omitempty"`
 }
 
-type goalStartAuthorization struct {
-	OperatorID string `json:"operatorId"`
-	Revision   int    `json:"revision"`
-	GrantedBy  string `json:"grantedBy"`
-	ConsumedBy string `json:"consumedBy,omitempty"`
-}
-
-type goalPolicy struct {
-	OperatorStart *goalStartAuthorization `json:"operatorStart,omitempty"`
-}
-
 type goalObservation struct {
 	At       time.Time `json:"at"`
 	NativeID string    `json:"nativeId,omitempty"`
@@ -57,7 +46,6 @@ type goalDocument struct {
 	Schema                      int               `json:"schema"`
 	ChatID                      string            `json:"chatId"`
 	Harness                     string            `json:"harness"`
-	OperatorID                  string            `json:"operatorId,omitempty"`
 	Version                     int               `json:"version"`
 	ControlVersion              int               `json:"controlVersion"`
 	RequestedRevision           int               `json:"requestedRevision"`
@@ -69,7 +57,6 @@ type goalDocument struct {
 	Revisions                   []goalRevision    `json:"revisions"`
 	Receipts                    []goalReceipt     `json:"receipts"`
 	Observations                []goalObservation `json:"observations"`
-	Policy                      goalPolicy        `json:"policy"`
 	ExecutionAuthorizedRevision int               `json:"executionAuthorizedRevision,omitempty"`
 	AgentPauseRevision          int               `json:"agentPauseRevision,omitempty"`
 }

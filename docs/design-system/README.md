@@ -114,7 +114,7 @@ workflow runs the fast checks and builds Storybook on frontend changes.
 Storybook includes foundations and stateful examples for chat, terminal dock,
 navigation, Settings, Connections, Skills, Jobs, utility, PDF and image preview,
 microphone, and Browser Assistant. Main's current chat uses a goal ledger and
-operator lane controls; the catalog follows those current APIs. The interface
+issue and goal controls; the catalog follows those current APIs. The interface
 is still migrating: `check:ui` is a ratchet, not a claim that every feature
 stylesheet is fully tokenized. See [the inventory](inventory.md) for the open
 seams and the source of truth for each screen.
@@ -250,14 +250,6 @@ history and the new-job editor. Dev-local Chromium opened the empty Jobs screen
 and phone editor, dismissed it with Escape, and followed “Start a new chat for
 this job.” No job was created or run; populated rows use synthetic data.
 
-Operator status uses shared Filter Chip, Status Badge, Button and Feedback.
-Its lane disclosure uses Button's expanded and controlled-panel semantics.
-Storybook covers desktop and phone progress, expanded lane actions and an error
-state without stale loading. Chromium verified Enter disclosure and panel
-linkage at both widths. The live dev-local Status tab displayed a regular
-chat's task progress; populated operator lanes require an operator fixture.
-Lane progress and closure authority remain with the real operator and sessiond.
-
 Main chat now uses semantic palette tokens throughout its transcript and goal
 ledger. The goal editor uses the shared adaptive Dialog, Text Area and Buttons;
 ledger actions use shared Buttons, Select and Feedback. Storybook shows an
@@ -345,16 +337,13 @@ child folders. Storybook shows nested paths, hidden browser, empty, phone,
 document and light states; the live nested file path was reviewed in a real
 chat.
 
-The shared Switch also replaces the bespoke Operator toggle in chat settings.
-It has inline and described-row layouts, checked and disabled stories, native
-button keyboard behavior, and semantic theme colors. Chromium confirmed click
-and Space activation in the standalone story, plus the Operator row in desktop,
-phone and light-theme chat settings. The New Chat and chat settings pickers now
+The shared Switch provides inline and described-row layouts, checked and disabled stories, native button keyboard behavior, and semantic theme colors.
+The New Chat and chat settings pickers now
 use the same Choice Item for selected, disabled, and described options. Both
 screens use the shared Choice Picker, which owns desktop placement,
 outside-click and Escape behavior, sibling-picker coordination, and a
 full-width bottom sheet presentation. Choice Section now gives provider, model,
-permission, mode and operator groups the same heading, divider and note layout,
+permission and mode groups the same heading, divider and note layout,
 with an accessible group label when a heading exists. Choice List now owns the
 bounded model scroll region in both screens, and compact Feedback presents
 loading, empty and error states with the same status semantics. Chat settings
