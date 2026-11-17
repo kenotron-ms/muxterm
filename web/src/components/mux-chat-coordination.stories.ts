@@ -15,7 +15,7 @@ const chats: SDKChat[] = [
 ];
 const work = {
   id:'storybook-coordination-work', title:'Ship session coordination', brief:'Review the inbox and publish the release.',
-  status:'active', progress:'Browser verification complete; waiting for review.', ownerSessionId:owner,
+  status:'active', progress:'Browser verification complete; waiting for review.', ownerSessionId:owner, projectIds:['storybook-project'],
   sessionIds:[sourceA,sourceB], updatedAt:now,
   updates:[
     {id:'update-1',at:now,sessionId:owner,text:'Started the release review.',status:'active'},
@@ -23,7 +23,7 @@ const work = {
   ],
 };
 const coordinationFixture: ApiFixture = ({url,method}) => {
-  if (method === 'GET' && url.pathname === '/api/sdk-work') return fixtureJSON({work:[work]});
+  if (method === 'GET' && url.pathname === '/api/sdk-work' && (!url.searchParams.has('project_id') || url.searchParams.get('project_id') === 'storybook-project')) return fixtureJSON({work:[work]});
   if (method === 'GET' && url.pathname === `/api/sdk-work/${work.id}`) return fixtureJSON(work);
   return fixtureJSON({error:`No coordination fixture for ${method} ${url.pathname}`},501);
 };
@@ -33,7 +33,7 @@ const meta = {
   parameters:{layout:'fullscreen',fullBleed:true,apiFixture:coordinationFixture},
   render:() => {
     sdkChats.chats = chats;
-    return html`<div style="height:100vh"><mux-chat-coordination .sessionId=${owner}></mux-chat-coordination></div>`;
+    return html`<div style="height:100vh"><mux-chat-coordination .sessionId=${owner} projectId="storybook-project"></mux-chat-coordination></div>`;
   },
 } satisfies Meta;
 export default meta;
