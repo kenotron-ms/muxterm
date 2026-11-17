@@ -3,7 +3,7 @@ import { apiPath } from './base-path.js';
 export type SDKVoiceState = 'idle' | 'connecting' | 'listening' | 'speaking';
 type VoiceMeter = { source: MediaStreamAudioSourceNode; analyser: AnalyserNode; bins: Uint8Array<ArrayBuffer> };
 
-/** One browser audio connection to GPT-Live, bound to one SDK chat. */
+/** One browser audio connection to Realtime, bound to one SDK chat. */
 export class SDKVoiceSession {
   private chatId: string;
   private onState: (state: SDKVoiceState) => void;
@@ -80,14 +80,14 @@ export class SDKVoiceSession {
         if (generation !== this.generation || typeof event.data !== 'string') return;
         try {
           const message = JSON.parse(event.data) as { type?: string };
-          if (message.type === 'session.started') {
+          if (message.type === 'session.created' || message.type === 'session.updated') {
             this.setState('listening');
             this.playReadySound();
             this.startMeterLoop();
-          } else if (message.type === 'session.input_transcript.delta') {
+          } else if (message.type === 'conversation.item.input_audio_transcription.completed') {
             window.clearTimeout(this.quietTimer);
             this.setState('listening');
-          } else if (message.type === 'session.output_transcript.delta') {
+          } else if (message.type === 'response.output_audio_transcript.delta') {
             this.setState('speaking');
             window.clearTimeout(this.quietTimer);
             this.quietTimer = window.setTimeout(() => this.setState('listening'), 900);

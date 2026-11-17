@@ -1643,6 +1643,9 @@ export class MuxSDKChat extends LitElement {
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:message, at:event.at });
       if (!this.replaying && event.generationId && this.voice?.providerSessionId === event.generationId) this.voice.stop();
     }
+    else if (event.type === 'voice.session.ended') {
+      if (!this.replaying && event.generationId && this.voice?.providerSessionId === event.generationId) this.voice.stop();
+    }
     else if (event.type === 'session.renamed') { if (!this.replaying) void sdkChats.refresh(); }
     else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); this.workExpanded.delete(this.currentTurn); this.workCollapsedWhileWorking.delete(this.currentTurn); if (event.type === 'error') blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
     if (event.type === 'input.accepted' && event.source !== 'voice' && event.source !== 'recovery') {
