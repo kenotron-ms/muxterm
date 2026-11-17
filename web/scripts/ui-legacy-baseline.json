@@ -92,12 +92,6 @@
     "literalDimensions": 19,
     "nativeControls": 2
   },
-  "components/mux-operator-status.ts": {
-    "legacyTokens": 0,
-    "literalColors": 0,
-    "literalScale": 0,
-    "nativeControls": 0
-  },
   "components/mux-pane-picker.ts": {
     "legacyTokens": 0,
     "literalColors": 0,

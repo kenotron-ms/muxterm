@@ -31,7 +31,7 @@ func (s *Server) handleSDKChatBranch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "wait for the current turn to finish before branching", http.StatusConflict)
 		return
 	}
-	if parent.Goal != "" || parent.Operator {
+	if parent.Goal != "" {
 		http.Error(w, "branching is unavailable for managed chats", http.StatusUnprocessableEntity)
 		return
 	}
@@ -90,8 +90,6 @@ func (s *Server) handleSDKChatBranch(w http.ResponseWriter, r *http.Request) {
 			line := "User: " + event.Text
 			if event.Origin != nil {
 				switch event.Origin.Type {
-				case "operator-lane":
-					line = "Linked lane report: " + event.Text
 				case "external-tool":
 					line = "External tool input: " + event.Text
 				default:

@@ -11,7 +11,7 @@ type ChatEvent = {
   inputId?:string; inputIds?:string[]; itemId?:string; complete?:boolean;
   toolId?:string; name?:string; raw?:unknown; summary?:boolean;
   agent?:string; childSessionId?:string; parentSessionId?:string;
-  origin?:{type:'operator-lane'|'chat-message';chatId:string;name:string;harness:string;status:string;relation?:'chat-to-chat'};
+  origin?:{type:'chat-message';chatId:string;name:string;harness:string;status:string;relation?:'chat-to-chat'};
 };
 
 const at = (second: number) => `2026-10-22T10:00:${String(second).padStart(2,'0')}Z`;
@@ -65,18 +65,6 @@ const delegated: ChatEvent[] = [
   {at:at(6),type:'assistant.delta',text:'The delegated review is complete. Open its card to inspect the work.'},
   {at:at(7),type:'turn.completed',inputIds:['delegation-1']},
 ];
-const linkedReports: ChatEvent[] = [
-  {at:at(1),type:'operator.lane.report',childSessionId:'linked-lane-1',text:'**Catalog review complete.** The shared controls now cover the chat toolbar and composer.',origin:{type:'operator-lane',chatId:'linked-lane-1',name:'Design review lane',harness:'codex',status:'ready'}},
-  {at:at(2),type:'input.accepted',kind:'user',source:'browser',inputId:'report-1',text:'Show the linked report and source message.'},
-  {at:at(3),type:'input.accepted',text:'Please check the phone controls too.',origin:{type:'chat-message',chatId:'source-chat-1',name:'Companion chat',harness:'codex',status:'ready',relation:'chat-to-chat'}},
-  {at:at(4),type:'assistant.delta',text:'Both linked items can be expanded or opened from the source action.'},
-  {at:at(5),type:'turn.completed',inputIds:['report-1']},
-];
-const failedLinkedReports: ChatEvent[] = [
-  {at:at(1),type:'operator.lane.report',childSessionId:'linked-lane-1',text:'**Catalog review stopped.** The component scan did not finish.',origin:{type:'operator-lane',chatId:'linked-lane-1',name:'Design review lane',harness:'codex',status:'failed'}},
-  ...linkedReports.slice(1),
-];
-
 const settings = {
   model:'gpt-6-sol', effort:'medium', permission:'full-permission', mode:'agent',
   permissions:['read-only','workspace-write','full-permission'], modes:['agent','plan'],
@@ -86,17 +74,12 @@ const settings = {
   ],
 };
 
-function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal'|'cleared' = 'none', scenario:'default'|'delegated'|'reports'|'failed-report'|'goalify'|'mermaid'|'citation' = 'default'): ApiFixture {
+function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal'|'cleared' = 'none', scenario:'default'|'delegated'|'goalify'|'mermaid'|'citation' = 'default'): ApiFixture {
   let historyRequests = 0;
   const chat: SDKChat = {
     id, title:'Component library review', workspaceId:'project-1',
     projectPath:'/home/demo/muxterm', harness:'codex', state,
     createdAt:'2026-10-22T10:00:00Z',
-  };
-  const operator: SDKChat = {
-    id:'storybook-operator', title:'Design system operator', workspaceId:'project-1',
-    projectPath:'/home/demo/muxterm', harness:'codex', state:'working', operator:true,
-    operatorLanes:[id], createdAt:'2026-10-22T09:00:00Z',
   };
   const goal = {
     schema:1, chatId:id, harness:'codex', version:goalState === 'none' ? 0 : 3,
@@ -104,7 +87,6 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     requestedRevision:goalState === 'none' ? 0 : 1,
     appliedRevision:goalState === 'none' ? 0 : 1,
     humanPaused:false, state:goalState === 'none' ? 'not-set' : goalState === 'cleared' ? 'cleared' : 'active',
-    ...(goalState === 'proposal' ? {operatorId:operator.id} : {}),
     gap:'',
     revisions:goalState === 'none' ? [] : [{revision:1,condition:'Catalog every shared control, then stop after browser review.',provenance:'human',at:at(1)}],
     receipts:goalState === 'none' ? [] : [
@@ -114,10 +96,10 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     ],
     observations:goalState === 'none' ? [] : [{at:at(4),event:{type:'goal.started',goalState:'active',goalSummary:'The native harness acknowledged revision 1.'}}],
   };
-  const events = scenario === 'delegated' ? delegated : scenario === 'reports' ? linkedReports : scenario === 'failed-report' ? failedLinkedReports : scenario === 'goalify' ? goalify : scenario === 'mermaid' ? mermaidTranscript : scenario === 'citation' ? citationTranscript : state === 'working' ? running : state === 'uncertain' ? interrupted : transcript;
+  const events = scenario === 'delegated' ? delegated : scenario === 'goalify' ? goalify : scenario === 'mermaid' ? mermaidTranscript : scenario === 'citation' ? citationTranscript : state === 'working' ? running : state === 'uncertain' ? interrupted : transcript;
   const messages = events.filter(event => event.type !== 'tool.started' && event.type !== 'tool.completed');
   return ({url,method,init}) => {
-    if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON(goalState === 'proposal' ? [chat,operator] : [chat]);
+    if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON([chat]);
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-projects')) return fixtureJSON([{id:'project-1',name:'Component library',path:'/home/demo/muxterm'}]);
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-jobs')) return fixtureJSON([]);
     if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/goal`)) {
@@ -299,19 +281,6 @@ export const DelegatedWorkOpen: Story = {
     }
     throw new Error('The delegated work card did not render');
   },
-};
-export const LinkedReports: Story = {
-  args:{sessionId:'storybook-chat-linked-reports'},
-  parameters:{apiFixture:chatFixture('storybook-chat-linked-reports','ready','none','reports')},
-};
-export const PhoneLinkedReports: Story = {
-  args:{sessionId:'storybook-chat-phone-linked-reports'},
-  globals:{viewport:{value:'phone390',isRotated:false}},
-  parameters:{apiFixture:chatFixture('storybook-chat-phone-linked-reports','ready','none','reports')},
-};
-export const FailedLinkedReport: Story = {
-  args:{sessionId:'storybook-chat-failed-linked-report'},
-  parameters:{apiFixture:chatFixture('storybook-chat-failed-linked-report','ready','none','failed-report')},
 };
 const showRunningTurn = async ({canvasElement}: {canvasElement:HTMLElement}) => {
   await sdkChats.refresh();

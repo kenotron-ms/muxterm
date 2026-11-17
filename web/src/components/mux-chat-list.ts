@@ -5,7 +5,6 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageCircle, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
 import { icon } from '../lib/icons.js';
-import { laneIcon } from '../lib/lane-icon.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
 import { remotesStore } from '../lib/remotes-store.js';
 import type { MuxUITextField } from '../ui/text-field.js';
@@ -45,23 +44,11 @@ function harnessGlyph(chat: SDKChat) {
 
 const ARCHIVE_PAGE_SIZE = 25;
 const ARCHIVE_ROW_HEIGHT = 32;
-interface ChatGroup { id: string; name: string; remoteHost?: string; project?: SDKProject; chats: SDKChat[]; laneIds: Set<string>; archived?: boolean; archiveStart?: number; total?: number; loading?: boolean; archiveError?: string }
+interface ChatGroup { id: string; name: string; remoteHost?: string; project?: SDKProject; chats: SDKChat[]; archived?: boolean; archiveStart?: number; total?: number; loading?: boolean; archiveError?: string }
 type PinnedItem =
   | { kind:'project'; id:string; name:string; project:SDKProject }
-  | { kind:'chat'; id:string; name:string; chat:SDKChat; lane:boolean };
-type PendingConfirmation =
-  | { kind:'remove-project'; id:string; name:string }
-  | { kind:'archive-linked-chat'; id:string; name:string };
-
-// The input is already newest-first. Keep that order within each role while
-// leaving Pinned and Archived as separate sections.
-function chatsByRole(chats: SDKChat[], laneIds: Set<string>): SDKChat[] {
-  return [
-    ...chats.filter(chat => chat.operator),
-    ...chats.filter(chat => !chat.operator && laneIds.has(chat.id)),
-    ...chats.filter(chat => !chat.operator && !laneIds.has(chat.id)),
-  ];
-}
+  | { kind:'chat'; id:string; name:string; chat:SDKChat };
+type PendingConfirmation = { kind:'remove-project'; id:string; name:string };
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -187,9 +174,6 @@ export class MuxChatWorkspace extends LitElement {
     .row:has(.rename-input):focus-within,.chat-row:has(.rename-input):focus-within { outline:none; }
     .status { width:var(--ui-status-dot-size); height:var(--ui-status-dot-size); border-radius:50%; background:var(--ui-text-muted); flex:none; }
     .status.working { background:var(--ui-success); }
-    .status.operator { display:inline-flex; align-items:center; justify-content:center; width:var(--ui-icon-xs); height:var(--ui-icon-xs); border-radius:0; background:none; color:var(--ui-accent); }
-    .status.operator.working { background:none; color:var(--ui-success); }
-    .status.operator.failed,.status.operator.uncertain { color:var(--ui-danger); }
     .status.lane { display:inline-flex; align-items:center; justify-content:center; width:var(--ui-icon-xs); height:var(--ui-icon-xs); border-radius:0; background:none; color:var(--ui-text-muted); }
     .status.lane.starting,.status.lane.working { background:none; color:var(--ui-accent); }
     .status.lane.ready { color:var(--ui-success); }
@@ -288,8 +272,7 @@ export class MuxChatWorkspace extends LitElement {
     if (!pending) return;
     this.pendingConfirmation = undefined;
     try {
-      if (pending.kind === 'remove-project') await sdkChats.removeProject(pending.id);
-      else await sdkChats.setArchived(pending.id, true);
+      await sdkChats.removeProject(pending.id);
       this.error = '';
     } catch (error) { this.error = errorMessage(error); }
   }
@@ -317,13 +300,6 @@ export class MuxChatWorkspace extends LitElement {
   }
   async toggleArchive(chat: SDKChat) {
     this.closeMenu();
-    if (!chat.archived) {
-      const linked = sdkChats.chats.some(parent => parent.operator && parent.operatorLanes?.includes(chat.id));
-      if (linked) {
-        this.pendingConfirmation = { kind:'archive-linked-chat', id:chat.id, name:chat.title };
-        return;
-      }
-    }
     try { await sdkChats.setArchived(chat.id, !chat.archived); this.error = ''; }
     catch (error) { this.error = errorMessage(error); }
   }
@@ -393,12 +369,10 @@ export class MuxChatWorkspace extends LitElement {
         ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.error}</mux-ui-feedback>` : nothing}
         <div class="editor-actions"><mux-ui-button size="small" variant="quiet" @click=${() => { this.editing=false; this.error=''; }}>Cancel</mux-ui-button><mux-ui-button size="small" variant="primary" ?disabled=${!this.editName.trim() || (!group.project.managedFolder && !this.editPath.trim())} @click=${() => void this.saveProject()}>Save folder</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
-      ${this.pendingConfirmation ? html`<mux-ui-dialog size="compact" presentation="adaptive" label=${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project' : 'Archive linked chat'} open @dismiss=${() => { this.pendingConfirmation=undefined; }}><div class="confirmation">
-        <h2>${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project?' : 'Archive chat?'}</h2>
-        <p>${this.pendingConfirmation.kind === 'remove-project'
-          ? `Remove “${this.pendingConfirmation.name}” from Sessions? Its chats will move to Chat. The folder stays on disk.`
-          : `Archive “${this.pendingConfirmation.name}”? It will be removed from its operator's lanes.`}</p>
-        <div class="confirmation-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingConfirmation=undefined; }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => void this.confirmPendingAction()}>${this.pendingConfirmation.kind === 'remove-project' ? 'Remove project' : 'Archive chat'}</mux-ui-button></div>
+      ${this.pendingConfirmation ? html`<mux-ui-dialog size="compact" presentation="adaptive" label="Remove project" open @dismiss=${() => { this.pendingConfirmation=undefined; }}><div class="confirmation">
+        <h2>Remove project?</h2>
+        <p>Remove “${this.pendingConfirmation.name}” from Sessions? Its chats will move to Chat. The folder stays on disk.</p>
+        <div class="confirmation-actions"><mux-ui-button variant="secondary" @click=${() => { this.pendingConfirmation=undefined; }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => void this.confirmPendingAction()}>Remove project</mux-ui-button></div>
       </div></mux-ui-dialog>` : nothing}
       ${this.error && !this.editing ? html`<mux-ui-feedback kind="error" appearance="panel" density="compact">${this.error}</mux-ui-feedback>` : nothing}
       ${this.open ? html`<div class=${group.archived ? 'chats archive-list' : 'chats'} role=${group.archived ? 'region' : nothing} aria-label=${group.archived ? 'Archived sessions' : nothing}>
@@ -406,17 +380,15 @@ export class MuxChatWorkspace extends LitElement {
         ${repeat(group.chats, chat => chat.id, chat => html`
         <div class="chat-row" ?selected=${this.selectedSession === chat.id} @contextmenu=${(e:MouseEvent) => this.showContext(e,chat.id)}>
           ${this.renamingId === chat.id ? html`<mux-ui-text-field class="rename-input" aria-label="Chat name" .value=${this.renameDraft} @input=${(e:Event) => { this.renameDraft = (e.target as MuxUITextField).value; }} @keydown=${(e:KeyboardEvent) => { if (e.key === 'Enter') void this.saveRename(); if (e.key === 'Escape') this.renamingId = ''; }}></mux-ui-text-field><mux-ui-button class="rename-save" variant="quiet" size="small" icon-only accessible-label="Save chat name" @click=${() => void this.saveRename()}>${icon(Check,{size:14})}</mux-ui-button>` : html`
-            ${!this.drawer && !chat.operator && !group.laneIds.has(chat.id) ? this.chatHarnessButton(chat) : nothing}
-            <mux-ui-list-row class="chat" label=${chat.title} tooltip=${`${chat.operator ? 'Operator · ' : group.laneIds.has(chat.id) ? 'Lane · ' : ''}${chat.title}\n${group.project?.managedFolder ? 'No folder' : chat.projectPath || 'Folder unknown'}`} ?hide-icon=${!chat.operator && !group.laneIds.has(chat.id) && !this.drawer} ?selected=${this.selectedSession === chat.id} @click=${() => this.openChat(chat)}>
-              ${this.drawer && !chat.operator && !group.laneIds.has(chat.id)
-                ? html`<span slot="icon" class="chat-icon" aria-hidden="true"></span>`
-                : chat.operator || group.laneIds.has(chat.id) ? html`<span slot="icon" class="status ${chat.operator ? 'operator' : 'lane'} ${chat.state}" title=${chat.operator ? `Operator · ${chat.state}` : `Lane · ${chat.state}`}>${chat.operator ? icon(Network,{size:13}) : laneIcon(14)}</span>` : nothing}
+            ${!this.drawer ? this.chatHarnessButton(chat) : nothing}
+            <mux-ui-list-row class="chat" label=${chat.title} tooltip=${`${chat.title}\n${group.project?.managedFolder ? 'No folder' : chat.projectPath || 'Folder unknown'}`} ?hide-icon=${!this.drawer} ?selected=${this.selectedSession === chat.id} @click=${() => this.openChat(chat)}>
+              ${this.drawer ? html`<span slot="icon" class="chat-icon" aria-hidden="true"></span>` : nothing}
               ${chat.remoteHost ? html`<span slot="label" class="chat-label-copy"><span class="chat-title">${chat.title}</span><span class="chat-host">${sdkChats.remoteHosts.find(host => host.id === chat.remoteHost)?.name || chat.remoteHost}</span></span>` : nothing}
             </mux-ui-list-row>
-            ${this.drawer && !chat.operator && !group.laneIds.has(chat.id) ? this.chatHarnessButton(chat) : nothing}
+            ${this.drawer ? this.chatHarnessButton(chat) : nothing}
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} tooltip=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</mux-ui-button>
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} tooltip=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</mux-ui-button>`}
-          ${this.renamingId === chat.id && !chat.operator && !group.laneIds.has(chat.id) ? nothing : chat.operator || group.laneIds.has(chat.id) ? html`<mux-ui-button class="action more" icon-only size="small" variant="quiet" tone="muted" data-chat-id=${chat.id} accessible-label=${`Options for ${chat.title}`} tooltip="Chat options" haspopup="menu" .expanded=${this.menuFor === chat.id} @click=${() => { this.menuFor = this.menuFor === chat.id ? '' : chat.id; this.contextMenu = false; }}>${icon(Ellipsis,{size:16})}</mux-ui-button>` : nothing}
+
           ${this.menuFor === chat.id ? this.chatMenu(chat) : nothing}
         </div>`)}
         ${group.archived ? html`<div class="archive-spacer" style=${`height:${Math.max(0,(group.total || 0) - (group.archiveStart || 0) - group.chats.length) * ARCHIVE_ROW_HEIGHT}px`}></div>${group.loading ? html`<div class="archive-status" role="status">Loading archived sessions…</div>` : group.archiveError ? html`<div class="archive-status" role="alert">${group.archiveError}</div>` : !group.total ? html`<div class="archive-status">No archived sessions</div>` : nothing}` : nothing}
@@ -726,18 +698,17 @@ export class MuxChatList extends LitElement {
     const projects = [...sdkChats.projects].sort((a,b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     const chats = [...sdkChats.chats].sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt) || a.id.localeCompare(b.id));
     const active = chats.filter(chat => !chat.archived);
-    const laneIds = new Set(chats.filter(chat => chat.operator).flatMap(chat => chat.operatorLanes || []));
-    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, remoteHost:project.remoteHost, chats:chatsByRole(active.filter(chat => chat.workspaceId === project.id && (chat.remoteHost || '') === (project.remoteHost || '')), laneIds), laneIds }));
-    const ungrouped = chatsByRole(active.filter(chat => !chat.remoteHost && (!chat.workspaceId || !projects.some(project => project.id === chat.workspaceId && !project.remoteHost))), laneIds);
-    groups.unshift({ id:'ungrouped', name:'Chat', chats:ungrouped, laneIds });
+    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, remoteHost:project.remoteHost, chats:active.filter(chat => chat.workspaceId === project.id && (chat.remoteHost || '') === (project.remoteHost || '')) }));
+    const ungrouped = active.filter(chat => !chat.remoteHost && (!chat.workspaceId || !projects.some(project => project.id === chat.workspaceId && !project.remoteHost)));
+    groups.unshift({ id:'ungrouped', name:'Chat', chats:ungrouped });
     for (const host of sdkChats.remoteHosts) {
-      const remoteUngrouped = chatsByRole(active.filter(chat => chat.remoteHost === host.id && (!chat.workspaceId || !projects.some(project => project.id === chat.workspaceId && project.remoteHost === host.id))), laneIds);
-      if (remoteUngrouped.length) groups.push({ id:`ungrouped:${host.id}`, name:'Chat', remoteHost:host.id, chats:remoteUngrouped, laneIds });
+      const remoteUngrouped = active.filter(chat => chat.remoteHost === host.id && (!chat.workspaceId || !projects.some(project => project.id === chat.workspaceId && project.remoteHost === host.id)));
+      if (remoteUngrouped.length) groups.push({ id:`ungrouped:${host.id}`, name:'Chat', remoteHost:host.id, chats:remoteUngrouped });
     }
-    groups.push({ id:'archived', name:'Archived', archived:true, chats:this.archiveRows, laneIds, archiveStart:this.archiveStart, total:this.archiveTotal, loading:this.archiveLoading, archiveError:this.archiveError });
+    groups.push({ id:'archived', name:'Archived', archived:true, chats:this.archiveRows, archiveStart:this.archiveStart, total:this.archiveTotal, loading:this.archiveLoading, archiveError:this.archiveError });
     const pinned: PinnedItem[] = [
       ...projects.filter(project => project.pinned).map(project => ({ kind:'project' as const, id:project.id, name:project.name, project })),
-      ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, chat, lane:laneIds.has(chat.id) })),
+      ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, chat })),
     ];
     return html`
       ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>
@@ -748,7 +719,7 @@ export class MuxChatList extends LitElement {
               <mux-ui-button class="pin-rename-save" variant="quiet" size="small" icon-only accessible-label="Save chat name" @click=${() => void this.savePinnedRename()}>${icon(Check,{size:14})}</mux-ui-button>
             ` : html`
               <mux-ui-list-row class="pin-link" label=${item.name} tooltip=${item.name} ?selected=${item.kind === 'chat' && this.selectedSession === item.id} @click=${() => item.kind === 'project' ? this.locateProject(item.id) : this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:item.id}, bubbles:true, composed:true }))}>
-                ${item.kind === 'project' ? html`<span slot="icon" class="pin-icon">${icon(item.project.remoteHost ? Network : Folder,{size:15})}</span>` : item.chat.operator || item.lane ? html`<span slot="icon" class="pin-icon ${item.lane && !item.chat.operator ? `lane ${item.chat.state}` : ''}">${item.lane && !item.chat.operator ? laneIcon(15) : icon(Network,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}
+                ${item.kind === 'project' ? html`<span slot="icon" class="pin-icon">${icon(item.project.remoteHost ? Network : Folder,{size:15})}</span>` : harnessMark(item.chat, 'pin-icon')}
               </mux-ui-list-row>
               ${item.kind === 'project' ? html`
                 <mux-ui-button class="pin-action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`New chat in ${item.name}`} tooltip=${`New chat in ${item.name}`} @click=${() => this.openPinnedProjectChat(item.project)}>${icon(Plus,{size:15})}</mux-ui-button>

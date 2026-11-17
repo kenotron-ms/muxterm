@@ -2,7 +2,6 @@ import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
-import { sdkChats, type SDKChat } from '../lib/sdk-chats.js';
 import '../ui/choice-item.js';
 import '../ui/choice-list.js';
 import '../ui/choice-picker.js';
@@ -11,7 +10,6 @@ import '../ui/feedback.js';
 import '../ui/button.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import '../ui/range-field.js';
-import '../ui/switch.js';
 
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
 type ModeOption = { name: string; description?: string; source?: string };
@@ -27,7 +25,6 @@ const providerLabel = (value: string) => value === 'provider-anthropic' ? 'Anthr
 export class MuxSDKChatSettings extends LitElement {
   @property() sessionId = '';
   @property() harness = '';
-  @property({ type:Boolean }) operator = false;
   @property({ type:Boolean }) turnBusy = false;
   @state() private settings?: Settings;
   @state() private loading = false;
@@ -68,18 +65,6 @@ export class MuxSDKChatSettings extends LitElement {
     } catch (error) { this.error = error instanceof Error ? error.message : String(error); }
     finally { this.loading = false; this.pending(false); }
   }
-  private async toggleOperator() {
-    if (this.loading || !this.sessionId) return;
-    this.loading = true; this.error = '';
-    try {
-      const chat = await sdkChats.operator(this.sessionId, { enabled: !this.operator });
-      this.dispatchEvent(new CustomEvent<SDKChat>('operator-changed', { detail:chat, bubbles:true, composed:true }));
-    } catch (error) { this.error = String(error); }
-    finally { this.loading = false; }
-  }
-  private operatorControl() {
-    return html`<mux-ui-choice-section heading="Operator" separated><mux-ui-switch layout="row" label="Operator mode" description="Coordinate other chats as lanes" .checked=${this.operator} ?disabled=${this.loading} @change=${() => void this.toggleOperator()}></mux-ui-switch></mux-ui-choice-section>`;
-  }
   /** Amplifier has no permission switch to offer -- its tool access comes from
    *  the composed bundle. What it does have, and nothing else exposed, is its
    *  own mode system, so that takes this slot. */
@@ -87,12 +72,11 @@ export class MuxSDKChatSettings extends LitElement {
     const active = s.mode || '';
     const options = s.modeOptions || [];
     return html`
-      <mux-ui-choice-picker class="picker permission-picker" label="Amplifier mode and operator" .summary=${`${modeLabel(active)}${this.operator ? ' · Operator' : ''}`} placement="above" appearance="plain" panel-align="left">
+      <mux-ui-choice-picker class="picker permission-picker" label="Amplifier mode" .summary=${modeLabel(active)} placement="above" appearance="plain" panel-align="left">
         <mux-ui-choice-section heading="Mode" .description=${options.length ? '' : 'This bundle composes no modes.'}>
           ${this.choice('Default', 'No overlay — the bundle exactly as composed', active === '', true, () => void this.select({ mode:'' }))}
           ${options.map(option => this.choice(modeLabel(option.name), option.description || '', active === option.name, true, () => void this.select({ mode:option.name })))}
         </mux-ui-choice-section>
-        ${this.operatorControl()}
         ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
       </mux-ui-choice-picker>`;
   }
@@ -114,7 +98,7 @@ export class MuxSDKChatSettings extends LitElement {
     const mode = s.mode || 'agent';
     return html`
       ${this.harness === 'amplifier' ? this.modePicker(s) : html`
-      <mux-ui-choice-picker class="picker permission-picker" label="Permission, mode and operator" .summary=${`${permissionLabels[permission]}${mode === 'plan' ? ' · Plan' : ''}${this.operator ? ' · Operator' : ''}`} placement="above" appearance="plain" panel-align="left">
+      <mux-ui-choice-picker class="picker permission-picker" label="Permission and mode" .summary=${`${permissionLabels[permission]}${mode === 'plan' ? ' · Plan' : ''}`} placement="above" appearance="plain" panel-align="left">
         <mux-ui-choice-section heading="Permission">
           ${(['read-only','workspace-write','full-permission'] as const).map(value => this.choice(permissionLabels[value], permissionHints[value], permission === value, s.permissions.includes(value), () => void this.select({ permission:value, ...(this.harness === 'claude' ? { mode:value === 'read-only' ? 'plan' : 'agent' } : {}) })))}
         </mux-ui-choice-section>
@@ -122,7 +106,6 @@ export class MuxSDKChatSettings extends LitElement {
           ${this.choice('Agent', 'Work with the selected permission', mode === 'agent', s.modes.includes('agent') && (this.harness !== 'claude' || permission !== 'read-only'), () => void this.select({ mode:'agent' }))}
           ${this.choice('Plan', 'Explore and prepare a plan', mode === 'plan', s.modes.includes('plan') && (this.harness !== 'claude' || permission === 'read-only'), () => void this.select({ mode:'plan' }))}
         </mux-ui-choice-section>
-        ${this.operatorControl()}
         ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
       </mux-ui-choice-picker>`}
       <mux-ui-choice-picker class="picker model-picker" label="Provider, model and thinking" .summary=${model?.label || s.model || this.harness} placement="above" appearance="plain" panel-align="right">

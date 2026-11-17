@@ -23,17 +23,6 @@ func (err *goalRequestError) Error() string {
 	return err.message
 }
 
-func (h *sdkChatHost) directGoalOperatorsLocked(id string) []string {
-	operators := []string{}
-	for _, candidate := range h.chats {
-		if candidate.Operator && slices.Contains(candidate.OperatorLanes, id) {
-			operators = append(operators, candidate.ID)
-		}
-	}
-	slices.Sort(operators)
-	return operators
-}
-
 func humanBrowserRequest(r *http.Request) bool {
 	if r.Header.Get("X-Muxterm-Agent") != "" || r.Header.Get("Authorization") != "" {
 		return false
@@ -55,14 +44,6 @@ func (s *Server) handleGoalLedger(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 503)
 		return
 	}
-	s.sdkChats.mu.Lock()
-	for index := range documents {
-		documents[index].OperatorID = ""
-		if operators := s.sdkChats.directGoalOperatorsLocked(documents[index].ChatID); len(operators) > 0 {
-			documents[index].OperatorID = operators[0]
-		}
-	}
-	s.sdkChats.mu.Unlock()
 	writeSDKJSON(w, 200, documents)
 }
 
@@ -77,11 +58,6 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chat := *current
-	operatorID := ""
-	operatorIDs := h.directGoalOperatorsLocked(id)
-	if len(operatorIDs) > 0 {
-		operatorID = operatorIDs[0]
-	}
 	h.mu.Unlock()
 	if r.Method == http.MethodGet {
 		document, err := h.goals.update(chat, nil)
@@ -92,7 +68,6 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		if document.Gap == "" {
 			document.Gap = goalCapabilityGap(chat.Harness)
 		}
-		document.OperatorID = operatorID
 		writeSDKJSON(w, 200, document)
 		return
 	}
@@ -126,8 +101,8 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		origin, valid := h.controlOriginLocked(r.Header.Get("X-Muxterm-Origin"), id)
 		h.mu.Unlock()
-		if !valid || origin.Type != "chat-message" || (origin.ChatID != id && origin.Relation != "operator-to-lane") {
-			http.Error(w, "goal control requires a human browser or owner/direct operator capability", 403)
+		if !valid || origin.Type != "chat-message" || origin.ChatID != id {
+			http.Error(w, "goal control requires a human browser or owner chat capability", 403)
 			return
 		}
 		actor = origin.ChatID
@@ -135,7 +110,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "agents can report evidence only for their own goal", 403)
 			return
 		}
-		if req.Action == "set" || req.Action == "approve" || req.Action == "authorize" || req.Action == "revoke" {
+		if req.Action == "set" || req.Action == "approve" {
 			http.Error(w, "only a human may set or revise the stop condition", 403)
 			return
 		}
@@ -145,16 +120,16 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "goal must contain 1 to 4000 characters", 400)
 		return
 	}
-	if req.Action != "set" && req.Action != "pause" && req.Action != "resume" && req.Action != "clear" && req.Action != "evidence" && req.Action != "propose" && req.Action != "approve" && req.Action != "authorize" && req.Action != "revoke" && req.Action != "start" {
+	if req.Action != "set" && req.Action != "pause" && req.Action != "resume" && req.Action != "clear" && req.Action != "evidence" && req.Action != "propose" && req.Action != "approve" && req.Action != "start" {
 		http.Error(w, "unknown goal action", 400)
 		return
 	}
-	if !supportsNativeGoalControl(chat.Harness) && slices.Contains([]string{"set", "approve", "authorize", "start", "pause", "resume", "clear"}, req.Action) {
+	if !supportsNativeGoalControl(chat.Harness) && slices.Contains([]string{"set", "approve", "start", "pause", "resume", "clear"}, req.Action) {
 		http.Error(w, goalCapabilityGap(chat.Harness), http.StatusUnprocessableEntity)
 		return
 	}
-	if req.StartBy != "" && req.StartBy != "human" && req.StartBy != "operator" {
-		http.Error(w, "startBy must be human or operator", 400)
+	if req.StartBy != "" && req.StartBy != "human" {
+		http.Error(w, "startBy must be human", 400)
 		return
 	}
 	if req.Action == "propose" && (objective == "" || len([]rune(objective)) > 4000) {
@@ -188,7 +163,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		if document.HumanPaused && !human && (req.Action == "resume" || req.Action == "start") {
 			return &goalRequestError{http.StatusForbidden, "only a human can release a human pause"}
 		}
-		if (req.Action == "pause" || req.Action == "resume" || req.Action == "clear" || req.Action == "start" || req.Action == "authorize") && document.RequestedRevision == 0 {
+		if (req.Action == "pause" || req.Action == "resume" || req.Action == "clear" || req.Action == "start") && document.RequestedRevision == 0 {
 			return &goalRequestError{http.StatusBadRequest, "no human goal is set"}
 		}
 		for _, receipt := range document.Receipts {
@@ -214,25 +189,11 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		if req.Action == "set" || req.Action == "approve" {
 			document.RequestedRevision++
 			document.Revisions = append(document.Revisions, goalRevision{Revision: document.RequestedRevision, Condition: objective, Provenance: actor, At: time.Now().UTC()})
-			document.Policy.OperatorStart = nil
 			document.AgentPauseRevision = 0
-		}
-		if req.Action == "revoke" {
-			document.Policy.OperatorStart = nil
-		}
-		if req.Action == "authorize" || (req.Action == "approve" && req.StartBy == "operator") {
-			if operatorID == "" {
-				return &goalRequestError{http.StatusBadRequest, "link a direct operator before authorizing a start"}
-			}
-			document.Policy.OperatorStart = &goalStartAuthorization{OperatorID: operatorID, Revision: document.RequestedRevision, GrantedBy: actor}
 		}
 		if req.Action == "start" || req.Action == "resume" {
 			if !human && (req.Action == "start" || document.AgentPauseRevision != document.RequestedRevision || document.ExecutionAuthorizedRevision != document.RequestedRevision) {
-				grant := document.Policy.OperatorStart
-				if grant == nil || grant.OperatorID != actor || !slices.Contains(operatorIDs, actor) || grant.Revision != document.RequestedRevision || grant.ConsumedBy != "" {
-					return &goalRequestError{http.StatusForbidden, "human authorization for this operator and revision is required"}
-				}
-				grant.ConsumedBy = req.ClientRef
+				return &goalRequestError{http.StatusForbidden, "only a human may start or resume this goal"}
 			}
 			document.ExecutionAuthorizedRevision = document.RequestedRevision
 			document.AgentPauseRevision = 0
@@ -240,7 +201,6 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		}
 		if human && req.Action == "pause" {
 			document.HumanPaused = true
-			document.Policy.OperatorStart = nil
 		}
 		if !human && req.Action == "pause" && slices.Contains([]string{"active", "continuing", "awaiting-native-observation"}, document.State) && document.ExecutionAuthorizedRevision == document.RequestedRevision {
 			document.AgentPauseRevision = document.RequestedRevision
@@ -251,14 +211,13 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		if human && (req.Action == "resume" || req.Action == "start" || (req.Action == "approve" && req.StartBy == "human")) {
 			document.HumanPaused = false
 		}
-		document.OperatorID = operatorID
 		document.ControlVersion++
 		document.Gap = goalCapabilityGap(chat.Harness)
 		status := "dispatching"
 		if !supportsNativeGoalControl(chat.Harness) {
 			status = "unsupported"
 		}
-		if req.Action == "evidence" || req.Action == "propose" || req.Action == "authorize" || req.Action == "revoke" || (req.Action == "approve" && req.StartBy != "human") {
+		if req.Action == "evidence" || req.Action == "propose" {
 			status = "recorded"
 		}
 		if req.Action == "set" || (req.Action == "approve" && req.StartBy == "human") {

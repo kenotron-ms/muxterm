@@ -49,7 +49,7 @@ func sdkLastRecoverableInput(path string) (string, error) {
 				continue
 			}
 			var event sdkEvent
-			if json.Unmarshal(lines[i], &event) != nil || event.Type != "input.accepted" || event.Kind != "user" || event.Source == "recovery" || event.Source == "goalify" || event.Source == "operator-lane" || event.Source == "chat-message" || event.Origin != nil {
+			if json.Unmarshal(lines[i], &event) != nil || event.Type != "input.accepted" || event.Kind != "user" || event.Source == "recovery" || event.Source == "goalify" || event.Source == "chat-message" || event.Origin != nil {
 				continue
 			}
 			request := []rune(strings.TrimSpace(event.Text))
@@ -117,7 +117,7 @@ func sdkMessagePageStart(file *os.File, end int64) (int64, error) {
 					Kind   string `json:"kind"`
 					Source string `json:"source"`
 				}
-				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" && header.Kind == "user" && header.Source != "operator-lane" && header.Source != "chat-message" && header.Source != "recovery" {
+				if json.Unmarshal(line, &header) == nil && header.Type == "input.accepted" && header.Kind == "user" && header.Source != "chat-message" && header.Source != "recovery" {
 					turns++
 				}
 			}

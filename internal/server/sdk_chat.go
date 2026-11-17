@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,52 +27,44 @@ import (
 
 // SDK chats are Go-owned records. Native harness IDs are resume pointers only.
 type sdkChat struct {
-	ID                  string        `json:"id"`
-	SideParentID        string        `json:"sideParentId,omitempty"`
-	WorkspaceID         string        `json:"workspaceId,omitempty"`
-	TerminalWorkspaceID string        `json:"terminalWorkspaceId,omitempty"`
-	ProjectPath         string        `json:"projectPath"`
-	SourceFolders       []string      `json:"sourceFolders,omitempty"`
-	Title               string        `json:"title"`
-	TitleSource         string        `json:"titleSource,omitempty"`
-	TitleCheckedTurn    int           `json:"titleCheckedTurn,omitempty"`
-	UserTurns           int           `json:"userTurns,omitempty"`
-	Harness             string        `json:"harness"`
-	Approval            string        `json:"approval,omitempty"`
-	Goal                string        `json:"goal,omitempty"`
-	GoalState           string        `json:"goalState,omitempty"`
-	GoalReason          string        `json:"goalReason,omitempty"`
-	GoalSummary         string        `json:"goalSummary,omitempty"`
-	Bundle              string        `json:"bundle,omitempty"`
-	Provider            string        `json:"provider,omitempty"`
-	Model               string        `json:"model,omitempty"`
-	Effort              string        `json:"effort,omitempty"`
-	Permission          string        `json:"permission,omitempty"`
-	Mode                string        `json:"mode,omitempty"`
-	NativeID            string        `json:"nativeId,omitempty"`
-	State               string        `json:"state"`
-	Archived            bool          `json:"archived,omitempty"`
-	Pinned              bool          `json:"pinned,omitempty"`
-	WorkMode            string        `json:"workMode,omitempty"`
-	CreatedAt           time.Time     `json:"createdAt"`
-	UpdatedAt           time.Time     `json:"updatedAt,omitempty"`
-	TurnStartedAt       time.Time     `json:"turnStartedAt,omitempty"`
-	LastTurnSeconds     int           `json:"lastTurnSeconds,omitempty"`
-	LastTurnOutcome     string        `json:"lastTurnOutcome,omitempty"`
-	LastActivity        string        `json:"lastActivity,omitempty"`
-	LastOutput          string        `json:"lastOutput,omitempty"`
-	HasVoiceHistory     bool          `json:"hasVoiceHistory,omitempty"`
-	VoiceHandoff        bool          `json:"voiceHandoff,omitempty"`
-	BranchContext       string        `json:"-"`
-	BranchPending       bool          `json:"branchPending,omitempty"`
-	Operator            bool          `json:"operator,omitempty"`
-	OperatorLanes       []string      `json:"operatorLanes,omitempty"`
-	LaneTodos           []sdkLaneTodo `json:"laneTodos,omitempty"`
-	LaneReport          string        `json:"laneReport,omitempty"`
-}
-type sdkLaneTodo struct {
-	Text   string `json:"text"`
-	Status string `json:"status"`
+	ID                  string    `json:"id"`
+	SideParentID        string    `json:"sideParentId,omitempty"`
+	WorkspaceID         string    `json:"workspaceId,omitempty"`
+	TerminalWorkspaceID string    `json:"terminalWorkspaceId,omitempty"`
+	ProjectPath         string    `json:"projectPath"`
+	SourceFolders       []string  `json:"sourceFolders,omitempty"`
+	Title               string    `json:"title"`
+	TitleSource         string    `json:"titleSource,omitempty"`
+	TitleCheckedTurn    int       `json:"titleCheckedTurn,omitempty"`
+	UserTurns           int       `json:"userTurns,omitempty"`
+	Harness             string    `json:"harness"`
+	Approval            string    `json:"approval,omitempty"`
+	Goal                string    `json:"goal,omitempty"`
+	GoalState           string    `json:"goalState,omitempty"`
+	GoalReason          string    `json:"goalReason,omitempty"`
+	GoalSummary         string    `json:"goalSummary,omitempty"`
+	Bundle              string    `json:"bundle,omitempty"`
+	Provider            string    `json:"provider,omitempty"`
+	Model               string    `json:"model,omitempty"`
+	Effort              string    `json:"effort,omitempty"`
+	Permission          string    `json:"permission,omitempty"`
+	Mode                string    `json:"mode,omitempty"`
+	NativeID            string    `json:"nativeId,omitempty"`
+	State               string    `json:"state"`
+	Archived            bool      `json:"archived,omitempty"`
+	Pinned              bool      `json:"pinned,omitempty"`
+	WorkMode            string    `json:"workMode,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt,omitempty"`
+	TurnStartedAt       time.Time `json:"turnStartedAt,omitempty"`
+	LastTurnSeconds     int       `json:"lastTurnSeconds,omitempty"`
+	LastTurnOutcome     string    `json:"lastTurnOutcome,omitempty"`
+	LastActivity        string    `json:"lastActivity,omitempty"`
+	LastOutput          string    `json:"lastOutput,omitempty"`
+	HasVoiceHistory     bool      `json:"hasVoiceHistory,omitempty"`
+	VoiceHandoff        bool      `json:"voiceHandoff,omitempty"`
+	BranchContext       string    `json:"-"`
+	BranchPending       bool      `json:"branchPending,omitempty"`
 }
 type sdkProject struct {
 	ID            string   `json:"id"`
@@ -182,10 +173,7 @@ type sdkChatHost struct {
 	workItems        map[string]*sdkWorkItem
 	nameStreams      map[chan string]struct{}
 	naming           map[string]bool
-	reportRunning    map[string]bool
-	reportPending    map[string]bool
 	onEvent          func(sdkEvent)
-	estimates        *sdkEffortEstimator
 	originTokens     map[string]string
 	originTokenChats map[string]string
 	unifiedEvents    map[string]*unifiedEventProjection
@@ -206,8 +194,7 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
-	h.estimates = newSDKEffortEstimator(h.dir)
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
 	h.goals = openGoalLedger(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	h.loadSubscriptions()
@@ -255,11 +242,6 @@ func newSDKChatHost() *sdkChatHost {
 			if c.WorkspaceID != "" && h.projects[c.WorkspaceID] == nil {
 				h.projects[c.WorkspaceID] = &sdkProject{ID: c.WorkspaceID, Name: filepath.Base(c.ProjectPath), Path: c.ProjectPath}
 			}
-		}
-	}
-	for _, c := range h.chats {
-		if c.Operator {
-			go h.drainOperatorReports(c.ID)
 		}
 	}
 	h.loadWorkItems()
@@ -338,14 +320,10 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		// into a lane message in the transcript.
 		if origin := h.inputOrigin(event.SessionID, event.InputID); origin != nil {
 			event.Origin = origin
-			if origin.Type == "operator-lane" {
-				event.Source = "operator-lane"
-			} else {
-				event.Source = "chat-message"
-			}
+			event.Source = "chat-message"
 		} else {
 			event.Origin = nil
-			if event.Source == "operator-lane" || event.Source == "chat-message" {
+			if event.Source == "chat-message" {
 				event.Source = "browser"
 			}
 		}
@@ -395,9 +373,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.LastTurnOutcome = ""
 		c.LastActivity = "Working on: " + sdkPreview(event.Text, 160)
 		c.LastOutput = ""
-		c.LaneReport = ""
-		c.LaneTodos = nil
-		if event.Kind == "user" && event.Origin == nil && event.Source != "operator-lane" && event.Source != "recovery" {
+		if event.Kind == "user" && event.Origin == nil && event.Source != "recovery" {
 			c.UserTurns++
 		}
 	case "tool.started":
@@ -405,22 +381,10 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		// Text before a tool call is interim narration. Keep the status
 		// message aligned with the latest assistant reply after that tool.
 		c.LastOutput = ""
-		c.LaneReport = ""
-		if todos := sdkTodosFromTool(event); todos != nil {
-			c.LaneTodos = todos
-		}
-	case "tool.completed":
-		if todos := sdkTodosFromTool(event); todos != nil {
-			c.LaneTodos = todos
-		}
 	case "assistant.delta":
 		c.LastOutput = sdkTail(c.LastOutput+event.Text, 300)
-		c.LaneReport = sdkTail(c.LaneReport+event.Text, 4000)
 	case "assistant.interim":
-		// The next assistant message is the lane's latest reply. Do not show
-		// pre-tool narration as part of the expanded status row.
 		c.LastOutput = ""
-		c.LaneReport = ""
 	case "turn.completed":
 		c.State = "ready"
 		c.LastTurnOutcome = "completed"
@@ -444,8 +408,6 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	case "session.uncertain":
 		c.State = "uncertain"
 		c.LastActivity = "Delivery uncertain"
-	case "operator.lane.status":
-		c.LastActivity = sdkPreview(event.Text, 160)
 	}
 	h.observeGoalLocked(c, event)
 	_ = h.saveLocked(c)
@@ -508,51 +470,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	if h.onEvent != nil {
 		h.onEvent(event)
 	}
-	if event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain" {
-		h.mu.Lock()
-		isOperator := c.Operator
-		h.mu.Unlock()
-		if isOperator {
-			go h.drainOperatorReports(event.SessionID)
-		}
-	}
-	// Sidecar events are the status hook for every SDK harness. Mirror lifecycle
-	// milestones into each linked operator's durable journal and live stream.
-	if event.Type == "input.accepted" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain" || event.Type == "goal.progress" || event.Type == "operator.lane.status" {
-		h.mu.Lock()
-		lane := h.chats[event.SessionID]
-		var parents []string
-		if lane != nil {
-			for _, operator := range h.chats {
-				if operator.Operator && slices.Contains(operator.OperatorLanes, lane.ID) {
-					parents = append(parents, operator.ID)
-				}
-			}
-		}
-		var label, harness, state, activity, output string
-		var terminalGoal bool
-		if lane != nil {
-			label, harness, state, activity, output = lane.Title, lane.Harness, lane.State, lane.LastActivity, lane.LastOutput
-			terminalGoal = lane.Goal != ""
-		}
-		h.mu.Unlock()
-		for _, parent := range parents {
-			message := activity
-			if event.Type == "turn.completed" && output != "" {
-				message = output
-			}
-			if event.Type == "error" && event.Message != "" {
-				message = event.Message
-			}
-			h.appendEvent(sdkEvent{SessionID: parent, Type: "operator.lane.status", ChildSessionID: event.SessionID, Name: label, Agent: harness, Kind: state, Text: sdkPreview(message, 180), Origin: &sdkEventOrigin{Type: "operator-lane", ChatID: event.SessionID, Name: label, Harness: harness, Status: state}})
-			finishedTurn := !terminalGoal && event.Type == "turn.completed"
-			stopped := event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain"
-			finishedGoal := terminalGoal && event.Type == "goal.progress" && event.GoalState != "" && event.GoalState != "continuing" && event.GoalState != "active" && event.GoalState != "paused" && event.GoalState != "cleared"
-			if finishedTurn || stopped || finishedGoal {
-				h.queueOperatorReport(parent, event.SessionID, event)
-			}
-		}
-	}
+
 }
 
 // Unified sends full snapshots. Reconstruct the display projection from the
@@ -1832,8 +1750,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, OperatorID, SideParentID string
-		Attachments                                                                                                                    []string `json:"attachments"`
+		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, SideParentID string
+		Attachments                                                                                                        []string `json:"attachments"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -1857,7 +1775,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "main chat unavailable", http.StatusUnprocessableEntity)
 			return
 		}
-		if req.Goal != "" || req.OperatorID != "" || req.WorkMode == "worktree" || len(req.Attachments) != 0 || strings.TrimSpace(req.Prompt) == "" {
+		if req.Goal != "" || req.WorkMode == "worktree" || len(req.Attachments) != 0 || strings.TrimSpace(req.Prompt) == "" {
 			http.Error(w, "side chat requires a question without attachments or goal", http.StatusBadRequest)
 			return
 		}
@@ -1929,16 +1847,6 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "provider does not match harness", 400)
 		return
 	}
-	// A lane started by an operator defaults to that chat's project. Explicit
-	// project choices still take precedence for cross-project delegation.
-	if req.OperatorID != "" && req.WorkspaceID == "" && req.ProjectPath == "" {
-		h.mu.Lock()
-		operator := h.chats[req.OperatorID]
-		if operator != nil {
-			req.WorkspaceID, req.ProjectPath = operator.WorkspaceID, operator.ProjectPath
-		}
-		h.mu.Unlock()
-	}
 	sourceFolders := []string{}
 	if req.SideParentID != "" {
 		sourceFolders = sideSourceFolders
@@ -1985,16 +1893,6 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.ProjectPath = filepath.Clean(req.ProjectPath)
-	if req.OperatorID != "" {
-		h.mu.Lock()
-		operator := h.chats[req.OperatorID]
-		valid := operator != nil && operator.Operator && len(operator.OperatorLanes) < 12
-		h.mu.Unlock()
-		if !valid {
-			http.Error(w, "operator unavailable or lane limit reached", 422)
-			return
-		}
-	}
 	// A missing runtime is a setup failure, not a conversation. Check before
 	// writing a chat record or creating a worktree.
 	if isSDKACPHarness(req.Harness) || req.Harness == "opencode" {
@@ -2049,32 +1947,11 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	c := &sdkChat{ID: chatID, SideParentID: req.SideParentID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Bundle: req.Bundle, Model: req.Model, Effort: req.Effort, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
-	if req.OperatorID != "" {
-		operator := h.chats[req.OperatorID]
-		if operator == nil || !operator.Operator || len(operator.OperatorLanes) >= 12 {
-			h.mu.Unlock()
-			http.Error(w, "operator unavailable or lane limit reached", 422)
-			return
-		}
-		operator.OperatorLanes = append(operator.OperatorLanes, c.ID)
-		if err := h.saveLocked(operator); err != nil {
-			operator.OperatorLanes = operator.OperatorLanes[:len(operator.OperatorLanes)-1]
-			h.mu.Unlock()
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		h.notifyCatalogLocked(operator.ID)
-	}
 	h.chats[c.ID] = c
 	err = h.saveLocked(c)
 	if err != nil {
 		delete(h.chats, c.ID)
 		h.forgetChatOriginLocked(c.ID)
-		if req.OperatorID != "" {
-			operator := h.chats[req.OperatorID]
-			operator.OperatorLanes = slices.DeleteFunc(operator.OperatorLanes, func(id string) bool { return id == c.ID })
-			_ = h.saveLocked(operator)
-		}
 	}
 	h.mu.Unlock()
 	if err != nil {
@@ -2092,7 +1969,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	openingID := sdkID()
-	openingContent := h.laneInput(c.ID, req.Prompt)
+	openingContent := sdkChatInput(c.ID, req.Prompt)
 	if sideContext != "" {
 		openingContent = sideContext + "\n\nSide question: " + req.Prompt
 	}
@@ -2259,36 +2136,17 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			}
 			h.mu.Lock()
 			previousArchived, previousPinned := c.Archived, c.Pinned
-			previousParents := map[*sdkChat][]string{}
 			if req.Archived != nil {
 				c.Archived = *req.Archived
-				if *req.Archived {
-					for _, parent := range h.chats {
-						if slices.Contains(parent.OperatorLanes, id) {
-							previousParents[parent] = append([]string(nil), parent.OperatorLanes...)
-							parent.OperatorLanes = slices.DeleteFunc(parent.OperatorLanes, func(laneID string) bool { return laneID == id })
-						}
-					}
-				}
+
 			}
 			if req.Pinned != nil {
 				c.Pinned = *req.Pinned
 			}
 			err := h.saveLocked(c)
-			if err == nil {
-				for parent := range previousParents {
-					if err = h.saveLocked(parent); err != nil {
-						break
-					}
-				}
-			}
 			if err != nil {
 				c.Archived, c.Pinned = previousArchived, previousPinned
 				_ = h.saveLocked(c)
-				for parent, lanes := range previousParents {
-					parent.OperatorLanes = lanes
-					_ = h.saveLocked(parent)
-				}
 			}
 			updated := *c
 			if err == nil {
@@ -2296,9 +2154,6 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 					h.forgetChatOriginLocked(id)
 				}
 				h.notifyCatalogLocked(id)
-				for parent := range previousParents {
-					h.notifyCatalogLocked(parent.ID)
-				}
 			}
 			h.mu.Unlock()
 			if err != nil {
@@ -2453,8 +2308,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			content = sdkTaskInputWithVoiceContext(content, h.recentVoiceContext(id))
 		}
 		if req.Kind == "user" || req.Kind == "steer" {
-			content = h.operatorInput(id, content)
-			content = h.laneInput(id, content)
+			content = sdkChatInput(id, content)
 		}
 		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": content, "displayContent": displayContent, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
 		if err != nil {
