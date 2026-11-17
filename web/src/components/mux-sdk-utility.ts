@@ -245,12 +245,12 @@ export class MuxSDKUtility extends LitElement {
     }
     try {
       const saved = JSON.parse(localStorage.getItem(TABS_KEY + this.sessionId) || 'null') as { tabs?: { id: string; kind: string; pageId?: string; filePath?: string; url?:string; title?:string; sideChatId?:string; draft?:string }[]; activeTabId?: string } | null;
-      const valid = new Set<string>(['new','side','voice','files','coordination','changes','terminal','pages','meetings','web','browser','goal']);
+      const valid = new Set<string>(['new','side','voice','files','status','coordination','changes','terminal','pages','meetings','web','browser','goal']);
       if (saved?.tabs && saved.tabs.length <= 50 && saved.tabs.every(tab => typeof tab.id === 'string' && valid.has(tab.kind))) {
         const active = saved.tabs.find(tab => tab.id === saved.activeTabId);
-        const restored = saved.tabs.filter(tab => !['new','web','terminal'].includes(tab.kind));
+        const restored = saved.tabs.filter(tab => !['new','web','terminal','status'].includes(tab.kind));
         this.tabs = restored.map(tab => ({ id:tab.kind === 'browser' ? crypto.randomUUID() : tab.id, kind:tab.kind as UtilityTabId, pageId:tab.pageId, filePath:tab.filePath, url:tab.url, title:tab.title, sideChatId:tab.sideChatId, draft:tab.draft }));
-        this.activeTabId = active && !['new','web','terminal'].includes(active.kind) ? (this.tabs[restored.indexOf(active)]?.id || '') : saved.activeTabId === '' || active ? '' : (this.tabs[0]?.id || '');
+        this.activeTabId = active && !['new','web','terminal','status'].includes(active.kind) ? (this.tabs[restored.indexOf(active)]?.id || '') : saved.activeTabId === '' || active ? '' : (this.tabs[0]?.id || '');
         if (saved.tabs.length !== this.tabs.length || saved.tabs.some(tab => tab.kind === 'browser')) this.saveTabs();
       }
       for (const key of ['files','changes','pages'] as const) {
