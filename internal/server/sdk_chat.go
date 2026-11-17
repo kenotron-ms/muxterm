@@ -98,6 +98,7 @@ type sdkEvent struct {
 	Kind            string                 `json:"kind,omitempty"`
 	Source          string                 `json:"source,omitempty"`
 	Origin          *sdkEventOrigin        `json:"origin,omitempty"`
+	Cumulative      bool                   `json:"cumulative,omitempty"`
 	Text            string                 `json:"text,omitempty"`
 	Name            string                 `json:"name,omitempty"`
 	ToolID          string                 `json:"toolId,omitempty"`
@@ -187,7 +188,13 @@ type sdkChatHost struct {
 	estimates        *sdkEffortEstimator
 	originTokens     map[string]string
 	originTokenChats map[string]string
+	unifiedEvents    map[string]*unifiedEventProjection
 	goals            *goalLedger
+}
+
+type unifiedEventProjection struct {
+	seen      map[string]bool
+	textBytes map[string]int
 }
 
 func sdkDataDir() string {
@@ -199,7 +206,7 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}}
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, reportRunning: map[string]bool{}, reportPending: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
 	h.estimates = newSDKEffortEstimator(h.dir)
 	h.goals = openGoalLedger(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
@@ -349,6 +356,12 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		h.mu.Unlock()
 		return
 	}
+	if c.Harness == "amplifier-unified" && (strings.HasPrefix(event.ID, "unified:") || event.Cumulative) {
+		if !h.acceptUnifiedEventLocked(&event) {
+			h.mu.Unlock()
+			return
+		}
+	}
 	if event.Type == "error" {
 		switch {
 		case c.Harness == "codex" && strings.Contains(event.Message, "Missing bearer or basic authentication"):
@@ -459,6 +472,11 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	}
 	if err != nil {
 		log.Printf("append SDK chat event %s: %v", event.SessionID, err)
+		if c.Harness == "amplifier-unified" {
+			// Rebuild from the durable journal on the next snapshot. A failed
+			// append must not make the projection think it already stored text.
+			delete(h.unifiedEvents, event.SessionID)
+		}
 	}
 	for ch := range h.streams[event.SessionID] {
 		select {
@@ -535,6 +553,52 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			}
 		}
 	}
+}
+
+// Unified sends full snapshots. Reconstruct the display projection from the
+// existing journal after a Muxterm restart, then append only unseen text and
+// discrete events. The harness remains the conversation-history authority.
+func (h *sdkChatHost) acceptUnifiedEventLocked(event *sdkEvent) bool {
+	projection := h.unifiedEvents[event.SessionID]
+	if projection == nil {
+		projection = &unifiedEventProjection{seen: map[string]bool{}, textBytes: map[string]int{}}
+		path := filepath.Join(h.dir, event.SessionID+".ndjson")
+		if file, err := os.Open(path); err == nil {
+			decoder := json.NewDecoder(file)
+			for {
+				var old sdkEvent
+				if err := decoder.Decode(&old); err != nil {
+					break
+				}
+				if strings.HasPrefix(old.ID, "unified:") {
+					projection.seen[old.ID] = true
+				}
+				if old.Type == "assistant.delta" && strings.HasPrefix(old.ItemID, "unified:") {
+					projection.textBytes[old.ItemID] += len(old.Text)
+				}
+			}
+			_ = file.Close()
+		}
+		h.unifiedEvents[event.SessionID] = projection
+	}
+	if event.Cumulative {
+		if event.Type != "assistant.delta" || !strings.HasPrefix(event.ItemID, "unified:") {
+			return false
+		}
+		previous := projection.textBytes[event.ItemID]
+		if previous >= len(event.Text) {
+			return false
+		}
+		event.Text = event.Text[previous:]
+		projection.textBytes[event.ItemID] += len(event.Text)
+		event.ID = fmt.Sprintf("unified:assistant:%s:%d", event.ItemID, projection.textBytes[event.ItemID])
+		event.Cumulative = false
+	}
+	if projection.seen[event.ID] {
+		return false
+	}
+	projection.seen[event.ID] = true
+	return true
 }
 func sdkPreview(text string, limit int) string {
 	return strings.TrimSpace(sdkTail(text, limit))
@@ -1205,7 +1269,7 @@ func isSDKACPHarness(harness string) bool {
 }
 
 func isSDKConfiguredHarness(harness string) bool {
-	return harness == "pi" || harness == "opencode" || harness == "deepseek" || harness == "antigravity-sdk" || isSDKACPHarness(harness)
+	return harness == "pi" || harness == "opencode" || harness == "deepseek" || harness == "antigravity-sdk" || harness == "amplifier-unified" || isSDKACPHarness(harness)
 }
 
 func sdkACPExecutable(harness string) string {
@@ -1614,6 +1678,9 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		for _, harness := range availableConfigured {
 			options = append(options, option{Harness: harness, Provider: "configured"})
 		}
+		if os.Getenv("MUXTERM_UNIFIED_URL") != "" && os.Getenv("MUXTERM_UNIFIED_TOKEN_FILE") != "" {
+			options = append(options, option{Harness: "amplifier-unified", Provider: "configured"})
+		}
 	}
 	if sdkReady && claudeErr == nil {
 		ready := os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
@@ -1845,7 +1912,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "configured"
 		case "copilot":
 			req.Provider = "github"
-		case "pi", "opencode", "deepseek", "gemini", "antigravity", "antigravity-sdk":
+		case "pi", "opencode", "deepseek", "gemini", "antigravity", "antigravity-sdk", "amplifier-unified":
 			req.Provider = "configured"
 		}
 	}
