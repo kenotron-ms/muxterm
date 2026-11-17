@@ -5,6 +5,7 @@ import { remoteChatPath } from '../lib/remote-chat-routes.js';
 import { sdkChats } from '../lib/sdk-chats.js';
 import '../ui/button.js';
 import { MuxUISelect } from '../ui/select.js';
+import { MuxUITextArea } from '../ui/text-area.js';
 
 type WorkActor = { kind:'chat' | 'human' | 'external-tool'; sessionId?:string };
 type WorkUpdate = { id:string; at:string; actor?:WorkActor; sessionId?:string; linkedSessionId?:string; text:string; status?:string; progress?:string; outcome?:string; evidence?:string[]; ownerSessionId?:string; reviewerSessionId?:string; blockedReason?:string };
@@ -72,7 +73,7 @@ export class MuxChatCoordination extends LitElement {
     .facts strong { color:var(--ui-text); }
     .blocker { border-left:3px solid var(--ui-danger); padding:var(--ui-space-2) var(--ui-space-4); margin:var(--ui-space-5) 0; background:var(--ui-surface-raised); white-space:pre-wrap; }
     .actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin:var(--ui-space-4) 0; }
-    .blocker-input { width:100%; min-height:var(--ui-control-lg); resize:vertical; padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; }
+    .blocker-input { margin-top:var(--ui-space-4); }
     .error { color:var(--ui-danger); margin:var(--ui-space-3) 0; }
     @media(max-width:550px) { .wrap { padding:var(--ui-space-5); } .issue::part(button) { padding-inline:0; } .issue .status { display:none; } .ownership { grid-template-columns:1fr; } }
   `;
@@ -191,7 +192,7 @@ export class MuxChatCoordination extends LitElement {
       ${item.status === 'blocked' ? html`<div class="blocker"><strong>Blocked:</strong> ${item.blockedReason}</div>` : nothing}
       <div class="progress"><strong>Current progress</strong><p>${item.progress || 'No progress recorded yet.'}</p>${item.outcome ? html`<p><strong>Outcome:</strong> ${item.outcome}</p>` : nothing}</div>
       <div class="actions">${item.status === 'blocked' ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this.saving} @click=${() => void this.updateItem({status:'active'})}>Resume work</mux-ui-button>` : item.status === 'open' || item.status === 'active' ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this.saving} @click=${() => void this.updateItem({status:'review'})}>Ready for review</mux-ui-button>` : nothing}${item.status !== 'done' && item.status !== 'cancelled' ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this.saving} @click=${() => void this.updateItem({status:'done'})}>Mark done</mux-ui-button>` : nothing}</div>
-      ${item.status !== 'done' && item.status !== 'cancelled' ? html`<label for="work-blocker">Blocker</label><textarea id="work-blocker" class="blocker-input" .value=${this.blockerDraft} @input=${(event:Event) => { this.blockerDraft=(event.target as HTMLTextAreaElement).value; }} placeholder="What needs to happen before work can continue?"></textarea><div class="actions"><mux-ui-button size="small" variant="secondary" ?disabled=${this.saving || !this.blockerDraft.trim()} @click=${() => void this.updateItem({status:'blocked',blockedReason:this.blockerDraft.trim()})}>Mark blocked</mux-ui-button></div>` : nothing}
+      ${item.status !== 'done' && item.status !== 'cancelled' ? html`<mux-ui-text-area class="blocker-input" label="Blocker" .rows=${2} .value=${this.blockerDraft} ?disabled=${this.saving} @input=${(event:Event) => { this.blockerDraft=(event.target as MuxUITextArea).value; }} placeholder="What needs to happen before work can continue?"></mux-ui-text-area><div class="actions"><mux-ui-button size="small" variant="secondary" ?disabled=${this.saving || !this.blockerDraft.trim()} @click=${() => void this.updateItem({status:'blocked',blockedReason:this.blockerDraft.trim()})}>Mark blocked</mux-ui-button></div>` : nothing}
       <section class="timeline"><h3>Activity</h3>${updates.length ? updates.map(update => html`<div class="entry"><div class="meta">${this.date(update.at)} · ${this.actorName(update.actor, update.sessionId)}${update.status ? ` · ${this.statusName(update.status)}` : ''}</div><p>${update.text || update.progress || update.outcome || (update.ownerSessionId !== undefined ? `Owner: ${update.ownerSessionId ? this.sessionTitle(update.ownerSessionId) : 'Unassigned'}` : update.reviewerSessionId !== undefined ? `Reviewer: ${update.reviewerSessionId ? this.sessionTitle(update.reviewerSessionId) : 'Unassigned'}` : update.blockedReason ? update.blockedReason : update.linkedSessionId ? `Linked ${this.sessionTitle(update.linkedSessionId)}` : update.status ? this.statusName(update.status) : 'Update recorded')}</p>${update.evidence?.length ? html`<p class="meta">Evidence: ${update.evidence.join(', ')}</p>` : nothing}</div>`) : html`<div class="empty">No activity yet.</div>`}</section>`;
   }
   override render() {
