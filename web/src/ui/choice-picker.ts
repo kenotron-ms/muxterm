@@ -3,6 +3,7 @@ import { customElement, property } from 'lit/decorators.js';
 import { ChevronDown } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { icon } from '../lib/icons.js';
+import { floatPopup } from '../lib/floating-popup.js';
 
 export type ChoicePickerPlacement = 'below' | 'above';
 export type ChoicePickerAppearance = 'outlined' | 'plain';
@@ -19,6 +20,7 @@ export class MuxUIChoicePicker extends LitElement {
   @property({ reflect:true }) appearance: ChoicePickerAppearance = 'outlined';
   @property({ attribute:'panel-align', reflect:true }) panelAlign: 'left' | 'right' = 'left';
   @property({ type:Boolean, reflect:true }) open = false;
+  private stopFloating?: () => void;
 
   static override styles = css`
     ${subtleScrollbars}
@@ -46,15 +48,12 @@ export class MuxUIChoicePicker extends LitElement {
     :host([appearance='outlined']) summary:hover,:host([appearance='outlined'][open]) summary { border-color:var(--ui-accent); }
     :host([appearance='plain']) summary:hover,:host([appearance='plain'][open]) summary { background:var(--ui-surface-hover); border-color:var(--ui-border); }
     .panel {
-      box-sizing:border-box; position:absolute; z-index:var(--ui-z-menu); width:min(var(--ui-picker-width),calc(100vw - var(--ui-space-11)));
+      box-sizing:border-box; position:absolute; top:0; left:0; z-index:var(--ui-z-menu); width:min(var(--ui-picker-width),calc(100vw - var(--ui-space-11)));
       max-height:min(72dvh,var(--ui-dialog-height)); overflow:auto; padding:var(--ui-space-4);
       border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl);
       background:var(--ui-surface-raised); background-image:var(--ui-overlay-backdrop-image); box-shadow:var(--ui-shadow-overlay);
     }
-    :host([placement='below']) .panel { top:calc(var(--ui-control-md) + var(--ui-space-1)); max-height:min(48dvh,var(--ui-picker-compact-height)); }
-    :host([placement='above']) .panel { bottom:calc(var(--ui-control-md) + var(--ui-space-2)); }
-    :host([panel-align='left']) .panel { left:0; }
-    :host([panel-align='right']) .panel { right:0; }
+    :host([placement='below']) .panel { max-height:min(48dvh,var(--ui-picker-compact-height)); }
     @media(max-width:700px) {
       :host([placement]) .panel {
         position:fixed; z-index:var(--ui-z-sheet); inset:auto 0 0; width:100vw; max-width:none;
@@ -88,15 +87,26 @@ export class MuxUIChoicePicker extends LitElement {
     document.addEventListener('keydown', this.closeOnEscape);
   }
   override disconnectedCallback(): void {
+    this.stopFloating?.();
+    this.stopFloating = undefined;
     MuxUIChoicePicker.openPickers.delete(this);
     document.removeEventListener('pointerdown', this.closeOnOutsidePointer);
     document.removeEventListener('keydown', this.closeOnEscape);
     super.disconnectedCallback();
   }
 
-  override updated(): void {
+  override updated(changed: Map<string, unknown>): void {
     const details = this.renderRoot.querySelector('details');
     if (details && details.open !== this.open) details.open = this.open;
+    if (!this.open) {
+      this.stopFloating?.();
+      this.stopFloating = undefined;
+    } else if (!this.stopFloating || changed.has('placement') || changed.has('panelAlign')) {
+      this.stopFloating?.();
+      const anchor = this.renderRoot.querySelector('summary');
+      const panel = this.renderRoot.querySelector<HTMLElement>('.panel');
+      if (anchor && panel) this.stopFloating = floatPopup(anchor, panel, `${this.placement === 'above' ? 'top' : 'bottom'}-${this.panelAlign === 'right' ? 'end' : 'start'}`);
+    }
   }
   override focus(options?: FocusOptions): void { this.renderRoot.querySelector('summary')?.focus(options); }
 

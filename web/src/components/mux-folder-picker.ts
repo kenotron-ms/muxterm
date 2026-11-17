@@ -4,6 +4,7 @@ import { ArrowLeft, Check, ChevronDown, ChevronRight, Folder } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { sdkChats, type FolderListing } from '../lib/sdk-chats.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { floatPopup } from '../lib/floating-popup.js';
 
 /** Selects one server folder. Rows select a folder; chevrons browse inside it. */
 @customElement('mux-folder-picker')
@@ -18,7 +19,7 @@ export class MuxFolderPicker extends LitElement {
   @state() private listing?: FolderListing;
   @state() private loading = false;
   @state() private error = '';
-  @state() private above = false;
+  private stopFloating?: () => void;
   private readonly onOutsidePointer = (event:PointerEvent) => {
     if (this.open && !event.composedPath().includes(this)) this.open = false;
   };
@@ -35,9 +36,8 @@ export class MuxFolderPicker extends LitElement {
     .trigger svg { flex:none; }
     .trigger .path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     :host([field]) .trigger { max-width:none; height:var(--ui-control-md); border-color:var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); }
-    .menu { position:absolute; z-index:var(--ui-z-menu); top:calc(100% + var(--ui-space-3)); left:0; box-sizing:border-box; width:min(var(--ui-mobile-drawer-width),calc(100vw - var(--ui-control-lg))); max-height:min(var(--ui-menu-max-height),60dvh); overflow:auto; padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-menu); }
-    .menu.above { top:auto; bottom:calc(100% + var(--ui-space-3)); }
-    :host([field]) .menu { width:100%; }
+    .menu { position:absolute; z-index:var(--ui-z-menu); top:0; left:0; box-sizing:border-box; width:min(var(--ui-mobile-drawer-width),calc(100vw - var(--ui-control-lg))); max-height:min(var(--ui-menu-max-height),60dvh); overflow:auto; padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-menu); }
+    :host([field]) .menu { width:var(--floating-reference-width,100%); }
     :host([inline]) .menu { position:static; width:100%; max-height:min(var(--folder-list-height,var(--ui-menu-max-height)),40dvh); box-shadow:none; }
     .head { position:sticky; top:calc(-1 * var(--ui-space-3)); z-index:var(--ui-z-local); display:flex; align-items:center; gap:var(--ui-space-3); min-height:var(--ui-control-md); padding:0 var(--ui-space-2) var(--ui-space-3); border-bottom:1px solid var(--ui-border); background:var(--ui-surface-raised); color:var(--ui-text-muted); }
     .head span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ui-text-xs); }
@@ -61,8 +61,18 @@ export class MuxFolderPicker extends LitElement {
   }
   override updated(changed: Map<string, unknown>) {
     if (changed.has('remoteHost') && this.inline && this.isConnected) void this.browse(this.value || this.base);
+    if (!this.open || this.inline) {
+      this.stopFloating?.();
+      this.stopFloating = undefined;
+    } else if (!this.stopFloating) {
+      const trigger = this.renderRoot.querySelector('.trigger');
+      const menu = this.renderRoot.querySelector<HTMLElement>('.menu');
+      if (trigger && menu) this.stopFloating = floatPopup(trigger, menu, 'bottom-start', 8, false);
+    }
   }
   override disconnectedCallback() {
+    this.stopFloating?.();
+    this.stopFloating = undefined;
     document.removeEventListener('pointerdown', this.onOutsidePointer);
     super.disconnectedCallback();
   }
@@ -86,8 +96,6 @@ export class MuxFolderPicker extends LitElement {
   private toggle() {
     this.open = !this.open;
     if (this.open) {
-      const bounds = this.getBoundingClientRect();
-      this.above = window.innerHeight - bounds.bottom < 380 && bounds.top > window.innerHeight - bounds.bottom;
       void this.browse(this.value || this.base);
     }
   }
@@ -100,7 +108,7 @@ export class MuxFolderPicker extends LitElement {
     const current = this.listing;
     return html`
       ${this.inline ? nothing : html`<button class="trigger" type="button" aria-label=${this.label} aria-haspopup="menu" aria-expanded=${this.open} title=${this.value} @click=${this.toggle}>${icon(Folder,{size:15})}<span class="path">${this.displayPath(this.value)}</span>${this.field ? icon(ChevronDown,{size:14}) : nothing}</button>`}
-      ${this.open || this.inline ? html`<div class=${this.above && !this.inline ? 'menu above' : 'menu'} role=${this.inline ? 'group' : 'menu'} aria-label="Folders" @keydown=${(event:KeyboardEvent) => { if (event.key === 'Escape' && !this.inline) { this.open = false; this.renderRoot.querySelector<HTMLButtonElement>('.trigger')?.focus(); } }}>
+      ${this.open || this.inline ? html`<div class="menu" role=${this.inline ? 'group' : 'menu'} aria-label="Folders" @keydown=${(event:KeyboardEvent) => { if (event.key === 'Escape' && !this.inline) { this.open = false; this.renderRoot.querySelector<HTMLButtonElement>('.trigger')?.focus(); } }}>
         ${current ? html`<div class="head"><button class="up" type="button" aria-label="Parent folder" title="Parent folder" ?disabled=${current.path === current.parent} @click=${() => void this.browse(current.parent)}>${icon(ArrowLeft,{size:16})}</button><span title=${current.path}>${current.path}</span></div>
           <div class="row-line"><button class="row" role="menuitemradio" aria-checked=${this.value === current.path} ?selected=${this.value === current.path} @click=${() => this.select(current.path)}>${icon(Folder,{size:15})}<span class="name">Use this folder</span>${this.value === current.path ? html`<span class="check">${icon(Check,{size:15})}</span>` : nothing}</button></div>
           ${current.folders.map(name => { const path = `${current.path.replace(/\/$/,'')}/${name}`; return html`<div class="row-line"><button class="row" role="menuitemradio" aria-checked=${this.value === path} ?selected=${this.value === path} title=${path} @click=${() => this.select(path)}>${icon(Folder,{size:15})}<span class="name">${name}</span>${this.value === path ? html`<span class="check">${icon(Check,{size:15})}</span>` : nothing}</button><button class="browse" type="button" aria-label=${`Browse inside ${name}`} title=${`Browse inside ${name}`} @click=${() => void this.browse(path)}>${icon(ChevronRight,{size:15})}</button></div>`; })}

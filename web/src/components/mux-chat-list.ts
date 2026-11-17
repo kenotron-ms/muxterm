@@ -11,6 +11,7 @@ import { remotesStore } from '../lib/remotes-store.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIMenu } from '../ui/menu.js';
+import { pointReference, type PopupReference } from '../lib/floating-popup.js';
 import '../ui/text-field.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
@@ -73,6 +74,7 @@ export class MuxChatWorkspace extends LitElement {
   @state() private open = true;
   @state() private menuFor = '';
   @state() private contextMenu = false;
+  @state() private contextReference: PopupReference | null = null;
   @state() private movingChatId = '';
   @state() private editing = false;
   @state() private editName = '';
@@ -149,7 +151,6 @@ export class MuxChatWorkspace extends LitElement {
     .row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
     .chat-row:has(mux-ui-menu) .action.more { display:inline-flex; opacity:1; }
     .row:has(mux-ui-menu) .host-label { display:none; }
-    mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .chats { margin:0; padding-left:var(--ui-sidebar-session-indent,var(--ui-space-8)); }
     .archive-list { box-sizing:border-box; }
     .archive-list .chat-row { height:var(--ui-space-9); min-height:var(--ui-space-9); }
@@ -225,7 +226,7 @@ export class MuxChatWorkspace extends LitElement {
       ${harnessGlyph(chat)}
     </mux-ui-button>`;
   }
-  private closeMenu() { this.menuFor = ''; this.contextMenu = false; this.movingChatId = ''; }
+  private closeMenu() { this.menuFor = ''; this.contextMenu = false; this.contextReference = null; this.movingChatId = ''; }
   private dismissMenu(event: CustomEvent<{restoreFocus:boolean}>) {
     const target = this.menuFor;
     this.closeMenu();
@@ -239,6 +240,7 @@ export class MuxChatWorkspace extends LitElement {
     event.preventDefault();
     this.menuFor = target;
     this.contextMenu = true;
+    this.contextReference = pointReference(event, event.currentTarget as Element);
     this.movingChatId = '';
   }
   private startRename(id: string, title: string) {
@@ -339,7 +341,7 @@ export class MuxChatWorkspace extends LitElement {
   }
   private projectMenu() {
     const p = this.model.project!;
-    return html`<mux-ui-menu class=${this.contextMenu ? 'context' : ''} label="Project actions" @menu-dismiss=${this.dismissMenu}>
+    return html`<mux-ui-menu .reference=${this.contextMenu ? this.contextReference : null} .placement=${this.contextMenu ? 'bottom-start' : 'bottom-end'} label="Project actions" @menu-dismiss=${this.dismissMenu}>
       <mux-ui-menu-item @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => this.startEdit()}>${icon(Settings2,{size:14})} Edit folder</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => void this.pinProject()}>${icon(p.pinned ? PinOff : Pin,{size:14})} ${p.pinned ? 'Unpin project' : 'Pin project'}</mux-ui-menu-item>
@@ -349,18 +351,18 @@ export class MuxChatWorkspace extends LitElement {
   }
   private remoteMenu() {
     const host = this.model.remoteHost!;
-    return html`<mux-ui-menu class=${this.contextMenu ? 'context' : ''} label="Remote actions" @menu-dismiss=${this.dismissMenu}>
+    return html`<mux-ui-menu .reference=${this.contextMenu ? this.contextReference : null} .placement=${this.contextMenu ? 'bottom-start' : 'bottom-end'} label="Remote actions" @menu-dismiss=${this.dismissMenu}>
       <mux-ui-menu-item @click=${() => this.newProjectChat()}>${icon(Plus,{size:14})} New chat</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => void this.disconnectRemote()}>${icon(Network,{size:14})} Disconnect ${sdkChats.remoteHosts.find(item => item.id === host)?.name || host}</mux-ui-menu-item>
     </mux-ui-menu>`;
   }
   private chatMenu(chat: SDKChat) {
-    if (this.movingChatId === chat.id) return html`<mux-ui-menu class="context" label="Move chat to project" @menu-dismiss=${this.dismissMenu}>
+    if (this.movingChatId === chat.id) return html`<mux-ui-menu .reference=${this.contextMenu ? this.contextReference : null} .placement=${this.contextMenu ? 'bottom-start' : 'bottom-end'} label="Move chat to project" @menu-dismiss=${this.dismissMenu}>
       <mux-ui-menu-item @click=${() => { this.movingChatId = ''; }}>← Back</mux-ui-menu-item>
       ${chat.workspaceId ? html`<mux-ui-menu-item @click=${() => void this.moveChat(chat, '')}>Move to Chat</mux-ui-menu-item>` : nothing}
       ${sdkChats.projects.filter(project => project.id !== chat.workspaceId && (project.remoteHost || '') === (chat.remoteHost || '')).map(project => html`<mux-ui-menu-item @click=${() => void this.moveChat(chat, project.id)}>Move to ${project.name}</mux-ui-menu-item>`)}
     </mux-ui-menu>`;
-    return html`<mux-ui-menu class="context" label="Chat actions" @menu-dismiss=${this.dismissMenu}>
+    return html`<mux-ui-menu .reference=${this.contextMenu ? this.contextReference : null} .placement=${this.contextMenu ? 'bottom-start' : 'bottom-end'} label="Chat actions" @menu-dismiss=${this.dismissMenu}>
       <mux-ui-menu-item @click=${() => this.openChat(chat)}>${icon(MessageSquare,{size:14})} Open chat</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})} ${chat.pinned ? 'Unpin chat' : 'Pin chat'}</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => this.startRename(chat.id, chat.title)}>${icon(Pencil,{size:14})} Rename chat</mux-ui-menu-item>
@@ -428,6 +430,7 @@ export class MuxChatList extends LitElement {
   @state() private pinError = '';
   @state() private pinnedMenuFor = '';
   @state() private pinnedMenuContext = false;
+  @state() private pinnedContextReference: PopupReference | null = null;
   @state() private pinnedMovingChatId = '';
   @state() private pinnedRenamingChatId = '';
   @state() private pinnedRenameDraft = '';
@@ -497,7 +500,6 @@ export class MuxChatList extends LitElement {
     .pin-row:has(mux-ui-menu) .pin-action.more { display:inline-flex; }
     .pin-rename { flex:1; min-width:0; margin:var(--ui-space-1) var(--ui-space-2); }
     .pin-rename-save { flex:none; margin-right:var(--ui-space-2); }
-    .pin-row mux-ui-menu.context { --ui-menu-offset-y:var(--ui-space-7); --ui-menu-offset-x:var(--ui-space-5); }
     .pin-feedback { margin:var(--ui-space-1) var(--ui-space-2) var(--ui-space-4); }
     .project-form { display:grid; gap:var(--ui-space-5); padding:var(--ui-space-6); color:var(--ui-text); }
     .project-form h2 { margin:0; font-size:var(--ui-text-xl); }
@@ -597,6 +599,7 @@ export class MuxChatList extends LitElement {
   private closePinnedMenu() {
     this.pinnedMenuFor = '';
     this.pinnedMenuContext = false;
+    this.pinnedContextReference = null;
     this.pinnedMovingChatId = '';
   }
   private showPinnedContext(event: MouseEvent, item: PinnedItem) {
@@ -604,6 +607,7 @@ export class MuxChatList extends LitElement {
     event.preventDefault();
     this.pinnedMenuFor = `${item.kind}:${item.id}`;
     this.pinnedMenuContext = true;
+    this.pinnedContextReference = pointReference(event, event.currentTarget as Element);
     this.pinnedMovingChatId = '';
   }
   private dismissPinnedMenu(event: CustomEvent<{restoreFocus:boolean}>) {
@@ -652,7 +656,7 @@ export class MuxChatList extends LitElement {
   private pinnedMenu(item: PinnedItem) {
     if (item.kind === 'project') {
       const project = item.project;
-      return html`<mux-ui-menu class=${this.pinnedMenuContext ? 'context' : ''} label="Project actions" @menu-dismiss=${this.dismissPinnedMenu}>
+      return html`<mux-ui-menu .reference=${this.pinnedMenuContext ? this.pinnedContextReference : null} .placement=${this.pinnedMenuContext ? 'bottom-start' : 'bottom-end'} label="Project actions" @menu-dismiss=${this.dismissPinnedMenu}>
         <mux-ui-menu-item @click=${() => this.openPinnedProjectChat(project)}>${icon(Plus,{size:14})} New chat</mux-ui-menu-item>
         <mux-ui-menu-item @click=${() => this.editPinnedProject(project.id)}>${icon(Settings2,{size:14})} Edit folder</mux-ui-menu-item>
         <mux-ui-menu-item @click=${() => void this.unpin('project',project.id,project.name)}>${icon(PinOff,{size:14})} Unpin project</mux-ui-menu-item>
@@ -661,12 +665,12 @@ export class MuxChatList extends LitElement {
       </mux-ui-menu>`;
     }
     const chat = item.chat;
-    if (this.pinnedMovingChatId === chat.id) return html`<mux-ui-menu class="context" label="Move chat to project" @menu-dismiss=${this.dismissPinnedMenu}>
+    if (this.pinnedMovingChatId === chat.id) return html`<mux-ui-menu .reference=${this.pinnedMenuContext ? this.pinnedContextReference : null} .placement=${this.pinnedMenuContext ? 'bottom-start' : 'bottom-end'} label="Move chat to project" @menu-dismiss=${this.dismissPinnedMenu}>
       <mux-ui-menu-item @click=${() => { this.pinnedMovingChatId = ''; }}>← Back</mux-ui-menu-item>
       ${chat.workspaceId ? html`<mux-ui-menu-item @click=${() => void this.movePinnedChat(chat, '')}>Move to Chat</mux-ui-menu-item>` : nothing}
       ${sdkChats.projects.filter(project => project.id !== chat.workspaceId && (project.remoteHost || '') === (chat.remoteHost || '')).map(project => html`<mux-ui-menu-item @click=${() => void this.movePinnedChat(chat, project.id)}>Move to ${project.name}</mux-ui-menu-item>`)}
     </mux-ui-menu>`;
-    return html`<mux-ui-menu class="context" label="Chat actions" @menu-dismiss=${this.dismissPinnedMenu}>
+    return html`<mux-ui-menu .reference=${this.pinnedMenuContext ? this.pinnedContextReference : null} .placement=${this.pinnedMenuContext ? 'bottom-start' : 'bottom-end'} label="Chat actions" @menu-dismiss=${this.dismissPinnedMenu}>
       <mux-ui-menu-item @click=${() => { this.closePinnedMenu(); this.dispatchEvent(new CustomEvent('chat-open', { detail:{sessionId:chat.id}, bubbles:true, composed:true })); }}>${icon(MessageSquare,{size:14})} Open chat</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => void this.unpin('chat',chat.id,chat.title)}>${icon(PinOff,{size:14})} Unpin chat</mux-ui-menu-item>
       <mux-ui-menu-item @click=${() => this.startPinnedRename(chat)}>${icon(Pencil,{size:14})} Rename chat</mux-ui-menu-item>
