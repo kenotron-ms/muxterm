@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { live } from 'lit/directives/live.js';
-import { customElement, property, state } from 'lit/decorators.js';
+import { customElement, property, query, state } from 'lit/decorators.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { chatMarkdownPolicy } from '../lib/chat-markdown-policy.js';
@@ -109,6 +109,7 @@ export class MuxSDKChat extends LitElement {
   @property() initialSideDraft = '';
   @property({ attribute:false }) onSideChatCreated?: (tabId: string, chat: SDKChat) => void;
   @property({ type: Boolean, reflect: true }) compact = false;
+  @query('.composer') private composerEl?: HTMLElement;
   @state() private chat?: SDKChat;
   @state() private goalDocument?: GoalDocument;
   @state() private goalNotice = '';
@@ -2814,7 +2815,7 @@ export class MuxSDKChat extends LitElement {
       ${sideStart ? nothing : this.goalStatus()}
       ${this.commandNotice ? html`<mux-ui-feedback class="goal-notice" .kind=${this.commandFailed ? 'error' : 'info'} density="compact">${this.commandNotice}</mux-ui-feedback>` : nothing}
       ${this.goalNotice ? html`<mux-ui-feedback class="goal-notice" kind="error" density="compact">${this.goalNotice}</mux-ui-feedback>` : nothing}
-      ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions" .reference=${this.renderRoot.querySelector('.composer')}>${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
+      ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions" .reference=${this.composerEl}>${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
       <div class="composer" @paste=${this.onPaste}>
       ${this.clipboardError ? html`<mux-ui-feedback kind="error" density="compact">${this.clipboardError}</mux-ui-feedback>` : nothing}
       ${this.dictationError ? html`<mux-ui-feedback kind="error" density="compact">${this.dictationError}</mux-ui-feedback>` : nothing}

@@ -51,7 +51,6 @@ export class MuxFolderPicker extends LitElement {
     .row .check svg { color:var(--ui-accent); }
     .empty,.error { padding:var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .error { color:var(--ui-danger-text); }
-    @media (max-width:550px) { .menu { left:0; } }
   `;
 
   override connectedCallback() {

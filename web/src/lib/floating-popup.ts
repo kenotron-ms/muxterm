@@ -32,13 +32,13 @@ export function floatPopup(reference: PopupReference, popup: HTMLElement, placem
     const cssMaxHeight = parseFloat(getComputedStyle(popup).maxHeight);
     const maxHeight = Number.isFinite(cssMaxHeight) ? cssMaxHeight : Infinity;
     const current = generation;
-    popup.style.setProperty('--floating-reference-width', `${reference.getBoundingClientRect().width}px`);
     popup.style.position = 'fixed';
     popup.style.left = '0px';
     popup.style.top = '0px';
     popup.style.right = 'auto';
     popup.style.bottom = 'auto';
     stop = autoUpdate(reference, popup, () => {
+      popup.style.setProperty('--floating-reference-width', `${reference.getBoundingClientRect().width}px`);
       void computePosition(reference, popup, {
         strategy: 'fixed', placement,
         middleware: [offset(distance), flip({ padding:8 }), shift({ padding:8 }), size({
