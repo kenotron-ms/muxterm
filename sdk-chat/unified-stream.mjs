@@ -229,7 +229,7 @@ export class UnifiedStream {
         }
       } catch (error) {
         if (this.closed || controller.signal.aborted) return;
-        if (/HTTP 40[013]/.test(String(error))) {
+        if (/HTTP 4\d\d/.test(String(error))) {
           this.emit(this.session.id, 'error', { message: String(error) });
           return;
         }
