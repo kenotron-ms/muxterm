@@ -486,9 +486,8 @@ export class MuxSDKChat extends LitElement {
     .recovery-row mux-ui-button { flex:none; }
     .recovery-error { color:var(--ui-danger); }
     .slash-menu { --ui-listbox-width:var(--ui-chat-content-width); }
-    .goal-status { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:min(100%,var(--ui-chat-transcript-width)); min-height:38px; margin:0 auto var(--ui-space-3); padding:var(--ui-space-2) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; text-align:left; cursor:pointer; }
-    .goal-status:hover { background:var(--ui-surface-hover); }
-    .goal-status:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
+    .goal-status { box-sizing:border-box; display:block; width:min(100%,var(--ui-chat-transcript-width)); margin:0 auto var(--ui-space-3); }
+    .goal-status::part(button) { justify-content:flex-start; gap:var(--ui-space-3); min-height:var(--ui-control-md); padding:var(--ui-space-2) var(--ui-space-4); background:var(--ui-surface-raised); text-align:left; }
     .goal-status-icon { display:grid; place-items:center; flex:none; color:var(--ui-accent); }
     .goal-status-label { flex:none; font-size:var(--ui-text-sm); font-weight:650; }
     .goal-status-condition { min-width:0; overflow:hidden; color:var(--ui-text-muted); font-size:var(--ui-text-sm); text-overflow:ellipsis; white-space:nowrap; }
@@ -2454,9 +2453,9 @@ export class MuxSDKChat extends LitElement {
       (chat?.goalState === goalState ? chat.goalSummary || chat.goalReason ||
         (terminal && !laterTurn && record?.requestedRevision === record?.appliedRevision ? chat.lastOutput : '') : '') || '';
     const preview = (summary || condition).replace(/^\s*#{1,6}\s*/gm, '').replace(/\s+/g, ' ').trim();
-    return html`<button type="button" class="goal-status" data-tone=${tone} title=${summary ? `${label}: ${summary}\n\n${condition}` : condition} aria-label=${`${label}: ${preview} (open Goal tab)`} @click=${this.openGoalTab}>
+    return html`<mux-ui-button class="goal-status" variant="secondary" data-tone=${tone} tooltip=${summary ? `${label}: ${summary}\n\n${condition}` : condition} accessible-label=${`${label}: ${preview} (open Goal tab)`} @click=${this.openGoalTab}>
       <span class="goal-status-icon" aria-hidden="true">${icon(Target,{size:15})}</span><span class="goal-status-label">${label}</span><span class="goal-status-condition" aria-hidden="true">${preview}</span><span class="goal-status-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span>
-    </button>`;
+    </mux-ui-button>`;
   }
   private async refineGoal(condition:string) {
     if (this.goalifyPending || this.busy || this.commandPending || !this.activeSession) return;
