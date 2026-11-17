@@ -2433,20 +2433,21 @@ export class MuxSDKChat extends LitElement {
       : record?.state === 'blocked' ? 'Goal blocked'
       : ['usage_limited','budget_limited','cap_hit'].includes(record?.state || '') ? 'Goal limit reached'
       : record?.state === 'stalled' ? 'Goal stalled'
+      : record?.state === 'cancelled' ? 'Goal cancelled'
       : record?.state === 'uncertain' || record?.state === 'error' ? 'Goal needs review'
       : record?.state === 'ended' ? 'Goal ended'
       : record?.state === 'paused' ? 'Goal paused' : 'Goal set';
-    const tone = record?.humanPaused || ['paused','blocked','ended','stalled','usage_limited','budget_limited','cap_hit'].includes(record?.state || '') ? 'warning'
+    const tone = record?.humanPaused || ['paused','blocked','ended','stalled','cancelled','usage_limited','budget_limited','cap_hit'].includes(record?.state || '') ? 'warning'
       : ['complete','completed','achieved'].includes(record?.state || '') ? 'success'
       : ['uncertain','error'].includes(record?.state || '') ? 'danger' : 'default';
     const goalState = record?.state || '';
-    const observation = record?.observations.findLast(item =>
+    const observation = record?.observations?.findLast(item =>
       (item.event.type === 'goal.progress' || item.event.type === 'goal.snapshot') &&
       item.event.goalState === goalState && (item.event.goalSummary || item.event.goalReason));
     const chat = this.chat;
-    const lastGoalObservation = record?.observations.findLastIndex(item =>
+    const lastGoalObservation = record?.observations?.findLastIndex(item =>
       item.event.type === 'goal.progress' || item.event.type === 'goal.snapshot') ?? -1;
-    const laterTurn = lastGoalObservation >= 0 && record?.observations.slice(lastGoalObservation + 1)
+    const laterTurn = lastGoalObservation >= 0 && record?.observations?.slice(lastGoalObservation + 1)
       .some(item => item.event.type === 'turn.started');
     const terminal = ['blocked','complete','completed','achieved','stalled','cap_hit','cancelled','error','ended','uncertain','usage_limited','budget_limited'].includes(goalState);
     const summary = observation?.event.goalSummary || observation?.event.goalReason ||
@@ -2807,7 +2808,7 @@ export class MuxSDKChat extends LitElement {
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       <div class="body scroll-edge-fade ${sideStart ? 'side-empty' : ''}" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
-      ${sideStart ? html`<div><h2>Ask about this chat</h2><p>Start a side conversation while the main chat continues.</p></div>` : this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
+      ${sideStart ? html`<div><h2>Ask about this chat</h2><p>Start a side conversation while the main chat continues.</p></div>` : this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : this.goalDocument?.revisions.length || this.commandNotice || this.goalNotice || this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
       ${this.error ? html`<mux-ui-feedback class="block" kind="error" appearance="panel" density="compact">${this.error}${this.reconnectFailed ? html`<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryConnection}>Retry now</mux-ui-button>` : nothing}</mux-ui-feedback>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><mux-ui-button class="scroll-bottom" variant="secondary" size="small" accessible-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</mux-ui-button></div>` : nothing}<div class="composer-wrap">
       ${this.recoveryRequired ? html`<div class="recovery-row" role="status"><span class=${this.recoveryError ? 'recovery-error' : ''} title=${this.recoveryErrorDetail || 'Work may have changed before the interruption.'}>${this.recoveryError || 'Turn interrupted · Work may have changed'}</span><mux-ui-button variant="secondary" size="small" ?disabled=${this.recoveryPending} accessible-label="Continue interrupted turn" tooltip="Check recent work, then continue only what remains" @click=${() => void this.continueInterruptedTurn()}>${this.recoveryPending ? 'Continuing…' : 'Continue'}</mux-ui-button></div>` : nothing}
