@@ -1,10 +1,9 @@
 # Goals and the shared ledger
 
-The composer has a single-line goal rail. Selecting it opens the Goal utility
+The composer has a single-line goal status and latest outcome summary. Selecting it opens the Goal utility
 tab, which renders the current stop condition as markdown with controls to
 refine, pause, resume or reset, and clear it. The `/goal` command sets, inspects,
-pauses, resumes, and clears the goal. Its result appears as an inline card in
-the chat pane that opens the Goal tab. A human can keep the condition as-is or
+pauses, resumes, and clears the goal. A human can keep the condition as-is or
 ask the goalify skill for a refined draft in the Goal tab, then choose whether
 to apply that draft in chat. Reset restarts the current approved condition after
 the native goal has finished.
@@ -15,7 +14,7 @@ operator. The shared ledger stays behind the UI as the authority and history sto
 
 | Adapter | Goal controls | Boundary |
 | --- | --- | --- |
-| Codex app-server | Experimental native get/set, pause/resume, clear and notifications | Initial set may start native execution. An edit never requests active status; edits after complete/clear/uncertainty are paused for explicit resume. Native execution, evaluation, and continuation remain Codex-owned. |
+| Codex app-server | Experimental native get/set, pause/resume, clear and notifications | Initial set may start native execution. A human `/goal <condition>` retries a blocked goal with active status; other edits do not request active status. Edits after complete/clear/uncertainty are paused for explicit resume. Native execution, evaluation, and continuation remain Codex-owned. |
 | Amplifier loop-live | Coordinator goal mutation and native progress observations | Conditions and revisions are installed in the native loop. Its continuation guard prevents further automatic turns while suspended. A human-directed initial start/resume submits one input; native evaluation/continuation owns subsequent work. |
 | Claude Agent SDK | Built-in `/goal` command dispatch and `active_goal` observations | Discover the native command first. A structured `local_command_run` acknowledges dispatch, not achievement or applied condition; native observations establish application. Suspend clears the native goal while retaining the muxterm condition. Reactivation is a new native goal with reset counters, not an exact native pause/resume. A null observation cannot distinguish achieved from cleared. |
 
@@ -26,11 +25,12 @@ achieved goal. No free-text response, regex, or keyword authorizes execution or
 proves completion. Native structured events, hook decisions, and receipts carry
 the protocol state.
 A completed turn never proves a goal achieved. Native statuses and event details
-are retained verbatim, including blocked, usage/budget limits, and clear.
+are retained verbatim, including blocked, usage/budget limits, and clear. Goal
+outcomes appear in the composer status instead of adding transcript status rows.
 Native clear is not rollback or proof that the current turn was interrupted.
 Clear retains human revisions; explicit resume can recreate the saved condition
 as a new native goal. Completed goals likewise require explicit resume.
-The composer goal banner disappears when the native goal is cleared; its
+The composer goal status disappears when the native goal is cleared; its
 revision and control history remain in the shared ledger.
 
 ## Storage and receipts
