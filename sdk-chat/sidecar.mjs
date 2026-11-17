@@ -13,6 +13,7 @@ import { PiStream } from './pi-stream.mjs';
 import { OpenCodeStream } from './opencode-stream.mjs';
 import { DeepSeekStream } from './deepseek-stream.mjs';
 import { AntigravitySDKStream } from './antigravity-sdk-stream.mjs';
+import { UnifiedStream } from './unified-stream.mjs';
 import { antigravityLoginStatus, startAntigravityLogin, cancelAntigravityLogin, finishAntigravityLogin } from './antigravity-login.mjs';
 import { query, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 
@@ -74,6 +75,9 @@ const capabilities = harness => harness === 'copilot'
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: true }
   : isACPHarness(harness)
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: false }
+  : harness === 'amplifier-unified'
+  ? { approvals: false, transcript_read: false, interrupt: true, live_input: true,
+      attributed_service_input: false, native_steering: true }
   : harness === 'pi' || harness === 'opencode' || harness === 'deepseek' || harness === 'antigravity-sdk'
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: false,
       attributed_service_input: false, native_steering: harness === 'pi' }
@@ -301,17 +305,20 @@ async function command(cmd) {
   if (op === 'start' || op === 'resume') {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
     if (harness !== 'codex' && harness !== 'claude' && harness !== 'copilot' &&
-      !['pi', 'opencode', 'deepseek', 'antigravity-sdk'].includes(harness) && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
+      !['pi', 'opencode', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness) && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
     const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval,
       catalog: cmd.catalog === true, originFile: cmd.catalog === true ? '' : originFile(sessionId, cmd.originToken),
       inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
-    if (['pi', 'opencode', 'deepseek', 'antigravity-sdk'].includes(harness)) {
-      const Adapter = { pi: PiStream, opencode: OpenCodeStream, deepseek: DeepSeekStream,
-        'antigravity-sdk': AntigravitySDKStream }[harness];
-      try { s.native = new Adapter(s, emit); await s.native.ready; }
+    if (['pi', 'opencode', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness)) {
+      try {
+        const Adapter = { pi: PiStream, opencode: OpenCodeStream, deepseek: DeepSeekStream,
+          'antigravity-sdk': AntigravitySDKStream, 'amplifier-unified': UnifiedStream }[harness];
+        s.native = new Adapter(s, emit);
+        await s.native.ready;
+      }
       catch (error) {
         await s.native?.close().catch(() => {});
         sessions.delete(sessionId); forgetOriginFile(s.originFile); throw error;

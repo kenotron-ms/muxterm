@@ -102,6 +102,10 @@ export class MuxSDKChatSettings extends LitElement {
   override render() {
     const s = this.settings;
     if (!s) return html`<mux-ui-feedback class="load-feedback" kind=${this.error ? 'error' : 'loading'} density="compact">${this.error || 'Loading controls…'}${this.error ? html`<mux-ui-button slot="action" size="small" @click=${() => void this.load(this.sessionId)}>Retry</mux-ui-button>` : nothing}</mux-ui-feedback>`;
+    if (this.harness === 'amplifier-unified') return html`
+      <mux-ui-choice-picker class="picker" label="Amplifier Unified controls" summary="Controls in Unified" placement="above" appearance="plain" panel-align="left">
+        <div class="group">Access, approvals, provider, and model are managed in Amplifier Unified.</div>
+      </mux-ui-choice-picker>`;
     const model = s.models.find(item => item.id === s.model);
     const models = model ? s.models : s.model ? [{ id:s.model, label:s.model, efforts:[] }, ...s.models] : s.models;
     const efforts = model?.efforts || [];

@@ -153,3 +153,29 @@ Amplifier runs in the supervised Python sidecar. At startup the sidecar installs
 The sidecar resolves the existing Amplifier CLI settings and fails visibly if
 no provider/model is configured. Live inputs are never replayed after a crash;
 Go marks interrupted turns uncertain.
+
+## Amplifier Unified connected host
+
+`amplifier-unified` is a separate chat choice from the CLI-backed `amplifier`
+adapter. It connects to an already-running Unified host through its version-1
+HTTP/SSE client contract. Unified owns execution and session history; closing a
+Muxterm chat detaches its view without stopping Unified work. The adapter sends
+text, streams assistant text, resumes its native session, and forwards Stop and
+rename. Unified's native steering handles text sent during an active turn.
+
+Set `MUXTERM_UNIFIED_URL` to the Unified host origin and
+`MUXTERM_UNIFIED_TOKEN_FILE` to a file containing its control bearer token before
+starting Muxterm. A local Unified installation stores the token at
+`<Unified data dir>/config/auth/control-token`. Plain HTTP is accepted only for
+loopback hosts; remote hosts require HTTPS with a trusted certificate. The chosen
+Muxterm project path must also exist on the Unified host. The control token has
+broad host authority, so keep the file private.
+
+Muxterm maintains the embedded adapter against Unified's published client
+contract. It rejects unsupported protocol versions explicitly.
+
+The current adapter projects text and turn state. Unified approvals, tool and
+worker progress, attachments, provider/model controls, and full historical
+transcript paging are not yet mapped into Muxterm. Use Unified's own client for
+those controls. Accepted sends use stable command IDs and are never replayed
+automatically after an uncertain transport result.
