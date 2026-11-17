@@ -284,6 +284,11 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	if admitted {
 		condition := document.Revisions[len(document.Revisions)-1].Condition
+		// A new human /goal command retries a blocked native goal. Setting only
+		// the condition leaves Codex's blocked status intact.
+		if req.Action == "set" && document.State == "blocked" && !document.HumanPaused {
+			nativeAction = "resume"
+		}
 		preserveStop := req.Action == "set" && document.RequestedRevision > 1 && slices.Contains([]string{"complete", "achieved", "stalled", "cap_hit", "cancelled", "error", "ended", "cleared", "uncertain"}, document.State)
 		go h.dispatchGoal(chat, req.ClientRef, nativeAction, condition, document.HumanPaused || (document.State == "paused" && nativeAction != "resume") || preserveStop, document.RequestedRevision)
 	}

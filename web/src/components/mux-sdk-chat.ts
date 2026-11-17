@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { live } from 'lit/directives/live.js';
 import { customElement, property, state } from 'lit/decorators.js';
-import { MarkdownStream, parseMarkdown } from '../lib/markdown-stream.js';
+import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 import { chatMarkdownPolicy } from '../lib/chat-markdown-policy.js';
 import { chatComposerAttachment } from './chat-composer-attachment.js';
@@ -55,14 +55,14 @@ type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; pare
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type Block = { key: number; turn: number; kind: 'user' | 'interjection' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message' | 'goal' | 'question' | 'voice-input' | 'voice-output'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; lightweight?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
+type Block = { key: number; turn: number; kind: 'user' | 'interjection' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message' | 'question' | 'voice-input' | 'voice-output'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; lightweight?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
 type CachedTranscript = { blocks: Block[]; chat?: SDKChat };
 const transcriptCache = new Map<string, CachedTranscript>();
 const retainedChatViews = new Map<string, { restore: (view: MuxSDKChat) => void; scrollTop: number; follow: boolean }>();
-const transcriptCacheKey = (id: string) => `muxterm-chat-transcript:v2:${id}`;
+const transcriptCacheKey = (id: string) => `muxterm-chat-transcript:v3:${id}`;
 const draftCache = new Map<string, string>();
 const draftKey = (id: string, kind: 'message' | 'agent') => `muxterm-chat-draft:${kind}:${id}`;
 function readDraft(id: string, kind: 'message' | 'agent'): string {
@@ -115,7 +115,6 @@ export class MuxSDKChat extends LitElement {
   @state() private commandNotice = '';
   @state() private commandFailed = false;
   @state() private commandPending = false;
-  private commandAt = '';
   @state() private goalifyPending = false;
   @state() private goalifyError = '';
   private dismissedGoalifyKeys = new Set<string>();
@@ -487,15 +486,17 @@ export class MuxSDKChat extends LitElement {
     .recovery-row mux-ui-button { flex:none; }
     .recovery-error { color:var(--ui-danger); }
     .slash-menu { --ui-listbox-width:var(--ui-chat-content-width); }
-    .goal-response { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); padding:var(--ui-space-6); background:var(--ui-surface-raised); }
-    .goal-response header { display:flex; align-items:center; gap:var(--ui-space-3); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
-    .goal-response header svg { color:var(--ui-accent); }
-    .goal-response-state { margin-left:auto; color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:400; text-align:right; }
-    .goal-response .text { margin:var(--ui-space-4) 0 0; overflow-wrap:anywhere; }
-    .goal-response .text > :first-child { margin-top:0; }
-    .goal-response .text > :last-child { margin-bottom:0; }
-    .goal-response-note { margin:var(--ui-space-4) 0 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
-    .goal-response-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-5); }
+    .goal-status { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:min(100%,var(--ui-chat-transcript-width)); min-height:38px; margin:0 auto var(--ui-space-3); padding:var(--ui-space-2) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; text-align:left; cursor:pointer; }
+    .goal-status:hover { background:var(--ui-surface-hover); }
+    .goal-status:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
+    .goal-status-icon { display:grid; place-items:center; flex:none; color:var(--ui-accent); }
+    .goal-status-label { flex:none; font-size:var(--ui-text-sm); font-weight:650; }
+    .goal-status-condition { min-width:0; overflow:hidden; color:var(--ui-text-muted); font-size:var(--ui-text-sm); text-overflow:ellipsis; white-space:nowrap; }
+    .goal-status-chevron { display:grid; place-items:center; flex:none; margin-left:auto; color:var(--ui-text-muted); }
+    .goal-status[data-tone="warning"] .goal-status-icon { color:var(--ui-warning); }
+    .goal-status[data-tone="success"] .goal-status-icon { color:var(--ui-success); }
+    .goal-status[data-tone="danger"] .goal-status-icon { color:var(--ui-danger); }
+    .goal-notice { box-sizing:border-box; width:min(100%,var(--ui-chat-transcript-width)); margin:0 auto var(--ui-space-3); }
     .goal-refinement-choice { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-4); padding:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); font-size:var(--ui-text-sm); }
     .goal-refinement-choice span { flex:1; min-width:0; }
     .attachments { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); padding:0 0 var(--ui-space-5); }
@@ -504,7 +505,6 @@ export class MuxSDKChat extends LitElement {
     /* The border extends 15px beyond each 760px transcript edge so typed text aligns with replies. */
     .composer { box-sizing:border-box; width:min(100%,var(--ui-chat-transcript-width)); margin:auto; border:1px solid var(--ui-border); border-radius:var(--ui-radius-2xl); background:var(--ui-chat-composer-surface); padding:var(--ui-space-5) var(--ui-space-5) var(--ui-space-3); box-shadow:var(--ui-shadow-control); transition:border-color .15s,box-shadow .15s; }
     .composer-row { display:flex; }
-    .work-items .goal-response { margin:var(--ui-space-5) 0 var(--ui-space-4); }
     .composer-controls { display:flex; align-items:center; gap:var(--ui-space-1); margin-top:var(--ui-space-2); min-height:var(--ui-control-md); }
     .composer-controls .attach-picker { width:var(--ui-control-md); height:var(--ui-control-md); }
     .composer-controls mux-sdk-chat-settings { flex:0 1 auto; }
@@ -868,7 +868,7 @@ export class MuxSDKChat extends LitElement {
     this.voiceError = '';
     this.activeSession = this.sessionId;
     this.goalDocument = undefined; this.goalNotice = ''; this.goalifyPending = false; this.goalifyError = ''; this.dismissedGoalifyKeys.clear();
-    this.commandGeneration++; this.commandNotice = ''; this.commandFailed = false; this.commandPending = false; this.commandAt = ''; this.slashDismissedFor = ''; this.slashSelection = 0;
+    this.commandGeneration++; this.commandNotice = ''; this.commandFailed = false; this.commandPending = false; this.slashDismissedFor = ''; this.slashSelection = 0;
     void this.refreshGoal();
     this.draft = readDraft(this.activeSession, 'message');
     this.draftHasContent = !!this.draft.trim();
@@ -1628,7 +1628,6 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'goal.progress') {
       if (this.chat) this.chat = { ...this.chat, goalState: event.goalState, goalReason: event.goalReason, goalSummary: event.goalSummary };
-      if (event.goalState && !['active','continuing','paused','cleared'].includes(event.goalState)) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:`Goal ${event.goalState}: ${event.goalSummary || event.goalReason || ''}` });
     }
     else if (event.type === 'operator.lane.status') {
       this.upsertLaneCard(blocks, event, false);
@@ -2098,7 +2097,6 @@ export class MuxSDKChat extends LitElement {
         else if (item.kind === 'delegate') steps.push(this.agentCard(item, agents));
         else if (item.kind === 'lane-report') steps.push(this.laneCard(item));
         else if (item.kind === 'chat-message') steps.push(this.chatMessageCard(item));
-        else if (item.kind === 'goal') steps.push(html`${this.goalResponse()}`);
         else if (item.kind === 'status' || item.kind === 'error') steps.push(html`<div class="${item.kind}">${item.text}</div>`);
         else if (item.kind === 'voice-input' || item.kind === 'voice-output') steps.push(html`<div class="voice-work"><span class="work-icon">${icon(Mic,{size:14})}</span><span><strong>${item.kind === 'voice-input' ? item.source === 'steer' ? 'Voice steer' : 'You said' : 'Voice replied'}</strong>${item.text ? html` · ${item.text}` : nothing}</span></div>`);
       }
@@ -2136,7 +2134,7 @@ export class MuxSDKChat extends LitElement {
     return `Worked for ${this.workDuration(started, finished)}`;
   }
   private transcriptRows(): TranscriptRow[] {
-    if (this.rowsCache?.blocks === this.blocks) return this.withGoalResponse(this.rowsCache.rows);
+    if (this.rowsCache?.blocks === this.blocks) return this.rowsCache.rows;
     const work = new Map<number, Block[]>();
     const latestInput = new Map<number, number>();
     const latestActiveUser = new Map<number, number>();
@@ -2201,49 +2199,7 @@ export class MuxSDKChat extends LitElement {
     }
     const visibleRows = rows.filter(row => !(row.work?.every(item => item.kind === 'progress') && this.turnFinished.has(row.block.turn)));
     this.rowsCache = { blocks:this.blocks, rows:visibleRows };
-    return this.withGoalResponse(visibleRows);
-  }
-  private withGoalResponse(rows: TranscriptRow[]): TranscriptRow[] {
-    if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice) return rows;
-    const receipt = this.goalDocument?.receipts.findLast(item => ['set','approve','clear','pause','resume','start'].includes(item.action));
-    const at = this.commandNotice && this.commandAt ? this.commandAt : receipt?.at || this.goalDocument?.revisions.at(-1)?.at;
-    const stamp = Date.parse(at || '');
-    const index = Number.isFinite(stamp) ? rows.findIndex(row => {
-      // Work rows use a synthetic progress block, which often has no `at`.
-      // Their turn start is the point where the next turn enters the timeline.
-      const blockStamp = Date.parse(row.block.at || '');
-      const rowStamp = row.work ? this.turnStarted.get(row.block.turn) ?? blockStamp : Number.isFinite(blockStamp) ? blockStamp : this.turnStarted.get(row.block.turn) ?? this.turnFinished.get(row.block.turn);
-      return rowStamp !== undefined && Number.isFinite(rowStamp) && rowStamp > stamp;
-    }) : -1;
-    const goal: Block = {key:-1,turn:this.currentTurn,kind:'goal',text:'',at};
-    const result = [...rows];
-    const before = index < 0 ? result.length : index;
-    let workIndex = -1;
-    for (let i = before - 1; i >= 0; i--) {
-      if (result[i].work) { workIndex = i; break; }
-    }
-    if (workIndex >= 0 && Number.isFinite(stamp)) {
-      const finished = this.turnFinished.get(result[workIndex].block.turn);
-      if (finished !== undefined && finished < stamp) workIndex = -1;
-    }
-    if (workIndex < 0 && Number.isFinite(stamp)) {
-      // A goal that starts a turn may arrive just before its work row. Older
-      // goals stay at their own timestamp instead of joining unrelated work.
-      workIndex = result.findIndex((row, i) => {
-        if (i < before || !row.work) return false;
-        const started = this.turnStarted.get(row.block.turn) ?? Date.parse(row.block.at || '');
-        return Number.isFinite(started) && started >= stamp && started - stamp <= 30_000;
-      });
-    }
-    if (workIndex >= 0) {
-      const row = result[workIndex];
-      goal.turn = row.block.turn;
-      result[workIndex] = {...row, work:[...row.work!, goal]};
-    } else {
-      goal.turn = -1;
-      result.splice(before, 0, {key:`work-goal-${receipt?.id || 'current'}`,block:goal,work:[goal]});
-    }
-    return result;
+    return visibleRows;
   }
   private rowHeight(row: TranscriptRow) { return this.rowHeights.get(row.key) ?? (row.work ? 50 : row.block.kind === 'user' ? 75 : 118); }
   private updateWithScrollAnchor(body: HTMLElement, update: () => void) {
@@ -2441,9 +2397,8 @@ export class MuxSDKChat extends LitElement {
       if (row.work) {
         const working = !this.turnFinished.has(block.turn);
         const open = this.workDisclosureOpen(block.turn);
-        const goalOnly = row.work.every(item => item.kind === 'goal');
         const timeline = open ? this.workTimeline(block.turn, row.work, agents) : nothing;
-        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working && !goalOnly}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working && !goalOnly ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${goalOnly ? 'Goal update' : working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${timeline === nothing ? nothing : html`<div class="work-items">${timeline}</div>`}</details></div>`;
+        return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${timeline === nothing ? nothing : html`<div class="work-items">${timeline}</div>`}</details></div>`;
       }
       return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
@@ -2467,26 +2422,41 @@ export class MuxSDKChat extends LitElement {
     else this.stepExpanded.add(key);
     this.requestUpdate();
   }
-  private goalResponse() {
+  private goalStatus() {
     const condition = this.currentGoalText();
-    const cleared = this.goalDocument?.state === 'cleared' && !condition;
-    if (!this.goalDocument?.revisions.length && !this.commandNotice && !this.goalNotice) return nothing;
-    const title = this.commandFailed ? 'Goal command failed' : cleared ? 'Goal cleared' : 'Goal';
+    if (!condition) return nothing;
     const record = this.goalDocument;
-    const state = record?.humanPaused ? 'Paused by you'
+    const label = record?.humanPaused ? 'Goal paused'
       : record?.receipts.some(receipt => receipt.status === 'dispatching') ? 'Applying goal change…'
       : record && record.requestedRevision > record.appliedRevision ? 'Goal change requested'
       : record?.state === 'active' || record?.state === 'continuing' ? 'Pursuing goal'
       : record?.state === 'complete' || record?.state === 'completed' || record?.state === 'achieved' ? 'Goal achieved'
+      : record?.state === 'blocked' ? 'Goal blocked'
+      : ['usage_limited','budget_limited','cap_hit'].includes(record?.state || '') ? 'Goal limit reached'
+      : record?.state === 'stalled' ? 'Goal stalled'
       : record?.state === 'uncertain' || record?.state === 'error' ? 'Goal needs review'
-      : record?.state === 'ended' ? 'Goal ended · outcome unknown'
-      : record?.state === 'paused' ? 'Paused goal' : '';
-    return html`<section class="goal-response" aria-label="Goal response"><header>${icon(Target,{size:16})}<strong>${title}</strong>${state ? html`<span class="goal-response-state">${state}</span>` : nothing}</header>
-      ${condition ? html`<div class="text">${renderSegments(parseMarkdown(condition),chatMarkdownPolicy)}</div>` : nothing}
-      ${this.commandNotice ? html`<p class="goal-response-note" role=${this.commandFailed ? 'alert' : 'status'}>${this.commandNotice}</p>` : nothing}
-      ${this.goalNotice ? html`<p class="goal-response-note" role="alert">${this.goalNotice}</p>` : nothing}
-      <div class="goal-response-actions"><mux-ui-button size="small" variant="secondary" @click=${this.openGoalTab}>Open Goal tab ${icon(ChevronRight,{size:13})}</mux-ui-button></div>
-    </section>`;
+      : record?.state === 'ended' ? 'Goal ended'
+      : record?.state === 'paused' ? 'Goal paused' : 'Goal set';
+    const tone = record?.humanPaused || ['paused','blocked','ended','stalled','usage_limited','budget_limited','cap_hit'].includes(record?.state || '') ? 'warning'
+      : ['complete','completed','achieved'].includes(record?.state || '') ? 'success'
+      : ['uncertain','error'].includes(record?.state || '') ? 'danger' : 'default';
+    const goalState = record?.state || '';
+    const observation = record?.observations.findLast(item =>
+      (item.event.type === 'goal.progress' || item.event.type === 'goal.snapshot') &&
+      item.event.goalState === goalState && (item.event.goalSummary || item.event.goalReason));
+    const chat = this.chat;
+    const lastGoalObservation = record?.observations.findLastIndex(item =>
+      item.event.type === 'goal.progress' || item.event.type === 'goal.snapshot') ?? -1;
+    const laterTurn = lastGoalObservation >= 0 && record?.observations.slice(lastGoalObservation + 1)
+      .some(item => item.event.type === 'turn.started');
+    const terminal = ['blocked','complete','completed','achieved','stalled','cap_hit','cancelled','error','ended','uncertain','usage_limited','budget_limited'].includes(goalState);
+    const summary = observation?.event.goalSummary || observation?.event.goalReason ||
+      (chat?.goalState === goalState ? chat.goalSummary || chat.goalReason ||
+        (terminal && !laterTurn && record?.requestedRevision === record?.appliedRevision ? chat.lastOutput : '') : '') || '';
+    const preview = (summary || condition).replace(/^\s*#{1,6}\s*/gm, '').replace(/\s+/g, ' ').trim();
+    return html`<button type="button" class="goal-status" data-tone=${tone} title=${summary ? `${label}: ${summary}\n\n${condition}` : condition} aria-label=${`${label}: ${preview} (open Goal tab)`} @click=${this.openGoalTab}>
+      <span class="goal-status-icon" aria-hidden="true">${icon(Target,{size:15})}</span><span class="goal-status-label">${label}</span><span class="goal-status-condition" aria-hidden="true">${preview}</span><span class="goal-status-chevron" aria-hidden="true">${icon(ChevronRight,{size:14})}</span>
+    </button>`;
   }
   private async refineGoal(condition:string) {
     if (this.goalifyPending || this.busy || this.commandPending || !this.activeSession) return;
@@ -2517,7 +2487,6 @@ export class MuxSDKChat extends LitElement {
     this.commandPending = true;
     this.commandFailed = false;
     this.commandNotice = '';
-    this.commandAt = new Date().toISOString();
     try {
       const read = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/goal`), { cache:'no-store' });
       if (!read.ok) throw new Error((await read.text()).trim());
@@ -2526,7 +2495,8 @@ export class MuxSDKChat extends LitElement {
       this.goalDocument = current;
       if (command.action === 'inspect') {
         this.commandFailed = false;
-        this.commandNotice = this.currentGoalText(current) || 'No goal is set for this chat. Type /goal followed by a condition.';
+        if (this.currentGoalText(current)) this.openGoalTab();
+        else this.commandNotice = 'No goal is set for this chat. Type /goal followed by a condition.';
       } else {
         const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/goal`), {
           method:'PATCH', headers:{'Content-Type':'application/json'},
@@ -2537,9 +2507,7 @@ export class MuxSDKChat extends LitElement {
         if (generation !== this.commandGeneration || sessionId !== this.activeSession) return;
         this.goalDocument = record;
         this.commandFailed = false;
-        this.commandNotice = command.action === 'set' ? 'Goal condition saved.' :
-          command.action === 'pause' ? 'Pause requested.' : command.action === 'resume' ?
-            ['complete','completed','achieved','ended','stalled','cap_hit','cancelled','error','uncertain'].includes(current.state) ? 'Goal reset requested.' : 'Resume requested.' : 'Goal cleared.';
+        this.commandNotice = command.action === 'clear' ? 'Goal cleared.' : '';
       }
       if (generation === this.commandGeneration && sessionId === this.activeSession && originalDraft !== undefined && this.flushDraft() === originalDraft) this.setDraft('');
       if (generation === this.commandGeneration && sessionId === this.activeSession) void this.scrollToBottom();
@@ -2840,10 +2808,13 @@ export class MuxSDKChat extends LitElement {
     <div class="layout ${this.previewFocused ? 'preview-focused' : ''}" @dragenter=${this.onDragEnter} @dragover=${this.onDragOver} @dragleave=${this.onDragLeave} @drop=${this.onDrop}><div class="chat">
       ${this.agentHistoryError ? html`<mux-ui-feedback class="agent-history-error" kind="error" appearance="panel">Saved agent work could not be loaded.<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryAgentHistory}>Retry</mux-ui-button></mux-ui-feedback>` : nothing}
       <div class="body scroll-edge-fade ${sideStart ? 'side-empty' : ''}" @scroll=${this.onBodyScroll} @wheel=${() => { this.historyUserInteracted = true; }} @touchstart=${() => { this.historyUserInteracted = true; }} @pointerdown=${() => { this.historyUserInteracted = true; }}>
-      ${sideStart ? html`<div><h2>Ask about this chat</h2><p>Start a side conversation while the main chat continues.</p></div>` : this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length || this.goalDocument?.revisions.length || this.commandNotice || this.goalNotice ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
+      ${sideStart ? html`<div><h2>Ask about this chat</h2><p>Start a side conversation while the main chat continues.</p></div>` : this.selectedAgent ? this.agentWork(agents.find(agent => agent.id === this.selectedAgent)) : this.blocks.length ? this.transcript(agents) : this.error ? nothing : html`<mux-ui-feedback class="block" kind="loading" density="compact">Loading recent messages…</mux-ui-feedback>`}
       ${this.error ? html`<mux-ui-feedback class="block" kind="error" appearance="panel" density="compact">${this.error}${this.reconnectFailed ? html`<mux-ui-button slot="action" variant="secondary" size="small" @click=${this.retryConnection}>Retry now</mux-ui-button>` : nothing}</mux-ui-feedback>` : nothing}
     </div>${this.showScrollBottom ? html`<div class="scroll-bottom-row"><mux-ui-button class="scroll-bottom" variant="secondary" size="small" accessible-label="Scroll to bottom" @click=${() => void this.scrollToBottom()}>↓ Scroll to bottom</mux-ui-button></div>` : nothing}<div class="composer-wrap">
       ${this.recoveryRequired ? html`<div class="recovery-row" role="status"><span class=${this.recoveryError ? 'recovery-error' : ''} title=${this.recoveryErrorDetail || 'Work may have changed before the interruption.'}>${this.recoveryError || 'Turn interrupted · Work may have changed'}</span><mux-ui-button variant="secondary" size="small" ?disabled=${this.recoveryPending} accessible-label="Continue interrupted turn" tooltip="Check recent work, then continue only what remains" @click=${() => void this.continueInterruptedTurn()}>${this.recoveryPending ? 'Continuing…' : 'Continue'}</mux-ui-button></div>` : nothing}
+      ${sideStart ? nothing : this.goalStatus()}
+      ${this.commandNotice ? html`<mux-ui-feedback class="goal-notice" .kind=${this.commandFailed ? 'error' : 'info'} density="compact">${this.commandNotice}</mux-ui-feedback>` : nothing}
+      ${this.goalNotice ? html`<mux-ui-feedback class="goal-notice" kind="error" density="compact">${this.goalNotice}</mux-ui-feedback>` : nothing}
       ${slashSuggestions.length ? html`<mux-ui-listbox class="slash-menu" id="chat-slash-menu" label="Chat commands" presentation="suggestions">${slashSuggestions.map((suggestion,index) => html`<mux-ui-listbox-option id=${`chat-slash-option-${index}`} .label=${suggestion.label} .description=${suggestion.description} layout="inline" ?selected=${index === this.slashSelection} ?active=${index === this.slashSelection} @mousedown=${(event:MouseEvent) => event.preventDefault()} @click=${() => this.selectSlashSuggestion(suggestion.insert)}></mux-ui-listbox-option>`)}</mux-ui-listbox>` : nothing}
       <div class="composer" @paste=${this.onPaste}>
       ${this.clipboardError ? html`<mux-ui-feedback kind="error" density="compact">${this.clipboardError}</mux-ui-feedback>` : nothing}
