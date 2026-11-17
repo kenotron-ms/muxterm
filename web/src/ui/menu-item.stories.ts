@@ -1,13 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { html } from 'lit';
 import './menu.js';
+import './button.js';
 
 const meta = {
   title: 'Components/Menu Item',
   tags: ['autodocs'],
   parameters: { layout: 'fullscreen' },
   render: () => html`<div style="position:relative;min-height:360px;padding:var(--ui-space-7);background:var(--ui-surface-nav)">
-    <mux-ui-menu label="Project actions" style="--ui-menu-offset-y:var(--ui-space-7);--ui-menu-offset-x:auto;left:var(--ui-space-7)">
+    <mux-ui-button variant="secondary">Project options</mux-ui-button>
+    <mux-ui-menu label="Project actions">
       <mux-ui-menu-item>New chat</mux-ui-menu-item>
       <mux-ui-menu-item href="https://example.com/project">Open project site</mux-ui-menu-item>
       <mux-ui-menu-item disabled>Unavailable action</mux-ui-menu-item>

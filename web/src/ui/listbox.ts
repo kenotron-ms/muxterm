@@ -1,6 +1,7 @@
 import { LitElement, css, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { floatPopup, type PopupReference } from '../lib/floating-popup.js';
 
 export type ListboxPresentation = 'popover' | 'suggestions' | 'embedded';
 
@@ -19,6 +20,8 @@ export function listboxIndexForKey(key: string, current: number, count: number):
 export class MuxUIListbox extends LitElement {
   @property() label = '';
   @property({ reflect:true }) presentation: ListboxPresentation = 'popover';
+  @property({ attribute:false }) reference: PopupReference | null = null;
+  private stopFloating?: () => void;
 
   static override styles = css`
     ${subtleScrollbars}
@@ -29,13 +32,13 @@ export class MuxUIListbox extends LitElement {
       color:var(--ui-text); font:var(--ui-text-sm)/1.4 var(--ui-font-sans);
     }
     :host([presentation='popover']) {
-      position:absolute; top:calc(var(--ui-control-md) + var(--ui-space-1)); left:0;
+      position:absolute; top:0; left:0;
       width:min(var(--ui-listbox-width,var(--ui-picker-width)),calc(100vw - var(--ui-space-8)));
       max-height:var(--ui-menu-max-height);
     }
     :host([presentation='suggestions']) {
-      position:absolute; bottom:calc(100% - var(--ui-space-px)); left:50%; transform:translateX(-50%);
-      width:min(var(--ui-listbox-width,var(--ui-dialog-width)),calc(100% - var(--ui-space-8)));
+      position:absolute; top:0; left:0;
+      width:min(var(--ui-listbox-width,var(--ui-dialog-width)),var(--floating-reference-width,100vw));
       max-height:var(--ui-menu-max-height);
     }
     ::slotted([role='separator']) { display:block; height:var(--ui-divider-thickness); margin:var(--ui-space-3) var(--ui-space-2); background:var(--ui-border); }
@@ -55,11 +58,28 @@ export class MuxUIListbox extends LitElement {
     this.setAttribute('role', 'listbox');
     this.syncLabel();
   }
+  override disconnectedCallback(): void {
+    this.stopFloating?.();
+    this.stopFloating = undefined;
+    super.disconnectedCallback();
+  }
   private syncLabel(): void {
     if (this.label) this.setAttribute('aria-label', this.label);
     else this.removeAttribute('aria-label');
   }
-  override updated(): void { this.syncLabel(); }
+  override updated(changed: Map<string, unknown>): void {
+    this.syncLabel();
+    if (this.presentation === 'embedded') {
+      this.stopFloating?.();
+      this.stopFloating = undefined;
+      return;
+    }
+    if (!this.stopFloating || changed.has('reference') || changed.has('presentation')) {
+      this.stopFloating?.();
+      const reference = this.reference || this.previousElementSibling || this.parentElement;
+      if (reference) this.stopFloating = floatPopup(reference, this, this.presentation === 'suggestions' ? 'top' : 'bottom-start', this.presentation === 'suggestions' ? 1 : 6, this.presentation !== 'suggestions');
+    }
+  }
   override render() { return html`<slot></slot>`; }
 }
 

@@ -1285,7 +1285,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .native-browser-history, mux-sdk-utility .native-browser-actions { display:flex; align-items:center; flex:none; gap:var(--ui-space-1); }
     mux-sdk-utility .native-browser-address { flex:1; min-width:0; }
     mux-sdk-utility .native-browser-address::part(input) { border-radius:var(--ui-radius-pill); background:var(--ui-surface-base); }
-    mux-sdk-utility .native-browser-menu { --ui-menu-offset-y:calc(var(--ui-control-lg) - var(--ui-space-1)); }
     mux-sdk-utility .native-browser-viewport { flex:1; min-width:0; min-height:0; overflow:auto; background:var(--ui-surface-base); }
     mux-sdk-utility .native-browser-error { padding:var(--ui-space-3) var(--ui-space-5); color:var(--ui-danger); border-bottom:1px solid var(--ui-border); font-size:var(--ui-text-sm); }
     mux-sdk-utility .native-browser-home { box-sizing:border-box; max-width:var(--ui-utility-home-width); margin:0 auto; padding:var(--ui-space-9) var(--ui-space-7); }
@@ -1341,7 +1340,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .mobile-utility-header, mux-sdk-utility .viewer-header.mobile-file-header { display:none; }
     mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; margin-left:auto; }
     mux-sdk-utility .file-open-wrap { position:relative; }
-    mux-sdk-utility .file-open-menu { --ui-menu-offset-y:calc(var(--ui-control-sm) + var(--ui-space-1)); --ui-menu-offset-x:0; --ui-menu-width:var(--ui-toast-min-width); }
+    mux-sdk-utility .file-open-menu { --ui-menu-width:var(--ui-toast-min-width); }
     mux-sdk-utility .file-open-menu svg { flex:none; color:var(--ui-text-muted); }
     mux-sdk-utility .status-spacer { flex:1; }
     mux-sdk-utility .viewer-body { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; }

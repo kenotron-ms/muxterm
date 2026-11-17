@@ -1,18 +1,22 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { floatPopup, type PopupReference } from '../lib/floating-popup.js';
 import './menu-item.js';
 
 /** An action menu for shared Menu Items. */
 @customElement('mux-ui-menu')
 export class MuxUIMenu extends LitElement {
   @property() label = 'Actions';
+  @property({ attribute:false }) reference: PopupReference | null = null;
+  @property() placement: 'bottom-start' | 'bottom-end' = 'bottom-end';
+  private stopFloating?: () => void;
 
   static override styles = css`
     ${subtleScrollbars}
     :host {
       box-sizing:border-box; display:block; position:absolute; z-index:var(--ui-z-menu);
-      top:var(--ui-menu-offset-y,var(--ui-control-sm)); right:var(--ui-menu-offset-x,var(--ui-space-2));
+      top:0; left:0;
       width:max-content; min-width:var(--ui-menu-min-width); max-width:min(var(--ui-menu-width,var(--ui-picker-width)),calc(100vw - var(--ui-space-8)));
       max-height:var(--ui-menu-max-height); overflow:auto; padding:var(--ui-space-2);
       border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg);
@@ -29,6 +33,19 @@ export class MuxUIMenu extends LitElement {
       :host::before { content:''; display:block; width:var(--ui-control-md); height:var(--ui-space-2); margin:0 auto var(--ui-space-5); border-radius:var(--ui-radius-pill); background:var(--ui-border); }
     }
   `;
+
+  override updated(changed: Map<string, unknown>): void {
+    if (!this.stopFloating || changed.has('reference') || changed.has('placement')) {
+      this.stopFloating?.();
+      const reference = this.reference || this.previousElementSibling || this.parentElement;
+      if (reference) this.stopFloating = floatPopup(reference, this, this.placement);
+    }
+  }
+  override disconnectedCallback(): void {
+    this.stopFloating?.();
+    this.stopFloating = undefined;
+    super.disconnectedCallback();
+  }
 
   private items(): HTMLElement[] {
     const slot = this.renderRoot.querySelector('slot');

@@ -1,4 +1,5 @@
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
+import { floatPopup } from '../lib/floating-popup.js';
 import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sdkChats, sdkHarnessLabel, type FolderListing, type SDKHarnessName } from '../lib/sdk-chats.js';
@@ -77,6 +78,7 @@ export class MuxNewChat extends LitElement {
   private pendingFolderChoose?: () => void;
   @state() private listing?: FolderListing;
   @state() private pickerOpen = false;
+  private stopLocationFloating?: () => void;
   @state() private folderDialogOpen = false;
   @state() private folderDialogListing?: FolderListing;
   @state() private folderDialogPath = '';
@@ -201,7 +203,7 @@ export class MuxNewChat extends LitElement {
     .project-trigger:hover,.project-trigger[aria-expanded="true"] { background:var(--ui-surface-hover); color:var(--ui-text); }
     .project-trigger:focus-visible { outline:2px solid var(--ui-focus); }
     .project-trigger span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .project-options { position:absolute; z-index:var(--ui-z-menu); top:calc(100% + var(--ui-space-2)); left:0; box-sizing:border-box; width:min(var(--ui-mobile-drawer-width),calc(100vw - var(--ui-control-lg))); max-height:min(var(--ui-dialog-height),75dvh); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-overlay); box-shadow:var(--ui-shadow-menu); --folder-list-height:var(--ui-new-chat-location-width); }
+    .project-options { position:absolute; z-index:var(--ui-z-menu); top:0; left:0; box-sizing:border-box; width:min(var(--ui-mobile-drawer-width),calc(100vw - var(--ui-control-lg))); max-height:min(var(--ui-dialog-height),75dvh); overflow:auto; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-overlay); box-shadow:var(--ui-shadow-menu); --folder-list-height:var(--ui-new-chat-location-width); }
     .project-options mux-folder-picker { display:block; width:100%; }
     .project-options mux-folder-picker::part(menu) { border:0; }
     .project-option { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-height:var(--ui-control-md); padding:var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); text-align:left; font:inherit; cursor:pointer; }
@@ -274,6 +276,8 @@ export class MuxNewChat extends LitElement {
     void sdkChats.folders('', this.remoteHost).then(listing => { this.listing = listing; if (!this.folder) { this.folder = listing.base; void this.loadCatalog(); } }).catch(error => { this.error = String(error); });
   }
   override disconnectedCallback() {
+    this.stopLocationFloating?.();
+    this.stopLocationFloating = undefined;
     this.flushPrompt();
     this.pendingFolderChoose?.();
     this.unsub?.();
@@ -291,6 +295,14 @@ export class MuxNewChat extends LitElement {
     if (textarea) { syncTextareaSizing(textarea); textarea.focus(); }
   }
   protected override updated(changed: PropertyValues<this>) {
+    if (!this.pickerOpen) {
+      this.stopLocationFloating?.();
+      this.stopLocationFloating = undefined;
+    } else if (!this.stopLocationFloating) {
+      const trigger = this.renderRoot.querySelector('.project-trigger');
+      const menu = this.renderRoot.querySelector<HTMLElement>('.project-options');
+      if (trigger && menu) this.stopLocationFloating = floatPopup(trigger, menu, 'bottom-start', 6, false);
+    }
     if (changed.has('initialHarness') && !this.userSelectedHarness && this.startOptions?.some(option => option.harness === this.initialHarness) && this.harness !== this.initialHarness) {
       this.onHarnessChange(this.initialHarness);
     }
