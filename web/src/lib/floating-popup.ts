@@ -7,8 +7,9 @@ export function floatPopup(reference: PopupReference, popup: HTMLElement, placem
   const phone = window.matchMedia('(max-width:700px)');
   const original = {
     position: popup.style.position, left: popup.style.left, top: popup.style.top,
-    right: popup.style.right, bottom: popup.style.bottom, maxHeight: popup.style.maxHeight,
+    right: popup.style.right, bottom: popup.style.bottom, margin: popup.style.margin, maxHeight: popup.style.maxHeight,
     referenceWidth: popup.style.getPropertyValue('--floating-reference-width'),
+    popover: popup.getAttribute('popover'),
   };
   let stop: (() => void) | undefined;
   let generation = 0;
@@ -17,18 +18,28 @@ export function floatPopup(reference: PopupReference, popup: HTMLElement, placem
     generation++;
     stop?.();
     stop = undefined;
+    if (popup.matches(':popover-open')) popup.hidePopover();
+    if (original.popover === null) popup.removeAttribute('popover');
+    else popup.setAttribute('popover', original.popover);
     popup.style.position = original.position;
     popup.style.left = original.left;
     popup.style.top = original.top;
     popup.style.right = original.right;
     popup.style.bottom = original.bottom;
+    popup.style.margin = original.margin;
     popup.style.maxHeight = original.maxHeight;
     if (original.referenceWidth) popup.style.setProperty('--floating-reference-width', original.referenceWidth);
     else popup.style.removeProperty('--floating-reference-width');
   };
   const sync = () => {
     reset();
-    if (phone.matches && phoneSheet) return;
+    // The top layer escapes dockview pane clipping and stacking contexts.
+    popup.setAttribute('popover', 'manual');
+    popup.style.margin = '0';
+    if (phone.matches && phoneSheet) {
+      popup.showPopover();
+      return;
+    }
     const cssMaxHeight = parseFloat(getComputedStyle(popup).maxHeight);
     const maxHeight = Number.isFinite(cssMaxHeight) ? cssMaxHeight : Infinity;
     const current = generation;
@@ -37,6 +48,7 @@ export function floatPopup(reference: PopupReference, popup: HTMLElement, placem
     popup.style.top = '0px';
     popup.style.right = 'auto';
     popup.style.bottom = 'auto';
+    popup.showPopover();
     stop = autoUpdate(reference, popup, () => {
       popup.style.setProperty('--floating-reference-width', `${reference.getBoundingClientRect().width}px`);
       void computePosition(reference, popup, {
