@@ -6,8 +6,9 @@ import { sdkChats } from '../lib/sdk-chats.js';
 import '../ui/button.js';
 
 type WorkActor = { kind:'chat' | 'human' | 'external-tool'; sessionId?:string };
+type WorkDispatch = { clientRef:string; sessionId:string; state:string; detail?:string };
 type WorkUpdate = { id:string; at:string; actor?:WorkActor; sessionId?:string; linkedSessionId?:string; text:string; status?:string; progress?:string; nextAction?:string; outcome?:string; evidence?:string[]; ownerSessionId?:string; reviewerSessionId?:string; blockedReason?:string; dependsOn?:string[]; labels?:string[] };
-type WorkItem = { id:string; title:string; brief:string; status:string; progress?:string; nextAction?:string; outcome?:string; createdBy:WorkActor; ownerSessionId:string; reviewerSessionId?:string; acceptanceCriteria?:string; blockedReason?:string; dependsOn:string[]; waitingOn:string[]; labels:string[]; revision:number; sessionIds:string[]; projectIds:string[]; updatedAt:string; updates?:WorkUpdate[] };
+type WorkItem = { id:string; title:string; brief:string; status:string; progress?:string; nextAction?:string; outcome?:string; createdBy:WorkActor; ownerSessionId:string; reviewerSessionId?:string; acceptanceCriteria?:string; blockedReason?:string; dependsOn:string[]; waitingOn:string[]; labels:string[]; dispatch?:WorkDispatch; revision:number; sessionIds:string[]; projectIds:string[]; updatedAt:string; updates?:WorkUpdate[] };
 
 @customElement('mux-chat-coordination')
 export class MuxChatCoordination extends LitElement {
@@ -18,6 +19,8 @@ export class MuxChatCoordination extends LitElement {
   @state() private detail?: WorkItem;
   @state() private filter: 'open' | 'all' | 'done' = 'open';
   @state() private scope: 'folder' | 'all' = 'folder';
+  @state() private projectFilter = '';
+  @state() private labelFilter = '';
   @state() private error = '';
   private poll?: number;
   private loading = false;
@@ -36,6 +39,8 @@ export class MuxChatCoordination extends LitElement {
     .overview p { color:var(--ui-text-muted); }
     .overview .filters { margin-bottom:0; }
     .filters { display:flex; gap:var(--ui-space-2); margin-bottom:var(--ui-space-4); }
+    .field-filters { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin-bottom:var(--ui-space-4); }
+    .field-filters select { max-width:100%; min-width:10rem; padding:var(--ui-space-2) var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; }
     .filter[pressed] { color:var(--ui-accent); }
     .list { border-top:1px solid var(--ui-border); }
     .issue { border-bottom:1px solid var(--ui-border); padding:var(--ui-space-4) var(--ui-space-2); }
@@ -88,6 +93,8 @@ export class MuxChatCoordination extends LitElement {
       this.detail = undefined;
       this.filter = 'open';
       this.scope = 'folder';
+      this.projectFilter = '';
+      this.labelFilter = '';
       this.loading = false;
       void this.refresh();
     }
@@ -127,6 +134,7 @@ export class MuxChatCoordination extends LitElement {
   private actorLabel(actor?:WorkActor, legacySessionId?:string) { return actor?.kind === 'chat' && actor.sessionId ? this.chatLink(actor.sessionId) : actor?.kind === 'human' ? 'Browser user' : actor?.kind === 'external-tool' ? 'External tool' : legacySessionId ? this.chatLink(legacySessionId) : 'Unknown'; }
   private creatorLabel(item:WorkItem) { return this.actorLabel(item.createdBy); }
   private ownerLabel(item:WorkItem) { return item.ownerSessionId ? this.chatLink(item.ownerSessionId) : 'Unassigned'; }
+  private dispatchLabel(item:WorkItem) { const dispatch=item.dispatch; return dispatch ? dispatch.state === 'failed' ? 'Failed to start' : dispatch.state === 'preparing' ? 'Preparing chat' : html`${dispatch.state === 'claimed' ? 'Claimed by' : dispatch.state === 'uncertain' ? 'Check' : 'Sent to'} ${this.chatLink(dispatch.sessionId)}` : nothing; }
   private dependencyLabel(id:string) { return this.work.find(item => item.id === id)?.title || id.slice(0,8); }
   private async openDependency(id:string) {
     const item = this.work.find(candidate => candidate.id === id);
@@ -140,21 +148,31 @@ export class MuxChatCoordination extends LitElement {
     this.refreshKey++;
     this.loading = false;
     this.scope = scope;
+    this.projectFilter = '';
     this.work = [];
     this.detail = undefined;
     void this.refresh();
   }
+  private selectProjectFilter(id:string) {
+    if (id && this.scope !== 'all') this.selectScope('all');
+    this.projectFilter = id;
+  }
+  private projectName(id:string) { return sdkChats.projects.find(project => project.id === id && (project.remoteHost || '') === this.remoteHost)?.name || id.slice(0,8); }
   private projectNames(item:WorkItem) {
-    return item.projectIds?.length ? item.projectIds.map(id => sdkChats.projects.find(project => project.id === id && (project.remoteHost || '') === this.remoteHost)?.name || id.slice(0,8)).join(', ') : 'No folder';
+    return item.projectIds?.length ? item.projectIds.map(id => this.projectName(id)).join(', ') : 'No folder';
   }
 
   private issueList() {
     const ordered = [...this.work].sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
-    const openCount = ordered.filter(item => item.status !== 'done' && item.status !== 'cancelled').length;
-    const visible = ordered.filter(item => this.filter === 'all' || (this.filter === 'done' ? item.status === 'done' || item.status === 'cancelled' : item.status !== 'done' && item.status !== 'cancelled'));
-    return html`<div class="overview"><p>${openCount} open · ${this.work.length} total</p><div class="filters" aria-label="Issue scope"><mux-ui-button size="small" variant="quiet" toggle .pressed=${this.scope === 'folder'} @click=${() => this.selectScope('folder')}>${this.projectId ? 'This folder' : 'This chat'}</mux-ui-button><mux-ui-button size="small" variant="quiet" toggle .pressed=${this.scope === 'all'} @click=${() => this.selectScope('all')}>All issues</mux-ui-button></div></div>
+    const projectIds = [...new Set([...sdkChats.projects.filter(project => (project.remoteHost || '') === this.remoteHost).map(project => project.id), ...ordered.flatMap(item => item.projectIds || [])])].sort((a,b) => this.projectName(a).localeCompare(this.projectName(b)));
+    const labels = [...new Set(ordered.flatMap(item => item.labels || []))].sort();
+    const narrowed = ordered.filter(item => (!this.projectFilter || item.projectIds?.includes(this.projectFilter)) && (!this.labelFilter || item.labels?.includes(this.labelFilter)));
+    const openCount = narrowed.filter(item => item.status !== 'done' && item.status !== 'cancelled').length;
+    const visible = narrowed.filter(item => this.filter === 'all' || (this.filter === 'done' ? item.status === 'done' || item.status === 'cancelled' : item.status !== 'done' && item.status !== 'cancelled'));
+    return html`<div class="overview"><p>${openCount} open · ${narrowed.length} total</p><div class="filters" aria-label="Issue scope"><mux-ui-button size="small" variant="quiet" toggle .pressed=${this.scope === 'folder'} @click=${() => this.selectScope('folder')}>${this.projectId ? 'This folder' : 'This chat'}</mux-ui-button><mux-ui-button size="small" variant="quiet" toggle .pressed=${this.scope === 'all'} @click=${() => this.selectScope('all')}>All issues</mux-ui-button></div></div>
       <div class="filters" aria-label="Filter issues">${(['open','all','done'] as const).map(filter => html`<mux-ui-button class="filter" size="small" variant="quiet" toggle .pressed=${this.filter === filter} @click=${() => { this.filter=filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Done'}</mux-ui-button>`)}</div>
-      ${visible.length ? html`<div class="list">${visible.map(item => html`<div class="issue"><mux-ui-button class="issue-open" full-width variant="quiet" @click=${() => this.openDetail(item)}><span class="status-dot ${item.status}" aria-hidden="true"></span><span class="issue-main"><strong>${item.title}</strong><span class="summary">${item.waitingOn?.length ? `Waiting on ${item.waitingOn.length} prerequisite${item.waitingOn.length === 1 ? '' : 's'}` : item.nextAction || item.progress || item.brief || 'No progress yet'}</span></span><span class="status">${this.statusName(item.status)}</span></mux-ui-button><span class="meta">Owner: ${this.ownerLabel(item)} · Created by ${this.creatorLabel(item)} · ${this.projectNames(item)}${item.labels?.length ? ` · ${item.labels.join(', ')}` : ''}</span></div>`)}</div>` : html`<div class="empty"><strong>${this.work.length ? 'No issues in this view' : 'No issues yet'}</strong>${this.work.length ? 'Choose another filter to see them.' : 'Issues will appear here as agents record shared work.'}</div>`}`;
+      <div class="field-filters"><select aria-label="Filter by project" .value=${this.projectFilter} @change=${(event:Event) => this.selectProjectFilter((event.target as HTMLSelectElement).value)}><option value="">All projects</option>${projectIds.map(id => html`<option value=${id}>${this.projectName(id)}</option>`)}</select><select aria-label="Filter by label" .value=${this.labelFilter} @change=${(event:Event) => { this.labelFilter=(event.target as HTMLSelectElement).value; }}><option value="">All labels</option>${labels.map(label => html`<option value=${label}>${label}</option>`)}</select></div>
+      ${visible.length ? html`<div class="list">${visible.map(item => html`<div class="issue"><mux-ui-button class="issue-open" full-width variant="quiet" @click=${() => this.openDetail(item)}><span class="status-dot ${item.status}" aria-hidden="true"></span><span class="issue-main"><strong>${item.title}</strong><span class="summary">${item.waitingOn?.length ? `Waiting on ${item.waitingOn.length} prerequisite${item.waitingOn.length === 1 ? '' : 's'}` : item.nextAction || item.progress || item.brief || 'No progress yet'}</span></span><span class="status">${this.statusName(item.status)}</span></mux-ui-button><span class="meta">Owner: ${this.ownerLabel(item)} · Created by ${this.creatorLabel(item)}${item.dispatch && item.dispatch.state !== 'claimed' ? html` · Kickoff: ${this.dispatchLabel(item)}` : nothing} · ${this.projectNames(item)}${item.labels?.length ? ` · ${item.labels.join(', ')}` : ''}</span></div>`)}</div>` : html`<div class="empty"><strong>${this.work.length ? 'No issues in this view' : 'No issues yet'}</strong>${this.work.length ? 'Choose another filter to see them.' : 'Issues will appear here as agents record shared work.'}</div>`}`;
   }
   private issueDetail() {
     const item = this.detail;
@@ -162,7 +180,7 @@ export class MuxChatCoordination extends LitElement {
     const updates = [...(item.updates || [])].reverse();
     return html`<div class="detail-head"><mux-ui-button size="small" variant="quiet" @click=${() => { this.detail=undefined; }}>← All issues</mux-ui-button><span class="status">${this.statusName(item.status)}</span></div>
       <h2>${item.title}</h2><p class="detail-lead">${item.brief || 'No description yet.'}</p>
-      <div class="facts"><p><strong>Created by:</strong> ${this.creatorLabel(item)}</p><p><strong>Owner:</strong> ${this.ownerLabel(item)}</p>${item.labels?.length ? html`<p><strong>Labels:</strong> ${item.labels.join(', ')}</p>` : nothing}${item.dependsOn?.length ? html`<p><strong>Depends on:</strong> ${this.dependencyLinks(item.dependsOn)}</p>` : nothing}${item.waitingOn?.length ? html`<p><strong>Waiting on:</strong> ${this.dependencyLinks(item.waitingOn)}</p>` : nothing}${item.nextAction ? html`<p><strong>Next action:</strong> ${item.nextAction}</p>` : nothing}${item.acceptanceCriteria ? html`<p><strong>Acceptance criteria:</strong> ${item.acceptanceCriteria}</p>` : nothing}<p><strong>Reviewer:</strong> ${item.reviewerSessionId ? this.chatLink(item.reviewerSessionId) : 'Unassigned'}</p>${item.sessionIds?.length ? html`<p><strong>Participants:</strong> ${item.sessionIds.map((id, index) => html`${index ? ', ' : ''}${this.chatLink(id)}`)}</p>` : nothing}<p class="meta">Updated ${this.date(item.updatedAt)} · Folders: ${this.projectNames(item)}</p></div>
+      <div class="facts"><p><strong>Created by:</strong> ${this.creatorLabel(item)}</p><p><strong>Owner:</strong> ${this.ownerLabel(item)}</p>${item.dispatch ? html`<p><strong>Kickoff:</strong> ${this.dispatchLabel(item)}${item.dispatch.detail ? ` · ${item.dispatch.detail}` : ''}</p>` : nothing}${item.labels?.length ? html`<p><strong>Labels:</strong> ${item.labels.join(', ')}</p>` : nothing}${item.dependsOn?.length ? html`<p><strong>Depends on:</strong> ${this.dependencyLinks(item.dependsOn)}</p>` : nothing}${item.waitingOn?.length ? html`<p><strong>Waiting on:</strong> ${this.dependencyLinks(item.waitingOn)}</p>` : nothing}${item.nextAction ? html`<p><strong>Next action:</strong> ${item.nextAction}</p>` : nothing}${item.acceptanceCriteria ? html`<p><strong>Acceptance criteria:</strong> ${item.acceptanceCriteria}</p>` : nothing}<p><strong>Reviewer:</strong> ${item.reviewerSessionId ? this.chatLink(item.reviewerSessionId) : 'Unassigned'}</p>${item.sessionIds?.length ? html`<p><strong>Participants:</strong> ${item.sessionIds.map((id, index) => html`${index ? ', ' : ''}${this.chatLink(id)}`)}</p>` : nothing}<p class="meta">Updated ${this.date(item.updatedAt)} · Folders: ${this.projectNames(item)}</p></div>
       ${item.status === 'blocked' ? html`<div class="blocker"><strong>Blocked:</strong> ${item.blockedReason}</div>` : nothing}
       <div class="progress"><strong>Current progress</strong><p>${item.progress || 'No progress recorded yet.'}</p>${item.outcome ? html`<p><strong>Outcome:</strong> ${item.outcome}</p>` : nothing}</div>
       <section class="timeline"><h3>Activity</h3>${updates.length ? updates.map(update => html`<div class="entry"><div class="meta">${this.date(update.at)} · ${this.actorLabel(update.actor, update.sessionId)}${update.status ? ` · ${this.statusName(update.status)}` : ''}</div><p>${update.text || update.progress || update.outcome || (update.ownerSessionId !== undefined ? html`Owner: ${update.ownerSessionId ? this.chatLink(update.ownerSessionId) : 'Unassigned'}` : update.reviewerSessionId !== undefined ? html`Reviewer: ${update.reviewerSessionId ? this.chatLink(update.reviewerSessionId) : 'Unassigned'}` : update.dependsOn !== undefined ? html`Dependencies: ${update.dependsOn.length ? this.dependencyLinks(update.dependsOn) : 'Cleared'}` : update.labels !== undefined ? `Labels: ${update.labels.length ? update.labels.join(', ') : 'Cleared'}` : update.nextAction !== undefined ? `Next action: ${update.nextAction || 'Cleared'}` : update.blockedReason ? update.blockedReason : update.linkedSessionId ? html`Linked ${this.chatLink(update.linkedSessionId)}` : update.status ? this.statusName(update.status) : 'Update recorded')}</p>${update.evidence?.length ? html`<p class="meta">Evidence: ${update.evidence.join(', ')}</p>` : nothing}</div>`) : html`<div class="empty">No activity yet.</div>`}</section>`;

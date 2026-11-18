@@ -146,6 +146,21 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-work/"+url.PathEscape(id), nil)
 			return string(result), err
 		})
+	srv.Register("start_work_item", "Ask Muxterm to kick off an open Work item after its dependencies are done. Muxterm reserves one dispatch, chooses a ready chat in a matching project that owns no other unfinished work, or creates a chat. It sends the Work ID and instructs that chat to claim the item. The returned dispatch state is preparing, sent, claimed, uncertain, or failed; inspect an uncertain chat before attempting any new dispatch. Reusing client_ref is idempotent. This does not start or change a Chat Goal.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp}), "required": []string{"work_id", "client_ref"}},
+		func(args map[string]any) (string, error) {
+			id, err := argString(args, "work_id")
+			if err != nil {
+				return "", err
+			}
+			ref, err := argString(args, "client_ref")
+			if err != nil {
+				return "", err
+			}
+			body, _ := json.Marshal(map[string]any{"clientRef": ref})
+			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-work/"+url.PathEscape(id)+"/start", body)
+			return string(result), err
+		})
 	srv.Register("update_work_item", "Append an idempotent progress update or change status, next action, owner, reviewer, blocker, dependencies, labels, participants, or folder tags. depends_on and labels replace their respective lists; [] clears either. Dependency, label, and assignment changes require expected_revision. Cycles are rejected and work cannot become active, review, or done while waiting_on is nonempty. owner_session_id is the current assignee; pass an empty string to unassign. An unassigned item can be claimed by the calling chat for itself. A blocked item needs blocked_reason or text. status=review marks evidence ready for its reviewer. Assignment does not wake an idle chat; send_chat_message explicitly for that. This never controls a Chat Goal.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp, "session_id": stringProp, "linked_session_id": stringProp, "text": stringProp, "status": map[string]any{"type": "string", "enum": []string{"open", "active", "blocked", "review", "done", "cancelled"}}, "progress": stringProp, "next_action": stringProp, "outcome": stringProp, "evidence": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "depends_on": stringsProp, "owner_session_id": stringProp, "reviewer_session_id": stringProp, "blocked_reason": stringProp, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}), "required": []string{"work_id", "client_ref"}},
 		func(args map[string]any) (string, error) {

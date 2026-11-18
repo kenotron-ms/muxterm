@@ -1,8 +1,11 @@
 # Shared work records
 
 The Issues view and the `create_work_item`, `list_work_items`,
-`get_next_work_item`, `get_work_item`, and `update_work_item` MCP tools use one durable Work record. Creating or updating
+`get_next_work_item`, `get_work_item`, `update_work_item`, and
+`start_work_item` MCP tools use one durable Work record. Creating or updating
 work does not start an agent, send a chat message, or control a Chat Goal.
+The Issues view can narrow the visible list by project and label; the MCP list
+and next-ready tools accept multiple project IDs (any match) and labels (all match).
 
 ## Start with a request in chat
 
@@ -10,14 +13,16 @@ Tell a chat the outcome you want, even if your first completion condition is
 rough. The chat should assess whether that condition actually demonstrates the
 outcome, suggest a better one when needed, and ask about choices that depend on
 your judgment. It then creates the Work item and maintains the acceptance
-criteria, next action, and owner. You do not need to supply a chat ID or keep
+criteria and next action. Muxterm selects a worker at kickoff, and the worker
+claims ownership. You do not need to supply a chat ID or keep
 the next action current yourself.
 
-At kickoff, the coordinating chat can do the work itself, choose a suitable
-existing chat, or create a new one in the relevant project. It records the
-chosen owner and starts the worker's turn. The current API exposes these as
-separate calls; it does not yet provide an atomic scheduler or automatically
-wake a chat merely because a Work item was assigned.
+At kickoff, the coordinating chat calls `start_work_item` with the Work ID and
+a stable `client_ref`. Muxterm chooses a ready chat in a matching project that
+owns no other unfinished work, or creates one. It sends the Work ID to that
+chat; the worker reads the record, claims it, and starts its next action.
+The system records the selected chat and dispatch state on the Work item.
+An item with unfinished prerequisites cannot be started.
 
 ## People and sessions
 
@@ -42,6 +47,14 @@ work it created or currently owns; an unassigned item may be claimed by a chat
 for itself. Browser and same-user external tools retain their existing control
 scope. Each change has a `client_ref`; retrying the same change returns its
 record instead of appending it twice.
+
+`dispatch` records the chat selected by `start_work_item` and whether kickoff
+is `preparing`, `sent`, `claimed`, `uncertain`, or `failed`. A sent input means
+Muxterm admitted the worker's turn; `claimed` means that chat took ownership.
+Repeated calls with the same `client_ref` return the same dispatch. If delivery
+is uncertain, inspect the linked chat and Work record before a new attempt;
+Muxterm does not blindly resend an uncertain input. A failed dispatch can be
+retried with a new reference. The Issues view links the selected chat.
 
 ## Work state
 
@@ -91,8 +104,9 @@ claimant got there first, the server returns 409; fetch again before deciding
 what to do. For a broader inspection of blocked or assigned work, use
 `list_work_items` and `get_work_item`.
 
-For an idle chat, create or assign the item to its chat ID, then call
-`send_chat_message` once with the Work ID and next action. Assignment is a
-durable ownership change; that explicit message starts the chat turn. A chat
-that claims work while already running needs no extra kickoff message. Neither
-path starts a Chat Goal.
+For a new item that needs a worker, call `start_work_item` with `work_id` and a
+stable `client_ref`. Muxterm reserves one dispatch before selecting a worker;
+while reserved, the item is excluded from `get_next_work_item`. The selected
+chat claims with its own ID and the latest revision. A chat already running
+can claim ready work from the pile and continue in the same turn. Neither path
+starts a Chat Goal.

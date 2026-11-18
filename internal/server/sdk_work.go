@@ -20,35 +20,36 @@ import (
 // Work items coordinate sessions. A work item is neither a Chat Goal nor a
 // command to start a harness.
 type sdkWorkItem struct {
-	ID                string          `json:"id"`
-	ClientRef         string          `json:"clientRef"`
-	Title             string          `json:"title"`
-	Brief             string          `json:"brief"`
-	NextAction        string          `json:"nextAction,omitempty"`
-	CreateNextAction  string          `json:"createNextAction,omitempty"`
-	Status            string          `json:"status"`
-	CreatedBy         sdkWorkActor    `json:"createdBy"`
-	OwnerSessionID    string          `json:"ownerSessionId"`
-	CreateOwnerID     string          `json:"createOwnerSessionId,omitempty"`
-	Acceptance        string          `json:"acceptanceCriteria,omitempty"`
-	ReviewerSessionID string          `json:"reviewerSessionId,omitempty"`
-	CreateReviewerID  string          `json:"createReviewerSessionId,omitempty"`
-	BlockedReason     string          `json:"blockedReason,omitempty"`
-	ProjectIDs        []string        `json:"projectIds"`
-	CreateProjectIDs  []string        `json:"createProjectIds"`
-	Labels            []string        `json:"labels"`
-	CreateLabels      []string        `json:"createLabels,omitempty"`
-	SessionIDs        []string        `json:"sessionIds"`
-	CreateSessionIDs  []string        `json:"createSessionIds"`
-	DependsOn         []string        `json:"dependsOn"`
-	CreateDependsOn   []string        `json:"createDependsOn,omitempty"`
-	WaitingOn         []string        `json:"waitingOn"`
-	Progress          string          `json:"progress,omitempty"`
-	Outcome           string          `json:"outcome,omitempty"`
-	Revision          int             `json:"revision"`
-	CreatedAt         time.Time       `json:"createdAt"`
-	UpdatedAt         time.Time       `json:"updatedAt"`
-	Updates           []sdkWorkUpdate `json:"updates"`
+	ID                string           `json:"id"`
+	ClientRef         string           `json:"clientRef"`
+	Title             string           `json:"title"`
+	Brief             string           `json:"brief"`
+	NextAction        string           `json:"nextAction,omitempty"`
+	CreateNextAction  string           `json:"createNextAction,omitempty"`
+	Status            string           `json:"status"`
+	CreatedBy         sdkWorkActor     `json:"createdBy"`
+	OwnerSessionID    string           `json:"ownerSessionId"`
+	CreateOwnerID     string           `json:"createOwnerSessionId,omitempty"`
+	Acceptance        string           `json:"acceptanceCriteria,omitempty"`
+	ReviewerSessionID string           `json:"reviewerSessionId,omitempty"`
+	CreateReviewerID  string           `json:"createReviewerSessionId,omitempty"`
+	BlockedReason     string           `json:"blockedReason,omitempty"`
+	ProjectIDs        []string         `json:"projectIds"`
+	CreateProjectIDs  []string         `json:"createProjectIds"`
+	Labels            []string         `json:"labels"`
+	CreateLabels      []string         `json:"createLabels,omitempty"`
+	SessionIDs        []string         `json:"sessionIds"`
+	CreateSessionIDs  []string         `json:"createSessionIds"`
+	DependsOn         []string         `json:"dependsOn"`
+	CreateDependsOn   []string         `json:"createDependsOn,omitempty"`
+	WaitingOn         []string         `json:"waitingOn"`
+	Dispatch          *sdkWorkDispatch `json:"dispatch,omitempty"`
+	Progress          string           `json:"progress,omitempty"`
+	Outcome           string           `json:"outcome,omitempty"`
+	Revision          int              `json:"revision"`
+	CreatedAt         time.Time        `json:"createdAt"`
+	UpdatedAt         time.Time        `json:"updatedAt"`
+	Updates           []sdkWorkUpdate  `json:"updates"`
 }
 
 type sdkWorkUpdate struct {
@@ -71,6 +72,15 @@ type sdkWorkUpdate struct {
 	BlockedReason     *string      `json:"blockedReason,omitempty"`
 	DependsOn         *[]string    `json:"dependsOn,omitempty"`
 	ExpectedRevision  *int         `json:"expectedRevision,omitempty"`
+}
+
+type sdkWorkDispatch struct {
+	ClientRef string    `json:"clientRef"`
+	SessionID string    `json:"sessionId"`
+	State     string    `json:"state"`
+	Detail    string    `json:"detail,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // CreatedBy is immutable provenance. The owner is a separate, assignable chat.
@@ -236,6 +246,14 @@ func (h *sdkChatHost) loadWorkItems() {
 			continue
 		}
 		h.workItems[item.ID] = &item
+		if item.Dispatch != nil && item.Dispatch.State == "preparing" {
+			item.Dispatch.State = "uncertain"
+			item.Dispatch.Detail = "server restarted before dispatch acknowledgement; inspect the selected chat before retrying"
+			item.Dispatch.UpdatedAt = time.Now().UTC()
+			if err := h.saveWorkLocked(&item); err != nil {
+				log.Printf("mark work dispatch uncertain %s: %v", item.ID, err)
+			}
+		}
 	}
 }
 
@@ -292,7 +310,7 @@ func (s *Server) handleSDKNextWork(w http.ResponseWriter, r *http.Request) {
 	}
 	var next *sdkWorkItem
 	for _, item := range h.workItems {
-		if item.Status != "open" || item.OwnerSessionID != "" || len(h.workWaitingOnLocked(item)) != 0 {
+		if item.Status != "open" || item.OwnerSessionID != "" || (item.Dispatch != nil && item.Dispatch.State != "failed") || len(h.workWaitingOnLocked(item)) != 0 {
 			continue
 		}
 		if !workMatchesProjects(h.workProjectIDsLocked(item), projectIDs) || !workMatchesLabels(item.Labels, labels) {
@@ -618,6 +636,11 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "work item changed; refresh before assigning", 409)
 		return
 	}
+	if req.OwnerSessionID != nil && item.Dispatch != nil && item.Dispatch.State != "failed" && item.OwnerSessionID == "" && *req.OwnerSessionID != item.Dispatch.SessionID {
+		h.mu.Unlock()
+		http.Error(w, "work is reserved for another session", 409)
+		return
+	}
 	if actor.Kind == "chat" && (req.OwnerSessionID != nil || req.ReviewerSessionID != nil || req.DependsOn != nil || req.Labels != nil) && actor.SessionID != item.OwnerSessionID && actor.SessionID != h.workCreatorLocked(item).SessionID && !(item.OwnerSessionID == "" && req.OwnerSessionID != nil && *req.OwnerSessionID == actor.SessionID && req.ReviewerSessionID == nil && req.DependsOn == nil && req.Labels == nil) {
 		h.mu.Unlock()
 		http.Error(w, "only the creator or owner can assign this work; an unassigned item may be claimed", 403)
@@ -631,6 +654,13 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	previousOwner := copy.OwnerSessionID
 	if req.OwnerSessionID != nil {
 		copy.OwnerSessionID = *req.OwnerSessionID
+		if copy.Dispatch != nil && copy.OwnerSessionID == copy.Dispatch.SessionID {
+			dispatch := *copy.Dispatch
+			dispatch.State = "claimed"
+			dispatch.Detail = ""
+			dispatch.UpdatedAt = time.Now().UTC()
+			copy.Dispatch = &dispatch
+		}
 		if previousOwner != "" && previousOwner != copy.OwnerSessionID && !slices.Contains(copy.SessionIDs, previousOwner) && previousOwner != copy.CreatedBy.SessionID {
 			copy.SessionIDs = append(slices.Clone(copy.SessionIDs), previousOwner)
 		}
