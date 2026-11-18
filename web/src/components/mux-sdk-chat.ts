@@ -51,7 +51,7 @@ import goalifySkill from '../../../skills/goalify/SKILL.md?raw';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
 type LaneOrigin = { type: 'operator-lane' | 'chat-message' | 'external-tool'; chatId: string; targetChatId?: string; relation?: 'operator-to-lane' | 'lane-to-lane' | 'lane-to-operator' | 'chat-to-chat'; name: string; harness: string; status: string };
-type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; name?: string; toolId?: string; itemId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; origin?: LaneOrigin; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
+type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; workId?: string; name?: string; toolId?: string; itemId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; origin?: LaneOrigin; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
@@ -1617,6 +1617,9 @@ export class MuxSDKChat extends LitElement {
       this.turnStart = blocks.length;
       this.currentTurn++;
       if (!this.replaying) void sdkChats.refresh();
+    }
+    else if (event.type === 'work.attention') {
+      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:event.text || 'Work needs attention.', at:event.at });
     }
     else if (event.type === 'goal.progress') {
       if (this.chat) this.chat = { ...this.chat, goalState: event.goalState, goalReason: event.goalReason, goalSummary: event.goalSummary };

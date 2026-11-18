@@ -20,6 +20,9 @@ func (h *sdkChatHost) eligibleWorkChatLocked(chat *sdkChat, item *sdkWorkItem, p
 	if chat == nil || chat.Archived || chat.VoiceHandoff || chat.SideParentID != "" || chat.State != "ready" {
 		return false
 	}
+	if chat.ID == h.workCreatorLocked(item).SessionID {
+		return false
+	}
 	if len(projects) == 0 {
 		if chat.WorkspaceID != "" {
 			return false
@@ -121,9 +124,9 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, copy)
 		return
 	}
-	if item.Status != "open" || len(h.workWaitingOnLocked(item)) != 0 {
+	if !h.workEligibleLocked(item, true) {
 		h.mu.Unlock()
-		http.Error(w, "work must be open with all prerequisites done", 409)
+		http.Error(w, "work is not eligible to start", 409)
 		return
 	}
 	projects := slices.Clone(h.workProjectIDsLocked(item))
@@ -160,9 +163,9 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		writeSDKJSON(w, 200, copy)
 		return
 	}
-	if item.Status != "open" || len(h.workWaitingOnLocked(item)) != 0 {
+	if !h.workEligibleLocked(item, true) {
 		h.mu.Unlock()
-		http.Error(w, "work must be open with all prerequisites done", 409)
+		http.Error(w, "work is not eligible to start", 409)
 		return
 	}
 	projects = slices.Clone(h.workProjectIDsLocked(item))
@@ -238,6 +241,11 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
+	}
+	if state == "uncertain" || state == "failed" {
+		if creatorID := result.CreatedBy.SessionID; creatorID != "" && creatorID != result.Dispatch.SessionID {
+			h.appendEvent(sdkEvent{SessionID: creatorID, Type: "work.attention", WorkID: id, Text: "Work kickoff needs inspection: " + result.Title + ". Open the Work tab for details."})
+		}
 	}
 	writeSDKJSON(w, 200, result)
 }

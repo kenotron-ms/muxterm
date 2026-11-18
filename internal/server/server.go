@@ -145,6 +145,7 @@ type Server struct {
 	agentVersions *codingAgentVersionCache
 
 	sdkChats              *sdkChatHost
+	workWake              chan struct{}
 	pagesMu               sync.Map // chat ID -> *sync.Mutex; page writes never hold the global chat lock
 	sdkChatAttachments    *chatattachments.Store
 	sdkJobs               *sdkJobs
@@ -179,6 +180,8 @@ func New(cfg Config) *Server {
 		version:        cfg.Version,
 	}
 	s.sdkChats = newSDKChatHost()
+	s.workWake = make(chan struct{}, 1)
+	s.sdkChats.onWorkChange = s.wakeWork
 	s.agentVersions = &codingAgentVersionCache{}
 	s.sdkChats.goals.onChange = s.hub.BroadcastGoalChanged
 	s.sdkJobs = newSDKJobs(s.sdkChats)
@@ -429,6 +432,8 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/sdk-work/{id}/start", protect(http.HandlerFunc(s.handleSDKWorkStart)))
 	s.mux.Handle("POST /api/sdk-work/{id}/dispatch/reset", protect(http.HandlerFunc(s.handleSDKWorkDispatchReset)))
 	s.mux.Handle("POST /api/sdk-work/{id}/updates", protect(http.HandlerFunc(s.handleSDKWorkUpdate)))
+	s.mux.Handle("GET /api/sdk-projects/{id}/work-control", protect(http.HandlerFunc(s.handleSDKProjectWorkControl)))
+	s.mux.Handle("PATCH /api/sdk-projects/{id}/work-control", protect(http.HandlerFunc(s.handleSDKProjectWorkControl)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}/project", protect(http.HandlerFunc(s.handleSDKChatProject)))
 	s.mux.Handle("POST /api/chat-ui/navigate", protect(http.HandlerFunc(s.handleChatUINavigation)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
@@ -516,6 +521,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		defer s.sdkVoice.close()
 	}
 	jobContext, stopJobs := context.WithCancel(ctx)
+	workDone := make(chan struct{})
+	go func() { defer close(workDone); s.workLoop(jobContext) }()
 	s.meetingJobContext = jobContext
 	go s.agentVersions.run(jobContext)
 	go func() {
@@ -564,7 +571,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	defer close(sweepDone)
 	go s.sweepPublications(sweepDone)
 	// Stop scheduling before waiting for other server work or closing adapters.
-	defer func() { stopJobs(); <-jobsDone; s.sdkJobs.dispatchWG.Wait(); s.meetingJobs.Wait() }()
+	defer func() { stopJobs(); <-workDone; <-jobsDone; s.sdkJobs.dispatchWG.Wait(); s.meetingJobs.Wait() }()
 
 	errCh := make(chan error, 1)
 	go func() {

@@ -11,8 +11,8 @@ func registerWorkTools(srv *Server) {
 	pt := newPublishTools()
 	stringProp := map[string]any{"type": "string"}
 	stringsProp := map[string]any{"type": "array", "items": stringProp}
-	srv.Register("create_work_item", "Create a durable work record. Muxterm records who created it separately from its assignable owner_session_id. Omit owner_session_id to leave work unassigned; project_ids defaults to the owner's folder when present. labels are normalized, searchable tags. depends_on lists prerequisite Work IDs; each must reach done before this item can start. next_action is the concrete next step; acceptance_criteria says how completion will be judged. Assignment records ownership but does not wake an idle chat: send_chat_message explicitly to kick off its turn. This does not alter a Chat Goal. client_ref makes retries idempotent.",
-		map[string]any{"type": "object", "properties": withMachine(map[string]any{"client_ref": stringProp, "title": stringProp, "brief": stringProp, "next_action": stringProp, "owner_session_id": stringProp, "acceptance_criteria": stringProp, "reviewer_session_id": stringProp, "session_ids": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "depends_on": stringsProp}), "required": []string{"client_ref", "title", "brief"}},
+	srv.Register("create_work_item", "Record a project Work item as a draft. Creation never starts implementation in this chat or any other chat. Review the brief and acceptance criteria with the human; when the human asks to start, set readiness=ready with update_work_item. Muxterm's scheduler then selects a different eligible worker chat. Omit owner_session_id so the scheduler owns selection; project_ids defaults to this chat's project. source records the originating request. labels are searchable tags; depends_on must finish before dispatch. client_ref makes retries idempotent. Work does not alter a Chat Goal.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"client_ref": stringProp, "title": stringProp, "brief": stringProp, "source": stringProp, "next_action": stringProp, "owner_session_id": stringProp, "acceptance_criteria": stringProp, "reviewer_session_id": stringProp, "session_ids": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "depends_on": stringsProp}), "required": []string{"client_ref", "title", "brief"}},
 		func(args map[string]any) (string, error) {
 			ref, err := argString(args, "client_ref")
 			if err != nil {
@@ -23,6 +23,10 @@ func registerWorkTools(srv *Server) {
 				return "", err
 			}
 			brief, err := argString(args, "brief")
+			if err != nil {
+				return "", err
+			}
+			source, _, err := argStringOptional(args, "source")
 			if err != nil {
 				return "", err
 			}
@@ -46,7 +50,7 @@ func registerWorkTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
-			bodyMap := map[string]any{"clientRef": ref, "title": title, "brief": brief, "nextAction": nextAction, "ownerSessionId": owner, "acceptanceCriteria": acceptance, "reviewerSessionId": reviewer, "sessionIds": participants}
+			bodyMap := map[string]any{"clientRef": ref, "title": title, "brief": brief, "source": source, "nextAction": nextAction, "ownerSessionId": owner, "acceptanceCriteria": acceptance, "reviewerSessionId": reviewer, "sessionIds": participants}
 			if projects, err := argStringSlice(args, "project_ids"); err != nil {
 				return "", err
 			} else if projects != nil {
@@ -106,7 +110,7 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodGet, path, nil)
 			return string(result), err
 		})
-	srv.Register("get_next_work_item", "Fetch the oldest ready item from the unassigned work pile. Only open items with every depends_on prerequisite done are returned; blocked, assigned, completed, cancelled, and dependency-waiting items are skipped. Filter by project_id or project_ids (OR), and labels (all required). Returns {\"work\":null} when none is ready. This read does not claim work: use update_work_item with the returned id and revision as expected_revision; a competing claim returns 409.",
+	srv.Register("get_next_work_item", "Fetch the oldest eligible ready item from the unassigned work pile. Draft, held, paused-project, full-project, and dependency-waiting items are skipped. Filter by project_id or project_ids (OR), and labels (all required). Returns {\"work\":null} when none is ready. This read does not claim work: use update_work_item with the returned id and revision as expected_revision; a competing claim returns 409.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"project_id": stringProp, "project_ids": stringsProp, "labels": stringsProp})},
 		func(args map[string]any) (string, error) {
 			query := url.Values{}
@@ -146,7 +150,7 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-work/"+url.PathEscape(id), nil)
 			return string(result), err
 		})
-	srv.Register("start_work_item", "Ask Muxterm to kick off an open Work item after its dependencies are done. Muxterm reserves one dispatch, chooses a ready chat in a matching project that owns no other unfinished work, or creates a chat. It sends the Work ID and instructs that chat to claim the item. The returned dispatch state is preparing, sent, claimed, uncertain, or failed; inspect an uncertain chat before attempting any new dispatch. Reusing client_ref is idempotent. This does not start or change a Chat Goal.",
+	srv.Register("start_work_item", "Manually ask Muxterm to dispatch a ready Work item when its project's scheduler is playing, has capacity, and its dependencies are done. Normally set readiness=ready and let the scheduler start it. Muxterm selects a different eligible chat or creates one, records a dispatch receipt, and instructs that chat to claim. Inspect uncertain delivery before retrying. Reusing client_ref is idempotent. This does not start or change a Chat Goal.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp}), "required": []string{"work_id", "client_ref"}},
 		func(args map[string]any) (string, error) {
 			id, err := argString(args, "work_id")
@@ -184,8 +188,8 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-work/"+url.PathEscape(id)+"/dispatch/reset", body)
 			return string(result), err
 		})
-	srv.Register("update_work_item", "Append an idempotent progress update or change status, next action, owner, reviewer, blocker, dependencies, labels, participants, or folder tags. depends_on and labels replace their respective lists; [] clears either. Dependency, label, and assignment changes require expected_revision. Cycles are rejected and work cannot become active, review, or done while waiting_on is nonempty. owner_session_id is the current assignee; pass an empty string to unassign. An unassigned item can be claimed by the calling chat for itself. A blocked item needs blocked_reason or text. status=review marks evidence ready for its reviewer. Assignment does not wake an idle chat; send_chat_message explicitly for that. This never controls a Chat Goal.",
-		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp, "session_id": stringProp, "linked_session_id": stringProp, "text": stringProp, "status": map[string]any{"type": "string", "enum": []string{"open", "active", "blocked", "review", "done", "cancelled"}}, "progress": stringProp, "next_action": stringProp, "outcome": stringProp, "evidence": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "depends_on": stringsProp, "owner_session_id": stringProp, "reviewer_session_id": stringProp, "blocked_reason": stringProp, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}), "required": []string{"work_id", "client_ref"}},
+	srv.Register("update_work_item", "Append progress, evidence, status, or a revision to a Work record. The creator or owner can correct title, brief, and acceptance_criteria with expected_revision while preserving the original and history. readiness=draft keeps it in intake; readiness=ready authorizes the scheduler to select a different chat; readiness=held stops new dispatch. A human hold can only be released by a human. Setting ready requires an explicit human start instruction in the calling chat. Readiness, assignment, dependency, and label changes require expected_revision. Direct claims obey the same eligibility as scheduler starts. Blocked work needs blocked_reason or text; status=review marks evidence ready for review. This never controls a Chat Goal.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp, "session_id": stringProp, "linked_session_id": stringProp, "text": stringProp, "title": stringProp, "brief": stringProp, "acceptance_criteria": stringProp, "readiness": map[string]any{"type": "string", "enum": []string{"draft", "ready", "held"}}, "status": map[string]any{"type": "string", "enum": []string{"open", "active", "blocked", "review", "done", "cancelled"}}, "progress": stringProp, "next_action": stringProp, "outcome": stringProp, "evidence": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "depends_on": stringsProp, "owner_session_id": stringProp, "reviewer_session_id": stringProp, "blocked_reason": stringProp, "needs_human": map[string]any{"type": "boolean"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}), "required": []string{"work_id", "client_ref"}},
 		func(args map[string]any) (string, error) {
 			id, err := argString(args, "work_id")
 			if err != nil {
@@ -196,7 +200,7 @@ func registerWorkTools(srv *Server) {
 				return "", err
 			}
 			bodyMap := map[string]any{"clientRef": ref}
-			for _, key := range []struct{ arg, json string }{{"session_id", "sessionId"}, {"linked_session_id", "linkedSessionId"}, {"text", "text"}, {"status", "status"}, {"progress", "progress"}, {"next_action", "nextAction"}, {"outcome", "outcome"}, {"owner_session_id", "ownerSessionId"}, {"reviewer_session_id", "reviewerSessionId"}, {"blocked_reason", "blockedReason"}} {
+			for _, key := range []struct{ arg, json string }{{"session_id", "sessionId"}, {"linked_session_id", "linkedSessionId"}, {"text", "text"}, {"title", "title"}, {"brief", "brief"}, {"acceptance_criteria", "acceptanceCriteria"}, {"readiness", "readiness"}, {"status", "status"}, {"progress", "progress"}, {"next_action", "nextAction"}, {"outcome", "outcome"}, {"owner_session_id", "ownerSessionId"}, {"reviewer_session_id", "reviewerSessionId"}, {"blocked_reason", "blockedReason"}} {
 				if value, present, err := argStringOptional(args, key.arg); err != nil {
 					return "", err
 				} else if present {
@@ -209,6 +213,13 @@ func registerWorkTools(srv *Server) {
 					return "", fmt.Errorf("expected_revision must be a positive integer")
 				}
 				bodyMap["expectedRevision"] = int(value)
+			}
+			if value, present := args["needs_human"]; present {
+				flag, ok := value.(bool)
+				if !ok {
+					return "", fmt.Errorf("needs_human must be a boolean")
+				}
+				bodyMap["needsHuman"] = flag
 			}
 			if evidence, err := argStringSlice(args, "evidence"); err != nil {
 				return "", err

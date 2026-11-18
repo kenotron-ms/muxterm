@@ -67,12 +67,15 @@ type sdkChat struct {
 	BranchPending       bool      `json:"branchPending,omitempty"`
 }
 type sdkProject struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Path          string   `json:"path"`
-	ManagedFolder bool     `json:"managedFolder,omitempty"`
-	SourceFolders []string `json:"sourceFolders,omitempty"`
-	Pinned        bool     `json:"pinned,omitempty"`
+	ID                 string   `json:"id"`
+	Name               string   `json:"name"`
+	Path               string   `json:"path"`
+	ManagedFolder      bool     `json:"managedFolder,omitempty"`
+	SourceFolders      []string `json:"sourceFolders,omitempty"`
+	Pinned             bool     `json:"pinned,omitempty"`
+	WorkPaused         bool     `json:"workPaused,omitempty"`
+	WorkParallelism    int      `json:"workParallelism,omitempty"`
+	WorkControlVersion int      `json:"workControlVersion,omitempty"`
 }
 type sdkEvent struct {
 	ID              string                 `json:"id,omitempty"`
@@ -171,6 +174,7 @@ type sdkChatHost struct {
 	subscriptions    map[string]*sdkChatSubscription
 	inboxStreams     map[string]map[chan struct{}]struct{}
 	workItems        map[string]*sdkWorkItem
+	onWorkChange     func()
 	nameStreams      map[chan string]struct{}
 	naming           map[string]bool
 	onEvent          func(sdkEvent)
@@ -458,6 +462,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		h.scheduleNamingLocked(c)
 	}
 	h.mu.Unlock()
+	if h.onWorkChange != nil && (event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain") {
+		h.onWorkChange()
+	}
 	// The pending plan and source journal are durable before fanout. Subscriber
 	// fsyncs can be slow, so they must not hold the global chat mutex.
 	if err == nil && pendingSaved {
