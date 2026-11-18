@@ -263,6 +263,19 @@ func (h *sdkChatHost) loadWorkItems() {
 			continue
 		}
 		h.workItems[item.ID] = &item
+		if item.Readiness == "" {
+			// Older records had no readiness field. Keep claimed work in motion,
+			// but require an explicit ready instruction before dispatching the
+			// unclaimed pile after an upgrade.
+			if item.Status == "active" || item.OwnerSessionID != "" || item.Dispatch != nil {
+				item.Readiness = "ready"
+			} else {
+				item.Readiness = "draft"
+			}
+			if err := h.saveWorkLocked(&item); err != nil {
+				log.Printf("migrate work readiness %s: %v", item.ID, err)
+			}
+		}
 		if item.Dispatch != nil && item.Dispatch.State == "preparing" {
 			// Startup is single-threaded; h.mu is not yet shared with request handlers.
 			item.Dispatch.State = "uncertain"
