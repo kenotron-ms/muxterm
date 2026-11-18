@@ -315,7 +315,7 @@ export class MuxSDKUtility extends LitElement {
     if (tab.kind === 'pages') return 'Notes';
     if (tab.kind === 'meetings') return 'Meetings';
     if (tab.kind === 'browser') return tab.title || (tab.url ? new URL(tab.url).hostname : 'Browser');
-    return ({ coordination:'Issues', changes:'Changes', goal:'Goal' } as Record<string,string>)[tab.kind] || 'Tab';
+    return ({ coordination:'Work', changes:'Changes', goal:'Goal' } as Record<string,string>)[tab.kind] || 'Tab';
   }
   private saveTabs() { if (this.terminalMode) return; try { localStorage.setItem(TABS_KEY + this.sessionId, JSON.stringify({ tabs:this.tabs, activeTabId:this.activeTabId })); } catch { /* private browsing */ } }
   private async restoreSideChats() {
@@ -470,7 +470,7 @@ export class MuxSDKUtility extends LitElement {
       ${this.voiceAvailable ? html`<mux-ui-action-tile label="Voice" description="Talk with the voice companion" @click=${() => this.chooseTool('voice')}><span slot="icon">${icon(AudioLines,{size:18})}</span></mux-ui-action-tile>` : nothing}
       <mux-ui-action-tile label="Goal" description="Read and control the current goal" @click=${() => this.chooseTool('goal')}><span slot="icon">${icon(Target,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Files" description="Browse and preview project files" @click=${() => this.chooseTool('files')}><span slot="icon">${icon(Folder,{size:18})}</span></mux-ui-action-tile>
-      <mux-ui-action-tile label="Issues" description="View shared work and progress" @click=${() => this.chooseTool('coordination')}><span slot="icon">${icon(CircleDot,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="Work" description="View the queue and progress" @click=${() => this.chooseTool('coordination')}><span slot="icon">${icon(CircleDot,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Changes" description="Review edits in this project" @click=${() => this.chooseTool('changes')}><span slot="icon">${icon(GitCompare,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Notes" description="Browse and edit notes for this chat" @click=${() => this.chooseTool('pages')}><span slot="icon">${icon(NotebookPen,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Meetings" description="Record or invite someone to a call" @click=${() => this.chooseTool('meetings')}><span slot="icon">${icon(AudioLines,{size:18})}</span></mux-ui-action-tile>

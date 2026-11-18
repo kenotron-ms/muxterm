@@ -29,7 +29,7 @@ const coordinationFixture: ApiFixture = ({url,method}) => {
 };
 
 const meta = {
-  title:'Screens/Issues', tags:['autodocs'],
+  title:'Screens/Work', tags:['autodocs'],
   parameters:{layout:'fullscreen',fullBleed:true,apiFixture:coordinationFixture},
   render:() => {
     sdkChats.chats = chats;
