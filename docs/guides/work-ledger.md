@@ -4,6 +4,21 @@ The Issues view and the `create_work_item`, `list_work_items`, `get_work_item`,
 and `update_work_item` MCP tools use one durable Work record. Creating or updating
 work does not start an agent, send a chat message, or control a Chat Goal.
 
+## Start with a request in chat
+
+Tell a chat the outcome you want, even if your first completion condition is
+rough. The chat should assess whether that condition actually demonstrates the
+outcome, suggest a better one when needed, and ask about choices that depend on
+your judgment. It then creates the Work item and maintains the acceptance
+criteria, next action, and owner. You do not need to supply a chat ID or keep
+the next action current yourself.
+
+At kickoff, the coordinating chat can do the work itself, choose a suitable
+existing chat, or create a new one in the relevant project. It records the
+chosen owner and starts the worker's turn. The current API exposes these as
+separate calls; it does not yet provide an atomic scheduler or automatically
+wake a chat merely because a Work item was assigned.
+
 ## People and sessions
 
 `createdBy` records who submitted the original item. It is immutable. Muxterm
@@ -38,13 +53,23 @@ concrete step and can be changed or cleared with `next_action` in
 leaving blocked clears the reason. `review` means the work is ready for its
 reviewer. Updates carry evidence references in the activity history.
 
+`dependsOn` lists prerequisite Work IDs. `waitingOn` is derived from those
+records and lists prerequisites that have not reached `done`; a cancelled
+prerequisite remains unmet. Muxterm rejects unknown IDs and dependency cycles.
+The API rejects attempts to move waiting work to `active`, `review`, or `done`.
+Adding or replacing dependencies requires `expected_revision`; pass an empty
+`depends_on` list to clear them. Once all prerequisites are done, `waitingOn`
+becomes empty without an edit to the dependent record. The Issues view shows
+the waiting count and links each prerequisite in the detail view. This is a
+readiness rule, not an automatic kickoff: a worker must still be started.
+
 Work updates are written to the Work record. A typed `work.*` event is also
 written to the owner's chat event stream, where an explicit `work` topic
 subscription may observe it. These events do not become ordinary messages in
 the chat transcript. An unassigned item's record remains discoverable in the
 Issues list without selecting an arbitrary chat as its notification target.
 
-## Assign, claim, and start work
+## Agent mechanics: assign, claim, and start work
 
 An active chat can find unassigned work with `list_work_items`, read one with
 `get_work_item`, then claim it by calling `update_work_item` with its own
