@@ -42,14 +42,12 @@ export class MuxChatCoordination extends LitElement {
   static styles = css`
     :host { display:block; height:100%; overflow:auto; box-sizing:border-box; container-type:inline-size; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-sm)/1.55 var(--ui-font-sans); }
     * { box-sizing:border-box; }
-    .wrap { max-width:950px; margin:0 auto; padding:var(--ui-space-5); }
+    .wrap { max-width:950px; margin:0 auto; padding:var(--ui-space-8); }
     h2,h3,p { margin:0; }
     h2 { font-size:var(--ui-text-xl); line-height:1.2; letter-spacing:-.025em; }
     h3 { font-size:var(--ui-text-md); }
-    .intro,.meta,.muted { color:var(--ui-text-muted); }
-    .hero { min-height:112px; padding:var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background-color:var(--ui-surface-raised); background-image:linear-gradient(color-mix(in srgb,var(--ui-surface-raised) 73%,transparent),color-mix(in srgb,var(--ui-surface-raised) 73%,transparent)),var(--ui-chat-backdrop-image); background-position:center; background-size:cover; }
-    .intro { margin-top:var(--ui-space-2); max-width:35ch; }
-    .overview { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:var(--ui-space-2); margin:var(--ui-space-5) 0 var(--ui-space-3); }
+    .meta,.muted { color:var(--ui-text-muted); }
+    .overview { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:var(--ui-space-2); margin:var(--ui-space-8) 0 var(--ui-space-5); }
     .overview .meta { font-size:var(--ui-text-sm); }
     .filters { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
     .filter-toggle { margin-left:auto; }
@@ -57,17 +55,17 @@ export class MuxChatCoordination extends LitElement {
     .filter-panel .filters { margin-bottom:var(--ui-space-3); }
     .field-filters { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
     .field-filters mux-ui-select { flex:1 1 170px; min-width:0; }
-    .lane { margin-top:var(--ui-space-6); }
-    .lane-heading { display:flex; align-items:center; gap:var(--ui-space-2); margin-bottom:var(--ui-space-3); }
+    .lane { margin-top:var(--ui-space-9); }
+    .lane-heading { display:flex; align-items:center; gap:var(--ui-space-2); margin-bottom:var(--ui-space-5); }
     .lane-heading h3 { flex:1; }
     .lane-heading .count { color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-variant-numeric:tabular-nums; }
     .lane-mark { display:inline-grid; place-items:center; width:25px; height:25px; flex:none; border-radius:var(--ui-radius-md); background:color-mix(in srgb,var(--ui-accent) 16%,var(--ui-surface-raised)); color:var(--ui-accent); font-weight:700; }
     .lane-mark.attention { background:color-mix(in srgb,var(--ui-danger) 13%,var(--ui-surface-raised)); color:var(--ui-danger); }
     .lane-mark.review,.lane-mark.waiting { background:color-mix(in srgb,var(--ui-warning) 14%,var(--ui-surface-raised)); color:var(--ui-warning); }
     .lane-mark.finished { background:color-mix(in srgb,var(--ui-success) 14%,var(--ui-surface-raised)); color:var(--ui-success); }
-    .work-row { margin-bottom:var(--ui-space-2); }
+    .work-row { margin-bottom:var(--ui-space-5); }
     .work-open { display:block; width:100%; }
-    .work-open::part(button) { display:block; width:100%; min-width:0; padding:var(--ui-space-4) var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; white-space:normal; font:inherit; }
+    .work-open::part(button) { display:block; width:100%; min-width:0; padding:var(--ui-space-6) var(--ui-space-7); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; white-space:normal; font:inherit; }
     .work-open:hover::part(button) { border-color:var(--ui-accent); background:var(--ui-surface-hover); }
     .work-open strong { display:block; font-size:var(--ui-text-md); line-height:1.35; font-weight:650; overflow-wrap:anywhere; }
     .summary { display:block; margin-top:var(--ui-space-1); color:var(--ui-text-muted); overflow-wrap:anywhere; }
@@ -86,10 +84,10 @@ export class MuxChatCoordination extends LitElement {
     .state-pill.active,.state-pill.ready { border-color:var(--ui-accent); color:var(--ui-accent); }
     .detail-grid { display:grid; grid-template-columns:1fr; gap:var(--ui-space-5); align-items:start; margin-top:var(--ui-space-6); }
     .detail-main { min-width:0; }
-    .situation { padding:var(--ui-space-5); border:1px solid var(--ui-border); border-left:3px solid var(--ui-accent); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
-    .situation.attention { border-left-color:var(--ui-danger); }
-    .situation.waiting,.situation.review { border-left-color:var(--ui-warning); }
-    .situation h3 { margin-bottom:var(--ui-space-2); }
+    .situation { padding:0 0 var(--ui-space-7); border-bottom:1px solid var(--ui-border); }
+    .situation h3 { margin-bottom:var(--ui-space-3); color:var(--ui-accent); }
+    .situation.attention h3 { color:var(--ui-danger); }
+    .situation.waiting h3,.situation.review h3 { color:var(--ui-warning); }
     .situation p + p { margin-top:var(--ui-space-3); }
     .detail-section { padding-bottom:var(--ui-space-5); margin-bottom:var(--ui-space-5); border-bottom:1px solid var(--ui-border); }
     .detail-section p { margin-top:var(--ui-space-2); white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -110,7 +108,7 @@ export class MuxChatCoordination extends LitElement {
     .more-details dd { margin:0; min-width:0; }
     .error { color:var(--ui-danger); margin:var(--ui-space-3) 0; }
     @container (min-width:760px) { .detail-grid { grid-template-columns:minmax(0,1fr) 220px; gap:var(--ui-space-8); } }
-    @container (max-width:430px) { .wrap { padding:var(--ui-space-4); } .hero { padding:var(--ui-space-5); } .work-open::part(button) { padding:var(--ui-space-4); } }
+    @container (max-width:430px) { .wrap { padding:var(--ui-space-7); } .work-open::part(button) { padding:var(--ui-space-6); } }
   `;
 
   override connectedCallback() {
@@ -268,6 +266,6 @@ export class MuxChatCoordination extends LitElement {
       <details class="more-details"><summary>More details</summary><dl><dt>Work ID</dt><dd>${item.id}</dd><dt>Revision</dt><dd>${item.revision}</dd><dt>Added by</dt><dd>${this.creatorLabel(item)}</dd><dt>Added</dt><dd>${this.date(item.createdAt)}</dd><dt>Last updated</dt><dd>${this.date(item.updatedAt)}</dd>${item.sessionIds?.length ? html`<dt>Linked chats</dt><dd>${item.sessionIds.map((id,index) => html`${index ? ', ' : ''}${this.chatLink(id)}`)}</dd>` : nothing}</dl></details>`;
   }
   override render() {
-    return html`<div class="wrap">${this.detail ? nothing : html`<header class="hero"><h2>Work</h2><p class="intro">A clear view of what’s moving, waiting, and ready for a look.</p></header>`}${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.workDetail() : this.workList()}</div>`;
+    return html`<div class="wrap">${this.detail ? nothing : html`<header><h2>Work</h2></header>`}${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.workDetail() : this.workList()}</div>`;
   }
 }
