@@ -26,7 +26,7 @@ const icon = (name: 'work' | 'folder' | 'play' | 'pause' | 'chevron' | 'back' | 
     clock: svg`<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>`,
     check: svg`<path d="m4 12 5 5L20 6"/>`,
     chat: svg`<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8A8.5 8.5 0 0 1 12.5 3a8.5 8.5 0 0 1 8.5 8.5z"/>`,
-    wait: svg`<path d="M6 2h12M6 22h12M8 2c0 5 4 5 4 10s-4 5-4 10m8-20c0 5-4 5-4 10s4 5 4 10"/>`,
+    wait: svg`<path d="M7 4h10M7 20h10M8 4c0 4 4 4 4 8s-4 4-4 8m8-16c0 4-4 4-4 8s4 4 4 8"/>`,
     alert: svg`<path d="m10.3 3.9-8.1 14a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3l-8.1-14a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4m0 4h.01"/>`,
     flag: svg`<path d="M5 21V4m0 1c5-3 9 3 14 0v11c-5 3-9-3-14 0"/>`,
   };
