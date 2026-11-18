@@ -35,21 +35,20 @@ func (h *sdkChatHost) eligibleWorkChatLocked(chat *sdkChat, item *sdkWorkItem, p
 			return false
 		}
 	}
-	goal, err := h.goals.update(*chat, nil)
-	return err == nil && !goal.HumanPaused
+	return true
 }
 
-func (h *sdkChatHost) chooseWorkChatLocked(item *sdkWorkItem, projects []string) (string, bool) {
+func (h *sdkChatHost) chooseWorkChatLocked(item *sdkWorkItem, projects []string, goalReady map[string]bool) (string, bool) {
 	if item.OwnerSessionID != "" {
 		owner := h.chats[item.OwnerSessionID]
-		if h.eligibleWorkChatLocked(owner, item, projects) {
+		if goalReady[item.OwnerSessionID] && h.eligibleWorkChatLocked(owner, item, projects) {
 			return owner.ID, true
 		}
 		return "", false
 	}
 	choices := make([]*sdkChat, 0)
 	for _, chat := range h.chats {
-		if h.eligibleWorkChatLocked(chat, item, projects) {
+		if goalReady[chat.ID] && h.eligibleWorkChatLocked(chat, item, projects) {
 			choices = append(choices, chat)
 		}
 	}
@@ -109,12 +108,13 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if item.Dispatch != nil && (item.Dispatch.State != "failed" || item.Dispatch.ClientRef == req.ClientRef) {
+		sameRef := item.Dispatch.ClientRef == req.ClientRef
 		copy := *item
 		copy.CreatedBy = h.workCreatorLocked(item)
 		copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 		copy.WaitingOn = h.workWaitingOnLocked(item)
 		h.mu.Unlock()
-		if item.Dispatch.ClientRef != req.ClientRef {
+		if !sameRef {
 			http.Error(w, "work already dispatched", 409)
 			return
 		}
@@ -127,7 +127,46 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projects := slices.Clone(h.workProjectIDsLocked(item))
-	workerID, existing := h.chooseWorkChatLocked(item, projects)
+	candidates := make([]sdkChat, 0)
+	for _, chat := range h.chats {
+		if h.eligibleWorkChatLocked(chat, item, projects) {
+			candidates = append(candidates, *chat)
+		}
+	}
+	h.mu.Unlock()
+	goalReady := make(map[string]bool, len(candidates))
+	for _, chat := range candidates {
+		goal, err := h.goals.update(chat, nil)
+		goalReady[chat.ID] = err == nil && !goal.HumanPaused
+	}
+	h.mu.Lock()
+	item = h.workItems[id]
+	if item == nil {
+		h.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	if item.Dispatch != nil && (item.Dispatch.State != "failed" || item.Dispatch.ClientRef == req.ClientRef) {
+		sameRef := item.Dispatch.ClientRef == req.ClientRef
+		copy := *item
+		copy.CreatedBy = h.workCreatorLocked(item)
+		copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
+		copy.WaitingOn = h.workWaitingOnLocked(item)
+		h.mu.Unlock()
+		if !sameRef {
+			http.Error(w, "work already dispatched", 409)
+			return
+		}
+		writeSDKJSON(w, 200, copy)
+		return
+	}
+	if item.Status != "open" || len(h.workWaitingOnLocked(item)) != 0 {
+		h.mu.Unlock()
+		http.Error(w, "work must be open with all prerequisites done", 409)
+		return
+	}
+	projects = slices.Clone(h.workProjectIDsLocked(item))
+	workerID, existing := h.chooseWorkChatLocked(item, projects, goalReady)
 	if workerID == "" {
 		h.mu.Unlock()
 		http.Error(w, "assigned chat is not ready", 409)
