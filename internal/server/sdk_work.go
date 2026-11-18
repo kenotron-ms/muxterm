@@ -244,6 +244,7 @@ func (h *sdkChatHost) workPath(id string) string {
 }
 
 func (h *sdkChatHost) loadWorkItems() {
+	// Startup is single-threaded; h.mu is not yet shared with request handlers.
 	entries, err := os.ReadDir(filepath.Join(h.dir, "work"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("read work items: %v", err)
@@ -277,7 +278,6 @@ func (h *sdkChatHost) loadWorkItems() {
 			}
 		}
 		if item.Dispatch != nil && item.Dispatch.State == "preparing" {
-			// Startup is single-threaded; h.mu is not yet shared with request handlers.
 			item.Dispatch.State = "uncertain"
 			item.Dispatch.Detail = "server restarted before dispatch acknowledgement; inspect the selected chat before retrying"
 			item.Dispatch.UpdatedAt = time.Now().UTC()
