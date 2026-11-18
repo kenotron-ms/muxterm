@@ -470,7 +470,7 @@ export class MuxSDKUtility extends LitElement {
       ${this.voiceAvailable ? html`<mux-ui-action-tile label="Voice" description="Talk with the voice companion" @click=${() => this.chooseTool('voice')}><span slot="icon">${icon(AudioLines,{size:18})}</span></mux-ui-action-tile>` : nothing}
       <mux-ui-action-tile label="Goal" description="Read and control the current goal" @click=${() => this.chooseTool('goal')}><span slot="icon">${icon(Target,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Files" description="Browse and preview project files" @click=${() => this.chooseTool('files')}><span slot="icon">${icon(Folder,{size:18})}</span></mux-ui-action-tile>
-      <mux-ui-action-tile label="Work" description="View the queue and progress" @click=${() => this.chooseTool('coordination')}><span slot="icon">${icon(CircleDot,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="Work" description="See this project's queue and progress" @click=${() => this.chooseTool('coordination')}><span slot="icon">${icon(CircleDot,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Changes" description="Review edits in this project" @click=${() => this.chooseTool('changes')}><span slot="icon">${icon(GitCompare,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Notes" description="Browse and edit notes for this chat" @click=${() => this.chooseTool('pages')}><span slot="icon">${icon(NotebookPen,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Meetings" description="Record or invite someone to a call" @click=${() => this.chooseTool('meetings')}><span slot="icon">${icon(AudioLines,{size:18})}</span></mux-ui-action-tile>
