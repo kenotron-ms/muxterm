@@ -107,6 +107,7 @@ func (h *sdkChatHost) requestWorkActorLocked(r *http.Request) sdkWorkActor {
 	if id := h.originTokenChats[r.Header.Get("X-Muxterm-Origin")]; id != "" {
 		return sdkWorkActor{Kind: "chat", SessionID: id}
 	}
+	// Same-user external tools are trusted to administer Work across chats.
 	return sdkWorkActor{Kind: "external-tool"}
 }
 
@@ -247,6 +248,7 @@ func (h *sdkChatHost) loadWorkItems() {
 		}
 		h.workItems[item.ID] = &item
 		if item.Dispatch != nil && item.Dispatch.State == "preparing" {
+			// Startup is single-threaded; h.mu is not yet shared with request handlers.
 			item.Dispatch.State = "uncertain"
 			item.Dispatch.Detail = "server restarted before dispatch acknowledgement; inspect the selected chat before retrying"
 			item.Dispatch.UpdatedAt = time.Now().UTC()
@@ -329,6 +331,7 @@ func (s *Server) handleSDKNextWork(w http.ResponseWriter, r *http.Request) {
 	copy.CreatedBy = h.workCreatorLocked(next)
 	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(next))
 	copy.WaitingOn = h.workWaitingOnLocked(next)
+	copy.Updates = nil
 	h.mu.Unlock()
 	writeSDKJSON(w, 200, map[string]any{"work": copy})
 }

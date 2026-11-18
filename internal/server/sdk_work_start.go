@@ -241,3 +241,86 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSDKJSON(w, 200, result)
 }
+
+// An uncertain kickoff needs an explicit, revision-fenced resolution after the
+// caller inspects the selected chat. It is never silently retried.
+func (s *Server) handleSDKWorkDispatchReset(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ClientRef        string `json:"clientRef"`
+		ExpectedRevision int    `json:"expectedRevision"`
+		Reason           string `json:"reason"`
+	}
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || req.ExpectedRevision < 1 || strings.TrimSpace(req.Reason) == "" || len(req.Reason) > 4096 {
+		http.Error(w, "clientRef, expectedRevision, and reason required", 400)
+		return
+	}
+	req.Reason = strings.TrimSpace(req.Reason)
+	h := s.sdkChats
+	h.mu.Lock()
+	item := h.workItems[r.PathValue("id")]
+	if item == nil {
+		h.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	actor := h.requestWorkActorLocked(r)
+	if actor.Kind == "chat" && actor.SessionID != h.workCreatorLocked(item).SessionID && actor.SessionID != item.OwnerSessionID && (item.Dispatch == nil || actor.SessionID != item.Dispatch.SessionID) {
+		h.mu.Unlock()
+		http.Error(w, "only the creator, owner, or selected chat can resolve this dispatch", 403)
+		return
+	}
+	resetRef := "dispatch-reset:" + req.ClientRef
+	message := "Resolved uncertain kickoff as failed: " + req.Reason
+	for _, update := range item.Updates {
+		if update.ClientRef != resetRef {
+			continue
+		}
+		if update.Text != message {
+			h.mu.Unlock()
+			http.Error(w, "clientRef already used with different reason", 409)
+			return
+		}
+		copy := *item
+		copy.CreatedBy = h.workCreatorLocked(item)
+		copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
+		copy.WaitingOn = h.workWaitingOnLocked(item)
+		h.mu.Unlock()
+		writeSDKJSON(w, 200, copy)
+		return
+	}
+	if item.Revision != req.ExpectedRevision {
+		h.mu.Unlock()
+		http.Error(w, "work item changed; inspect before resolving dispatch", 409)
+		return
+	}
+	if item.Status != "open" || item.OwnerSessionID != "" || item.Dispatch == nil || item.Dispatch.State != "uncertain" {
+		h.mu.Unlock()
+		http.Error(w, "only an unclaimed uncertain kickoff can be reset", 409)
+		return
+	}
+	if chat := h.chats[item.Dispatch.SessionID]; chat != nil && (chat.State == "starting" || chat.State == "working") {
+		h.mu.Unlock()
+		http.Error(w, "selected chat is still running; inspect it before resolving dispatch", 409)
+		return
+	}
+	now := time.Now().UTC()
+	copy := *item
+	dispatch := *item.Dispatch
+	dispatch.State = "failed"
+	dispatch.Detail = req.Reason
+	dispatch.UpdatedAt = now
+	copy.Dispatch = &dispatch
+	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: resetRef, At: now, Actor: actor, Text: message, LinkedSessionID: dispatch.SessionID, ExpectedRevision: &req.ExpectedRevision})
+	copy.Revision++
+	copy.UpdatedAt = now
+	if err := h.saveWorkLocked(&copy); err != nil {
+		h.mu.Unlock()
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	copy.CreatedBy = h.workCreatorLocked(&copy)
+	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(&copy))
+	copy.WaitingOn = h.workWaitingOnLocked(&copy)
+	h.mu.Unlock()
+	writeSDKJSON(w, 200, copy)
+}

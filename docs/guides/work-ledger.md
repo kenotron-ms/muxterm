@@ -53,8 +53,13 @@ is `preparing`, `sent`, `claimed`, `uncertain`, or `failed`. A sent input means
 Muxterm admitted the worker's turn; `claimed` means that chat took ownership.
 Repeated calls with the same `client_ref` return the same dispatch. If delivery
 is uncertain, inspect the linked chat and Work record before a new attempt;
-Muxterm does not blindly resend an uncertain input. A failed dispatch can be
-retried with a new reference. The Issues view links the selected chat.
+Muxterm does not blindly resend an uncertain input. If the selected chat did
+not claim the item, call `reset_work_dispatch` with the Work ID, current
+`expected_revision`, a stable `client_ref`, and a reason. It records the
+resolution in activity and rejects a reset while the selected chat is still
+starting or working. The dispatch then becomes `failed`; call
+`start_work_item` with a new reference to try again. The Issues view links the
+selected chat, including failed kickoffs.
 
 ## Work state
 

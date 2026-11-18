@@ -136,7 +136,7 @@ export class MuxChatCoordination extends LitElement {
   private actorLabel(actor?:WorkActor, legacySessionId?:string) { return actor?.kind === 'chat' && actor.sessionId ? this.chatLink(actor.sessionId) : actor?.kind === 'human' ? 'Browser user' : actor?.kind === 'external-tool' ? 'External tool' : legacySessionId ? this.chatLink(legacySessionId) : 'Unknown'; }
   private creatorLabel(item:WorkItem) { return this.actorLabel(item.createdBy); }
   private ownerLabel(item:WorkItem) { return item.ownerSessionId ? this.chatLink(item.ownerSessionId) : 'Unassigned'; }
-  private dispatchLabel(item:WorkItem) { const dispatch=item.dispatch; return dispatch ? dispatch.state === 'failed' ? 'Failed to start' : dispatch.state === 'preparing' ? 'Preparing chat' : html`${dispatch.state === 'claimed' ? 'Claimed by' : dispatch.state === 'uncertain' ? 'Check' : 'Sent to'} ${this.chatLink(dispatch.sessionId)}` : nothing; }
+  private dispatchLabel(item:WorkItem) { const dispatch=item.dispatch; return dispatch ? html`${dispatch.state === 'failed' ? 'Failed kickoff for' : dispatch.state === 'preparing' ? 'Preparing' : dispatch.state === 'claimed' ? 'Claimed by' : dispatch.state === 'uncertain' ? 'Check' : 'Sent to'} ${this.chatLink(dispatch.sessionId)}` : nothing; }
   private dependencyLabel(id:string) { return this.work.find(item => item.id === id)?.title || id.slice(0,8); }
   private async openDependency(id:string) {
     const item = this.work.find(candidate => candidate.id === id);

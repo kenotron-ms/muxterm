@@ -423,6 +423,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/sdk-work", protect(http.HandlerFunc(s.handleSDKWork)))
 	s.mux.Handle("GET /api/sdk-work/{id}", protect(http.HandlerFunc(s.handleSDKWorkItem)))
 	s.mux.Handle("POST /api/sdk-work/{id}/start", protect(http.HandlerFunc(s.handleSDKWorkStart)))
+	s.mux.Handle("POST /api/sdk-work/{id}/dispatch/reset", protect(http.HandlerFunc(s.handleSDKWorkDispatchReset)))
 	s.mux.Handle("POST /api/sdk-work/{id}/updates", protect(http.HandlerFunc(s.handleSDKWorkUpdate)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}/project", protect(http.HandlerFunc(s.handleSDKChatProject)))
 	s.mux.Handle("POST /api/chat-ui/navigate", protect(http.HandlerFunc(s.handleChatUINavigation)))
