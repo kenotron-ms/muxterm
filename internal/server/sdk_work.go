@@ -24,6 +24,8 @@ type sdkWorkItem struct {
 	ClientRef         string          `json:"clientRef"`
 	Title             string          `json:"title"`
 	Brief             string          `json:"brief"`
+	NextAction        string          `json:"nextAction,omitempty"`
+	CreateNextAction  string          `json:"createNextAction,omitempty"`
 	Status            string          `json:"status"`
 	CreatedBy         sdkWorkActor    `json:"createdBy"`
 	OwnerSessionID    string          `json:"ownerSessionId"`
@@ -53,6 +55,7 @@ type sdkWorkUpdate struct {
 	Text              string       `json:"text"`
 	Status            string       `json:"status,omitempty"`
 	Progress          string       `json:"progress,omitempty"`
+	NextAction        *string      `json:"nextAction,omitempty"`
 	Outcome           string       `json:"outcome,omitempty"`
 	Evidence          []string     `json:"evidence,omitempty"`
 	LinkedSessionID   string       `json:"linkedSessionId,omitempty"`
@@ -193,13 +196,14 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		ClientRef         string    `json:"clientRef"`
 		Title             string    `json:"title"`
 		Brief             string    `json:"brief"`
+		NextAction        string    `json:"nextAction"`
 		OwnerSessionID    string    `json:"ownerSessionId"`
 		Acceptance        string    `json:"acceptanceCriteria"`
 		ReviewerSessionID string    `json:"reviewerSessionId"`
 		SessionIDs        []string  `json:"sessionIds"`
 		ProjectIDs        *[]string `json:"projectIds"`
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || len(req.Acceptance) > 16<<10 || len(req.SessionIDs) > 32 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) {
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || len(req.NextAction) > 4096 || len(req.Acceptance) > 16<<10 || len(req.SessionIDs) > 32 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) {
 		http.Error(w, "clientRef and title required", 400)
 		return
 	}
@@ -256,7 +260,11 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 			if item.CreatedBy.Kind == "" {
 				createReviewer = item.ReviewerSessionID
 			}
-			if item.Title != req.Title || item.Brief != req.Brief || item.Acceptance != req.Acceptance || createReviewer != req.ReviewerSessionID || createOwner != req.OwnerSessionID || !slices.Equal(createdWith, req.SessionIDs) || !slices.Equal(createdProjects, projectIDs) {
+			createNextAction := item.CreateNextAction
+			if item.CreatedBy.Kind == "" {
+				createNextAction = item.NextAction
+			}
+			if item.Title != req.Title || item.Brief != req.Brief || createNextAction != strings.TrimSpace(req.NextAction) || item.Acceptance != req.Acceptance || createReviewer != req.ReviewerSessionID || createOwner != req.OwnerSessionID || !slices.Equal(createdWith, req.SessionIDs) || !slices.Equal(createdProjects, projectIDs) {
 				h.mu.Unlock()
 				http.Error(w, "clientRef already used for different work", 409)
 				return
@@ -270,7 +278,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := time.Now().UTC()
-	item := &sdkWorkItem{ID: sdkID(), ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief,
+	item := &sdkWorkItem{ID: sdkID(), ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
 		Status: "open", CreatedBy: creator, OwnerSessionID: req.OwnerSessionID, CreateOwnerID: req.OwnerSessionID, Acceptance: req.Acceptance, ReviewerSessionID: req.ReviewerSessionID, CreateReviewerID: req.ReviewerSessionID, ProjectIDs: projectIDs, CreateProjectIDs: slices.Clone(projectIDs), SessionIDs: req.SessionIDs,
 		CreateSessionIDs: append([]string{}, req.SessionIDs...),
 		Revision:         1, CreatedAt: now, UpdatedAt: now, Updates: []sdkWorkUpdate{}}
@@ -311,6 +319,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		Text              string    `json:"text"`
 		Status            string    `json:"status"`
 		Progress          string    `json:"progress"`
+		NextAction        *string   `json:"nextAction"`
 		Outcome           string    `json:"outcome"`
 		Evidence          []string  `json:"evidence"`
 		LinkedSessionID   string    `json:"linkedSessionId"`
@@ -320,7 +329,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		BlockedReason     *string   `json:"blockedReason"`
 		ExpectedRevision  *int      `json:"expectedRevision"`
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || len(req.Text) > 16<<10 || len(req.Progress) > 4096 || len(req.Outcome) > 16<<10 || len(req.Evidence) > 20 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) || (req.Status != "" && !validWorkStatus(req.Status)) || (req.OwnerSessionID != nil && len(*req.OwnerSessionID) > 256) || (req.ReviewerSessionID != nil && len(*req.ReviewerSessionID) > 256) || (req.BlockedReason != nil && len(*req.BlockedReason) > 4096) || (req.Text == "" && req.Status == "" && req.Progress == "" && req.Outcome == "" && req.LinkedSessionID == "" && req.ProjectIDs == nil && req.OwnerSessionID == nil && req.ReviewerSessionID == nil && req.BlockedReason == nil) {
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || len(req.Text) > 16<<10 || len(req.Progress) > 4096 || (req.NextAction != nil && len(*req.NextAction) > 4096) || len(req.Outcome) > 16<<10 || len(req.Evidence) > 20 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) || (req.Status != "" && !validWorkStatus(req.Status)) || (req.OwnerSessionID != nil && len(*req.OwnerSessionID) > 256) || (req.ReviewerSessionID != nil && len(*req.ReviewerSessionID) > 256) || (req.BlockedReason != nil && len(*req.BlockedReason) > 4096) || (req.Text == "" && req.Status == "" && req.Progress == "" && req.NextAction == nil && req.Outcome == "" && req.LinkedSessionID == "" && req.ProjectIDs == nil && req.OwnerSessionID == nil && req.ReviewerSessionID == nil && req.BlockedReason == nil) {
 		http.Error(w, "clientRef and a valid work update required", 400)
 		return
 	}
@@ -385,7 +394,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, prior := range item.Updates {
 		if prior.ClientRef == req.ClientRef {
-			if (prior.Actor.Kind != "" && prior.Actor != actor) || prior.SessionID != req.SessionID || prior.Text != req.Text || prior.Status != req.Status || prior.Progress != req.Progress || prior.Outcome != req.Outcome || prior.LinkedSessionID != req.LinkedSessionID || !slices.Equal(prior.Evidence, req.Evidence) || (prior.ProjectIDs == nil) != (req.ProjectIDs == nil) || (prior.ProjectIDs != nil && !slices.Equal(*prior.ProjectIDs, *req.ProjectIDs)) || (prior.OwnerSessionID == nil) != (req.OwnerSessionID == nil) || (prior.OwnerSessionID != nil && *prior.OwnerSessionID != *req.OwnerSessionID) || (prior.ReviewerSessionID == nil) != (req.ReviewerSessionID == nil) || (prior.ReviewerSessionID != nil && *prior.ReviewerSessionID != *req.ReviewerSessionID) || (prior.BlockedReason == nil) != (req.BlockedReason == nil) || (prior.BlockedReason != nil && *prior.BlockedReason != *req.BlockedReason) || (prior.ExpectedRevision == nil) != (req.ExpectedRevision == nil) || (prior.ExpectedRevision != nil && *prior.ExpectedRevision != *req.ExpectedRevision) {
+			if (prior.Actor.Kind != "" && prior.Actor != actor) || prior.SessionID != req.SessionID || prior.Text != req.Text || prior.Status != req.Status || prior.Progress != req.Progress || (prior.NextAction == nil) != (req.NextAction == nil) || (prior.NextAction != nil && *prior.NextAction != *req.NextAction) || prior.Outcome != req.Outcome || prior.LinkedSessionID != req.LinkedSessionID || !slices.Equal(prior.Evidence, req.Evidence) || (prior.ProjectIDs == nil) != (req.ProjectIDs == nil) || (prior.ProjectIDs != nil && !slices.Equal(*prior.ProjectIDs, *req.ProjectIDs)) || (prior.OwnerSessionID == nil) != (req.OwnerSessionID == nil) || (prior.OwnerSessionID != nil && *prior.OwnerSessionID != *req.OwnerSessionID) || (prior.ReviewerSessionID == nil) != (req.ReviewerSessionID == nil) || (prior.ReviewerSessionID != nil && *prior.ReviewerSessionID != *req.ReviewerSessionID) || (prior.BlockedReason == nil) != (req.BlockedReason == nil) || (prior.BlockedReason != nil && *prior.BlockedReason != *req.BlockedReason) || (prior.ExpectedRevision == nil) != (req.ExpectedRevision == nil) || (prior.ExpectedRevision != nil && *prior.ExpectedRevision != *req.ExpectedRevision) {
 				h.mu.Unlock()
 				http.Error(w, "clientRef already used for different update", 409)
 				return
@@ -412,7 +421,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	copy.CreatedBy = h.workCreatorLocked(item)
 	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: req.ClientRef, At: time.Now().UTC(), Actor: actor, SessionID: req.SessionID,
-		Text: req.Text, Status: req.Status, Progress: req.Progress, Outcome: req.Outcome, Evidence: req.Evidence, LinkedSessionID: req.LinkedSessionID, ProjectIDs: req.ProjectIDs, OwnerSessionID: req.OwnerSessionID, ReviewerSessionID: req.ReviewerSessionID, BlockedReason: req.BlockedReason, ExpectedRevision: req.ExpectedRevision})
+		Text: req.Text, Status: req.Status, Progress: req.Progress, NextAction: req.NextAction, Outcome: req.Outcome, Evidence: req.Evidence, LinkedSessionID: req.LinkedSessionID, ProjectIDs: req.ProjectIDs, OwnerSessionID: req.OwnerSessionID, ReviewerSessionID: req.ReviewerSessionID, BlockedReason: req.BlockedReason, ExpectedRevision: req.ExpectedRevision})
 	previousOwner := copy.OwnerSessionID
 	if req.OwnerSessionID != nil {
 		copy.OwnerSessionID = *req.OwnerSessionID
@@ -432,12 +441,18 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Status != "" {
 		copy.Status = req.Status
+		if (req.Status == "done" || req.Status == "cancelled") && req.NextAction == nil {
+			copy.NextAction = ""
+		}
 		if req.Status != "blocked" && req.BlockedReason == nil {
 			copy.BlockedReason = ""
 		}
 	}
 	if req.BlockedReason != nil {
 		copy.BlockedReason = strings.TrimSpace(*req.BlockedReason)
+	}
+	if req.NextAction != nil {
+		copy.NextAction = strings.TrimSpace(*req.NextAction)
 	}
 	if copy.Status == "blocked" && copy.BlockedReason == "" {
 		if req.Text != "" {

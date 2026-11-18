@@ -16,7 +16,9 @@ that provenance is written into the record on its first update.
 unassigned work. `reviewerSessionId` is an optional chat expected to inspect the
 result. Linked `sessionIds` remain participants; reassignment does not erase
 the previous owner's history. The Issues list shows creator and current owner
-separately, and the detail view can reassign the owner or reviewer.
+separately; the detail view shows the record and its activity. Every chat shown
+in the Issues view links to that chat. Create and update work through the MCP
+tools or API. The Issues UI is read-only.
 
 Assignment changes require `expected_revision` from `get_work_item` (or
 `expectedRevision` over HTTP). The server rejects a stale revision with 409,
@@ -29,7 +31,9 @@ record instead of appending it twice.
 ## Work state
 
 The record holds its brief, optional `acceptanceCriteria`, current progress,
-outcome, reviewer, and `blockedReason`. Its status is `open`, `active`,
+`nextAction`, outcome, reviewer, and `blockedReason`. `nextAction` names the next
+concrete step and can be changed or cleared with `next_action` in
+`update_work_item`. Its status is `open`, `active`,
 `blocked`, `review`, `done`, or `cancelled`. A blocked item requires a reason;
 leaving blocked clears the reason. `review` means the work is ready for its
 reviewer. Updates carry evidence references in the activity history.
@@ -39,3 +43,17 @@ written to the owner's chat event stream, where an explicit `work` topic
 subscription may observe it. These events do not become ordinary messages in
 the chat transcript. An unassigned item's record remains discoverable in the
 Issues list without selecting an arbitrary chat as its notification target.
+
+## Assign, claim, and start work
+
+An active chat can find unassigned work with `list_work_items`, read one with
+`get_work_item`, then claim it by calling `update_work_item` with its own
+`owner_session_id` and the returned `expected_revision`. It can proceed in the
+same turn. If another claimant got there first, the server returns 409; read
+the record again before deciding what to do.
+
+For an idle chat, create or assign the item to its chat ID, then call
+`send_chat_message` once with the Work ID and next action. Assignment is a
+durable ownership change; that explicit message starts the chat turn. A chat
+that claims work while already running needs no extra kickoff message. Neither
+path starts a Chat Goal.
