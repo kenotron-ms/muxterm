@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/kenotron-ms/muxterm/internal/atomicfile"
 )
@@ -35,6 +36,8 @@ type sdkWorkItem struct {
 	BlockedReason     string          `json:"blockedReason,omitempty"`
 	ProjectIDs        []string        `json:"projectIds"`
 	CreateProjectIDs  []string        `json:"createProjectIds"`
+	Labels            []string        `json:"labels"`
+	CreateLabels      []string        `json:"createLabels,omitempty"`
 	SessionIDs        []string        `json:"sessionIds"`
 	CreateSessionIDs  []string        `json:"createSessionIds"`
 	DependsOn         []string        `json:"dependsOn"`
@@ -62,6 +65,7 @@ type sdkWorkUpdate struct {
 	Evidence          []string     `json:"evidence,omitempty"`
 	LinkedSessionID   string       `json:"linkedSessionId,omitempty"`
 	ProjectIDs        *[]string    `json:"projectIds,omitempty"`
+	Labels            *[]string    `json:"labels,omitempty"`
 	OwnerSessionID    *string      `json:"ownerSessionId,omitempty"`
 	ReviewerSessionID *string      `json:"reviewerSessionId,omitempty"`
 	BlockedReason     *string      `json:"blockedReason,omitempty"`
@@ -111,6 +115,48 @@ func normalizeWorkProjectIDs(ids []string) []string {
 	ids = slices.Clone(ids)
 	sort.Strings(ids)
 	return slices.Compact(ids)
+}
+
+func normalizeWorkLabels(labels []string) ([]string, error) {
+	if len(labels) > 32 {
+		return nil, errors.New("too many work labels")
+	}
+	result := make([]string, 0, len(labels))
+	for _, value := range labels {
+		label := strings.ToLower(strings.TrimSpace(value))
+		if label == "" || len(label) > 64 {
+			return nil, errors.New("work labels must be 1-64 characters")
+		}
+		for _, character := range label {
+			if unicode.IsControl(character) {
+				return nil, errors.New("work labels cannot contain control characters")
+			}
+		}
+		result = append(result, label)
+	}
+	sort.Strings(result)
+	return slices.Compact(result), nil
+}
+
+func workMatchesProjects(itemProjects, filter []string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+	for _, id := range filter {
+		if slices.Contains(itemProjects, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func workMatchesLabels(itemLabels, filter []string) bool {
+	for _, label := range filter {
+		if !slices.Contains(itemLabels, label) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeWorkDependencies(ids []string) []string {
@@ -210,21 +256,91 @@ func (h *sdkChatHost) saveWorkLocked(item *sdkWorkItem) error {
 	return nil
 }
 
+func workQueryFilters(r *http.Request) ([]string, []string, error) {
+	projects := r.URL.Query()["project_id"]
+	if len(projects) > 32 {
+		return nil, nil, errors.New("too many project filters")
+	}
+	for _, id := range projects {
+		if strings.TrimSpace(id) == "" {
+			return nil, nil, errors.New("empty project filter")
+		}
+	}
+	projects = normalizeWorkProjectIDs(projects)
+	labels, err := normalizeWorkLabels(r.URL.Query()["label"])
+	return projects, labels, err
+}
+
+// handleSDKNextWork returns the oldest unassigned, open item whose direct
+// prerequisites are all done. The read does not reserve work: callers claim
+// with update_work_item and expectedRevision, so competing workers cannot
+// silently take the same item.
+func (s *Server) handleSDKNextWork(w http.ResponseWriter, r *http.Request) {
+	projectIDs, labels, err := workQueryFilters(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h := s.sdkChats
+	h.mu.Lock()
+	for _, id := range projectIDs {
+		if h.projects[id] == nil {
+			h.mu.Unlock()
+			http.Error(w, "unknown project folder: "+id, http.StatusUnprocessableEntity)
+			return
+		}
+	}
+	var next *sdkWorkItem
+	for _, item := range h.workItems {
+		if item.Status != "open" || item.OwnerSessionID != "" || len(h.workWaitingOnLocked(item)) != 0 {
+			continue
+		}
+		if !workMatchesProjects(h.workProjectIDsLocked(item), projectIDs) || !workMatchesLabels(item.Labels, labels) {
+			continue
+		}
+		if next == nil || item.CreatedAt.Before(next.CreatedAt) || (item.CreatedAt.Equal(next.CreatedAt) && item.ID < next.ID) {
+			next = item
+		}
+	}
+	if next == nil {
+		h.mu.Unlock()
+		writeSDKJSON(w, 200, map[string]any{"work": nil})
+		return
+	}
+	copy := *next
+	copy.CreatedBy = h.workCreatorLocked(next)
+	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(next))
+	copy.WaitingOn = h.workWaitingOnLocked(next)
+	h.mu.Unlock()
+	writeSDKJSON(w, 200, map[string]any{"work": copy})
+}
+
 func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	if r.Method == http.MethodGet {
+		projectIDs, labels, err := workQueryFilters(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		owner := r.URL.Query().Get("session_id")
-		projectID := r.URL.Query().Get("project_id")
 		status := r.URL.Query().Get("status")
 		if status != "" && !validWorkStatus(status) {
 			http.Error(w, "invalid work status", 400)
 			return
 		}
 		h.mu.Lock()
+		for _, id := range projectIDs {
+			if h.projects[id] == nil {
+				h.mu.Unlock()
+				http.Error(w, "unknown project folder: "+id, http.StatusUnprocessableEntity)
+				return
+			}
+		}
 		rows := make([]sdkWorkItem, 0, len(h.workItems))
 		for _, item := range h.workItems {
-			projectIDs := h.workProjectIDsLocked(item)
-			if projectID != "" && !slices.Contains(projectIDs, projectID) {
+			itemProjects := h.workProjectIDsLocked(item)
+			if !workMatchesProjects(itemProjects, projectIDs) || !workMatchesLabels(item.Labels, labels) {
 				continue
 			}
 			if owner != "" && item.OwnerSessionID != owner && h.workCreatorLocked(item).SessionID != owner && !slices.Contains(item.SessionIDs, owner) {
@@ -235,7 +351,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 			}
 			copy := *item
 			copy.CreatedBy = h.workCreatorLocked(item)
-			copy.ProjectIDs = slices.Clone(projectIDs)
+			copy.ProjectIDs = slices.Clone(itemProjects)
 			copy.WaitingOn = h.workWaitingOnLocked(item)
 			copy.Updates = nil
 			rows = append(rows, copy)
@@ -255,10 +371,16 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		ReviewerSessionID string    `json:"reviewerSessionId"`
 		SessionIDs        []string  `json:"sessionIds"`
 		ProjectIDs        *[]string `json:"projectIds"`
+		Labels            []string  `json:"labels"`
 		DependsOn         []string  `json:"dependsOn"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || len(req.NextAction) > 4096 || len(req.Acceptance) > 16<<10 || len(req.SessionIDs) > 32 || len(req.DependsOn) > 32 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) {
 		http.Error(w, "clientRef and title required", 400)
+		return
+	}
+	labels, err := normalizeWorkLabels(req.Labels)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
 	sort.Strings(req.SessionIDs)
@@ -325,7 +447,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 				createNextAction = item.NextAction
 			}
 			createdDependencies := item.CreateDependsOn
-			if item.Title != req.Title || item.Brief != req.Brief || createNextAction != strings.TrimSpace(req.NextAction) || item.Acceptance != req.Acceptance || createReviewer != req.ReviewerSessionID || createOwner != req.OwnerSessionID || !slices.Equal(createdWith, req.SessionIDs) || !slices.Equal(createdProjects, projectIDs) || !slices.Equal(createdDependencies, req.DependsOn) {
+			if item.Title != req.Title || item.Brief != req.Brief || createNextAction != strings.TrimSpace(req.NextAction) || item.Acceptance != req.Acceptance || createReviewer != req.ReviewerSessionID || createOwner != req.OwnerSessionID || !slices.Equal(createdWith, req.SessionIDs) || !slices.Equal(createdProjects, projectIDs) || !slices.Equal(createdDependencies, req.DependsOn) || !slices.Equal(item.CreateLabels, labels) {
 				h.mu.Unlock()
 				http.Error(w, "clientRef already used for different work", 409)
 				return
@@ -341,7 +463,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	item := &sdkWorkItem{ID: sdkID(), ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
-		Status: "open", CreatedBy: creator, OwnerSessionID: req.OwnerSessionID, CreateOwnerID: req.OwnerSessionID, Acceptance: req.Acceptance, ReviewerSessionID: req.ReviewerSessionID, CreateReviewerID: req.ReviewerSessionID, ProjectIDs: projectIDs, CreateProjectIDs: slices.Clone(projectIDs), SessionIDs: req.SessionIDs,
+		Status: "open", CreatedBy: creator, OwnerSessionID: req.OwnerSessionID, CreateOwnerID: req.OwnerSessionID, Acceptance: req.Acceptance, ReviewerSessionID: req.ReviewerSessionID, CreateReviewerID: req.ReviewerSessionID, ProjectIDs: projectIDs, CreateProjectIDs: slices.Clone(projectIDs), Labels: labels, CreateLabels: append([]string{}, labels...), SessionIDs: req.SessionIDs,
 		CreateSessionIDs: append([]string{}, req.SessionIDs...), DependsOn: req.DependsOn, CreateDependsOn: append([]string{}, req.DependsOn...), WaitingOn: h.workWaitingOnLocked(&sdkWorkItem{DependsOn: req.DependsOn}),
 		Revision: 1, CreatedAt: now, UpdatedAt: now, Updates: []sdkWorkUpdate{}}
 	if err := h.saveWorkLocked(item); err != nil {
@@ -387,17 +509,18 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		Evidence          []string  `json:"evidence"`
 		LinkedSessionID   string    `json:"linkedSessionId"`
 		ProjectIDs        *[]string `json:"projectIds"`
+		Labels            *[]string `json:"labels"`
 		OwnerSessionID    *string   `json:"ownerSessionId"`
 		ReviewerSessionID *string   `json:"reviewerSessionId"`
 		BlockedReason     *string   `json:"blockedReason"`
 		DependsOn         *[]string `json:"dependsOn"`
 		ExpectedRevision  *int      `json:"expectedRevision"`
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || len(req.Text) > 16<<10 || len(req.Progress) > 4096 || (req.NextAction != nil && len(*req.NextAction) > 4096) || len(req.Outcome) > 16<<10 || len(req.Evidence) > 20 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) || (req.DependsOn != nil && len(*req.DependsOn) > 32) || (req.Status != "" && !validWorkStatus(req.Status)) || (req.OwnerSessionID != nil && len(*req.OwnerSessionID) > 256) || (req.ReviewerSessionID != nil && len(*req.ReviewerSessionID) > 256) || (req.BlockedReason != nil && len(*req.BlockedReason) > 4096) || (req.Text == "" && req.Status == "" && req.Progress == "" && req.NextAction == nil && req.Outcome == "" && req.LinkedSessionID == "" && req.ProjectIDs == nil && req.OwnerSessionID == nil && req.ReviewerSessionID == nil && req.BlockedReason == nil && req.DependsOn == nil) {
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || len(req.Text) > 16<<10 || len(req.Progress) > 4096 || (req.NextAction != nil && len(*req.NextAction) > 4096) || len(req.Outcome) > 16<<10 || len(req.Evidence) > 20 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) || (req.DependsOn != nil && len(*req.DependsOn) > 32) || (req.Status != "" && !validWorkStatus(req.Status)) || (req.OwnerSessionID != nil && len(*req.OwnerSessionID) > 256) || (req.ReviewerSessionID != nil && len(*req.ReviewerSessionID) > 256) || (req.BlockedReason != nil && len(*req.BlockedReason) > 4096) || (req.Text == "" && req.Status == "" && req.Progress == "" && req.NextAction == nil && req.Outcome == "" && req.LinkedSessionID == "" && req.ProjectIDs == nil && req.Labels == nil && req.OwnerSessionID == nil && req.ReviewerSessionID == nil && req.BlockedReason == nil && req.DependsOn == nil) {
 		http.Error(w, "clientRef and a valid work update required", 400)
 		return
 	}
-	if (req.OwnerSessionID != nil || req.ReviewerSessionID != nil || req.DependsOn != nil) && req.ExpectedRevision == nil {
+	if (req.OwnerSessionID != nil || req.ReviewerSessionID != nil || req.DependsOn != nil || req.Labels != nil) && req.ExpectedRevision == nil {
 		http.Error(w, "expectedRevision required to change assignment or dependencies", 400)
 		return
 	}
@@ -456,6 +579,15 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		req.ProjectIDs = &ids
 	}
+	if req.Labels != nil {
+		labels, err := normalizeWorkLabels(*req.Labels)
+		if err != nil {
+			h.mu.Unlock()
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		req.Labels = &labels
+	}
 	if req.DependsOn != nil {
 		ids := normalizeWorkDependencies(*req.DependsOn)
 		if !h.workDependenciesValidLocked(item.ID, ids) {
@@ -467,7 +599,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, prior := range item.Updates {
 		if prior.ClientRef == req.ClientRef {
-			if (prior.Actor.Kind != "" && prior.Actor != actor) || prior.SessionID != req.SessionID || prior.Text != req.Text || prior.Status != req.Status || prior.Progress != req.Progress || (prior.NextAction == nil) != (req.NextAction == nil) || (prior.NextAction != nil && *prior.NextAction != *req.NextAction) || prior.Outcome != req.Outcome || prior.LinkedSessionID != req.LinkedSessionID || !slices.Equal(prior.Evidence, req.Evidence) || (prior.ProjectIDs == nil) != (req.ProjectIDs == nil) || (prior.ProjectIDs != nil && !slices.Equal(*prior.ProjectIDs, *req.ProjectIDs)) || (prior.DependsOn == nil) != (req.DependsOn == nil) || (prior.DependsOn != nil && !slices.Equal(*prior.DependsOn, *req.DependsOn)) || (prior.OwnerSessionID == nil) != (req.OwnerSessionID == nil) || (prior.OwnerSessionID != nil && *prior.OwnerSessionID != *req.OwnerSessionID) || (prior.ReviewerSessionID == nil) != (req.ReviewerSessionID == nil) || (prior.ReviewerSessionID != nil && *prior.ReviewerSessionID != *req.ReviewerSessionID) || (prior.BlockedReason == nil) != (req.BlockedReason == nil) || (prior.BlockedReason != nil && *prior.BlockedReason != *req.BlockedReason) || (prior.ExpectedRevision == nil) != (req.ExpectedRevision == nil) || (prior.ExpectedRevision != nil && *prior.ExpectedRevision != *req.ExpectedRevision) {
+			if (prior.Actor.Kind != "" && prior.Actor != actor) || prior.SessionID != req.SessionID || prior.Text != req.Text || prior.Status != req.Status || prior.Progress != req.Progress || (prior.NextAction == nil) != (req.NextAction == nil) || (prior.NextAction != nil && *prior.NextAction != *req.NextAction) || prior.Outcome != req.Outcome || prior.LinkedSessionID != req.LinkedSessionID || !slices.Equal(prior.Evidence, req.Evidence) || (prior.ProjectIDs == nil) != (req.ProjectIDs == nil) || (prior.ProjectIDs != nil && !slices.Equal(*prior.ProjectIDs, *req.ProjectIDs)) || (prior.Labels == nil) != (req.Labels == nil) || (prior.Labels != nil && !slices.Equal(*prior.Labels, *req.Labels)) || (prior.DependsOn == nil) != (req.DependsOn == nil) || (prior.DependsOn != nil && !slices.Equal(*prior.DependsOn, *req.DependsOn)) || (prior.OwnerSessionID == nil) != (req.OwnerSessionID == nil) || (prior.OwnerSessionID != nil && *prior.OwnerSessionID != *req.OwnerSessionID) || (prior.ReviewerSessionID == nil) != (req.ReviewerSessionID == nil) || (prior.ReviewerSessionID != nil && *prior.ReviewerSessionID != *req.ReviewerSessionID) || (prior.BlockedReason == nil) != (req.BlockedReason == nil) || (prior.BlockedReason != nil && *prior.BlockedReason != *req.BlockedReason) || (prior.ExpectedRevision == nil) != (req.ExpectedRevision == nil) || (prior.ExpectedRevision != nil && *prior.ExpectedRevision != *req.ExpectedRevision) {
 				h.mu.Unlock()
 				http.Error(w, "clientRef already used for different update", 409)
 				return
@@ -486,7 +618,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "work item changed; refresh before assigning", 409)
 		return
 	}
-	if actor.Kind == "chat" && (req.OwnerSessionID != nil || req.ReviewerSessionID != nil || req.DependsOn != nil) && actor.SessionID != item.OwnerSessionID && actor.SessionID != h.workCreatorLocked(item).SessionID && !(item.OwnerSessionID == "" && req.OwnerSessionID != nil && *req.OwnerSessionID == actor.SessionID && req.ReviewerSessionID == nil && req.DependsOn == nil) {
+	if actor.Kind == "chat" && (req.OwnerSessionID != nil || req.ReviewerSessionID != nil || req.DependsOn != nil || req.Labels != nil) && actor.SessionID != item.OwnerSessionID && actor.SessionID != h.workCreatorLocked(item).SessionID && !(item.OwnerSessionID == "" && req.OwnerSessionID != nil && *req.OwnerSessionID == actor.SessionID && req.ReviewerSessionID == nil && req.DependsOn == nil && req.Labels == nil) {
 		h.mu.Unlock()
 		http.Error(w, "only the creator or owner can assign this work; an unassigned item may be claimed", 403)
 		return
@@ -495,7 +627,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	copy.CreatedBy = h.workCreatorLocked(item)
 	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: req.ClientRef, At: time.Now().UTC(), Actor: actor, SessionID: req.SessionID,
-		Text: req.Text, Status: req.Status, Progress: req.Progress, NextAction: req.NextAction, Outcome: req.Outcome, Evidence: req.Evidence, LinkedSessionID: req.LinkedSessionID, ProjectIDs: req.ProjectIDs, DependsOn: req.DependsOn, OwnerSessionID: req.OwnerSessionID, ReviewerSessionID: req.ReviewerSessionID, BlockedReason: req.BlockedReason, ExpectedRevision: req.ExpectedRevision})
+		Text: req.Text, Status: req.Status, Progress: req.Progress, NextAction: req.NextAction, Outcome: req.Outcome, Evidence: req.Evidence, LinkedSessionID: req.LinkedSessionID, ProjectIDs: req.ProjectIDs, Labels: req.Labels, DependsOn: req.DependsOn, OwnerSessionID: req.OwnerSessionID, ReviewerSessionID: req.ReviewerSessionID, BlockedReason: req.BlockedReason, ExpectedRevision: req.ExpectedRevision})
 	previousOwner := copy.OwnerSessionID
 	if req.OwnerSessionID != nil {
 		copy.OwnerSessionID = *req.OwnerSessionID
@@ -508,6 +640,9 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ProjectIDs != nil {
 		copy.ProjectIDs = slices.Clone(*req.ProjectIDs)
+	}
+	if req.Labels != nil {
+		copy.Labels = slices.Clone(*req.Labels)
 	}
 	if req.DependsOn != nil {
 		copy.DependsOn = slices.Clone(*req.DependsOn)

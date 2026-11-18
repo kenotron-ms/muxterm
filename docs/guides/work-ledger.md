@@ -1,7 +1,7 @@
 # Shared work records
 
-The Issues view and the `create_work_item`, `list_work_items`, `get_work_item`,
-and `update_work_item` MCP tools use one durable Work record. Creating or updating
+The Issues view and the `create_work_item`, `list_work_items`,
+`get_next_work_item`, `get_work_item`, and `update_work_item` MCP tools use one durable Work record. Creating or updating
 work does not start an agent, send a chat message, or control a Chat Goal.
 
 ## Start with a request in chat
@@ -53,6 +53,14 @@ concrete step and can be changed or cleared with `next_action` in
 leaving blocked clears the reason. `review` means the work is ready for its
 reviewer. Updates carry evidence references in the activity history.
 
+`labels` are normalized to lowercase and can be changed with
+`update_work_item` using `expected_revision`. An empty `labels` list clears
+them. `list_work_items` and `get_next_work_item` accept `project_id` (one or
+several values) and `label` (one or several values) over HTTP. The matching
+MCP arguments are `project_id` or `project_ids`, and `labels`. Multiple
+projects mean **any** listed project; multiple labels mean **all** listed
+labels. Omit either filter to search across all projects or labels.
+
 `dependsOn` lists prerequisite Work IDs. `waitingOn` is derived from those
 records and lists prerequisites that have not reached `done`; a cancelled
 prerequisite remains unmet. Muxterm rejects unknown IDs and dependency cycles.
@@ -69,13 +77,19 @@ subscription may observe it. These events do not become ordinary messages in
 the chat transcript. An unassigned item's record remains discoverable in the
 Issues list without selecting an arbitrary chat as its notification target.
 
-## Agent mechanics: assign, claim, and start work
+## Agent mechanics: find, claim, and start work
 
-An active chat can find unassigned work with `list_work_items`, read one with
-`get_work_item`, then claim it by calling `update_work_item` with its own
-`owner_session_id` and the returned `expected_revision`. It can proceed in the
-same turn. If another claimant got there first, the server returns 409; read
-the record again before deciding what to do.
+An active chat can call `get_next_work_item` with optional `project_ids` and
+`labels` filters to
+fetch the oldest ready item in the unassigned pile. The result is
+`{"work":null}` when none is ready. Ready means `status=open`, no owner, and
+every `dependsOn` item is `done`. Items waiting on prerequisites are never
+returned. The tool is read-only and does not reserve the item. Claim it with
+`update_work_item`, using its own `owner_session_id` and the returned
+`revision` as `expected_revision`. It can proceed in the same turn. If another
+claimant got there first, the server returns 409; fetch again before deciding
+what to do. For a broader inspection of blocked or assigned work, use
+`list_work_items` and `get_work_item`.
 
 For an idle chat, create or assign the item to its chat ID, then call
 `send_chat_message` once with the Work ID and next action. Assignment is a
