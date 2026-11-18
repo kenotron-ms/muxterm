@@ -163,13 +163,12 @@ Muxterm chat detaches its view without stopping Unified work. The adapter sends
 text, streams assistant text, resumes its native session, and forwards Stop and
 rename. Unified's native steering handles text sent during an active turn.
 
-Set `MUXTERM_UNIFIED_URL` to the Unified host origin and
-`MUXTERM_UNIFIED_TOKEN_FILE` to a file containing its control bearer token before
-starting Muxterm. A local Unified installation stores the token at
-`<Unified data dir>/config/auth/control-token`. Plain HTTP is accepted only for
-loopback hosts; remote hosts require HTTPS with a trusted certificate. The chosen
-Muxterm project path must also exist on the Unified host. The control token has
-broad host authority, so keep the file private.
+Open Settings → AI → Amplifier Unified and choose **This computer** to install
+and connect the local Unified service. Muxterm discovers its owner-only token
+automatically. Choose **Existing host** to enter its HTTPS origin and control
+token; Muxterm stores the token in a private file and never returns it to the
+browser. Plain HTTP is accepted only for loopback hosts. The chosen Muxterm
+project path must also exist on a remote Unified host.
 
 Muxterm maintains the embedded adapter against Unified's published client
 contract. It rejects unsupported protocol versions explicitly.

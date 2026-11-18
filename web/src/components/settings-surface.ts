@@ -40,6 +40,7 @@ export type SettingsSection = 'appearance' | 'terminal' | 'notifications' | 'wor
 type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean };
 type AntigravityLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
 type AgentVersion = { harness: string; installed: boolean; version?: string; latestVersion?: string; installMethod?: string; updateAvailable: boolean; checkedAt?: string };
+type UnifiedConnection = { mode: 'local' | 'existing'; url: string; installed: boolean; installSupported: boolean; tokenConfigured: boolean; connected: boolean; message?: string };
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> = [
   { id: 'appearance', label: 'Appearance' },
@@ -673,6 +674,13 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _antigravityInstalling = false;
   private _antigravityPollTimer?: number;
   private _antigravityEpoch = 0;
+  @state() private _unified: UnifiedConnection | null = null;
+  @state() private _unifiedMode: 'local' | 'existing' = 'local';
+  @state() private _unifiedURL = '';
+  @state() private _unifiedToken = '';
+  @state() private _unifiedBusy = false;
+  @state() private _unifiedMessage = '';
+  @state() private _unifiedError = '';
 
   // ── Voice credentials ──────────────────────────────────────────────────
   // _voice is what the SERVER says. The _v* fields are the form's own edits,
@@ -1133,6 +1141,7 @@ export class MuxSettingsSurface extends LitElement {
 
   private _loadAIConnections(): void {
     void this._loadAntigravity();
+    void this._loadUnified();
     void this._loadAgentAvailability();
     this._agentVersions = new Map();
     void this._refreshAgentVersions();
@@ -1361,18 +1370,91 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _renderUnified() {
-    const configured = this._readyAgents?.has('amplifier-unified') ?? false;
-    const label = this._agentStatusError ? 'Status unavailable' : this._readyAgents === null ? 'Checking' : configured ? 'Configured' : 'Set up';
+    const ready = this._readyAgents?.has('amplifier-unified') ?? false;
+    const status = this._unified;
+    const savedChoiceShown = status?.mode === this._unifiedMode &&
+      (this._unifiedMode === 'local' || this._unifiedURL.trim() === status.url && !this._unifiedToken);
+    const label = status === null ? 'Checking' : ready ? 'Configured' : 'Set up';
     return html`<details class="agent-card ai-harness">
-      <summary><span class="agent-identity"><span class="agent-title">Amplifier Unified</span><span class="agent-description">Connected Unified host · separate from Amplifier CLI</span></span><mux-ui-status-badge appearance="plain" tone=${configured ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <summary><span class="agent-identity"><span class="agent-title">Amplifier Unified</span><span class="agent-description">Connected Unified host · separate from Amplifier CLI</span></span><mux-ui-status-badge appearance="plain" tone=${ready ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="agent-body">
-        <p>Connect Muxterm to an already running Amplifier Unified host. The host owns execution and session history and can update independently of Muxterm.</p>
-        <p>Set <code>MUXTERM_UNIFIED_URL</code> to the host origin and <code>MUXTERM_UNIFIED_TOKEN_FILE</code> to the path of its control token file in the Muxterm server environment. Muxterm reads these values at startup.</p>
-        <p>Local Unified stores the token at <code>&lt;Unified data dir&gt;/config/auth/control-token</code>. Remote hosts require HTTPS; the selected project path must exist on the Unified host.</p>
-        <p>${configured ? 'The required environment variables are present. Connection is checked when a chat starts.' : 'Unified appears in New Chat once both environment variables are present.'}</p>
-        <div class="agent-card-actions"><mux-ui-button size="small" variant="secondary" @click=${() => void this._loadAgentAvailability()}>Refresh status</mux-ui-button><a href="https://github.com/kenotron-ms/muxterm/blob/main/sdk-chat/README.md#amplifier-unified-connected-host" target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
+        <p>Unified runs its own service and keeps its own sessions. Install it here or connect an existing host; it can update independently of Muxterm.</p>
+        <mux-ui-radio-group aria-label="Unified location" name="unified-location" .value=${this._unifiedMode}
+          .options=${[{value:'local',label:'This computer',description:'Install and connect automatically'}, {value:'existing',label:'Existing host',description:'Enter its address and control token'}]}
+          ?disabled=${this._unifiedBusy}
+          @change=${(event: CustomEvent<{value:string}>) => { this._unifiedMode = event.detail.value as 'local' | 'existing'; this._unifiedToken = ''; this._unifiedMessage = ''; this._unifiedError = ''; }}></mux-ui-radio-group>
+        ${this._unifiedMode === 'local' ? html`
+          <p>${status?.installed ? 'Amplifier Unified is installed on this computer.' : 'Muxterm will install Amplifier Unified and start its background service.'} ${status?.tokenConfigured && status.mode === 'local' ? 'Local credentials were found.' : ''}</p>
+          <div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${this._unifiedBusy || !status?.installSupported} @click=${() => void this._installUnified()}>${this._unifiedBusy ? 'Connecting…' : status?.installed ? 'Start and connect' : 'Install and connect'}</mux-ui-button></div>
+          ${status && !status.installSupported ? html`<p>Automatic installation is available in a deployed Linux or macOS Muxterm instance.</p>` : nothing}
+        ` : html`
+          <mux-ui-text-field label="Unified host URL" type="url" placeholder="https://unified.example.com" .value=${this._unifiedURL} ?disabled=${this._unifiedBusy} @input=${(event: Event) => { this._unifiedURL = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
+          <mux-ui-text-field label="Control token" type="password" autocomplete="off" placeholder=${status?.mode === 'existing' && status.tokenConfigured ? 'Saved token (leave blank to keep)' : 'Paste the host control token'} .value=${this._unifiedToken} ?disabled=${this._unifiedBusy} @input=${(event: Event) => { this._unifiedToken = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
+          <p>Remote hosts require HTTPS. The project path must exist on the Unified host. Muxterm stores the token privately and does not show it again.</p>
+          <div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${this._unifiedBusy || !this._unifiedURL.trim()} @click=${() => void this._saveUnified()}>${this._unifiedBusy ? 'Saving…' : 'Save connection'}</mux-ui-button></div>
+        `}
+        ${this._unifiedError ? html`<mux-ui-feedback kind="error" density="compact">${this._unifiedError}</mux-ui-feedback>` : nothing}
+        ${this._unifiedMessage ? html`<mux-ui-feedback kind="success" density="compact">${this._unifiedMessage}</mux-ui-feedback>` : nothing}
+        <div class="agent-card-actions"><mux-ui-button size="small" variant="secondary" ?disabled=${this._unifiedBusy || !ready || !savedChoiceShown} @click=${() => void this._checkUnified()}>Test connection</mux-ui-button><mux-ui-button size="small" variant="secondary" ?disabled=${this._unifiedBusy} @click=${() => void this._loadUnified()}>Refresh status</mux-ui-button></div>
       </div>
     </details>`;
+  }
+
+  private async _unifiedRequest(path: string, method = 'GET', body?: unknown): Promise<UnifiedConnection> {
+    const response = await fetch(apiPath(path), { method, ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
+    if (!response.ok) throw new Error((await response.text()).trim() || `Unified request failed (HTTP ${response.status})`);
+    return await response.json() as UnifiedConnection;
+  }
+
+  private _applyUnified(status: UnifiedConnection): void {
+    this._unified = status;
+    this._unifiedMode = status.mode;
+    this._unifiedURL = status.mode === 'existing' ? status.url : '';
+    this._unifiedToken = '';
+  }
+
+  private async _loadUnified(): Promise<void> {
+    this._unifiedError = '';
+    try { this._applyUnified(await this._unifiedRequest('/api/ai/unified/connection')); }
+    catch (error) { this._unifiedError = error instanceof Error ? error.message : 'Could not read Unified settings'; }
+    void this._loadAgentAvailability();
+  }
+
+  private async _saveUnified(): Promise<void> {
+    this._unifiedBusy = true;
+    this._unifiedError = '';
+    this._unifiedMessage = '';
+    const token = this._unifiedToken;
+    this._unifiedToken = '';
+    try {
+      this._applyUnified(await this._unifiedRequest('/api/ai/unified/connection', 'PUT', { mode: 'existing', url: this._unifiedURL.trim(), token }));
+      this._unifiedMessage = 'Connection saved. Test it before starting a chat.';
+      void this._loadAgentAvailability();
+    } catch (error) { this._unifiedError = error instanceof Error ? error.message : 'Could not save Unified settings'; }
+    finally { this._unifiedBusy = false; }
+  }
+
+  private async _installUnified(): Promise<void> {
+    this._unifiedBusy = true;
+    this._unifiedError = '';
+    this._unifiedMessage = '';
+    try {
+      await this._unifiedRequest('/api/ai/unified/install', 'POST');
+      this._applyUnified(await this._unifiedRequest('/api/ai/unified/connection', 'PUT', { mode: 'local' }));
+      this._applyUnified(await this._unifiedRequest('/api/ai/unified/check', 'POST'));
+      this._unifiedMessage = 'Unified is installed and connected. It is available in New chat.';
+      void this._loadAgentAvailability();
+    } catch (error) { this._unifiedError = error instanceof Error ? error.message : 'Could not install Unified'; }
+    finally { this._unifiedBusy = false; }
+  }
+
+  private async _checkUnified(): Promise<void> {
+    this._unifiedBusy = true;
+    this._unifiedError = '';
+    this._unifiedMessage = '';
+    try { this._applyUnified(await this._unifiedRequest('/api/ai/unified/check', 'POST')); this._unifiedMessage = 'Connected to Unified.'; }
+    catch (error) { this._unifiedError = error instanceof Error ? error.message : 'Could not connect to Unified'; }
+    finally { this._unifiedBusy = false; }
   }
 
   private _setDefaultHarness(defaultHarness: ResolvedConfig['ai']['defaultHarness']): void {

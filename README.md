@@ -235,7 +235,7 @@ The browser renders panes with Lit, dockview, and xterm.js. The Go server handle
 ## Requirements
 
 - **Go** 1.24.2+ (the module selects toolchain 1.24.4)
-- **Node.js** 18+
+- **Node.js** 22+ (required by current chat sidecar dependencies)
 
 ## Development
 

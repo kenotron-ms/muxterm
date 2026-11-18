@@ -2,6 +2,9 @@
 // this adapter only projects its version-1 HTTP/SSE session into muxterm events.
 import { readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { instanceDataHome } from './instance-xdg.mjs';
 
 const capabilities = { approvals: false, transcript_read: false, interrupt: true,
   live_input: true, attributed_service_input: false, native_steering: true };
@@ -15,10 +18,17 @@ function nativeSessionId(muxtermId) {
 }
 
 function connection() {
-  const configured = process.env.MUXTERM_UNIFIED_URL;
-  const tokenFile = process.env.MUXTERM_UNIFIED_TOKEN_FILE;
-  if (!configured || !tokenFile)
-    throw new Error('Amplifier Unified needs MUXTERM_UNIFIED_URL and MUXTERM_UNIFIED_TOKEN_FILE');
+  let settings = { mode: 'local' };
+  try {
+    settings = JSON.parse(readFileSync(join(instanceDataHome(), 'muxterm', 'sdk-chat', 'unified', 'connection.json'), 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw new Error('Could not read Unified connection settings', { cause: error });
+  }
+  if (!['local', 'existing'].includes(settings.mode)) throw new Error('Invalid Unified connection mode');
+  const configured = settings.mode === 'local' ? 'http://127.0.0.1:8941' : settings.url;
+  const tokenFile = settings.mode === 'local'
+    ? join(homedir(), '.amplifier-unified', 'config', 'auth', 'control-token')
+    : join(instanceDataHome(), 'muxterm', 'sdk-chat', 'unified', 'control-token');
   const url = new URL(configured);
   if (url.username || url.password || url.search || url.hash || url.pathname !== '/' ||
       !(['http:', 'https:'].includes(url.protocol))) throw new Error('Invalid Unified base URL');
