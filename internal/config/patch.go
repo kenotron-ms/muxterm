@@ -39,7 +39,7 @@ func (p Patch) Apply(base Config) (Config, error) {
 	}
 	if _, ok := p.fields["ai"]; ok {
 		switch base.AI.DefaultHarness {
-		case "codex", "claude", "copilot", "amplifier", "pi", "opencode", "deepseek", "antigravity":
+		case "codex", "claude", "copilot", "amplifier", "amplifier-unified", "pi", "opencode", "deepseek", "antigravity":
 		default:
 			return Config{}, fmt.Errorf("ai.default_harness: unsupported harness %q", base.AI.DefaultHarness)
 		}

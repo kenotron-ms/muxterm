@@ -92,7 +92,7 @@ const SETUP_AGENTS = [
   { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', install:'uv tool install git+https://github.com/microsoft/amplifier', update:'uv tool upgrade amplifier', start:'amplifier', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
 // Existing Gemini CLI chats can resume, but new chats use Antigravity.
-const DEFAULT_HARNESSES: SDKHarnessName[] = ['codex', 'claude', 'copilot', 'amplifier', 'pi', 'opencode', 'deepseek', 'antigravity'];
+const DEFAULT_HARNESSES: SDKHarnessName[] = ['codex', 'claude', 'copilot', 'amplifier', 'amplifier-unified', 'pi', 'opencode', 'deepseek', 'antigravity'];
 
 /**
  * The status markers. A glyph in a fixed gutter, not a coloured slab: colour
@@ -1354,9 +1354,25 @@ export class MuxSettingsSurface extends LitElement {
       ${this._agentVersionError ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._agentVersionError}</mux-ui-feedback>` : nothing}
       <div class="agent-list">
         ${this._renderAntigravity()}
+        ${this._renderUnified()}
         ${SETUP_AGENTS.map(agent => this._renderSetupAgent(agent))}
       </div>
     `;
+  }
+
+  private _renderUnified() {
+    const configured = this._readyAgents?.has('amplifier-unified') ?? false;
+    const label = this._agentStatusError ? 'Status unavailable' : this._readyAgents === null ? 'Checking' : configured ? 'Configured' : 'Set up';
+    return html`<details class="agent-card ai-harness">
+      <summary><span class="agent-identity"><span class="agent-title">Amplifier Unified</span><span class="agent-description">Connected Unified host · separate from Amplifier CLI</span></span><mux-ui-status-badge appearance="plain" tone=${configured ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <div class="agent-body">
+        <p>Connect Muxterm to an already running Amplifier Unified host. The host owns execution and session history and can update independently of Muxterm.</p>
+        <p>Set <code>MUXTERM_UNIFIED_URL</code> to the host origin and <code>MUXTERM_UNIFIED_TOKEN_FILE</code> to the path of its control token file in the Muxterm server environment. Muxterm reads these values at startup.</p>
+        <p>Local Unified stores the token at <code>&lt;Unified data dir&gt;/config/auth/control-token</code>. Remote hosts require HTTPS; the selected project path must exist on the Unified host.</p>
+        <p>${configured ? 'The required environment variables are present. Connection is checked when a chat starts.' : 'Unified appears in New Chat once both environment variables are present.'}</p>
+        <div class="agent-card-actions"><mux-ui-button size="small" variant="secondary" @click=${() => void this._loadAgentAvailability()}>Refresh status</mux-ui-button><a href="https://github.com/kenotron-ms/muxterm/blob/main/sdk-chat/README.md#amplifier-unified-connected-host" target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
+      </div>
+    </details>`;
   }
 
   private _setDefaultHarness(defaultHarness: ResolvedConfig['ai']['defaultHarness']): void {
