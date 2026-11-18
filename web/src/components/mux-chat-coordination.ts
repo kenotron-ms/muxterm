@@ -164,7 +164,11 @@ export class MuxChatCoordination extends LitElement {
       if (key !== this.refreshKey) return;
       this.work = items.work;
       this.control = control;
-      if (this.detail) this.detail = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(this.detail.id)}`);
+      if (this.detail) {
+        const detail = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(this.detail.id)}`);
+        if (key !== this.refreshKey) return;
+        this.detail = detail;
+      }
       this.error = '';
     } catch (error) { if (key === this.refreshKey) this.error = String(error); }
     finally { if (key === this.refreshKey) this.loading = false; }

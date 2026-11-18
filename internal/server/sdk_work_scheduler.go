@@ -27,7 +27,8 @@ func (h *sdkChatHost) workActiveCountLocked(projectID, exceptID string) int {
 		if item.ID == exceptID || item.Status == "done" || item.Status == "cancelled" || item.Status == "blocked" || item.Status == "review" || (item.Status != "active" && item.Readiness != "ready") {
 			continue
 		}
-		if len(h.workProjectIDsLocked(item)) != 1 || h.workProjectIDsLocked(item)[0] != projectID {
+		projects := h.workProjectIDsLocked(item)
+		if len(projects) != 1 || projects[0] != projectID {
 			continue
 		}
 		if item.Status == "active" || item.OwnerSessionID != "" || (item.Dispatch != nil && item.Dispatch.State != "failed") {
@@ -167,6 +168,17 @@ func (s *Server) reconcileWorkFailures() {
 func (s *Server) handleSDKProjectWorkControl(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	id := r.PathValue("id")
+	var req struct {
+		Paused          *bool `json:"paused"`
+		Parallelism     *int  `json:"parallelism"`
+		ExpectedVersion int   `json:"expectedVersion"`
+	}
+	if r.Method == http.MethodPatch {
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req) != nil || (req.Paused == nil && req.Parallelism == nil) || (req.Parallelism != nil && (*req.Parallelism < 1 || *req.Parallelism > 8)) {
+			http.Error(w, "paused or parallelism 1-8 required", 400)
+			return
+		}
+	}
 	h.mu.Lock()
 	project := h.projects[id]
 	if project == nil {
@@ -175,16 +187,6 @@ func (s *Server) handleSDKProjectWorkControl(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if r.Method == http.MethodPatch {
-		var req struct {
-			Paused          *bool `json:"paused"`
-			Parallelism     *int  `json:"parallelism"`
-			ExpectedVersion int   `json:"expectedVersion"`
-		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req) != nil || (req.Paused == nil && req.Parallelism == nil) || (req.Parallelism != nil && (*req.Parallelism < 1 || *req.Parallelism > 8)) {
-			h.mu.Unlock()
-			http.Error(w, "paused or parallelism 1-8 required", 400)
-			return
-		}
 		version := project.WorkControlVersion
 		if version == 0 {
 			version = 1
