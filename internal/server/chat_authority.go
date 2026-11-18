@@ -68,7 +68,8 @@ func agentChatPathAllowed(method, path string) bool {
 	if strings.HasPrefix(path, "/api/sdk-work/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/api/sdk-work/"), "/")
 		return (len(parts) == 1 && parts[0] != "" && method == http.MethodGet) ||
-			(len(parts) == 2 && parts[0] != "" && parts[1] == "updates" && method == http.MethodPost)
+			(len(parts) == 2 && parts[0] != "" && (parts[1] == "updates" || parts[1] == "start") && method == http.MethodPost) ||
+			(len(parts) == 3 && parts[0] != "" && parts[1] == "dispatch" && parts[2] == "reset" && method == http.MethodPost)
 	}
 	if path == "/api/sdk-chats" {
 		return method == http.MethodGet || method == http.MethodPost

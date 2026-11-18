@@ -15,7 +15,7 @@ const chats: SDKChat[] = [
 ];
 const work = {
   id:'storybook-coordination-work', title:'Ship session coordination', brief:'Review the inbox and publish the release.',
-  status:'active', progress:'Browser verification complete; waiting for review.', ownerSessionId:owner, projectIds:['storybook-project'],
+  status:'review', progress:'Browser verification complete; waiting for review.', createdBy:{kind:'chat',sessionId:sourceA}, ownerSessionId:owner, reviewerSessionId:sourceB, acceptanceCriteria:'Verify the release in a real browser and record the PR.', revision:3, projectIds:['storybook-project'],
   sessionIds:[sourceA,sourceB], updatedAt:now,
   updates:[
     {id:'update-1',at:now,sessionId:owner,text:'Started the release review.',status:'active'},

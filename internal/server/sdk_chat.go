@@ -1918,6 +1918,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chatID := sdkID()
+	if plannedID, ok := r.Context().Value(workStartChatIDKey{}).(string); ok && plannedID != "" {
+		chatID = plannedID
+	}
 	if req.WorkMode == "worktree" {
 		root, err := exec.CommandContext(r.Context(), "git", "-C", req.ProjectPath, "rev-parse", "--show-toplevel").Output()
 		if err != nil || strings.TrimSpace(string(root)) != req.ProjectPath {
@@ -1947,6 +1950,11 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	c := &sdkChat{ID: chatID, SideParentID: req.SideParentID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Bundle: req.Bundle, Model: req.Model, Effort: req.Effort, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	h.mu.Lock()
+	if h.chats[c.ID] != nil {
+		h.mu.Unlock()
+		http.Error(w, "chat already exists", 409)
+		return
+	}
 	h.chats[c.ID] = c
 	err = h.saveLocked(c)
 	if err != nil {
