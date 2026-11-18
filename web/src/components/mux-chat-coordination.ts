@@ -4,6 +4,8 @@ import { apiPath } from '../lib/base-path.js';
 import { remoteChatPath } from '../lib/remote-chat-routes.js';
 import { sdkChats } from '../lib/sdk-chats.js';
 import '../ui/button.js';
+import type { MuxUISelect } from '../ui/select.js';
+import '../ui/select.js';
 
 type WorkActor = { kind:'chat' | 'human' | 'external-tool'; sessionId?:string };
 type WorkDispatch = { clientRef:string; sessionId:string; state:string; detail?:string };
@@ -40,7 +42,7 @@ export class MuxChatCoordination extends LitElement {
     .overview .filters { margin-bottom:0; }
     .filters { display:flex; gap:var(--ui-space-2); margin-bottom:var(--ui-space-4); }
     .field-filters { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin-bottom:var(--ui-space-4); }
-    .field-filters select { max-width:100%; min-width:10rem; padding:var(--ui-space-2) var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; }
+    .field-filters mux-ui-select { flex:1 1 var(--ui-dock-tab-min-width); min-width:0; }
     .filter[pressed] { color:var(--ui-accent); }
     .list { border-top:1px solid var(--ui-border); }
     .issue { border-bottom:1px solid var(--ui-border); padding:var(--ui-space-4) var(--ui-space-2); }
@@ -171,7 +173,7 @@ export class MuxChatCoordination extends LitElement {
     const visible = narrowed.filter(item => this.filter === 'all' || (this.filter === 'done' ? item.status === 'done' || item.status === 'cancelled' : item.status !== 'done' && item.status !== 'cancelled'));
     return html`<div class="overview"><p>${openCount} open · ${narrowed.length} total</p><div class="filters" aria-label="Issue scope"><mux-ui-button size="small" variant="quiet" toggle .pressed=${this.scope === 'folder'} @click=${() => this.selectScope('folder')}>${this.projectId ? 'This folder' : 'This chat'}</mux-ui-button><mux-ui-button size="small" variant="quiet" toggle .pressed=${this.scope === 'all'} @click=${() => this.selectScope('all')}>All issues</mux-ui-button></div></div>
       <div class="filters" aria-label="Filter issues">${(['open','all','done'] as const).map(filter => html`<mux-ui-button class="filter" size="small" variant="quiet" toggle .pressed=${this.filter === filter} @click=${() => { this.filter=filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Done'}</mux-ui-button>`)}</div>
-      <div class="field-filters"><select aria-label="Filter by project" .value=${this.projectFilter} @change=${(event:Event) => this.selectProjectFilter((event.target as HTMLSelectElement).value)}><option value="">All projects</option>${projectIds.map(id => html`<option value=${id}>${this.projectName(id)}</option>`)}</select><select aria-label="Filter by label" .value=${this.labelFilter} @change=${(event:Event) => { this.labelFilter=(event.target as HTMLSelectElement).value; }}><option value="">All labels</option>${labels.map(label => html`<option value=${label}>${label}</option>`)}</select></div>
+      <div class="field-filters"><mux-ui-select size="small" aria-label="Filter by project" .value=${this.projectFilter} .options=${[{value:'',label:'All projects'},...projectIds.map(id => ({value:id,label:this.projectName(id)}))]} @change=${(event:Event) => this.selectProjectFilter((event.target as MuxUISelect).value)}></mux-ui-select><mux-ui-select size="small" aria-label="Filter by label" .value=${this.labelFilter} .options=${[{value:'',label:'All labels'},...labels.map(label => ({value:label,label}))]} @change=${(event:Event) => { this.labelFilter=(event.target as MuxUISelect).value; }}></mux-ui-select></div>
       ${visible.length ? html`<div class="list">${visible.map(item => html`<div class="issue"><mux-ui-button class="issue-open" full-width variant="quiet" @click=${() => this.openDetail(item)}><span class="status-dot ${item.status}" aria-hidden="true"></span><span class="issue-main"><strong>${item.title}</strong><span class="summary">${item.waitingOn?.length ? `Waiting on ${item.waitingOn.length} prerequisite${item.waitingOn.length === 1 ? '' : 's'}` : item.nextAction || item.progress || item.brief || 'No progress yet'}</span></span><span class="status">${this.statusName(item.status)}</span></mux-ui-button><span class="meta">Owner: ${this.ownerLabel(item)} · Created by ${this.creatorLabel(item)}${item.dispatch && item.dispatch.state !== 'claimed' ? html` · Kickoff: ${this.dispatchLabel(item)}` : nothing} · ${this.projectNames(item)}${item.labels?.length ? ` · ${item.labels.join(', ')}` : ''}</span></div>`)}</div>` : html`<div class="empty"><strong>${this.work.length ? 'No issues in this view' : 'No issues yet'}</strong>${this.work.length ? 'Choose another filter to see them.' : 'Issues will appear here as agents record shared work.'}</div>`}`;
   }
   private issueDetail() {
