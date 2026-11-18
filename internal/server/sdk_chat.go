@@ -1596,7 +1596,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		for _, harness := range availableConfigured {
 			options = append(options, option{Harness: harness, Provider: "configured"})
 		}
-		if os.Getenv("MUXTERM_UNIFIED_URL") != "" && os.Getenv("MUXTERM_UNIFIED_TOKEN_FILE") != "" {
+		if unifiedConnectionAvailable() {
 			options = append(options, option{Harness: "amplifier-unified", Provider: "configured"})
 		}
 	}

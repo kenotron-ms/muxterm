@@ -297,6 +297,10 @@ func New(cfg Config) *Server {
 	s.mux.Handle("DELETE /api/ai/antigravity/login", protect(http.HandlerFunc(s.handleAntigravityLogin)))
 	s.mux.Handle("POST /api/ai/antigravity/login/callback", protect(http.HandlerFunc(s.handleAntigravityLoginCallback)))
 	s.mux.Handle("POST /api/ai/antigravity/install", protect(http.HandlerFunc(s.handleAntigravityInstall)))
+	s.mux.Handle("GET /api/ai/unified/connection", protect(http.HandlerFunc(s.handleUnifiedConnectionGet)))
+	s.mux.Handle("PUT /api/ai/unified/connection", protect(http.HandlerFunc(s.handleUnifiedConnectionPut)))
+	s.mux.Handle("POST /api/ai/unified/check", protect(http.HandlerFunc(s.handleUnifiedConnectionCheck)))
+	s.mux.Handle("POST /api/ai/unified/install", protect(http.HandlerFunc(s.handleUnifiedInstall)))
 	s.mux.Handle("GET /api/ai/agents/versions", protect(http.HandlerFunc(s.handleCodingAgentVersions)))
 	s.mux.Handle("POST /api/ai/agents/versions/refresh", protect(http.HandlerFunc(s.handleCodingAgentVersionRefresh)))
 
