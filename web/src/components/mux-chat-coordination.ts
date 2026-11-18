@@ -82,33 +82,31 @@ export class MuxChatCoordination extends LitElement {
     .state-pill { display:inline-flex; align-items:center; border:1px solid var(--ui-border-strong); border-radius:999px; padding:1px var(--ui-space-3); color:var(--ui-text); font-size:var(--ui-text-xs); font-weight:650; }
     .state-pill.attention { border-color:var(--ui-danger); color:var(--ui-danger); }
     .state-pill.active,.state-pill.ready { border-color:var(--ui-accent); color:var(--ui-accent); }
-    .detail-grid { display:grid; grid-template-columns:1fr; gap:var(--ui-space-5); align-items:start; margin-top:var(--ui-space-6); }
+    .detail-grid { display:grid; grid-template-columns:1fr; gap:var(--ui-space-8); align-items:start; margin-top:var(--ui-space-8); }
     .detail-main { min-width:0; }
-    .situation { padding:0 0 var(--ui-space-7); border-bottom:1px solid var(--ui-border); }
     .situation h3 { margin-bottom:var(--ui-space-3); color:var(--ui-accent); }
     .situation.attention h3 { color:var(--ui-danger); }
     .situation.waiting h3,.situation.review h3 { color:var(--ui-warning); }
     .situation p + p { margin-top:var(--ui-space-3); }
-    .detail-section { padding-bottom:var(--ui-space-5); margin-bottom:var(--ui-space-5); border-bottom:1px solid var(--ui-border); }
+    .detail-section { margin-bottom:var(--ui-space-7); }
     .detail-section p { margin-top:var(--ui-space-2); white-space:pre-wrap; overflow-wrap:anywhere; }
     .detail-section h3,.side-section h3 { font-size:var(--ui-text-sm); font-weight:650; }
-    .detail-side { min-width:0; }
-    .side-section { padding-bottom:var(--ui-space-3); margin-bottom:var(--ui-space-3); border-bottom:1px solid var(--ui-border); }
+    .detail-side { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:var(--ui-space-7) var(--ui-space-8); min-width:0; }
     .side-section p { margin-top:var(--ui-space-1); overflow-wrap:anywhere; }
     .chip { display:inline-block; border:1px solid var(--ui-border-strong); border-radius:999px; padding:0 var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    .activity { margin-top:var(--ui-space-6); }
-    .activity h3 { padding-bottom:var(--ui-space-3); border-bottom:1px solid var(--ui-border-strong); }
-    .entry { border-bottom:1px solid var(--ui-border); padding:var(--ui-space-4) 0; }
+    .activity { margin-top:var(--ui-space-9); }
+    .entry { padding:var(--ui-space-5) 0; }
+    .entry + .entry { margin-top:var(--ui-space-3); }
     .entry p { margin-top:var(--ui-space-2); white-space:pre-wrap; overflow-wrap:anywhere; }
-    .more-details { margin-top:var(--ui-space-6); padding-top:var(--ui-space-3); border-top:1px solid var(--ui-border); }
+    .more-details { margin-top:var(--ui-space-9); }
     .more-details summary { color:var(--ui-text-muted); cursor:pointer; }
     .more-details summary:hover { color:var(--ui-text); }
     .more-details dl { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:var(--ui-space-2) var(--ui-space-4); margin:var(--ui-space-4) 0 0; font-size:var(--ui-text-xs); overflow-wrap:anywhere; }
     .more-details dt { color:var(--ui-text-muted); }
     .more-details dd { margin:0; min-width:0; }
     .error { color:var(--ui-danger); margin:var(--ui-space-3) 0; }
-    @container (min-width:760px) { .detail-grid { grid-template-columns:minmax(0,1fr) 220px; gap:var(--ui-space-8); } }
-    @container (max-width:430px) { .wrap { padding:var(--ui-space-7); } .work-open::part(button) { padding:var(--ui-space-6); } }
+    @container (min-width:760px) { .detail-grid { grid-template-columns:minmax(0,1fr) 220px; gap:var(--ui-space-8); } .detail-side { grid-template-columns:1fr; } }
+    @container (max-width:430px) { .wrap { padding:var(--ui-space-7); } .work-open::part(button) { padding:var(--ui-space-6); } .detail-side { grid-template-columns:1fr; } }
   `;
 
   override connectedCallback() {
@@ -244,6 +242,7 @@ export class MuxChatCoordination extends LitElement {
     if (!item) return nothing;
     const updates = [...(item.updates || [])].reverse();
     const lane = this.queueLane(item);
+    const relatedIds = item.dependsOn?.filter(id => !item.waitingOn?.includes(id)) || [];
     const dispatchNeedsCheck = item.dispatch?.state === 'failed' || item.dispatch?.state === 'uncertain';
     const situationTitle = item.status === 'blocked' || dispatchNeedsCheck ? 'Needs attention' : item.waitingOn?.length ? 'Waiting for' : item.status === 'done' ? 'Result' : item.status === 'review' ? 'Ready for review' : item.progress ? 'Latest progress' : item.status === 'open' && !item.ownerSessionId ? 'Ready for a chat to pick up' : 'What’s happening';
     return html`<div class="detail-head"><mux-ui-button size="small" variant="quiet" @click=${() => { this.detail=undefined; this.scrollTop=0; }}>← All work</mux-ui-button></div>
@@ -260,7 +259,7 @@ export class MuxChatCoordination extends LitElement {
           ${item.dispatch ? html`<section class="side-section"><h3>Start</h3><p>${this.dispatchLabel(item)}</p></section>` : nothing}
           ${item.projectIds?.length ? html`<section class="side-section"><h3>Project</h3><p>${this.projectNames(item)}</p></section>` : nothing}
           ${item.labels?.length ? html`<section class="side-section"><h3>Labels</h3><p>${item.labels.map(label => html`<span class="chip">${label}</span>`)}</p></section>` : nothing}
-          ${item.dependsOn?.length ? html`<section class="side-section"><h3>Related work</h3><p>${this.dependencyLinks(item.dependsOn)}</p></section>` : nothing}
+          ${relatedIds.length ? html`<section class="side-section"><h3>Related work</h3><p>${this.dependencyLinks(relatedIds)}</p></section>` : nothing}
         </aside></div>
       <section class="activity"><h3>Updates</h3>${updates.length ? updates.map(update => html`<div class="entry"><div class="meta">${this.actorLabel(update.actor, update.sessionId)} · ${this.date(update.at)}${update.status ? ` · ${this.statusName(update.status)}` : ''}</div><p>${update.text || update.progress || update.outcome || (update.ownerSessionId !== undefined ? html`Working on it: ${update.ownerSessionId ? this.chatLink(update.ownerSessionId) : 'No chat assigned'}` : update.reviewerSessionId !== undefined ? html`Reviewing: ${update.reviewerSessionId ? this.chatLink(update.reviewerSessionId) : 'No reviewer assigned'}` : update.dependsOn !== undefined ? html`Related work: ${update.dependsOn.length ? this.dependencyLinks(update.dependsOn) : 'Cleared'}` : update.labels !== undefined ? `Labels: ${update.labels.length ? update.labels.join(', ') : 'Cleared'}` : update.nextAction !== undefined ? `Next: ${update.nextAction || 'Cleared'}` : update.blockedReason ? update.blockedReason : update.linkedSessionId ? html`Linked ${this.chatLink(update.linkedSessionId)}` : update.status ? this.statusName(update.status) : 'Update recorded')}</p>${update.evidence?.length ? html`<p class="meta">Evidence: ${update.evidence.join(', ')}</p>` : nothing}</div>`) : html`<p class="muted" style="margin-top:var(--ui-space-4)">No updates yet.</p>`}</section>
       <details class="more-details"><summary>More details</summary><dl><dt>Work ID</dt><dd>${item.id}</dd><dt>Revision</dt><dd>${item.revision}</dd><dt>Added by</dt><dd>${this.creatorLabel(item)}</dd><dt>Added</dt><dd>${this.date(item.createdAt)}</dd><dt>Last updated</dt><dd>${this.date(item.updatedAt)}</dd>${item.sessionIds?.length ? html`<dt>Linked chats</dt><dd>${item.sessionIds.map((id,index) => html`${index ? ', ' : ''}${this.chatLink(id)}`)}</dd>` : nothing}</dl></details>`;
