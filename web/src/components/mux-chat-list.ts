@@ -8,10 +8,12 @@ import { icon } from '../lib/icons.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
 import { remotesStore } from '../lib/remotes-store.js';
 import type { MuxUITextField } from '../ui/text-field.js';
+import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIMenu } from '../ui/menu.js';
 import { pointReference, type PopupReference } from '../lib/floating-popup.js';
 import '../ui/text-field.js';
+import '../ui/select.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
@@ -44,6 +46,9 @@ function harnessGlyph(chat: SDKChat) {
 
 const ARCHIVE_PAGE_SIZE = 25;
 const ARCHIVE_ROW_HEIGHT = 32;
+const ARCHIVE_FILTER_OPTIONS = [{value:'all',label:'Active and archived'},{value:'active',label:'Active only'},{value:'archived',label:'Archived only'}];
+const STATE_FILTER_OPTIONS = [{value:'all',label:'Any state'},{value:'working',label:'Working'},{value:'ready',label:'Ready'},{value:'failed',label:'Failed'},{value:'uncertain',label:'Uncertain'}];
+const HARNESS_FILTER_OPTIONS = [{value:'all',label:'Any harness'},...(Object.keys(harnessMarks) as SDKHarnessName[]).map(harness => ({value:harness,label:sdkHarnessLabel(harness)}))];
 interface ChatGroup { id: string; name: string; remoteHost?: string; project?: SDKProject; chats: SDKChat[]; archived?: boolean; archiveStart?: number; total?: number; loading?: boolean; archiveError?: string }
 type PinnedItem =
   | { kind:'project'; id:string; name:string; project:SDKProject }
@@ -499,26 +504,23 @@ export class MuxChatList extends LitElement {
     .project-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-3); }
     .search-controls { padding:var(--ui-space-1) var(--ui-space-2) var(--ui-space-3); }
     .search-line { display:flex; align-items:center; min-width:0; gap:var(--ui-space-1); }
-    .search-box { box-sizing:border-box; display:flex; align-items:center; flex:1; min-width:0; height:var(--ui-control-md); gap:var(--ui-space-2); padding:0 var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text-muted); }
-    .search-box:focus-within { outline:2px solid var(--ui-focus); outline-offset:1px; }
-    .search-box input { flex:1; min-width:0; width:100%; border:0; outline:0; background:transparent; color:var(--ui-text); font:inherit; }
-    .search-box input::-webkit-search-cancel-button { display:none; }
-    .search-box input::placeholder { color:var(--ui-text-muted); }
-    .search-clear,.filter-toggle,.reset-filters { border:0; background:transparent; color:var(--ui-text-muted); cursor:pointer; font:inherit; }
-    .search-clear,.filter-toggle { display:flex; align-items:center; justify-content:center; flex:none; min-width:var(--ui-control-md); min-height:var(--ui-control-md); border-radius:var(--ui-radius-md); }
-    .filter-toggle[aria-expanded='true'],.filter-toggle:hover,.search-clear:hover { background:var(--ui-surface-hover); color:var(--ui-text); }
-    .filter-toggle.active { color:var(--ui-accent); background:var(--ui-surface-hover); }
-    .search-clear:focus-visible,.filter-toggle:focus-visible,.reset-filters:focus-visible,select:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .search-field { position:relative; flex:1; min-width:0; }
+    .search-input { width:100%; --ui-control-sm:var(--ui-control-md); }
+    .search-input::part(input) { padding-inline-start:var(--ui-space-8); }
+    .search-input::part(input)::-webkit-search-cancel-button { display:none; }
+    .search-field:has(.search-clear) .search-input::part(input) { padding-inline-end:var(--ui-control-md); }
+    .search-icon { position:absolute; top:50%; left:var(--ui-space-3); transform:translateY(-50%); color:var(--ui-text-muted); pointer-events:none; line-height:0; }
+    .search-clear { position:absolute; top:0; right:0; --ui-control-sm:var(--ui-control-md); }
+    .filter-toggle { --ui-control-sm:var(--ui-control-md); }
+    .reset-filters { width:100%; }
     .filter-fields { display:grid; gap:var(--ui-space-2); padding-top:var(--ui-space-3); }
     .filter-fields label { display:grid; grid-template-columns:70px minmax(0,1fr); align-items:center; gap:var(--ui-space-2); color:var(--ui-text-muted); }
-    .filter-fields select { min-width:0; width:100%; height:var(--ui-control-md); padding:0 var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; }
+    .filter-fields mux-ui-select { min-width:0; width:100%; --ui-control-sm:var(--ui-control-md); }
     .result-status { margin:0 var(--ui-space-2) var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .result-status.error { color:var(--ui-danger); }
     .current-result { margin:0 var(--ui-space-2) var(--ui-space-3); }
-    .current-result button { width:100%; min-height:var(--ui-control-md); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; font:inherit; cursor:pointer; }
-    .current-result button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .current-result mux-ui-button { width:100%; }
     .current-result span { display:block; padding:var(--ui-space-1) var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    @media (pointer:coarse) { .search-box,.search-clear,.filter-toggle,.filter-fields select { min-height:44px; } }
     @media(hover:none), (max-width:550px) {
       .pin-row:hover .pin-action:not(.more),.pin-row:focus-within .pin-action:not(.more) { display:none; }
       .pin-row .pin-action.more { display:inline-flex; }
@@ -566,7 +568,7 @@ export class MuxChatList extends LitElement {
   private clearSearch() {
     this.searchText = ''; this.archiveFilter = 'all'; this.stateFilter = 'all'; this.harnessFilter = 'all'; this.filtersOpen = false;
     this.scheduleSearch();
-    this.renderRoot.querySelector<HTMLInputElement>('.search-box input')?.focus();
+    this.renderRoot.querySelector<MuxUITextField>('.search-input')?.focus();
   }
   override updated(changed: Map<string, unknown>) {
     if (changed.has('pinnedMovingChatId') && this.pinnedMenuFor) requestAnimationFrame(() => this.renderRoot.querySelector<MuxUIMenu>('.pin-row mux-ui-menu')?.focusFirst());
@@ -830,18 +832,27 @@ export class MuxChatList extends LitElement {
       ${this.pinError ? html`<mux-ui-feedback class="pin-feedback" kind="error" appearance="panel" density="compact">${this.pinError}</mux-ui-feedback>` : nothing}
       <div class="heading-row"><div class="heading">Sessions</div><div class="heading-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="New folder" tooltip="New folder" @click=${() => void this.openProjectDialog()}>${icon(FolderPlus,{size:16})}</mux-ui-button></div></div>
       <div class="search-controls" role="search" aria-label="Find sessions">
-        <div class="search-line"><div class="search-box">${icon(Search,{size:15})}<input type="search" aria-label="Search sessions by title or folder" placeholder="Find sessions" autocomplete="off" maxlength="512" .value=${this.searchText} @input=${(event:Event) => { this.searchText=(event.target as HTMLInputElement).value; this.scheduleSearch(); }} @keydown=${(event:KeyboardEvent) => { if (event.key === 'Escape' && this.searchActive) this.clearSearch(); }}>${this.searchText ? html`<button class="search-clear" type="button" aria-label="Clear search" @click=${() => { this.searchText=''; this.scheduleSearch(); this.renderRoot.querySelector<HTMLInputElement>('.search-box input')?.focus(); }}>${icon(X,{size:14})}</button>` : nothing}</div><button class=${`filter-toggle ${this.archiveFilter !== 'all' || this.stateFilter !== 'all' || this.harnessFilter !== 'all' ? 'active' : ''}`} type="button" aria-label="Filter sessions" aria-expanded=${String(this.filtersOpen)} aria-controls="session-filters" title="Filter sessions" @click=${() => { this.filtersOpen=!this.filtersOpen; }}>${icon(Filter,{size:16})}</button></div>
+        <div class="search-line">
+          <div class="search-field">
+            <mux-ui-text-field class="search-input" type="search" size="small" aria-label="Search sessions by title or folder" placeholder="Find sessions" autocomplete="off" .value=${this.searchText}
+              @input=${(event:Event) => { this.searchText=(event.target as MuxUITextField).value.slice(0,512); this.scheduleSearch(); }}
+              @keydown=${(event:KeyboardEvent) => { if (event.key === 'Escape' && this.searchActive) this.clearSearch(); }}></mux-ui-text-field>
+            <span class="search-icon" aria-hidden="true">${icon(Search,{size:15})}</span>
+            ${this.searchText ? html`<mux-ui-button class="search-clear" icon-only size="small" variant="quiet" tone="muted" accessible-label="Clear search" @click=${() => { this.searchText=''; this.scheduleSearch(); this.renderRoot.querySelector<MuxUITextField>('.search-input')?.focus(); }}>${icon(X,{size:14})}</mux-ui-button>` : nothing}
+          </div>
+          <mux-ui-button class="filter-toggle" icon-only size="small" variant="quiet" tone="muted" toggle .pressed=${this.archiveFilter !== 'all' || this.stateFilter !== 'all' || this.harnessFilter !== 'all'} expandable .expanded=${this.filtersOpen} .controls=${'session-filters'} accessible-label="Filter sessions" tooltip="Filter sessions" @click=${() => { this.filtersOpen=!this.filtersOpen; }}>${icon(Filter,{size:16})}</mux-ui-button>
+        </div>
         ${this.filtersOpen ? html`<div class="filter-fields" id="session-filters">
-          <label>Archive<select aria-label="Archive status" .value=${this.archiveFilter} @change=${(event:Event) => { this.archiveFilter=(event.target as HTMLSelectElement).value; this.scheduleSearch(); }}><option value="all">Active and archived</option><option value="active">Active only</option><option value="archived">Archived only</option></select></label>
-          <label>State<select aria-label="Session state" .value=${this.stateFilter} @change=${(event:Event) => { this.stateFilter=(event.target as HTMLSelectElement).value; this.scheduleSearch(); }}><option value="all">Any state</option><option value="working">Working</option><option value="ready">Ready</option><option value="failed">Failed</option><option value="uncertain">Uncertain</option></select></label>
-          <label>Harness<select aria-label="Session harness" .value=${this.harnessFilter} @change=${(event:Event) => { this.harnessFilter=(event.target as HTMLSelectElement).value; this.scheduleSearch(); }}><option value="all">Any harness</option>${(Object.keys(harnessMarks) as SDKHarnessName[]).map(harness => html`<option value=${harness}>${sdkHarnessLabel(harness)}</option>`)}</select></label>
-          ${this.searchActive ? html`<button class="reset-filters" type="button" @click=${() => this.clearSearch()}>Clear search and filters</button>` : nothing}
+          <label>Archive<mux-ui-select size="small" aria-label="Archive status" .value=${this.archiveFilter} .options=${ARCHIVE_FILTER_OPTIONS} @change=${(event:Event) => { this.archiveFilter=(event.target as MuxUISelect).value; this.scheduleSearch(); }}></mux-ui-select></label>
+          <label>State<mux-ui-select size="small" aria-label="Session state" .value=${this.stateFilter} .options=${STATE_FILTER_OPTIONS} @change=${(event:Event) => { this.stateFilter=(event.target as MuxUISelect).value; this.scheduleSearch(); }}></mux-ui-select></label>
+          <label>Harness<mux-ui-select size="small" aria-label="Session harness" .value=${this.harnessFilter} .options=${HARNESS_FILTER_OPTIONS} @change=${(event:Event) => { this.harnessFilter=(event.target as MuxUISelect).value; this.scheduleSearch(); }}></mux-ui-select></label>
+          ${this.searchActive ? html`<mux-ui-button class="reset-filters" variant="quiet" size="small" @click=${() => this.clearSearch()}>Clear search and filters</mux-ui-button>` : nothing}
         </div>` : nothing}
       </div>
       ${this.searchActive ? html`
-        ${selectedChat ? html`<div class="current-result"><span>Current chat</span><button type="button" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:selectedChat.id},bubbles:true,composed:true}))}>${selectedChat.title}</button></div>` : nothing}
+        ${selectedChat ? html`<div class="current-result"><span>Current chat</span><mux-ui-button full-width align="start" size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:selectedChat.id},bubbles:true,composed:true}))}>${selectedChat.title}</mux-ui-button></div>` : nothing}
         ${!sdkChats.inventoryReady ? html`<p class="result-status" role="status">Loading sessions…</p>` : this.searchLoading ? html`<p class="result-status" role="status">Searching archived sessions…</p>` : html`<p class="result-status" role="status">${resultCount} ${resultCount === 1 ? 'session' : 'sessions'} found</p>`}
-        ${this.searchError ? html`<p class="result-status error" role="alert">${this.searchError} <button type="button" @click=${() => this.scheduleSearch()}>Retry</button></p>` : nothing}
+        ${this.searchError ? html`<p class="result-status error" role="alert">${this.searchError} <mux-ui-button variant="quiet" size="small" @click=${() => this.scheduleSearch()}>Retry</mux-ui-button></p>` : nothing}
         ${this.searchWarnings.map(warning => html`<p class="result-status error" role="alert">${warning}</p>`)}
         ${unavailableHosts.length ? html`<p class="result-status error" role="alert">Sessions on ${unavailableHosts.map(host => host.name).join(', ')} are unavailable. Reconnect to search them.</p>` : nothing}
         ${sdkChats.inventoryReady && !this.searchLoading && !this.searchError && !this.searchWarnings.length && !unavailableHosts.length && !resultCount ? html`<p class="result-status">No sessions match. Try another title, folder, or filter.</p>` : nothing}
