@@ -220,14 +220,14 @@ export class MuxConnections extends LitElement {
   }); }
   private startGoogleSetup(service:Service) {
     const existing=this.remotes?.items.some(item=>item.provider===service.id)??false;
-    const prompt=`Help me ${existing?'review and, if needed, redo':'set up'} ${service.name} in this Muxterm using Browser Assistant. Start by checking whether my Google account and Cloud project are eligible for the Google Workspace Developer Preview MCP service. Ask me which account and project to use; inspect existing registrations before creating another one.
+    const prompt=`Help me ${existing?'review and, if needed, redo':'set up'} ${service.name} in this Muxterm using the native Mac browser pane. Start by checking whether my Google account and Cloud project are eligible for the Google Workspace Developer Preview MCP service. Ask me which account and project to use; inspect existing registrations before creating another one.
 
 Use prepare_connection with provider "google" and services ["${service.id}"] on this Muxterm. Compare its exact callback, endpoint, and scopes with these displayed values:
 Callback: ${this.remotes?.callbackUrl||'Check the Customizations page'}
 Endpoint: ${service.endpoint||'Check the Customizations page'}
 Scopes: ${service.scopes?.join(', ')||'Check the Customizations page'}
 
-Guide me through the Google Cloud Console using my paired Browser Assistant. Stop before any client secret appears. I will pause browser access and upload the Web OAuth JSON or enter credentials on the private Muxterm setup page. Never put a client ID, secret, registration file, or its contents in chat or agent tools. Then use check_connection and the opaque credential handle to configure the connection. Guide me through Google sign-in, checking tools, and choosing which read tools to enable. Do not read mail content just to verify setup.
+Guide me through the Google Cloud Console using the Muxterm Mac browser pane. Stop before any client secret appears. I will take over the browser and upload the Web OAuth JSON or enter credentials on the private Muxterm setup page. Never put a client ID, secret, registration file, or its contents in chat or agent tools. Then use check_connection and the opaque credential handle to configure the connection. Guide me through Google sign-in, checking tools, and choosing which read tools to enable. Do not read mail content just to verify setup.
 
 If I already have a connection, check its status first. Do not remove or replace it without my agreement. If the setup tools are unavailable, guide me through the existing private manual entry instead. If the Google account is ineligible, explain the blocker and stop.`;
     this.dispatchEvent(new CustomEvent('connection-setup-chat',{detail:{prompt},bubbles:true,composed:true}));
@@ -260,7 +260,7 @@ If I already have a connection, check its status first. Do not remove or replace
     const ready=items.some(item=>item.state==='ready'&&item.allowedTools.length>0);
     return html`<div class="head"><h2>${service.name}</h2><mux-ui-status-badge tone=${ready?'success':'neutral'}>${ready?'Ready':'Preview · setup required'}</mux-ui-status-badge></div>
       <p class="lead">${service.description}. Connect through Google's official service using a Web OAuth client from your Google Cloud project.</p>
-      <div class="box"><strong>${items.length?'Need to set up again?':'Set up with an agent'}</strong><p class="note">An agent can guide the Cloud registration in your paired browser. You enter credentials privately and choose when to authorize access.</p>
+      <div class="box"><strong>${items.length?'Need to set up again?':'Set up with an agent'}</strong><p class="note">An agent can guide the Cloud registration in the Muxterm Mac browser pane. You enter credentials privately and choose when to authorize access.</p>
         <div class="actions"><mux-ui-button variant="primary" @click=${()=>this.startGoogleSetup(service)}>${items.length?'Open setup chat again':'Open setup chat'}</mux-ui-button></div></div>
       <details class="box"><summary>Setup requirements and manual entry</summary>
       <section class="setup-section"><strong>Preview requirements</strong><p class="note">These official Google services require an enrolled Google Workspace account and Cloud project. This setup is not a supported route for a personal @gmail.com account. Google does not allow preview services in public apps before general availability. <a href="https://developers.google.com/workspace/preview" target="_blank" rel="noopener noreferrer">Read the requirements</a></p></section>

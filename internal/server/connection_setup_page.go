@@ -60,7 +60,7 @@ var connectionSetupPage = template.Must(template.New("private-connection-setup")
 <h2>Requested scopes</h2><ul>{{range .scopes}}<li><code>{{.}}</code></li>{{end}}</ul>
 {{if .notice}}<p>{{.notice}}</p>{{end}}
 <p>This setup expires after 15 minutes. Uploading approves only these destinations. It does not sign you in, enable tools, or replace an existing connection.</p>
-<p><strong>Pause Browser Assistant before selecting a file or entering credentials.</strong> If this browser is not signed into Muxterm, sign in before continuing. The page contains no third-party scripts.</p>
+<p><strong>Stop agent browser actions before selecting a file or entering credentials.</strong> If this browser is not signed into Muxterm, sign in before continuing. The page contains no third-party scripts.</p>
 {{if .can_upload}}
 <form id="credentials" data-upload="{{.upload_url}}" autocomplete="off">
 <label for="format">Credential format</label><select id="format">{{if eq .provider "google"}}<option value="google-web-json">Google Web OAuth client JSON</option>{{else}}<option value="oauth-client-json">OAuth client JSON (client_id and client_secret)</option>{{end}}<option value="manual">Enter client ID and secret</option></select>
@@ -71,7 +71,7 @@ var connectionSetupPage = template.Must(template.New("private-connection-setup")
 </form>
 {{else}}<p>This setup is no longer accepting credentials, or its callback is not HTTPS or localhost. Ask your agent to check its state and deployment URL.</p>{{end}}
 <p id="message" role="status" aria-live="polite"></p>
-<p>The agent receives only an opaque receipt. After submission, close credential-bearing Cloud Console pages before re-enabling Browser Assistant. Uploaded credentials stay temporarily in server memory; only configured connections are saved to Muxterm’s private credential storage.</p>
+<p>The agent receives only an opaque receipt. After submission, close credential-bearing Cloud Console pages before resuming agent browser actions. Uploaded credentials stay temporarily in server memory; only configured connections are saved to Muxterm’s private credential storage.</p>
 <script nonce="{{.nonce}}">
 const form=document.getElementById('credentials');
 if(form){
@@ -88,7 +88,7 @@ try{
 let payload={format:format.value,approved:document.getElementById('approved').checked};
 if(format.value==='manual'){payload.client_id=clientID.value;payload.client_secret=secret.value;}
 else{const selected=file.files[0];if(!selected||selected.size>32768)throw new Error('Choose an OAuth registration JSON file no larger than 32 KiB.');payload.document=await selected.text();}
-const response=await fetch(form.dataset.upload,{method:'POST',credentials:'same-origin',redirect:'error',headers:{'Content-Type':'application/json','X-Muxterm-Browser-Request':'1'},body:JSON.stringify(payload)});
+const response=await fetch(form.dataset.upload,{method:'POST',credentials:'same-origin',redirect:'error',headers:{'Content-Type':'application/json','X-Muxterm-Connection-Request':'1'},body:JSON.stringify(payload)});
 payload=null;
 if(!response.ok)throw new Error(await response.text());
 form.reset();form.remove();message.textContent='Credentials approved. Close any secret-bearing pages, then tell your agent to check this setup and finish configuration. Browser access can remain paused.';

@@ -107,7 +107,7 @@ func (server *Server) connectionSetupIdentity(request *http.Request) string {
 			return ""
 		}
 	}
-	return server.browserAssistantOwner(request)
+	return server.connectionRequestOwner(request)
 }
 
 func (server *Server) connectionSetupOwner(writer http.ResponseWriter, request *http.Request) string {
@@ -115,7 +115,7 @@ func (server *Server) connectionSetupOwner(writer http.ResponseWriter, request *
 		http.Error(writer, "Cross-site request denied", http.StatusForbidden)
 		return ""
 	}
-	if !server.browserAssistantMutation(writer, request) {
+	if !server.connectionRequestMutation(writer, request) {
 		return ""
 	}
 	owner := server.connectionSetupIdentity(request)
@@ -216,7 +216,7 @@ func (server *Server) handleConnectionSetupPrepare(writer http.ResponseWriter, r
 		setup.Handle = ""
 		registry.mu.Unlock()
 	})
-	browserAssistantJSON(writer, http.StatusCreated, server.connectionSetupPublic(setup))
+	connectionRequestJSON(writer, http.StatusCreated, server.connectionSetupPublic(setup))
 }
 
 func (server *Server) connectionSetupPublic(setup *connectionSetup) map[string]any {
@@ -261,7 +261,7 @@ func (server *Server) handleConnectionSetupStatus(writer http.ResponseWriter, re
 		http.Error(writer, "Setup not found or expired", http.StatusNotFound)
 		return
 	}
-	browserAssistantJSON(writer, http.StatusOK, server.connectionSetupPublic(setup))
+	connectionRequestJSON(writer, http.StatusOK, server.connectionSetupPublic(setup))
 }
 
 func parseConnectionCredentials(provider, callback, format, document, clientID, secret string) (*connectionCredentials, error) {
@@ -364,7 +364,7 @@ func (server *Server) handleConnectionSetupCredentials(writer http.ResponseWrite
 		return
 	}
 	setup.Credentials, setup.Handle, setup.HandleHash, setup.State = credentials, handle, sha256.Sum256([]byte(handle)), "credentials-ready"
-	browserAssistantJSON(writer, http.StatusCreated, map[string]string{"state": setup.State})
+	connectionRequestJSON(writer, http.StatusCreated, map[string]string{"state": setup.State})
 }
 
 func (server *Server) handleConnectionSetupConfigure(writer http.ResponseWriter, request *http.Request) {
@@ -395,7 +395,7 @@ func (server *Server) handleConnectionSetupConfigure(writer http.ResponseWriter,
 	if setup.State == "configured" {
 		result := server.connectionSetupPublic(setup)
 		registry.mu.Unlock()
-		browserAssistantJSON(writer, http.StatusOK, result)
+		connectionRequestJSON(writer, http.StatusOK, result)
 		return
 	}
 	if setup.State != "credentials-ready" || setup.Credentials == nil {
@@ -451,7 +451,7 @@ func (server *Server) handleConnectionSetupConfigure(writer http.ResponseWriter,
 		setup.ConnectionIDs = append(setup.ConnectionIDs, connection.ID)
 	}
 	setup.State, setup.Handle, setup.Credentials = "configured", "", nil
-	browserAssistantJSON(writer, http.StatusCreated, server.connectionSetupPublic(setup))
+	connectionRequestJSON(writer, http.StatusCreated, server.connectionSetupPublic(setup))
 }
 
 func (server *Server) handleConnectionSetupCancel(writer http.ResponseWriter, request *http.Request) {
@@ -469,7 +469,7 @@ func (server *Server) handleConnectionSetupCancel(writer http.ResponseWriter, re
 	}
 	setup.Credentials, setup.Handle = nil, ""
 	delete(registry.items, setup.ID)
-	browserAssistantJSON(writer, http.StatusOK, map[string]string{"state": "cancelled"})
+	connectionRequestJSON(writer, http.StatusOK, map[string]string{"state": "cancelled"})
 }
 
 func (server *Server) handleSetupConnectionStatus(writer http.ResponseWriter, request *http.Request) {
@@ -499,7 +499,7 @@ func (server *Server) handleSetupConnectionStatus(writer http.ResponseWriter, re
 			tools = append(tools, tool.Name)
 		}
 	}
-	browserAssistantJSON(writer, http.StatusOK, map[string]any{"connection_id": connection.ID, "state": connection.public().State, "available_tools": tools, "enabled_tool_count": len(connection.AllowedTools), "checked_at": connection.CheckedAt, "needs_attention": connection.CheckError != "", "authorization_required": connection.Token == nil})
+	connectionRequestJSON(writer, http.StatusOK, map[string]any{"connection_id": connection.ID, "state": connection.public().State, "available_tools": tools, "enabled_tool_count": len(connection.AllowedTools), "checked_at": connection.CheckedAt, "needs_attention": connection.CheckError != "", "authorization_required": connection.Token == nil})
 }
 
 func connectionSetupOrigin(raw string) string {

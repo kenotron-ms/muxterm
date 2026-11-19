@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -71,6 +72,10 @@ type Companion struct {
 	activeBrowser    string
 	browserRect      browserRect
 	browserVisible   bool
+	browserControl   *http.Server
+	browserListener  net.Listener
+	browserSocket    string
+	browserRefs      map[string]browserRefSnapshot
 }
 
 func (c *Companion) authorize(token string) error {
@@ -484,6 +489,7 @@ func (c *Companion) OpenPreview(token string, port int) error {
 }
 
 func (c *Companion) close() {
+	c.stopBrowserControl()
 	c.mu.Lock()
 	forwards := c.forwards
 	c.forwards = make(map[int]*runningForward)

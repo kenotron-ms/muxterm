@@ -113,7 +113,7 @@ workflow runs the fast checks and builds Storybook on frontend changes.
 
 Storybook includes foundations and stateful examples for chat, terminal dock,
 navigation, Settings, Connections, Skills, Jobs, utility, PDF and image preview,
-microphone, and Browser Assistant. Main's current chat uses a goal ledger and
+and microphone. Main's current chat uses a goal ledger and
 issue and goal controls; the catalog follows those current APIs. The interface
 is still migrating: `check:ui` is a ratchet, not a claim that every feature
 stylesheet is fully tokenized. See [the inventory](inventory.md) for the open

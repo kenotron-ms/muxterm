@@ -23,12 +23,6 @@
     "literalScale": 0,
     "nativeControls": 0
   },
-  "components/mux-browser-assistant.ts": {
-    "legacyTokens": 0,
-    "literalColors": 0,
-    "literalScale": 0,
-    "nativeControls": 0
-  },
   "components/mux-chat-list.ts": {
     "legacyTokens": 0,
     "literalColors": 0,

@@ -139,13 +139,11 @@ existing project rows remain visible in the current client until it reloads.
 - **Agent integration (MCP)** — connect any MCP-compatible AI agent to drive workspaces, panes, and terminals
 - **Agent sessions** — Claude, Codex, and Amplifier report native lifecycle hooks into one durable fleet, with terminals as optional attachments
 - **Chat coordination** — explicit side and voice handoffs to the main chat, with durable issues and goal records
-- **Browser Assistant (developer preview)** — pair your local Chrome browser with self-hosted Muxterm for scoped agent interaction and real-browser verification
+- **Native browser control (Mac app)** — MCP agents can inspect and interact with tabs in Muxterm’s WKWebView browser pane
 
-## Browser Assistant
+## Native browser control (Mac app)
 
-Download `muxterm-browser-assistant-dev.zip` from the [GitHub release assets](https://github.com/kenotron-ms/muxterm/releases/latest), extract it, and load the `browser-assistant` folder through Chrome’s **Load unpacked** option. In Muxterm, use **Customizations → Browser Assistant → Connect browser**, then confirm the connection in the extension popup.
-
-**Browser access** opens a dedicated agent window; **Control this tab** authorizes your current tab and site. Access has no timer, and browser restarts pause it. Signed-in browser actions can read private data and submit forms: enable access only for an instance and agents you trust. Use HTTPS for remote pairing. This developer preview uses the current shared-owner authorization model, not per-agent or full multi-user isolation. See [setup, permissions, and limitations](extensions/browser-assistant/README.md).
+The Mac app exposes its own browser tabs to the local `browser_action` MCP tool. `inspect` returns a compact list of visible elements with refs; use `click` or `type` with those refs. `screenshot` is available when visual inspection is needed. The control socket is local to the Mac and accessible only to the same user. Browser content and signed-in sessions are sensitive; stop agent actions before opening secrets.
 
 ## Agent integration (MCP)
 
