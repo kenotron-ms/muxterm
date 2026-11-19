@@ -16,7 +16,7 @@ type sdkVoiceHandoff struct {
 	Message string `json:"message"`
 }
 
-// GPT-Live's client delegation has no task text. Let a short-lived agent
+// Realtime's action tool has no task text. Let a short-lived agent
 // interpret the recent dialogue against the main chat before anything is sent.
 // Its only output is a proposed message; it has no chat-message capability.
 func (h *sdkVoiceHost) interpretDelegation(ctx context.Context, main sdkChat, nearDelegation string) (sdkVoiceHandoff, error) {
@@ -67,7 +67,7 @@ func (h *sdkVoiceHost) interpretDelegation(ctx context.Context, main sdkChat, ne
 		"Reply with ONLY JSON: {\"action\":\"send|status|cancel|end_voice|none\",\"message\":\"...\"}. " +
 		"Use status for a question about task progress, cancel only for an explicit request to stop the task, and end_voice when the user says goodbye, says stop as a standalone request, or asks to stop or pause this voice conversation. End_voice leaves the main task running. Use none when the latest request is unclear. " +
 		"For send, message must be the actual instruction or update to deliver, not a description of the conversation.\n\n" +
-		mainContext + "\n\nLatest main and voice events:\n" + h.history(main.ID) +
+		mainContext + "\n\nLatest completed main-chat turns:\n" + h.transcript(main.ID) +
 		"\n\nVoice exchange:\n" + voiceContext +
 		"\n\nUser speech near this delegation:\n" + sanitizeVoiceContextText(nearDelegation, 1800)
 	inputID := sdkID()

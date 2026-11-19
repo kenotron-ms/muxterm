@@ -1548,8 +1548,15 @@ export class MuxSDKChat extends LitElement {
       const role = event.type === 'voice.input.delta' ? 'user' : 'assistant';
       const entries = [...this.voiceEntries];
       const last = entries[entries.length - 1];
-      if (last?.role === role) entries[entries.length - 1] = { ...last, text:last.text + (event.text || '') };
+      if (last?.role === role && !last.done) entries[entries.length - 1] = { ...last, text:last.text + (event.text || '') };
       else entries.push({ role, text:event.text || '', at:event.at });
+      this.voiceEntries = entries;
+    }
+    else if (event.type === 'voice.input.done' || event.type === 'voice.output.done') {
+      const role = event.type === 'voice.input.done' ? 'user' : 'assistant';
+      const entries = [...this.voiceEntries];
+      const last = entries[entries.length - 1];
+      if (last?.role === role) entries[entries.length - 1] = { ...last, done:true };
       this.voiceEntries = entries;
     }
     else if (event.type === 'question.requested' || event.type === 'question.suggested') {

@@ -5,7 +5,7 @@ import { icon } from '../lib/icons.js';
 import type { SDKVoiceState } from '../lib/sdk-voice-session.js';
 import '../ui/button.js';
 
-export type VoiceEntry = { role: 'user' | 'assistant' | 'task' | 'error'; text: string; at?: string };
+export type VoiceEntry = { role: 'user' | 'assistant' | 'task' | 'error'; text: string; at?: string; done?: boolean };
 
 /** The conversation surface for the single voice connection owned by a main chat. */
 @customElement('mux-voice-companion')
