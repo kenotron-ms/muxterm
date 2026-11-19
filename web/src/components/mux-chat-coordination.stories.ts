@@ -19,7 +19,11 @@ const base = { createdBy:{kind:'chat',sessionId:intake}, reviewerSessionId:'', s
 const work = [
   { ...base, id:'invite-copy', title:'Review invitation wording', brief:'Check the welcome invitation before the pilot goes out.', status:'review', readiness:'ready', progress:'Copy and examples are ready to inspect.', labels:['onboarding','pilot'], updates:[{id:'review-update',at:now,actor:{kind:'chat',sessionId:builder},status:'review',text:'Drafted two versions and shared the preview.',evidence:['Preview in worker chat']}] },
   { ...base, id:'launch-date', title:'Choose a launch date', brief:'The invitation schedule needs a date.', status:'blocked', readiness:'ready', needsHuman:true, blockedReason:'Choose which week the pilot should begin.', labels:['pilot'] },
-  { ...base, id:'build-invites', title:'Build invitation flow', brief:'Let members accept an invitation and finish their welcome.', status:'active', readiness:'ready', ownerSessionId:builder, progress:'The first browser flow is running.', nextAction:'Verify the invite link on mobile.', labels:['onboarding','frontend'], updates:[{id:'build-update',at:now,actor:{kind:'chat',sessionId:builder},status:'active',text:'Started the invitation flow.'}] },
+  { ...base, id:'build-invites', title:'Build invitation flow', brief:'Let members accept an invitation and finish their welcome.', status:'active', readiness:'ready', ownerSessionId:builder, progress:'The first browser flow is running.', nextAction:'Verify the invite link on mobile.', labels:['onboarding','frontend'], updates:[
+    {id:'build-update',at:'2026-11-18T18:10:00Z',actor:{kind:'chat',sessionId:builder},status:'active',text:'Started the invitation flow.'},
+    {id:'legacy-update',at:'2026-11-18T18:20:00Z',actor:{kind:'chat',sessionId:builder},text:'The invitation form is wired to the project service, but an existing pilot account still uses the earlier email template. I am checking the template migration before I ask for review. The desktop browser path passed; the phone path is still waiting for the test account to be refreshed.'},
+    {id:'review-followup',at:now,actor:{kind:'chat',sessionId:builder},summary:'Review found an older email template; I’m updating existing pilot accounts.',text:'**Review finding:** New invitations use the updated email, but existing pilot accounts still have the older template.\n\n- Updated the invitation form and checked the desktop flow.\n- Updating the existing accounts before rerunning the phone flow.\n- Next: verify both flows in the browser, then request review.',evidence:['Desktop browser run in worker chat']},
+  ] },
   { ...base, id:'search', title:'Add project search', brief:'Find a project by name from the switcher.', status:'open', readiness:'ready', nextAction:'Create the search interaction.', labels:['navigation'] },
   { ...base, id:'docs', title:'Document project search', brief:'Explain search once it ships.', status:'open', readiness:'ready', dependsOn:['search'], waitingOn:['search'], nextAction:'Draft a short guide.', labels:['docs'] },
   { ...base, id:'provider', title:'Check provider credentials', brief:'Confirm the pilot account can use the selected model.', status:'blocked', readiness:'ready', needsHuman:false, blockedReason:'Waiting for the provider to finish provisioning.', labels:['pilot'] },
@@ -70,5 +74,10 @@ export const Inbox: Story = {};
 export const InboxPhone: Story = {globals:{viewport:{value:'phone390',isRotated:false}}};
 export const Detail: Story = {play:openDetail('Build invitation flow')};
 export const DetailPhone: Story = {globals:{viewport:{value:'phone390',isRotated:false}},play:openDetail('Build invitation flow')};
+export const ActivityExpanded: Story = {play:async context => {
+  await openDetail('Build invitation flow')(context);
+  const view = context.canvasElement.querySelector<MuxChatCoordination>('mux-chat-coordination');
+  view?.shadowRoot?.querySelector<HTMLDetailsElement>('.activity-full')?.setAttribute('open', '');
+}};
 export const GoalReview: Story = {play:openDetail('Plan the member welcome pilot')};
 export const GoalReviewPhone: Story = {globals:{viewport:{value:'phone390',isRotated:false}},play:openDetail('Plan the member welcome pilot')};
