@@ -10,12 +10,12 @@ import (
 	"strings"
 )
 
-// sideChatContext takes only completed turns, so a side question can be asked
-// while the main agent is working without copying an unfinished response.
-func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
+// completedChatTurns is the authoritative completed-turn reader shared by
+// side chat and Voice. A final, streaming turn is deliberately excluded.
+func (h *sdkChatHost) completedChatTurns(parentID string) ([]string, bool, error) {
 	file, err := os.Open(filepath.Join(h.dir, parentID+".ndjson"))
 	if err != nil {
-		return "", fmt.Errorf("main chat history is unavailable: %w", err)
+		return nil, false, fmt.Errorf("main chat history is unavailable: %w", err)
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
@@ -37,7 +37,7 @@ func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
 	for scanner.Scan() {
 		var event sdkEvent
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
-			return "", fmt.Errorf("main chat history is damaged")
+			return nil, false, fmt.Errorf("main chat history is damaged")
 		}
 		switch event.Type {
 		case "input.accepted":
@@ -45,7 +45,15 @@ func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
 				turn = append(turn, "User: "+event.Text)
 			}
 		case "assistant.delta":
-			assistant += event.Text
+			const maxAssistantBytes = 128 << 10
+			if len(assistant) < maxAssistantBytes {
+				remaining := maxAssistantBytes - len(assistant)
+				if len(event.Text) > remaining {
+					assistant += strings.ToValidUTF8(event.Text[:remaining], "")
+				} else {
+					assistant += event.Text
+				}
+			}
 		case "turn.completed":
 			if assistant != "" {
 				turn = append(turn, "Assistant: "+assistant)
@@ -61,6 +69,16 @@ func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		return nil, false, err
+	}
+	return completed, len(turn) != 0 || assistant != "", nil
+}
+
+// sideChatContext takes only completed turns, so a side question can be asked
+// while the main agent is working without copying an unfinished response.
+func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
+	completed, _, err := h.completedChatTurns(parentID)
+	if err != nil {
 		return "", err
 	}
 	if len(completed) > 6 {

@@ -3,7 +3,7 @@ import { apiPath } from './base-path.js';
 export type SDKVoiceState = 'idle' | 'connecting' | 'listening' | 'speaking';
 type VoiceMeter = { source: MediaStreamAudioSourceNode; analyser: AnalyserNode; bins: Uint8Array<ArrayBuffer> };
 
-/** One browser audio connection to GPT-Live, bound to one SDK chat. */
+/** One browser Realtime audio connection, bound to one SDK chat. */
 export class SDKVoiceSession {
   private chatId: string;
   private onState: (state: SDKVoiceState) => void;
@@ -75,24 +75,24 @@ export class SDKVoiceSession {
         if (peer.connectionState === 'failed' || peer.connectionState === 'closed') this.stop();
       };
       const channel = peer.createDataChannel('oai-events');
+      channel.onopen = () => {
+        if (generation !== this.generation) return;
+        this.setState('listening');
+        this.playReadySound();
+        this.startMeterLoop();
+      };
       channel.onclose = () => { if (generation === this.generation) this.stop(); };
       channel.onmessage = event => {
         if (generation !== this.generation || typeof event.data !== 'string') return;
         try {
           const message = JSON.parse(event.data) as { type?: string };
-          if (message.type === 'session.started') {
-            this.setState('listening');
-            this.playReadySound();
-            this.startMeterLoop();
-          } else if (message.type === 'session.input_transcript.delta') {
+          if (message.type === 'input_audio_buffer.speech_started' || message.type === 'conversation.item.input_audio_transcription.completed') {
             window.clearTimeout(this.quietTimer);
             this.setState('listening');
-          } else if (message.type === 'session.output_transcript.delta') {
+          } else if (message.type === 'response.output_audio_transcript.delta') {
             this.setState('speaking');
             window.clearTimeout(this.quietTimer);
             this.quietTimer = window.setTimeout(() => this.setState('listening'), 900);
-          } else if (message.type === 'session.closed') {
-            this.stop();
           }
         } catch { /* provider sent a non-JSON control frame */ }
       };

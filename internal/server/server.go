@@ -315,10 +315,6 @@ func New(cfg Config) *Server {
 			log.Printf("sdk voice: unavailable: %v", err)
 		} else {
 			s.sdkVoice = chatVoice
-			s.sdkChats.onEvent = func(event sdkEvent) {
-				chatVoice.onChatEvent(event)
-				s.sdkJobs.onChatEvent(event)
-			}
 			s.mux.Handle("POST /api/sdk-chats/{id}/voice/sdp", protect(http.HandlerFunc(s.handleSDKVoiceSDP)))
 			s.mux.Handle("POST /api/sdk-chats/{id}/voice/end", protect(http.HandlerFunc(s.handleSDKVoiceEnd)))
 		}

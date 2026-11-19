@@ -5,7 +5,7 @@ import { icon } from '../lib/icons.js';
 import type { SDKVoiceState } from '../lib/sdk-voice-session.js';
 import '../ui/button.js';
 
-export type VoiceEntry = { role: 'user' | 'assistant' | 'task' | 'error'; text: string; at?: string };
+export type VoiceEntry = { role: 'user' | 'assistant' | 'task' | 'error'; text: string; at?: string; done?: boolean };
 
 /** The conversation surface for the single voice connection owned by a main chat. */
 @customElement('mux-voice-companion')
@@ -49,8 +49,7 @@ export class MuxVoiceCompanion extends LitElement {
   override updated(changed: Map<string, unknown>) {
     if (changed.has('voiceState') || changed.has('startedAt')) {
       if (this.voiceState !== 'idle' && this.startedAt && !this.ticker) {
-        this.seconds = Math.floor((Date.now() - this.startedAt) / 1000);
-        this.ticker = window.setInterval(() => { this.seconds = Math.floor((Date.now() - this.startedAt) / 1000); }, 1000);
+        this.startTicker();
       } else if (this.voiceState === 'idle' && this.ticker) {
         window.clearInterval(this.ticker);
         this.ticker = undefined;
@@ -61,6 +60,16 @@ export class MuxVoiceCompanion extends LitElement {
       const body = this.renderRoot.querySelector<HTMLElement>('.conversation');
       if (body && body.scrollHeight - body.scrollTop - body.clientHeight < 140) body.scrollTop = body.scrollHeight;
     }
+  }
+
+  override connectedCallback() {
+    super.connectedCallback();
+    if (this.voiceState !== 'idle' && this.startedAt && !this.ticker) this.startTicker();
+  }
+
+  private startTicker() {
+    this.seconds = Math.floor((Date.now() - this.startedAt) / 1000);
+    this.ticker = window.setInterval(() => { this.seconds = Math.floor((Date.now() - this.startedAt) / 1000); }, 1000);
   }
 
   override disconnectedCallback() {
