@@ -17,19 +17,19 @@ type browserPickRect struct {
 }
 
 type browserPickResult struct {
-	ID         string          `json:"id"`
-	Kind       string          `json:"kind,omitempty"`
-	URL        string          `json:"url,omitempty"`
-	Title      string          `json:"title,omitempty"`
-	Selector   string          `json:"selector,omitempty"`
-	Tag        string          `json:"tag,omitempty"`
-	Role       string          `json:"role,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	Text       string          `json:"text,omitempty"`
-	Rect       browserPickRect `json:"rect,omitempty"`
-	Screenshot string          `json:"screenshot,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	Cancelled  bool            `json:"cancelled,omitempty"`
+	ID         string           `json:"id"`
+	Kind       string           `json:"kind,omitempty"`
+	URL        string           `json:"url,omitempty"`
+	Title      string           `json:"title,omitempty"`
+	Selector   string           `json:"selector,omitempty"`
+	Tag        string           `json:"tag,omitempty"`
+	Role       string           `json:"role,omitempty"`
+	Name       string           `json:"name,omitempty"`
+	Text       string           `json:"text,omitempty"`
+	Rect       *browserPickRect `json:"rect,omitempty"`
+	Screenshot string           `json:"screenshot,omitempty"`
+	Error      string           `json:"error,omitempty"`
+	Cancelled  bool             `json:"cancelled,omitempty"`
 }
 
 func (c *Companion) emitBrowserPick(result browserPickResult) {
@@ -75,7 +75,7 @@ func (c *Companion) browserPick(id, mode string) {
 
 	// Selection happens inside the separate WKWebView. Poll a tiny JSON result
 	// instead of copying page content or screenshots on every pointer move.
-	read := fmt.Sprintf("(() => { const key = %q; const value = window.__muxtermPickResults?.[key]; if (value) delete window.__muxtermPickResults[key]; return JSON.stringify(value || null); })()", token)
+	read := fmt.Sprintf("(() => { if (!window.__muxtermPickResults) return 'lost'; const key = %q; const value = window.__muxtermPickResults[key]; if (value) delete window.__muxtermPickResults[key]; return JSON.stringify(value || null); })()", token)
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(180 * time.Millisecond)
@@ -88,12 +88,27 @@ func (c *Companion) browserPick(id, mode string) {
 			return
 		}
 		payload, evalErr := c.browserEvaluate(id, read)
+		if evalErr == nil && payload == "lost" {
+			c.bridgeMu.Unlock()
+			result.Cancelled = true
+			result.Error = "Selection cancelled when the page changed"
+			c.emitBrowserPick(result)
+			return
+		}
 		if evalErr == nil && payload != "" && payload != "null" {
 			evalErr = json.Unmarshal([]byte(payload), &result)
 			result.ID = id
 			if evalErr == nil && result.Kind == "area" {
-				rect, rectErr := c.clampBrowserPickRect(result.Rect)
+				var rect browserRect
+				var rectErr error
+				if result.Rect == nil {
+					rectErr = errors.New("selected area has no bounds")
+				} else {
+					rect, rectErr = c.clampBrowserPickRect(*result.Rect)
+				}
 				if rectErr == nil {
+					// Keep bridgeMu held: closing the tab would free its WKWebView
+					// while the asynchronous snapshot still uses that native pointer.
 					result.Screenshot, rectErr = c.browserScreenshotRegion(id, rect)
 				}
 				if len(result.Screenshot) > 1800000 {

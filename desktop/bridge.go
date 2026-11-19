@@ -132,6 +132,8 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			actionErr = c.browserSelect(message.ID)
 		case "pick":
 			go c.browserPick(message.ID, message.Mode)
+		case "pick-cancel":
+			_, _ = c.browserEvaluate(message.ID, "window.__muxtermPickCancel?.(); 'cancelled'")
 		case "ready":
 		case "close":
 			c.browserClose(message.ID)

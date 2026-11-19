@@ -209,6 +209,7 @@ export class MuxSDKUtility extends LitElement {
   private browserError = '';
   private browserMenuOpen = false;
   private browserPickMode: 'element' | 'area' | '' = '';
+  private browserPickId = '';
   private browserPollTimer?: number;
   private browserObserver?: ResizeObserver;
   private browserRecent: {url:string; title:string}[] = [];
@@ -285,6 +286,7 @@ export class MuxSDKUtility extends LitElement {
     if (this.pagesPollTimer) window.clearInterval(this.pagesPollTimer);
     if (this.fileActionTimer) window.clearTimeout(this.fileActionTimer);
     if (this.browserPollTimer) window.clearInterval(this.browserPollTimer);
+    this.cancelBrowserPick();
     this.browserReady = false;
     if (!this.terminalMode) window.__muxtermBrowserUtilityReady = false;
     window.removeEventListener('muxterm-browser-ready', this.enableBrowser);
@@ -399,25 +401,25 @@ export class MuxSDKUtility extends LitElement {
     return inserted;
   }
   private openNewTabView() {
-    if (this.activeTab === 'browser') { this.hideBrowser(); this.browserPickMode = ''; }
+    if (this.activeTab === 'browser') this.hideBrowser();
     this.activeTabId = ''; this.saveTabs(); this.resetFileView(); this.paintAll();
   }
   private addTab(kind: Exclude<UtilityTabId, 'new'>, draft = ''): UtilityTab {
-    if (this.activeTab === 'browser') { this.hideBrowser(); this.browserPickMode = ''; }
+    if (this.activeTab === 'browser') this.hideBrowser();
     const tab: UtilityTab = { id:crypto.randomUUID(), kind, ...(draft ? {draft} : {}) };
     this.tabs = [...this.tabs,tab]; this.activeTabId = tab.id; this.saveTabs();
     void this.activateTab(tab); this.paintAll(); return tab;
   }
   private selectTab(id: string) {
     const tab = this.tabs.find(item => item.id === id); if (!tab) return;
-    if (this.activeTab === 'browser' && id !== this.activeTabId) { this.hideBrowser(); this.browserPickMode = ''; }
+    if (this.activeTab === 'browser' && id !== this.activeTabId) this.hideBrowser();
     this.activeTabId = id; this.saveTabs(); void this.activateTab(tab); this.paintAll();
   }
   private closeTab(id: string) {
     const index = this.tabs.findIndex(tab => tab.id === id); if (index < 0) return;
     if (this.tabs[index].kind === 'side' && this.tabs[index].sideChatId) this.rememberClosedSideChat(this.tabs[index].sideChatId);
     if (this.tabs[index].kind === 'browser') {
-      this.browserPickMode = '';
+      if (this.browserPickId === id) this.cancelBrowserPick();
       if (this.activeTabId === id) this.hideBrowser();
       if (this.browserOpened.delete(id)) this.browserSend({type:'close', id});
     }
@@ -516,7 +518,17 @@ export class MuxSDKUtility extends LitElement {
     if (this.activeTab === 'browser') this.activateBrowser(this.currentTab);
     this.paintAll();
   };
-  private hideBrowser() { this.browserSend({type:'layout', visible:false, rect:{X:0,Y:0,Width:0,Height:0}}); }
+  private cancelBrowserPick() {
+    if (!this.browserPickId) return;
+    this.browserSend({type:'pick-cancel', id:this.browserPickId});
+    this.browserPickMode = '';
+    this.browserPickId = '';
+    if (this.isConnected) this.paintAll();
+  }
+  private hideBrowser() {
+    this.cancelBrowserPick();
+    this.browserSend({type:'layout', visible:false, rect:{X:0,Y:0,Width:0,Height:0}});
+  }
   private activateBrowser(tab: UtilityTab) {
     this.browserError = '';
     if (!this.browserOpened.has(tab.id)) {
@@ -563,8 +575,10 @@ export class MuxSDKUtility extends LitElement {
   };
   private receiveBrowserTarget = (event: CustomEvent<BrowserTarget>) => {
     const target = event.detail;
-    if (!this.tabs.some(tab => tab.kind === 'browser' && tab.id === target.id)) return;
+    if (target.id !== this.browserPickId) return;
+    this.browserPickId = '';
     this.browserPickMode = '';
+    if (!this.tabs.some(tab => tab.kind === 'browser' && tab.id === target.id)) return;
     if (target.error) this.browserError = target.error;
     if (target.kind && !target.cancelled) {
       this.dispatchEvent(new CustomEvent('sdk-browser-target', {detail:target, bubbles:true, composed:true}));
@@ -575,6 +589,7 @@ export class MuxSDKUtility extends LitElement {
     if (!tab.url || this.browserPickMode) return;
     this.browserError = '';
     this.browserPickMode = mode;
+    this.browserPickId = tab.id;
     this.browserSend({type:'pick', id:tab.id, mode});
     this.paintAll();
   }
@@ -597,6 +612,7 @@ export class MuxSDKUtility extends LitElement {
   private navigateBrowser(tab: UtilityTab, raw: string) {
     const url = this.browserAddress(raw);
     if (!url) return;
+    this.cancelBrowserPick();
     tab.url = url; tab.title = '';
     this.browserError = ''; this.browserMenuOpen = false;
     this.saveTabs(); this.paintAll();
@@ -613,7 +629,7 @@ export class MuxSDKUtility extends LitElement {
   private browserView(tab: UtilityTab): TemplateResult {
     const state = this.browserStates.get(tab.id);
     return html`<section class="native-browser"><div class="native-browser-toolbar">
-      <div class="native-browser-history"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back" tooltip="Back" ?disabled=${!state?.canGoBack} @click=${() => this.browserSend({type:'back',id:tab.id})}>${icon(ArrowLeft,{size:16})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Forward" tooltip="Forward" ?disabled=${!state?.canGoForward} @click=${() => this.browserSend({type:'forward',id:tab.id})}>${icon(ChevronRight,{size:16})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Reload" tooltip="Reload" ?disabled=${!tab.url} @click=${() => this.browserSend({type:'reload',id:tab.id})}>${icon(RefreshCw,{size:15})}</mux-ui-button></div>
+      <div class="native-browser-history"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back" tooltip="Back" ?disabled=${!state?.canGoBack} @click=${() => { this.cancelBrowserPick(); this.browserSend({type:'back',id:tab.id}); }}>${icon(ArrowLeft,{size:16})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Forward" tooltip="Forward" ?disabled=${!state?.canGoForward} @click=${() => { this.cancelBrowserPick(); this.browserSend({type:'forward',id:tab.id}); }}>${icon(ChevronRight,{size:16})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Reload" tooltip="Reload" ?disabled=${!tab.url} @click=${() => { this.cancelBrowserPick(); this.browserSend({type:'reload',id:tab.id}); }}>${icon(RefreshCw,{size:15})}</mux-ui-button></div>
       <mux-ui-text-field class="native-browser-address" size="small" type="text" aria-label="Search or enter a URL" placeholder="Search or enter a URL" .value=${tab.url || ''} @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') { this.navigateBrowser(tab, (event.target as MuxUITextField).liveValue); (event.target as MuxUITextField).blur(); } }}></mux-ui-text-field>
       <div class="native-browser-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Open in default browser" tooltip="Open in default browser" ?disabled=${!tab.url} @click=${() => this.browserSend({type:'external',url:tab.url})}>${icon(ExternalLink,{size:15})}</mux-ui-button><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Browser options" tooltip="Browser options" haspopup="menu" .expanded=${this.browserMenuOpen} @click=${() => { this.browserMenuOpen = !this.browserMenuOpen; this.paintAll(); }}>${icon(Ellipsis,{size:17})}</mux-ui-button>${this.browserMenuOpen ? html`<mux-ui-menu class="native-browser-menu" label="Browser options" @menu-dismiss=${() => { this.browserMenuOpen = false; this.paintAll(); }}><mux-ui-menu-item @click=${() => { this.browserMenuOpen = false; this.addTab('browser'); }}>New browser tab</mux-ui-menu-item>${tab.url ? html`<mux-ui-menu-item @click=${() => void this.copyBrowserURL(tab.url || '')}>Copy URL</mux-ui-menu-item>` : nothing}</mux-ui-menu>` : nothing}</div>
     </div><div class="native-browser-targetbar" role="group" aria-label="Add browser context"><mux-ui-button size="small" variant="quiet" tone="muted" ?disabled=${!tab.url || !!this.browserPickMode} @click=${() => this.pickBrowserTarget(tab,'element')}>${icon(Target,{size:15})} Pick element</mux-ui-button><mux-ui-button size="small" variant="quiet" tone="muted" ?disabled=${!tab.url || !!this.browserPickMode} @click=${() => this.pickBrowserTarget(tab,'area')}>${icon(Maximize2,{size:15})} Select area</mux-ui-button></div>${this.browserError ? html`<div class="native-browser-error" role="alert">${this.browserError}</div>` : nothing}<div class="native-browser-viewport">${!tab.url ? html`<div class="native-browser-home"><h2>Tools</h2><div class="native-browser-tool-grid">
