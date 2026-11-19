@@ -938,6 +938,7 @@ export class MuxSDKChat extends LitElement {
     if (retained) {
       retainedChatViews.delete(this.sessionId);
       retained.restore(this);
+      if (this.workDigest.size) this.queueWorkDigestRefresh();
       this.chat = sdkChats.chats.find(chat => chat.id === this.sessionId) || this.chat;
       this.recoveryRequired = this.chat?.state === 'uncertain';
       this.restoringScroll = true;
@@ -978,6 +979,7 @@ export class MuxSDKChat extends LitElement {
       completedInputAnchors: new Map(this.completedInputAnchors), pendingInputs: new Map(this.pendingInputs),
       parsers: new Map(this.parsers), rowHeights: new Map(this.rowHeights),
       workExpanded: new Set(this.workExpanded), workCollapsedWhileWorking: new Set(this.workCollapsedWhileWorking),
+      workDigest: new Map(this.workDigest),
       laneReportsExpanded: new Set(this.laneReportsExpanded), stepExpanded: new Set(this.stepExpanded),
       visibleStart: this.visibleStart, visibleEnd: this.visibleEnd,
       selectedAgent: this.selectedAgent, agentEvents: this.agentEvents, agentHistoryError: this.agentHistoryError,
