@@ -123,6 +123,27 @@ class SDKChatStore {
     this.chats = [...this.chats.filter(chat => !chat.archived), ...this.archivedCache.values()];
     return {chats,total:available.reduce((sum,result) => sum + result.total,0)};
   }
+  async searchArchived(query: string, signal?: AbortSignal): Promise<{chats: SDKChat[]; warnings: string[]}> {
+    const hosts = ['', ...this.remoteHosts.filter(host => host.state === 'connected').map(host => host.id)];
+    const load = async (host: string): Promise<SDKChat[]> => {
+      const getPage = async (page: number) => {
+        const params = new URLSearchParams({archived:'true', page:String(page), q:query});
+        const response = await fetch(apiPath(remoteChatPath(host, `/api/sdk-chats?${params}`)), {signal});
+        if (!response.ok) throw new Error(`Archived sessions could not load (${response.status})`);
+        return response.json() as Promise<{chats:SDKChat[];total:number}>;
+      };
+      const first = await getPage(0);
+      const pages = await Promise.all(Array.from({length:Math.max(0,Math.ceil(first.total / 25)-1)},(_,index) => getPage(index+1)));
+      return [first,...pages].flatMap(page => page.chats.map(chat => ({...chat,remoteHost:host || undefined})));
+    };
+    const results = await Promise.allSettled(hosts.map(load));
+    if (signal?.aborted) throw new DOMException('Search cancelled', 'AbortError');
+    if (results[0].status === 'rejected') throw results[0].reason;
+    const warnings = results.slice(1).flatMap((result,index) => result.status === 'rejected' ? [`Could not search archived sessions on ${this.remoteHosts.filter(host => host.state === 'connected')[index]?.name || hosts[index+1]}.`] : []);
+    const chats = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    for (const chat of chats) rememberChatHost(chat.id,chat.remoteHost || '');
+    return {chats,warnings};
+  }
   async create(request: { remoteHost?: string; workspaceId?: string; projectPath?: string; workMode?: 'local' | 'worktree'; harness: string; provider: string; bundle?: string; model?: string; effort?: string; prompt: string; attachments?: string[] }) {
     const host = request.remoteHost || (request.workspaceId ? projectHost(request.workspaceId) : '');
     const response = await fetch(apiPath(remoteChatPath(host, '/api/sdk-chats')), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
