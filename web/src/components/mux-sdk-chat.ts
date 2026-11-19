@@ -2507,7 +2507,8 @@ export class MuxSDKChat extends LitElement {
   private workDigestView() {
     const entries = [...this.workDigest.values()].map(entry => ({entry,state:this.digestState(entry)}));
     // Concept B places completed outcomes ahead of active work after inspection rows.
-    entries.sort((a,b) => (a.state.tone === 'attention' ? 0 : a.state.tone === 'done' ? 1 : 2) - (b.state.tone === 'attention' ? 0 : b.state.tone === 'done' ? 1 : 2) || Date.parse(b.entry.at) - Date.parse(a.entry.at));
+    const sortAt = (value:string) => Date.parse(value) || 0;
+    entries.sort((a,b) => (a.state.tone === 'attention' ? 0 : a.state.tone === 'done' ? 1 : 2) - (b.state.tone === 'attention' ? 0 : b.state.tone === 'done' ? 1 : 2) || sortAt(b.entry.at) - sortAt(a.entry.at));
     const attention = entries.filter(row => row.state.tone === 'attention').length;
     const updates = entries.reduce((total,row) => total + row.entry.count, 0);
     return html`<section class="work-digest" aria-label="Work from this chat"><header class="work-digest-head"><h2>Work from this chat</h2><div class="work-digest-summary"><p>${entries.length} item${entries.length === 1 ? '' : 's'} · ${updates} update${updates === 1 ? '' : 's'}</p>${attention ? html`<span class="work-digest-count">${attention} need${attention === 1 ? 's' : ''} attention</span>` : nothing}</div></header>
