@@ -204,9 +204,9 @@ func currentMeetingTURNStatus() (meetingTURNStatus, error) {
 }
 
 func (s *Server) handleMeetingTURNSettings(w http.ResponseWriter, r *http.Request) {
-	meetingTURNSettingsMu.Lock()
-	defer meetingTURNSettingsMu.Unlock()
 	if r.Method == http.MethodGet {
+		meetingTURNSettingsMu.Lock()
+		defer meetingTURNSettingsMu.Unlock()
 		status, err := currentMeetingTURNStatus()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -216,6 +216,8 @@ func (s *Server) handleMeetingTURNSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if r.Method == http.MethodDelete {
+		meetingTURNSettingsMu.Lock()
+		defer meetingTURNSettingsMu.Unlock()
 		if err := meetingTURNSettingsStore().Clear(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -266,6 +268,8 @@ func (s *Server) handleMeetingTURNSettings(w http.ResponseWriter, r *http.Reques
 			http.Error(w, "Cannot encode TURN settings", http.StatusInternalServerError)
 			return
 		}
+		meetingTURNSettingsMu.Lock()
+		defer meetingTURNSettingsMu.Unlock()
 		if err := meetingTURNSettingsStore().Save(string(encoded)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -310,6 +314,8 @@ func (s *Server) handleMeetingTURNSettings(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Cannot encode TURN settings", http.StatusInternalServerError)
 		return
 	}
+	meetingTURNSettingsMu.Lock()
+	defer meetingTURNSettingsMu.Unlock()
 	if err := meetingTURNSettingsStore().Save(string(encoded)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
