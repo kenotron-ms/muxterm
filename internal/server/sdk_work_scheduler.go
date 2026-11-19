@@ -42,7 +42,7 @@ func (h *sdkChatHost) workActiveCountLocked(projectID, exceptID string) int {
 // discovery, and direct claims. A failed dispatch needs explicit inspection
 // before the scheduler considers it again.
 func (h *sdkChatHost) workEligibleLocked(item *sdkWorkItem, allowFailedDispatch bool) bool {
-	if item == nil || item.Status != "open" || item.Readiness != "ready" || item.HeldByHuman || item.OwnerSessionID != "" || len(h.workWaitingOnLocked(item)) != 0 {
+	if item == nil || item.Status != "open" || item.Readiness != "ready" || item.GoalCondition == "" || item.GoalRevision < 1 || item.GoalApproved != item.GoalRevision || item.GoalApprovedAt == nil || item.HeldByHuman || item.OwnerSessionID != "" || len(h.workWaitingOnLocked(item)) != 0 {
 		return false
 	}
 	if item.Dispatch != nil && (!allowFailedDispatch || item.Dispatch.State != "failed") {

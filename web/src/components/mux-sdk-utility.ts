@@ -471,6 +471,11 @@ export class MuxSDKUtility extends LitElement {
     if (existing) this.selectTab(existing.id);
     else this.addTab(id);
   }
+  async showWorkItem(id: string): Promise<void> {
+    this.showPanel('coordination');
+    await this.updateComplete;
+    this.querySelector<import('./mux-chat-coordination.js').MuxChatCoordination>('mux-chat-coordination')?.showWorkItem(id);
+  }
   setVoiceLevels(levels: readonly number[]): void {
     this.querySelector<MuxVoiceCompanion>('mux-voice-companion')?.setLevels(levels);
   }

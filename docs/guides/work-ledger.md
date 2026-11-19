@@ -1,117 +1,109 @@
-# Shared work records
+# Shared Work and native goals
 
-The Issues view and the `create_work_item`, `list_work_items`,
-`get_next_work_item`, `get_work_item`, `update_work_item`, and
-`start_work_item` MCP tools use one durable Work record. Creating or updating
-work does not start an agent, send a chat message, or control a Chat Goal.
-The Issues view can narrow the visible list by project and label; the MCP list
-and next-ready tools accept multiple project IDs (any match) and labels (all match).
+A Work item is a durable promise in a project's queue. A Chat Goal is the
+stop condition that lets one worker session pursue that promise. Creating Work
+records the request; it does not start implementation. A goal condition is
+drafted on the Work item, reviewed by a human, and installed as the selected
+worker's native Chat Goal when the item becomes ready and the project scheduler
+has room.
 
-## Start with a request in chat
+## Start in a chat
 
-Tell a chat the outcome you want, even if your first completion condition is
-rough. The chat should assess whether that condition actually demonstrates the
-outcome, suggest a better one when needed, and ask about choices that depend on
-your judgment. It then creates the Work item and maintains the acceptance
-criteria and next action. Muxterm selects a worker at kickoff, and the worker
-claims ownership. You do not need to supply a chat ID or keep
-the next action current yourself.
+Tell a chat what outcome you want. For example:
 
-At kickoff, the coordinating chat calls `start_work_item` with the Work ID and
-a stable `client_ref`. Muxterm chooses a ready chat in a matching project that
-owns no other unfinished work, or creates one. It sends the Work ID to that
-chat; the worker reads the record, claims it, and starts its next action.
-The system records the selected chat and dispatch state on the Work item.
-An item with unfinished prerequisites cannot be started.
+> Add project search. Capture this as a Work item, draft a clear stopping
+> condition for its worker, and let me review it before anything starts.
 
-## People and sessions
+The chat calls `create_work_item`, then `update_work_item` with
+`goal_condition` and the current `expected_revision`. It can refine the brief,
+acceptance criteria, dependencies, and proposed condition with you. It must
+leave the item in `draft` until you approve the exact condition. The draft and
+all later revisions stay in the Work history.
 
-`createdBy` records who submitted the original item. It is immutable. Muxterm
-records a chat capability as `{kind:"chat",sessionId}`, a browser as
-`{kind:"human"}`, and a same-user external tool as `{kind:"external-tool"}`.
-Older records are shown with their original `ownerSessionId` as the creator;
-that provenance is written into the record on its first update.
+A goal draft appears in two places:
 
-`ownerSessionId` is the current assignee, not the creator. It may be empty for
-unassigned work. `reviewerSessionId` is an optional chat expected to inspect the
-result. Linked `sessionIds` remain participants; reassignment does not erase
-the previous owner's history. The Issues list shows creator and current owner
-separately; the detail view shows the record and its activity. Every chat shown
-in the Issues view links to that chat. Create and update work through the MCP
-tools or API. The Issues UI is read-only.
+- The creating chat shows an inline review card with the exact condition.
+- The project's Work tab shows the same card on the item's detail page.
 
-Assignment changes require `expected_revision` from `get_work_item` (or
-`expectedRevision` over HTTP). The server rejects a stale revision with 409,
-so concurrent claims do not silently replace one another. A chat may assign
-work it created or currently owns; an unassigned item may be claimed by a chat
-for itself. Browser and same-user external tools retain their existing control
-scope. Each change has a `client_ref`; retrying the same change returns its
-record instead of appending it twice.
+Both cards call the same approval action. **Approve only** records your
+approval and leaves the item in Draft. **Approve & start** approves that exact
+condition and marks the item Ready in one action. If you approved earlier,
+**Start work** marks it Ready later. Ask the chat to revise the condition if it
+has the wrong outcome or stopping point. A changed draft or substantive Work
+brief revokes an unstarted approval. Stale review clicks return 409 and require
+a refresh. Agent tools cannot approve the condition or release a human hold.
 
-`dispatch` records the chat selected by `start_work_item` and whether kickoff
-is `preparing`, `sent`, `claimed`, `uncertain`, or `failed`. A sent input means
-Muxterm admitted the worker's turn; `claimed` means that chat took ownership.
-Repeated calls with the same `client_ref` return the same dispatch. If delivery
-is uncertain, inspect the linked chat and Work record before a new attempt;
-Muxterm does not blindly resend an uncertain input. If the selected chat did
-not claim the item, call `reset_work_dispatch` with the Work ID, current
-`expected_revision`, a stable `client_ref`, and a reason. It records the
-resolution in activity and rejects a reset while the selected chat is still
-starting or working. The dispatch then becomes `failed`; call
-`start_work_item` with a new reference to try again. The Issues view links the
-selected chat, including failed kickoffs.
+The Work tab also has project-level play/pause and a parallelism slider.
+Paused projects retain Ready items in the queue. Dependencies must be `done`
+before an item is eligible. Older Ready items without an approved goal need a
+goal draft and approval before the scheduler can send them to a worker.
 
-## Work state
+## What happens when Work is Ready
 
-The record holds its brief, optional `acceptanceCriteria`, current progress,
-`nextAction`, outcome, reviewer, and `blockedReason`. `nextAction` names the next
-concrete step and can be changed or cleared with `next_action` in
-`update_work_item`. Its status is `open`, `active`,
-`blocked`, `review`, `done`, or `cancelled`. A blocked item requires a reason;
-leaving blocked clears the reason. `review` means the work is ready for its
-reviewer. Updates carry evidence references in the activity history.
+Muxterm's coded scheduler chooses a goal-free, ready chat in the same project
+that owns no other unfinished Work, or creates a new one. It never uses the
+creating chat as the worker. It reserves a dispatch on the Work item, creates
+a new chat without an opening turn if needed, and installs the approved
+condition as that chat's native goal. Only after native acknowledgement and
+observation of the exact applied revision does it send the Work ID and
+execution instructions. The worker reads the record,
+claims it with `update_work_item`, pursues the native goal, and records
+progress, evidence, blockers, and outcome on Work. The goal ledger records the
+same approved condition, its human Work approval provenance, native receipt,
+and goal progress.
 
-`labels` are normalized to lowercase and can be changed with
-`update_work_item` using `expected_revision`. An empty `labels` list clears
-them. `list_work_items` and `get_next_work_item` accept `project_id` (one or
-several values) and `label` (one or several values) over HTTP. The matching
-MCP arguments are `project_id` or `project_ids`, and `labels`. Multiple
-projects mean **any** listed project; multiple labels mean **all** listed
-labels. Omit either filter to search across all projects or labels.
+The supported native goal harnesses are Codex, Claude, Copilot, and Amplifier.
+If the creating chat uses another harness and no suitable existing chat is
+available, the scheduler creates a Codex worker. A reused chat with an
+existing goal or human pause is ineligible. Work approval authorizes this one
+exact condition; it does not let the scheduler overwrite another goal or
+release a pause. The native goal ledger's `controlVersion` is fenced when
+installing the condition.
 
-`dependsOn` lists prerequisite Work IDs. `waitingOn` is derived from those
-records and lists prerequisites that have not reached `done`; a cancelled
-prerequisite remains unmet. Muxterm rejects unknown IDs and dependency cycles.
-The API rejects attempts to move waiting work to `active`, `review`, or `done`.
-Adding or replacing dependencies requires `expected_revision`; pass an empty
-`depends_on` list to clear them. Once all prerequisites are done, `waitingOn`
-becomes empty without an edit to the dependent record. The Issues view shows
-the waiting count and links each prerequisite in the detail view. This is a
-readiness rule, not an automatic kickoff: a worker must still be started.
+A dispatch is `preparing`, `sent`, `claimed`, `uncertain`, or `failed`. A native
+control or input whose acknowledgement is uncertain is never silently
+replayed. Inspect the linked chat and Work history before calling
+`reset_work_dispatch` with the current revision and a reason, then use
+`start_work_item` with a new `client_ref` if a retry is appropriate.
 
-Work updates are written to the Work record. A typed `work.*` event is also
-written to the owner's chat event stream, where an explicit `work` topic
-subscription may observe it. These events do not become ordinary messages in
-the chat transcript. An unassigned item's record remains discoverable in the
-Issues list without selecting an arbitrary chat as its notification target.
+## Check in and steer
 
-## Agent mechanics: find, claim, and start work
+Open the project's Work tab to see what is in motion, ready, waiting, blocked,
+or finished. Filter by label, then open an item for its condition, dependency
+links, assigned chat, and activity timeline. Follow the chat link to inspect
+its full transcript and native Goal tab. The Work tab surfaces goal drafts,
+reviews, blockers needing a human, and uncertain dispatches.
 
-An active chat can call `get_next_work_item` with optional `project_ids` and
-`labels` filters to
-fetch the oldest ready item in the unassigned pile. The result is
-`{"work":null}` when none is ready. Ready means `status=open`, no owner, and
-every `dependsOn` item is `done`. Items waiting on prerequisites are never
-returned. The tool is read-only and does not reserve the item. Claim it with
-`update_work_item`, using its own `owner_session_id` and the returned
-`revision` as `expected_revision`. It can proceed in the same turn. If another
-claimant got there first, the server returns 409; fetch again before deciding
-what to do. For a broader inspection of blocked or assigned work, use
-`list_work_items` and `get_work_item`.
+Tell the creating or worker chat what changed. It can update the Work brief,
+next action, progress, or blocker and ask you to review a revised goal. A goal
+condition cannot be changed after dispatch; steering the running native goal
+requires its own human goal control. A human pause remains in force until a
+human resumes it.
 
-For a new item that needs a worker, call `start_work_item` with `work_id` and a
-stable `client_ref`. Muxterm reserves one dispatch before selecting a worker;
-while reserved, the item is excluded from `get_next_work_item`. The selected
-chat claims with its own ID and the latest revision. A chat already running
-can claim ready work from the pile and continue in the same turn. Neither path
-starts a Chat Goal.
+## Fields and tools
+
+`createdBy` is immutable provenance; `ownerSessionId` is the current worker.
+`reviewerSessionId` and `sessionIds` link other chats. Work also stores title,
+brief, source, `acceptanceCriteria`, `nextAction`, project IDs, labels,
+`dependsOn`, status, readiness, progress, blocker, outcome, dispatch, revision,
+and attributed updates. `waitingOn` is derived from unfinished dependencies.
+The goal fields are `goalCondition`, `goalRevision`,
+`goalApprovedRevision`, and `goalApprovedAt`.
+
+`create_work_item` makes a draft. `update_work_item` proposes a condition and
+records changes with `client_ref` and `expected_revision`. The browser's
+`POST /api/sdk-work/{id}/goal/approve` accepts the exact condition, both Work
+and goal revisions, a stable `clientRef`, and optional `ready:true`. Only a
+human browser may call it. `list_work_items` and `get_next_work_item` can
+filter by project and labels. `get_next_work_item` is a read, not a claim;
+items without approved goals, held or paused items, full projects, and items
+with unfinished dependencies are skipped. `start_work_item` requests a manual
+handoff when the scheduler is playing. A direct `update_work_item` claim is
+accepted only if that chat already has the exact approved native goal applied
+and authorized; the ordinary path is the scheduler handoff.
+
+Each Work mutation is idempotent by `client_ref`; revision fences prevent a
+stale assignment or approval from silently replacing newer work. Sparse
+`work.goal.proposed` and `work.attention` notices reach the relevant chat;
+ordinary Work updates remain on the record and in topic subscriptions rather
+than flooding the main transcript.
