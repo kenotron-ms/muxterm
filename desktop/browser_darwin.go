@@ -183,6 +183,7 @@ type browserTab struct {
 	id      string
 	view    unsafe.Pointer
 	started bool
+	address string
 }
 
 type browserRect struct{ X, Y, Width, Height float64 }
@@ -215,7 +216,7 @@ func (c *Companion) browserOpen(id, address string) error {
 	if c.browserTabs == nil {
 		c.browserTabs = make(map[string]*browserTab)
 	}
-	c.browserTabs[id] = &browserTab{id: id, view: pointer, started: address != ""}
+	c.browserTabs[id] = &browserTab{id: id, view: pointer, started: address != "", address: address}
 	c.activeBrowser = id
 	c.mu.Unlock()
 	c.browserLayout()
@@ -309,6 +310,7 @@ func (c *Companion) browserAction(id string, action string, address string) erro
 	if action == "navigate" {
 		c.mu.Lock()
 		tab.started = true
+		tab.address = address
 		c.mu.Unlock()
 		defer c.browserLayout()
 	}
@@ -349,7 +351,11 @@ func (c *Companion) browserState() (string, []browserTabState) {
 	application.InvokeSync(func() {
 		for _, tab := range tabs {
 			urlValue, titleValue := C.browserURL(tab.view), C.browserTitle(tab.view)
-			states = append(states, browserTabState{ID: tab.id, URL: C.GoString(urlValue), Title: C.GoString(titleValue), CanGoBack: bool(C.browserCanGoBack(tab.view)), CanGoForward: bool(C.browserCanGoForward(tab.view))})
+			pageURL := C.GoString(urlValue)
+			if pageURL == "" {
+				pageURL = tab.address
+			}
+			states = append(states, browserTabState{ID: tab.id, URL: pageURL, Title: C.GoString(titleValue), CanGoBack: bool(C.browserCanGoBack(tab.view)), CanGoForward: bool(C.browserCanGoForward(tab.view))})
 			C.free(unsafe.Pointer(urlValue))
 			C.free(unsafe.Pointer(titleValue))
 		}

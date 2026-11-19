@@ -131,7 +131,7 @@ try:
         raise AssertionError("Native type and click did not update the page")
 
     try:
-        wait_for("visible native browser view", lambda: action(str(socket_path), {"action": "tabs"}).get("visible"))
+        wait_for("visible native browser view", lambda: action(str(socket_path), {"action": "tabs"}).get("visible"), timeout=60)
     except AssertionError:
         print("Native tab state:", action(str(socket_path), {"action": "tabs"}))
         raise

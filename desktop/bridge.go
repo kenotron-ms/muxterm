@@ -132,6 +132,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			actionErr = c.browserSelect(message.ID)
 		case "pick":
 			go c.browserPick(message.ID, message.Mode)
+		case "ready":
 		case "close":
 			c.browserClose(message.ID)
 		case "status":
@@ -140,6 +141,15 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 		}
 		active, tabs := c.browserState()
 		sort.Slice(tabs, func(i, j int) bool { return tabs[i].ID < tabs[j].ID })
+		if message.Type == "ready" {
+			for _, tab := range tabs {
+				encoded, _ := json.Marshal(struct {
+					ID  string `json:"id"`
+					URL string `json:"url"`
+				}{ID: tab.ID, URL: tab.URL})
+				c.evalMuxtermJS("window.__muxtermDesktopOpen?.(" + string(encoded) + ")")
+			}
+		}
 		state := struct {
 			Active string            `json:"active"`
 			Tabs   []browserTabState `json:"tabs"`
