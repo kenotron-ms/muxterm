@@ -63,6 +63,10 @@ being reported as human authorization decisions.
 On restart, pending receipts become uncertain and active state becomes uncertain.
 Nothing is replayed. Human pause holds survive restart, including failed or
 uncertain native acknowledgements. Reconcile before making another request.
+For Codex, opening an uncertain chat reads the native goal and reconciles the
+ledger when its condition matches the approved revision, or when the native
+goal has been cleared. A missing snapshot or a different native condition keeps
+ordinary chat input blocked until an explicit goal control resolves it.
 Passive settings/title loads cannot restart an
 uncertain goal. Legacy native conditions without a human ledger revision require
 explicit adoption through the `/goal` command, not inferred provenance.

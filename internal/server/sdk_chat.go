@@ -904,17 +904,54 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	}
 }
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
-	if ctx.Value(goalControlContextKey{}) != true {
-		document, err := h.goals.update(*c, nil)
-		if err != nil {
-			return fmt.Errorf("goal ledger unavailable: %w", err)
-		}
-		if (document.RequestedRevision > 0 && document.State == "uncertain") || (c.Goal != "" && document.RequestedRevision == 0) {
-			return errors.New("native goal requires reconciliation; use the human goal editor or an explicit scoped goal control before loading this session")
+	document, err := h.goals.update(*c, nil)
+	if err != nil {
+		return fmt.Errorf("goal ledger unavailable: %w", err)
+	}
+	approvedGoal := ""
+	if len(document.Revisions) > 0 {
+		approvedGoal = document.Revisions[len(document.Revisions)-1].Condition
+	}
+	needsReconciliation := ctx.Value(goalControlContextKey{}) != true &&
+		((document.RequestedRevision > 0 && document.State == "uncertain") ||
+			(c.Goal != "" && (document.RequestedRevision == 0 || (c.Harness == "codex" && c.Goal != approvedGoal))))
+	if needsReconciliation && c.Harness != "codex" {
+		return errors.New("native goal requires reconciliation; use the human goal editor or an explicit scoped goal control before loading this session")
+	}
+	if _, err = h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never", "permission": c.Permission, "mode": c.Mode, "originToken": h.chatOriginToken(c.ID)}); err != nil {
+		return err
+	}
+	if !needsReconciliation {
+		return nil
+	}
+	result, err := h.call(ctx, "goal-snapshot", map[string]any{"sessionId": c.ID})
+	if err != nil {
+		return fmt.Errorf("native goal could not be reconciled after restart: %w", err)
+	}
+	var snapshot struct {
+		Goal      string `json:"goal"`
+		GoalState string `json:"goalState"`
+	}
+	if err := json.Unmarshal(result, &snapshot); err != nil || snapshot.GoalState == "" || (snapshot.Goal == "" && snapshot.GoalState != "cleared") {
+		return errors.New("native goal returned an invalid snapshot after restart")
+	}
+	if snapshot.Goal != "" {
+		if document.RequestedRevision == 0 || snapshot.Goal != approvedGoal {
+			return errors.New("native goal differs from the human goal; use the goal editor to reconcile it before continuing")
 		}
 	}
-	_, err := h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never", "permission": c.Permission, "mode": c.Mode, "originToken": h.chatOriginToken(c.ID)})
-	return err
+	goal := snapshot.Goal
+	h.appendEvent(sdkEvent{SessionID: c.ID, Type: "goal.snapshot", Goal: &goal, GoalState: snapshot.GoalState})
+	if document.RequestedRevision > 0 {
+		reconciled, err := h.goals.update(*c, nil)
+		if err != nil {
+			return fmt.Errorf("goal ledger unavailable after native reconciliation: %w", err)
+		}
+		if reconciled.State == "uncertain" || (goal != "" && reconciled.AppliedRevision != reconciled.RequestedRevision) || (goal == "" && reconciled.State != "cleared") {
+			return errors.New("native goal reconciliation was not recorded; retry after inspecting the goal ledger")
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleSDKChatSettings(w http.ResponseWriter, r *http.Request) {
