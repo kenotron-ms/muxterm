@@ -350,7 +350,7 @@ export class MuxSDKChat extends LitElement {
     .work-digest-description { display:-webkit-box; margin-top:var(--ui-space-1); overflow:hidden; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.4; overflow-wrap:anywhere; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
     .work-digest-action { display:inline-flex; align-items:center; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); font-weight:650; white-space:nowrap; }
     .work-digest-row:hover .work-digest-action,.work-digest-row:focus-within .work-digest-action { color:var(--ui-text); }
-    @media(max-width:560px) { .work-digest-row { gap:var(--ui-space-4); } .work-digest-action-text { display:none; } }
+    @media(max-width:560px) { .work-digest-row::part(button) { gap:var(--ui-space-4); } .work-digest-action-text { display:none; } }
     @media(max-width:360px) { .work-digest-head,.work-digest-row::part(button) { padding-inline:var(--ui-space-4); } }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -623,6 +623,7 @@ export class MuxSDKChat extends LitElement {
   }
   override disconnectedCallback() {
     if (this.workDigestTimer) window.clearTimeout(this.workDigestTimer);
+    this.workDigestTimer = undefined;
     window.removeEventListener('muxterm-goal-changed', this.onGoalChanged);
     window.removeEventListener('muxterm-goal-reconnected', this.onGoalReconnected);
     this.flushDraft();
