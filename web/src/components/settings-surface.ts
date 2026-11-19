@@ -1886,7 +1886,7 @@ export class MuxSettingsSurface extends LitElement {
       ${usingService ? html`
         <p class="v-hint">Create an API key at <a href="https://turn.ampbox.io/" target="_blank" rel="noopener noreferrer">turn.ampbox.io</a>. Muxterm stores it on this server and requests temporary credentials for each call.</p>
         <div class="v-field"><mux-ui-text-field label="API key" type="password" autocomplete="off"
-          placeholder=${status?.mode === 'service' && status.authConfigured ? 'Leave blank to keep the saved key' : 'Paste your API key'}
+          placeholder=${status?.mode === 'service' && status.authConfigured && this._turnAPIURL.trim() === (status.apiUrl || 'https://turn.ampbox.io') ? 'Leave blank to keep the saved key' : 'Paste your API key'}
           .value=${this._turnAPIKey}
           @input=${(event: Event) => { this._turnAPIKey = (event.target as HTMLInputElement).value; }}></mux-ui-text-field></div>
         <details class="turn-advanced" ?open=${this._turnAPIURL !== 'https://turn.ampbox.io'}><summary>Use another TURN service</summary>
