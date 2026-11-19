@@ -183,6 +183,7 @@ export class UnifiedStream {
         undefined, 'session read');
       this.applySnapshot(latest);
     } catch (error) {
+      this.session.busy = false;
       this.emit(this.session.id, 'error', { id: `unified:send-read:${input.id}`,
         message: error instanceof Error ? error.message : 'Unified session read failed. Check AI settings.' });
     }
