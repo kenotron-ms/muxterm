@@ -305,9 +305,9 @@ export class MuxSDKUtility extends LitElement {
       <button class="mobile-tab-trigger" type="button" aria-label=${`Choose tab, current ${tab.id ? this.tabTitle(tab) : 'Open a tool'}`} aria-haspopup="dialog" aria-expanded=${String(this.tabSheetOpen)} @click=${() => { this.tabSheetOpen = true; this.paintAll(); }}>
         ${icon(tab.id ? TAB_GLYPHS[tab.kind] : Plus,{size:16})}<span>${tab.id ? this.tabTitle(tab) : 'Open a tool'}</span>${icon(ChevronDown,{size:16})}
       </button>
-      ${tab.id ? html`<mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label=${`Close ${this.tabTitle(tab)} tab`} tooltip="Close tab" @click=${() => this.closeTab(tab.id)}>${icon(X,{size:18})}</mux-ui-button>` : nothing}
-      <mux-ui-button icon-only size="large" variant="quiet" tone="muted" accessible-label="New tab" tooltip="New tab" @click=${() => this.openNewTabView()}>${icon(Plus,{size:18})}</mux-ui-button>
-      <mux-ui-button icon-only size="large" variant="quiet" accessible-label="Close utility pane" tooltip="Close utility pane" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(PanelRight,{size:20})}</mux-ui-button>
+      ${tab.id ? html`<button class="mobile-tab-action muted" type="button" aria-label=${`Close ${this.tabTitle(tab)} tab`} @click=${() => this.closeTab(tab.id)}>${icon(X,{size:16})}</button>` : nothing}
+      <button class="mobile-tab-action muted" type="button" aria-label="New tab" @click=${() => this.openNewTabView()}>${icon(Plus,{size:16})}</button>
+      <button class="mobile-tab-action" type="button" aria-label="Close utility pane" @click=${() => this.dispatchEvent(new CustomEvent('close',{bubbles:true,composed:true}))}>${icon(PanelRight,{size:18})}</button>
     </div>
     ${this.tabSheetOpen ? html`<mux-ui-dialog class="mobile-tab-sheet-dialog" open size="compact" presentation="adaptive" label="Choose a tab" @dismiss=${() => this.closeTabSheet()}>
       <div class="mobile-tab-sheet">
@@ -1307,11 +1307,12 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .mobile-tab-picker { display:none; }
     @media(max-width:767.98px) {
       mux-sdk-utility mux-ui-tab-strip { display:none; }
-      mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-height:var(--ui-control-lg); padding:0 var(--ui-space-4); }
-      mux-sdk-utility .mobile-tab-picker mux-ui-button { flex:none; }
-      mux-sdk-utility .mobile-tab-trigger { box-sizing:border-box; display:flex; align-items:center; flex:1; gap:var(--ui-space-3); min-width:0; min-height:var(--ui-control-lg); padding:0 var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:500 var(--ui-text-sm) var(--ui-font-sans); text-align:left; cursor:pointer; }
-      mux-sdk-utility .mobile-tab-trigger:hover, mux-sdk-utility .mobile-tab-trigger[aria-expanded='true'] { border-color:var(--ui-text-muted); }
-      mux-sdk-utility .mobile-tab-trigger:focus-visible, mux-sdk-utility .mobile-tab-sheet button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+      mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-1); height:var(--ui-control-md); padding:0 var(--ui-space-2); }
+      mux-sdk-utility .mobile-tab-trigger { box-sizing:border-box; display:flex; align-items:center; flex:1; gap:var(--ui-space-3); min-width:0; height:100%; padding:0 var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); font:600 var(--ui-text-sm) var(--ui-font-sans); text-align:left; cursor:pointer; }
+      mux-sdk-utility .mobile-tab-action { box-sizing:border-box; display:grid; place-items:center; flex:none; width:var(--ui-control-md); height:var(--ui-control-md); padding:0; border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); cursor:pointer; }
+      mux-sdk-utility .mobile-tab-action.muted { color:var(--ui-text-muted); }
+      mux-sdk-utility .mobile-tab-trigger:hover, mux-sdk-utility .mobile-tab-trigger[aria-expanded='true'], mux-sdk-utility .mobile-tab-action:hover { background:var(--ui-surface-hover); }
+      mux-sdk-utility .mobile-tab-picker button:focus-visible, mux-sdk-utility .mobile-tab-sheet button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
       mux-sdk-utility .mobile-tab-trigger > svg { flex:none; color:var(--ui-text-muted); }
       mux-sdk-utility .mobile-tab-trigger > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       mux-sdk-utility .mobile-tab-sheet { box-sizing:border-box; display:flex; flex-direction:column; max-height:min(78dvh,var(--ui-dialog-height)); padding:0 var(--ui-space-5) calc(var(--ui-space-5) + env(safe-area-inset-bottom)); }
