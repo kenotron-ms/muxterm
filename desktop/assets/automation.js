@@ -7,7 +7,7 @@
       return `#${CSS.escape(element.id)}`;
     }
     const parts = [];
-    for (let node = element; node && node !== document.documentElement && parts.length < 12; node = node.parentElement) {
+    for (let node = element; node && node !== document.documentElement; node = node.parentElement) {
       const siblings = [...node.parentElement.children].filter(candidate => candidate.tagName === node.tagName);
       parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${siblings.indexOf(node) + 1})`);
     }

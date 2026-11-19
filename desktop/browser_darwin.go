@@ -194,7 +194,7 @@ func (c *Companion) browserOpen(id, address string) error {
 	return nil
 }
 
-// Cocoa view operations run through InvokeSync on the main thread.
+// Callers hold bridgeMu so views remain valid while Cocoa operations run through InvokeSync.
 func (c *Companion) browserLayout() {
 	window, ok := c.app.Window.GetByName("muxterm")
 	if !ok {
