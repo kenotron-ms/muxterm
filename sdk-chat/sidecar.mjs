@@ -357,6 +357,11 @@ async function command(cmd) {
   const s = sessions.get(sessionId);
   if (op === 'close' && !s) return { status: 'closed' };
   if (!s) throw new Error('Session is not resident; resume it first');
+  if (op === 'goal-snapshot') {
+    if (s.harness !== 'codex') throw new Error('Native goal snapshot unavailable for this adapter');
+    s.codex ||= codexStream(s);
+    return await s.codex.readGoal();
+  }
   if (op === 'goal') {
     if (s.copilot) return await s.copilot.goal(cmd);
     if (s.harness === 'codex') {

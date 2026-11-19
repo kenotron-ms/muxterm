@@ -252,6 +252,12 @@ export class CodexStream {
     return { goal: goal?.objective || '', goalState: goal?.status || 'cleared' };
   }
 
+  async readGoal() {
+    await this.ready;
+    const current = await this.request('thread/goal/get', { threadId: this.session.nativeId });
+    return this.goalSnapshot(current.goal);
+  }
+
   async goal(action, objective, paused = false) {
     await this.ready;
     let result;
