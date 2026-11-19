@@ -210,14 +210,16 @@ func (s *Server) selectWorkConfiguration(ctx context.Context, candidates []sdkCh
 			continue
 		}
 		catalog, err := s.workModelCatalog(ctx, harness, options[index].Provider, "", projectPath)
+		failure := "catalog unavailable"
 		if err == nil {
 			var config sdkWorkConfiguration
 			config, err = workCatalogConfig(options[index], catalog, nil)
 			if err == nil {
 				return config, "", "", strings.Join(fallback, "; "), nil
 			}
+			failure = "configuration incompatible"
 		}
-		fallback = append(fallback, harness+" catalog unavailable: "+err.Error())
+		fallback = append(fallback, harness+" "+failure+": "+err.Error())
 	}
 	return sdkWorkConfiguration{}, "", "", "", fmt.Errorf("no compatible Work worker configuration: %s", strings.Join(fallback, "; "))
 }
