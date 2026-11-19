@@ -339,6 +339,9 @@ export class MuxMeetings extends LitElement {
       this.recordCallByDefault = true;
       this.callLayout = 'focus';
       this.selfVideoMinimized = false;
+      this.connectionOpen = false;
+      this.layoutOpen = false;
+      this.moreOpen = false;
     }
     this.callPreparing = true;
     const attempt=++this.callPreparationSeq;
@@ -898,7 +901,7 @@ export class MuxMeetings extends LitElement {
       ${this.callStatus.startsWith('Recording failed:') ? html`<mux-ui-feedback kind="error" density="compact">${this.callStatus}</mux-ui-feedback>` : nothing}
       <div class="call-stage ${screen ? 'sharing' : ''} ${waiting ? 'waiting' : ''} layout-${this.callLayout} ${this.selfVideoMinimized ? 'self-minimized' : ''} ${this.sampleScene ? 'sample-media' : ''}">
         ${screen ? html`<div class="call-screen-tile">${this.sampleScene ? html`<div class="sample-screen"><i></i><strong>Project notes</strong></div>` : nothing}<video class="call-screen" autoplay playsinline ?muted=${!!this.screenStream}></video><span>${this.screenStream ? 'Your screen' : 'Guest screen'}</span></div>` : nothing}
-        <div class="call-video-tile guest">${this.sampleScene && !waiting ? html`<div class="sample-person guest"><i></i><b></b></div>` : waiting ? html`<div class="waiting-avatar">${icon(Plus,{size:28})}</div>` : nothing}<video class="call-remote" autoplay playsinline></video><span>${waiting ? 'Guest' : 'Guest'}</span></div>
+        <div class="call-video-tile guest">${this.sampleScene && !waiting ? html`<div class="sample-person guest"><i></i><b></b></div>` : waiting ? html`<div class="waiting-avatar">${icon(Plus,{size:28})}</div>` : nothing}<video class="call-remote" autoplay playsinline></video><span>Guest</span></div>
         <div class="call-video-tile self">${this.sampleScene ? html`<div class="sample-person host"><i></i><b></b></div>` : nothing}<video class="call-local" autoplay playsinline muted></video><span>You</span>${this.callLayout==='focus' ? html`<button class="self-minimize" aria-label="Minimize your video" title="Minimize your video" @click=${() => {this.selfVideoMinimized=true;this.requestUpdate();}}>${icon(Minus,{size:14})}</button>` : nothing}</div>
         ${this.callLayout==='focus' && this.selfVideoMinimized ? html`<button class="self-restore" @click=${() => {this.selfVideoMinimized=false;this.requestUpdate();}}>Show my video</button>` : nothing}
       </div>
