@@ -74,7 +74,9 @@ if not bundle.is_dir():
 
 fixture = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fixture)
 threading.Thread(target=fixture.serve_forever, daemon=True).start()
-home = Path(tempfile.mkdtemp(prefix="muxterm-browser-ci-"))
+# Darwin Unix socket paths are short (sun_path is 104 bytes). Keep the
+# isolated HOME short enough for both the local server and control sockets.
+home = Path(tempfile.mkdtemp(prefix="mb-", dir="/tmp"))
 socket_path = home / "Library/Application Support/muxterm-desktop/browser-control.sock"
 server_url = home / "Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
 settings = home / "Library/Application Support/muxterm-desktop/settings.json"
@@ -131,6 +133,11 @@ try:
 
     wait_for("native navigation", navigated)
     print("Native WKWebView control passed: open, inspect, type, invalid navigate, click, screenshot, navigate")
+except Exception:
+    if log.exists():
+        print("Isolated Mac app log (last 4000 characters):")
+        print(log.read_text(errors="replace")[-4000:])
+    raise
 finally:
     subprocess.run(["osascript", "-e", 'tell application id "io.ampbox.muxterm.desktop" to quit'], check=False)
     fixture.shutdown()
