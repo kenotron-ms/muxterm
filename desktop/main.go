@@ -89,6 +89,9 @@ func main() {
 			companion.showSettings()
 		}
 	}
+	if err := companion.startBrowserControl(); err != nil {
+		log.Printf("native browser control unavailable: %v", err)
+	}
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}

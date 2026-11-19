@@ -1,7 +1,7 @@
 # Agent-assisted Google connector registration
 
 The reusable skill is [`muxterm-google-setup`](../../skills/muxterm-google-setup/SKILL.md).
-It guides the Cloud Console work through Muxterm Browser Assistant, then hands off
+It guides the Cloud Console work through the Muxterm Mac browser pane, then hands off
 credential entry and Google consent to the user. It does not require gcloud or the
 desktop/SSH OAuth proof of concept, and does not reset existing connections.
 
@@ -17,7 +17,7 @@ Give a browser-capable agent this prompt from the repository checkout:
 
 ```text
 Read skills/muxterm-google-setup/SKILL.md and follow it to help me set up my
-Muxterm Google connector using Browser Assistant.
+Muxterm Google connector using the native browser pane.
 
 Muxterm URL: <the instance I want to connect>
 Requested services: <Gmail, Drive, Calendar, Docs, Sheets, or Slides>
@@ -39,7 +39,7 @@ through the shared Skills catalog or a connector UI shortcut is a separate step.
 ```text
 Choose Muxterm + services
     → check account eligibility and exact callback
-    → pair Browser Assistant and enable its managed window
+    → open a native browser tab in the Muxterm Mac app
     → agent prepares the confirmed project, APIs, consent and Web client form
     → pause browser access
     → user creates client and uploads Web OAuth JSON on a private Muxterm page
@@ -49,7 +49,7 @@ Choose Muxterm + services
     → check tools, approve selected read tools, optionally verify a safe call
 ```
 
-Browser Assistant does not transfer credentials. While it is paused, the user uploads
+Native browser control does not transfer credentials. While agent actions are stopped, the user uploads
 the registration file directly to Muxterm, or enters credentials on the private page.
 The agent sees only an opaque handle. Password masking alone does not make automated
 credential entry secret-blind. See [Shared credential intake](connection-credential-intake.md)

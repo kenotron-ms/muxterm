@@ -9,8 +9,8 @@ clients. It does not register an app with a provider automatically.
 
 1. `prepare_connection` fixes the destinations, issuer, scopes and exact callback.
    It returns an authenticated `private_upload_url` and a setup ID valid for
-   15 minutes. This is an intake expiry, not a Browser Assistant access timeout.
-2. The user pauses Browser Assistant, opens that URL while signed into the same
+   15 minutes. This is an intake expiry.
+2. The agent stops browser actions; the user opens that URL while signed into the same
    Muxterm as the same owner, uploads a file or enters credentials, reviews the
    metadata, and approves. Files come from the browser's computer, not an arbitrary
    server path. The original downloaded file remains on that computer.
@@ -72,8 +72,8 @@ accepted for credential upload. The page has a restrictive nonce-based CSP, no
 third-party scripts, no framing, no caching and no referrer transmission. Secrets
 are never accepted as arguments to these four agent tools. Do not inspect or
 screenshot credential-bearing pages, automate secret entry, or read secret files
-to verify success. Stop Browser Assistant before private entry and close secret
-pages before re-enabling access.
+to verify success. Stop agent browser actions before private entry and close secret
+pages before resuming them.
 
 Pending credentials stay in server memory and are discarded on cancellation,
 expiry or successful configuration; restart also discards pending setups. This is

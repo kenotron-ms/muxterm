@@ -29,7 +29,7 @@ func connectionSetupRequest(args map[string]any, method, path string, payload an
 		return "", err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Muxterm-Browser-Request", "1")
+	request.Header.Set("X-Muxterm-Connection-Request", "1")
 	if token, err := sessiond.ServerToken(); err == nil && token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -77,7 +77,7 @@ func registerConnectionSetupTools(srv *Server) {
 	array := func(limit int) map[string]any {
 		return map[string]any{"type": "array", "items": text(512), "minItems": 1, "maxItems": limit, "uniqueItems": true}
 	}
-	srv.Register("prepare_connection", "Prepare an owner-bound OAuth connection setup on this Muxterm. Google takes selected services; remote-oauth takes name, endpoint, issuer_url and scopes. Returns the exact callback, targets, scopes and an authenticated private upload URL valid for 15 minutes. Ask the user to pause Browser Assistant and upload a registration file or enter credentials there. Never pass client IDs, secrets, file paths or file contents through agent tools. Does not create a connection or authorize an account. Local server only.", map[string]any{
+	srv.Register("prepare_connection", "Prepare an owner-bound OAuth connection setup on this Muxterm. Google takes selected services; remote-oauth takes name, endpoint, issuer_url and scopes. Returns the exact callback, targets, scopes and an authenticated private upload URL valid for 15 minutes. Ask the user to take over browser control and upload a registration file or enter credentials there. Never pass client IDs, secrets, file paths or file contents through agent tools. Does not create a connection or authorize an account. Local server only.", map[string]any{
 		"type": "object", "additionalProperties": false,
 		"properties": withMachine(map[string]any{
 			"provider": map[string]any{"type": "string", "enum": []string{"google", "remote-oauth"}},

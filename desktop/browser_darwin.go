@@ -8,6 +8,38 @@ package main
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #include <stdlib.h>
+#include <stdint.h>
+
+extern void muxtermBrowserResult(uint64_t requestID, const char* value, const char* error);
+
+static void browserEvaluate(void* pointer, const char* script, uint64_t requestID) {
+    WKWebView* browser = (WKWebView*)pointer;
+    NSString* expression = [NSString stringWithUTF8String:script];
+    [browser evaluateJavaScript:expression completionHandler:^(id value, NSError* error) {
+        NSString* result = [value isKindOfClass:[NSString class]] ? value : @"";
+        muxtermBrowserResult(requestID, result.UTF8String, error ? error.localizedDescription.UTF8String : NULL);
+    }];
+}
+
+static void browserSnapshot(void* pointer, uint64_t requestID) {
+    WKWebView* browser = (WKWebView*)pointer;
+    [browser takeSnapshotWithConfiguration:nil completionHandler:^(NSImage* image, NSError* error) {
+        if (error || image == nil) {
+            muxtermBrowserResult(requestID, NULL, error ? error.localizedDescription.UTF8String : "Snapshot unavailable");
+            return;
+        }
+        CGImageRef pixels = [image CGImageForProposedRect:NULL context:nil hints:nil];
+        if (pixels == NULL) {
+            muxtermBrowserResult(requestID, NULL, "Snapshot unavailable");
+            return;
+        }
+        NSBitmapImageRep* bitmap = [[NSBitmapImageRep alloc] initWithCGImage:pixels];
+        NSData* jpeg = [bitmap representationUsingType:NSBitmapImageFileTypeJPEG properties:@{NSImageCompressionFactor: @0.6}];
+        [bitmap release];
+        NSString* encoded = [jpeg base64EncodedStringWithOptions:0];
+        muxtermBrowserResult(requestID, encoded.UTF8String, NULL);
+    }];
+}
 
 static void* browserCreate(void* windowPtr, const char* address) {
     NSWindow* window = (NSWindow*)windowPtr;
@@ -73,10 +105,51 @@ import "C"
 
 import (
 	"errors"
+	"time"
 	"unsafe"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
+
+func (c *Companion) browserEvaluate(id, script string) (string, error) {
+	c.mu.Lock()
+	tab := c.browserTabs[id]
+	c.mu.Unlock()
+	if tab == nil {
+		return "", errors.New("browser tab not found")
+	}
+	requestID, response := browserResultSubscribe()
+	application.InvokeSync(func() {
+		value := C.CString(script)
+		C.browserEvaluate(tab.view, value, C.uint64_t(requestID))
+		C.free(unsafe.Pointer(value))
+	})
+	select {
+	case result := <-response:
+		return result.value, result.err
+	case <-time.After(15 * time.Second):
+		browserResultCancel(requestID)
+		return "", errors.New("browser action timed out")
+	}
+}
+
+func (c *Companion) browserScreenshot(id string) (string, error) {
+	c.mu.Lock()
+	tab := c.browserTabs[id]
+	c.mu.Unlock()
+	if tab == nil {
+		return "", errors.New("browser tab not found")
+	}
+	requestID, response := browserResultSubscribe()
+	application.InvokeSync(func() { C.browserSnapshot(tab.view, C.uint64_t(requestID)) })
+	select {
+	case result := <-response:
+		return result.value, result.err
+	case <-time.After(15 * time.Second):
+		browserResultCancel(requestID)
+		return "", errors.New("browser screenshot timed out")
+	}
+}
 
 type browserTab struct {
 	id      string
@@ -121,7 +194,7 @@ func (c *Companion) browserOpen(id, address string) error {
 	return nil
 }
 
-// Callers hold bridgeMu so a native view cannot be removed during this snapshot.
+// Callers hold bridgeMu so views remain valid while Cocoa operations run through InvokeSync.
 func (c *Companion) browserLayout() {
 	window, ok := c.app.Window.GetByName("muxterm")
 	if !ok {

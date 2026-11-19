@@ -150,7 +150,7 @@ type Server struct {
 	sdkChatAttachments    *chatattachments.Store
 	sdkJobs               *sdkJobs
 	connections           *serviceConnections
-	browserAssistant      *browserAssistantRegistry
+	localToken            string
 	connectionSetups      *connectionSetupRegistry
 	meetingCalls          *meetingCallRegistry
 	meetingTranscriptions sync.Map // meeting ID -> context.CancelFunc
@@ -188,7 +188,7 @@ func New(cfg Config) *Server {
 	s.sdkChats.goals.onChange = s.hub.BroadcastGoalChanged
 	s.sdkJobs = newSDKJobs(s.sdkChats)
 	s.connections = newServiceConnections()
-	s.browserAssistant = newBrowserAssistantRegistry(cfg.LocalToken)
+	s.localToken = cfg.LocalToken
 	s.connectionSetups = newConnectionSetupRegistry()
 	s.meetingCalls = newMeetingCallRegistry()
 	attachmentRoot, err := chatattachments.DefaultRoot()
@@ -279,7 +279,6 @@ func New(cfg Config) *Server {
 	// Protected routes: loopback bypass, else a valid session (cookie or
 	// bearer token) is required — see internal/server/authmiddleware.go.
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
-	s.registerBrowserAssistantRoutes(protect)
 	s.registerConnectionSetupRoutes(protect)
 	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
 

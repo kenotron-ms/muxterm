@@ -6,31 +6,15 @@ import (
 	"strings"
 )
 
-func (s *Server) agentBrowserControlRequest(r *http.Request) bool {
-	if r.Header.Get("X-Muxterm-Agent") != "1" || s.browserAssistant.localToken == "" {
-		return false
-	}
-	token, ok := bearerToken(r)
-	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.browserAssistant.localToken)) != 1 {
-		return false
-	}
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) != 5 || parts[0] != "api" || parts[1] != "browser-assistant" || parts[2] != "connections" || parts[3] == "" {
-		return false
-	}
-	return (r.Method == http.MethodPost && (parts[4] == "commands" || parts[4] == "requests")) ||
-		(r.Method == http.MethodDelete && parts[4] == "control")
-}
-
 // Agent Chat requests are limited to discovery, creation, transcript/status
 // reads, and idempotent message admission. A same-user local token authenticates
 // the MCP process; goal controls retain their separate origin and ledger rules.
 func (s *Server) agentChatRequest(r *http.Request) bool {
-	if r.Header.Get("X-Muxterm-Agent") != "1" || s.browserAssistant.localToken == "" {
+	if r.Header.Get("X-Muxterm-Agent") != "1" || s.localToken == "" {
 		return false
 	}
 	token, ok := bearerToken(r)
-	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.browserAssistant.localToken)) != 1 || !agentChatPathAllowed(r.Method, r.URL.Path) {
+	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.localToken)) != 1 || !agentChatPathAllowed(r.Method, r.URL.Path) {
 		return false
 	}
 	// The same-user MCP client without a session capability acts as an
@@ -50,11 +34,11 @@ func (s *Server) agentChatRequest(r *http.Request) bool {
 }
 
 func (s *Server) agentRemoteChatRequest(r *http.Request) bool {
-	if r.Header.Get("X-Muxterm-Agent") != "1" || s.browserAssistant.localToken == "" {
+	if r.Header.Get("X-Muxterm-Agent") != "1" || s.localToken == "" {
 		return false
 	}
 	token, ok := bearerToken(r)
-	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.browserAssistant.localToken)) != 1 {
+	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.localToken)) != 1 {
 		return false
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/remote-chat/"+r.PathValue("id"))
@@ -130,11 +114,11 @@ func agentChatPathAllowed(method, path string) bool {
 // human browser request. Its same-user helper token is scoped here to chat and
 // project operations; goal controls stay on their narrower path.
 func (s *Server) remoteChatBridgeRequest(r *http.Request) bool {
-	if r.Header.Get("X-Muxterm-Remote-Chat") != "1" || r.Header.Get("Sec-Fetch-Site") != "same-origin" || r.Header.Get("X-Muxterm-Agent") != "" || s.browserAssistant.localToken == "" {
+	if r.Header.Get("X-Muxterm-Remote-Chat") != "1" || r.Header.Get("Sec-Fetch-Site") != "same-origin" || r.Header.Get("X-Muxterm-Agent") != "" || s.localToken == "" {
 		return false
 	}
 	token, ok := bearerToken(r)
-	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.browserAssistant.localToken)) != 1 {
+	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.localToken)) != 1 {
 		return false
 	}
 	path := r.URL.Path
@@ -159,7 +143,7 @@ func (s *Server) chatAuthorityBoundary(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if s.agentBrowserControlRequest(r) || s.agentChatRequest(r) || s.agentRemoteChatRequest(r) {
+		if s.agentChatRequest(r) || s.agentRemoteChatRequest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -188,8 +172,8 @@ func (s *Server) chatAuthorityBoundary(next http.Handler) http.Handler {
 				http.Error(w, "owner chat capability required", 403)
 				return
 			}
-		} else if ((strings.HasPrefix(path, "/api/sdk-") || strings.HasPrefix(path, "/api/browser-assistant")) && r.Method != http.MethodGet && r.Method != http.MethodHead) || r.Header.Get("Upgrade") != "" {
-			http.Error(w, "agent mutation requires a scoped control endpoint; browser controls remain human-only", 403)
+		} else if ((strings.HasPrefix(path, "/api/sdk-")) && r.Method != http.MethodGet && r.Method != http.MethodHead) || r.Header.Get("Upgrade") != "" {
+			http.Error(w, "agent mutation requires a scoped control endpoint", 403)
 			return
 		}
 		next.ServeHTTP(w, r)
