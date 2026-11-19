@@ -10,12 +10,13 @@ import (
 )
 
 type browserMessage struct {
-	Type    string      `json:"type"`
-	ID      string      `json:"id"`
-	URL     string      `json:"url"`
-	Mode    string      `json:"mode"`
-	Visible bool        `json:"visible"`
-	Rect    browserRect `json:"rect"`
+	Type      string      `json:"type"`
+	ID        string      `json:"id"`
+	RequestID string      `json:"requestId"`
+	URL       string      `json:"url"`
+	Mode      string      `json:"mode"`
+	Visible   bool        `json:"visible"`
+	Rect      browserRect `json:"rect"`
 }
 
 func (c *Companion) chooseChatFolder(window application.Window, requestID string) {
@@ -131,7 +132,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 		case "select":
 			actionErr = c.browserSelect(message.ID)
 		case "pick":
-			go c.browserPick(message.ID, message.Mode)
+			go c.browserPick(message.ID, message.Mode, message.RequestID)
 		case "pick-cancel":
 			_, _ = c.browserEvaluate(message.ID, "window.__muxtermPickCancel?.(); 'cancelled'")
 		case "ready":

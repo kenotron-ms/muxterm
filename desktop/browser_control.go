@@ -268,9 +268,27 @@ func (c *Companion) runBrowserControl(command browserControlCommand) (any, error
 			cursor.Action = "cursor"
 			if input, marshalErr := json.Marshal(cursor); marshalErr == nil {
 				if response, evalErr := c.browserEvaluate(id, "("+string(code)+")("+string(input)+")"); evalErr == nil && !strings.Contains(response, `"error"`) {
-					// Keep the action synchronous so the agent sees the cursor arrive
-					// before the click, while retaining the existing click semantics.
+					// The caller holds bridgeMu. Let layout and navigation proceed
+					// during the visual pause, then recheck the native view and URL.
+					c.bridgeMu.Unlock()
 					time.Sleep(380 * time.Millisecond)
+					c.bridgeMu.Lock()
+					_, currentTabs := c.browserState()
+					currentURL := ""
+					for _, tab := range currentTabs {
+						if tab.ID == id {
+							currentURL = tab.URL
+							break
+						}
+					}
+					if currentURL == "" {
+						return nil, errors.New("browser tab closed during cursor animation")
+					}
+					for _, tab := range tabs {
+						if tab.ID == id && tab.URL != currentURL {
+							return nil, errors.New("page changed; inspect again")
+						}
+					}
 				}
 			}
 		}

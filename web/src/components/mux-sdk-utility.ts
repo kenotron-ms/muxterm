@@ -78,7 +78,7 @@ function legacyPageContent(blocks: PageBlock[], remoteHost = ''): PartialBlock[]
 type UtilityTabId = 'new' | 'side' | 'voice' | 'files' | 'coordination' | 'changes' | 'pages' | 'meetings' | 'browser' | 'goal';
 type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string; url?: string; title?: string; sideChatId?: string; draft?: string };
 type BrowserState = { tabs?: { id:string; url:string; title:string; canGoBack:boolean; canGoForward:boolean }[]; error?:string };
-type BrowserTarget = { id:string; kind?:'element'|'area'; url?:string; title?:string; selector?:string; tag?:string; role?:string; name?:string; text?:string; rect?:{x:number;y:number;width:number;height:number}; screenshot?:string; error?:string; cancelled?:boolean };
+type BrowserTarget = { id:string; requestId?:string; kind?:'element'|'area'; url?:string; title?:string; selector?:string; tag?:string; role?:string; name?:string; text?:string; rect?:{x:number;y:number;width:number;height:number}; screenshot?:string; error?:string; cancelled?:boolean };
 type BrowserBridge = { send: (message: Record<string, unknown>) => void };
 declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge; __muxtermPendingBrowserOpens?: {id:string;url:string}[]; __muxtermBrowserUtilityReady?: boolean } }
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
@@ -210,6 +210,7 @@ export class MuxSDKUtility extends LitElement {
   private browserMenuOpen = false;
   private browserPickMode: 'element' | 'area' | '' = '';
   private browserPickId = '';
+  private browserPickRequestId = '';
   private browserPollTimer?: number;
   private browserObserver?: ResizeObserver;
   private browserRecent: {url:string; title:string}[] = [];
@@ -523,6 +524,7 @@ export class MuxSDKUtility extends LitElement {
     this.browserSend({type:'pick-cancel', id:this.browserPickId});
     this.browserPickMode = '';
     this.browserPickId = '';
+    this.browserPickRequestId = '';
     if (this.isConnected) this.paintAll();
   }
   private hideBrowser() {
@@ -575,8 +577,9 @@ export class MuxSDKUtility extends LitElement {
   };
   private receiveBrowserTarget = (event: CustomEvent<BrowserTarget>) => {
     const target = event.detail;
-    if (target.id !== this.browserPickId) return;
+    if (target.id !== this.browserPickId || target.requestId !== this.browserPickRequestId) return;
     this.browserPickId = '';
+    this.browserPickRequestId = '';
     this.browserPickMode = '';
     if (!this.tabs.some(tab => tab.kind === 'browser' && tab.id === target.id)) return;
     if (target.error) this.browserError = target.error;
@@ -590,7 +593,8 @@ export class MuxSDKUtility extends LitElement {
     this.browserError = '';
     this.browserPickMode = mode;
     this.browserPickId = tab.id;
-    this.browserSend({type:'pick', id:tab.id, mode});
+    this.browserPickRequestId = crypto.randomUUID();
+    this.browserSend({type:'pick', id:tab.id, mode, requestId:this.browserPickRequestId});
     this.paintAll();
   }
   private rememberBrowserPage(url: string, title: string, repaint = true) {

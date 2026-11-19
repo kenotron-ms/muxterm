@@ -18,6 +18,7 @@ type browserPickRect struct {
 
 type browserPickResult struct {
 	ID         string           `json:"id"`
+	RequestID  string           `json:"requestId,omitempty"`
 	Kind       string           `json:"kind,omitempty"`
 	URL        string           `json:"url,omitempty"`
 	Title      string           `json:"title,omitempty"`
@@ -37,8 +38,8 @@ func (c *Companion) emitBrowserPick(result browserPickResult) {
 	c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-browser-target', {detail:" + string(encoded) + "}))")
 }
 
-func (c *Companion) browserPick(id, mode string) {
-	result := browserPickResult{ID: id}
+func (c *Companion) browserPick(id, mode, requestID string) {
+	result := browserPickResult{ID: id, RequestID: requestID}
 	if mode != "element" && mode != "area" {
 		result.Error = "Choose an element or area"
 		c.emitBrowserPick(result)
@@ -98,6 +99,7 @@ func (c *Companion) browserPick(id, mode string) {
 		if evalErr == nil && payload != "" && payload != "null" {
 			evalErr = json.Unmarshal([]byte(payload), &result)
 			result.ID = id
+			result.RequestID = requestID
 			if evalErr == nil && result.Kind == "area" {
 				var rect browserRect
 				var rectErr error
