@@ -25,6 +25,8 @@ type browserControlCommand struct {
 	Key      string  `json:"key,omitempty"`
 	X        float64 `json:"x,omitempty"`
 	Y        float64 `json:"y,omitempty"`
+	Width    float64 `json:"width,omitempty"`
+	Height   float64 `json:"height,omitempty"`
 	DeltaX   float64 `json:"deltaX,omitempty"`
 	DeltaY   float64 `json:"deltaY,omitempty"`
 }
@@ -232,7 +234,17 @@ func (c *Companion) runBrowserControl(command browserControlCommand) (any, error
 		if !c.browserViewVisible(id) {
 			return nil, errors.New("show this browser tab in the Mac app before taking a screenshot")
 		}
-		data, err := c.browserScreenshot(id)
+		var data string
+		var err error
+		if command.Width != 0 || command.Height != 0 {
+			rect, rectErr := c.clampBrowserPickRect(browserPickRect{X: command.X, Y: command.Y, Width: command.Width, Height: command.Height})
+			if rectErr != nil {
+				return nil, rectErr
+			}
+			data, err = c.browserScreenshotRegion(id, rect)
+		} else {
+			data, err = c.browserScreenshot(id)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -250,6 +262,17 @@ func (c *Companion) runBrowserControl(command browserControlCommand) (any, error
 		code, err := assets.ReadFile("assets/automation.js")
 		if err != nil {
 			return nil, err
+		}
+		if command.Action == "click" && c.browserViewVisible(id) {
+			cursor := command
+			cursor.Action = "cursor"
+			if input, marshalErr := json.Marshal(cursor); marshalErr == nil {
+				if response, evalErr := c.browserEvaluate(id, "("+string(code)+")("+string(input)+")"); evalErr == nil && !strings.Contains(response, `"error"`) {
+					// Keep the action synchronous so the agent sees the cursor arrive
+					// before the click, while retaining the existing click semantics.
+					time.Sleep(380 * time.Millisecond)
+				}
+			}
 		}
 		arguments, err := json.Marshal(command)
 		if err != nil {

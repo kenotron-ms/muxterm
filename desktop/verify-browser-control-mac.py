@@ -153,6 +153,9 @@ try:
         raise
     if screenshot["mimeType"] != "image/jpeg" or not base64.b64decode(screenshot["data"]).startswith(b"\xff\xd8"):
         raise AssertionError("Native screenshot is not JPEG")
+    region = action(str(socket_path), {"action": "screenshot", "id": tab_id, "x": 0, "y": 0, "width": 80, "height": 60})
+    if region["mimeType"] != "image/jpeg" or not base64.b64decode(region["data"]).startswith(b"\xff\xd8"):
+        raise AssertionError("Native region screenshot is not JPEG")
     action(str(socket_path), {"action": "navigate", "id": tab_id, "url": url + "?next=1"})
     def navigated():
         try:
@@ -161,7 +164,7 @@ try:
             return False
 
     wait_for("native navigation", navigated)
-    print("Native WKWebView control passed: open, inspect, type, invalid navigate, click, screenshot, navigate")
+    print("Native WKWebView control passed: open, inspect, type, invalid navigate, click, screenshot, region screenshot, navigate")
 except Exception:
     if log.exists():
         print("Isolated Mac app log (last 4000 characters):")

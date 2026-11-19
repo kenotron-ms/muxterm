@@ -13,6 +13,7 @@ type browserMessage struct {
 	Type    string      `json:"type"`
 	ID      string      `json:"id"`
 	URL     string      `json:"url"`
+	Mode    string      `json:"mode"`
 	Visible bool        `json:"visible"`
 	Rect    browserRect `json:"rect"`
 }
@@ -129,6 +130,8 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			}
 		case "select":
 			actionErr = c.browserSelect(message.ID)
+		case "pick":
+			go c.browserPick(message.ID, message.Mode)
 		case "close":
 			c.browserClose(message.ID)
 		case "status":

@@ -21,9 +21,16 @@ static void browserEvaluate(void* pointer, const char* script, uint64_t requestI
     }];
 }
 
-static void browserSnapshot(void* pointer, uint64_t requestID) {
+static void browserSnapshot(void* pointer, double x, double y, double width, double height, bool region, uint64_t requestID) {
     WKWebView* browser = (WKWebView*)pointer;
-    [browser takeSnapshotWithConfiguration:nil completionHandler:^(NSImage* image, NSError* error) {
+    WKSnapshotConfiguration* configuration = nil;
+    if (region) {
+        configuration = [[WKSnapshotConfiguration alloc] init];
+        double top = browser.isFlipped ? y : browser.bounds.size.height - y - height;
+        configuration.rect = CGRectMake(x, top, width, height);
+        configuration.snapshotWidth = @(MIN(width, 800));
+    }
+    [browser takeSnapshotWithConfiguration:configuration completionHandler:^(NSImage* image, NSError* error) {
         if (error || image == nil) {
             muxtermBrowserResult(requestID, NULL, error ? error.localizedDescription.UTF8String : "Snapshot unavailable");
             return;
@@ -39,6 +46,7 @@ static void browserSnapshot(void* pointer, uint64_t requestID) {
         NSString* encoded = [jpeg base64EncodedStringWithOptions:0];
         muxtermBrowserResult(requestID, encoded.UTF8String, NULL);
     }];
+    [configuration release];
 }
 
 static void* browserCreate(void* windowPtr, const char* address) {
@@ -141,7 +149,27 @@ func (c *Companion) browserScreenshot(id string) (string, error) {
 		return "", errors.New("browser tab not found")
 	}
 	requestID, response := browserResultSubscribe()
-	application.InvokeSync(func() { C.browserSnapshot(tab.view, C.uint64_t(requestID)) })
+	application.InvokeSync(func() { C.browserSnapshot(tab.view, 0, 0, 0, 0, C.bool(false), C.uint64_t(requestID)) })
+	select {
+	case result := <-response:
+		return result.value, result.err
+	case <-time.After(15 * time.Second):
+		browserResultCancel(requestID)
+		return "", errors.New("browser screenshot timed out")
+	}
+}
+
+func (c *Companion) browserScreenshotRegion(id string, rect browserRect) (string, error) {
+	c.mu.Lock()
+	tab := c.browserTabs[id]
+	c.mu.Unlock()
+	if tab == nil {
+		return "", errors.New("browser tab not found")
+	}
+	requestID, response := browserResultSubscribe()
+	application.InvokeSync(func() {
+		C.browserSnapshot(tab.view, C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height), C.bool(true), C.uint64_t(requestID))
+	})
 	select {
 	case result := <-response:
 		return result.value, result.err
