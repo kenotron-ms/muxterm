@@ -298,8 +298,7 @@ export class MuxChatCoordination extends LitElement {
     const state = this.status(item);
     const stateClass = item.status === 'blocked' ? 'blocked' : item.status === 'done' ? 'done' : item.waitingOn?.length ? 'waiting' : '';
     return html`<article class="detail-view">
-      <mux-ui-button class="back" variant="quiet" size="small" @click=${() => { this.detail = undefined; }}>${icon('back')}Back to work</mux-ui-button>
-      <div class="project detail-project">${icon('folder')}${this.projectName()}</div>
+      ${this.projectId ? html`<mux-ui-button class="back" variant="quiet" size="small" @click=${() => { this.detail = undefined; }}>${icon('back')}Back to work</mux-ui-button><div class="project detail-project">${icon('folder')}${this.projectName()}</div>` : nothing}
       <div class=${`status ${stateClass}`}>${icon(this.statusIcon(item))}${state}</div>
       <h2>${item.title}</h2>
       <p class="lead">${item.brief || 'No description yet.'}</p>
@@ -316,6 +315,6 @@ export class MuxChatCoordination extends LitElement {
     </article>`;
   }
   override render() {
-    return html`<div class="wrap"><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.projectId ? this.detail ? this.detailView() : this.list() : nothing}</div>`;
+    return html`<div class="wrap"><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId && !this.detail ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.detailView() : this.projectId ? this.list() : nothing}</div>`;
   }
 }

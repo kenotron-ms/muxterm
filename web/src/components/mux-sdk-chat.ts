@@ -56,7 +56,9 @@ type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; pare
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type Block = { key: number; turn: number; kind: 'user' | 'interjection' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'lane-report' | 'chat-message' | 'question' | 'voice-input' | 'voice-output'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; workId?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; lightweight?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
+type Block = { key: number; turn: number; kind: 'user' | 'interjection' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'work-digest' | 'lane-report' | 'chat-message' | 'question' | 'voice-input' | 'voice-output'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; workId?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; lightweight?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
+type DigestWork = { id:string; title:string; status:string; readiness?:string; needsHuman?:boolean; blockedReason?:string; progress?:string; nextAction?:string; outcome?:string; ownerSessionId?:string; updatedAt?:string; dispatch?:{state:string;detail?:string;sessionId?:string} };
+type DigestEntry = { workId:string; text:string; at:string; count:number; work?:DigestWork; error?:boolean };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
 type HistoryPage = { from: number; to: number; hasMore: boolean; events: SDKEvent[] };
 type TranscriptRow = { key: string; block: Block; work?: Block[] };
@@ -152,6 +154,11 @@ export class MuxSDKChat extends LitElement {
   @state() private busy = false;
   @state() private stopping = false;
   @state() private drawerOpen = false;
+  private workDigest = new Map<string, DigestEntry>();
+  private workDigestTimer?: number;
+  private workReturnFocus?: HTMLElement;
+  @state() private mobileWorkDetail = false;
+  @state() private openWorkTitle = '';
   @state() private chatMenuOpen = false;
   @state() private movingChat = false;
   @state() private renameChatOpen = false;
@@ -319,6 +326,27 @@ export class MuxSDKChat extends LitElement {
     .block.assistant { position:relative; margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); }
     .block.assistant:has(mux-chat-visualization[mode="wide"]) { max-width:min(var(--ui-chat-visualization-wide-width),100%); }
     .block.work { margin-bottom:var(--ui-space-7); }
+    .work-digest { overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background:var(--ui-surface-raised); color:var(--ui-text); }
+    .work-digest-head { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); padding:var(--ui-space-5) var(--ui-space-6); border-bottom:1px solid var(--ui-border); }
+    .work-digest-head h2 { margin:0; font:700 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
+    .work-digest-head p { margin:var(--ui-space-1) 0 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .work-digest-count { flex:none; padding:var(--ui-space-2) var(--ui-space-4); border-radius:var(--ui-radius-pill); background:color-mix(in srgb,var(--ui-warning) 16%,var(--ui-surface-raised)); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
+    .work-digest-row { display:grid; grid-template-columns:var(--ui-space-7) minmax(0,1fr) auto; align-items:center; gap:var(--ui-space-4); min-width:0; padding:var(--ui-space-5) var(--ui-space-6); }
+    .work-digest-row + .work-digest-row { border-top:1px solid var(--ui-border); }
+    .work-digest-row[data-tone='attention'] { background:color-mix(in srgb,var(--ui-warning) 9%,var(--ui-surface-raised)); }
+    .work-digest-symbol { display:grid; place-items:center; width:var(--ui-space-7); height:var(--ui-space-7); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); color:var(--ui-accent); font-weight:800; }
+    .work-digest-row[data-tone='attention'] .work-digest-symbol { color:var(--ui-warning); }
+    .work-digest-row[data-tone='done'] .work-digest-symbol { color:var(--ui-success); }
+    .work-digest-copy { min-width:0; }
+    .work-digest-copy h3 { margin:0; font-size:var(--ui-text-md); font-weight:700; line-height:1.4; overflow-wrap:anywhere; }
+    .work-digest-copy p { margin:var(--ui-space-1) 0 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.45; overflow-wrap:anywhere; }
+    .work-digest-copy time { display:block; margin-top:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .work-digest-action { min-height:44px; padding:var(--ui-space-2) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; white-space:nowrap; }
+    .work-digest-action:hover { background:var(--ui-surface-hover); }
+    .work-digest-action:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
+    .work-digest-row[data-tone='attention'] .work-digest-action { border-color:var(--ui-warning); }
+    @media(max-width:560px) { .work-digest-head { align-items:flex-start; flex-wrap:wrap; } .work-digest-row { grid-template-columns:var(--ui-space-7) minmax(0,1fr); align-items:start; } .work-digest-action { grid-column:2; width:max-content; max-width:100%; } }
+    @media(max-width:360px) { .work-digest-head,.work-digest-row { padding-inline:var(--ui-space-4); } .work-digest-count { padding-inline:var(--ui-space-3); } }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .work-stream .pulse { width:var(--ui-chat-pulse-size); height:var(--ui-chat-pulse-size); flex:none; border-radius:50%; background:var(--ui-accent); animation:activity-pulse 1.35s ease-in-out infinite; }
@@ -538,6 +566,10 @@ export class MuxSDKChat extends LitElement {
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
     @media(max-width:767.98px) { .chat-screen-header,.chat-screen-header.with-utility { width:100%; --ui-screen-header-padding-right:var(--ui-space-5); } }
     @media(max-width:767.98px) { .body { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-9); } .composer-wrap { padding:0 var(--ui-space-5) var(--ui-space-5); } .drawer,.layout.preview-focused .drawer { box-sizing:border-box; display:flex; flex-direction:column; position:fixed; inset:0; z-index:var(--ui-z-sheet); width:100vw; height:100dvh; margin:0; border:0; box-shadow:var(--ui-shadow-side-strong); padding-top:env(safe-area-inset-top, 0px); } .drawer mux-sdk-utility { flex:1; min-height:0; height:auto; } .drawer-resizer { display:none; } .topbar-actions { gap:var(--ui-space-1); } .chat-screen-header .mobile-nav, .chat-screen-header .chat-menu-trigger, .chat-screen-header .pane-controls mux-ui-button { width:var(--ui-control-lg); height:var(--ui-control-lg); } }
+    dialog.work-detail-dialog { max-width:none; max-height:none; padding-inline:0; background:var(--ui-surface-base); color:var(--ui-text); animation:none; }
+    dialog.work-detail-dialog::backdrop { background:var(--ui-backdrop); }
+    .work-detail-return { flex:none; min-height:44px; padding:var(--ui-space-2) var(--ui-space-6); border:0; border-bottom:1px solid var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); font-weight:650; text-align:left; }
+    .work-detail-return:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-3px; }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -585,6 +617,7 @@ export class MuxSDKChat extends LitElement {
     void fetchVoiceStatus().then(status => { this.voiceAvailable = status.enabled && !status.restartRequired; });
   }
   override disconnectedCallback() {
+    if (this.workDigestTimer) window.clearTimeout(this.workDigestTimer);
     window.removeEventListener('muxterm-goal-changed', this.onGoalChanged);
     window.removeEventListener('muxterm-goal-reconnected', this.onGoalReconnected);
     this.flushDraft();
@@ -681,6 +714,8 @@ export class MuxSDKChat extends LitElement {
     } catch { /* Chat remains usable if job metadata is unavailable. */ }
   }
   override updated(changed: Map<string, unknown>) {
+    const workDialog = this.renderRoot.querySelector<HTMLDialogElement>('.work-detail-dialog');
+    if (workDialog && !workDialog.open) workDialog.showModal();
     this.syncWorkTimer();
     this.observeScrollFade();
     const rows = new Set(this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]'));
@@ -768,7 +803,13 @@ export class MuxSDKChat extends LitElement {
     this.drawerOpen = true;
   }
   private setPaneMode(mode: 'chat' | 'split' | 'preview') {
-    if (mode === 'chat') { this.drawerOpen = false; this.previewFocused = false; return; }
+    if (mode === 'chat') {
+      this.drawerOpen = false; this.previewFocused = false; this.mobileWorkDetail = false;
+      const trigger = this.workReturnFocus;
+      this.workReturnFocus = undefined;
+      if (trigger) void this.updateComplete.then(() => { if (trigger.isConnected) trigger.focus(); });
+      return;
+    }
     if (!this.drawerOpen) this.openDrawer();
     this.previewFocused = mode === 'preview';
   }
@@ -1138,6 +1179,9 @@ export class MuxSDKChat extends LitElement {
     this.cacheTimer = window.setTimeout(() => { this.cacheTimer = undefined; this.persistTranscriptCache(); }, 150);
   }
   private resetTranscript() {
+    if (this.workDigestTimer) window.clearTimeout(this.workDigestTimer);
+    this.workDigestTimer = undefined;
+    this.workDigest = new Map();
     this.blocks = []; this.voiceEntries = []; this.trajectory = []; this.parsers.clear(); this.workExpanded.clear(); this.workCollapsedWhileWorking.clear(); this.laneReportsExpanded.clear(); this.stepExpanded.clear();
     this.turnStarted.clear(); this.turnFinished.clear(); this.currentTurn = 0;
     this.nextBlockKey = 0; this.turnStart = 0; this.completedInputAnchors.clear(); this.pendingInputs.clear(); this.rowsCache = undefined;
@@ -1248,6 +1292,35 @@ export class MuxSDKChat extends LitElement {
     for (const event of this.loadedEvents) this.onEvent(event);
     this.replaying = false;
     this.busy = busy;
+    this.queueWorkDigestRefresh();
+  }
+
+  private queueWorkDigestRefresh() {
+    if (this.workDigestTimer || !this.workDigest.size) return;
+    this.workDigestTimer = window.setTimeout(() => {
+      this.workDigestTimer = undefined;
+      void this.refreshWorkDigest();
+    }, 80);
+  }
+  private async refreshWorkDigest() {
+    const epoch = this.historyEpoch;
+    const host = this.chat?.remoteHost || '';
+    const ids = [...this.workDigest.keys()];
+    const results = await Promise.allSettled(ids.map(async id => {
+      const response = await fetch(apiPath(remoteChatPath(host, `/api/sdk-work/${encodeURIComponent(id)}`)), { cache:'no-store' });
+      if (!response.ok) throw new Error(`Work ${id} unavailable (${response.status})`);
+      return await response.json() as DigestWork;
+    }));
+    if (epoch !== this.historyEpoch) return;
+    const next = new Map(this.workDigest);
+    ids.forEach((id, index) => {
+      const entry = next.get(id);
+      if (!entry) return;
+      const result = results[index];
+      next.set(id, result.status === 'fulfilled' ? {...entry, work:result.value, error:false} : {...entry, error:true});
+    });
+    this.workDigest = next;
+    this.requestUpdate();
   }
   private async fillRecentHistory(epoch: number) {
     if (this.fillingRecent) return;
@@ -1624,7 +1697,14 @@ export class MuxSDKChat extends LitElement {
       if (!this.replaying) void sdkChats.refresh();
     }
     else if (event.type === 'work.attention') {
-      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:event.text || 'Work needs attention.', at:event.at });
+      if (event.workId) {
+        if (!blocks.some(block => block.kind === 'work-digest')) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'work-digest', text:'', at:event.at });
+        const next = new Map(this.workDigest);
+        const previous = next.get(event.workId);
+        next.set(event.workId, { workId:event.workId, text:event.text || 'Work needs attention.', at:event.at || '', count:(previous?.count || 0) + 1, work:previous?.work });
+        this.workDigest = next;
+        if (!this.replaying) this.queueWorkDigestRefresh();
+      } else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:event.text || 'Work needs attention.', at:event.at });
     }
     else if (event.type === 'work.goal.proposed' && event.workId) {
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:event.text || 'Work goal ready for review', workId:event.workId, at:event.at });
@@ -2100,7 +2180,7 @@ export class MuxSDKChat extends LitElement {
         else if (item.kind === 'delegate') steps.push(this.agentCard(item, agents));
         else if (item.kind === 'lane-report') steps.push(this.laneCard(item));
         else if (item.kind === 'chat-message') steps.push(this.chatMessageCard(item));
-        else if (item.kind === 'status' || item.kind === 'error') steps.push(html`<div class="${item.kind}">${item.text}${item.workId ? html` <mux-ui-button size="small" variant="quiet" @click=${() => this.openWorkItem(item.workId!)}>View work</mux-ui-button><mux-work-goal-review .workId=${item.workId} .remoteHost=${this.chat?.remoteHost || ''}></mux-work-goal-review>` : nothing}</div>`);
+        else if (item.kind === 'status' || item.kind === 'error') steps.push(html`<div class="${item.kind}">${item.text}${item.workId ? html` <mux-ui-button size="small" variant="quiet" @click=${(event:Event) => this.openWorkItem(item.workId!, event.currentTarget as HTMLElement, item.text.split(': ').slice(1).join(': '))}>View work</mux-ui-button><mux-work-goal-review .workId=${item.workId} .remoteHost=${this.chat?.remoteHost || ''}></mux-work-goal-review>` : nothing}</div>`);
         else if (item.kind === 'voice-input' || item.kind === 'voice-output') steps.push(html`<div class="voice-work"><span class="work-icon">${icon(Mic,{size:14})}</span><span><strong>${item.kind === 'voice-input' ? item.source === 'steer' ? 'Voice steer' : 'You said' : 'Voice replied'}</strong>${item.text ? html` · ${item.text}` : nothing}</span></div>`);
       }
     }
@@ -2146,6 +2226,7 @@ export class MuxSDKChat extends LitElement {
     for (const block of this.blocks) {
       if (!this.turnFinished.has(block.turn)) {
         if (block.kind === 'user') latestActiveUser.set(block.turn, block.key);
+        else if (block.kind === 'work-digest') continue;
         else {
           const items = work.get(block.turn) || [];
           items.push(block);
@@ -2166,6 +2247,7 @@ export class MuxSDKChat extends LitElement {
     for (const block of this.blocks) {
       if (!this.turnFinished.has(block.turn)) {
         if (block.kind === 'user') rows.push({ key:`block-${block.key}`, block });
+        else if (block.kind === 'work-digest') rows.push({ key:`block-${block.key}`, block });
         if (!shown.has(block.turn) && (block.key === latestActiveUser.get(block.turn) || latestActiveUser.get(block.turn) === undefined)) {
           const items = work.get(block.turn);
           if (items?.length) {
@@ -2388,6 +2470,36 @@ export class MuxSDKChat extends LitElement {
       if (this.activeSession === sessionId) { this.questionErrorId = block.id; this.questionError = String(error instanceof Error ? error.message : error); }
     } finally { this.answeringQuestion = ''; }
   }
+  private digestState(entry: DigestEntry): {tone:'attention'|'done'|'progress'; label:string; action:string; description:string; title:string} {
+    const work = entry.work;
+    const title = work?.title || entry.text.split(': ').slice(1).join(': ').replace(/\. Open the Work tab for details\.$/, '') || 'Work item';
+    const kickoff = work ? work.dispatch?.state === 'uncertain' || work.dispatch?.state === 'failed' : entry.text.startsWith('Work kickoff needs inspection:');
+    const stoppedWorker = work ? !!work.blockedReason?.startsWith('Worker chat stopped') : entry.text.startsWith('Work needs inspection:');
+    const clip = (value:string) => {
+      const plain = value.replace(/\s+/g, ' ').trim();
+      return plain.length > 165 ? `${plain.slice(0, 162).trimEnd()}…` : plain;
+    };
+    const detail = work?.blockedReason || work?.dispatch?.detail || work?.outcome || work?.progress || work?.nextAction || '';
+    if (work?.status === 'done') return {tone:'done',label:'Completed',action:'Review outcome',title,description:clip(work.outcome || work.progress || 'Work completed. Open the record for the outcome.')};
+    if (kickoff) return {tone:'attention',label:'Inspect kickoff',action:'Inspect kickoff',title,description:clip(detail || 'Chat acceptance was not confirmed. Inspect the worker chat before retrying.')};
+    if (stoppedWorker) return {tone:'attention',label:'Worker stopped',action:'Inspect worker',title,description:clip(detail || 'The worker chat stopped. Inspect its transcript before deciding what to do next.')};
+    if (work?.status === 'review') return {tone:'attention',label:'Ready for review',action:'Review work',title,description:clip(work.outcome || work.progress || work.nextAction || 'Review the reported work and evidence.')};
+    if (work?.status === 'blocked') return {tone:'attention',label:work.needsHuman ? 'Needs a decision' : 'Blocked',action:work.needsHuman ? 'Decide next step' : 'Inspect blocker',title,description:clip(detail || 'Open the Work record to inspect the blocker.')};
+    if (!work && entry.text.startsWith('Work completed:')) return {tone:'done',label:'Completed',action:'Review outcome',title,description:'Work completed. Open the record for the outcome.'};
+    if (work?.status === 'cancelled' || entry.text.startsWith('Work stopped:')) return {tone:'attention',label:'Stopped',action:'Review stopped work',title,description:clip(detail || 'Work stopped. Open the record for details.')};
+    const owner = work?.ownerSessionId || work?.dispatch?.sessionId;
+    const worker = owner ? sdkChats.chats.find(chat => chat.id === owner && (chat.remoteHost || '') === (this.chat?.remoteHost || ''))?.title || owner.slice(0, 8) : '';
+    return {tone:'progress',label:'In progress',action:'Open Work item',title,description:clip(`${worker ? `Worker: ${worker}${detail ? ' · ' : ''}` : ''}${detail || (entry.error ? 'Details unavailable; open the Work record.' : 'Work claimed.')}`)};
+  }
+  private workDigestView() {
+    const entries = [...this.workDigest.values()].map(entry => ({entry,state:this.digestState(entry)}));
+    entries.sort((a,b) => (a.state.tone === 'attention' ? 0 : a.state.tone === 'done' ? 1 : 2) - (b.state.tone === 'attention' ? 0 : b.state.tone === 'done' ? 1 : 2) || Date.parse(b.entry.at) - Date.parse(a.entry.at));
+    const attention = entries.filter(row => row.state.tone === 'attention').length;
+    const updates = entries.reduce((total,row) => total + row.entry.count, 0);
+    return html`<section class="work-digest" aria-label="Work from this chat"><header class="work-digest-head"><div><h2>Work from this chat</h2><p>${updates} update${updates === 1 ? '' : 's'} across ${entries.length} item${entries.length === 1 ? '' : 's'}</p></div>${attention ? html`<span class="work-digest-count">${attention} need${attention === 1 ? 's' : ''} attention</span>` : nothing}</header>
+      ${entries.map(({entry,state}) => html`<article class="work-digest-row" data-tone=${state.tone} data-work-id=${entry.workId}><span class="work-digest-symbol" aria-hidden="true">${state.tone === 'attention' ? '!' : state.tone === 'done' ? '✓' : '•'}</span><div class="work-digest-copy"><h3>${state.label} · ${state.title}</h3><p>${state.description}</p>${entry.at ? html`<time datetime=${entry.at}>${new Date(entry.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</time>` : nothing}</div><button class="work-digest-action" type="button" aria-label=${`${state.action}: ${state.title}`} @click=${(event:Event) => this.openWorkItem(entry.workId, event.currentTarget as HTMLElement)}>${state.action}</button></article>`)}
+    </section>`;
+  }
   private transcript(agents: AgentView[]) {
     const rows = this.transcriptRows();
     const start = rows.length <= 80 ? 0 : Math.min(this.visibleStart, rows.length);
@@ -2403,7 +2515,7 @@ export class MuxSDKChat extends LitElement {
         const timeline = open ? this.workTimeline(block.turn, row.work, agents) : nothing;
         return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${timeline === nothing ? nothing : html`<div class="work-items">${timeline}</div>`}</details></div>`;
       }
-      return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : block.kind === 'status' && block.workId ? html`<div class="status">${block.text} <mux-ui-button size="small" variant="quiet" @click=${() => this.openWorkItem(block.workId!)}>View work</mux-ui-button></div><mux-work-goal-review .workId=${block.workId} .remoteHost=${this.chat?.remoteHost || ''}></mux-work-goal-review>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
+      return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'work-digest' ? this.workDigestView() : block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : block.kind === 'status' && block.workId ? html`<div class="status">${block.text} <mux-ui-button size="small" variant="quiet" @click=${(event:Event) => this.openWorkItem(block.workId!, event.currentTarget as HTMLElement, block.text.split(': ').slice(1).join(': '))}>View work</mux-ui-button></div><mux-work-goal-review .workId=${block.workId} .remoteHost=${this.chat?.remoteHost || ''}></mux-work-goal-review>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
   private toggleWorkDisclosure(turn: number, event: MouseEvent) {
@@ -2749,9 +2861,15 @@ export class MuxSDKChat extends LitElement {
     this.setPaneMode('split');
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('goal'));
   }
-  private openWorkItem(id: string) {
+  private openWorkItem(id: string, trigger?: HTMLElement, title?: string) {
+    this.workReturnFocus = this.compact ? trigger : undefined;
+    this.mobileWorkDetail = this.compact;
+    this.openWorkTitle = this.workDigest.get(id)?.work?.title || title || 'Work item';
     this.setPaneMode('split');
-    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id));
+    void this.updateComplete.then(async () => {
+      await this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id);
+      if (this.mobileWorkDetail) this.shadowRoot?.querySelector<HTMLElement>('.work-detail-return')?.focus();
+    });
   }
   private laneCard(block: Block) {
     const name = sdkChats.chats.find(chat => chat.id === block.id)?.title || block.name || 'Linked lane';
@@ -2795,6 +2913,9 @@ export class MuxSDKChat extends LitElement {
       </mux-ui-button><div class="lane-report-preview" title=${preview}>${preview}</div><div class="lane-report-open-cell">${block.id ? html`<mux-ui-button class="lane-report-open" variant="quiet" size="small" icon-only accessible-label=${`Open source chat: ${name}`} tooltip="Open source chat" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:block.id},bubbles:true,composed:true}))}>${sourceIcon}</mux-ui-button>` : nothing}</div></div>
       ${expanded ? html`<div class="lane-report-detail input-message-detail" id=${detailId}>${this.markdown(block, block.key, true)}</div>` : nothing}</article>`;
   }
+  private utilityContent() {
+    return html`<mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.settingsPending && !this.dictationActive && !this.chat?.branchPending} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility>`;
+  }
   override render() {
     const agents = this.agents();
     const slashSuggestions = this.selectedAgent ? [] : this.slashSuggestions();
@@ -2832,7 +2953,9 @@ export class MuxSDKChat extends LitElement {
       <div class="composer-controls">${sideStart ? nothing : this.attachmentPicker()}${sideStart ? nothing : html`<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>`}${this.dictationButton()}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
-      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><mux-ui-pane-divider class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></mux-ui-pane-divider><mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.settingsPending && !this.dictationActive && !this.chat?.branchPending} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility></aside>`) : nothing}
+      ${this.drawerOpen ? keyed(this.sessionId, this.mobileWorkDetail
+        ? html`<dialog class="drawer work-detail-dialog" aria-label=${`Work detail: ${this.openWorkTitle}`} aria-modal="true" @cancel=${(event:Event) => { event.preventDefault(); this.setPaneMode('chat'); }}><button class="work-detail-return" type="button" @click=${() => this.setPaneMode('chat')}>← Back to chat</button>${this.utilityContent()}</dialog>`
+        : html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><mux-ui-pane-divider class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></mux-ui-pane-divider>${this.utilityContent()}</aside>`) : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`;
   }
 }
