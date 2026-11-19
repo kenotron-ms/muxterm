@@ -40,11 +40,14 @@ goal draft and approval before the scheduler can send them to a worker.
 
 ## What happens when Work is Ready
 
-Muxterm's coded scheduler chooses a goal-free, ready chat in the same project
-that owns no other unfinished Work, or creates a new one. It never uses the
-creating chat as the worker. It reserves a dispatch on the Work item, creates
-a new chat without an opening turn if needed, and installs the approved
-condition as that chat's native goal. Only after native acknowledgement and
+Muxterm's scheduler creates a new worker chat by default. It reuses a chat only
+when that chat completed a direct prerequisite Work item, is ready and goal-free
+in the same project, owns no unfinished Work, and its configuration remains
+available. A recent chat, similar title, or participant link alone does not
+establish useful context. Archived and human-paused chats are excluded. The
+scheduler never uses the creating chat as the worker. It reserves a dispatch on
+the Work item and creates a new chat without an opening turn if needed. It then
+installs the approved condition as that chat's native goal. Only after native acknowledgement and
 observation of the exact applied revision does it send the Work ID and
 execution instructions. The worker reads the record,
 claims it with `update_work_item`, pursues the native goal, and records
@@ -53,10 +56,18 @@ same approved condition, its human Work approval provenance, native receipt,
 and goal progress.
 
 The supported native goal harnesses are Codex, Claude, Copilot, and Amplifier.
-If the creating chat uses another harness and no suitable existing chat is
-available, the scheduler creates a Codex worker. A reused chat with an
-existing goal or human pause is ineligible. Work approval authorizes this one
-exact condition; it does not let the scheduler overwrite another goal or
+For a new worker, the scheduler checks the configured default harness and the
+runtime's available options. If that harness cannot run a native goal or its
+model catalog is unavailable, it tries Codex, Claude, Copilot, then Amplifier
+in that order. The catalog supplies the default bundle, provider, model, and
+supported reasoning effort; Codex uses medium effort when the model has no
+catalog default and offers medium, and Claude uses its high-effort runtime
+default. A related worker's existing harness and settings are checked against
+the current catalog and activated before reuse. If no compatible combination exists, dispatch returns
+a clear error without reserving the item. The Work dispatch and activity
+timeline state whether the worker was created or reused, the prerequisite
+that justified reuse, the effective settings, and any fallback reason. Work
+approval authorizes this one exact condition; it does not let the scheduler overwrite another goal or
 release a pause. The native goal ledger's `controlVersion` is fenced when
 installing the condition.
 
