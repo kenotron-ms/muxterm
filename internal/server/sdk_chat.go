@@ -913,7 +913,8 @@ func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
 		approvedGoal = document.Revisions[len(document.Revisions)-1].Condition
 	}
 	needsReconciliation := ctx.Value(goalControlContextKey{}) != true &&
-		((document.RequestedRevision > 0 && document.State == "uncertain") || (c.Goal != "" && c.Goal != approvedGoal))
+		((document.RequestedRevision > 0 && document.State == "uncertain") ||
+			(c.Goal != "" && (document.RequestedRevision == 0 || (c.Harness == "codex" && c.Goal != approvedGoal))))
 	if needsReconciliation && c.Harness != "codex" {
 		return errors.New("native goal requires reconciliation; use the human goal editor or an explicit scoped goal control before loading this session")
 	}
