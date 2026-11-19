@@ -95,12 +95,24 @@ type sdkWorkUpdate struct {
 }
 
 type sdkWorkDispatch struct {
-	ClientRef string    `json:"clientRef"`
-	SessionID string    `json:"sessionId"`
-	State     string    `json:"state"`
-	Detail    string    `json:"detail,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ClientRef       string                `json:"clientRef"`
+	SessionID       string                `json:"sessionId"`
+	State           string                `json:"state"`
+	Detail          string                `json:"detail,omitempty"`
+	SelectionReason string                `json:"selectionReason,omitempty"`
+	ContextWorkID   string                `json:"contextWorkId,omitempty"`
+	Configuration   *sdkWorkConfiguration `json:"configuration,omitempty"`
+	Fallback        string                `json:"fallback,omitempty"`
+	CreatedAt       time.Time             `json:"createdAt"`
+	UpdatedAt       time.Time             `json:"updatedAt"`
+}
+
+type sdkWorkConfiguration struct {
+	Harness  string `json:"harness"`
+	Provider string `json:"provider"`
+	Bundle   string `json:"bundle"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort"`
 }
 
 // CreatedBy is immutable provenance. The owner is a separate, assignable chat.

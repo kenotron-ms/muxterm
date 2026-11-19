@@ -42,32 +42,6 @@ func (h *sdkChatHost) eligibleWorkChatLocked(chat *sdkChat, item *sdkWorkItem, p
 	return true
 }
 
-func (h *sdkChatHost) chooseWorkChatLocked(item *sdkWorkItem, projects []string, goalReady map[string]bool) (string, bool) {
-	if item.OwnerSessionID != "" {
-		owner := h.chats[item.OwnerSessionID]
-		if goalReady[item.OwnerSessionID] && h.eligibleWorkChatLocked(owner, item, projects) {
-			return owner.ID, true
-		}
-		return "", false
-	}
-	choices := make([]*sdkChat, 0)
-	for _, chat := range h.chats {
-		if goalReady[chat.ID] && h.eligibleWorkChatLocked(chat, item, projects) {
-			choices = append(choices, chat)
-		}
-	}
-	sort.Slice(choices, func(i, j int) bool {
-		if choices[i].UpdatedAt.Equal(choices[j].UpdatedAt) {
-			return choices[i].ID < choices[j].ID
-		}
-		return choices[i].UpdatedAt.After(choices[j].UpdatedAt)
-	})
-	if len(choices) > 0 {
-		return choices[0].ID, true
-	}
-	return sdkID(), false
-}
-
 func (s *Server) finishWorkDispatch(id, ref, state, detail string) (sdkWorkItem, error) {
 	h := s.sdkChats
 	h.mu.Lock()
@@ -131,6 +105,8 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projects := slices.Clone(h.workProjectIDsLocked(item))
+	projectPath := h.projects[projects[0]].Path
+	related := h.workContextCandidatesLocked(item)
 	candidates := make([]sdkChat, 0)
 	for _, chat := range h.chats {
 		if h.eligibleWorkChatLocked(chat, item, projects) {
@@ -138,10 +114,22 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.mu.Unlock()
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := related[candidates[i].ID], related[candidates[j].ID]
+		if left != right {
+			return left < right
+		}
+		return candidates[i].ID < candidates[j].ID
+	})
 	goalReady := make(map[string]bool, len(candidates))
 	for _, chat := range candidates {
 		goal, err := h.goals.update(chat, nil)
 		goalReady[chat.ID] = err == nil && !goal.HumanPaused && goal.RequestedRevision == 0 && supportsNativeGoalControl(chat.Harness)
+	}
+	config, relatedChatID, contextWorkID, fallback, err := s.selectWorkConfiguration(r.Context(), candidates, related, goalReady, projectPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
 	}
 	h.mu.Lock()
 	item = h.workItems[id]
@@ -170,28 +158,44 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projects = slices.Clone(h.workProjectIDsLocked(item))
-	workerID, existing := h.chooseWorkChatLocked(item, projects, goalReady)
-	if workerID == "" {
-		h.mu.Unlock()
-		http.Error(w, "assigned chat is not ready", 409)
-		return
+	workerID, existing := sdkID(), false
+	if relatedChatID != "" {
+		if h.workContextCandidatesLocked(item)[relatedChatID] != contextWorkID {
+			h.mu.Unlock()
+			http.Error(w, "related worker changed before dispatch; retry selection", 409)
+			return
+		}
+		if !h.eligibleWorkChatLocked(h.chats[relatedChatID], item, projects) || !goalReady[relatedChatID] {
+			h.mu.Unlock()
+			http.Error(w, "related worker is no longer ready; retry selection", 409)
+			return
+		}
+		workerID, existing = relatedChatID, true
 	}
 	actor := h.requestWorkActorLocked(r)
-	harness := "codex"
-	if creator := h.chats[h.workCreatorLocked(item).SessionID]; creator != nil && creator.Harness != "" {
-		harness = creator.Harness
-	}
-	if !supportsNativeGoalControl(harness) {
-		harness = "codex"
-	}
 	projectID := ""
 	if len(projects) > 0 {
 		projectID = projects[0]
 	}
 	now := time.Now().UTC()
 	copy := *item
-	copy.Dispatch = &sdkWorkDispatch{ClientRef: req.ClientRef, SessionID: workerID, State: "preparing", CreatedAt: now, UpdatedAt: now}
-	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "dispatch:" + req.ClientRef, At: now, Actor: actor, Text: "Selected chat for work kickoff", LinkedSessionID: workerID})
+	reason := "Created a fresh worker; no eligible completed prerequisite worker has compatible, goal-free task context."
+	if existing {
+		reason = "Reused this chat because it completed direct prerequisite Work " + contextWorkID + " and its configuration is compatible."
+	}
+	configuration := config
+	copy.Dispatch = &sdkWorkDispatch{ClientRef: req.ClientRef, SessionID: workerID, State: "preparing", SelectionReason: reason, ContextWorkID: contextWorkID, Configuration: &configuration, Fallback: fallback, CreatedAt: now, UpdatedAt: now}
+	setting := func(value string) string {
+		if value == "" {
+			return "none"
+		}
+		return value
+	}
+	selectionText := reason + " Effective worker: " + config.Harness + "/" + config.Provider + ", bundle=" + setting(config.Bundle) + ", model=" + setting(config.Model) + ", effort=" + setting(config.Effort) + "."
+	if fallback != "" {
+		selectionText += " Fallback: " + fallback + "."
+	}
+	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "dispatch:" + req.ClientRef, At: now, Actor: actor, Summary: "Worker selected", Text: selectionText, LinkedSessionID: workerID})
 	copy.Revision++
 	copy.UpdatedAt = now
 	if err := h.saveWorkLocked(&copy); err != nil {
@@ -202,8 +206,12 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The human-approved Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your native goal."
 	state, detail := "sent", ""
-	if !existing {
-		payload, _ := json.Marshal(map[string]any{"WorkspaceID": projectID, "Harness": harness, "Prompt": "Work: " + copy.Title, "WorkMode": "local"})
+	if existing {
+		if err := s.applyReusedWorkConfiguration(r.Context(), workerID, config); err != nil {
+			state, detail = "uncertain", err.Error()
+		}
+	} else {
+		payload, _ := json.Marshal(map[string]any{"WorkspaceID": projectID, "Harness": config.Harness, "Provider": config.Provider, "Bundle": config.Bundle, "Model": config.Model, "Effort": config.Effort, "Prompt": "Work: " + copy.Title, "WorkMode": "local"})
 		ctx := context.WithValue(r.Context(), workStartChatIDKey{}, workerID)
 		ctx = context.WithValue(ctx, workStartIdleChatKey{}, true)
 		request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/sdk-chats", bytes.NewReader(payload))
