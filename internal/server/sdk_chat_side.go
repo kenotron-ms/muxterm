@@ -45,7 +45,15 @@ func (h *sdkChatHost) completedChatTurns(parentID string) ([]string, bool, error
 				turn = append(turn, "User: "+event.Text)
 			}
 		case "assistant.delta":
-			assistant += event.Text
+			const maxAssistantBytes = 128 << 10
+			if len(assistant) < maxAssistantBytes {
+				remaining := maxAssistantBytes - len(assistant)
+				if len(event.Text) > remaining {
+					assistant += strings.ToValidUTF8(event.Text[:remaining], "")
+				} else {
+					assistant += event.Text
+				}
+			}
 		case "turn.completed":
 			if assistant != "" {
 				turn = append(turn, "Assistant: "+assistant)

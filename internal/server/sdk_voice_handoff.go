@@ -88,7 +88,10 @@ func (h *sdkVoiceHost) interpretDelegation(ctx context.Context, main sdkChat, ne
 		select {
 		case <-ctx.Done():
 			return sdkVoiceHandoff{}, ctx.Err()
-		case event := <-events:
+		case event, ok := <-events:
+			if !ok {
+				return sdkVoiceHandoff{}, errors.New("voice handoff event stream closed")
+			}
 			switch event.Type {
 			case "assistant.delta":
 				if output.Len()+len(event.Text) > 12000 {

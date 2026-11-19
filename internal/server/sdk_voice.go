@@ -322,9 +322,20 @@ func (h *sdkVoiceHost) connect(ctx context.Context, chatID, offer string) (strin
 	callCtx, cancel := context.WithCancel(context.Background())
 	call := &sdkVoiceCall{host: h, chatID: chatID, providerID: callID, conn: conn, ctx: callCtx, cancel: cancel, seen: map[string]bool{}}
 	h.mu.Lock()
-	previous := h.calls[chatID]
-	h.calls[chatID] = call
+	_, chatExists := h.chat(chatID)
+	var previous *sdkVoiceCall
+	if chatExists {
+		previous = h.calls[chatID]
+		h.calls[chatID] = call
+	}
 	h.mu.Unlock()
+	if !chatExists {
+		call.close()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = h.hangupCall(cleanupCtx, callID, token)
+		cleanupCancel()
+		return "", "", errors.New("chat no longer available")
+	}
 	if previous != nil {
 		previous.close()
 	}
