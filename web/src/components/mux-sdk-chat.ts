@@ -908,6 +908,8 @@ export class MuxSDKChat extends LitElement {
     this.voice = this.sideMode ? undefined : new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; if (state === 'connecting') this.voiceStartedAt = Date.now(); else if (state === 'idle') this.voiceStartedAt = 0; }, levels => this.updateVoiceLevels(levels));
     this.voiceError = '';
     this.activeSession = this.sessionId;
+    if (this.mobileWorkDetail) { this.drawerOpen = false; this.previewFocused = false; }
+    this.mobileWorkDetail = false; this.workReturnFocus = undefined; this.openWorkTitle = '';
     this.goalDocument = undefined; this.goalNotice = ''; this.goalifyPending = false; this.goalifyError = ''; this.dismissedGoalifyKeys.clear();
     this.commandGeneration++; this.commandNotice = ''; this.commandFailed = false; this.commandPending = false; this.slashDismissedFor = ''; this.slashSelection = 0;
     void this.refreshGoal();
