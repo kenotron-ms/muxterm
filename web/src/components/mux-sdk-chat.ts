@@ -341,10 +341,9 @@ export class MuxSDKChat extends LitElement {
     .work-digest-copy h3 { margin:0; font-size:var(--ui-text-md); font-weight:700; line-height:1.4; overflow-wrap:anywhere; }
     .work-digest-copy p { margin:var(--ui-space-1) 0 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.45; overflow-wrap:anywhere; }
     .work-digest-copy time { display:block; margin-top:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    .work-digest-action { min-height:44px; padding:var(--ui-space-2) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; white-space:nowrap; }
-    .work-digest-action:hover { background:var(--ui-surface-hover); }
-    .work-digest-action:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
-    .work-digest-row[data-tone='attention'] .work-digest-action { border-color:var(--ui-warning); }
+    .work-digest-action::part(button) { min-height:var(--ui-control-lg); padding:var(--ui-space-2) var(--ui-space-4); border-color:var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
+    .work-digest-action::part(button):hover { background:var(--ui-surface-hover); }
+    .work-digest-row[data-tone='attention'] .work-digest-action::part(button) { border-color:var(--ui-warning); }
     @media(max-width:560px) { .work-digest-head { align-items:flex-start; flex-wrap:wrap; } .work-digest-row { grid-template-columns:var(--ui-space-7) minmax(0,1fr); align-items:start; } .work-digest-action { grid-column:2; width:max-content; max-width:100%; } }
     @media(max-width:360px) { .work-digest-head,.work-digest-row { padding-inline:var(--ui-space-4); } .work-digest-count { padding-inline:var(--ui-space-3); } }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
@@ -568,8 +567,8 @@ export class MuxSDKChat extends LitElement {
     @media(max-width:767.98px) { .body { padding:var(--ui-space-8) var(--ui-space-6) var(--ui-space-9); } .composer-wrap { padding:0 var(--ui-space-5) var(--ui-space-5); } .drawer,.layout.preview-focused .drawer { box-sizing:border-box; display:flex; flex-direction:column; position:fixed; inset:0; z-index:var(--ui-z-sheet); width:100vw; height:100dvh; margin:0; border:0; box-shadow:var(--ui-shadow-side-strong); padding-top:env(safe-area-inset-top, 0px); } .drawer mux-sdk-utility { flex:1; min-height:0; height:auto; } .drawer-resizer { display:none; } .topbar-actions { gap:var(--ui-space-1); } .chat-screen-header .mobile-nav, .chat-screen-header .chat-menu-trigger, .chat-screen-header .pane-controls mux-ui-button { width:var(--ui-control-lg); height:var(--ui-control-lg); } }
     dialog.work-detail-dialog { max-width:none; max-height:none; padding-inline:0; background:var(--ui-surface-base); color:var(--ui-text); animation:none; }
     dialog.work-detail-dialog::backdrop { background:var(--ui-backdrop); }
-    .work-detail-return { flex:none; min-height:44px; padding:var(--ui-space-2) var(--ui-space-6); border:0; border-bottom:1px solid var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); font-weight:650; text-align:left; }
-    .work-detail-return:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-3px; }
+    .work-detail-return { flex:none; }
+    .work-detail-return::part(button) { min-height:var(--ui-control-lg); padding:var(--ui-space-2) var(--ui-space-6); border:0; border-bottom:1px solid var(--ui-border); border-radius:0; background:var(--ui-surface-base); color:var(--ui-text); font-weight:650; }
   `;
   override connectedCallback() {
     super.connectedCallback();
@@ -2497,7 +2496,7 @@ export class MuxSDKChat extends LitElement {
     const attention = entries.filter(row => row.state.tone === 'attention').length;
     const updates = entries.reduce((total,row) => total + row.entry.count, 0);
     return html`<section class="work-digest" aria-label="Work from this chat"><header class="work-digest-head"><div><h2>Work from this chat</h2><p>${updates} update${updates === 1 ? '' : 's'} across ${entries.length} item${entries.length === 1 ? '' : 's'}</p></div>${attention ? html`<span class="work-digest-count">${attention} need${attention === 1 ? 's' : ''} attention</span>` : nothing}</header>
-      ${entries.map(({entry,state}) => html`<article class="work-digest-row" data-tone=${state.tone} data-work-id=${entry.workId}><span class="work-digest-symbol" aria-hidden="true">${state.tone === 'attention' ? '!' : state.tone === 'done' ? '✓' : '•'}</span><div class="work-digest-copy"><h3>${state.label} · ${state.title}</h3><p>${state.description}</p>${entry.at ? html`<time datetime=${entry.at}>${new Date(entry.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</time>` : nothing}</div><button class="work-digest-action" type="button" aria-label=${`${state.action}: ${state.title}`} @click=${(event:Event) => this.openWorkItem(entry.workId, event.currentTarget as HTMLElement)}>${state.action}</button></article>`)}
+      ${entries.map(({entry,state}) => html`<article class="work-digest-row" data-tone=${state.tone} data-work-id=${entry.workId}><span class="work-digest-symbol" aria-hidden="true">${state.tone === 'attention' ? '!' : state.tone === 'done' ? '✓' : '•'}</span><div class="work-digest-copy"><h3>${state.label} · ${state.title}</h3><p>${state.description}</p>${entry.at ? html`<time datetime=${entry.at}>${new Date(entry.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</time>` : nothing}</div><mux-ui-button class="work-digest-action" size="large" accessible-label=${`${state.action}: ${state.title}`} @click=${(event:Event) => this.openWorkItem(entry.workId, event.currentTarget as HTMLElement)}>${state.action}</mux-ui-button></article>`)}
     </section>`;
   }
   private transcript(agents: AgentView[]) {
@@ -2954,7 +2953,7 @@ export class MuxSDKChat extends LitElement {
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, this.mobileWorkDetail
-        ? html`<dialog class="drawer work-detail-dialog" aria-label=${`Work detail: ${this.openWorkTitle}`} aria-modal="true" @cancel=${(event:Event) => { event.preventDefault(); this.setPaneMode('chat'); }}><button class="work-detail-return" type="button" @click=${() => this.setPaneMode('chat')}>← Back to chat</button>${this.utilityContent()}</dialog>`
+        ? html`<dialog class="drawer work-detail-dialog" aria-label=${`Work detail: ${this.openWorkTitle}`} aria-modal="true" @cancel=${(event:Event) => { event.preventDefault(); this.setPaneMode('chat'); }}><mux-ui-button class="work-detail-return" variant="quiet" size="large" align="start" full-width @click=${() => this.setPaneMode('chat')}>← Back to chat</mux-ui-button>${this.utilityContent()}</dialog>`
         : html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><mux-ui-pane-divider class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></mux-ui-pane-divider>${this.utilityContent()}</aside>`) : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`;
   }
