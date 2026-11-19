@@ -329,7 +329,7 @@ func (c *Companion) OpenBrowserTab(token, rawURL string) (string, error) {
 		ID  string `json:"id"`
 		URL string `json:"url"`
 	}{id, rawURL})
-	c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-browser-open', {detail:" + string(payload) + "}))")
+	c.evalMuxtermJS("(() => { const detail = " + string(payload) + "; if (window.__muxtermDesktopOpen) window.__muxtermDesktopOpen(detail); else (window.__muxtermPendingBrowserOpens ||= []).push(detail); })()")
 	return id, nil
 }
 

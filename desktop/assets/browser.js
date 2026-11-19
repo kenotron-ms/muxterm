@@ -9,6 +9,13 @@
   window.__muxtermDesktopReceive = (state) => {
     window.dispatchEvent(new CustomEvent('muxterm-browser-state', { detail: state }));
   };
+  // The native socket can open a tab while the utility view is still mounting.
+  // Keep the request until its listener attaches, then hand it to that view.
+  window.__muxtermPendingBrowserOpens ||= [];
+  window.__muxtermDesktopOpen = (detail) => {
+    window.__muxtermPendingBrowserOpens.push(detail);
+    window.dispatchEvent(new CustomEvent('muxterm-browser-open', { detail }));
+  };
   const externalURL = (raw) => {
     if ((typeof raw !== 'string' && !(raw instanceof URL)) || !String(raw).trim()) return null;
     try {

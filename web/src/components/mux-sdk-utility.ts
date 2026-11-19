@@ -79,7 +79,7 @@ type UtilityTabId = 'new' | 'side' | 'voice' | 'files' | 'coordination' | 'chang
 type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string; url?: string; title?: string; sideChatId?: string; draft?: string };
 type BrowserState = { tabs?: { id:string; url:string; title:string; canGoBack:boolean; canGoForward:boolean }[]; error?:string };
 type BrowserBridge = { send: (message: Record<string, unknown>) => void };
-declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge } }
+declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge; __muxtermPendingBrowserOpens?: {id:string;url:string}[] } }
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
 const BROWSER_RECENT_KEY = 'muxterm.desktop.browser.recent';
 const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, side:MessageCircleQuestionMark, voice:AudioLines, changes:GitCompare, files:Folder, coordination:CircleDot, pages:NotebookPen, meetings:AudioLines, browser:Globe2, goal:Target };
@@ -504,6 +504,7 @@ export class MuxSDKUtility extends LitElement {
     try { this.browserRecent = JSON.parse(localStorage.getItem(BROWSER_RECENT_KEY) || '[]').filter((entry: {url?:string;title?:string}) => typeof entry.url === 'string' && typeof entry.title === 'string').slice(0, 8); } catch { /* storage unavailable */ }
     window.addEventListener('muxterm-browser-state', this.receiveBrowserState);
     window.addEventListener('muxterm-browser-open', this.receiveBrowserOpen as EventListener);
+    for (const detail of window.__muxtermPendingBrowserOpens?.splice(0) || []) this.receiveBrowserOpen(new CustomEvent('muxterm-browser-open', {detail}));
     this.browserPollTimer = window.setInterval(() => { if (this.activeTab === 'browser') this.layoutBrowser(); }, 800);
     if (this.activeTab === 'browser') this.activateBrowser(this.currentTab);
     this.paintAll();
@@ -542,6 +543,8 @@ export class MuxSDKUtility extends LitElement {
     if (changed) { this.saveTabs(); this.paintAll(); }
   };
   private receiveBrowserOpen = (event: CustomEvent<{id:string;url:string}>) => {
+    window.__muxtermPendingBrowserOpens = window.__muxtermPendingBrowserOpens?.filter(item => item.id !== event.detail.id);
+    if (this.tabs.some(tab => tab.id === event.detail.id)) return;
     if (this.activeTab === 'browser') this.hideBrowser();
     const tab: UtilityTab = {id:event.detail.id, kind:'browser', url:event.detail.url};
     this.tabs = [...this.tabs, tab]; this.activeTabId = tab.id;

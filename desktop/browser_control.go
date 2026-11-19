@@ -114,9 +114,16 @@ func browserControlJSON(writer http.ResponseWriter, value any) {
 func (c *Companion) handleBrowserControlTabs(writer http.ResponseWriter, _ *http.Request) {
 	c.bridgeMu.Lock()
 	active, tabs := c.browserState()
+	visible := c.browserViewVisible(active)
 	c.bridgeMu.Unlock()
 	sort.Slice(tabs, func(i, j int) bool { return tabs[i].ID < tabs[j].ID })
-	browserControlJSON(writer, map[string]any{"active": active, "tabs": tabs})
+	browserControlJSON(writer, map[string]any{"active": active, "visible": visible, "tabs": tabs})
+}
+
+func (c *Companion) browserViewVisible(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return id != "" && c.activeBrowser == id && c.browserVisible && c.browserRect.Width > 0 && c.browserRect.Height > 0
 }
 
 func (c *Companion) handleBrowserControlAction(writer http.ResponseWriter, request *http.Request) {
@@ -164,7 +171,7 @@ func (c *Companion) handleBrowserControlAction(writer http.ResponseWriter, reque
 func (c *Companion) runBrowserControl(command browserControlCommand) (any, error) {
 	active, tabs := c.browserState()
 	if command.Action == "tabs" {
-		return map[string]any{"active": active, "tabs": tabs}, nil
+		return map[string]any{"active": active, "visible": c.browserViewVisible(active), "tabs": tabs}, nil
 	}
 	id := command.ID
 	if id == "" {
@@ -210,6 +217,9 @@ func (c *Companion) runBrowserControl(command browserControlCommand) (any, error
 	case "back", "forward", "reload":
 		return map[string]string{"action": command.Action}, c.browserAction(id, command.Action, "")
 	case "screenshot":
+		if !c.browserViewVisible(id) {
+			return nil, errors.New("show this browser tab in the Mac app before taking a screenshot")
+		}
 		data, err := c.browserScreenshot(id)
 		if err != nil {
 			return nil, err

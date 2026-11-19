@@ -115,13 +115,27 @@ try:
     if "native-ok" not in action(str(socket_path), {"action": "inspect", "id": tab_id})["text"]:
         raise AssertionError("Native type and click did not update the page")
 
+    try:
+        wait_for("visible native browser view", lambda: action(str(socket_path), {"action": "tabs"}).get("visible"))
+    except AssertionError:
+        print("Native tab state:", action(str(socket_path), {"action": "tabs"}))
+        raise
+
+    screenshot_error = []
+
     def screenshot_ready():
         try:
             return action(str(socket_path), {"action": "screenshot", "id": tab_id})
-        except (AssertionError, OSError):
+        except (AssertionError, OSError) as error:
+            if not screenshot_error:
+                screenshot_error.append(str(error))
             return None
 
-    screenshot = wait_for("native screenshot", screenshot_ready)
+    try:
+        screenshot = wait_for("native screenshot", screenshot_ready)
+    except AssertionError:
+        print("First screenshot error:", screenshot_error[0] if screenshot_error else "none")
+        raise
     if screenshot["mimeType"] != "image/jpeg" or not base64.b64decode(screenshot["data"]).startswith(b"\xff\xd8"):
         raise AssertionError("Native screenshot is not JPEG")
     action(str(socket_path), {"action": "navigate", "id": tab_id, "url": url + "?next=1"})
