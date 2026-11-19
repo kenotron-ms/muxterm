@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Work updates in chat — design concepts</title>
+  <style>
+    :root { color-scheme:dark; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#111419; color:#e8edf4; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; }
+    button { font:inherit; cursor:pointer; }
+    button:focus-visible { outline:3px solid #9ec7ff; outline-offset:3px; }
+    .app { display:grid; grid-template-columns:66px minmax(0,1fr); min-height:100vh; }
+    .rail { background:#15191f; border-right:1px solid #333b46; padding:18px 10px; display:flex; flex-direction:column; align-items:center; gap:18px; }
+    .rail button { width:44px; height:44px; border:0; border-radius:12px; background:transparent; color:#9caabd; font-size:19px; }
+    .rail .selected { background:#313c4e; color:#e3efff; }
+    .main { min-width:0; display:flex; flex-direction:column; }
+    .top { display:flex; align-items:center; justify-content:space-between; height:56px; padding:0 25px; border-bottom:1px solid #303842; background:#1b2027; }
+    .top strong { font-size:14px; font-weight:640; }
+    .top small { color:#9caabd; font-size:12px; }
+    .tabs { display:flex; gap:8px; align-items:center; }
+    .tabs button { border:1px solid #3e4a59; border-radius:8px; padding:6px 11px; background:#242b35; color:#bac6d5; font-size:12px; min-height:32px; }
+    .tabs button[aria-current="page"] { background:#36516f; color:#fff; border-color:#56789e; }
+    .body { width:min(100%,900px); margin:0 auto; padding:26px 36px 24px; flex:1; }
+    .context { font-size:12px; color:#a7b1c0; margin:0 0 22px; }
+    .context strong { color:#dfe6ee; font-weight:600; }
+    .user { margin:0 0 22px auto; max-width:600px; width:max-content; padding:12px 17px; border-radius:16px 16px 4px 16px; background:#2b3748; line-height:1.5; font-size:14px; }
+    .assistant { margin:0 0 22px; max-width:650px; line-height:1.55; font-size:14px; }
+    .assistant p { margin:0 0 8px; }
+    .assistant .who { display:block; color:#97a7ba; font-size:12px; margin-bottom:6px; }
+    .worked { color:#96a7b9; font-size:12px; margin:0 0 20px; }
+    .worked::before { content:"⌄"; margin-right:9px; }
+    .time { color:#8291a4; font-size:11px; white-space:nowrap; }
+    .action { display:inline-flex; align-items:center; justify-content:center; border-radius:8px; border:1px solid #587697; background:#2d4664; color:#f5f9ff; padding:0 14px; min-height:44px; font-weight:600; font-size:13px; text-align:center; }
+    .action:hover { background:#3c5a7d; }
+    .action.quiet { background:transparent; color:#c6d9ef; border-color:#536579; }
+    .action.quiet:hover { background:#293a4e; }
+    .tag { display:inline-flex; align-items:center; gap:7px; font-size:12px; font-weight:650; }
+    .tag .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:currentColor; }
+    .tag.progress { color:#aacdff; }
+    .tag.done { color:#a5d9ba; }
+    .tag.attention { color:#ffc990; }
+    .intro { margin:0 0 18px; font-size:12px; color:#93a2b4; }
+    .intro strong { color:#cbd7e5; }
+    .a-update { padding:13px 0 14px 15px; border-left:2px solid #506581; margin:0 0 16px; max-width:650px; }
+    .a-update.done { border-color:#6caa83; }
+    .a-update .line { display:flex; justify-content:space-between; align-items:center; gap:14px; }
+    .a-update h2 { font-size:14px; margin:7px 0 4px; font-weight:650; letter-spacing:-.01em; }
+    .a-update p { color:#aebbc9; margin:0 0 12px; font-size:13px; line-height:1.5; }
+    .a-update .tail { display:flex; flex-wrap:wrap; align-items:center; gap:9px; }
+    .a-update .worker { color:#aebbc9; font-size:12px; margin-left:4px; }
+    .a-alert { max-width:650px; background:#302b29; border:1px solid #936646; border-left:4px solid #e6a767; border-radius:8px; padding:15px 17px; margin:18px 0 24px; }
+    .a-alert .line { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .a-alert h2 { margin:8px 0 5px; font-size:16px; letter-spacing:-.015em; }
+    .a-alert p { margin:0 0 13px; font-size:13px; line-height:1.5; color:#e3d3c5; }
+    .a-alert .action { background:#bd7b40; color:#1c150f; border-color:#dda266; }
+    .a-alert .action:hover { background:#e2a465; }
+    .a-alert .tail { display:flex; flex-wrap:wrap; gap:9px; align-items:center; }
+    .a-alert .sub { color:#d9b899; font-size:12px; }
+    .b-shell { border:1px solid #46515e; border-radius:11px; max-width:670px; overflow:hidden; background:#1c232c; margin:0 0 26px; }
+    .b-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 17px; border-bottom:1px solid #384654; }
+    .b-head h2 { margin:0; font-size:15px; letter-spacing:-.01em; }
+    .b-head p { margin:3px 0 0; color:#a9b7c6; font-size:12px; }
+    .b-head .count { background:#574536; color:#ffd1a0; border-radius:6px; font-size:11px; font-weight:700; padding:5px 8px; white-space:nowrap; }
+    .b-row { display:grid; grid-template-columns:20px 1fr auto; gap:10px; padding:14px 17px; border-bottom:1px solid #34404b; align-items:start; }
+    .b-row:last-child { border:0; }
+    .b-row .symbol { font-size:16px; line-height:1; margin-top:1px; color:#a6cbf5; }
+    .b-row.done .symbol { color:#a5d9ba; }
+    .b-row.attention { background:#322c28; }
+    .b-row.attention .symbol { color:#f4b678; }
+    .b-row .copy { min-width:0; }
+    .b-row h3 { font-size:13px; line-height:1.35; margin:0 0 4px; font-weight:650; }
+    .b-row p { margin:0; color:#a9b8c8; font-size:12px; line-height:1.45; }
+    .b-row.attention p { color:#ead4c0; }
+    .b-row .time { margin-top:6px; display:inline-block; }
+    .b-row .action { min-width:132px; }
+    .b-row.attention .action { border-color:#c38d5c; background:#6d4932; color:#fff2e2; }
+    .composer { width:min(100%,900px); margin:0 auto; padding:10px 36px 25px; }
+    .composer .box { min-height:77px; background:#242b34; border:1px solid #45505d; border-radius:14px; padding:14px 17px; color:#8f9bad; font-size:14px; }
+    .composer .bottom { display:flex; align-items:center; justify-content:space-between; margin-top:17px; }
+    .composer .bottom span { color:#aab6c5; font-size:12px; }
+    .composer .bottom button { border:0; background:#607da2; border-radius:50%; color:#fff; width:30px; height:30px; }
+    .drawer-scrim { display:none; position:fixed; inset:0; background:#0009; z-index:5; }
+    .drawer-scrim.open { display:block; }
+    .drawer { position:absolute; right:0; top:0; width:min(440px,100vw); height:100%; overflow:auto; background:#202730; border-left:1px solid #596778; padding:23px; }
+    .drawer .close { float:right; border:1px solid #566679; border-radius:8px; background:#303d4c; color:#fff; min-width:44px; min-height:44px; }
+    .drawer .crumb { color:#a9b7c7; font-size:12px; margin:8px 0 28px; }
+    .drawer h2 { font-size:20px; line-height:1.25; margin:13px 0; }
+    .drawer p { font-size:13px; line-height:1.55; color:#c0cbd7; }
+    .drawer section { border-top:1px solid #495767; padding:16px 0; }
+    .drawer h3 { margin:0 0 8px; font-size:12px; color:#d7e2ed; }
+    .drawer .focus { background:#352e28; border:1px solid #986b48; border-radius:8px; padding:12px; }
+    .drawer .focus h3 { color:#ffd3a4; }
+    .a,.b { display:none; }
+    body[data-concept="a"] .a,body[data-concept="b"] .b { display:block; }
+    @media(max-width:650px) {
+      .app { display:block; }
+      .rail { display:none; }
+      .top { height:56px; padding:0 15px; }
+      .top small { display:none; }
+      .top strong { max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .tabs button { padding:5px 8px; font-size:11px; min-height:36px; }
+      .body { padding:20px 17px 12px; }
+      .user { width:auto; max-width:90%; }
+      .assistant { margin-bottom:18px; }
+      .a-update { padding:11px 0 12px 12px; }
+      .a-alert { padding:13px; }
+      .b-row { grid-template-columns:18px minmax(0,1fr); gap:8px; padding:13px; }
+      .b-row .action { grid-column:2; width:100%; min-width:0; }
+      .b-head { padding:13px; }
+      .composer { padding:10px 17px 18px; }
+      .composer .box { min-height:66px; }
+      .drawer { width:100%; border:0; }
+    }
+    @media(max-width:340px) { .tabs { gap:4px; } .tabs button { padding:5px 6px; } .top { padding:0 10px; } .body { padding:18px 13px; } .composer { padding:8px 13px 15px; } }
+    @media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; animation:none!important; } }
+  </style>
+</head>
+<body data-concept="a">
+<div class="app">
+  <aside class="rail" aria-label="App navigation"><button aria-label="Chats" class="selected">▤</button><button aria-label="Work">▣</button><button aria-label="Files">▥</button></aside>
+  <main class="main">
+    <header class="top"><strong>Project planning</strong><div class="tabs" aria-label="Design concepts"><button id="tab-a" type="button">A · In thread</button><button id="tab-b" type="button">B · Work digest</button></div><small>Design mockup</small></header>
+    <div class="body">
+      <p class="context"><strong>Muxterm</strong> / Project planning &nbsp;·&nbsp; Today</p>
+      <div class="user">Can you take care of the three Work items we discussed?</div>
+      <div class="assistant"><span class="who">Codex</span><p>I’ve captured the requests as Work. I’ll keep this conversation readable while their worker chats make progress.</p></div>
+      <div class="worked">Worked for 24s</div>
+      <p class="intro a"><strong>Work updates</strong> from this conversation</p>
+      <section class="a" aria-label="Concept A: in-thread Work updates">
+        <article class="a-update" aria-label="Work claimed: archived sessions"><div class="line"><span class="tag progress"><span class="dot"></span> In progress</span><time class="time">10:42</time></div><h2>Archived sessions can’t claim new Work</h2><p>Worker chat “Archive eligibility” picked this up. It’s checking dispatch and direct claims.</p><div class="tail"><button class="action quiet" data-item="claimed">Open Work item</button><span class="worker">Worker: Archive eligibility</span></div></article>
+        <article class="a-update done" aria-label="Work completed: Files concept"><div class="line"><span class="tag done"><span class="dot"></span> Completed</span><time class="time">10:55</time></div><h2>Mobile Files design options</h2><p>Two concepts and phone screenshots are ready; Concept A was selected for implementation.</p><div class="tail"><button class="action quiet" data-item="completed">Review outcome</button></div></article>
+        <article class="a-alert" aria-label="Attention needed: kickoff needs inspection"><div class="line"><span class="tag attention"><span class="dot"></span> Needs inspection</span><time class="time">11:07</time></div><h2>Fresh worker sessions</h2><p>The kickoff request was sent, but chat acceptance wasn’t confirmed. Check the selected chat before retrying to avoid duplicate work.</p><div class="tail"><button class="action" data-item="inspection">Inspect kickoff</button><span class="sub">No automatic retry</span></div></article>
+      </section>
+      <section class="b" aria-label="Concept B: grouped Work digest"><div class="b-shell"><header class="b-head"><div><h2>Work from this chat</h2><p>3 updates across 3 items</p></div><span class="count">1 needs attention</span></header>
+        <article class="b-row attention"><span class="symbol" aria-hidden="true">!</span><div class="copy"><h3>Inspect kickoff · Fresh worker sessions</h3><p>Chat acceptance wasn’t confirmed. Check the selected chat before retrying.</p><time class="time">11:07</time></div><button class="action" data-item="inspection">Inspect kickoff</button></article>
+        <article class="b-row done"><span class="symbol" aria-hidden="true">✓</span><div class="copy"><h3>Completed · Mobile Files design options</h3><p>Two concepts ready; Concept A selected.</p><time class="time">10:55</time></div><button class="action quiet" data-item="completed">Review outcome</button></article>
+        <article class="b-row"><span class="symbol" aria-hidden="true">●</span><div class="copy"><h3>In progress · Archived sessions can’t claim new Work</h3><p>Worker: Archive eligibility · Checking dispatch and direct claims.</p><time class="time">10:42</time></div><button class="action quiet" data-item="claimed">Open Work item</button></article>
+      </div></section>
+      <div class="assistant"><span class="who">Codex</span><p>I’m continuing with the remaining items. The kickoff marked for inspection needs a look before any retry.</p></div>
+    </div>
+    <div class="composer"><div class="box">Message Codex…<div class="bottom"><span>＋ &nbsp; Chat settings</span><button aria-label="Send message">↑</button></div></div></div>
+  </main>
+</div>
+<div class="drawer-scrim" id="scrim"><aside class="drawer" aria-label="Work item detail" role="dialog" aria-modal="true"><button class="close" id="close" aria-label="Close Work detail">✕</button><p class="crumb">Work / Muxterm</p><div id="drawer-content"></div></aside></div>
+<script>
+  const records={
+    claimed:{status:'In motion',title:'Archived sessions can’t claim new Work',summary:'Worker chat “Archive eligibility” claimed this item and is checking server paths that start or claim Work.',action:'Next move',detail:'Verify direct claims and scheduler dispatch against an isolated dev server.',worker:'Archive eligibility'},
+    completed:{status:'Finished',title:'Mobile Files design options',summary:'Two browser-rendered concepts with 390px and 320px screenshots were reviewed. Concept A was selected.',action:'Outcome',detail:'Use the full-page browse and preview flow in a separate implementation item.',worker:'Files design'},
+    inspection:{status:'Needs inspection',title:'Fresh worker sessions',summary:'The kickoff request reached the selected chat, but its input acceptance was not confirmed.',action:'What is needed',detail:'Inspect the selected chat transcript and dispatch receipt. Resolve the uncertain kickoff before a new request; do not retry blindly.',worker:'Selected worker chat'}
+  };
+  const body=document.body;
+  const query=new URLSearchParams(location.search);
+  const tabs={a:document.getElementById('tab-a'),b:document.getElementById('tab-b')};
+  function concept(value){body.dataset.concept=value;for(const [key,tab] of Object.entries(tabs)){if(key===value)tab.setAttribute('aria-current','page');else tab.removeAttribute('aria-current');}history.replaceState(null,'',`?concept=${value}`);}
+  concept(query.get('concept')==='b'?'b':'a');
+  for(const [key,tab] of Object.entries(tabs))tab.addEventListener('click',()=>concept(key));
+  const scrim=document.getElementById('scrim'); const close=document.getElementById('close');
+  let returnFocus;
+  document.querySelectorAll('[data-item]').forEach(button=>button.addEventListener('click',()=>{const record=records[button.dataset.item];returnFocus=button;document.getElementById('drawer-content').innerHTML=`<span class="tag ${button.dataset.item==='inspection'?'attention':button.dataset.item==='completed'?'done':'progress'}"><span class="dot"></span>${record.status}</span><h2>${record.title}</h2><p>${record.summary}</p><section class="${button.dataset.item==='inspection'?'focus':''}"><h3>${record.action}</h3><p>${record.detail}</p></section><section><h3>Who’s on it</h3><p>${record.worker}</p></section><section><h3>Goal for the worker</h3><p>Approved by you. The worker follows the agreed stopping condition; changes need your review.</p></section><section><h3>Recent activity</h3><p>The full record keeps its history, evidence, and linked chat.</p></section>`;scrim.classList.add('open');close.focus();}));
+  function dismiss(){scrim.classList.remove('open');returnFocus?.focus();}
+  close.addEventListener('click',dismiss);scrim.addEventListener('click',event=>{if(event.target===scrim)dismiss();});document.addEventListener('keydown',event=>{if(event.key==='Escape'&&scrim.classList.contains('open'))dismiss();});
+  const item=query.get('item');if(records[item])document.querySelector(`.${body.dataset.concept} [data-item="${item}"]`)?.click();
+</script>
+</body>
+</html>
