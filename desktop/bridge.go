@@ -142,12 +142,23 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 		active, tabs := c.browserState()
 		sort.Slice(tabs, func(i, j int) bool { return tabs[i].ID < tabs[j].ID })
 		if message.Type == "ready" {
-			for _, tab := range tabs {
+			replay := func(tab browserTabState) {
 				encoded, _ := json.Marshal(struct {
 					ID  string `json:"id"`
 					URL string `json:"url"`
 				}{ID: tab.ID, URL: tab.URL})
 				c.evalMuxtermJS("window.__muxtermDesktopOpen?.(" + string(encoded) + ")")
+			}
+			for _, tab := range tabs {
+				if tab.ID != active {
+					replay(tab)
+				}
+			}
+			for _, tab := range tabs {
+				if tab.ID == active {
+					replay(tab)
+					break
+				}
 			}
 		}
 		state := struct {
