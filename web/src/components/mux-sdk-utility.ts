@@ -79,7 +79,7 @@ type UtilityTabId = 'new' | 'side' | 'voice' | 'files' | 'coordination' | 'chang
 type UtilityTab = { id: string; kind: UtilityTabId; pageId?: string; filePath?: string; url?: string; title?: string; sideChatId?: string; draft?: string };
 type BrowserState = { tabs?: { id:string; url:string; title:string; canGoBack:boolean; canGoForward:boolean }[]; error?:string };
 type BrowserBridge = { send: (message: Record<string, unknown>) => void };
-declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge; __muxtermPendingBrowserOpens?: {id:string;url:string}[] } }
+declare global { interface Window { __muxtermDesktopBrowser?: BrowserBridge; __muxtermPendingBrowserOpens?: {id:string;url:string}[]; __muxtermBrowserUtilityReady?: boolean } }
 const TABS_KEY = 'muxterm.sdk.utility.tabs.';
 const BROWSER_RECENT_KEY = 'muxterm.desktop.browser.recent';
 const TAB_GLYPHS: Record<UtilityTabId, IconNode> = { new:Plus, side:MessageCircleQuestionMark, voice:AudioLines, changes:GitCompare, files:Folder, coordination:CircleDot, pages:NotebookPen, meetings:AudioLines, browser:Globe2, goal:Target };
@@ -284,6 +284,7 @@ export class MuxSDKUtility extends LitElement {
     if (this.fileActionTimer) window.clearTimeout(this.fileActionTimer);
     if (this.browserPollTimer) window.clearInterval(this.browserPollTimer);
     this.browserReady = false;
+    window.__muxtermBrowserUtilityReady = false;
     window.removeEventListener('muxterm-browser-ready', this.enableBrowser);
     window.removeEventListener('muxterm-browser-state', this.receiveBrowserState);
     window.removeEventListener('muxterm-browser-open', this.receiveBrowserOpen as EventListener);
@@ -504,6 +505,7 @@ export class MuxSDKUtility extends LitElement {
     try { this.browserRecent = JSON.parse(localStorage.getItem(BROWSER_RECENT_KEY) || '[]').filter((entry: {url?:string;title?:string}) => typeof entry.url === 'string' && typeof entry.title === 'string').slice(0, 8); } catch { /* storage unavailable */ }
     window.addEventListener('muxterm-browser-state', this.receiveBrowserState);
     window.addEventListener('muxterm-browser-open', this.receiveBrowserOpen as EventListener);
+    window.__muxtermBrowserUtilityReady = true;
     for (const detail of window.__muxtermPendingBrowserOpens?.splice(0) || []) this.receiveBrowserOpen(new CustomEvent('muxterm-browser-open', {detail}));
     this.browserPollTimer = window.setInterval(() => { if (this.activeTab === 'browser') this.layoutBrowser(); }, 800);
     if (this.activeTab === 'browser') this.activateBrowser(this.currentTab);

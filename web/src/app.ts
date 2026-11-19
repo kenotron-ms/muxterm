@@ -759,10 +759,18 @@ export class MuxApp extends LitElement {
     if (this._connectionStatus === 'connected') this._showReconnectOverlay = false;
   };
 
+  private _onNativeBrowserOpen = (): void => {
+    if (!window.__muxtermDesktopBrowser || window.__muxtermBrowserUtilityReady) return;
+    this._selectMainSurface(null);
+    this._terminalUtilityOpen = true;
+  };
+
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener('muxterm-update-started', this._onUpdateStarted);
     window.addEventListener('muxterm-update-failed', this._onUpdateFailed);
+    window.addEventListener('muxterm-browser-open', this._onNativeBrowserOpen);
+    if (window.__muxtermPendingBrowserOpens?.length) this._onNativeBrowserOpen();
     this._unsubscribeChats = sdkChats.subscribe(() => {
       this._reconcileBootChat();
       this.requestUpdate();
@@ -1160,6 +1168,7 @@ export class MuxApp extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('muxterm-update-started', this._onUpdateStarted);
     window.removeEventListener('muxterm-update-failed', this._onUpdateFailed);
+    window.removeEventListener('muxterm-browser-open', this._onNativeBrowserOpen);
     this._unsubscribeChats?.();
     this._unsubscribeChats = null;
     window.removeEventListener('open-launcher', this._onOpenSettings);
