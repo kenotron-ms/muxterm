@@ -22,21 +22,43 @@ function connection() {
   try {
     settings = JSON.parse(readFileSync(join(instanceDataHome(), 'muxterm', 'sdk-chat', 'unified', 'connection.json'), 'utf8'));
   } catch (error) {
-    if (error.code !== 'ENOENT') throw new Error('Could not read Unified connection settings', { cause: error });
+    if (error.code !== 'ENOENT') throw new Error('Could not read Unified connection settings. Reconnect in AI settings.');
   }
-  if (!['local', 'existing'].includes(settings.mode)) throw new Error('Invalid Unified connection mode');
+  if (!['local', 'existing'].includes(settings.mode)) throw new Error('Invalid Unified connection mode. Reconnect in AI settings.');
   const configured = settings.mode === 'local' ? 'http://127.0.0.1:8941' : settings.url;
   const tokenFile = settings.mode === 'local'
     ? join(homedir(), '.amplifier-unified', 'config', 'auth', 'control-token')
     : join(instanceDataHome(), 'muxterm', 'sdk-chat', 'unified', 'control-token');
-  const url = new URL(configured);
+  let url;
+  try { url = new URL(configured); }
+  catch { throw new Error('Invalid Unified host address. Reconnect in AI settings.'); }
   if (url.username || url.password || url.search || url.hash || url.pathname !== '/' ||
-      !(['http:', 'https:'].includes(url.protocol))) throw new Error('Invalid Unified base URL');
+      !(['http:', 'https:'].includes(url.protocol))) throw new Error('Invalid Unified host address. Reconnect in AI settings.');
   if (url.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))
     throw new Error('Unified HTTP is allowed only on loopback; use HTTPS for a remote host');
-  const token = readFileSync(tokenFile, 'utf8').trim();
-  if (!token) throw new Error('Unified control token file is empty');
+  let token;
+  try { token = readFileSync(tokenFile, 'utf8').trim(); }
+  catch { throw new Error('Unified control token is unavailable. Reconnect in AI settings.'); }
+  if (!token) throw new Error('Unified control token is empty. Reconnect in AI settings.');
   return { base: url.origin, token };
+}
+
+function stageError(stage, status) {
+  const prefix = `Unified ${stage}`;
+  let hint;
+  if (status === 401 || status === 403) hint = 'Check the control token in AI settings.';
+  else if (status >= 300 && status < 400) hint = 'The API redirected; check the Unified host address in AI settings.';
+  else if (stage === 'message acceptance' && (!status || status >= 500))
+    hint = 'Delivery may have succeeded; open this chat and check its saved input before sending again.';
+  else if (stage === 'session creation' && (status === 400 || status === 422))
+    hint = 'Check that the project path exists on the Unified host.';
+  else if (status === 404) hint = 'Check the Unified host address and version in AI settings.';
+  else if (status) hint = 'Check the Unified host and retry.';
+  else hint = 'Check that Unified is running at the address in AI settings, then retry.';
+  const detail = status ? ` returned HTTP ${status}` : ' could not reach the configured host';
+  const error = new Error(`${prefix}${detail}. ${hint}`);
+  error.status = status;
+  return error;
 }
 
 export class UnifiedStream {
@@ -49,23 +71,29 @@ export class UnifiedStream {
     this.currentInputId = '';
     this.emittedInputs = new Set();
     this.emittedText = new Map();
+    this.lastRevision = -1;
     this.stopRequested = false;
     this.controller = null;
     this.connection = connection();
     this.ready = this.initialize();
   }
 
-  async request(method, path, body, signal) {
-    const response = await fetch(this.connection.base + path, {
-      method, signal: signal || AbortSignal.timeout(60000),
-      headers: { Authorization: `Bearer ${this.connection.token}`,
-        'X-Amplifier-Client': this.clientId, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
+  async request(method, path, body, stage, allowMissing = false) {
+    let response;
+    try {
+      response = await fetch(this.connection.base + path, {
+        method, redirect: 'manual', signal: AbortSignal.timeout(stage === 'message acceptance' ? 60000 : 15000),
+        headers: { Authorization: `Bearer ${this.connection.token}`,
+          'X-Amplifier-Client': this.clientId, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+    } catch { throw stageError(stage, 0); }
+    if (allowMissing && response.status === 404) return null;
+    if (!response.ok) throw stageError(stage, response.status);
     let result;
-    try { result = await response.json(); } catch { throw new Error(`Unified returned HTTP ${response.status} without JSON`); }
-    if (!response.ok || result?.accepted === false)
-      throw new Error(result?.error || result?.message || `Unified returned HTTP ${response.status}`);
+    try { result = await response.json(); }
+    catch { throw new Error(`Unified ${stage} returned an invalid response. Check the Unified host version in AI settings.`); }
+    if (result?.accepted === false) throw new Error(`Unified ${stage} was declined. Check the Unified host in AI settings.`);
     return result;
   }
 
@@ -73,27 +101,40 @@ export class UnifiedStream {
     if (this.session.catalog) return;
     const attached = await this.request('POST', '/api/clients/attach', {
       clientId: this.clientId, kind: 'native', protocolVersion: 1, includeState: false,
-    });
+    }, 'client attach');
     if (attached.protocolVersion !== 1 || !attached.hostInstanceId)
       throw new Error('Unified host does not support connected-client protocol version 1');
     if (this.closed) return;
-    if (!this.session.nativeId) {
-      // Both identifiers are stable across an uncertain creation response.
-      // The session can be found again without issuing a second creation.
-      await this.request('POST', '/api/actions', { id: `muxterm-create-${this.session.id}`,
-        action: 'session.create', args: { id: this.nativeId, workspace: this.session.cwd,
-          ...(this.session.bundle ? { bundle: this.session.bundle } : {}), select: false } });
+    let first = await this.request('GET', `/api/sessions/${encodeURIComponent(this.nativeId)}`,
+      undefined, 'session read', true);
+    if (!first && !this.session.nativeId) {
+      // Read before create on every restart. If creation's response is lost,
+      // inspect the stable native ID before deciding whether to retry.
+      try {
+        await this.request('POST', '/api/actions', { id: `muxterm-create-${this.session.id}`,
+          action: 'session.create', args: { id: this.nativeId, workspace: this.session.cwd,
+            ...(this.session.bundle ? { bundle: this.session.bundle } : {}), select: false } }, 'session creation');
+      } catch (error) {
+        try {
+          first = await this.request('GET', `/api/sessions/${encodeURIComponent(this.nativeId)}`,
+            undefined, 'session read', true);
+        } catch { /* Preserve the creation-stage failure if recovery cannot be confirmed. */ }
+        if (!first) throw error;
+      }
     }
-    const first = await this.request('GET', `/api/sessions/${encodeURIComponent(this.nativeId)}`);
+    first ||= await this.request('GET', `/api/sessions/${encodeURIComponent(this.nativeId)}`,
+      undefined, 'session read');
     if (this.closed) return;
     if (first.protocolVersion !== 1)
       throw new Error('Unified session protocol changed; update the Unified adapter');
     if (first.session?.id !== this.nativeId) throw new Error('Unified returned a different session');
+    const initialStream = await this.openEventStream();
+    if (this.closed) { initialStream.controller.abort(); return; }
     this.session.nativeId = this.nativeId;
     this.emit(this.session.id, 'session.started', { id: `unified:session:${this.nativeId}`,
       nativeId: this.nativeId, capabilities });
     this.applySnapshot(first);
-    this.followPromise = this.follow();
+    this.followPromise = this.follow(initialStream);
   }
 
   options() {
@@ -112,7 +153,7 @@ export class UnifiedStream {
     if (cmd.mode === 'manual' || cmd.mode === 'generated') {
       const result = await this.request('POST', `/api/sessions/${encodeURIComponent(this.nativeId)}/commands`, {
         id: randomUUID(), action: 'session.rename', args: { title: cmd.name },
-      });
+      }, 'session rename');
       if (result.session) this.applySnapshot(result);
       return { name: cmd.name, source: cmd.mode };
     }
@@ -122,16 +163,30 @@ export class UnifiedStream {
   async send(input) {
     await this.ready;
     if (input.attachments?.length) throw new Error('Unified attachments are not yet supported in Muxterm');
+    this.currentInputId = input.id;
     const result = await this.request('POST', `/api/sessions/${encodeURIComponent(this.nativeId)}/commands`, {
       id: input.id, action: 'conversation.send', args: { text: input.content },
-    });
+    }, 'message acceptance');
     if (!result.accepted) throw new Error('Unified did not confirm message acceptance');
-    this.currentInputId = input.id;
+    if (!this.emittedInputs.has(input.id)) {
+      this.emittedInputs.add(input.id);
+      this.emit(this.session.id, 'input.accepted', { id: `unified:input:${input.id}`,
+        inputId: input.id, kind: input.kind, source: input.source,
+        text: input.displayContent || input.content });
+    }
+    // SSE may have delivered the completed turn before the command reply.
+    // Re-read after acknowledgement so an older snapshot cannot leave busy
+    // set forever, and never turn an accepted send into uncertain delivery.
     this.session.busy = true;
-    this.emittedInputs.add(input.id);
-    this.emit(this.session.id, 'input.accepted', { id: `unified:input:${input.id}`,
-      inputId: input.id, kind: input.kind, source: input.source, text: input.displayContent || input.content });
-    if (result.session) this.applySnapshot(result);
+    try {
+      const latest = await this.request('GET', `/api/sessions/${encodeURIComponent(this.nativeId)}`,
+        undefined, 'session read');
+      this.applySnapshot(latest);
+    } catch (error) {
+      this.session.busy = false;
+      this.emit(this.session.id, 'error', { id: `unified:send-read:${input.id}`,
+        message: error instanceof Error ? error.message : 'Unified session read failed. Check AI settings.' });
+    }
     return { status: 'accepted', inputId: input.id };
   }
 
@@ -140,7 +195,7 @@ export class UnifiedStream {
     const result = await this.request('POST', `/api/sessions/${encodeURIComponent(this.nativeId)}/commands`, {
       id: `muxterm-stop-${this.session.id}-${this.currentInputId || randomUUID()}`,
       action: 'conversation.stop', args: {},
-    });
+    }, 'turn interruption');
     this.stopRequested = true;
     if (result.session) this.applySnapshot(result);
     return { status: 'accepted' };
@@ -155,7 +210,12 @@ export class UnifiedStream {
     }
     const row = frame.session;
     if (!row || row.id !== this.nativeId || this.closed) return;
+    if (Number.isInteger(frame.revision)) {
+      if (frame.revision < this.lastRevision) return;
+      this.lastRevision = frame.revision;
+    }
     this.lastRow = row;
+    let replyCommitted = !this.currentInputId;
     for (const message of row.messages || []) {
       if (message.role === 'user') {
         const inputId = message.inputId || message.id;
@@ -166,7 +226,10 @@ export class UnifiedStream {
             inputId, kind: 'user', source: 'unified', text: message.text || '' });
         }
       } else if (message.role === 'assistant' && message.text) {
+        if (message.inputId === this.currentInputId) replyCommitted = true;
         this.emitAssistant(message.streamId || message.id, message.text);
+      } else if (message.role === 'assistant' && message.inputId === this.currentInputId) {
+        replyCommitted = true;
       }
     }
     if (row.streaming && row.streamingId) this.emitAssistant(row.streamingId, row.streaming);
@@ -182,7 +245,7 @@ export class UnifiedStream {
       this.session.busy = true;
       this.emit(this.session.id, 'turn.started', { id: `unified:turn:${this.currentInputId}:started`,
         inputIds: this.currentInputId ? [this.currentInputId] : [] });
-    } else if (!working && this.session.busy) {
+    } else if (!working && this.session.busy && (replyCommitted || this.stopRequested || row.status === 'stopped')) {
       this.session.busy = false;
       const stopped = this.stopRequested || row.status === 'stopped';
       this.emit(this.session.id, stopped ? 'turn.cancelled' : 'turn.completed', {
@@ -202,22 +265,42 @@ export class UnifiedStream {
       text, cumulative: true });
   }
 
-  async follow() {
+  async openEventStream() {
+    const controller = new AbortController();
+    this.controller = controller;
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    let response;
+    try {
+      response = await fetch(this.connection.base +
+        `/api/sessions/${encodeURIComponent(this.nativeId)}/events`, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: { Authorization: `Bearer ${this.connection.token}`,
+          'X-Amplifier-Client': this.clientId },
+      });
+    } catch {
+      if (this.controller === controller) this.controller = null;
+      throw stageError('event stream', 0);
+    } finally { clearTimeout(timeout); }
+    if (!response.ok || !response.body) {
+      if (this.controller === controller) this.controller = null;
+      throw response.ok
+        ? new Error('Unified event stream has no body. Check the Unified host version in AI settings.')
+        : stageError('event stream', response.status);
+    }
+    return { response, controller };
+  }
+
+  async follow(initialStream) {
     let delay = 250;
+    let stream = initialStream;
     while (!this.closed) {
-      const controller = new AbortController();
-      this.controller = controller;
+      let controller = stream?.controller;
       try {
-        const response = await fetch(this.connection.base +
-          `/api/sessions/${encodeURIComponent(this.nativeId)}/events`, {
-          signal: controller.signal,
-          headers: { Authorization: `Bearer ${this.connection.token}`,
-            'X-Amplifier-Client': this.clientId },
-        });
-        if (!response.ok) throw new Error(`Unified stream returned HTTP ${response.status}`);
-        if (!response.body) throw new Error('Unified stream has no body');
+        stream ||= await this.openEventStream();
+        controller = stream.controller;
         delay = 250;
-        const reader = response.body.getReader();
+        const reader = stream.response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
         for (;;) {
@@ -232,18 +315,23 @@ export class UnifiedStream {
             if (!lines.some(line => line === 'event: snapshot')) continue;
             const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
             if (!data) continue;
-            const snapshot = JSON.parse(data);
+            let snapshot;
+            try { snapshot = JSON.parse(data); }
+            catch { throw new Error('Unified event stream sent an invalid snapshot. Check the Unified host version in AI settings.'); }
             if (snapshot.deleted) return;
             this.applySnapshot(snapshot);
           }
         }
       } catch (error) {
-        if (this.closed || controller.signal.aborted) return;
-        if (/HTTP 4\d\d/.test(String(error))) {
-          this.emit(this.session.id, 'error', { message: String(error) });
-          return;
-        }
-      } finally { if (this.controller === controller) this.controller = null; }
+        if (this.closed || controller?.signal.aborted) return;
+        this.emit(this.session.id, 'error', { id: `unified:stream:${this.nativeId}`,
+          message: error instanceof Error && error.message.startsWith('Unified ')
+            ? error.message : stageError('event stream', 0).message });
+        if (error.status && error.status >= 400 && error.status < 500) return;
+      } finally {
+        if (this.controller === controller) this.controller = null;
+        stream = null;
+      }
       if (this.closed) return;
       await new Promise(resolve => setTimeout(resolve, delay));
       delay = Math.min(5000, delay * 2);
