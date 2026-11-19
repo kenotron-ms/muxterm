@@ -104,6 +104,7 @@ export class MuxMeetings extends LitElement {
   private callRecordingStarting = false;
   private callPreparationSeq = 0;
   private callHostingError = '';
+  private callFallbackWarning = '';
   private callStream?:MediaStream;
   private callAudioDevices:MediaDeviceInfo[] = [];
   private callVideoDevices:MediaDeviceInfo[] = [];
@@ -325,14 +326,16 @@ export class MuxMeetings extends LitElement {
     this.callPreparing = true;
     const attempt=++this.callPreparationSeq;
     this.callHostingError = '';
+    this.callFallbackWarning = '';
     this.requestUpdate();
     try {
       const readinessResponse=await fetch(apiPath('/api/meetings/call-readiness'));
       if (attempt!==this.callPreparationSeq) return;
       if (!readinessResponse.ok) throw new Error(`Could not check call hosting (${readinessResponse.status}).`);
-      const readiness=await readinessResponse.json() as {available:boolean;reason:string};
+      const readiness=await readinessResponse.json() as {available:boolean;reason:string;warning?:string};
       if (attempt!==this.callPreparationSeq) return;
       if (!readiness.available) { this.callHostingError=readiness.reason; this.requestUpdate(); return; }
+      this.callFallbackWarning=readiness.warning || '';
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('A secure browser context is required for video calls.');
       this.callStream?.getTracks().forEach(track=>track.stop());
       const audio=this.callAudioDeviceId ? {deviceId:{exact:this.callAudioDeviceId}} : true;
@@ -354,6 +357,7 @@ export class MuxMeetings extends LitElement {
     this.callStream = undefined;
     this.callPreparing = false;
     this.callHostingError = '';
+    this.callFallbackWarning = '';
     this.requestUpdate();
   }
   private async callSignal(type:string,payload:unknown,meetingId=this.callId,chatId=this.sessionId) {
@@ -375,12 +379,13 @@ export class MuxMeetings extends LitElement {
       if (stale()) { await fetch(meetingPath(meeting.id),{method:'DELETE',keepalive:true}); return; }
       const invited = await fetch(meetingPath(meeting.id)+'/invite',{method:'POST'});
       if (!invited.ok) throw new Error((await invited.text()).trim() || `Could not create invite (${invited.status})`);
-      const invite = await invited.json() as {inviteUrl:string;iceServers:RTCIceServer[]};
+      const invite = await invited.json() as {inviteUrl:string;iceServers:RTCIceServer[];iceWarning?:string};
       if (stale()) { await fetch(meetingPath(meeting.id),{method:'DELETE',keepalive:true}); return; }
       this.callId = meeting.id;
       this.selectedId = meeting.id;
       this.meetings.unshift(meeting);
       this.inviteUrl = invite.inviteUrl;
+      this.callFallbackWarning = invite.iceWarning || '';
       this.callCursor = 0;
       this.guestJoined = false;
       this.offerSent = false;
@@ -391,7 +396,7 @@ export class MuxMeetings extends LitElement {
       this.callAttemptAt=0;
       this.remoteStream = undefined;
       this.remoteScreen = undefined;
-      const peer = new RTCPeerConnection({iceServers:invite.iceServers || []});
+      const peer = new RTCPeerConnection({iceServers:invite.iceServers || [], iceTransportPolicy:'all'});
       this.callPeer = peer;
       const chatId=this.sessionId,meetingId=meeting.id;
       peer.onicecandidate = event => { if (event.candidate && this.callPeer===peer) void this.callSignal('ice',event.candidate,meetingId,chatId).catch(error => { this.callStatus=String(error); this.requestUpdate(); }); };
@@ -620,7 +625,7 @@ export class MuxMeetings extends LitElement {
     this.callPeer?.close(); this.callPeer=undefined;
     this.callStream?.getTracks().forEach(track=>track.stop());this.callStream=undefined;
     this.screenStream?.getTracks().forEach(track=>track.stop());this.screenStream=undefined;this.shareSender=undefined;
-    this.callId='';this.inviteUrl='';this.callRecording=false;this.remoteStream=undefined;this.remoteScreen=undefined;
+    this.callId='';this.inviteUrl='';this.callFallbackWarning='';this.callRecording=false;this.remoteStream=undefined;this.remoteScreen=undefined;
     this.callNetwork={route:'checking',ice:'new',turnConfigured:false};
     this.callAttemptAt=0;
     await notices;
@@ -832,7 +837,7 @@ export class MuxMeetings extends LitElement {
   private clock(seconds:number) { return `${Math.floor(seconds/60).toString().padStart(2,'0')}:${(seconds%60).toString().padStart(2,'0')}`; }
   private inputMeter() { return html`<div class="input-meter"><span>Input level</span><div role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${this.inputLevel}><i style=${`width:${this.inputLevel}%`}></i></div></div>`; }
   private meetingBody(selected?:Meeting) {
-    if (this.callPreparing) return html`<div class="meeting-detail"><div class="meeting-overline">CALL PREFLIGHT</div><h2>Start a call</h2><p>Confirm your camera and microphone before creating a guest invite.</p>${this.callHostingError ? html`<mux-ui-feedback kind="warning">${this.callHostingError}</mux-ui-feedback><p>Guests need to reach this Muxterm server for the invite and call signaling. A self-hosted TURN server is recommended when direct browser connections are blocked.</p><div class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => void this.prepareCall()}>Check again</mux-ui-button><mux-ui-button variant="secondary" @click=${() => this.abandonCall()}>Cancel</mux-ui-button></div>` : this.callStream ? html`<div class="meeting-preflight"><video class="call-preview" autoplay playsinline muted></video><p>${this.callStatus || 'Sample camera and microphone ready.'}</p><div class="call-device-fields"><label>Microphone<select aria-label="Call microphone" @change=${(event:Event) => {this.callAudioDeviceId=(event.target as HTMLSelectElement).value;void this.prepareCall();}}>${this.callAudioDevices.length?this.callAudioDevices.map(device=>html`<option value=${device.deviceId} ?selected=${device.deviceId===this.callAudioDeviceId}>${device.label || 'Microphone'}</option>`):html`<option>Sample microphone</option>`}</select></label><label>Camera<select aria-label="Call camera" @change=${(event:Event) => {this.callVideoDeviceId=(event.target as HTMLSelectElement).value;void this.prepareCall();}}>${this.callVideoDevices.length?this.callVideoDevices.map(device=>html`<option value=${device.deviceId} ?selected=${device.deviceId===this.callVideoDeviceId}>${device.label || 'Camera'}</option>`):html`<option>Sample camera</option>`}</select></label></div></div><div class="meeting-buttons"><mux-ui-button variant="primary" ?disabled=${this.callStarting} @click=${() => void this.startCall()}>${icon(Video,{size:15})} Create call and invite</mux-ui-button><mux-ui-button variant="secondary" @click=${() => this.abandonCall()}>Cancel</mux-ui-button></div>` : html`<mux-ui-feedback kind="loading">Checking call hosting and devices…</mux-ui-feedback>`}</div>`;
+    if (this.callPreparing) return html`<div class="meeting-detail"><div class="meeting-overline">CALL PREFLIGHT</div><h2>Start a call</h2><p>Confirm your camera and microphone before creating a guest invite.</p>${this.callFallbackWarning && !this.callHostingError ? html`<mux-ui-feedback kind="warning">${this.callFallbackWarning} Direct connections can still work.</mux-ui-feedback>` : nothing}${this.callHostingError ? html`<mux-ui-feedback kind="warning">${this.callHostingError}</mux-ui-feedback><p>Guests need to reach this Muxterm server for the invite and call signaling. A self-hosted TURN server is recommended when direct browser connections are blocked.</p><div class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => void this.prepareCall()}>Check again</mux-ui-button><mux-ui-button variant="secondary" @click=${() => this.abandonCall()}>Cancel</mux-ui-button></div>` : this.callStream ? html`<div class="meeting-preflight"><video class="call-preview" autoplay playsinline muted></video><p>${this.callStatus || 'Sample camera and microphone ready.'}</p><div class="call-device-fields"><label>Microphone<select aria-label="Call microphone" @change=${(event:Event) => {this.callAudioDeviceId=(event.target as HTMLSelectElement).value;void this.prepareCall();}}>${this.callAudioDevices.length?this.callAudioDevices.map(device=>html`<option value=${device.deviceId} ?selected=${device.deviceId===this.callAudioDeviceId}>${device.label || 'Microphone'}</option>`):html`<option>Sample microphone</option>`}</select></label><label>Camera<select aria-label="Call camera" @change=${(event:Event) => {this.callVideoDeviceId=(event.target as HTMLSelectElement).value;void this.prepareCall();}}>${this.callVideoDevices.length?this.callVideoDevices.map(device=>html`<option value=${device.deviceId} ?selected=${device.deviceId===this.callVideoDeviceId}>${device.label || 'Camera'}</option>`):html`<option>Sample camera</option>`}</select></label></div></div><div class="meeting-buttons"><mux-ui-button variant="primary" ?disabled=${this.callStarting} @click=${() => void this.startCall()}>${icon(Video,{size:15})} Create call and invite</mux-ui-button><mux-ui-button variant="secondary" @click=${() => this.abandonCall()}>Cancel</mux-ui-button></div>` : html`<mux-ui-feedback kind="loading">Checking call hosting and devices…</mux-ui-feedback>`}</div>`;
     if (this.callId) return this.callView(selected);
     if (this.preparation) return html`<div class="meeting-detail"><h2>Record a meeting</h2><p>Confirm your microphone, then start recording.</p>${this.stream ? html`<label for="meeting-input">Microphone</label><select id="meeting-input" @change=${(event:Event) => { this.deviceId=(event.target as HTMLSelectElement).value; void this.prepare(); }}>${this.devices.map(device => html`<option value=${device.deviceId} ?selected=${device.deviceId === this.deviceId}>${device.label || 'Microphone'}</option>`)}</select><p>Input: ${this.stream.getAudioTracks()[0]?.label || 'Microphone ready'}</p>${this.inputMeter()}<div class="meeting-buttons"><mux-ui-button variant="primary" ?disabled=${this.recordingStarting} @click=${() => void this.startRecording()}>${icon(Mic,{size:15})} Start recording</mux-ui-button><mux-ui-button variant="secondary" @click=${() => this.abandonPreparation()}>Cancel</mux-ui-button></div>` : html`<mux-ui-feedback kind="loading">Requesting microphone permission…</mux-ui-feedback>`}</div>`;
     if (this.activeId) return html`<div class="meeting-detail"><div class="record-live">● Recording · ${this.clock(this.elapsed)}</div><h2>${selected?.title || 'Quick recording'}</h2><p>Capturing ${this.stream?.getAudioTracks()[0]?.label || 'microphone'}. Saved chunks stay in muxterm storage.</p>${this.inputMeter()}<mux-ui-button variant="danger" @click=${() => void this.stopRecording()}>${icon(Square,{size:15})} Stop and save</mux-ui-button></div>`;
@@ -850,7 +855,7 @@ export class MuxMeetings extends LitElement {
   private callView(selected?:Meeting) {
     const localAudio=this.callStream?.getAudioTracks()[0],localVideo=this.callStream?.getVideoTracks()[0];
     const screen=this.screenStream || this.remoteScreen;
-    return html`<div class="meeting-call"><div class="meeting-overline">${selected?.title || 'VIDEO CALL'} · ${this.guestJoined ? 'GUEST JOINED' : 'WAITING FOR GUEST'}</div><h2>${this.guestJoined ? 'You and a guest' : 'Waiting for a guest'}</h2><p>${this.callStatus || 'Connecting…'}</p>${this.networkView()}${this.callRecording ? html`<div class="record-live">● Recording audio, video, and active screen share. Both people can see this indicator.</div>` : nothing}
+    return html`<div class="meeting-call"><div class="meeting-overline">${selected?.title || 'VIDEO CALL'} · ${this.guestJoined ? 'GUEST JOINED' : 'WAITING FOR GUEST'}</div><h2>${this.guestJoined ? 'You and a guest' : 'Waiting for a guest'}</h2><p>${this.callStatus || 'Connecting…'}</p>${this.networkView()}${this.callFallbackWarning ? html`<mux-ui-feedback kind="warning" density="compact">${this.callFallbackWarning} Direct connections can still work.</mux-ui-feedback>` : nothing}${this.callRecording ? html`<div class="record-live">● Recording audio, video, and active screen share. Both people can see this indicator.</div>` : nothing}
       <div class="call-stage ${screen ? 'sharing' : ''} ${this.sampleScene ? 'sample-media' : ''}">${screen ? html`<div class="call-screen-tile">${this.sampleScene ? html`<div class="sample-screen"><i></i><strong>Project notes</strong><p>Decisions · follow ups · next steps</p></div>` : nothing}<video class="call-screen" autoplay playsinline ?muted=${!!this.screenStream}></video><span>${this.screenStream ? 'Your screen' : 'Guest screen'}</span></div>` : nothing}<div class="call-video-tile">${this.sampleScene ? html`<div class="sample-person guest"><i></i><b></b></div>` : nothing}<video class="call-remote" autoplay playsinline></video><span>${this.guestJoined ? 'Guest' : 'Waiting for a guest'}</span></div><div class="call-video-tile">${this.sampleScene ? html`<div class="sample-person host"><i></i><b></b></div>` : nothing}<video class="call-local" autoplay playsinline muted></video><span>You</span></div></div>
       <div class="call-controls"><mux-ui-button size="small" variant="secondary" @click=${() => { if(this.sampleScene)this.sampleMicOn=!this.sampleMicOn;else if(localAudio)localAudio.enabled=!localAudio.enabled;this.requestUpdate(); }}>${icon((this.sampleScene ? this.sampleMicOn : localAudio?.enabled) ? Mic : MicOff,{size:15})} ${(this.sampleScene ? this.sampleMicOn : localAudio?.enabled) ? 'Mute' : 'Unmute'}</mux-ui-button><mux-ui-button size="small" variant="secondary" ?disabled=${!localVideo&&!this.sampleScene} @click=${() => { if(this.sampleScene)this.sampleCameraOn=!this.sampleCameraOn;else if(localVideo)localVideo.enabled=!localVideo.enabled;this.requestUpdate(); }}>${icon((this.sampleScene ? this.sampleCameraOn : localVideo?.enabled) ? Video : VideoOff,{size:15})} ${(this.sampleScene ? this.sampleCameraOn : localVideo?.enabled) ? 'Camera off' : 'Camera on'}</mux-ui-button><mux-ui-button size="small" variant="secondary" @click=${() => { if(this.sampleScene){this.screenStream=this.screenStream?undefined:new MediaStream();this.requestUpdate();}else void this.toggleShare(); }}>${icon(MonitorUp,{size:15})} ${this.screenStream ? 'Stop share' : 'Share screen'}</mux-ui-button><mux-ui-button size="small" variant="danger" @click=${() => { if(this.sampleScene){this.callId='';this.requestUpdate();}else void this.leaveCall(); }}>${icon(X,{size:15})} End call</mux-ui-button></div>
       <div class="call-invite"><strong>Guest invite</strong><span>${this.inviteUrl}</span><mux-ui-button size="small" variant="secondary" @click=${() => void navigator.clipboard.writeText(this.inviteUrl).catch(error => {this.callStatus=String(error);this.requestUpdate();})}>${icon(Copy,{size:15})} Copy link</mux-ui-button></div>

@@ -69,7 +69,7 @@ func randomMeetingSecret() string {
 	return base64.RawURLEncoding.EncodeToString(bytes[:])
 }
 
-func meetingICEServers() []map[string]any {
+func meetingStaticICEServers() []map[string]any {
 	// Operators provide their own STUN/TURN credentials. Empty is deliberate:
 	// host candidates can work on a LAN without contacting any outside service.
 	raw := os.Getenv("MUXTERM_MEETING_ICE_SERVERS")
@@ -111,6 +111,38 @@ func meetingICEServers() []map[string]any {
 	return valid
 }
 
+func meetingICEServers() ([]map[string]any, error) {
+	servers := meetingStaticICEServers()
+	turn, err := meetingTURNServer()
+	if err != nil {
+		return nil, err
+	}
+	if turn != nil {
+		// STUN discovers a direct route through NAT. The same coturn listener
+		// supplies a relay candidate when direct ICE checks cannot connect.
+		if urls, ok := turn["urls"].([]string); ok {
+			for _, raw := range urls {
+				if strings.HasPrefix(raw, "turn:") && !strings.Contains(raw, "?transport=tcp") {
+					hostPort := strings.SplitN(strings.TrimPrefix(raw, "turn:"), "?", 2)[0]
+					servers = append(servers, map[string]any{"urls": "stun:" + hostPort})
+					break
+				}
+			}
+		}
+		servers = append(servers, turn)
+	}
+	return servers, nil
+}
+
+func meetingICEServersForCall() ([]map[string]any, string) {
+	servers, err := meetingICEServers()
+	if err != nil {
+		// A relay outage must not prevent a direct browser connection.
+		return meetingStaticICEServers(), "TURN fallback unavailable: " + err.Error()
+	}
+	return servers, ""
+}
+
 // A guest invite needs a stable HTTPS origin supplied by the operator. The
 // request Host header is not authority for a link that will leave this machine.
 func (s *Server) meetingInviteOrigin() (string, string) {
@@ -136,8 +168,12 @@ func (s *Server) meetingInviteOrigin() (string, string) {
 
 func (s *Server) handleMeetingCallReadiness(w http.ResponseWriter, _ *http.Request) {
 	origin, reason := s.meetingInviteOrigin()
+	warning := ""
+	if reason == "" {
+		_, warning = meetingICEServersForCall()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"available": origin != "", "reason": reason, "inviteOrigin": origin,
+		"available": origin != "" && reason == "", "reason": reason, "inviteOrigin": origin, "warning": warning,
 	})
 }
 
@@ -178,6 +214,11 @@ func (s *Server) handleMeetingInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Call already ended", http.StatusConflict)
 		return
 	}
+	var iceServers []map[string]any
+	iceWarning := ""
+	if r.Method == http.MethodPost {
+		iceServers, iceWarning = meetingICEServersForCall()
+	}
 	s.meetingCalls.mu.Lock()
 	if old := s.meetingCalls.byMeeting[meetingID]; old != nil {
 		delete(s.meetingCalls.byToken, old.Token)
@@ -194,7 +235,7 @@ func (s *Server) handleMeetingInvite(w http.ResponseWriter, r *http.Request) {
 	s.meetingCalls.byToken[call.Token] = call
 	s.meetingCalls.mu.Unlock()
 	meetingLock.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"token": call.Token, "inviteUrl": inviteOrigin + "/guest/" + call.Token, "expiresAt": call.Expires.UTC().Format(time.RFC3339), "iceServers": meetingICEServers()})
+	writeJSON(w, http.StatusOK, map[string]any{"token": call.Token, "inviteUrl": inviteOrigin + "/guest/" + call.Token, "expiresAt": call.Expires.UTC().Format(time.RFC3339), "iceServers": iceServers, "iceWarning": iceWarning})
 }
 
 func (s *Server) callByToken(w http.ResponseWriter, token string) *meetingCall {
@@ -219,6 +260,7 @@ func (s *Server) handleMeetingGuestJoin(w http.ResponseWriter, r *http.Request) 
 	if call == nil {
 		return
 	}
+	iceServers, iceWarning := meetingICEServersForCall()
 	s.meetingCalls.mu.Lock()
 	if s.meetingCalls.byToken[call.Token] != call || time.Now().After(call.Expires) {
 		s.meetingCalls.mu.Unlock()
@@ -255,7 +297,7 @@ func (s *Server) handleMeetingGuestJoin(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Meeting unavailable", 404)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"meetingId": meetingID, "title": meeting.Title, "lease": lease, "iceServers": meetingICEServers(), "expiresAt": expires.UTC().Format(time.RFC3339)})
+	writeJSON(w, http.StatusOK, map[string]any{"meetingId": meetingID, "title": meeting.Title, "lease": lease, "iceWarning": iceWarning, "iceServers": iceServers, "expiresAt": expires.UTC().Format(time.RFC3339)})
 }
 
 func (s *Server) handleMeetingHostSignals(w http.ResponseWriter, r *http.Request) {
