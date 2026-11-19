@@ -50,7 +50,11 @@ func (c *Companion) startBrowserControl() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
 		return err
 	}
 	if info, err := os.Lstat(path); err == nil {
@@ -149,6 +153,10 @@ func (c *Companion) handleBrowserControlAction(writer http.ResponseWriter, reque
 		return
 	}
 	if command.Action == "navigate" {
+		if strings.TrimSpace(command.URL) == "" {
+			http.Error(writer, "URL is required", http.StatusBadRequest)
+			return
+		}
 		// URL preparation may establish an SSH tunnel, so keep it outside
 		// bridgeMu while native browser messages continue to flow.
 		address, err := c.prepareBrowserURL(command.URL)
@@ -215,7 +223,11 @@ func (c *Companion) runBrowserControl(command browserControlCommand) (any, error
 		delete(c.browserRefs, id)
 		return map[string]string{"navigated": command.URL}, nil
 	case "back", "forward", "reload":
-		return map[string]string{"action": command.Action}, c.browserAction(id, command.Action, "")
+		if err := c.browserAction(id, command.Action, ""); err != nil {
+			return nil, err
+		}
+		delete(c.browserRefs, id)
+		return map[string]string{"action": command.Action}, nil
 	case "screenshot":
 		if !c.browserViewVisible(id) {
 			return nil, errors.New("show this browser tab in the Mac app before taking a screenshot")
@@ -279,8 +291,9 @@ func (c *Companion) runBrowserControl(command browserControlCommand) (any, error
 				ref := "e" + strconv.Itoa(index+1)
 				selectors[ref] = element.Selector
 				label := strings.Join(strings.Fields(element.Label), " ")
-				if len(label) > 100 {
-					label = label[:100]
+				runes := []rune(label)
+				if len(runes) > 100 {
+					label = string(runes[:100])
 				}
 				kind := element.Tag
 				if element.Role != "" {

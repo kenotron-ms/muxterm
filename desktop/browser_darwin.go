@@ -194,7 +194,7 @@ func (c *Companion) browserOpen(id, address string) error {
 	return nil
 }
 
-// Callers hold bridgeMu so a native view cannot be removed during this snapshot.
+// Cocoa view operations run through InvokeSync on the main thread.
 func (c *Companion) browserLayout() {
 	window, ok := c.app.Window.GetByName("muxterm")
 	if !ok {
