@@ -77,7 +77,10 @@ threading.Thread(target=fixture.serve_forever, daemon=True).start()
 # Darwin Unix socket paths are short (sun_path is 104 bytes). Keep the
 # isolated HOME short enough for both the local server and control sockets.
 home = Path(tempfile.mkdtemp(prefix="mb-", dir="/tmp"))
-data_home = home / ".local/share"
+app_support = home / "Library/Application Support/muxterm-desktop"
+# The desktop companion deliberately gives its bundled local server a private
+# data root, overriding an inherited XDG_DATA_HOME in localServerEnv.
+data_home = app_support / "local/data"
 chat_dir = data_home / "muxterm/sdk-chat"
 chat_dir.mkdir(parents=True)
 chat_id = "a" * 32
@@ -89,9 +92,9 @@ chat_id = "a" * 32
     "state": "done",
     "createdAt": "2026-01-01T00:00:00Z",
 }))
-socket_path = home / "Library/Application Support/muxterm-desktop/browser-control.sock"
-server_url = home / "Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
-settings = home / "Library/Application Support/muxterm-desktop/settings.json"
+socket_path = app_support / "browser-control.sock"
+server_url = app_support / "local/runtime/muxterm/server.url"
+settings = app_support / "settings.json"
 settings.parent.mkdir(parents=True)
 settings.write_text('{"keepSessionsOnQuit":false}\n')
 log = Path(os.environ["RUNNER_TEMP"]) / "muxterm-browser-control.log"
