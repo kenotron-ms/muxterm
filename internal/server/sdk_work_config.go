@@ -258,6 +258,11 @@ func (s *Server) applyReusedWorkConfiguration(ctx context.Context, chatID string
 	if current == nil || current.State != "ready" || current.Archived {
 		return errors.New("related worker changed while settings were applied")
 	}
+	previous := *current
 	current.Bundle, current.Provider, current.Model, current.Effort = config.Bundle, config.Provider, config.Model, config.Effort
-	return h.saveLocked(current)
+	if err := h.saveLocked(current); err != nil {
+		*current = previous
+		return err
+	}
+	return nil
 }
