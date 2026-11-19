@@ -537,6 +537,18 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.OwnerSessionID != "" && h.chats[req.OwnerSessionID].Archived {
+		h.mu.Unlock()
+		http.Error(w, "archived chat cannot own new work", http.StatusConflict)
+		return
+	}
+	for _, id := range req.SessionIDs {
+		if h.chats[id].Archived {
+			h.mu.Unlock()
+			http.Error(w, "archived chat cannot be linked to new work", http.StatusConflict)
+			return
+		}
+	}
 	now := time.Now().UTC()
 	item := &sdkWorkItem{ID: sdkID(), ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, CreateTitle: &req.Title, CreateBrief: &req.Brief, Source: strings.TrimSpace(req.Source), Readiness: "draft", NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
 		Status: "open", CreatedBy: creator, OwnerSessionID: req.OwnerSessionID, CreateOwnerID: req.OwnerSessionID, Acceptance: req.Acceptance, CreateAcceptance: &req.Acceptance, ReviewerSessionID: req.ReviewerSessionID, CreateReviewerID: req.ReviewerSessionID, ProjectIDs: projectIDs, CreateProjectIDs: slices.Clone(projectIDs), Labels: labels, CreateLabels: append([]string{}, labels...), SessionIDs: req.SessionIDs,
@@ -700,6 +712,35 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 		http.Error(w, "work item changed; refresh before assigning", 409)
 		return
+	}
+	if req.OwnerSessionID != nil && *req.OwnerSessionID != "" && *req.OwnerSessionID != item.OwnerSessionID && h.chats[*req.OwnerSessionID].Archived {
+		h.mu.Unlock()
+		http.Error(w, "archived chat cannot claim work", http.StatusConflict)
+		return
+	}
+	if req.LinkedSessionID != "" && req.LinkedSessionID != item.OwnerSessionID && !slices.Contains(item.SessionIDs, req.LinkedSessionID) && h.chats[req.LinkedSessionID].Archived {
+		h.mu.Unlock()
+		http.Error(w, "archived chat cannot be linked to work", http.StatusConflict)
+		return
+	}
+	if req.Status == "active" && item.Status != "active" {
+		workerID := item.OwnerSessionID
+		if req.OwnerSessionID != nil {
+			workerID = *req.OwnerSessionID
+		}
+		if workerID == "" {
+			workerID = req.SessionID
+		}
+		if workerID == "" {
+			h.mu.Unlock()
+			http.Error(w, "starting work requires a worker chat", http.StatusConflict)
+			return
+		}
+		if worker := h.chats[workerID]; worker != nil && worker.Archived {
+			h.mu.Unlock()
+			http.Error(w, "archived chat cannot start work", http.StatusConflict)
+			return
+		}
 	}
 	if req.Readiness != nil {
 		if *req.Readiness == "ready" && (item.GoalCondition == "" || item.GoalRevision < 1 || item.GoalApproved != item.GoalRevision || item.GoalApprovedAt == nil || req.GoalCondition != nil || req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.NextAction != nil || req.DependsOn != nil || req.ProjectIDs != nil) {
