@@ -2020,6 +2020,12 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("chat %s could not start: %v", c.ID, err), 502)
 		return
 	}
+	if idle, ok := r.Context().Value(workStartIdleChatKey{}).(bool); ok && idle {
+		// Work installs its approved native goal before admitting any opening
+		// input. This internal context is never accepted from an HTTP body.
+		writeSDKJSON(w, 201, c)
+		return
+	}
 	openingID := sdkID()
 	openingContent := sdkChatInput(c.ID, req.Prompt)
 	if sideContext != "" {

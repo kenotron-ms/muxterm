@@ -24,6 +24,7 @@ const work = [
   { ...base, id:'docs', title:'Document project search', brief:'Explain search once it ships.', status:'open', readiness:'ready', dependsOn:['search'], waitingOn:['search'], nextAction:'Draft a short guide.', labels:['docs'] },
   { ...base, id:'provider', title:'Check provider credentials', brief:'Confirm the pilot account can use the selected model.', status:'blocked', readiness:'ready', needsHuman:false, blockedReason:'Waiting for the provider to finish provisioning.', labels:['pilot'] },
   { ...base, id:'welcome-email', title:'Write welcome email', brief:'Prepare the welcome note for new members.', status:'open', readiness:'draft', labels:['onboarding'] },
+  { ...base, id:'goal-review', title:'Plan the member welcome pilot', brief:'Make the first invitation flow understandable and reliable for new members.', status:'open', readiness:'draft', goalCondition:'Finish when the invitation can be sent, accepted, and verified in a real browser on desktop and phone, with the result and any remaining gaps recorded in Work. If access or dependencies prevent verification, record the blocker and stop for a human decision.', goalRevision:1, goalApprovedRevision:0, labels:['onboarding','pilot'] },
   { ...base, id:'signup', title:'Build signup form', brief:'Create the signup form and verify it in a browser.', status:'done', readiness:'ready', outcome:'Verified the signup path at desktop and phone widths.', labels:['onboarding'] },
 ];
 let control = {projectId, paused:false, parallelism:4, version:1, active:1};
@@ -69,3 +70,5 @@ export const Inbox: Story = {};
 export const InboxPhone: Story = {globals:{viewport:{value:'phone390',isRotated:false}}};
 export const Detail: Story = {play:openDetail('Build invitation flow')};
 export const DetailPhone: Story = {globals:{viewport:{value:'phone390',isRotated:false}},play:openDetail('Build invitation flow')};
+export const GoalReview: Story = {play:openDetail('Plan the member welcome pilot')};
+export const GoalReviewPhone: Story = {globals:{viewport:{value:'phone390',isRotated:false}},play:openDetail('Plan the member welcome pilot')};

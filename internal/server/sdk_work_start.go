@@ -15,6 +15,7 @@ import (
 )
 
 type workStartChatIDKey struct{}
+type workStartIdleChatKey struct{}
 
 func (h *sdkChatHost) eligibleWorkChatLocked(chat *sdkChat, item *sdkWorkItem, projects []string) bool {
 	if chat == nil || chat.Archived || chat.VoiceHandoff || chat.SideParentID != "" || chat.State != "ready" {
@@ -140,7 +141,7 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	goalReady := make(map[string]bool, len(candidates))
 	for _, chat := range candidates {
 		goal, err := h.goals.update(chat, nil)
-		goalReady[chat.ID] = err == nil && !goal.HumanPaused
+		goalReady[chat.ID] = err == nil && !goal.HumanPaused && goal.RequestedRevision == 0 && supportsNativeGoalControl(chat.Harness)
 	}
 	h.mu.Lock()
 	item = h.workItems[id]
@@ -180,6 +181,9 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	if creator := h.chats[h.workCreatorLocked(item).SessionID]; creator != nil && creator.Harness != "" {
 		harness = creator.Harness
 	}
+	if !supportsNativeGoalControl(harness) {
+		harness = "codex"
+	}
 	projectID := ""
 	if len(projects) > 0 {
 		projectID = projects[0]
@@ -196,9 +200,31 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mu.Unlock()
-	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Then carry out next_action, keep the Work record current, and report evidence or blockers there. Do not change a Chat Goal for this dispatch."
+	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The human-approved Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your native goal."
 	state, detail := "sent", ""
-	if existing {
+	if !existing {
+		payload, _ := json.Marshal(map[string]any{"WorkspaceID": projectID, "Harness": harness, "Prompt": "Work: " + copy.Title, "WorkMode": "local"})
+		ctx := context.WithValue(r.Context(), workStartChatIDKey{}, workerID)
+		ctx = context.WithValue(ctx, workStartIdleChatKey{}, true)
+		request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/sdk-chats", bytes.NewReader(payload))
+		response := httptest.NewRecorder()
+		s.handleSDKChats(response, request)
+		if response.Code != 201 {
+			state, detail = "uncertain", strings.TrimSpace(response.Body.String())
+			h.mu.Lock()
+			if h.chats[workerID] == nil {
+				state = "failed"
+			}
+			h.mu.Unlock()
+		}
+	}
+	if state == "sent" {
+		goalState, err := s.installApprovedWorkGoal(workerID, &copy)
+		if err != nil {
+			state, detail = goalState, err.Error()
+		}
+	}
+	if state == "sent" {
 		payload, _ := json.Marshal(map[string]any{"clientRef": "work-start:" + id + ":" + req.ClientRef, "content": prompt})
 		request := httptest.NewRequestWithContext(r.Context(), http.MethodPost, "/api/sdk-chats/"+workerID+"/control-send", bytes.NewReader(payload))
 		request.SetPathValue("id", workerID)
@@ -218,20 +244,6 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(response.Body.Bytes(), &receipt) != nil || receipt.Status != "accepted" {
 				state, detail = "uncertain", "chat input acceptance was not confirmed"
 			}
-		}
-	} else {
-		payload, _ := json.Marshal(map[string]any{"WorkspaceID": projectID, "Harness": harness, "Prompt": prompt, "WorkMode": "local"})
-		ctx := context.WithValue(r.Context(), workStartChatIDKey{}, workerID)
-		request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/sdk-chats", bytes.NewReader(payload))
-		response := httptest.NewRecorder()
-		s.handleSDKChats(response, request)
-		if response.Code != 201 {
-			state, detail = "uncertain", strings.TrimSpace(response.Body.String())
-			h.mu.Lock()
-			if h.chats[workerID] == nil {
-				state = "failed"
-			}
-			h.mu.Unlock()
 		}
 	}
 	if len(detail) > 4096 {
