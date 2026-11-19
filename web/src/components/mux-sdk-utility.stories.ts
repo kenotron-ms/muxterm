@@ -96,6 +96,11 @@ type Story = StoryObj<UtilityArgs>;
 function target(canvasElement: HTMLElement): MuxSDKUtility | null { return canvasElement.querySelector('mux-sdk-utility'); }
 
 export const Files: Story = {};
+export const PhoneFileBrowse: Story = {
+  args:{sessionId:sessionId('phone-browse')},parameters:{apiFixture:utilityFixture(sessionId('phone-browse'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  play:async ({canvasElement}) => { target(canvasElement)?.showPanel('files'); },
+};
 export const Goal: Story = {
   args:{sessionId:sessionId('goal'),goalState:'active',goalText:'# Goal\n\nCatalog every shared control, then stop after browser review.\n\n- Check the chat and utility layouts.\n- Record any remaining gaps.'},
   parameters:{apiFixture:utilityFixture(sessionId('goal'))},
@@ -181,12 +186,17 @@ export const FileOpenActions: Story = {
 export const PhoneFileOpenActions: Story = {
   args:{sessionId:sessionId('phone-file-actions')},parameters:{apiFixture:utilityFixture(sessionId('phone-file-actions'))},
   globals:{viewport:{value:'phone390',isRotated:false}},
-  play:FileOpenActions.play,
+  play:async ({canvasElement}) => {
+    const utility = target(canvasElement);
+    await utility?.showFile('README.md');
+    utility?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="File actions"]')?.click();
+  },
 };
 export const QuickOpen: Story = {
   args:{sessionId:sessionId('quick-open')},parameters:{apiFixture:utilityFixture(sessionId('quick-open'))},
   play:async ({canvasElement}) => {
     const utility = target(canvasElement);
+    utility?.showPanel('files');
     await utility?.updateComplete;
     utility?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Quick open file"]')?.click();
   },
@@ -194,10 +204,16 @@ export const QuickOpen: Story = {
 export const PhoneQuickOpen: Story = {
   args:{sessionId:sessionId('phone-quick-open')},parameters:{apiFixture:utilityFixture(sessionId('phone-quick-open'))},
   globals:{viewport:{value:'phone390',isRotated:false}},
-  play:QuickOpen.play,
+  play:async ({canvasElement}) => {
+    const utility = target(canvasElement);
+    utility?.showPanel('files');
+    await utility?.updateComplete;
+    utility?.querySelector<MuxUIButton>('.mobile-files-footer mux-ui-button')?.click();
+  },
 };
 const typeQuickOpen = async (canvasElement: HTMLElement, query: string) => {
   const utility = target(canvasElement);
+  utility?.showPanel('files');
   await utility?.updateComplete;
   utility?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Quick open file"]')?.click();
   await utility?.updateComplete;
