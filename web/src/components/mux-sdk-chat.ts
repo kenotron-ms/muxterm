@@ -770,6 +770,9 @@ export class MuxSDKChat extends LitElement {
     if (!this.drawerOpen) this.openDrawer();
     this.previewFocused = mode === 'preview';
   }
+  openBrowserUtility(): void {
+    this.setPaneMode('split');
+  }
   /** Apply a server-relayed request after this chat is on screen. */
   async navigateUI(action: 'chat' | 'panel' | 'tab' | 'file' | 'note', mode?: string, tab?: string, path?: string, noteId?: string): Promise<void> {
     if (action === 'chat') return;

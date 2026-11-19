@@ -77,6 +77,18 @@ threading.Thread(target=fixture.serve_forever, daemon=True).start()
 # Darwin Unix socket paths are short (sun_path is 104 bytes). Keep the
 # isolated HOME short enough for both the local server and control sockets.
 home = Path(tempfile.mkdtemp(prefix="mb-", dir="/tmp"))
+data_home = home / ".local/share"
+chat_dir = data_home / "muxterm/sdk-chat"
+chat_dir.mkdir(parents=True)
+chat_id = "a" * 32
+(chat_dir / f"{chat_id}.json").write_text(json.dumps({
+    "id": chat_id,
+    "projectPath": str(home),
+    "title": "Browser control check",
+    "harness": "codex",
+    "state": "done",
+    "createdAt": "2026-01-01T00:00:00Z",
+}))
 socket_path = home / "Library/Application Support/muxterm-desktop/browser-control.sock"
 server_url = home / "Library/Application Support/muxterm-desktop/local/runtime/muxterm/server.url"
 settings = home / "Library/Application Support/muxterm-desktop/settings.json"
@@ -86,7 +98,7 @@ log = Path(os.environ["RUNNER_TEMP"]) / "muxterm-browser-control.log"
 
 try:
     subprocess.run(
-        ["open", "-n", "--env", f"HOME={home}", "--stdout", str(log), "--stderr", str(log), "-a", str(bundle)],
+        ["open", "-n", "--env", f"HOME={home}", "--env", f"XDG_DATA_HOME={data_home}", "--stdout", str(log), "--stderr", str(log), "-a", str(bundle)],
         check=True,
     )
     wait_for("local Muxterm server", server_url.exists)

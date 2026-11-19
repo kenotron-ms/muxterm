@@ -565,6 +565,7 @@ export class MuxApp extends LitElement {
   private _drawerOpen = false;
 
   @state() private _sdkChatId: string | null = null;
+  private _lastSelectedSDKChatId: string | null = null;
   @state() private _terminalUtilityOpen = false;
   @state() private _connectionSelection = 'github';
   @state() private _newChatFolder = '';
@@ -761,8 +762,13 @@ export class MuxApp extends LitElement {
 
   private _onNativeBrowserOpen = (): void => {
     if (!window.__muxtermDesktopBrowser || window.__muxtermBrowserUtilityReady) return;
-    this._selectMainSurface(null);
-    this._terminalUtilityOpen = true;
+    if (!this._sdkChatId || UTILITY_TITLES.has(this._sdkChatId)) {
+      const chat = sdkChats.chats.find(item => item.id === this._lastSelectedSDKChatId && !item.archived)
+        || sdkChats.chats.find(item => !item.archived);
+      if (!chat) return;
+      this._selectMainSurface(chat.id);
+    }
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKChat>('mux-sdk-chat')?.openBrowserUtility());
   };
 
   connectedCallback(): void {
@@ -773,6 +779,7 @@ export class MuxApp extends LitElement {
     if (window.__muxtermPendingBrowserOpens?.length) this._onNativeBrowserOpen();
     this._unsubscribeChats = sdkChats.subscribe(() => {
       this._reconcileBootChat();
+      if (window.__muxtermPendingBrowserOpens?.length) this._onNativeBrowserOpen();
       this.requestUpdate();
     });
 
@@ -2140,6 +2147,7 @@ export class MuxApp extends LitElement {
         this._bootChatId = id;
         this._bootChatHost = host;
         this._sdkChatId = id;
+        this._lastSelectedSDKChatId = id;
         (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = id;
         setChatHash(id, true);
         this._rememberHistorySurface(id);
@@ -2181,6 +2189,7 @@ export class MuxApp extends LitElement {
     this._bootChatId = null;
     this._bootChatHost = '';
     this._sdkChatId = view;
+    if (chatId) this._lastSelectedSDKChatId = chatId;
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = chatId ?? '';
     const host = chatId ? chatHost(chatId) || sdkChats.chats.find(chat => chat.id === chatId)?.remoteHost || '' : '';
     if (chatId && host) rememberChatHost(chatId, host);
