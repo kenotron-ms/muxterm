@@ -95,7 +95,7 @@ chat_id = "a" * 32
 socket_path = app_support / "browser-control.sock"
 server_url = app_support / "local/runtime/muxterm/server.url"
 settings = app_support / "settings.json"
-settings.parent.mkdir(parents=True)
+settings.parent.mkdir(parents=True, exist_ok=True)
 settings.write_text('{"keepSessionsOnQuit":false}\n')
 log = Path(os.environ["RUNNER_TEMP"]) / "muxterm-browser-control.log"
 
