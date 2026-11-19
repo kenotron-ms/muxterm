@@ -31,6 +31,12 @@ type Story = StoryObj<ButtonArgs>;
 export const Secondary: Story = {};
 export const Primary: Story = { args: { variant: 'primary', label: 'Create workspace' } };
 export const Quiet: Story = { args: { variant: 'quiet', label: 'Cancel' } };
+export const ActionSheetRows: Story = {
+  render:() => html`<div style="width:min(100%,var(--ui-dialog-compact-width));display:grid;gap:var(--ui-space-2)">
+    <mux-ui-button full-width align="start" variant="quiet" size="large">${icon(Paperclip,{size:18})}Attach file</mux-ui-button>
+    <mux-ui-button full-width align="start" variant="quiet" size="large">${icon(NotebookPen,{size:18})}Open document</mux-ui-button>
+  </div>`,
+};
 export const Danger: Story = { args: { variant: 'danger', label: 'Close pane' } };
 export const Busy: Story = { args: { variant: 'primary', label: 'Saving changes', busy: true } };
 export const Disabled: Story = { args: { label: 'Unavailable', disabled: true } };

@@ -46,7 +46,7 @@ const captures = [
   { file: 'chat-project-editor-error-phone.png', id: 'composites-chat-list--phone-edit-project-error', width: 390, height: 844, ready: 'mux-ui-dialog[open] mux-ui-feedback[kind="error"]', readyText: 'Could not update this project. Try again.' },
   { file: 'chat-pinned-error-phone.png', id: 'composites-chat-list--phone-pinned-action-error', width: 390, height: 844, ready: 'mux-ui-feedback[kind="error"]', readyText: 'Could not unpin Atlas: Could not update this project. Try again.' },
   { file: 'utility-file-actions-desktop.png', id: 'screens-utility--file-open-actions', width: 1200, height: 800, ready: 'mux-ui-menu-item', readyText: 'Download file' },
-  { file: 'utility-file-actions-phone.png', id: 'screens-utility--phone-file-open-actions', width: 390, height: 844, ready: 'mux-ui-menu-item', readyText: 'Download file' },
+  { file: 'utility-file-actions-phone.png', id: 'screens-utility--phone-file-open-actions', width: 390, height: 844, ready: 'mux-ui-dialog.mobile-file-actions-dialog[open]', readyText: 'Download file' },
   { file: 'utility-note-editor-desktop.png', id: 'screens-utility--note-editor', width: 1200, height: 800, ready: 'mux-sdk-utility .page-title' },
   { file: 'utility-notes-phone.png', id: 'screens-utility--phone-notes', width: 390, height: 844, ready: 'mux-ui-rail-row[label="Component review"]' },
   { file: 'listbox-phone.png', id: 'components-listbox--phone-sheet', width: 390, height: 844, ready: 'mux-ui-listbox' },

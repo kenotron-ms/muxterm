@@ -3,6 +3,7 @@ import { customElement, property } from 'lit/decorators.js';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'quiet' | 'danger';
 export type ButtonSize = 'small' | 'medium' | 'large';
+export type ButtonAlign = 'center' | 'start';
 export type ButtonAppearance = 'app' | 'document';
 
 /** Shared action treatment. Without href it renders a native button; with href
@@ -13,6 +14,7 @@ export type ButtonAppearance = 'app' | 'document';
 export class MuxUIButton extends LitElement {
   @property({ reflect: true }) variant: ButtonVariant = 'secondary';
   @property({ reflect: true }) size: ButtonSize = 'medium';
+  @property({ reflect: true }) align: ButtonAlign = 'center';
   @property({ type: Boolean, reflect: true }) disabled = false;
   @property({ type: Boolean, reflect: true }) busy = false;
   @property({ type: Boolean, reflect: true, attribute: 'full-width' }) fullWidth = false;
@@ -61,6 +63,7 @@ export class MuxUIButton extends LitElement {
     }
     :host([size='small']) :is(button,a) { min-height: var(--ui-control-sm); padding: 0 var(--ui-space-4); font-size: var(--ui-text-sm); }
     :host([size='large']) :is(button,a) { min-height: var(--ui-control-lg); padding: 0 var(--ui-space-6); font-size: var(--ui-text-lg); }
+    :host([align='start']) :is(button,a) { justify-content: flex-start; }
     :host([icon-only]) :is(button,a) { min-height: 100%; padding: 0; }
     :host([variant='primary']) :is(button,a) { border-color: var(--ui-accent); background: var(--ui-accent); color: var(--ui-on-accent); }
     :host([variant='danger']) :is(button,a) { border-color: var(--ui-danger); background: var(--ui-danger); color: var(--ui-on-danger); }
