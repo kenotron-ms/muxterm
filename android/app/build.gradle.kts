@@ -29,6 +29,11 @@ android {
 
     buildFeatures {
         buildConfig = true
+        compose = true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.8"
     }
 
     signingConfigs {
@@ -57,7 +62,7 @@ android {
                 ?.let { applicationIdSuffix = it }
         }
 
-        // Sideloadable phone build: debug-signed, with only MainActivity as a
+        // Sideloadable phone build: debug-signed, with the native satellite as
         // launcher. A separate build type keeps src/debug's Automotive OS
         // emulator overlay and dependency out of the phone APK.
         create("phone") {
@@ -86,6 +91,12 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.activity:activity-compose:1.8.2")
+    implementation(platform("androidx.compose:compose-bom:2024.02.02"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // Android Auto projection screen. 1.7.0 is current stable at compileSdk 34;
     // fall back to 1.4.0 here (comment only, left in place) if it ever fails
@@ -95,6 +106,9 @@ dependencies {
     // Car screen's session feed: a WebSocket client for /ws. org.json (already
     // on the platform) parses the six fields we need - no Moshi/Gson/kotlinx.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.commonmark:commonmark:0.31.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.31.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.31.0")
 
     // DEBUG ONLY, and the "debug" matters. The target is Android AUTO -- the
     // phone projects to the car screen -- which needs androidx.car.app:app and
