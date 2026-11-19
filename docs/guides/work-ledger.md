@@ -90,6 +90,14 @@ and attributed updates. `waitingOn` is derived from unfinished dependencies.
 The goal fields are `goalCondition`, `goalRevision`,
 `goalApprovedRevision`, and `goalApprovedAt`.
 
+For progress reports, send `summary` as one short sentence about the change or
+decision (up to 160 characters). Put diagnostics, links, and lists in `text`
+as Markdown. The Work timeline shows the summary first and lets a reader open
+the full formatted update. Older long reports without a summary get a short
+preview; their original text remains available. When a report omits an explicit
+`progress` value, its summary becomes the current one-line progress shown at
+the top of the Work detail page.
+
 `create_work_item` makes a draft. `update_work_item` proposes a condition and
 records changes with `client_ref` and `expected_revision`. The browser's
 `POST /api/sdk-work/{id}/goal/approve` accepts the exact condition, both Work

@@ -3,6 +3,8 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
 import { remoteChatPath } from '../lib/remote-chat-routes.js';
 import { sdkChats } from '../lib/sdk-chats.js';
+import { parseMarkdown } from '../lib/markdown-stream.js';
+import { renderSegments } from '../lib/markdown-view.js';
 import '../ui/button.js';
 import '../ui/range-field.js';
 import '../ui/select.js';
@@ -12,9 +14,20 @@ import type { MuxUISelect } from '../ui/select.js';
 
 type WorkActor = { kind: 'chat' | 'human' | 'external-tool'; sessionId?: string };
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string };
-type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; text: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean };
+type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean };
 type WorkItem = { id: string; title: string; brief: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalApprovedRevision?: number; blockedReason?: string; dependsOn: string[]; waitingOn: string[]; labels: string[]; dispatch?: WorkDispatch; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
+
+function activityPreview(value: string): string {
+  const plain = value.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/(^|\n)\s*(?:#{1,6}\s+|[-*]\s+)/g, '$1')
+    .replace(/[`*_~]/g, '').replace(/\s+/g, ' ').trim();
+  const end = plain.search(/[.!?](?=\s|$)/);
+  const sentence = end >= 0 && end < 160 ? plain.slice(0, end + 1) : plain;
+  const characters = [...sentence];
+  if (characters.length <= 160) return sentence;
+  return characters.slice(0, 157).join('').replace(/\s+\S*$/, '').trimEnd() + '…';
+}
 
 const icon = (name: 'work' | 'folder' | 'play' | 'pause' | 'chevron' | 'back' | 'clock' | 'check' | 'chat' | 'wait' | 'alert' | 'flag') => {
   const paths = {
@@ -126,12 +139,30 @@ export class MuxChatCoordination extends LitElement {
     .tag { display:inline-flex; border-radius:var(--ui-radius-md); padding:var(--ui-space-2) var(--ui-space-5); background:var(--ui-surface-raised); color:var(--ui-text); font-size:var(--ui-text-md); font-weight:600; }
     .timeline { position:relative; list-style:none; margin:var(--ui-space-6) 0 0; padding:0; }
     .timeline:before { content:''; position:absolute; left:var(--ui-space-5); top:var(--ui-space-6); bottom:var(--ui-space-8); width:var(--ui-space-px); background:var(--ui-border); }
-    .timeline li { position:relative; display:grid; grid-template-columns:var(--ui-space-8) minmax(0,1fr); gap:var(--ui-space-5); padding:0 0 var(--ui-space-7); }
+    .timeline > li { position:relative; display:grid; grid-template-columns:var(--ui-space-8) minmax(0,1fr); gap:var(--ui-space-5); padding:0 0 var(--ui-space-7); }
     .timeline-icon { display:grid; place-items:center; width:var(--ui-space-8); height:var(--ui-space-8); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-accent); }
     .timeline-icon .icon { width:var(--ui-space-6); height:var(--ui-space-6); }
     .timeline time { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    .timeline strong { display:block; margin-top:var(--ui-space-1); font-weight:650; }
-    .timeline p { margin-top:var(--ui-space-2); color:var(--ui-text-muted); white-space:pre-wrap; overflow-wrap:anywhere; }
+    .timeline > li > div > strong { display:block; margin-top:var(--ui-space-1); font-weight:650; }
+    .timeline p { margin-top:var(--ui-space-2); color:var(--ui-text-muted); overflow-wrap:anywhere; }
+    .activity-summary { max-width:65ch; line-height:1.5; }
+    .activity-full { margin-top:var(--ui-space-2); }
+    .activity-full > summary { width:max-content; max-width:100%; color:var(--ui-accent); font-size:var(--ui-text-md); font-weight:600; cursor:pointer; }
+    .activity-full > summary:hover { text-decoration:underline; text-underline-offset:var(--ui-space-2); }
+    .activity-markdown { max-width:70ch; margin-top:var(--ui-space-3); color:var(--ui-text-muted); overflow-wrap:anywhere; }
+    .activity-markdown > :first-child { margin-top:0; }
+    .activity-markdown .md-p { margin:var(--ui-space-3) 0 0; white-space:normal; }
+    .activity-markdown .md-ul,.activity-markdown .md-ol { margin:var(--ui-space-3) 0; padding-left:var(--ui-space-7); }
+    .activity-markdown .md-li + .md-li { margin-top:var(--ui-space-2); }
+    .activity-markdown .md-li .md-p { margin:0; }
+    .activity-markdown .md-code { padding:var(--ui-space-px) var(--ui-space-2); border-radius:var(--ui-radius-sm); background:var(--ui-surface-raised); color:var(--ui-text); font:var(--ui-text-md) var(--ui-font-mono); }
+    .activity-markdown .md-pre { max-width:100%; padding:var(--ui-space-4); overflow:auto; border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); font:var(--ui-text-md) var(--ui-font-mono); }
+    .activity-markdown .md-quote { margin:var(--ui-space-3) 0; padding-left:var(--ui-space-4); border-left:var(--ui-space-px) solid var(--ui-border); }
+    .activity-markdown .md-tablewrap { max-width:100%; overflow:auto; }
+    .activity-markdown .md-table { border-collapse:collapse; }
+    .activity-markdown .md-th,.activity-markdown .md-td { padding:var(--ui-space-2) var(--ui-space-3); border-bottom:var(--ui-space-px) solid var(--ui-border); text-align:left; }
+    .activity-markdown .md-h { margin:var(--ui-space-4) 0 var(--ui-space-2); font-size:var(--ui-text-lg); }
+    .activity-evidence { margin-top:var(--ui-space-3); font-size:var(--ui-text-md); }
     .error { margin:var(--ui-space-5) 0; color:var(--ui-danger); }
     :focus-visible { outline:var(--ui-space-1) solid var(--ui-accent); outline-offset:var(--ui-space-2); }
     @media(max-width:560px) { .wrap { padding:var(--ui-space-8) var(--ui-space-7) var(--ui-control-lg); } .controls { align-items:flex-start; } .parallel { width:100%; justify-content:flex-start; } .parallel mux-ui-range-field { width:100%; } .label-filter { max-width:var(--ui-work-filter-width); } }
@@ -249,8 +280,16 @@ export class MuxChatCoordination extends LitElement {
   private timelineEntry(update: WorkUpdate) {
     const mark = update.status === 'done' || update.status === 'review' || update.goalApproved ? 'check' : update.status === 'blocked' ? 'alert' : update.status === 'active' ? 'play' : update.readiness === 'ready' ? 'flag' : update.linkedSessionId || update.ownerSessionId ? 'chat' : 'clock';
     const title = update.goalApproved ? 'Goal approved' : update.goalCondition ? 'Goal drafted' : update.status === 'done' ? 'Work completed' : update.status === 'blocked' ? 'Blocked' : update.status === 'review' ? 'Ready for review' : update.status === 'active' ? 'Work started' : update.status ? 'Work updated' : update.readiness === 'ready' ? 'Marked ready' : update.readiness === 'held' ? 'Put on hold' : html`Update from ${this.actor(update.actor)}`;
-    const detail = update.text || update.progress || update.outcome || update.blockedReason || (update.goalCondition ? 'Condition ready for review.' : update.ownerSessionId ? html`Claimed by ${this.chatLink(update.ownerSessionId)}` : update.linkedSessionId ? html`Linked ${this.chatLink(update.linkedSessionId)}` : update.readiness ? `Readiness: ${update.readiness}` : 'Record updated');
-    return html`<li><span class="timeline-icon">${icon(mark)}</span><div><time>${this.date(update.at)}</time><strong>${title}</strong><p>${detail}</p>${update.evidence?.length ? html`<p>Evidence: ${update.evidence.join(', ')}</p>` : nothing}</div></li>`;
+    const body = update.text || update.progress || update.outcome || update.blockedReason || '';
+    const summary = update.summary?.trim() || activityPreview(body);
+    const expanded = !!body && (!!update.summary && update.summary.trim() !== body.trim() || body.length > 160 || body.includes('\n'));
+    const fallback = update.goalCondition ? 'Condition ready for review.' : update.ownerSessionId ? html`Claimed by ${this.chatLink(update.ownerSessionId)}` : update.linkedSessionId ? html`Linked ${this.chatLink(update.linkedSessionId)}` : update.readiness ? `Readiness: ${update.readiness}` : 'Record updated';
+    const evidence = update.evidence?.length ? html`<p class="activity-evidence">Evidence: ${update.evidence.join(', ')}</p>` : nothing;
+    const content = expanded
+      ? html`<p class="activity-summary">${summary}</p><details class="activity-full"><summary>Read full update</summary><div class="activity-markdown">${renderSegments(parseMarkdown(body))}${evidence}</div></details>`
+      : body ? html`<div class="activity-markdown">${renderSegments(parseMarkdown(body))}${evidence}</div>`
+        : html`<p class="activity-summary">${summary || fallback}</p>${evidence}`;
+    return html`<li><span class="timeline-icon">${icon(mark)}</span><div><time>${this.date(update.at)}</time><strong>${title}</strong>${content}</div></li>`;
   }
   private detailView() {
     const item = this.detail;
@@ -266,7 +305,7 @@ export class MuxChatCoordination extends LitElement {
       <p class="lead">${item.brief || 'No description yet.'}</p>
       ${item.status === 'open' || item.goalCondition ? html`<mux-work-goal-review .item=${item} .remoteHost=${this.remoteHost} @work-goal-updated=${(event:CustomEvent<WorkItem>) => { this.detail=event.detail; void this.refresh(); }}></mux-work-goal-review>` : nothing}
       ${item.nextAction || item.blockedReason ? html`<section class=${`next ${item.status === 'blocked' ? 'blocked' : ''}`}><h3>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</h3><p>${item.blockedReason || item.nextAction}</p></section>` : nothing}
-      ${item.progress ? html`<section class="section"><h3>Where things stand</h3><p>${item.progress}</p></section>` : nothing}
+      ${item.progress ? html`<section class="section"><h3>Where things stand</h3><p>${item.progress.length > 160 || item.progress.includes('\n') ? activityPreview(item.progress) : item.progress}</p></section>` : nothing}
       ${item.acceptanceCriteria ? html`<section class="section"><h3>How we'll know it worked</h3><p>${item.acceptanceCriteria}</p></section>` : nothing}
       ${item.outcome ? html`<section class="section"><h3>Outcome</h3><p>${item.outcome}</p></section>` : nothing}
       ${item.ownerSessionId || item.dispatch?.sessionId ? html`<section class="section"><h3>Who's on it</h3><p>${this.chatLink(item.ownerSessionId || item.dispatch!.sessionId)}</p></section>` : nothing}
