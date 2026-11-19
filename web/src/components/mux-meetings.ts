@@ -1,13 +1,12 @@
 import { LitElement, html, nothing, type PropertyValues } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { AudioLines, Copy, Download, Mic, MicOff, MonitorUp, Plus, RefreshCw, Square, Trash2, Video, VideoOff, X } from 'lucide';
+import { ArrowLeft, AudioLines, Check, Copy, Download, Ellipsis, LayoutGrid, Mic, MicOff, Minus, MonitorUp, Plus, Radio, RefreshCw, Signal, Square, Trash2, Video, VideoOff, WifiOff, X } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/empty-state.js';
 import '../ui/feedback.js';
-import '../ui/pane-divider.js';
 import '../ui/rail-row.js';
 import '../ui/text-field.js';
 import type { MuxUITextField } from '../ui/text-field.js';
@@ -17,6 +16,7 @@ type TranscriptionOptions = { localReady:boolean; localDetail:string; providerRe
 type Transcript = { revision:number; segments:{id:string;startMs:number;endMs:number;text:string;speaker:string}[]; corrections:Record<string,string> };
 type LocalChunk = { key:string; blob:Blob };
 type CallRoute = 'checking'|'direct'|'relay'|'stalled'|'failed';
+type CallLayout = 'side'|'stacked'|'focus';
 type CallNetwork = { route:CallRoute; ice:string; localType?:string; remoteType?:string; protocol?:string; relayProtocol?:string; errorCode?:number; turnConfigured:boolean };
 type CandidateStat = { id:string; type:string; selectedCandidatePairId?:string; localCandidateId?:string; remoteCandidateId?:string; state?:string; nominated?:boolean; candidateType?:string; protocol?:string; relayProtocol?:string };
 
@@ -131,6 +131,12 @@ export class MuxMeetings extends LitElement {
   private pendingICE:RTCIceCandidateInit[] = [];
   private callRecorder?:MediaRecorder;
   private callRecording = false;
+  private recordCallByDefault = true;
+  private callLayout:CallLayout = 'focus';
+  private selfVideoMinimized = false;
+  private connectionOpen = false;
+  private layoutOpen = false;
+  private moreOpen = false;
   private callCanvas?:HTMLCanvasElement;
   private callDrawTimer?:number;
   private callAudio?:AudioContext;
@@ -199,6 +205,12 @@ export class MuxMeetings extends LitElement {
     this.loading=false;
     this.sampleMicOn=true;
     this.sampleCameraOn=true;
+    this.recordCallByDefault=true;
+    this.callLayout='focus';
+    this.selfVideoMinimized=false;
+    this.connectionOpen=false;
+    this.layoutOpen=false;
+    this.moreOpen=false;
     const now=new Date().toISOString();
     const recording:Meeting={id:'sample-recording',chatId:this.sessionId,title:'Product review',kind:'recording',startedAt:new Date(Date.now()-28*60*1000).toISOString(),endedAt:now,participants:['You','Mara'],recordingState:'ready',transcriptState:scene==='transcription'?'not_started':'ready',transcriptSource:'local',mediaType:'audio/webm',mediaBytes:2400000,chunks:4};
     const call:Meeting={id:'sample-call',chatId:this.sessionId,title:'Design review',kind:'call',startedAt:new Date(Date.now()-8*60*1000).toISOString(),participants:['You','Mara'],recordingState:'not_started',transcriptState:'not_started',mediaBytes:0,chunks:0};
@@ -323,6 +335,14 @@ export class MuxMeetings extends LitElement {
   private async prepareCall() {
     if (this.activeId) { this.error = 'Stop the recording before starting a call.'; this.requestUpdate(); return; }
     this.error = '';
+    if (!this.callPreparing) {
+      this.recordCallByDefault = true;
+      this.callLayout = 'focus';
+      this.selfVideoMinimized = false;
+      this.connectionOpen = false;
+      this.layoutOpen = false;
+      this.moreOpen = false;
+    }
     this.callPreparing = true;
     const attempt=++this.callPreparationSeq;
     this.callHostingError = '';
@@ -402,7 +422,7 @@ export class MuxMeetings extends LitElement {
       peer.onicecandidate = event => { if (event.candidate && this.callPeer===peer) void this.callSignal('ice',event.candidate,meetingId,chatId).catch(error => { this.callStatus=String(error); this.requestUpdate(); }); };
       peer.onicecandidateerror = event => { const code=(event as Event & {errorCode?:number}).errorCode; this.callNetwork={...this.callNetwork,errorCode:code}; this.requestUpdate(); };
       peer.oniceconnectionstatechange = () => { void this.inspectCallNetwork(); };
-      peer.onconnectionstatechange = () => { this.callStatus=peer.connectionState==='connected'?'Connected to guest':peer.connectionState==='failed'?'Media connection failed':peer.connectionState==='disconnected'?'Guest media disconnected; reconnecting…':'Connecting media…'; void this.inspectCallNetwork(); this.requestUpdate(); };
+      peer.onconnectionstatechange = () => { this.callStatus=peer.connectionState==='connected'?'Connected to guest':peer.connectionState==='failed'?'Media connection failed':peer.connectionState==='disconnected'?'Guest media disconnected; reconnecting…':'Connecting media…'; void this.inspectCallNetwork(); this.maybeStartCallRecording(); this.requestUpdate(); };
       peer.ontrack = event => {
         if (event.track.kind === 'audio') {
           this.remoteStream ??= new MediaStream();
@@ -414,6 +434,7 @@ export class MuxMeetings extends LitElement {
           this.remoteScreen = new MediaStream([event.track]);
           event.track.onended = () => { this.remoteScreen=undefined; this.requestUpdate(); };
         }
+        this.maybeStartCallRecording();
         this.requestUpdate();
       };
       peer.onnegotiationneeded = () => { if (this.callReady && peer.signalingState === 'stable') void this.offerCall(); };
@@ -453,6 +474,7 @@ export class MuxMeetings extends LitElement {
       if (this.guestJoined && this.callStatus==='Waiting for a guest') this.callStatus='Guest joined; checking media connection…';
       if (this.guestJoined && !this.offerSent && this.callPeer?.signalingState === 'stable') await this.offerCall();
       if (this.guestJoined && !data.peerConnected) this.callStatus='Guest disconnected; reconnecting…';
+      this.maybeStartCallRecording();
       if (Date.now()-this.lastNetworkCheck>3000) void this.inspectCallNetwork();
       this.requestUpdate();
     } catch (error) { this.callStatus=String(error); this.requestUpdate(); }
@@ -528,18 +550,23 @@ export class MuxMeetings extends LitElement {
     } catch (error) { this.callStatus=`Screen sharing cancelled or unavailable: ${String(error)}`; this.requestUpdate(); }
   }
   private videoCaptureType() {
+    if (typeof MediaRecorder === 'undefined') return '';
     for (const candidate of ['video/webm;codecs=vp8,opus','video/webm','video/mp4']) if (MediaRecorder.isTypeSupported(candidate)) return candidate;
     return '';
   }
+  private maybeStartCallRecording() {
+    if (this.recordCallByDefault && this.callId && this.guestJoined && this.callPeer?.connectionState === 'connected' && this.remoteStream?.getAudioTracks().some(track=>track.readyState==='live')) void this.startCallRecording();
+  }
   private async startCallRecording() {
-    if (!this.callId || this.callRecording || this.callRecordingStarting) return;
+    if (!this.callId || this.callLeaving || this.callRecording || this.callRecordingStarting) return;
     if (!this.guestJoined || !this.remoteStream?.getAudioTracks().some(track=>track.readyState==='live')) {
       this.callStatus='Wait for the guest audio before recording the call.';
       this.requestUpdate();
       return;
     }
     const mediaType=this.videoCaptureType();
-    if (!mediaType) { this.callStatus='This browser cannot record call video.'; this.requestUpdate(); return; }
+    if (!mediaType) { this.recordCallByDefault=false; this.callStatus='Recording failed: This browser cannot record call video.'; this.requestUpdate(); return; }
+    const recordingMeetingId=this.callId;
     this.callRecordingStarting=true;this.requestUpdate();
     try {
       const canvas=document.createElement('canvas'); canvas.width=1280; canvas.height=720; this.callCanvas=canvas;
@@ -565,12 +592,13 @@ export class MuxMeetings extends LitElement {
       const output=audio.createMediaStreamDestination();
       for (const source of [this.callStream,this.remoteStream]) if (source?.getAudioTracks().length) audio.createMediaStreamSource(new MediaStream(source.getAudioTracks())).connect(output);
       this.callRecordStream=new MediaStream([...captured.getVideoTracks(),...output.stream.getAudioTracks()]);
-      const response=await fetch(this.path(this.callId,'/record-start'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mediaType})});
+      const response=await fetch(this.path(recordingMeetingId,'/record-start'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mediaType})});
       if (!response.ok) throw new Error(`Could not start recording (${response.status})`);
+      if (this.callId!==recordingMeetingId || this.callLeaving) { this.releaseCallCapture(); return; }
       this.uploadQueue=Promise.resolve(); this.nextChunk=0; this.captureError='';
       const recorder=new MediaRecorder(this.callRecordStream,{mimeType:mediaType});
       this.callRecorder=recorder;
-      const chatId=this.sessionId,meetingId=this.callId;
+      const chatId=this.sessionId,meetingId=recordingMeetingId;
       recorder.ondataavailable=event=>{ if(event.data.size)this.queueChunk(meetingId,event.data,chatId); };
       recorder.onerror=()=>{ this.captureError='Call recording interrupted. Saved chunks remain recoverable.'; this.requestUpdate(); };
       recorder.start(2000);
@@ -580,6 +608,7 @@ export class MuxMeetings extends LitElement {
     } catch (error) {
       if (this.callRecorder?.state==='recording') this.callRecorder.stop();
       this.callRecorder=undefined;this.callRecording=false;
+      this.recordCallByDefault=false;
       this.callStatus=`Recording failed: ${String(error)}`; this.releaseCallCapture(); this.requestUpdate();
     } finally { this.callRecordingStarting=false;this.requestUpdate(); }
   }
@@ -837,117 +866,190 @@ export class MuxMeetings extends LitElement {
   private clock(seconds:number) { return `${Math.floor(seconds/60).toString().padStart(2,'0')}:${(seconds%60).toString().padStart(2,'0')}`; }
   private inputMeter() { return html`<div class="input-meter"><span>Input level</span><div role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${this.inputLevel}><i style=${`width:${this.inputLevel}%`}></i></div></div>`; }
   private meetingBody(selected?:Meeting) {
-    if (this.callPreparing) return html`<div class="meeting-detail"><div class="meeting-overline">CALL PREFLIGHT</div><h2>Start a call</h2><p>Confirm your camera and microphone before creating a guest invite.</p>${this.callFallbackWarning && !this.callHostingError ? html`<mux-ui-feedback kind="warning">${this.callFallbackWarning} Direct connections can still work.</mux-ui-feedback>` : nothing}${this.callHostingError ? html`<mux-ui-feedback kind="warning">${this.callHostingError}</mux-ui-feedback><p>Guests need to reach this Muxterm server for the invite and call signaling. A self-hosted TURN server is recommended when direct browser connections are blocked.</p><div class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => void this.prepareCall()}>Check again</mux-ui-button><mux-ui-button variant="secondary" @click=${() => this.abandonCall()}>Cancel</mux-ui-button></div>` : this.callStream ? html`<div class="meeting-preflight"><video class="call-preview" autoplay playsinline muted></video><p>${this.callStatus || 'Sample camera and microphone ready.'}</p><div class="call-device-fields"><label>Microphone<select aria-label="Call microphone" @change=${(event:Event) => {this.callAudioDeviceId=(event.target as HTMLSelectElement).value;void this.prepareCall();}}>${this.callAudioDevices.length?this.callAudioDevices.map(device=>html`<option value=${device.deviceId} ?selected=${device.deviceId===this.callAudioDeviceId}>${device.label || 'Microphone'}</option>`):html`<option>Sample microphone</option>`}</select></label><label>Camera<select aria-label="Call camera" @change=${(event:Event) => {this.callVideoDeviceId=(event.target as HTMLSelectElement).value;void this.prepareCall();}}>${this.callVideoDevices.length?this.callVideoDevices.map(device=>html`<option value=${device.deviceId} ?selected=${device.deviceId===this.callVideoDeviceId}>${device.label || 'Camera'}</option>`):html`<option>Sample camera</option>`}</select></label></div></div><div class="meeting-buttons"><mux-ui-button variant="primary" ?disabled=${this.callStarting} @click=${() => void this.startCall()}>${icon(Video,{size:15})} Create call and invite</mux-ui-button><mux-ui-button variant="secondary" @click=${() => this.abandonCall()}>Cancel</mux-ui-button></div>` : html`<mux-ui-feedback kind="loading">Checking call hosting and devices…</mux-ui-feedback>`}</div>`;
-    if (this.callId) return this.callView(selected);
-    if (this.preparation) return html`<div class="meeting-detail"><h2>Record a meeting</h2><p>Confirm your microphone, then start recording.</p>${this.stream ? html`<label for="meeting-input">Microphone</label><select id="meeting-input" @change=${(event:Event) => { this.deviceId=(event.target as HTMLSelectElement).value; void this.prepare(); }}>${this.devices.map(device => html`<option value=${device.deviceId} ?selected=${device.deviceId === this.deviceId}>${device.label || 'Microphone'}</option>`)}</select><p>Input: ${this.stream.getAudioTracks()[0]?.label || 'Microphone ready'}</p>${this.inputMeter()}<div class="meeting-buttons"><mux-ui-button variant="primary" ?disabled=${this.recordingStarting} @click=${() => void this.startRecording()}>${icon(Mic,{size:15})} Start recording</mux-ui-button><mux-ui-button variant="secondary" @click=${() => this.abandonPreparation()}>Cancel</mux-ui-button></div>` : html`<mux-ui-feedback kind="loading">Requesting microphone permission…</mux-ui-feedback>`}</div>`;
-    if (this.activeId) return html`<div class="meeting-detail"><div class="record-live">● Recording · ${this.clock(this.elapsed)}</div><h2>${selected?.title || 'Quick recording'}</h2><p>Capturing ${this.stream?.getAudioTracks()[0]?.label || 'microphone'}. Saved chunks stay in muxterm storage.</p>${this.inputMeter()}<mux-ui-button variant="danger" @click=${() => void this.stopRecording()}>${icon(Square,{size:15})} Stop and save</mux-ui-button></div>`;
-    if (selected) return html`<div class="meeting-detail"><div class="meeting-overline">${selected.kind === 'call' ? 'VIDEO CALL' : 'RECORDING'} · ${new Date(selected.startedAt).toLocaleString()}</div><h2>${selected.title}</h2><p>${selected.participants.join(', ')} · ${this.clock(this.duration(selected))}</p><p>Status: ${selected.recordingState === 'ready' ? 'Recording ready' : selected.recordingState === 'interrupted' ? 'Capture interrupted' : selected.recordingState}</p>${selected.error ? html`<mux-ui-feedback kind="warning">${selected.error}</mux-ui-feedback>` : nothing}${selected.recordingState === 'ready' ? html`${selected.mediaType?.startsWith('video/') ? html`<video class="meeting-player" controls preload="metadata" src=${this.path(selected.id,'/media')}></video>` : html`<audio controls preload="metadata" src=${this.path(selected.id,'/media')}></audio>`}<a class="meeting-download" href=${this.path(selected.id,'/media')} download=${`meeting-${selected.id}.webm`}>${icon(Download,{size:15})} Download original</a>${this.transcriptView(selected)}` : selected.chunks > 0 || this.locallyRecoverable.has(selected.id) ? html`<mux-ui-button variant="secondary" @click=${() => void this.recover(selected)}>Recover and finalize saved media</mux-ui-button>` : nothing}<div class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => { this.selectedId=''; this.requestUpdate(); }}>All meetings</mux-ui-button><mux-ui-button variant="danger" @click=${() => { this.deleteId=selected.id; this.requestUpdate(); }}>${icon(Trash2,{size:15})} Delete meeting</mux-ui-button></div></div>`;
-    return html`<mux-ui-empty-state heading="Meet here"><span slot="icon">${icon(AudioLines,{size:24})}</span>Record from your microphone or invite someone to a private call.<div slot="action" class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => void this.prepare()}>${icon(Plus,{size:15})} Record a meeting</mux-ui-button><mux-ui-button variant="secondary" @click=${() => void this.prepareCall()}>${icon(Video,{size:15})} Start a call</mux-ui-button></div></mux-ui-empty-state>`;
+    const recent=this.meetings.filter(item=>`${item.title} ${item.participants.join(' ')}`.toLowerCase().includes(this.query.toLowerCase()));
+    if (this.callPreparing) return html`<div class="meeting-prejoin">
+      ${this.callHostingError ? html`<mux-ui-feedback kind="warning" density="compact">${this.callHostingError}</mux-ui-feedback>` : nothing}
+      ${this.callFallbackWarning && !this.callHostingError ? html`<mux-ui-feedback kind="warning" density="compact">${this.callFallbackWarning}</mux-ui-feedback>` : nothing}
+      ${this.callStream ? html`
+        <video class="call-preview" autoplay playsinline muted aria-label="Camera preview"></video>
+        <div class="call-device-fields"><label>Microphone<select aria-label="Call microphone" @change=${(event:Event) => {this.callAudioDeviceId=(event.target as HTMLSelectElement).value;void this.prepareCall();}}>${this.callAudioDevices.length ? this.callAudioDevices.map(device=>html`<option value=${device.deviceId} ?selected=${device.deviceId===this.callAudioDeviceId}>${device.label || 'Microphone'}</option>`) : html`<option>Default microphone</option>`}</select></label><label>Camera<select aria-label="Call camera" @change=${(event:Event) => {this.callVideoDeviceId=(event.target as HTMLSelectElement).value;void this.prepareCall();}}>${this.callVideoDevices.length ? this.callVideoDevices.map(device=>html`<option value=${device.deviceId} ?selected=${device.deviceId===this.callVideoDeviceId}>${device.label || 'Camera'}</option>`) : html`<option>Default camera</option>`}</select></label></div>
+        <label class="call-record-default"><input type="checkbox" .checked=${this.recordCallByDefault} @change=${(event:Event) => {this.recordCallByDefault=(event.target as HTMLInputElement).checked;this.requestUpdate();}}><span>Record automatically</span></label>
+        <div class="meeting-buttons"><mux-ui-button variant="primary" ?disabled=${this.callStarting} @click=${() => void this.startCall()}>${icon(Video,{size:15})} Create call link</mux-ui-button><mux-ui-button variant="quiet" @click=${() => this.abandonCall()}>Cancel</mux-ui-button></div>
+      ` : this.callHostingError ? html`<div class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => void this.prepareCall()}>Check again</mux-ui-button><mux-ui-button variant="quiet" @click=${() => this.abandonCall()}>Cancel</mux-ui-button></div>` : html`<mux-ui-feedback kind="loading" density="compact">Checking camera and microphone…</mux-ui-feedback>`}
+    </div>`;
+    if (this.callId) return this.callView();
+    if (this.preparation) return html`<div class="meeting-detail"><h2>Record alone</h2>${this.stream ? html`<label class="meeting-field" for="meeting-input">Microphone<select id="meeting-input" @change=${(event:Event) => { this.deviceId=(event.target as HTMLSelectElement).value; void this.prepare(); }}>${this.devices.map(device => html`<option value=${device.deviceId} ?selected=${device.deviceId===this.deviceId}>${device.label || 'Microphone'}</option>`)}</select></label>${this.inputMeter()}<div class="meeting-buttons"><mux-ui-button variant="primary" ?disabled=${this.recordingStarting} @click=${() => void this.startRecording()}>${icon(Mic,{size:15})} Start recording</mux-ui-button><mux-ui-button variant="quiet" @click=${() => this.abandonPreparation()}>Cancel</mux-ui-button></div>` : html`<mux-ui-feedback kind="loading" density="compact">Requesting microphone…</mux-ui-feedback>`}</div>`;
+    if (this.activeId) return html`<div class="meeting-detail"><div class="record-live">● Recording ${this.clock(this.elapsed)}</div><h2>${selected?.title || 'Quick recording'}</h2>${this.inputMeter()}<mux-ui-button variant="danger" @click=${() => void this.stopRecording()}>${icon(Square,{size:15})} Stop and save</mux-ui-button></div>`;
+    if (selected) return html`<div class="meeting-detail meeting-review"><h2>${selected.recordingState==='ready' ? 'Recording saved' : selected.title}</h2><div class="meeting-meta">${selected.title} · ${new Date(selected.startedAt).toLocaleString()} · ${this.clock(this.duration(selected))}</div>${selected.error ? html`<mux-ui-feedback kind="warning" density="compact">${selected.error}</mux-ui-feedback>` : nothing}${selected.recordingState==='ready' ? html`${selected.mediaType?.startsWith('video/') ? html`<video class="meeting-player" controls preload="metadata" src=${this.path(selected.id,'/media')}></video>` : html`<audio controls preload="metadata" src=${this.path(selected.id,'/media')}></audio>`}<a class="meeting-download" href=${this.path(selected.id,'/media')} download=${`meeting-${selected.id}.webm`}>${icon(Download,{size:15})} Download original</a>${this.transcriptView(selected)}` : selected.chunks > 0 || this.locallyRecoverable.has(selected.id) ? html`<mux-ui-button variant="secondary" @click=${() => void this.recover(selected)}>Recover recording</mux-ui-button>` : nothing}<div class="meeting-buttons"><mux-ui-button variant="danger" @click=${() => { this.deleteId=selected.id; this.requestUpdate(); }}>${icon(Trash2,{size:15})} Delete meeting</mux-ui-button></div></div>`;
+    return html`<div class="meeting-home"><div class="meeting-actions"><mux-ui-button variant="primary" @click=${() => void this.prepareCall()}>${icon(Video,{size:15})} Start recorded call</mux-ui-button><mux-ui-button variant="secondary" @click=${() => void this.prepare()}>${icon(Mic,{size:15})} Record alone</mux-ui-button></div><section class="meeting-history" aria-label="Recent meetings"><div class="meeting-history-heading"><h2>Recent meetings</h2><mux-ui-button icon-only size="small" variant="quiet" accessible-label="Refresh meetings" tooltip="Refresh meetings" @click=${() => void this.load()}>${icon(RefreshCw,{size:15})}</mux-ui-button></div><mux-ui-text-field type="search" size="small" aria-label="Search recordings" placeholder="Search recordings" .value=${this.query} @input=${(event:Event) => {this.query=(event.target as MuxUITextField).liveValue;this.requestUpdate();}}></mux-ui-text-field><div class="meeting-rows">${this.loading ? html`<mux-ui-feedback kind="loading" density="compact">Loading meetings…</mux-ui-feedback>` : recent.map(meeting=>html`<button class="meeting-row" @click=${() => this.selectMeeting(meeting)}><span class="meeting-row-icon">${icon(meeting.kind==='call' ? Video : AudioLines,{size:16})}</span><span class="meeting-row-text"><strong>${meeting.title}</strong><small>${new Date(meeting.startedAt).toLocaleDateString()} · ${this.clock(this.duration(meeting))}${meeting.recordingState==='ready' ? ' · Recording ready' : ''}</small></span></button>`)}${!this.loading && !recent.length ? html`<div class="meeting-empty">${this.query?'No matching meetings':'No meetings yet'}</div>` : nothing}</div></section></div>`;
   }
   private networkView() {
     const network=this.callNetwork;
-    const routeLabel=network.route==='direct'?'Direct browser connection':network.route==='relay'?'TURN relay':network.route==='failed'?'No connection':network.route==='stalled'?'No route selected yet':'Checking routes';
-    const noRouteHint=network.turnConfigured?'Check TURN reachability and credentials. The browser cannot identify the exact network rule.':'No TURN fallback is configured. A NAT or firewall may be blocking the direct path.';
-    const hint=network.route==='direct'?'Media is traveling directly between browsers.':network.route==='relay'?'Media is using TURN. The browser cannot identify the exact NAT or firewall rule that prevented a direct route.':network.route==='failed'?`No route connected. ${noRouteHint}`:network.route==='stalled'?`No route was selected after 12 seconds. The browser has not reported failure. ${noRouteHint}`:'Browsers are testing available paths.';
-    const types:Record<string,string>={host:'local',srflx:'NAT-mapped',prflx:'peer-mapped',relay:'relay'};
-    return html`<div class="call-network" role="status"><strong>Connection: ${routeLabel}</strong><span>ICE ${network.ice}${network.protocol ? ` · ${network.protocol.toUpperCase()}` : ''}${network.localType && network.remoteType ? ` · ${types[network.localType] || network.localType} ↔ ${types[network.remoteType] || network.remoteType}` : ''}${network.relayProtocol ? ` · TURN over ${network.relayProtocol.toUpperCase()}` : ''}</span><p>${hint}${(network.route==='failed'||network.route==='stalled') && network.errorCode ? ` ICE server error ${network.errorCode}.` : ''}</p></div>`;
+    const routeLabel=network.route==='direct'?'Direct connection':network.route==='relay'?'TURN relay':network.route==='failed'?'No connection':network.route==='stalled'?'Still connecting':'Checking connection';
+    const glyph=network.route==='failed' ? WifiOff : network.route==='relay' ? Radio : Signal;
+    const details=[network.ice,network.protocol?.toUpperCase(),network.localType && network.remoteType ? `${network.localType} ↔ ${network.remoteType}` : '',network.relayProtocol ? `TURN ${network.relayProtocol.toUpperCase()}` : ''].filter(Boolean).join(' · ');
+    return html`<div class="connection-wrap"><mux-ui-button class="connection-trigger ${network.route}" icon-only size="small" variant="quiet" accessible-label=${routeLabel} tooltip=${routeLabel} .expanded=${this.connectionOpen} @click=${() => {this.connectionOpen=!this.connectionOpen;this.layoutOpen=false;this.moreOpen=false;this.requestUpdate();}}>${icon(glyph,{size:17})}</mux-ui-button>${this.connectionOpen ? html`<div class="connection-popover" role="status"><strong>${routeLabel}</strong><span>${details}</span>${network.route==='failed' || network.route==='stalled' ? html`<span>${network.turnConfigured ? 'Check TURN settings' : 'TURN is not configured'}</span>` : nothing}</div>` : nothing}</div>`;
   }
-  private callView(selected?:Meeting) {
+  private callView() {
     const localAudio=this.callStream?.getAudioTracks()[0],localVideo=this.callStream?.getVideoTracks()[0];
     const screen=this.screenStream || this.remoteScreen;
-    return html`<div class="meeting-call"><div class="meeting-overline">${selected?.title || 'VIDEO CALL'} · ${this.guestJoined ? 'GUEST JOINED' : 'WAITING FOR GUEST'}</div><h2>${this.guestJoined ? 'You and a guest' : 'Waiting for a guest'}</h2><p>${this.callStatus || 'Connecting…'}</p>${this.networkView()}${this.callFallbackWarning ? html`<mux-ui-feedback kind="warning" density="compact">${this.callFallbackWarning} Direct connections can still work.</mux-ui-feedback>` : nothing}${this.callRecording ? html`<div class="record-live">● Recording audio, video, and active screen share. Both people can see this indicator.</div>` : nothing}
-      <div class="call-stage ${screen ? 'sharing' : ''} ${this.sampleScene ? 'sample-media' : ''}">${screen ? html`<div class="call-screen-tile">${this.sampleScene ? html`<div class="sample-screen"><i></i><strong>Project notes</strong><p>Decisions · follow ups · next steps</p></div>` : nothing}<video class="call-screen" autoplay playsinline ?muted=${!!this.screenStream}></video><span>${this.screenStream ? 'Your screen' : 'Guest screen'}</span></div>` : nothing}<div class="call-video-tile">${this.sampleScene ? html`<div class="sample-person guest"><i></i><b></b></div>` : nothing}<video class="call-remote" autoplay playsinline></video><span>${this.guestJoined ? 'Guest' : 'Waiting for a guest'}</span></div><div class="call-video-tile">${this.sampleScene ? html`<div class="sample-person host"><i></i><b></b></div>` : nothing}<video class="call-local" autoplay playsinline muted></video><span>You</span></div></div>
-      <div class="call-controls"><mux-ui-button size="small" variant="secondary" @click=${() => { if(this.sampleScene)this.sampleMicOn=!this.sampleMicOn;else if(localAudio)localAudio.enabled=!localAudio.enabled;this.requestUpdate(); }}>${icon((this.sampleScene ? this.sampleMicOn : localAudio?.enabled) ? Mic : MicOff,{size:15})} ${(this.sampleScene ? this.sampleMicOn : localAudio?.enabled) ? 'Mute' : 'Unmute'}</mux-ui-button><mux-ui-button size="small" variant="secondary" ?disabled=${!localVideo&&!this.sampleScene} @click=${() => { if(this.sampleScene)this.sampleCameraOn=!this.sampleCameraOn;else if(localVideo)localVideo.enabled=!localVideo.enabled;this.requestUpdate(); }}>${icon((this.sampleScene ? this.sampleCameraOn : localVideo?.enabled) ? Video : VideoOff,{size:15})} ${(this.sampleScene ? this.sampleCameraOn : localVideo?.enabled) ? 'Camera off' : 'Camera on'}</mux-ui-button><mux-ui-button size="small" variant="secondary" @click=${() => { if(this.sampleScene){this.screenStream=this.screenStream?undefined:new MediaStream();this.requestUpdate();}else void this.toggleShare(); }}>${icon(MonitorUp,{size:15})} ${this.screenStream ? 'Stop share' : 'Share screen'}</mux-ui-button><mux-ui-button size="small" variant="danger" @click=${() => { if(this.sampleScene){this.callId='';this.requestUpdate();}else void this.leaveCall(); }}>${icon(X,{size:15})} End call</mux-ui-button></div>
-      <div class="call-invite"><strong>Guest invite</strong><span>${this.inviteUrl}</span><mux-ui-button size="small" variant="secondary" @click=${() => void navigator.clipboard.writeText(this.inviteUrl).catch(error => {this.callStatus=String(error);this.requestUpdate();})}>${icon(Copy,{size:15})} Copy link</mux-ui-button></div>
-      <div class="call-record-action"><p>Recording starts only when you choose it. The original stays in muxterm storage.</p>${this.callRecording ? html`<mux-ui-button size="small" variant="danger" @click=${() => { if(this.sampleScene){this.callRecording=false;this.requestUpdate();}else void this.stopCallRecording(); }}>${icon(Square,{size:15})} Stop recording</mux-ui-button>` : html`<mux-ui-button size="small" variant="secondary" ?disabled=${!this.sampleScene && (this.callRecordingStarting || !this.guestJoined || !this.remoteStream?.getAudioTracks().some(track=>track.readyState==='live'))} @click=${() => { if(this.sampleScene){this.callRecording=true;this.requestUpdate();}else void this.startCallRecording(); }}>${icon(Mic,{size:15})} Record this call</mux-ui-button>`}</div>
+    const waiting=!this.guestJoined;
+    return html`<div class="meeting-call">
+      <h2>${waiting ? 'Waiting for guest' : 'You and your guest'}</h2>
+      ${this.callFallbackWarning ? html`<mux-ui-feedback kind="warning" density="compact">${this.callFallbackWarning}</mux-ui-feedback>` : nothing}
+      ${this.callNetwork.route==='failed' ? html`<mux-ui-feedback kind="error" density="compact">${this.callStatus || 'Media connection failed'}</mux-ui-feedback>` : nothing}
+      ${this.callStatus.startsWith('Recording failed:') ? html`<mux-ui-feedback kind="error" density="compact">${this.callStatus}</mux-ui-feedback>` : nothing}
+      <div class="call-stage ${screen ? 'sharing' : ''} ${waiting ? 'waiting' : ''} layout-${this.callLayout} ${this.selfVideoMinimized ? 'self-minimized' : ''} ${this.sampleScene ? 'sample-media' : ''}">
+        ${screen ? html`<div class="call-screen-tile">${this.sampleScene ? html`<div class="sample-screen"><i></i><strong>Project notes</strong></div>` : nothing}<video class="call-screen" autoplay playsinline ?muted=${!!this.screenStream}></video><span>${this.screenStream ? 'Your screen' : 'Guest screen'}</span></div>` : nothing}
+        <div class="call-video-tile guest">${this.sampleScene && !waiting ? html`<div class="sample-person guest"><i></i><b></b></div>` : waiting ? html`<div class="waiting-avatar">${icon(Plus,{size:28})}</div>` : nothing}<video class="call-remote" autoplay playsinline></video><span>Guest</span></div>
+        <div class="call-video-tile self">${this.sampleScene ? html`<div class="sample-person host"><i></i><b></b></div>` : nothing}<video class="call-local" autoplay playsinline muted></video><span>You</span>${this.callLayout==='focus' ? html`<button class="self-minimize" aria-label="Minimize your video" title="Minimize your video" @click=${() => {this.selfVideoMinimized=true;this.requestUpdate();}}>${icon(Minus,{size:14})}</button>` : nothing}</div>
+        ${this.callLayout==='focus' && this.selfVideoMinimized && !screen ? html`<button class="self-restore" @click=${() => {this.selfVideoMinimized=false;this.requestUpdate();}}>Show my video</button>` : nothing}
+      </div>
+      ${waiting ? html`<div class="call-invite"><div><strong>Invite your guest</strong><span title=${this.inviteUrl}>${this.inviteUrl}</span></div><mux-ui-button size="small" variant="secondary" @click=${() => void navigator.clipboard.writeText(this.inviteUrl).catch(error=>{this.callStatus=String(error);this.requestUpdate();})}>${icon(Copy,{size:15})} Copy link</mux-ui-button></div>` : nothing}
+      <div class="call-controls"><mux-ui-button icon-only size="small" variant="secondary" accessible-label=${(this.sampleScene ? this.sampleMicOn : localAudio?.enabled) ? 'Mute microphone' : 'Unmute microphone'} tooltip=${(this.sampleScene ? this.sampleMicOn : localAudio?.enabled) ? 'Mute microphone' : 'Unmute microphone'} @click=${() => {if(this.sampleScene)this.sampleMicOn=!this.sampleMicOn;else if(localAudio)localAudio.enabled=!localAudio.enabled;this.requestUpdate();}}>${icon((this.sampleScene ? this.sampleMicOn : localAudio?.enabled) ? Mic : MicOff,{size:17})}</mux-ui-button><mux-ui-button icon-only size="small" variant="secondary" ?disabled=${!localVideo&&!this.sampleScene} accessible-label=${(this.sampleScene ? this.sampleCameraOn : localVideo?.enabled) ? 'Turn camera off' : 'Turn camera on'} tooltip=${(this.sampleScene ? this.sampleCameraOn : localVideo?.enabled) ? 'Turn camera off' : 'Turn camera on'} @click=${() => {if(this.sampleScene)this.sampleCameraOn=!this.sampleCameraOn;else if(localVideo)localVideo.enabled=!localVideo.enabled;this.requestUpdate();}}>${icon((this.sampleScene ? this.sampleCameraOn : localVideo?.enabled) ? Video : VideoOff,{size:17})}</mux-ui-button><mux-ui-button icon-only size="small" variant="secondary" accessible-label=${screen ? 'Stop sharing screen' : 'Share screen'} tooltip=${screen ? 'Stop sharing screen' : 'Share screen'} @click=${() => {if(this.sampleScene){this.screenStream=this.screenStream?undefined:new MediaStream();this.requestUpdate();}else void this.toggleShare();}}>${icon(MonitorUp,{size:17})}</mux-ui-button>
+        ${!waiting ? html`<div class="call-menu-wrap"><mux-ui-button icon-only size="small" variant="secondary" accessible-label="Change video layout" tooltip="Change video layout" .expanded=${this.layoutOpen} @click=${() => {this.layoutOpen=!this.layoutOpen;this.moreOpen=false;this.connectionOpen=false;this.requestUpdate();}}>${icon(LayoutGrid,{size:17})}</mux-ui-button>${this.layoutOpen ? html`<div class="call-menu layout-menu" role="group" aria-label="Video layouts">${(['side','stacked','focus'] as const).map((layout)=>html`<button aria-pressed=${this.callLayout===layout} @click=${() => {this.callLayout=layout;this.selfVideoMinimized=false;this.layoutOpen=false;this.requestUpdate();}}>${layout==='side'?'Side by side':layout==='stacked'?'Stacked':'Focus guest'}${this.callLayout===layout ? icon(Check,{size:14}) : nothing}</button>`)}</div>` : nothing}</div>` : nothing}
+        <div class="call-menu-wrap"><mux-ui-button icon-only size="small" variant="secondary" accessible-label="More call actions" tooltip="More call actions" .expanded=${this.moreOpen} @click=${() => {this.moreOpen=!this.moreOpen;this.layoutOpen=false;this.connectionOpen=false;this.requestUpdate();}}>${icon(Ellipsis,{size:17})}</mux-ui-button>${this.moreOpen ? html`<div class="call-menu more-menu" role="group" aria-label="More call actions"><button @click=${() => {void navigator.clipboard.writeText(this.inviteUrl).catch(error=>{this.callStatus=String(error);this.requestUpdate();});this.moreOpen=false;this.requestUpdate();}}>Copy invite link</button>${this.callRecording ? html`<button @click=${() => {this.recordCallByDefault=false;this.moreOpen=false;if(this.sampleScene){this.callRecording=false;this.requestUpdate();}else void this.stopCallRecording();}}>Stop recording</button>` : !waiting ? html`<button ?disabled=${this.callRecordingStarting || (!this.sampleScene && !this.remoteStream?.getAudioTracks().some(track=>track.readyState==='live'))} @click=${() => {this.moreOpen=false;if(this.sampleScene){this.callRecording=true;this.requestUpdate();}else void this.startCallRecording();}}>Start recording</button>` : nothing}</div>` : nothing}</div>
+        <mux-ui-button class="end-call" size="small" variant="danger" accessible-label="End call" tooltip="End call" ?disabled=${this.callLeaving} @click=${() => {if(this.sampleScene){this.callId='';this.requestUpdate();}else void this.leaveCall();}}>${icon(X,{size:16})}<span>End call</span></mux-ui-button>
+      </div>
     </div>`;
   }
+
   override render() {
-    const selected = this.selected();
-    const filtered = this.meetings.filter(item => `${item.title} ${item.participants.join(' ')}`.toLowerCase().includes(this.query.toLowerCase()));
+    const selected=this.selected();
+    const home=!this.callPreparing && !this.callId && !this.preparation && !this.activeId && !selected;
+    const title=this.callPreparing?'Before you start':this.callId ? this.guestJoined ? 'Call with guest' : 'New call' : this.preparation?'Record alone':this.activeId?'Recording':selected?'Recording':'Meetings';
+    const back=()=>{if(this.callPreparing)this.abandonCall();else if(this.preparation)this.abandonPreparation();else {this.selectedId='';this.requestUpdate();}};
     return html`<style>${styles}</style><section class="meeting-layout">
-      <aside class="meeting-rail"><div class="meeting-heading"><strong>MEETINGS ${this.sampleScene ? '· SAMPLE' : ''}</strong><mux-ui-button icon-only size="small" variant="quiet" accessible-label="Refresh meetings" tooltip="Refresh meetings" @click=${() => void this.load()}>${icon(RefreshCw,{size:15})}</mux-ui-button></div>
-        <mux-ui-text-field type="search" size="small" aria-label="Search meetings" placeholder="Search meetings" .value=${this.query} @input=${(event:Event) => { this.query = (event.target as MuxUITextField).liveValue; this.requestUpdate(); }}></mux-ui-text-field>
-        <div class="meeting-actions"><mux-ui-button size="small" variant="secondary" @click=${() => void this.prepare()}>${icon(Mic,{size:15})} Record</mux-ui-button><mux-ui-button size="small" variant="secondary" @click=${() => void this.prepareCall()}>${icon(Video,{size:15})} Start call</mux-ui-button></div>
-        <div class="meeting-rows">${this.loading ? html`<mux-ui-feedback kind="loading" density="compact">Loading meetings…</mux-ui-feedback>` : filtered.length ? filtered.map(meeting => html`<mux-ui-rail-row label=${meeting.title} detail=${new Date(meeting.startedAt).toLocaleString()} ?selected=${meeting.id === this.selectedId} @click=${() => this.selectMeeting(meeting)}><span slot="icon">${icon(meeting.kind === 'call' ? Video : AudioLines,{size:15})}</span></mux-ui-rail-row>`) : html`<mux-ui-feedback kind="empty" density="compact">${this.query ? 'No meetings match this search.' : 'No meetings yet.'}</mux-ui-feedback>`}</div>
-      </aside><mux-ui-pane-divider class="meeting-divider" fixed aria-hidden="true"></mux-ui-pane-divider><main class="meeting-viewer">
-        ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
-        ${this.captureError ? html`<mux-ui-feedback kind="warning" density="compact">${this.captureError}</mux-ui-feedback>` : nothing}
-        ${this.meetingBody(selected)}
-      </main><mux-ui-dialog size="compact" presentation="adaptive" label="Delete meeting" ?open=${!!this.deleteId} @dismiss=${() => { this.deleteId=''; this.requestUpdate(); }}><div class="meeting-confirm"><h2>Delete this meeting?</h2><p>The original recording and any saved chunks will be removed.</p><div class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => { this.deleteId=''; this.requestUpdate(); }}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => void this.deleteMeeting()}>Delete meeting</mux-ui-button></div></div></mux-ui-dialog>
+      <header class="meeting-top">${!home && !this.callId && !this.activeId ? html`<mux-ui-button icon-only size="small" variant="quiet" accessible-label="Back to meetings" tooltip="Back to meetings" @click=${back}>${icon(ArrowLeft,{size:17})}</mux-ui-button>` : nothing}<strong>${title}</strong><div class="meeting-top-actions">${this.callId ? html`<span class="record-badge ${this.callRecording?'active':''}"><i></i>${this.callRecording?'Recording':this.recordCallByDefault?'Recording ready':'Recording off'}</span>${this.networkView()}` : this.activeId ? html`<span class="record-badge active"><i></i>${this.clock(this.elapsed)}</span>` : nothing}</div></header>
+      <main class="meeting-viewer">${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}${this.captureError ? html`<mux-ui-feedback kind="warning" density="compact">${this.captureError}</mux-ui-feedback>` : nothing}${this.meetingBody(selected)}</main>
+      <mux-ui-dialog size="compact" presentation="adaptive" label="Delete meeting" ?open=${!!this.deleteId} @dismiss=${() => {this.deleteId='';this.requestUpdate();}}><div class="meeting-confirm"><h2>Delete this meeting?</h2><p>The recording and saved chunks will be removed.</p><div class="meeting-buttons"><mux-ui-button variant="secondary" @click=${() => {this.deleteId='';this.requestUpdate();}}>Cancel</mux-ui-button><mux-ui-button variant="danger" @click=${() => void this.deleteMeeting()}>Delete meeting</mux-ui-button></div></div></mux-ui-dialog>
     </section>`;
   }
+
 }
 
 const styles = `
-  mux-meetings { color:var(--ui-text); background:var(--ui-surface-base); font:var(--ui-text-md)/1.5 var(--ui-font-sans); }
-  mux-meetings .meeting-layout { display:grid; grid-template-columns:minmax(0,1fr) var(--ui-divider-thickness) clamp(220px,32%,340px); height:100%; min-width:0; }
-  mux-meetings .meeting-rail { grid-column:3; grid-row:1; min-width:0; min-height:0; display:flex; flex-direction:column; background:var(--ui-surface-base); }
-  mux-meetings .meeting-heading { height:var(--ui-utility-browser-heading-height); padding:0 var(--ui-space-4) 0 var(--ui-space-6); display:flex; align-items:center; justify-content:space-between; color:var(--ui-text-muted); font-size:var(--ui-text-xs); letter-spacing:.13em; }
-  mux-meetings mux-ui-text-field { margin:0 var(--ui-space-4) var(--ui-space-3); }
-  mux-meetings .meeting-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin:0 var(--ui-space-4) var(--ui-space-4); }
-  mux-meetings .meeting-rows { overflow:auto; flex:1; }
-  mux-meetings .meeting-divider { grid-column:2; grid-row:1; }
-  mux-meetings .meeting-viewer { grid-column:1; grid-row:1; overflow:auto; min-width:0; padding:var(--ui-space-5); }
-  mux-meetings .meeting-detail { max-width:680px; margin:var(--ui-space-8) auto; }
-  mux-meetings .meeting-detail h2 { font:600 var(--ui-text-xl)/1.2 var(--ui-font-sans); margin:var(--ui-space-3) 0; }
-  mux-meetings .meeting-detail p { color:var(--ui-text-muted); }
-  mux-meetings .meeting-overline { color:var(--ui-text-muted); font-size:var(--ui-text-xs); letter-spacing:.12em; font-weight:700; }
-  mux-meetings .record-live { color:var(--ui-danger); font-weight:700; }
+  mux-meetings { display:block; height:100%; min-width:0; color:var(--ui-text); background:var(--ui-surface-base); font:var(--ui-text-md)/1.45 var(--ui-font-sans); container-type:inline-size; }
+  mux-meetings .meeting-layout { display:flex; flex-direction:column; height:100%; min-width:0; min-height:0; }
+  mux-meetings .meeting-top { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-2); min-height:50px; padding:0 var(--ui-space-5); border-bottom:1px solid var(--ui-border); flex:none; }
+  mux-meetings .meeting-top > strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ui-text-sm); font-weight:700; }
+  mux-meetings .meeting-top-actions { display:flex; align-items:center; gap:var(--ui-space-2); margin-left:auto; }
+  mux-meetings .record-badge { display:inline-flex; align-items:center; gap:var(--ui-space-2); padding:5px 9px; border:1px solid var(--ui-border); border-radius:var(--ui-radius-pill); color:var(--ui-text-muted); font-size:var(--ui-text-xs); font-weight:650; white-space:nowrap; }
+  mux-meetings .record-badge.active { border-color:color-mix(in srgb,var(--ui-danger) 55%,var(--ui-border)); color:var(--ui-danger); }
+  mux-meetings .record-badge i { width:7px; height:7px; border-radius:50%; background:currentColor; }
+  mux-meetings .meeting-viewer { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-6); }
+  mux-meetings .meeting-home, mux-meetings .meeting-prejoin, mux-meetings .meeting-detail, mux-meetings .meeting-call { max-width:760px; margin:0 auto; }
+  mux-meetings .meeting-home { padding-top:var(--ui-space-3); }
+  mux-meetings .meeting-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
+  mux-meetings .meeting-history { margin-top:var(--ui-space-9); }
+  mux-meetings .meeting-history-heading { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-2); margin-bottom:var(--ui-space-3); }
+  mux-meetings .meeting-history h2 { margin:0; font-size:var(--ui-text-sm); font-weight:700; }
+  mux-meetings .meeting-history mux-ui-text-field { display:block; margin:0 0 var(--ui-space-2); }
+  mux-meetings .meeting-rows { display:flex; flex-direction:column; }
+  mux-meetings .meeting-row { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; padding:var(--ui-space-3) var(--ui-space-1); border:0; border-top:1px solid var(--ui-border); background:transparent; color:var(--ui-text); text-align:left; cursor:pointer; }
+  mux-meetings .meeting-row:hover, mux-meetings .meeting-row:focus-visible { background:var(--ui-surface-hover); }
+  mux-meetings .meeting-row:focus-visible, mux-meetings .call-menu button:focus-visible, mux-meetings .self-minimize:focus-visible, mux-meetings .self-restore:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
+  mux-meetings .meeting-row-icon { display:grid; place-items:center; width:28px; height:28px; flex:none; color:var(--ui-accent); }
+  mux-meetings .meeting-row-text { display:block; min-width:0; }
+  mux-meetings .meeting-row-text strong, mux-meetings .meeting-row-text small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  mux-meetings .meeting-row-text strong { font-size:var(--ui-text-sm); font-weight:650; }
+  mux-meetings .meeting-row-text small, mux-meetings .meeting-empty, mux-meetings .meeting-meta { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+  mux-meetings .meeting-empty { padding:var(--ui-space-4) 0; }
+  mux-meetings .meeting-prejoin { max-width:560px; }
+  mux-meetings .call-preview { display:block; width:100%; aspect-ratio:16/9; object-fit:cover; background:#151b27; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); margin:0 0 var(--ui-space-5); }
+  mux-meetings .call-device-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--ui-space-3); }
+  mux-meetings .call-device-fields label, mux-meetings .meeting-field { display:grid; gap:var(--ui-space-1); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
+  mux-meetings .call-device-fields select, mux-meetings .meeting-field select { box-sizing:border-box; width:100%; min-width:0; min-height:39px; padding:var(--ui-space-2) var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; }
+  mux-meetings .call-record-default { display:flex; align-items:center; gap:var(--ui-space-3); margin:var(--ui-space-5) 0; padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); font-weight:650; cursor:pointer; }
+  mux-meetings .call-record-default input { accent-color:var(--ui-accent); width:17px; height:17px; margin:0; }
+  mux-meetings .meeting-detail { max-width:680px; }
+  mux-meetings .meeting-detail h2 { font:600 var(--ui-text-xl)/1.2 var(--ui-font-sans); margin:0 0 var(--ui-space-4); }
+  mux-meetings .meeting-review h2 { font-size:var(--ui-text-2xl); }
+  mux-meetings .meeting-detail audio { display:block; width:100%; margin:var(--ui-space-7) 0; }
+  mux-meetings .meeting-player { display:block; width:100%; max-height:420px; margin:var(--ui-space-7) 0; background:#111827; }
+  mux-meetings .meeting-buttons { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin-top:var(--ui-space-5); }
+  mux-meetings .meeting-download { display:inline-flex; align-items:center; gap:var(--ui-space-2); }
+  mux-meetings .record-live { color:var(--ui-danger); font-weight:700; margin-bottom:var(--ui-space-3); }
   mux-meetings .input-meter { display:flex; align-items:center; gap:var(--ui-space-3); margin:var(--ui-space-5) 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
   mux-meetings .input-meter [role=meter] { height:8px; flex:1; max-width:260px; overflow:hidden; border-radius:var(--ui-radius-pill); background:var(--ui-border); }
   mux-meetings .input-meter i { display:block; height:100%; border-radius:inherit; background:var(--ui-accent); transition:width .16s linear; }
-  mux-meetings .meeting-detail audio { display:block; width:100%; margin:var(--ui-space-7) 0; }
-  mux-meetings .meeting-player { display:block; width:100%; max-height:420px; margin:var(--ui-space-7) 0; background:#111827; }
-  mux-meetings .meeting-buttons { display:flex; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-7); }
-  mux-meetings .meeting-download { display:inline-flex; align-items:center; gap:var(--ui-space-2); }
+  mux-meetings .meeting-call h2 { margin:0 0 var(--ui-space-3); font:650 var(--ui-text-lg)/1.25 var(--ui-font-sans); }
+  mux-meetings .call-stage { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--ui-space-2); margin:0 0 var(--ui-space-3); }
+  mux-meetings .call-video-tile, mux-meetings .call-screen-tile { position:relative; min-width:0; overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:#151b27; aspect-ratio:16/10; }
+  mux-meetings .call-stage video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  mux-meetings .call-screen-tile video { object-fit:contain; }
+  mux-meetings .call-stage span { position:absolute; z-index:2; left:var(--ui-space-2); bottom:var(--ui-space-2); padding:2px 6px; border-radius:var(--ui-radius-sm); background:#111827c9; color:white; font-size:var(--ui-text-xs); }
+  mux-meetings .call-stage.layout-stacked { grid-template-columns:1fr; }
+  mux-meetings .call-stage.layout-stacked .call-video-tile { aspect-ratio:16/7; }
+  mux-meetings .call-stage.layout-focus { display:block; position:relative; }
+  mux-meetings .call-stage.layout-focus .guest { width:100%; aspect-ratio:16/10; }
+  mux-meetings .call-stage.layout-focus .self { position:absolute; z-index:2; width:30%; right:var(--ui-space-3); bottom:var(--ui-space-3); box-shadow:var(--ui-shadow-side-strong); }
+  mux-meetings .call-stage.layout-focus .self span { display:none; }
+  mux-meetings .call-stage.layout-focus.self-minimized .self { display:none; }
+  mux-meetings .self-minimize, mux-meetings .self-restore { display:grid; place-items:center; position:absolute; z-index:3; right:6px; top:6px; min-width:25px; min-height:25px; padding:3px; border:1px solid #ffffff80; border-radius:var(--ui-radius-sm); background:#151b27d9; color:white; cursor:pointer; }
+  mux-meetings .self-restore { top:auto; right:var(--ui-space-3); bottom:var(--ui-space-3); padding:var(--ui-space-2) var(--ui-space-3); font:inherit; font-size:var(--ui-text-xs); }
+  mux-meetings .call-stage.waiting { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+  mux-meetings .call-stage.waiting .guest, mux-meetings .call-stage.waiting .self { position:relative; width:auto; right:auto; bottom:auto; box-shadow:none; }
+  mux-meetings .call-stage.waiting .self span { display:block; }
+  mux-meetings .call-stage.waiting .self-minimize { display:none; }
+  mux-meetings .waiting-avatar { position:absolute; z-index:1; inset:0; display:grid; place-items:center; color:var(--ui-text-muted); }
+  mux-meetings .call-stage.waiting .call-remote { display:none; }
+  mux-meetings .call-stage.sharing { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+  mux-meetings .call-stage.sharing .call-screen-tile { grid-column:1/-1; aspect-ratio:16/9; }
+  mux-meetings .call-stage.sharing .guest, mux-meetings .call-stage.sharing .self { position:relative; width:auto; right:auto; bottom:auto; box-shadow:none; }
+  mux-meetings .call-stage.sharing.self-minimized .self { display:block; }
+  mux-meetings .call-stage.sharing .self span { display:block; }
+  mux-meetings .call-stage.sharing .self-minimize { display:none; }
+  mux-meetings .call-controls { display:flex; align-items:center; gap:var(--ui-space-2); margin:var(--ui-space-3) 0; }
+  mux-meetings .call-controls .end-call { margin-left:auto; }
+  mux-meetings .call-menu-wrap, mux-meetings .connection-wrap { position:relative; }
+  mux-meetings .call-menu, mux-meetings .connection-popover { position:absolute; z-index:10; min-width:165px; padding:var(--ui-space-1); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-side-strong); }
+  mux-meetings .call-menu { bottom:calc(100% + 6px); left:0; }
+  mux-meetings .call-menu.more-menu { left:auto; right:0; }
+  mux-meetings .call-menu button { box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-2); width:100%; padding:var(--ui-space-2) var(--ui-space-3); border:0; border-radius:var(--ui-radius-sm); background:transparent; color:var(--ui-text); text-align:left; white-space:nowrap; cursor:pointer; }
+  mux-meetings .call-menu button:hover, mux-meetings .call-menu button[aria-pressed="true"] { background:var(--ui-surface-hover); }
+  mux-meetings .call-menu button:disabled { opacity:.5; cursor:not-allowed; }
+  mux-meetings .connection-popover { top:calc(100% + 8px); right:0; display:grid; gap:var(--ui-space-1); min-width:195px; padding:var(--ui-space-3); }
+  mux-meetings .connection-popover strong { font-size:var(--ui-text-sm); }
+  mux-meetings .connection-popover span { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+  mux-meetings .connection-trigger.relay { color:var(--ui-accent); }
+  mux-meetings .connection-trigger.failed, mux-meetings .connection-trigger.stalled { color:var(--ui-danger); }
+  mux-meetings .call-invite { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-3); padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
+  mux-meetings .call-invite > div { min-width:0; }
+  mux-meetings .call-invite strong, mux-meetings .call-invite span { display:block; }
+  mux-meetings .call-invite strong { font-size:var(--ui-text-xs); }
+  mux-meetings .call-invite span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+  mux-meetings .call-invite mux-ui-button { flex:none; }
+  mux-meetings .sample-media video { opacity:0; }
+  mux-meetings .sample-person { position:absolute; inset:0; background:linear-gradient(145deg,#41566d,#263b55 55%,#1b2c43); }
+  mux-meetings .sample-person.guest { background:linear-gradient(145deg,#746658,#4a5366 55%,#354354); }
+  mux-meetings .sample-person::before { content:''; position:absolute; width:32%; height:70%; left:34%; bottom:-29%; border-radius:45% 45% 10% 10%; background:#26364f; }
+  mux-meetings .sample-person.guest::before { background:#594050; }
+  mux-meetings .sample-person i { position:absolute; z-index:1; width:17%; aspect-ratio:1; left:42%; top:23%; border-radius:48%; background:#d6a37e; }
+  mux-meetings .sample-person.guest i { background:#a87258; }
+  mux-meetings .sample-person b { position:absolute; z-index:2; width:19%; aspect-ratio:1.6; left:41%; top:18%; border-radius:60% 60% 30% 30%; background:#24202b; }
+  mux-meetings .sample-screen { position:absolute; inset:0; padding:10%; color:#26354e; background:#f4f6fb; }
+  mux-meetings .sample-screen i { display:block; width:22%; height:8px; margin-bottom:10%; border-radius:5px; background:#5f82bb; }
+  mux-meetings .sample-screen strong { font-size:clamp(16px,2vw,34px); }
   mux-meetings .meeting-transcript { margin:var(--ui-space-8) 0; padding-top:var(--ui-space-5); border-top:1px solid var(--ui-border); }
-  mux-meetings .meeting-transcription-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ui-space-3); margin:var(--ui-space-5) 0; }
-  mux-meetings .meeting-transcription-actions .transcription-disclosure { width:100%; margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
   mux-meetings .transcript-header { display:flex; align-items:start; justify-content:space-between; gap:var(--ui-space-4); }
   mux-meetings .transcript-header strong { font-size:var(--ui-text-lg); }
-  mux-meetings .transcript-header p { font-size:var(--ui-text-sm); }
+  mux-meetings .transcript-header p, mux-meetings .transcription-disclosure { color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+  mux-meetings .meeting-transcription-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-3); margin:var(--ui-space-5) 0; }
   mux-meetings .transcript-segments { display:grid; gap:var(--ui-space-3); margin:var(--ui-space-5) 0; }
   mux-meetings .transcript-segment { display:grid; grid-template-columns:70px minmax(0,1fr); gap:var(--ui-space-3); }
   mux-meetings .transcript-segment strong { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
   mux-meetings .transcript-time { align-self:start; border:0; background:transparent; color:var(--ui-accent); padding:var(--ui-space-1); cursor:pointer; font:inherit; }
   mux-meetings .transcript-segment textarea { box-sizing:border-box; display:block; width:100%; min-height:58px; padding:var(--ui-space-2); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; resize:vertical; }
   mux-meetings .meeting-confirm { padding:var(--ui-space-5); }
-  mux-meetings .meeting-detail select { display:block; margin:var(--ui-space-2) 0; padding:var(--ui-space-3); background:var(--ui-surface-raised); color:var(--ui-text); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); }
-  mux-meetings .meeting-preflight video { display:block; width:min(100%,430px); aspect-ratio:16/10; object-fit:cover; background:#151b27; border-radius:var(--ui-radius-lg); margin:var(--ui-space-5) 0; }
-  mux-meetings .call-device-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:var(--ui-space-3); max-width:430px; }
-  mux-meetings .call-device-fields label { display:grid; gap:var(--ui-space-1); font-size:var(--ui-font-size-sm); }
-  mux-meetings .call-device-fields select { width:100%; min-width:0; }
-  mux-meetings .meeting-call { max-width:1000px; margin:0 auto; }
-  mux-meetings .meeting-call h2 { font:600 var(--ui-text-xl)/1.2 var(--ui-font-sans); margin:var(--ui-space-2) 0; }
-  mux-meetings .meeting-call p { color:var(--ui-text-muted); }
-  mux-meetings .call-stage { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--ui-space-3); margin:var(--ui-space-5) 0; }
-  mux-meetings .call-stage.sharing { grid-template-columns:minmax(0,2fr) minmax(150px,1fr); grid-template-rows:repeat(2,minmax(0,1fr)); }
-  mux-meetings .call-screen-tile, mux-meetings .call-video-tile { position:relative; min-width:0; overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:#151b27; aspect-ratio:16/10; }
-  mux-meetings .call-stage.sharing .call-screen-tile { grid-row:1 / 3; aspect-ratio:auto; }
-  mux-meetings .call-stage.sharing .call-video-tile { aspect-ratio:16/9; }
-  mux-meetings .call-stage video { width:100%; height:100%; object-fit:contain; }
-  mux-meetings .sample-media video { position:absolute; inset:0; opacity:0; }
-  mux-meetings .sample-person { position:absolute; inset:0; overflow:hidden; background:linear-gradient(145deg,#41566d,#263b55 55%,#1b2c43); }
-  mux-meetings .sample-person.guest { background:linear-gradient(145deg,#746658,#4a5366 55%,#354354); }
-  mux-meetings .sample-person::before { content:''; position:absolute; width:32%; height:70%; left:34%; bottom:-29%; border-radius:45% 45% 10% 10%; background:#26364f; }
-  mux-meetings .sample-person.guest::before { background:#594050; }
-  mux-meetings .sample-person i { position:absolute; width:17%; aspect-ratio:1; left:42%; top:23%; border-radius:48%; background:#d6a37e; z-index:1; }
-  mux-meetings .sample-person.guest i { background:#a87258; }
-  mux-meetings .sample-person b { position:absolute; width:19%; aspect-ratio:1.6; left:41%; top:18%; border-radius:60% 60% 30% 30%; background:#24202b; z-index:2; }
-  mux-meetings .sample-screen { position:absolute; inset:0; padding:10%; color:#26354e; background:#f4f6fb; }
-  mux-meetings .sample-screen i { display:block; width:22%; height:8px; margin-bottom:10%; border-radius:5px; background:#5f82bb; }
-  mux-meetings .sample-screen strong { font-size:clamp(16px,2vw,34px); }
-  mux-meetings .sample-screen p { color:#55657d; }
-  mux-meetings .call-stage span { position:absolute; bottom:var(--ui-space-2); left:var(--ui-space-2); padding:2px 7px; border-radius:var(--ui-radius-sm); background:#111827b9; color:white; font-size:var(--ui-text-xs); }
-  mux-meetings .call-controls { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin:var(--ui-space-4) 0; }
-  mux-meetings .call-invite, mux-meetings .call-record-action { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-3); padding:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); margin:var(--ui-space-4) 0; }
-  mux-meetings .call-invite span { overflow-wrap:anywhere; color:var(--ui-text-muted); font-size:var(--ui-text-sm); flex:1; }
-  mux-meetings .call-record-action p { margin:0; flex:1; }
-  mux-meetings .call-network { display:grid; gap:var(--ui-space-1); padding:var(--ui-space-3) var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
-  mux-meetings .call-network strong { font-size:var(--ui-text-sm); }
-  mux-meetings .call-network span, mux-meetings .call-network p { color:var(--ui-text-muted); font-size:var(--ui-text-xs); margin:0; }
-  mux-meetings .record-live { margin:var(--ui-space-3) 0; }
-  @container(max-width:420px) { mux-meetings .meeting-layout { display:flex; flex-direction:column; } mux-meetings .meeting-viewer { order:1; flex:1; } mux-meetings .meeting-divider { order:2; width:100%; height:1px; background:var(--ui-shell-divider); } mux-meetings .meeting-rail { order:3; min-height:160px; max-height:36%; } }
-  @container(max-width:620px) { mux-meetings .call-stage, mux-meetings .call-stage.sharing { display:flex; flex-direction:column; } mux-meetings .call-screen-tile { aspect-ratio:16/10 !important; } mux-meetings .call-video-tile { aspect-ratio:16/9 !important; } }
+  @container(max-width:470px) {
+    mux-meetings .meeting-viewer { padding:var(--ui-space-4); }
+    mux-meetings .meeting-actions { flex-direction:column; }
+    mux-meetings .call-device-fields { grid-template-columns:1fr; }
+    mux-meetings .call-stage.waiting { grid-template-columns:1fr; }
+    mux-meetings .call-stage.waiting .call-video-tile { aspect-ratio:16/7; }
+    mux-meetings .call-controls .end-call span { display:none; }
+    mux-meetings .call-invite { gap:var(--ui-space-1); }
+    mux-meetings .record-badge { padding:4px 6px; }
+  }
 `;

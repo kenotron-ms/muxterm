@@ -59,7 +59,7 @@
     "literalColors": 0,
     "literalScale": 0,
     "literalDimensions": 0,
-    "nativeControls": 5
+    "nativeControls": 13
   },
   "components/mux-monaco-diff.ts": {
     "legacyTokens": 0,
