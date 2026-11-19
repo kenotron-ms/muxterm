@@ -1307,7 +1307,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .mobile-tab-picker { display:none; }
     @media(max-width:767.98px) {
       mux-sdk-utility mux-ui-tab-strip { display:none; }
-      mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-height:var(--ui-nav-height); padding:var(--ui-space-2) var(--ui-space-4); }
+      mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-2); min-height:var(--ui-control-lg); padding:0 var(--ui-space-4); }
       mux-sdk-utility .mobile-tab-picker mux-ui-button { flex:none; }
       mux-sdk-utility .mobile-tab-trigger { box-sizing:border-box; display:flex; align-items:center; flex:1; gap:var(--ui-space-3); min-width:0; min-height:var(--ui-control-lg); padding:0 var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:500 var(--ui-text-sm) var(--ui-font-sans); text-align:left; cursor:pointer; }
       mux-sdk-utility .mobile-tab-trigger:hover, mux-sdk-utility .mobile-tab-trigger[aria-expanded='true'] { border-color:var(--ui-text-muted); }
