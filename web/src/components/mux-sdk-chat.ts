@@ -327,26 +327,31 @@ export class MuxSDKChat extends LitElement {
     .block.assistant { position:relative; margin-bottom:calc(var(--ui-control-sm) + var(--ui-space-8)); }
     .block.assistant:has(mux-chat-visualization[mode="wide"]) { max-width:min(var(--ui-chat-visualization-wide-width),100%); }
     .block.work { margin-bottom:var(--ui-space-7); }
-    .work-digest { overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background:var(--ui-surface-raised); color:var(--ui-text); }
-    .work-digest-head { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-5); padding:var(--ui-space-5) var(--ui-space-6); border-bottom:1px solid var(--ui-border); }
+    .work-digest { overflow:hidden; border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); }
+    .work-digest-head { padding:var(--ui-space-5) var(--ui-space-6); }
     .work-digest-head h2 { margin:0; font:700 var(--ui-text-lg)/1.3 var(--ui-font-sans); }
-    .work-digest-head p { margin:var(--ui-space-1) 0 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
-    .work-digest-count { flex:none; padding:var(--ui-space-2) var(--ui-space-4); border-radius:var(--ui-radius-pill); background:color-mix(in srgb,var(--ui-warning) 16%,var(--ui-surface-raised)); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
-    .work-digest-row { display:grid; grid-template-columns:var(--ui-space-7) minmax(0,1fr) auto; align-items:center; gap:var(--ui-space-4); min-width:0; padding:var(--ui-space-5) var(--ui-space-6); }
-    .work-digest-row + .work-digest-row { border-top:1px solid var(--ui-border); }
-    .work-digest-row[data-tone='attention'] { background:color-mix(in srgb,var(--ui-warning) 9%,var(--ui-surface-raised)); }
-    .work-digest-symbol { display:grid; place-items:center; width:var(--ui-space-7); height:var(--ui-space-7); border-radius:var(--ui-radius-md); background:var(--ui-surface-base); color:var(--ui-accent); font-weight:800; }
-    .work-digest-row[data-tone='attention'] .work-digest-symbol { color:var(--ui-warning); }
-    .work-digest-row[data-tone='done'] .work-digest-symbol { color:var(--ui-success); }
-    .work-digest-copy { min-width:0; }
-    .work-digest-copy h3 { margin:0; font-size:var(--ui-text-md); font-weight:700; line-height:1.4; overflow-wrap:anywhere; }
-    .work-digest-copy p { margin:var(--ui-space-1) 0 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.45; overflow-wrap:anywhere; }
-    .work-digest-copy time { display:block; margin-top:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
-    .work-digest-action::part(button) { min-height:var(--ui-control-lg); padding:var(--ui-space-2) var(--ui-space-4); border-color:var(--ui-border); background:var(--ui-surface-base); color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
-    .work-digest-action::part(button):hover { background:var(--ui-surface-hover); }
-    .work-digest-row[data-tone='attention'] .work-digest-action::part(button) { border-color:var(--ui-warning); }
-    @media(max-width:560px) { .work-digest-head { align-items:flex-start; flex-wrap:wrap; } .work-digest-row { grid-template-columns:var(--ui-space-7) minmax(0,1fr); align-items:start; } .work-digest-action { grid-column:2; width:max-content; max-width:100%; } }
-    @media(max-width:360px) { .work-digest-head,.work-digest-row { padding-inline:var(--ui-space-4); } .work-digest-count { padding-inline:var(--ui-space-3); } }
+    .work-digest-summary { display:flex; align-items:center; justify-content:space-between; gap:var(--ui-space-4); margin-top:var(--ui-space-1); }
+    .work-digest-summary p { margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
+    .work-digest-count { display:inline-flex; align-items:center; gap:var(--ui-space-3); flex:none; color:var(--ui-text); font-size:var(--ui-text-sm); font-weight:650; }
+    .work-digest-count::before { content:''; width:var(--ui-space-3); height:var(--ui-space-3); border-radius:50%; background:var(--ui-warning); }
+    .work-digest-row { display:block; width:100%; }
+    .work-digest-row::part(button) { display:grid; grid-template-columns:var(--ui-space-1) minmax(0,1fr) auto; align-items:center; gap:var(--ui-space-5); box-sizing:border-box; width:100%; min-width:0; min-height:var(--ui-row-touch); padding:var(--ui-space-5) var(--ui-space-6); border:0; border-top:1px solid var(--ui-border); border-radius:0; background:transparent; color:inherit; text-align:left; white-space:normal; font:inherit; }
+    .work-digest-row:hover::part(button) { background:var(--ui-surface-hover); }
+    .work-digest-row::part(button):focus-visible { outline:2px solid var(--ui-accent); outline-offset:calc(-1 * var(--ui-space-1)); position:relative; z-index:var(--ui-z-local); }
+    .work-digest-marker { width:var(--ui-space-1); height:var(--ui-space-8); border-radius:var(--ui-radius-pill); background:var(--ui-accent); }
+    .work-digest-row[data-tone='attention'] .work-digest-marker { background:var(--ui-warning); }
+    .work-digest-row[data-tone='done'] .work-digest-marker { background:var(--ui-success); }
+    .work-digest-copy { display:block; min-width:0; }
+    .work-digest-meta { display:flex; align-items:baseline; gap:var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-xs); line-height:1.4; }
+    .work-digest-status { color:var(--ui-accent); font-weight:700; }
+    .work-digest-row[data-tone='attention'] .work-digest-status { color:var(--ui-warning); }
+    .work-digest-row[data-tone='done'] .work-digest-status { color:var(--ui-success); }
+    .work-digest-title { display:block; margin-top:var(--ui-space-1); font-size:var(--ui-text-lg); font-weight:650; line-height:1.35; overflow-wrap:anywhere; }
+    .work-digest-description { display:-webkit-box; margin-top:var(--ui-space-1); overflow:hidden; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.4; overflow-wrap:anywhere; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+    .work-digest-action { display:inline-flex; align-items:center; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); font-weight:650; white-space:nowrap; }
+    .work-digest-row:hover .work-digest-action,.work-digest-row:focus-within .work-digest-action { color:var(--ui-text); }
+    @media(max-width:560px) { .work-digest-row { gap:var(--ui-space-4); } .work-digest-action-text { display:none; } }
+    @media(max-width:360px) { .work-digest-head,.work-digest-row::part(button) { padding-inline:var(--ui-space-4); } }
     .work-stream { display:flex; align-items:center; gap:var(--ui-space-4); min-height:var(--ui-chat-activity-row-height); color:var(--ui-text-muted); font-size:var(--ui-text-lg); }
     .work-stream .activity-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .work-stream .pulse { width:var(--ui-chat-pulse-size); height:var(--ui-chat-pulse-size); flex:none; border-radius:50%; background:var(--ui-accent); animation:activity-pulse 1.35s ease-in-out infinite; }
@@ -2505,8 +2510,12 @@ export class MuxSDKChat extends LitElement {
     entries.sort((a,b) => (a.state.tone === 'attention' ? 0 : a.state.tone === 'done' ? 1 : 2) - (b.state.tone === 'attention' ? 0 : b.state.tone === 'done' ? 1 : 2) || Date.parse(b.entry.at) - Date.parse(a.entry.at));
     const attention = entries.filter(row => row.state.tone === 'attention').length;
     const updates = entries.reduce((total,row) => total + row.entry.count, 0);
-    return html`<section class="work-digest" aria-label="Work from this chat"><header class="work-digest-head"><div><h2>Work from this chat</h2><p>${updates} update${updates === 1 ? '' : 's'} across ${entries.length} item${entries.length === 1 ? '' : 's'}</p></div>${attention ? html`<span class="work-digest-count">${attention} need${attention === 1 ? 's' : ''} attention</span>` : nothing}</header>
-      ${entries.map(({entry,state}) => html`<article class="work-digest-row" data-tone=${state.tone} data-work-id=${entry.workId}><span class="work-digest-symbol" aria-hidden="true">${state.tone === 'attention' ? '!' : state.tone === 'done' ? '✓' : '•'}</span><div class="work-digest-copy"><h3>${state.label} · ${state.title}</h3><p>${state.description}</p>${entry.at ? html`<time datetime=${entry.at}>${new Date(entry.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</time>` : nothing}</div><mux-ui-button class="work-digest-action" size="large" accessible-label=${`${state.action}: ${state.title}`} @click=${(event:Event) => this.openWorkItem(entry.workId, event.currentTarget as HTMLElement)}>${state.action}</mux-ui-button></article>`)}
+    return html`<section class="work-digest" aria-label="Work from this chat"><header class="work-digest-head"><h2>Work from this chat</h2><div class="work-digest-summary"><p>${entries.length} item${entries.length === 1 ? '' : 's'} · ${updates} update${updates === 1 ? '' : 's'}</p>${attention ? html`<span class="work-digest-count">${attention} need${attention === 1 ? 's' : ''} attention</span>` : nothing}</div></header>
+      ${entries.map(({entry,state}) => html`<mux-ui-button class="work-digest-row" variant="quiet" full-width align="start" data-tone=${state.tone} data-work-id=${entry.workId} accessible-label=${`${state.label}: ${state.title}. ${state.action}`} @click=${(event:Event) => this.openWorkItem(entry.workId, event.currentTarget as HTMLElement)}>
+        <span class="work-digest-marker" aria-hidden="true"></span>
+        <span class="work-digest-copy"><span class="work-digest-meta"><span class="work-digest-status">${state.label}</span>${entry.at ? html`<time datetime=${entry.at}>${new Date(entry.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</time>` : nothing}</span><span class="work-digest-title">${state.title}</span><span class="work-digest-description">${state.description}</span></span>
+        <span class="work-digest-action" aria-hidden="true"><span class="work-digest-action-text">${state.action}</span>${icon(ChevronRight, {size:16})}</span>
+      </mux-ui-button>`)}
     </section>`;
   }
   private transcript(agents: AgentView[]) {
