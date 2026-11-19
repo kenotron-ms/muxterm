@@ -25,6 +25,10 @@ func (s *Server) installApprovedWorkGoal(chatID string, item *sdkWorkItem) (stri
 		h.mu.Unlock()
 		return "failed", errors.New("selected Work chat is unavailable")
 	}
+	if current.Archived {
+		h.mu.Unlock()
+		return "failed", errors.New("archived chat cannot start Work")
+	}
 	chat := *current
 	h.mu.Unlock()
 	if !supportsNativeGoalControl(chat.Harness) {
