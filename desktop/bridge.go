@@ -10,11 +10,13 @@ import (
 )
 
 type browserMessage struct {
-	Type    string      `json:"type"`
-	ID      string      `json:"id"`
-	URL     string      `json:"url"`
-	Visible bool        `json:"visible"`
-	Rect    browserRect `json:"rect"`
+	Type      string      `json:"type"`
+	ID        string      `json:"id"`
+	RequestID string      `json:"requestId"`
+	URL       string      `json:"url"`
+	Mode      string      `json:"mode"`
+	Visible   bool        `json:"visible"`
+	Rect      browserRect `json:"rect"`
 }
 
 func (c *Companion) chooseChatFolder(window application.Window, requestID string) {
@@ -129,6 +131,11 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			}
 		case "select":
 			actionErr = c.browserSelect(message.ID)
+		case "pick":
+			go c.browserPick(message.ID, message.Mode, message.RequestID)
+		case "pick-cancel":
+			_, _ = c.browserEvaluate(message.ID, "window.__muxtermPickCancel?.(); 'cancelled'")
+		case "ready":
 		case "close":
 			c.browserClose(message.ID)
 		case "status":
@@ -137,6 +144,26 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 		}
 		active, tabs := c.browserState()
 		sort.Slice(tabs, func(i, j int) bool { return tabs[i].ID < tabs[j].ID })
+		if message.Type == "ready" {
+			replay := func(tab browserTabState) {
+				encoded, _ := json.Marshal(struct {
+					ID  string `json:"id"`
+					URL string `json:"url"`
+				}{ID: tab.ID, URL: tab.URL})
+				c.evalMuxtermJS("window.__muxtermDesktopOpen?.(" + string(encoded) + ")")
+			}
+			for _, tab := range tabs {
+				if tab.ID != active {
+					replay(tab)
+				}
+			}
+			for _, tab := range tabs {
+				if tab.ID == active {
+					replay(tab)
+					break
+				}
+			}
+		}
 		state := struct {
 			Active string            `json:"active"`
 			Tabs   []browserTabState `json:"tabs"`

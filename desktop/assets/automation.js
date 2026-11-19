@@ -31,6 +31,41 @@
   try {
     let result;
     switch (command.action) {
+      case 'cursor': {
+        const target = element();
+        const rect = target.getBoundingClientRect();
+        const x = Math.max(8, Math.min(innerWidth - 8, rect.left + rect.width / 2));
+        const y = Math.max(8, Math.min(innerHeight - 8, rect.top + rect.height / 2));
+        let cursor = window.__muxtermAgentCursor;
+        if (!cursor?.isConnected) {
+          cursor = document.createElement('div');
+          cursor.setAttribute('aria-hidden', 'true');
+          Object.assign(cursor.style, {
+            position:'fixed', left:'0', top:'0', width:'18px', height:'18px',
+            border:'3px solid white', borderRadius:'50%', boxSizing:'border-box',
+            background:'#4c7dff', boxShadow:'0 2px 12px #17275699, 0 0 0 2px #4c7dff',
+            pointerEvents:'none', zIndex:'2147483647', opacity:'1',
+          });
+          document.documentElement.appendChild(cursor);
+          window.__muxtermAgentCursor = cursor;
+        }
+        const from = window.__muxtermAgentCursorPoint || {x: Math.max(20, innerWidth * .15), y: Math.max(20, innerHeight * .2)};
+        cursor.getAnimations().forEach(animation => animation.cancel());
+        cursor.animate([
+          {transform:`translate(${from.x - 9}px, ${from.y - 9}px) scale(1)`},
+          {transform:`translate(${x - 9}px, ${y - 9}px) scale(1)`},
+        ], {duration:360, easing:'cubic-bezier(.42, 0, .58, 1)'});
+        cursor.style.transform = `translate(${x - 9}px, ${y - 9}px)`;
+        window.__muxtermAgentCursorPoint = {x,y};
+        clearTimeout(window.__muxtermAgentCursorFade);
+        window.__muxtermAgentCursorFade = setTimeout(() => {
+          cursor.animate([{opacity:1, transform:`translate(${x - 9}px, ${y - 9}px) scale(.7)`},
+            {opacity:0, transform:`translate(${x - 9}px, ${y - 9}px) scale(1.8)`}],
+          {duration:650, easing:'ease-out', fill:'forwards'});
+        }, 370);
+        result = {cursor:true};
+        break;
+      }
       case 'inspect':
         result = {
           title: document.title,

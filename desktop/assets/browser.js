@@ -79,5 +79,8 @@
   // runtime. Tell Wails the page is ready so native ExecJS status events are
   // delivered instead of remaining queued forever.
   window.webkit.messageHandlers.external.postMessage('wails:runtime:ready');
+  // A socket caller may have opened a tab after the native window appeared
+  // but before this page's bridge was installed. Ask native to replay it.
+  window.__muxtermDesktopBrowser.send({ type: 'ready' });
   window.dispatchEvent(new Event('muxterm-browser-ready'));
 })();

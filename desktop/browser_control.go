@@ -25,6 +25,8 @@ type browserControlCommand struct {
 	Key      string  `json:"key,omitempty"`
 	X        float64 `json:"x,omitempty"`
 	Y        float64 `json:"y,omitempty"`
+	Width    float64 `json:"width,omitempty"`
+	Height   float64 `json:"height,omitempty"`
 	DeltaX   float64 `json:"deltaX,omitempty"`
 	DeltaY   float64 `json:"deltaY,omitempty"`
 }
@@ -232,7 +234,17 @@ func (c *Companion) runBrowserControl(command browserControlCommand) (any, error
 		if !c.browserViewVisible(id) {
 			return nil, errors.New("show this browser tab in the Mac app before taking a screenshot")
 		}
-		data, err := c.browserScreenshot(id)
+		var data string
+		var err error
+		if command.Width != 0 || command.Height != 0 {
+			rect, rectErr := c.clampBrowserPickRect(browserPickRect{X: command.X, Y: command.Y, Width: command.Width, Height: command.Height})
+			if rectErr != nil {
+				return nil, rectErr
+			}
+			data, err = c.browserScreenshotRegion(id, rect)
+		} else {
+			data, err = c.browserScreenshot(id)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -250,6 +262,35 @@ func (c *Companion) runBrowserControl(command browserControlCommand) (any, error
 		code, err := assets.ReadFile("assets/automation.js")
 		if err != nil {
 			return nil, err
+		}
+		if command.Action == "click" && c.browserViewVisible(id) {
+			cursor := command
+			cursor.Action = "cursor"
+			if input, marshalErr := json.Marshal(cursor); marshalErr == nil {
+				if response, evalErr := c.browserEvaluate(id, "("+string(code)+")("+string(input)+")"); evalErr == nil && !strings.Contains(response, `"error"`) {
+					// The caller holds bridgeMu. Let layout and navigation proceed
+					// during the visual pause, then recheck the native view and URL.
+					c.bridgeMu.Unlock()
+					time.Sleep(380 * time.Millisecond)
+					c.bridgeMu.Lock()
+					_, currentTabs := c.browserState()
+					currentURL := ""
+					for _, tab := range currentTabs {
+						if tab.ID == id {
+							currentURL = tab.URL
+							break
+						}
+					}
+					if currentURL == "" {
+						return nil, errors.New("browser tab closed during cursor animation")
+					}
+					for _, tab := range tabs {
+						if tab.ID == id && tab.URL != currentURL {
+							return nil, errors.New("page changed; inspect again")
+						}
+					}
+				}
+			}
 		}
 		arguments, err := json.Marshal(command)
 		if err != nil {

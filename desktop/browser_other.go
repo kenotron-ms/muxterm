@@ -33,3 +33,6 @@ func (c *Companion) browserEvaluate(string, string) (string, error) {
 func (c *Companion) browserScreenshot(string) (string, error) {
 	return "", errors.New("native browser view requires macOS")
 }
+func (c *Companion) browserScreenshotRegion(string, browserRect) (string, error) {
+	return "", errors.New("native browser view requires macOS")
+}

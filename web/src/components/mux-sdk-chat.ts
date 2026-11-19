@@ -801,6 +801,32 @@ export class MuxSDKChat extends LitElement {
     this.setDraft(this.draft.trimEnd() ? `${this.draft.trimEnd()}\n${reference}\n` : `${reference}\n`);
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
   }
+  private stageBrowserTarget(event: CustomEvent<{kind:'element'|'area';url?:string;title?:string;selector?:string;tag?:string;role?:string;name?:string;text?:string;rect?:{x:number;y:number;width:number;height:number};screenshot?:string}>) {
+    this.stopDictation();
+    this.flushDraft();
+    this.selectedAgent = '';
+    this.setPaneMode('split');
+    const target = event.detail;
+    const lines = [`Browser page: ${target.url || 'Unknown URL'}`];
+    if (target.title) lines.push(`Page title: ${target.title}`);
+    if (target.kind === 'element') {
+      lines.push(`Selected element: ${target.tag || 'element'}${target.role ? ` [role=${target.role}]` : ''}${target.name ? ` “${target.name}”` : ''}`);
+      if (target.selector) lines.push(`CSS selector: ${target.selector}`);
+    } else if (target.rect) {
+      const {x,y,width,height} = target.rect;
+      lines.push(`Selected area in viewport: x=${Math.round(x)}, y=${Math.round(y)}, width=${Math.round(width)}, height=${Math.round(height)}`);
+    }
+    if (target.text) lines.push(`Visible page text: ${target.text}`);
+    const reference = lines.join('\n');
+    this.setDraft(this.draft.trimEnd() ? `${this.draft.trimEnd()}\n\n${reference}\n` : `${reference}\n`);
+    if (target.screenshot) {
+      try {
+        const bytes = Uint8Array.from(atob(target.screenshot), character => character.charCodeAt(0));
+        this.addFiles([new File([bytes], 'browser-area.jpg', {type:'image/jpeg'})]);
+      } catch { this.clipboardError = 'Could not attach the selected browser area'; }
+    }
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLTextAreaElement>('.composer-row textarea')?.focus());
+  }
   private stagePagePrompt(event: CustomEvent<{ pageId: string; title: string; kind: 'generate' | 'visualize' }>) {
     this.stopDictation();
     this.flushDraft();
@@ -2823,7 +2849,7 @@ export class MuxSDKChat extends LitElement {
       <div class="composer-controls">${sideStart ? nothing : this.attachmentPicker()}${sideStart ? nothing : html`<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>`}${this.dictationButton()}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
-      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><mux-ui-pane-divider class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></mux-ui-pane-divider><mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.settingsPending && !this.dictationActive && !this.chat?.branchPending} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility></aside>`) : nothing}
+      ${this.drawerOpen ? keyed(this.sessionId, html`<aside class="drawer" aria-label="Right drawer" style=${`--utility-width:${this.drawerWidth}px`}><mux-ui-pane-divider class="drawer-resizer" role="separator" aria-label="Resize right drawer" aria-orientation="vertical" tabindex="0" @pointerdown=${this.startDrawerResize} @pointermove=${this.moveDrawerResize} @pointerup=${this.endDrawerResize} @lostpointercapture=${this.endDrawerResize} @keydown=${(e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const {min,max}=this.widthLimits(); this.drawerWidth=Math.round(Math.max(min,Math.min(max,this.drawerWidth+(e.key === 'ArrowLeft' ? 20 : -20)))); try { localStorage.setItem(this.drawerKey(),String(this.drawerWidth)); } catch { /* private browsing */ } e.preventDefault(); } }}></mux-ui-pane-divider><mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.settingsPending && !this.dictationActive && !this.chat?.branchPending} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-browser-target=${this.stageBrowserTarget} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility></aside>`) : nothing}
     </div>${this.dropActive ? html`<div class="drop-overlay" role="status">Drop files to attach</div>` : nothing}`;
   }
 }
