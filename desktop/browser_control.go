@@ -141,6 +141,16 @@ func (c *Companion) handleBrowserControlAction(writer http.ResponseWriter, reque
 		browserControlJSON(writer, map[string]string{"id": id})
 		return
 	}
+	if command.Action == "navigate" {
+		// URL preparation may establish an SSH tunnel, so keep it outside
+		// bridgeMu while native browser messages continue to flow.
+		address, err := c.prepareBrowserURL(command.URL)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		command.URL = address.String()
+	}
 	c.bridgeMu.Lock()
 	defer c.bridgeMu.Unlock()
 	result, err := c.runBrowserControl(command)
@@ -192,12 +202,11 @@ func (c *Companion) runBrowserControl(command browserControlCommand) (any, error
 	case "select_tab":
 		return map[string]string{"selected": id}, c.browserSelect(id)
 	case "navigate":
-		delete(c.browserRefs, id)
-		address, err := c.prepareBrowserURL(command.URL)
-		if err != nil {
+		if err := c.browserAction(id, "navigate", command.URL); err != nil {
 			return nil, err
 		}
-		return map[string]string{"navigated": address.String()}, c.browserAction(id, "navigate", address.String())
+		delete(c.browserRefs, id)
+		return map[string]string{"navigated": command.URL}, nil
 	case "back", "forward", "reload":
 		return map[string]string{"action": command.Action}, c.browserAction(id, command.Action, "")
 	case "screenshot":

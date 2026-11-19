@@ -49,6 +49,9 @@ jobs:
       - name: Verify Mac Quit and background session choice
         run: bash desktop/verify-quit-mac.sh
 
+      - name: Verify native browser control
+        run: python3 desktop/verify-browser-control-mac.py
+
       - uses: actions/upload-artifact@v4
         with:
           name: muxterm-macos-arm64
