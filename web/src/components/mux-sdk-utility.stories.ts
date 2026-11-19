@@ -208,14 +208,16 @@ export const PhoneQuickOpen: Story = {
     const utility = target(canvasElement);
     utility?.showPanel('files');
     await utility?.updateComplete;
-    utility?.querySelector<MuxUIButton>('.mobile-files-footer mux-ui-button')?.click();
+    utility?.querySelector<MuxUIButton>('.mobile-files-footer mux-ui-button[accessible-label="Quick open file"]')?.click();
   },
 };
 const typeQuickOpen = async (canvasElement: HTMLElement, query: string) => {
   const utility = target(canvasElement);
   utility?.showPanel('files');
   await utility?.updateComplete;
-  utility?.querySelector<MuxUIButton>('mux-ui-button[accessible-label="Quick open file"]')?.click();
+  utility?.querySelector<MuxUIButton>(window.matchMedia('(max-width:767.98px)').matches
+    ? '.mobile-files-footer mux-ui-button[accessible-label="Quick open file"]'
+    : 'mux-ui-button[accessible-label="Quick open file"]')?.click();
   await utility?.updateComplete;
   const input = utility?.querySelector('mux-ui-command-search')?.shadowRoot?.querySelector<HTMLInputElement>('input');
   if (input) { input.value = query; input.dispatchEvent(new InputEvent('input', { bubbles:true, composed:true })); }

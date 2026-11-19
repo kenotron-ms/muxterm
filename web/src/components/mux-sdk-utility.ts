@@ -339,6 +339,7 @@ export class MuxSDKUtility extends LitElement {
   private mobileFileHeader(): TemplateResult | typeof nothing {
     if (this.currentTab.kind !== 'files') return nothing;
     const projectName = (this.projectPath || this.listing?.root || 'Project').split('/').filter(Boolean).pop() || 'Project';
+    // This heading is a sibling of utility-body, so key events here do not reach files-panel.
     return html`<div class="mobile-files-heading" @keydown=${(event:KeyboardEvent) => { if (event.key === 'Escape' && this.selected && !this.fileMenuOpen && !this.quickOpen) { event.preventDefault(); this.backToMobileFiles(); } }}>
       ${this.selected ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back to files" @click=${() => this.backToMobileFiles()}>${icon(ArrowLeft,{size:18})}</mux-ui-button>` : nothing}
       <div class="mobile-files-title"><strong>${this.selected ? this.selected.split('/').pop() : 'Files'}</strong><span>${this.selected ? this.selected : projectName}</span></div>
@@ -1059,27 +1060,24 @@ export class MuxSDKUtility extends LitElement {
     window.open(url, '_blank', 'noopener');
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
-  private fileHeader(projectName: string, segments: string[], file: Artifact | undefined, hasAlternateView: boolean, mobile = false): TemplateResult {
+  private fileHeader(projectName: string, segments: string[], file: Artifact | undefined, hasAlternateView: boolean): TemplateResult {
     const canOpenInBrowser = !!file && (file.kind === 'image' || !!this.pdfBytes || (!file.tooLarge && !file.binary && (file.kind === 'markdown' || file.kind === 'text')));
     const vsCodeURL = this.vsCodeURL();
     const pathItems = [
       { id:'.', label:projectName, actionLabel:'Show project files' },
       ...segments.map((part,index) => ({id:segments.slice(0,index+1).join('/'),label:part,actionLabel:index < segments.length-1 ? `Show ${part} in file browser` : undefined})),
     ];
-    const showMenu = this.fileMenuOpen && (this.terminalMode || mobile === window.matchMedia('(max-width:767.98px)').matches);
-    return html`<div class="viewer-header ${mobile ? 'mobile-file-header' : ''}">
+    const showMenu = this.fileMenuOpen && (this.terminalMode || !this.mobileFilesMedia.matches);
+    return html`<div class="viewer-header">
       ${this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back to files" tooltip="Back to files" @click=${() => this.backToTerminalFiles()}>${icon(ArrowLeft,{size:15})}</mux-ui-button>` : nothing}
-      ${this.selected || mobile ? html`<mux-ui-breadcrumb label="Open file path" .items=${pathItems} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => void this.navigateFileBreadcrumb(event.detail.id)}></mux-ui-breadcrumb>` : nothing}
+      ${this.selected ? html`<mux-ui-breadcrumb label="Open file path" .items=${pathItems} @breadcrumb-navigate=${(event:CustomEvent<{id:string}>) => void this.navigateFileBreadcrumb(event.detail.id)}></mux-ui-breadcrumb>` : nothing}
       <div class="file-header-actions">
         ${file && !this.terminalMode ? html`<mux-ui-button class="file-ask-button" icon-only size="small" variant="quiet" tone="muted" accessible-label="Ask about file" tooltip="Ask about file" @click=${() => this.askAboutFile()}>${icon(MessageCircleQuestionMark,{size:15})}</mux-ui-button>` : nothing}
         ${hasAlternateView ? html`<mux-ui-button class="file-action-button" size="small" variant="secondary" accessible-label=${this.fileMode === 'preview' ? 'View source' : 'View preview'} @click=${() => this.toggleFileMode()}>${icon(Code2,{size:14})}<span>${this.fileMode === 'preview' ? 'View source' : 'View preview'}</span></mux-ui-button>` : nothing}
         ${!this.terminalMode ? html`<mux-ui-button icon-only size="small" variant="quiet" tone="muted" toggle .pressed=${this.filesRailOpen} accessible-label=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} tooltip=${this.filesRailOpen ? 'Hide file browser' : 'Show file browser'} @click=${() => { this.filesRailOpen = !this.filesRailOpen; this.fileMenuOpen = false; this.paintAll(); }}>${icon(Folder,{size:15})}</mux-ui-button>` : nothing}
-        ${!file && mobile ? html`<mux-ui-button size="small" variant="secondary" accessible-label="Open file" @click=${() => this.showQuickOpen()}>${icon(Search,{size:14})}<span>Open</span></mux-ui-button>` : nothing}
         ${file ? html`<div class="file-open-wrap">
           <mux-ui-button class="file-open-button" size="small" variant="secondary" accessible-label="Open file options" tooltip="Open file options" haspopup="menu" .expanded=${this.fileMenuOpen} @click=${() => { this.fileMenuOpen = !this.fileMenuOpen; this.paintAll(); }}>${icon(ExternalLink,{size:14})}<span>Open</span>${icon(ChevronDown,{size:13})}</mux-ui-button>
           ${showMenu ? html`<mux-ui-menu class="file-open-menu" label="Open file" @menu-dismiss=${(event:CustomEvent<{restoreFocus:boolean}>) => { this.fileMenuOpen = false; this.paintAll(); if (event.detail.restoreFocus) queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }}>
-            ${mobile ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.askAboutFile(); }}>${icon(MessageCircleQuestionMark,{size:14})}Ask about file</mux-ui-menu-item>` : nothing}
-            ${mobile && hasAlternateView ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.toggleFileMode(); }}>${icon(Code2,{size:14})}${this.fileMode === 'preview' ? 'View source' : 'View preview'}</mux-ui-menu-item>` : nothing}
             ${canOpenInBrowser ? html`<mux-ui-menu-item @click=${() => { this.fileMenuOpen = false; this.openFileInBrowser(); }}>${icon(ExternalLink,{size:14})}Open in browser tab</mux-ui-menu-item>` : nothing}
             ${vsCodeURL ? html`<mux-ui-menu-item href=${vsCodeURL} @click=${() => { this.fileMenuOpen = false; }}>${icon(Code2,{size:14})}Open with VS Code</mux-ui-menu-item>` : nothing}
             <div role="separator"></div>
@@ -1126,7 +1124,7 @@ export class MuxSDKUtility extends LitElement {
       if (event.key === 'Escape' && !mobile && !this.quickOpen && this.fileMenuOpen) { this.fileMenuOpen = false; this.paintAll(); queueMicrotask(() => this.querySelector<MuxUIButton>('.file-open-button')?.focus()); }
       if (event.key === 'Escape' && mobile && this.selected && !this.quickOpen && !this.fileMenuOpen) { event.preventDefault(); this.backToMobileFiles(); }
     }}>
-      ${!this.terminalMode && (this.selected || !this.filesRailOpen) ? this.fileHeader(projectName, segments, file, hasAlternateView) : nothing}
+      ${!this.terminalMode && !mobile && (this.selected || !this.filesRailOpen) ? this.fileHeader(projectName, segments, file, hasAlternateView) : nothing}
       <div class="viewer">
         ${this.terminalMode ? this.fileHeader(projectName, segments, file, hasAlternateView) : nothing}
         <div class="viewer-body">${this.selected ? this.fileBody() : html`<mux-ui-empty-state heading="Explore this project"><span slot="icon">${icon(FolderOpen,{size:24})}</span>Choose a file from the explorer or search by name across the project.<mux-ui-button slot="action" variant="secondary" @click=${() => this.showQuickOpen()}>${icon(Search,{size:15})} Quick Open <kbd>Ctrl P</kbd></mux-ui-button></mux-ui-empty-state>`}</div>
@@ -1143,7 +1141,7 @@ export class MuxSDKUtility extends LitElement {
       </div>` : nothing}
       ${mobile ? html`<div class="mobile-files-footer">
         ${this.selected ? html`<mux-ui-button variant="secondary" size="small" @click=${() => this.backToMobileFiles()}>${icon(Folder,{size:16})}Browse files</mux-ui-button>` : nothing}
-        <mux-ui-button variant="secondary" size="small" @click=${() => this.showQuickOpen()}>${icon(Search,{size:16})}Quick Open</mux-ui-button>
+        <mux-ui-button variant="secondary" size="small" accessible-label="Quick open file" @click=${() => this.showQuickOpen()}>${icon(Search,{size:16})}Quick Open</mux-ui-button>
       </div>` : nothing}
       ${mobile && this.fileMenuOpen && file ? this.mobileFileActions(file, hasAlternateView) : nothing}
       ${this.quickOpen ? html`<mux-ui-dialog class="quick-dialog" open size="compact" presentation="adaptive" label="Quick Open" @dismiss=${() => this.hideQuickOpen()}><mux-ui-command-search aria-label="Search project files" placeholder="Search files by name…" .query=${this.quickQuery} .items=${this.quickResults.map((result): CommandSearchItem => ({id:result.path,label:result.name,description:result.path,detail:readableSize(result.size),icon:fileGlyph(result.name)}))} ?loading=${this.quickLoading} .error=${this.quickError} hint="Type at least two characters to search the project." emptyMessage="No matching files." .footer=${this.quickTruncated ? 'Showing the first matches. Narrow your search for more.' : ''} @query-change=${(event: CustomEvent<{query:string}>) => this.searchQuickOpen(event.detail.query)} @item-select=${(event: CustomEvent<{id:string}>) => void this.revealFile(event.detail.id)} @dismiss=${() => this.hideQuickOpen()}><span slot="icon">${icon(Search,{size:18})}</span></mux-ui-command-search></mux-ui-dialog>` : nothing}
@@ -1461,7 +1459,6 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .goal-toolbar-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); }
     mux-sdk-utility mux-ui-feedback.goal-feedback { margin:var(--ui-space-3) var(--ui-space-6) 0; }
     mux-sdk-utility .viewer-header { display:flex; align-items:center; gap:var(--ui-space-4); flex:none; min-height:var(--ui-utility-file-header-height); box-sizing:border-box; padding:var(--ui-space-1) var(--ui-space-4) var(--ui-space-1) var(--ui-space-6); background:transparent; }
-    mux-sdk-utility .viewer-header.mobile-file-header { display:none; }
     mux-sdk-utility .mobile-files-heading, mux-sdk-utility .mobile-files-footer { display:none; }
     mux-sdk-utility .file-header-actions { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; margin-left:auto; }
     mux-sdk-utility .file-open-wrap { position:relative; }
