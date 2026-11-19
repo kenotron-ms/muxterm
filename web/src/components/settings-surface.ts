@@ -35,8 +35,15 @@ import {
   type VoiceStatus,
   type VoiceMode,
 } from '../lib/voice-settings.js';
+import {
+  fetchMeetingTURNSettings,
+  saveMeetingTURNSettings,
+  saveMeetingTURNServiceSettings,
+  clearMeetingTURNSettings,
+  type MeetingTURNStatus,
+} from '../lib/meeting-turn-settings.js';
 
-export type SettingsSection = 'appearance' | 'terminal' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'remotes' | 'shortcuts' | 'about';
+export type SettingsSection = 'appearance' | 'terminal' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'meetings' | 'remotes' | 'shortcuts' | 'about';
 type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean };
 type AntigravityLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
 type AgentVersion = { harness: string; installed: boolean; version?: string; latestVersion?: string; installMethod?: string; updateAvailable: boolean; checkedAt?: string };
@@ -49,6 +56,7 @@ const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> =
   { id: 'workspaces', label: 'Workspaces' },
   { id: 'ai', label: 'AI' },
   { id: 'voice', label: 'Voice' },
+  { id: 'meetings', label: 'Meetings' },
   { id: 'remotes', label: 'Remotes' },
   { id: 'shortcuts', label: 'Keyboard Shortcuts' },
   { id: 'about', label: 'About' },
@@ -506,6 +514,10 @@ export class MuxSettingsSurface extends LitElement {
       color: var(--ui-text-muted);
     }
 
+    .turn-advanced { margin-top: var(--ui-space-6); }
+    .turn-advanced summary { cursor: pointer; color: var(--ui-text-muted); font-size: var(--ui-text-sm); }
+    .turn-advanced summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+
     .v-actions {
       display: flex;
       flex-wrap: wrap;
@@ -705,6 +717,15 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _voiceMessage = '';
   /** 'ok' | 'bad' | '' — drives the typographic marker, never colour alone. */
   @state() private _voiceMessageKind: 'ok' | 'bad' | '' = '';
+  @state() private _turnStatus: MeetingTURNStatus | null = null;
+  @state() private _turnServer = '';
+  @state() private _turnSecret = '';
+  @state() private _turnMode: 'shared-secret' | 'service' = 'service';
+  @state() private _turnAPIURL = 'https://turn.ampbox.io';
+  @state() private _turnAPIKey = '';
+  @state() private _turnBusy = false;
+  @state() private _turnMessage = '';
+  @state() private _turnError = false;
   @state() private _remotes: RemotesList = EMPTY_REMOTES;
   @state() private _remotesError = '';
   @state() private _addTarget = '';
@@ -754,6 +775,7 @@ export class MuxSettingsSurface extends LitElement {
       const changedSection = this._setSection(this.openSection);
       if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
       if (changedSection && this.openSection === 'voice') void this._loadVoice();
+      if (changedSection && this.openSection === 'meetings') void this._loadTURN();
       if (changedSection && this.openSection === 'ai') this._loadAIConnections();
     }
   }
@@ -798,6 +820,7 @@ export class MuxSettingsSurface extends LitElement {
       ++this._antigravityEpoch;
     }
     if (section === 'voice') void this._loadVoice();
+    if (section === 'meetings') void this._loadTURN();
     if (section === 'ai') this._loadAIConnections();
     if (section === 'remotes') void this._loadRemotes();
   }
@@ -1775,6 +1798,119 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  private async _loadTURN(): Promise<void> {
+    try {
+      const status = await fetchMeetingTURNSettings();
+      this._turnStatus = status;
+      this._turnServer = status.server || (status.localSecretAvailable ? 'turn.ampbox.io' : '');
+      this._turnMode = status.mode || 'service';
+      this._turnAPIURL = status.apiUrl || 'https://turn.ampbox.io';
+      this._turnAPIKey = '';
+      this._turnMessage = '';
+      this._turnError = false;
+    } catch (error) {
+      this._turnMessage = error instanceof Error ? error.message : String(error);
+      this._turnError = true;
+    }
+  }
+
+  private async _saveTURN(): Promise<void> {
+    if (this._turnBusy) return;
+    this._turnBusy = true;
+    this._turnMessage = '';
+    try {
+      const status = this._turnMode === 'service'
+        ? await saveMeetingTURNServiceSettings(this._turnAPIURL.trim(), this._turnAPIKey.trim())
+        : await saveMeetingTURNSettings(this._turnServer.trim(), this._turnSecret);
+      this._turnStatus = status;
+      this._turnServer = status.server;
+      this._turnAPIURL = status.apiUrl || 'https://turn.ampbox.io';
+      this._turnMessage = 'TURN settings saved for new meeting calls.';
+      this._turnError = false;
+    } catch (error) {
+      this._turnMessage = error instanceof Error ? error.message : String(error);
+      this._turnError = true;
+    } finally {
+      this._turnSecret = '';
+      this._turnAPIKey = '';
+      this._turnBusy = false;
+    }
+  }
+
+  private async _clearTURN(): Promise<void> {
+    if (this._turnBusy) return;
+    this._turnBusy = true;
+    try {
+      const status = await clearMeetingTURNSettings();
+      this._turnStatus = status;
+      this._turnServer = status.server || (status.localSecretAvailable ? 'turn.ampbox.io' : '');
+      this._turnMode = status.mode || 'service';
+      this._turnAPIURL = status.apiUrl || 'https://turn.ampbox.io';
+      this._turnMessage = status.source === 'environment'
+        ? 'Saved settings removed. The environment configuration is now active.'
+        : 'TURN settings removed.';
+      this._turnError = false;
+    } catch (error) {
+      this._turnMessage = error instanceof Error ? error.message : String(error);
+      this._turnError = true;
+    } finally {
+      this._turnSecret = '';
+      this._turnAPIKey = '';
+      this._turnBusy = false;
+    }
+  }
+
+  private _renderMeetings() {
+    const status = this._turnStatus;
+    const usingService = this._turnMode === 'service';
+    const currentModeConfigured = status?.mode === this._turnMode && status.authConfigured;
+    const useLocalSecret = status?.localSecretAvailable && this._turnServer.trim() === 'turn.ampbox.io';
+    const needsSecret = !useLocalSecret && (!status?.authConfigured || this._turnServer.trim() !== status.server);
+    const secretField = html`<div class="v-field">
+      <mux-ui-text-field label="Shared secret" type="password" autocomplete="off"
+        placeholder="Paste the coturn REST shared secret"
+        .value=${this._turnSecret}
+        @input=${(event: Event) => { this._turnSecret = (event.target as HTMLInputElement).value; }}></mux-ui-text-field>
+      <p class="v-hint">The secret is write-only and is never shown again in settings.</p>
+    </div>`;
+    return html`
+      <p class="section-title">Meeting connections</p>
+      <p class="v-hint">Browsers try a direct route first. If that route is blocked, TURN relays the call.</p>
+      ${this._vLine(currentModeConfigured ? 'ok' : 'none',
+        currentModeConfigured
+          ? `TURN fallback is ready for new calls${status.source === 'environment' ? ' through the service environment' : ''}.`
+          : usingService ? 'Add your TURN service API key to enable the fallback.'
+            : useLocalSecret ? 'The local coturn shared secret is available.' : 'A shared secret is needed for this server.')}
+      <mux-ui-switch label="Use a TURN service account" .checked=${usingService}
+        @change=${(event: CustomEvent<{checked:boolean}>) => { this._turnMode = event.detail.checked ? 'service' : 'shared-secret'; }}></mux-ui-switch>
+      ${usingService ? html`
+        <p class="v-hint">Create an API key at <a href="https://turn.ampbox.io/" target="_blank" rel="noopener noreferrer">turn.ampbox.io</a>. Muxterm stores it on this server and requests temporary credentials for each call.</p>
+        <div class="v-field"><mux-ui-text-field label="API key" type="password" autocomplete="off"
+          placeholder=${status?.mode === 'service' && status.authConfigured ? 'Leave blank to keep the saved key' : 'Paste your API key'}
+          .value=${this._turnAPIKey}
+          @input=${(event: Event) => { this._turnAPIKey = (event.target as HTMLInputElement).value; }}></mux-ui-text-field></div>
+        <details class="turn-advanced" ?open=${this._turnAPIURL !== 'https://turn.ampbox.io'}><summary>Use another TURN service</summary>
+          <div class="v-field"><mux-ui-text-field label="Service address" type="url" autocomplete="off"
+            placeholder="https://turn.ampbox.io" .value=${this._turnAPIURL}
+            @input=${(event: Event) => { this._turnAPIURL = (event.target as HTMLInputElement).value; }}></mux-ui-text-field></div>
+        </details>
+      ` : html`
+      <div class="v-field">
+        <mux-ui-text-field label="TURN server" type="text" autocomplete="off"
+          placeholder="turn.ampbox.io" .value=${this._turnServer}
+          @input=${(event: Event) => { this._turnServer = (event.target as HTMLInputElement).value; }}></mux-ui-text-field>
+        <p class="v-hint">Enter a server name only. Muxterm uses port 3478 over UDP and TCP automatically.</p>
+      </div>
+      ${needsSecret ? secretField : html`<details class="turn-advanced"><summary>Use a different shared secret</summary>${secretField}</details>`}
+      `}
+      <div class="v-actions">
+        <mux-ui-button size="small" variant="primary" ?disabled=${this._turnBusy} @click=${() => void this._saveTURN()}>${currentModeConfigured ? 'Save TURN fallback' : 'Enable TURN fallback'}</mux-ui-button>
+        ${status?.source === 'stored' ? html`<mux-ui-button size="small" variant="danger" ?disabled=${this._turnBusy} @click=${() => void this._clearTURN()}>Remove saved settings</mux-ui-button>` : ''}
+      </div>
+      ${this._turnMessage ? html`<mux-ui-feedback class="settings-feedback" kind=${this._turnError ? 'error' : 'success'} density="compact">${this._turnMessage}</mux-ui-feedback>` : ''}
+    `;
+  }
+
   // ── Remotes ───────────────────────────────────────────────────────────────
 
   /** GET /api/remotes — on open, on every host-state, after every mutation. */
@@ -2066,6 +2202,8 @@ export class MuxSettingsSurface extends LitElement {
                 ? this._renderRemotes()
                 : this._section === 'voice'
                   ? this._renderVoice()
+                  : this._section === 'meetings'
+                    ? this._renderMeetings()
                   : this._renderAI()}
         </div>
       </div>
