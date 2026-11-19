@@ -26,6 +26,7 @@ import './mux-chat-visualization.js';
 import type { MuxSDKUtility } from './mux-sdk-utility.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 import '../ui/button.js';
+import type { MuxUIButton } from '../ui/button.js';
 import '../ui/attachment.js';
 import '../ui/choice-item.js';
 import '../ui/choice-list.js';
@@ -714,7 +715,11 @@ export class MuxSDKChat extends LitElement {
   }
   override updated(changed: Map<string, unknown>) {
     const workDialog = this.renderRoot.querySelector<HTMLDialogElement>('.work-detail-dialog');
-    if (workDialog && !workDialog.open) workDialog.showModal();
+    if (workDialog && !workDialog.open) {
+      workDialog.showModal();
+      const back = workDialog.querySelector<MuxUIButton>('.work-detail-return');
+      void back?.updateComplete.then(() => { if (workDialog.isConnected && workDialog.open) back.focus(); });
+    }
     this.syncWorkTimer();
     this.observeScrollFade();
     const rows = new Set(this.shadowRoot?.querySelectorAll<HTMLElement>('[data-row-key]'));
@@ -2492,6 +2497,7 @@ export class MuxSDKChat extends LitElement {
   }
   private workDigestView() {
     const entries = [...this.workDigest.values()].map(entry => ({entry,state:this.digestState(entry)}));
+    // Concept B places completed outcomes ahead of active work after inspection rows.
     entries.sort((a,b) => (a.state.tone === 'attention' ? 0 : a.state.tone === 'done' ? 1 : 2) - (b.state.tone === 'attention' ? 0 : b.state.tone === 'done' ? 1 : 2) || Date.parse(b.entry.at) - Date.parse(a.entry.at));
     const attention = entries.filter(row => row.state.tone === 'attention').length;
     const updates = entries.reduce((total,row) => total + row.entry.count, 0);
@@ -2865,10 +2871,7 @@ export class MuxSDKChat extends LitElement {
     this.mobileWorkDetail = this.compact;
     this.openWorkTitle = this.workDigest.get(id)?.work?.title || title || 'Work item';
     this.setPaneMode('split');
-    void this.updateComplete.then(async () => {
-      await this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id);
-      if (this.mobileWorkDetail) this.shadowRoot?.querySelector<HTMLElement>('.work-detail-return')?.focus();
-    });
+    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id));
   }
   private laneCard(block: Block) {
     const name = sdkChats.chats.find(chat => chat.id === block.id)?.title || block.name || 'Linked lane';

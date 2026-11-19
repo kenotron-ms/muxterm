@@ -198,21 +198,29 @@ export class MuxChatCoordination extends LitElement {
     return await response.json() as T;
   }
   private async refresh() {
-    if (!this.projectId || this.loading) return;
+    if (this.loading || (!this.projectId && !this.detail)) return;
     const key = this.refreshKey;
     this.loading = true;
     try {
-      const [items, control] = await Promise.all([
-        this.request<{work: WorkItem[]}>(`/api/sdk-work?project_id=${encodeURIComponent(this.projectId)}`),
-        this.request<WorkControl>(`/api/sdk-projects/${encodeURIComponent(this.projectId)}/work-control`),
-      ]);
-      if (key !== this.refreshKey) return;
-      this.work = items.work;
-      this.control = control;
-      if (this.detail) {
-        const detail = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(this.detail.id)}`);
-        if (key !== this.refreshKey) return;
+      if (!this.projectId) {
+        const selected = this.detail;
+        if (!selected) return;
+        const detail = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(selected.id)}`);
+        if (key !== this.refreshKey || this.detail?.id !== detail.id) return;
         this.detail = detail;
+      } else {
+        const [items, control] = await Promise.all([
+          this.request<{work: WorkItem[]}>(`/api/sdk-work?project_id=${encodeURIComponent(this.projectId)}`),
+          this.request<WorkControl>(`/api/sdk-projects/${encodeURIComponent(this.projectId)}/work-control`),
+        ]);
+        if (key !== this.refreshKey) return;
+        this.work = items.work;
+        this.control = control;
+        if (this.detail) {
+          const detail = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(this.detail.id)}`);
+          if (key !== this.refreshKey) return;
+          this.detail = detail;
+        }
       }
       this.error = '';
     } catch (error) { if (key === this.refreshKey) this.error = String(error); }
