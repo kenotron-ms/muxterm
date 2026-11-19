@@ -198,21 +198,29 @@ export class MuxChatCoordination extends LitElement {
     return await response.json() as T;
   }
   private async refresh() {
-    if (!this.projectId || this.loading) return;
+    if (this.loading || (!this.projectId && !this.detail)) return;
     const key = this.refreshKey;
     this.loading = true;
     try {
-      const [items, control] = await Promise.all([
-        this.request<{work: WorkItem[]}>(`/api/sdk-work?project_id=${encodeURIComponent(this.projectId)}`),
-        this.request<WorkControl>(`/api/sdk-projects/${encodeURIComponent(this.projectId)}/work-control`),
-      ]);
-      if (key !== this.refreshKey) return;
-      this.work = items.work;
-      this.control = control;
-      if (this.detail) {
-        const detail = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(this.detail.id)}`);
-        if (key !== this.refreshKey) return;
+      if (!this.projectId) {
+        const selected = this.detail;
+        if (!selected) return;
+        const detail = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(selected.id)}`);
+        if (key !== this.refreshKey || this.detail?.id !== detail.id) return;
         this.detail = detail;
+      } else {
+        const [items, control] = await Promise.all([
+          this.request<{work: WorkItem[]}>(`/api/sdk-work?project_id=${encodeURIComponent(this.projectId)}`),
+          this.request<WorkControl>(`/api/sdk-projects/${encodeURIComponent(this.projectId)}/work-control`),
+        ]);
+        if (key !== this.refreshKey) return;
+        this.work = items.work;
+        this.control = control;
+        if (this.detail) {
+          const detail = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(this.detail.id)}`);
+          if (key !== this.refreshKey) return;
+          this.detail = detail;
+        }
       }
       this.error = '';
     } catch (error) { if (key === this.refreshKey) this.error = String(error); }
@@ -256,8 +264,11 @@ export class MuxChatCoordination extends LitElement {
   private async openDependency(id: string) {
     const found = this.work.find(item => item.id === id);
     if (found) { this.openDetail(found); return; }
-    try { this.detail = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(id)}`); }
-    catch (error) { this.error = String(error); }
+    const key = this.refreshKey;
+    try {
+      const item = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(id)}`);
+      if (key === this.refreshKey) this.detail = item;
+    } catch (error) { if (key === this.refreshKey) this.error = String(error); }
   }
   private dependencyLinks(ids: string[]) { return ids.map((id, index) => html`${index ? ', ' : ''}<a href="#" @click=${(event: Event) => { event.preventDefault(); void this.openDependency(id); }}>${this.work.find(item => item.id === id)?.title || id.slice(0,8)}</a>`); }
   private controls() { const control = this.control; return html`<div class="controls"><div class="controls-main"><mux-ui-button class="play" icon-only variant="secondary" ?disabled=${!control} accessible-label=${control?.paused ? 'Continue project work' : 'Pause project work'} title=${control?.paused ? 'Continue project work' : 'Pause project work'} @click=${() => void this.changeControl({paused: !control?.paused})}>${icon(control?.paused ? 'play' : 'pause')}</mux-ui-button><span class="active-count">${control?.active ?? 0} in motion${control?.paused ? ' · paused' : ''}</span></div><div class="parallel"><mux-ui-range-field label="Parallel" accessible-label="Parallel work in this project" .min=${1} .max=${8} .value=${control?.parallelism ?? 4} .valueLabels=${["1 at once", "2 at once", "3 at once", "4 at once", "5 at once", "6 at once", "7 at once", "8 at once"]} ?disabled=${!control} @change=${(event: Event) => void this.changeControl({parallelism: (event.target as MuxUIRangeField).value})}></mux-ui-range-field></div></div>`; }
@@ -298,8 +309,7 @@ export class MuxChatCoordination extends LitElement {
     const state = this.status(item);
     const stateClass = item.status === 'blocked' ? 'blocked' : item.status === 'done' ? 'done' : item.waitingOn?.length ? 'waiting' : '';
     return html`<article class="detail-view">
-      <mux-ui-button class="back" variant="quiet" size="small" @click=${() => { this.detail = undefined; }}>${icon('back')}Back to work</mux-ui-button>
-      <div class="project detail-project">${icon('folder')}${this.projectName()}</div>
+      ${this.projectId ? html`<mux-ui-button class="back" variant="quiet" size="small" @click=${() => { this.detail = undefined; }}>${icon('back')}Back to work</mux-ui-button><div class="project detail-project">${icon('folder')}${this.projectName()}</div>` : nothing}
       <div class=${`status ${stateClass}`}>${icon(this.statusIcon(item))}${state}</div>
       <h2>${item.title}</h2>
       <p class="lead">${item.brief || 'No description yet.'}</p>
@@ -317,6 +327,6 @@ export class MuxChatCoordination extends LitElement {
     </article>`;
   }
   override render() {
-    return html`<div class="wrap"><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.projectId ? this.detail ? this.detailView() : this.list() : nothing}</div>`;
+    return html`<div class="wrap"><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId && !this.detail ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.detailView() : this.projectId ? this.list() : nothing}</div>`;
   }
 }
