@@ -48,7 +48,9 @@ func (s *Server) handleRemoteChatProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	headerTimeout := 30 * time.Second
-	if r.Method == http.MethodPost && (rest == "/api/sdk-chats" || strings.HasSuffix(rest, "/control-send")) {
+	chatID, isChatPath := strings.CutPrefix(rest, "/api/sdk-chats/")
+	directChatPath := isChatPath && chatID != "" && !strings.Contains(chatID, "/")
+	if r.Method == http.MethodPost && (rest == "/api/sdk-chats" || directChatPath || strings.HasSuffix(rest, "/control-send")) {
 		headerTimeout = 4 * time.Minute
 	}
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true,
