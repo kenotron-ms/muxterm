@@ -2862,24 +2862,28 @@ export class MuxSDKChat extends LitElement {
     if (this.voiceState === 'idle') void this.toggleVoice();
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('voice'));
   }
+  private voiceOpenLabel() {
+    return sdkVoiceCall.active && sdkVoiceCall.active.chatId !== this.sessionId
+      ? 'Return to active voice call' : 'Open voice companion';
+  }
   private sendVoiceButton() {
     const sideStart = this.sideParentId && !this.sessionId;
     const mode = this.sideMode ? this.busy && !this.draftHasContent ? 'task-stop' : 'send' : this.draftHasContent || this.attachments.length ? this.busy ? 'steer' : 'send' : this.busy ? 'task-stop' : 'voice-open';
-    const label = mode === 'voice-open' ? 'Open voice companion' : mode === 'task-stop' ? 'Stop current task' : mode === 'steer' ? this.chat?.harness === 'antigravity-sdk' ? 'Stop and continue with this message' : 'Steer current task' : 'Send message';
+    const label = mode === 'voice-open' ? this.voiceOpenLabel() : mode === 'task-stop' ? 'Stop current task' : mode === 'steer' ? this.chat?.harness === 'antigravity-sdk' ? 'Stop and continue with this message' : 'Steer current task' : 'Send message';
     const disabled = sideStart ? !this.draftHasContent || this.startingSideChat
       : mode === 'voice-open' ? !this.voiceAvailable
       : mode === 'task-stop' ? this.stopping
       : mode === 'send' || mode === 'steer' ? (this.sideMode && !this.draftHasContent && !this.attachments.length) || this.stopping || this.recoveryPending || this.settingsPending || this.submittingSessions.has(this.activeSession) || this.attachments.some(a => a.uploading || !!a.error) || (this.busy && this.attachments.length > 0)
       : false;
     const glyph = mode === 'voice-open' ? html`<mux-ui-voice-bars></mux-ui-voice-bars>` : icon(mode === 'send' || mode === 'steer' ? ArrowUp : Square,{size:16});
-    return html`<mux-ui-button class="send" size="small" variant="primary" icon-only accessible-label=${mode === 'voice-open' && sdkVoiceCall.active?.chatId !== this.sessionId && sdkVoiceCall.active ? 'Return to active voice call' : label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'voice-open' ? this.showVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</mux-ui-button>`;
+    return html`<mux-ui-button class="send" size="small" variant="primary" icon-only accessible-label=${label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'voice-open' ? this.showVoice() : mode === 'task-stop' ? void this.stop() : void this.send()}>${keyed(mode, html`<span class="send-icon">${glyph}</span>`)}</mux-ui-button>`;
   }
   private updateVoiceLevels(levels: readonly number[]) {
     this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.setVoiceLevels(levels);
   }
   private sendAgentButton() {
     const mode = this.agentDraftHasContent ? 'steer' : this.busy ? 'task-stop' : 'voice-open';
-    const label = mode === 'steer' ? 'Send to root' : mode === 'task-stop' ? 'Stop root turn and delegated agent' : 'Open voice companion';
+    const label = mode === 'steer' ? 'Send to root' : mode === 'task-stop' ? 'Stop root turn and delegated agent' : this.voiceOpenLabel();
     const disabled = mode === 'steer' ? this.stopping || this.submittingSessions.has(this.activeSession) : mode === 'task-stop' ? this.stopping : this.sideMode || !this.voiceAvailable || this.settingsPending || this.dictationActive || !!this.chat?.branchPending;
     return html`<mux-ui-button class="send" size="small" variant="primary" icon-only accessible-label=${label} tooltip=${label} ?disabled=${disabled} @click=${() => mode === 'steer' ? void this.steerAgent() : mode === 'task-stop' ? void this.stop() : this.showVoice()}>${mode === 'voice-open' ? html`<mux-ui-voice-bars></mux-ui-voice-bars>` : icon(mode === 'steer' ? ArrowUp : Square,{size:16})}</mux-ui-button>`;
   }

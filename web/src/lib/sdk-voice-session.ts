@@ -262,10 +262,11 @@ class SDKVoiceCallController {
       if (state === 'idle') {
         this.session = null;
         this.call = null;
-      } else if (this.call) {
+        this.notify();
+      } else if (this.call && (this.call.state !== state || this.call.providerSessionId !== session.providerSessionId)) {
         this.call = { ...this.call, state, providerSessionId: session.providerSessionId };
+        this.notify();
       }
-      this.notify();
     }, levels => {
       if (this.session === session) for (const listener of this.levelListeners) listener(levels);
     });
