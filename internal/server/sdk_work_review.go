@@ -101,6 +101,18 @@ func workGoalCheckCurrent(item *sdkWorkItem) bool {
 			item.GoalCheck.GoalHash == workGoalHash(item.GoalCondition))
 }
 
+// Filing is authorization to schedule the checked goal. Human-approved legacy
+// records keep their separate approval receipt; neither path releases a hold.
+func workGoalDispatchAuthorized(item *sdkWorkItem) bool {
+	if item == nil || item.GoalCondition == "" || item.GoalRevision < 1 || !workGoalCheckCurrent(item) {
+		return false
+	}
+	if item.GoalFiledRevision == item.GoalRevision {
+		return true
+	}
+	return item.GoalApproved == item.GoalRevision && item.GoalApprovedAt != nil && workPreviewReady(item)
+}
+
 func checkWorkGoal(condition string, revision int) sdkWorkGoalCheck {
 	lower := strings.ToLower(condition)
 	result := sdkWorkGoalCheck{GoalRevision: revision, GoalHash: workGoalHash(condition), Findings: []sdkWorkGoalFinding{}, CheckedAt: time.Now().UTC()}

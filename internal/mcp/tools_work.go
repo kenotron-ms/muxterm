@@ -11,8 +11,8 @@ func registerWorkTools(srv *Server) {
 	pt := newPublishTools()
 	stringProp := map[string]any{"type": "string"}
 	stringsProp := map[string]any{"type": "array", "items": stringProp}
-	srv.Register("create_work_item", "Record a project Work item as a draft. Creation never starts implementation. Draft a finite, checkable native goal condition afterward with update_work_item(goal_condition). Ask the human to review and approve that exact condition in the creating chat or Work detail view; approval may also mark the item ready. For UI work set ui_work=true and attach a versioned design_preview with desktop and phone screenshots for affected surfaces before approval. Muxterm then selects a different eligible worker chat and installs the approved condition as its native Chat Goal before execution input. Omit owner_session_id so the scheduler owns selection; project_ids defaults to this chat's project. source records the originating request. labels are searchable tags; depends_on must finish before dispatch. client_ref makes retries idempotent.",
-		map[string]any{"type": "object", "properties": withMachine(map[string]any{"client_ref": stringProp, "title": stringProp, "brief": stringProp, "source": stringProp, "next_action": stringProp, "owner_session_id": stringProp, "acceptance_criteria": stringProp, "reviewer_session_id": stringProp, "session_ids": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "ui_work": map[string]any{"type": "boolean"}, "depends_on": stringsProp}), "required": []string{"client_ref", "title", "brief"}},
+	srv.Register("create_work_item", "File project Work for automatic scheduling. Before calling, turn the request into a finite goalify-style goal_condition with a checkable outcome, scope boundary, blocked exit, and verification evidence; put the readable task in brief and acceptance_criteria. For product implementation, include a merged PR and published, verified release in the outcome unless the human explicitly scoped the item as design-only. The server checks the goal and rejects weak conditions with findings. Filing queues the Work immediately when project controls and dependencies allow; no second human review is required. Set draft=true only when the human explicitly asks for a draft; an explicit draft can omit the goal and will not run. For UI work set ui_work=true; develop design as part of the Work unless the human requests a design review first. Omit owner_session_id so the scheduler selects a suitable session; project_ids defaults to this chat's project. source records the request. labels are searchable tags; depends_on must finish before dispatch. client_ref makes retries idempotent.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"client_ref": stringProp, "title": stringProp, "brief": stringProp, "source": stringProp, "next_action": stringProp, "owner_session_id": stringProp, "acceptance_criteria": stringProp, "goal_condition": stringProp, "draft": map[string]any{"type": "boolean"}, "reviewer_session_id": stringProp, "session_ids": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "ui_work": map[string]any{"type": "boolean"}, "depends_on": stringsProp}), "required": []string{"client_ref", "title", "brief"}},
 		func(args map[string]any) (string, error) {
 			ref, err := argString(args, "client_ref")
 			if err != nil {
@@ -42,6 +42,10 @@ func registerWorkTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
+			goal, _, err := argStringOptional(args, "goal_condition")
+			if err != nil {
+				return "", err
+			}
 			reviewer, _, err := argStringOptional(args, "reviewer_session_id")
 			if err != nil {
 				return "", err
@@ -50,7 +54,14 @@ func registerWorkTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
-			bodyMap := map[string]any{"clientRef": ref, "title": title, "brief": brief, "source": source, "nextAction": nextAction, "ownerSessionId": owner, "acceptanceCriteria": acceptance, "reviewerSessionId": reviewer, "sessionIds": participants}
+			bodyMap := map[string]any{"clientRef": ref, "title": title, "brief": brief, "source": source, "nextAction": nextAction, "ownerSessionId": owner, "acceptanceCriteria": acceptance, "goalCondition": goal, "reviewerSessionId": reviewer, "sessionIds": participants}
+			if value, present := args["draft"]; present {
+				flag, ok := value.(bool)
+				if !ok {
+					return "", fmt.Errorf("draft must be a boolean")
+				}
+				bodyMap["draft"] = flag
+			}
 			if value, present := args["ui_work"]; present {
 				flag, ok := value.(bool)
 				if !ok {
@@ -117,7 +128,7 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodGet, path, nil)
 			return string(result), err
 		})
-	srv.Register("get_next_work_item", "Fetch the oldest eligible ready item from the unassigned work pile. A human-approved goal condition is required. Draft, held, paused-project, full-project, and dependency-waiting items are skipped. Filter by project_id or project_ids (OR), and labels (all required). Returns {\"work\":null} when none is ready. This read does not claim work. Use start_work_item for a new handoff; a direct update_work_item claim is accepted only when this chat already runs the exact approved native goal.",
+	srv.Register("get_next_work_item", "Fetch the oldest eligible filed Work item from the unassigned pile. Draft, held, paused-project, full-project, and dependency-waiting items are skipped. Filter by project_id or project_ids (OR), and labels (all required). Returns {\"work\":null} when none is ready. This read does not claim work. Use start_work_item for a new handoff; a direct claim requires this chat's exact native Work goal.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"project_id": stringProp, "project_ids": stringsProp, "labels": stringsProp})},
 		func(args map[string]any) (string, error) {
 			query := url.Values{}
@@ -157,7 +168,7 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-work/"+url.PathEscape(id), nil)
 			return string(result), err
 		})
-	srv.Register("start_work_item", "Manually ask Muxterm to dispatch a ready Work item with its human-approved goal condition when the project's scheduler is playing, has capacity, and dependencies are done. Normally the human approves and marks ready in Work detail, then the scheduler starts it. Muxterm selects a different goal-free chat or creates one, installs its native Chat Goal, records a dispatch receipt, and asks it to claim. Inspect uncertain delivery before retrying. Reusing client_ref is idempotent.",
+	srv.Register("start_work_item", "Manually ask Muxterm to dispatch a filed Work item when the project's scheduler is playing, has capacity, and dependencies are done. Muxterm selects a suitable goal-free chat or creates one, installs the filed condition as its native Chat Goal, records a dispatch receipt, and asks it to claim. Inspect uncertain delivery before retrying. Reusing client_ref is idempotent.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp}), "required": []string{"work_id", "client_ref"}},
 		func(args map[string]any) (string, error) {
 			id, err := argString(args, "work_id")
@@ -195,7 +206,7 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-work/"+url.PathEscape(id)+"/dispatch/reset", body)
 			return string(result), err
 		})
-	srv.Register("update_work_item", "Append progress, evidence, status, or a revision to a Work record. For human-readable activity, give summary as one short sentence (160 characters max) saying what changed or what needs attention; put diagnostic detail in text as Markdown with line breaks, lists, and links. Do not paste a chat transcript or a dense run log into summary. The creator can draft goal_condition after goalifying the brief into a finite, checkable stop condition; this preserves revision history but cannot approve it. The human runs the revision-bound goal check and approves the exact condition in Work detail before readiness=ready can dispatch. New UI Work also requires design_preview with version, artifactUrl, and affected desktop/phone image URLs. Changing the draft or substantive Work details revokes an unstarted approval. A human hold can only be released by a human. Direct claims require this chat's native goal to match the approved Work condition. Blocked work needs blocked_reason or text; status=review marks evidence ready for review.",
+	srv.Register("update_work_item", "Append progress, evidence, status, or a revision to a Work record. Give summary as one short sentence (160 characters max); put diagnostic detail in text as Markdown. The creator can revise goal_condition; it is checked automatically. A filed goal revision stays queued when its check passes. An explicitly requested draft can be filed with readiness=ready after its goal check passes. Scope changes without a revised goal return an unstarted item to draft. A human hold can only be released by a human. Direct claims require this chat's native goal to match the filed Work condition. Blocked work needs blocked_reason or text; status=review marks evidence ready for review.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp, "session_id": stringProp, "linked_session_id": stringProp, "summary": map[string]any{"type": "string", "maxLength": 160}, "text": stringProp, "title": stringProp, "brief": stringProp, "acceptance_criteria": stringProp, "goal_condition": stringProp, "design_preview": map[string]any{"type": "object", "properties": map[string]any{"version": stringProp, "artifactUrl": stringProp, "desktopImageUrl": stringProp, "phoneImageUrl": stringProp, "affectsDesktop": map[string]any{"type": "boolean"}, "affectsPhone": map[string]any{"type": "boolean"}}, "required": []string{"version", "artifactUrl"}}, "readiness": map[string]any{"type": "string", "enum": []string{"draft", "ready", "held"}}, "status": map[string]any{"type": "string", "enum": []string{"open", "active", "blocked", "review", "done", "cancelled"}}, "progress": stringProp, "next_action": stringProp, "outcome": stringProp, "evidence": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "depends_on": stringsProp, "owner_session_id": stringProp, "reviewer_session_id": stringProp, "blocked_reason": stringProp, "needs_human": map[string]any{"type": "boolean"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}), "required": []string{"work_id", "client_ref"}},
 		func(args map[string]any) (string, error) {
 			id, err := argString(args, "work_id")

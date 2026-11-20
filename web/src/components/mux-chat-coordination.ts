@@ -15,7 +15,7 @@ import type { MuxUISelect } from '../ui/select.js';
 type WorkActor = { kind: 'chat' | 'human' | 'external-tool'; sessionId?: string };
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string; selectionReason?: string; contextWorkId?: string; fallback?: string; configuration?: { harness: string; provider: string; bundle?: string; model?: string; effort?: string } };
 type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean };
-type WorkItem = { id: string; title: string; brief: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalApprovedRevision?: number; blockedReason?: string; dependsOn: string[]; waitingOn: string[]; labels: string[]; dispatch?: WorkDispatch; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
+type WorkItem = { id: string; title: string; brief: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalApprovedRevision?: number; blockedReason?: string; dependsOn: string[]; waitingOn: string[]; labels: string[]; dispatch?: WorkDispatch; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
 
 function activityPreview(value: string): string {
@@ -239,7 +239,8 @@ export class MuxChatCoordination extends LitElement {
   private chatLink(id: string) { return html`<a href=${`#chat=${encodeURIComponent(id)}${this.remoteHost ? `&host=${encodeURIComponent(this.remoteHost)}` : ''}`} title=${`Open ${this.sessionTitle(id)}`}>${this.sessionTitle(id)}</a>`; }
   private actor(actor?: WorkActor) { return actor?.kind === 'chat' && actor.sessionId ? this.chatLink(actor.sessionId) : actor?.kind === 'human' ? 'You' : 'Muxterm'; }
   private date(value: string) { return new Date(value).toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'}); }
-  private attention(item: WorkItem) { return (item.status === 'review' && !item.reviewerSessionId) || (item.status === 'blocked' && !!item.needsHuman) || (item.status === 'open' && !!item.goalCondition && item.goalApprovedRevision !== item.goalRevision) || item.dispatch?.state === 'uncertain' || item.dispatch?.state === 'failed'; }
+  private goalReady(item: WorkItem) { return !!item.goalCondition && (item.goalFiledRevision === item.goalRevision || item.goalApprovedRevision === item.goalRevision); }
+  private attention(item: WorkItem) { return (item.status === 'review' && !item.reviewerSessionId) || (item.status === 'blocked' && !!item.needsHuman) || (item.status === 'open' && item.readiness !== 'draft' && !!item.goalCondition && !this.goalReady(item)) || item.dispatch?.state === 'uncertain' || item.dispatch?.state === 'failed'; }
   private status(item: WorkItem) {
     if (item.status === 'done') return 'Finished';
     if (item.status === 'cancelled') return 'Cancelled';
@@ -247,7 +248,8 @@ export class MuxChatCoordination extends LitElement {
     if (item.status === 'blocked') return item.needsHuman ? 'Needs a decision' : 'Blocked';
     if (item.waitingOn?.length) return 'Waiting for other work';
     if (item.readiness === 'held') return 'On hold';
-    if (item.status === 'open' && (!item.goalCondition || item.goalApprovedRevision !== item.goalRevision)) return item.goalCondition ? 'Goal needs review' : 'Needs goal draft';
+    if (item.status === 'open' && item.readiness === 'draft') return 'Draft';
+    if (item.status === 'open' && (!item.goalCondition || !this.goalReady(item))) return item.goalCondition ? 'Goal needs attention' : 'Needs goal';
     if (item.readiness !== 'ready') return 'Draft';
     if (item.status === 'active' || item.ownerSessionId || item.dispatch) return 'In motion';
     return 'Ready to start';
@@ -284,7 +286,7 @@ export class MuxChatCoordination extends LitElement {
     const attention = selected.filter(item => this.attention(item));
     const other = selected.filter(item => !this.attention(item));
     const motion = other.filter(item => item.status === 'active' || (item.status === 'open' && (item.ownerSessionId || item.dispatch)));
-    const ready = other.filter(item => item.status === 'open' && item.readiness === 'ready' && !!item.goalCondition && item.goalApprovedRevision === item.goalRevision && !item.waitingOn?.length && !item.ownerSessionId && !item.dispatch);
+    const ready = other.filter(item => item.status === 'open' && item.readiness === 'ready' && this.goalReady(item) && !item.waitingOn?.length && !item.ownerSessionId && !item.dispatch);
     const waiting = other.filter(item => !motion.includes(item) && !ready.includes(item) && item.status !== 'done' && item.status !== 'cancelled');
     const finished = other.filter(item => item.status === 'done' || item.status === 'cancelled');
     return html`<nav class="filters" aria-label="Work filter">${(['open','all','finished'] as const).map(filter => html`<mux-ui-button class="filter" variant="quiet" size="small" ?selected=${this.filter === filter} @click=${() => { this.filter = filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Finished'}</mux-ui-button>`)}${labels.length ? html`<mux-ui-select class="label-filter" size="small" aria-label="Filter by label" .value=${this.labelFilter} .options=${[{value:"",label:"All labels"},...labels.map(label => ({value:label,label}))]} @change=${(event: Event) => { this.labelFilter = (event.target as MuxUISelect).value; }}></mux-ui-select>` : nothing}</nav>${this.controls()}${attention.length ? html`<section class="attention" aria-label="Needs your attention">${attention.map(item => html`<div class="attention-item"><span class=${`kind ${item.status === 'review' ? 'review' : item.status === 'blocked' ? 'blocked' : ''}`}>${icon(this.statusIcon(item))}${this.status(item)}</span><mux-ui-button variant="quiet" @click=${() => this.openDetail(item)}><h3>${item.title}</h3></mux-ui-button><p>${this.summary(item)}</p></div>`)}</section>` : nothing}${this.group('In motion','motion',motion)}${this.group('Ready to start','ready',ready)}${this.group('Waiting & blocked','waiting',waiting)}${this.group('Finished','finished',finished)}${!selected.length ? html`<div class="empty"><strong>${this.work.length ? 'Nothing in this view' : 'No work here yet'}</strong><p>${this.work.length ? 'Try another filter.' : 'Ask a chat to capture an item for this project.'}</p></div>` : nothing}`;
