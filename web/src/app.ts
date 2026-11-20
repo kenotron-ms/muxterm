@@ -43,12 +43,14 @@ import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
 import type { MuxSDKChat } from './components/mux-sdk-chat.js';
-import { chatHost, rememberChatHost } from './lib/remote-chat-routes.js';
+import { chatHost, rememberChatHost, rememberProjectHost } from './lib/remote-chat-routes.js';
 import './components/mux-new-chat.js';
 import './components/mux-scheduled-jobs.js';
 import './components/mux-connections.js';
 import './components/mux-skills.js';
 import './components/mux-sdk-utility.js';
+import './components/mux-global-palette.js';
+import type { PaletteScope, PaletteTarget } from './components/mux-global-palette.js';
 import './components/workspace-create-dialog.js';
 import { homeSessions } from './lib/home-sessions.js';
 import { remotesStore } from './lib/remotes-store.js';
@@ -58,7 +60,7 @@ import type { SessionState } from './lib/session-state.js';
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
-import { sdkChats } from './lib/sdk-chats.js';
+import { sdkChats, type SDKProject } from './lib/sdk-chats.js';
 import {
   SessiondType,
   SessiondErrorCode,
@@ -379,6 +381,8 @@ export class MuxApp extends LitElement {
     .terminal-utility { box-sizing:border-box; position:relative; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); }
     .terminal-utility > mux-ui-pane-divider { position:absolute; top:0; bottom:0; left:0; z-index:var(--ui-z-local); }
     .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
+    .palette-project-panel { position:fixed; inset:0; z-index:var(--ui-z-sheet); display:flex; background:var(--ui-surface-base); }
+    .palette-project-panel > mux-sdk-utility { width:100%; height:100%; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,var(--ui-terminal-utility-width)); min-width:0; box-shadow:var(--ui-shadow-side); } }
 
     /* ── Surface 1: the workspace drawer ─────────────────────────────────
@@ -567,6 +571,10 @@ export class MuxApp extends LitElement {
   @state() private _sdkChatId: string | null = null;
   private _lastSelectedSDKChatId: string | null = null;
   @state() private _terminalUtilityOpen = false;
+  @state() private _paletteOpen = false;
+  @state() private _paletteScope: PaletteScope = 'all';
+  @state() private _paletteProjectPanel: SDKProject | null = null;
+  private _paletteReturnFocus: HTMLElement | null = null;
   @state() private _connectionSelection = 'github';
   @state() private _newChatFolder = '';
   @state() private _newChatProject = '';
@@ -815,6 +823,8 @@ export class MuxApp extends LitElement {
     this.addEventListener('workspace-close', this._onWorkspaceCloseIntent);
     // Escape dismisses the open overlay panel — see _onOverlayPanelEscape.
     window.addEventListener('keydown', this._onOverlayPanelEscape, true);
+    window.addEventListener('keydown', this._onPaletteShortcut, true);
+    this.addEventListener('palette-open', this._onPaletteOpen as EventListener);
     // Update layout mode when the viewport crosses the 768px breakpoint.
     window.addEventListener('resize', this._onViewportResize);
     this._layoutMode = currentLayoutMode();
@@ -1186,6 +1196,8 @@ export class MuxApp extends LitElement {
     this.removeEventListener('pane-close', this._onPaneCloseIntent);
     this.removeEventListener('workspace-close', this._onWorkspaceCloseIntent);
     window.removeEventListener('keydown', this._onOverlayPanelEscape, true);
+    window.removeEventListener('keydown', this._onPaletteShortcut, true);
+    this.removeEventListener('palette-open', this._onPaletteOpen as EventListener);
     this._disposePaneFocusListeners?.();
     this._disposePwaWindowControls?.();
     this._disposePwaWindowControls = null;
@@ -1438,7 +1450,7 @@ export class MuxApp extends LitElement {
         @drawer-toggle="${this._onDrawerToggle}"
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
-      <div class="content-area" ?inert=${settingsPage}>
+      <div class="content-area" ?inert=${settingsPage || !!this._paletteProjectPanel}>
         ${isWide && !this._sidebarCollapsed ? html`
           <mux-sidebar
             .newChatActive="${this._sdkChatId === 'new'}"
@@ -1607,6 +1619,8 @@ export class MuxApp extends LitElement {
           <div class="overlay-body">${this._renderSettings()}</div>
         </mux-ui-dialog>
       ` : ''}
+      ${this._paletteProjectPanel ? html`<section class="palette-project-panel" role="dialog" aria-modal="true" aria-label=${`Project ${this._paletteProjectPanel.name}`}><mux-sdk-utility project-mode .sessionId=${`project:${this._paletteProjectPanel.id}`} .projectId=${this._paletteProjectPanel.id} .projectPath=${this._paletteProjectPanel.path} .remoteHost=${this._paletteProjectPanel.remoteHost||''} @close=${() => { this._paletteProjectPanel=null; }}></mux-sdk-utility></section>` : ''}
+      <mux-global-palette .open=${this._paletteOpen} .scope=${this._paletteScope} @palette-dismiss=${this._onPaletteDismiss} @palette-select=${this._onPaletteSelect}></mux-global-palette>
       ${this._showReconnectOverlay
         ? html`<mux-reconnect-overlay
             message="${this._reconnectMessage}"
@@ -2354,6 +2368,77 @@ export class MuxApp extends LitElement {
     this._closeDrawer();
   };
 
+  private _onPaletteShortcut = (event: KeyboardEvent): void => {
+    if (event.key.toLowerCase() !== 'p' || event.altKey || event.shiftKey || event.isComposing || !(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this._openPalette('all');
+  };
+  private _onPaletteOpen = (event: Event): void => {
+    const scope = (event as CustomEvent<{scope?:PaletteScope}>).detail?.scope;
+    this._openPalette(scope === 'files' ? 'files' : 'all');
+  };
+  private _openPalette(scope: PaletteScope): void {
+    if (!this._paletteOpen) {
+      let focused: Element | null = document.activeElement;
+      while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+      this._paletteReturnFocus = focused instanceof HTMLElement ? focused : null;
+    }
+    this._paletteScope = scope;
+    this._paletteOpen = true;
+  }
+  private _onPaletteDismiss = (): void => {
+    this._paletteOpen = false;
+    const focus = this._paletteReturnFocus;
+    this._paletteReturnFocus = null;
+    void this.updateComplete.then(() => { if (focus?.isConnected) focus.focus({preventScroll:true}); });
+  };
+  private _onPaletteSelect = (event: CustomEvent<PaletteTarget>): void => {
+    this._paletteOpen = false;
+    this._paletteReturnFocus = null;
+    void this._navigatePaletteTarget(event.detail);
+  };
+  private async _navigatePaletteTarget(target: PaletteTarget): Promise<void> {
+    if (target.kind === 'action') {
+      this._paletteProjectPanel = null;
+      switch (target.action) {
+        case 'new-chat': this._onChatNew(); return;
+        case 'new-workspace': this._onOpenCreateModal(); return;
+        case 'terminal': this._onTerminalOpen(); return;
+        case 'jobs': this._onJobsOpen(); return;
+        case 'connections': this._onConnectionsOpen(); return;
+        case 'skills': this._onSkillsOpen(); return;
+      }
+    }
+    if (target.kind === 'project') {
+      rememberProjectHost(target.project.id,target.project.remoteHost||'');
+      this._paletteProjectPanel=target.project;
+      return;
+    }
+    const chat = target.kind === 'chat' ? target.chat : target.chat;
+    if (!chat) {
+      if (target.kind === 'chat') return;
+      const project=target.kind==='file'||target.kind==='work' ? target.project : undefined;
+      if (project) {
+        this._paletteProjectPanel=project;
+        await this.updateComplete;
+        const utility=this.renderRoot.querySelector<import('./components/mux-sdk-utility.js').MuxSDKUtility>('.palette-project-panel mux-sdk-utility');
+        if (target.kind==='file') await utility?.showFile(target.path);
+        else await utility?.showWorkItem(target.id);
+      }
+      return;
+    }
+    this._paletteProjectPanel = null;
+    rememberChatHost(chat.id,chat.remoteHost||'');
+    this._onChatOpen(new CustomEvent('chat-open',{detail:{sessionId:chat.id}}));
+    if (target.kind === 'chat') return;
+    await this.updateComplete;
+    const view=this.renderRoot.querySelector<MuxSDKChat>('mux-sdk-chat');
+    await view?.updateComplete;
+    if (target.kind === 'file') await view?.navigateUI('file',undefined,undefined,target.path);
+    else await view?.navigateWork(target.id);
+  }
+
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     // Picking a workspace closes the drawer covering the terminal.
     this._selectMainSurface(null);
@@ -2438,7 +2523,7 @@ export class MuxApp extends LitElement {
    * the drawer's own popover Escape is untouched.
    */
   private _onOverlayPanelEscape = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape' || !this._overlayPanel) return;
+    if (e.key !== 'Escape' || !this._overlayPanel || this._paletteOpen) return;
     e.preventDefault();
     e.stopPropagation();
     this._closeOverlayPanel();

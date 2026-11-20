@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { CalendarClock, ChevronLeft, ChevronRight, Plug, Plus, Puzzle, Settings, SquareTerminal } from 'lucide';
+import { CalendarClock, ChevronLeft, ChevronRight, Plug, Plus, Puzzle, Search, Settings, SquareTerminal } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { scrollEdgeFadeStyles, syncScrollEdgeFade } from '../lib/scroll-edge-fade.js';
 import { icon } from '../lib/icons.js';
@@ -15,6 +15,9 @@ import './mux-chat-list.js';
 /** Persistent destinations, chat groups, and actions beside the current workspace. */
 @customElement('mux-sidebar')
 export class MuxSidebar extends LitElement {
+  revealProject(id: string): void {
+    this.renderRoot.querySelector<MuxChatList>('mux-chat-list')?.locateProject(id);
+  }
   static override styles = css`
     ${subtleScrollbars}
     ${scrollEdgeFadeStyles}
@@ -258,6 +261,7 @@ export class MuxSidebar extends LitElement {
           <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Back" tooltip="Back" @click=${() => window.history.back()}>${icon(ChevronLeft,{size:17})}</mux-ui-button>
           <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Forward" tooltip="Forward" @click=${() => window.history.forward()}>${icon(ChevronRight,{size:17})}</mux-ui-button>
         </div>
+        <mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="Search and launch" tooltip="Search · Ctrl+P" @click=${() => this.dispatchEvent(new CustomEvent('palette-open',{detail:{scope:'all'},bubbles:true,composed:true}))}>${icon(Search,{size:17})}</mux-ui-button>
       </div>
       ${!this.drawer ? html`<nav class="fixed-actions" aria-label="New chat">
         <mux-ui-nav-item label="New Chat" ?active=${this.newChatActive}
