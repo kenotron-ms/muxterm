@@ -284,7 +284,18 @@ class SDKVoiceCallController {
     }
   }
 
-  stop(): void { this.session?.stop(); }
+  stop(): void {
+    const session = this.session;
+    if (!session) return;
+    session.stop();
+    // A failed feature check can leave SDKVoiceSession idle before it emits
+    // any state change. Clear our owner in that case as well.
+    if (this.session === session) {
+      this.session = null;
+      this.call = null;
+      this.notify();
+    }
+  }
 
   stopProvider(chatId: string, providerId: string): void {
     if (this.call?.chatId === chatId && this.session?.providerSessionId === providerId) this.stop();
