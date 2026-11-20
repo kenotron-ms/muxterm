@@ -157,8 +157,9 @@ export class MuxGlobalPalette extends LitElement {
       const response=await fetch(apiPath(remoteChatPath(project.remoteHost||'',path)),{signal:controller.signal});
       if (!response.ok) throw new Error(`Files unavailable in ${project.name}`);
       const body=await response.json() as {results:FileResult[]};
-      return (body.results||[]).slice(0,30).map(file => this.fileRow(file,project));
+      return (body.results||[]).slice(0,60).map(file => this.fileRow(file,project));
     };
+    // Each worker claims an index before awaiting the scan, so no project is scanned twice.
     let nextProject=0;
     const fileWorker=async ():Promise<Row[]> => {
       const found:Row[]=[];
@@ -226,8 +227,7 @@ export class MuxGlobalPalette extends LitElement {
       else if (!event.shiftKey && this.shadowRoot?.activeElement===controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
       return;
     }
-    if (event.key==='Escape') { event.preventDefault(); event.stopPropagation(); window.setTimeout(() => this.dismiss(),0); }
-    else if (event.key==='ArrowDown') { event.preventDefault(); this.active=Math.min(rows.length-1,active+1); this.renderRoot.querySelector(`[data-index="${this.active}"]`)?.scrollIntoView({block:'nearest'}); }
+    if (event.key==='ArrowDown') { event.preventDefault(); this.active=Math.min(rows.length-1,active+1); this.renderRoot.querySelector(`[data-index="${this.active}"]`)?.scrollIntoView({block:'nearest'}); }
     else if (event.key==='ArrowUp') { event.preventDefault(); this.active=Math.max(0,active-1); this.renderRoot.querySelector(`[data-index="${this.active}"]`)?.scrollIntoView({block:'nearest'}); }
     else if (event.key==='Enter' && active>=0) { event.preventDefault(); this.choose(rows[active]); }
   }
