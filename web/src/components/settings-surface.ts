@@ -27,6 +27,7 @@ import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/upda
 import { macAppVersion, checkMacUpdate, installMacUpdate, type MacUpdateStatus } from '../lib/mac-app.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
+  DEFAULT_GEMINI_MODEL,
   DEFAULT_VOICE_STATUS,
   fetchVoiceStatus,
   saveVoiceSettings,
@@ -708,7 +709,7 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _voiceLoaded = false;
   @state() private _vMode: VoiceMode = 'azure_entra';
   @state() private _vProvider: 'openai' | 'gemini' = 'openai';
-  @state() private _vGeminiModel = 'gemini-3.8-live';
+  @state() private _vGeminiModel = DEFAULT_GEMINI_MODEL;
   @state() private _vEnabled = false;
   @state() private _vEndpoint = '';
   @state() private _vModel = '';

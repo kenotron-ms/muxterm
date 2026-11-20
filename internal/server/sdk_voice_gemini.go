@@ -16,6 +16,8 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/secretfile"
 )
 
+const geminiDefaultModel = "gemini-3.8-live"
+
 // Gemini uses its own Live WebSocket protocol. The browser receives only a
 // single-use provider token; the long-lived key stays in the owner process.
 type geminiVoiceSession struct {
@@ -47,7 +49,7 @@ func checkGeminiVoiceKey(ctx context.Context, v config.VoiceConfig, store *secre
 	}
 	model := v.GeminiModel
 	if model == "" {
-		model = "gemini-3.8-live"
+		model = geminiDefaultModel
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://generativelanguage.googleapis.com/v1beta/models/"+url.PathEscape(model), nil)
 	if err != nil {
@@ -90,7 +92,7 @@ func (s *Server) handleGeminiVoiceStart(w http.ResponseWriter, r *http.Request) 
 	}
 	model := s.cfg.Voice.GeminiModel
 	if model == "" {
-		model = "gemini-3.8-live"
+		model = geminiDefaultModel
 	}
 	// The token is scoped to one Live session and expires before a stalled
 	// browser can accidentally reuse it. Provider error bodies are discarded.
@@ -116,6 +118,7 @@ func (s *Server) handleGeminiVoiceStart(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Gemini token request was refused", http.StatusBadGateway)
 		return
 	}
+	// Gemini places the opaque ephemeral access token in the "name" field.
 	var token struct {
 		Name string `json:"name"`
 	}

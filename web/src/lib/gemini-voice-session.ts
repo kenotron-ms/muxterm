@@ -161,6 +161,7 @@ export class GeminiVoiceSession {
     const audio = this.audio, mic = this.mic;
     if (!audio || !mic || this.capture) return;
     this.source = audio.createMediaStreamSource(mic);
+    // TODO: use AudioWorkletNode when its cross-browser capture path is verified.
     this.capture = audio.createScriptProcessor(2048, 1, 1);
     this.silent = audio.createGain();
     this.silent.gain.value = 0;

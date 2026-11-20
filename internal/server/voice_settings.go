@@ -316,7 +316,7 @@ func (s *Server) handleVoiceSettingsPut(w http.ResponseWriter, r *http.Request) 
 	if next.Provider == "gemini" {
 		next.GeminiModel = strings.TrimSpace(body.GeminiModel)
 		if next.GeminiModel == "" {
-			next.GeminiModel = "gemini-3.8-live"
+			next.GeminiModel = geminiDefaultModel
 		}
 		if len(next.GeminiModel) > 120 || strings.ContainsAny(next.GeminiModel, " /\\\t\r\n") {
 			writeVoiceSettingsError(w, http.StatusBadRequest, "Enter a Gemini Live model name without spaces or slashes.")
@@ -326,7 +326,7 @@ func (s *Server) handleVoiceSettingsPut(w http.ResponseWriter, r *http.Request) 
 			next.GeminiKeyStored = true
 			next.GeminiKeyEnv = ""
 		}
-		if next.Enabled && (!next.GeminiKeyStored && next.GeminiKeyEnv == "" || newKey == "" && !s.geminiVoiceKeyPresent(next)) {
+		if next.Enabled && newKey == "" && !s.geminiVoiceKeyPresent(next) {
 			writeVoiceSettingsError(w, http.StatusBadRequest, "Gemini Live needs a saved API key before it can be enabled.")
 			return
 		}

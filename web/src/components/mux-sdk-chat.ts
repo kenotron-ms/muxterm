@@ -622,10 +622,6 @@ export class MuxSDKChat extends LitElement {
     void fetchVoiceStatus().then(status => {
       this.voiceAvailable = status.enabled && !status.restartRequired;
       this.voiceProvider = status.provider;
-      if (this.sideMode || !this.sessionId || this.voiceState !== 'idle') return;
-      this.voice = new (status.provider === 'gemini' ? GeminiVoiceSession : SDKVoiceSession)(this.sessionId,
-        state => { this.voiceState = state; if (state === 'connecting') this.voiceStartedAt = Date.now(); else if (state === 'idle') this.voiceStartedAt = 0; },
-        levels => this.updateVoiceLevels(levels));
     });
   }
   override disconnectedCallback() {
@@ -923,7 +919,7 @@ export class MuxSDKChat extends LitElement {
     this.retainChatView();
     this.persistTranscriptCache();
     this.voice?.stop();
-    this.voice = this.sideMode ? undefined : new (this.voiceProvider === 'gemini' ? GeminiVoiceSession : SDKVoiceSession)(this.sessionId, state => { this.voiceState = state; if (state === 'connecting') this.voiceStartedAt = Date.now(); else if (state === 'idle') this.voiceStartedAt = 0; }, levels => this.updateVoiceLevels(levels));
+    this.voice = undefined;
     this.voiceError = '';
     this.activeSession = this.sessionId;
     if (this.mobileWorkDetail) { this.drawerOpen = false; this.previewFocused = false; }
@@ -2838,10 +2834,13 @@ export class MuxSDKChat extends LitElement {
     return html`<mux-ui-button class="dictation" variant="quiet" size="small" icon-only toggle ?pressed=${this.dictationActive} accessible-label=${label} tooltip=${label} ?disabled=${!this.dictationActive && (this.voiceState !== 'idle' || voiceInputController.getState() !== 'idle')} @click=${this.toggleDictation}>${icon(Mic,{size:16})}</mux-ui-button>`;
   }
   private async toggleVoice() {
-    if (!this.voice || !this.voiceAvailable) return;
-    if (this.voiceState !== 'idle') { this.voice.stop(); return; }
+    if (!this.voiceAvailable) return;
+    if (this.voiceState !== 'idle') { this.voice?.stop(); return; }
     if (this.settingsPending || this.dictationActive || this.chat?.branchPending) return;
     this.voiceError = '';
+    this.voice ??= new (this.voiceProvider === 'gemini' ? GeminiVoiceSession : SDKVoiceSession)(this.sessionId,
+      state => { this.voiceState = state; if (state === 'connecting') this.voiceStartedAt = Date.now(); else if (state === 'idle') this.voiceStartedAt = 0; },
+      levels => this.updateVoiceLevels(levels));
     try { await this.voice.start(); }
     catch (error) { this.voiceError = error instanceof Error ? error.message : 'Voice could not start.'; }
   }

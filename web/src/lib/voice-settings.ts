@@ -24,6 +24,8 @@ export type VoiceMode = 'openai_key' | 'azure_key' | 'azure_entra';
 /** Where an api_key-mode credential is read from. Never what it is. */
 export type VoiceKeySource = 'stored' | 'env' | 'none' | '';
 
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-live';
+
 export interface VoiceStatus {
   enabled: boolean;
   provider: 'openai' | 'gemini';
@@ -57,7 +59,7 @@ export interface VoiceStatus {
 export const DEFAULT_VOICE_STATUS: VoiceStatus = {
   enabled: false,
   provider: 'openai',
-  geminiModel: 'gemini-3.8-live',
+  geminiModel: DEFAULT_GEMINI_MODEL,
   mode: 'azure_entra',
   endpoint: '',
   model: '',
@@ -96,7 +98,7 @@ export function parseVoiceStatus(raw: unknown): VoiceStatus {
   return {
     enabled: r['enabled'] === true,
     provider: r['provider'] === 'gemini' ? 'gemini' : 'openai',
-    geminiModel: str(r, 'geminiModel') || 'gemini-3.8-live',
+    geminiModel: str(r, 'geminiModel') || DEFAULT_GEMINI_MODEL,
     mode: mode === 'openai_key' || mode === 'azure_key' || mode === 'azure_entra'
       ? mode
       : 'azure_entra',
