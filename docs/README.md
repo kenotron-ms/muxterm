@@ -9,6 +9,9 @@ Start with the current guides:
 | [Architecture](../ARCHITECTURE.md) | Current components and authority boundaries |
 | [Interface design](../DESIGN.md) | Current surfaces, theme, and interaction rules |
 | [AGENTS.md](../AGENTS.md) | Repository safety and verification rules |
+| [Installation and updates](guides/installation-and-updates.md) | Platform setup, services, updates, and local development |
+| [Remote projects](guides/remote-projects-and-chats.md) | Connect project machines and their chats |
+| [Agent integration](guides/agent-integration.md) | MCP setup, native session reporting, and lane approvals |
 
 ## Contracts and decisions
 

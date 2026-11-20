@@ -1,262 +1,107 @@
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px)" srcset="docs/marketing/workspace-mobile.svg">
+    <img src="docs/marketing/workspace.svg" alt="Muxterm brings terminals, agent chats, and Work into one workspace" width="1200">
+  </picture>
+</p>
+
 # muxterm
 
-A browser workspace for persistent terminals and agent work, backed by a Go session daemon.
+**Use the harnesses and subscriptions you already have. Get one inviting place to work, wherever you are.**
 
-See [the vision](VISION.md) for the product direction and [the documentation map](docs/README.md) for current guides and historical records.
+Muxterm brings Codex, Claude Code, and Amplifier sessions together with persistent terminals, files, and trackable Work. Open the same responsive workspace at your desk or on your phone: the status stays clear, and the calm, palette-derived interface leaves room for the task.
 
-## Install
+[Get started](#get-started) · [See the workflow](#a-good-first-workflow) · [Explore the features](#what-you-can-do) · [Download a release](https://github.com/kenotron-ms/muxterm/releases/latest)
 
-### macOS — Homebrew
+## Why use muxterm?
+
+- **Bring your own agent setup.** Keep using the harnesses, accounts, models, and subscriptions you already chose. Terminal work needs no AI provider at all.
+- **Return to useful context.** A Go session daemon owns the real PTYs, so browser disconnects and web-server restarts do not end your shells. It restores screen state when you reconnect, including full-screen terminal apps.
+- **See the work, not just the chat.** Agent sessions have durable history and status. Work records keep outcomes, owners, blockers, and evidence visible; a scheduler can give filed work to a suitable session.
+- **Take the same workspace with you.** Use the browser or install the PWA on desktop and phone. Connect project machines over SSH through one home Muxterm URL when your work spans hosts.
+
+## Get started
+
+**macOS**
+
 ```bash
 brew install kenotron-ms/tap/muxterm
+muxterm
 ```
 
-### Linux
+**Linux**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh | bash
+muxterm
 ```
 
-Or review first:
-```bash
-curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh -o install.sh
-less install.sh
-bash install.sh
-```
+The local command opens Muxterm in your browser. The Linux installer can also be [downloaded and reviewed before running](docs/guides/installation-and-updates.md#linux); it installs under your home directory without `sudo`. Prebuilt binaries, the macOS desktop app, and the Android client are on [GitHub Releases](https://github.com/kenotron-ms/muxterm/releases/latest). You can use terminals and workspaces immediately; agent chats need the corresponding harness installed and signed in.
 
-**No sudo required.** The binary installs to `~/.local/bin` and PATH is configured automatically.
-
-Terminal and workspace features work without an AI provider. AI setup is optional:
-
-| Conversation | First-time setup |
+| To use | Set up your existing account |
 | --- | --- |
-| Amplifier chats | [Install Amplifier](https://github.com/microsoft/amplifier-app-cli#installation), run `amplifier init` to choose a provider and model, then restart muxterm. If you choose Ollama, start its server and pull a model first. |
-| Codex chats | Install Node.js and npm, install Codex, then run `codex login` in a terminal. |
-| Claude Code chats | Install Node.js and npm, install Claude Code, then run `claude` in a terminal to sign in. |
+| Codex | Install Codex and run `codex login`. |
+| Claude Code | Install Claude Code and run `claude` to sign in. |
+| Amplifier | [Install Amplifier](https://github.com/microsoft/amplifier-app-cli#installation) and run `amplifier init` to select a provider and model. |
 
-The Anthropic key in muxterm's Settings → AI is separate from those logins.
+See [installation, service mode, and updates](docs/guides/installation-and-updates.md) for more options. An AI provider is optional for terminal use.
 
-**To run as a background service** (persists across reboots):
-```bash
-muxterm install
-# Optionally, to keep running even when logged out:
-sudo loginctl enable-linger $USER
-```
+## A good first workflow
 
-**To upgrade:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh | bash
-muxterm install  # restarts the service with the new binary
-```
+1. **Open Terminal** for your shell, editor, or TUI. Split panes when you want tools side by side; Muxterm keeps the PTYs running when the browser goes away.
+2. **Start a chat in a project folder.** Choose the harness and model you already use. Its conversation remains a session you can find again, rather than a terminal pane you must remember.
+3. **File a Work item for an outcome.** Describe what done means. Muxterm records the criteria, chooses an eligible worker session when the item is ready, and shows progress, blockers, and evidence in Work.
+4. **Keep the relevant surfaces nearby.** Browse and preview project files beside the conversation, or schedule a Job for recurring instructions.
+5. **Pick up from another screen.** Once you have configured a reachable home Muxterm URL, open it on your phone or another computer to inspect the session and its next action.
 
-The in-app release check shares a cache across muxterm processes under the
-same user (`~/.cache/muxterm/github-release.json` on Linux). Automatic checks
-use a 24-hour cache when anonymous and a 15-minute cache when the enabled
-GitHub connection supplies a token. An explicit check is available in About.
-Expired entries are revalidated with GitHub's ETag, and requests pause until
-the reported reset when the API rate limit is exhausted. `GITHUB_TOKEN` (or
-`GH_TOKEN`) in the server environment also uses an authenticated GitHub budget;
-tokens are never written to the cache. GitHub only guarantees that an unchanged
-`304` response is free of primary-rate-limit cost when authenticated; an
-unauthenticated `304` can still spend the shared IP budget. Development builds,
-`--no-auth` servers, `make dev` and `make dev-local` instances, and CI jobs skip
-release checks. Set `MUXTERM_DISABLE_UPDATE_CHECK=1` for other short-lived instances.
+| When you want to… | Use |
+| --- | --- |
+| Run commands or a full-screen terminal app | **Terminal** — persistent real PTYs and flexible panes |
+| Work with your coding agent | **Chats** — native harness sessions and their history |
+| Delegate and follow an outcome | **Work** — durable criteria, dispatch, progress, and evidence |
+| Inspect the project alongside a session | **Files** — browse, search, and preview without leaving the workspace |
+| Repeat standing instructions | **Scheduled jobs** — versioned instructions and run history |
 
-### Windows — Scoop (coming soon)
+## What you can do
 
-Pre-built binaries for each platform are attached to every [GitHub Release](https://github.com/kenotron-ms/muxterm/releases).
+**Keep terminals alive.** Named workspaces and resizable splits are backed by a standalone session daemon. Reconnection replays a cell-grid screen snapshot instead of relying on a raw byte stream, so tools such as vim and htop return at the current window size. The browser UI runs on Lit, dockview, and xterm.js.
 
-## What is this?
+**Work across harnesses.** Muxterm starts and tracks supported coding agents with native session lifecycle reporting. Chats and their history are first-class, whether or not a terminal is attached. A persistent Operator conversation and Work view help you understand the whole fleet. [Read the session model](VISION.md).
 
-muxterm is a terminal multiplexer where the UI lives in a browser. Open splits, create workspaces, resize panes — all standard multiplexer behavior, except it's HTML and xterm.js instead of ncurses, and it runs as a web app you install once and connect to from anywhere.
+**Keep the project in view.** The Files pane can browse and preview files beside a terminal or chat.
 
-The session daemon is a standalone Go process that owns your PTYs directly. It survives HTTP server restarts. When you reconnect, it replays a clean screen state — not a raw byte stream — so full-screen apps like vim and htop come back correctly at whatever size your window happens to be.
+**Move between machines.** A home Muxterm URL can connect to projects and agent sessions on SSH machines while their files, processes, and sign-ins stay there. [Set up remote projects](docs/guides/remote-projects-and-chats.md).
 
-```
-Browser (Lit + xterm.js + dockview)
-    ↕ WebSocket (binary-framed protocol)
-Go server (HTTP + WS relay)
-    ↕ Unix socket
-sessiond (PTY daemon)
-    ↕ PTY
+**Connect your other tools.** `muxterm mcp` exposes workspace, terminal, file, and other controls to MCP-compatible agents. The macOS app also has a local browser pane that agents can inspect and operate through its native MCP tool. [See agent integration and permission boundaries](docs/guides/agent-integration.md).
+
+<p align="center">
+  <img src="docs/verification/work-chat-digest/desktop-digest.png" alt="Browser capture of a chat showing several Work items with their latest states and next actions" width="900">
+</p>
+<p align="center"><em>Work status stays visible in the conversation; details live in the Work view.</em></p>
+
+<details>
+<summary>See Terminal and Files side by side</summary>
+
+<img src="docs/verification/single-terminal/file-preview.png" alt="Browser capture of a persistent terminal beside a file preview" width="900">
+
+</details>
+
+## How it works
+
+```text
+Browser / PWA / client
+       ↕ WebSocket
+Muxterm Go server — chats, Work, files, and web UI
+       ↕ Unix socket
+sessiond — real PTYs, screen state, and workspace lifecycle
+       ↕
 your shells
 ```
 
-## Quick start
+Muxterm is self-hosted. The server handles the web UI, authentication, and chat coordination; `sessiond` owns terminal state independently of the browser and HTTP server. Agent harnesses use their own installed tooling and credentials. See [the architecture](ARCHITECTURE.md), [vision](VISION.md), and [documentation map](docs/README.md).
 
-```bash
-# Build
-make build
+## Build and contribute
 
-# Run locally (opens browser, connects to local sessiond)
-./bin/muxterm
+From source, `make build` produces the embedded web UI and Go binary. For isolated local development use `make dev-local`; it serves on `127.0.0.1:8313`. See [development setup](docs/guides/installation-and-updates.md#development) and read [AGENTS.md](AGENTS.md) before running verification on a machine with Muxterm installed.
 
-# Run as a service (remote access, with token auth)
-./bin/muxterm serve --addr 0.0.0.0:8080
-
-# Install as a system service (survives reboots)
-./bin/muxterm install
-
-# Push to a remote server
-./bin/muxterm deploy user@myserver.com
-```
-
-## Remote projects and chats
-
-Use one Muxterm browser or Android client with a stable home Muxterm URL. On
-other machines, install and run a Muxterm server under the SSH account that
-owns the projects and coding-agent sign-ins. In **Settings → Remotes**, add or
-reuse those SSH machines. The Chats sidebar discovers project folders and
-sessions from their chat backends automatically; a network icon, machine name,
-and green dot identify a reachable remote project.
-
-In **New chat → Session location**, choose **Choose machine…**, select the SSH
-node, then browse a folder or create a new project folder there. The same
-dropdown offers **Set up SSH machine…**, which opens **Settings → Remotes**.
-Its project files, agent process, and chat history stay on
-that machine. The home server forwards chat requests over SSH; the client keeps
-using the home URL. Reloading a chat link reconnects to the same node.
-
-Each node needs a Muxterm version with the `chat-connect` helper and a running
-server. SSH key access must work noninteractively from the home server. If the
-remote binary is not on the SSH login shell's PATH, set
-`MUXTERM_REMOTE_BINARY` on the home server to its absolute path on the nodes.
-The project dot reports chat-backend reachability; an unreachable node's
-existing project rows remain visible in the current client until it reloads.
-
-## Features
-
-- **Workspaces** — named groups of panes, switch between them from a bar at the top
-- **Split panes** — real DOM layout via dockview; drag to resize, arbitrary nesting
-- **Clean reconnects** — server-side VT emulation replays a live cell-grid snapshot, not raw bytes; full-screen apps restore correctly at any window size
-- **PWA** — installable as a standalone desktop or mobile app; service worker for offline support
-- **Palette-derived chrome** — UI colors are derived from the active terminal palette automatically
-- **Session persistence** — sessiond owns PTYs independently of the HTTP server, so shells survive browser disconnects and HTTP server restarts
-- **Embedded frontend** — the Go binary serves the web UI; optional AI features require their respective providers and tools
-- **Auth** — HMAC token-based auth with localhost bypass
-- **Service install** — `muxterm install` sets up systemd (Linux) or launchd (macOS)
-- **Push deploy** — `muxterm deploy user@host` copies the binary and installs remotely
-- **Agent integration (MCP)** — connect any MCP-compatible AI agent to drive workspaces, panes, and terminals
-- **Agent sessions** — Claude, Codex, and Amplifier report native lifecycle hooks into one durable fleet, with terminals as optional attachments
-- **Chat coordination** — explicit side and voice handoffs to the main chat, with durable issues and goal records
-- **Native browser control (Mac app)** — MCP agents can inspect and interact with tabs in Muxterm’s WKWebView browser pane
-
-## Native browser control (Mac app)
-
-The Mac app exposes its own browser tabs to the local `browser_action` MCP tool. `inspect` returns a compact list of visible elements with refs; use `click` or `type` with those refs. `screenshot` is available when visual inspection is needed. The control socket is local to the Mac and accessible only to the same user. Browser content and signed-in sessions are sensitive; stop agent actions before opening secrets.
-
-## Agent integration (MCP)
-
-`muxterm mcp` exposes a [Model Context Protocol](https://modelcontextprotocol.io) server that lets any MCP-compatible AI agent drive workspaces, panes, and terminals. The server speaks JSON-RPC 2.0 over stdio and requires a running `muxterm` or `muxterm serve` instance to connect to.
-
-**25 tools** across 7 categories: workspace management, pane layout (with ASCII diagram for spatial awareness), terminal control (OSC 133 shell completion), agent delegation and fleet status, read-only file access across the machine boundary, port tunnels, publishing a file to a public URL, and server configuration.
-
-`publish_file` is the one that reaches the public internet: it serves ONE local file at an unguessable URL that anyone holding the link can read with no muxterm account. The content is **live** -- re-read from disk on every request -- so edits are visible immediately to everyone holding the link, and the link cannot be un-sent. Every publication expires (24h by default, 7 days maximum) and can be revoked, which stops future reads but recalls nothing already read. See `internal/server/publish.go`.
-
-### Agent session reporting
-
-Agent sessions are the fleet's primary records; a workspace and pane are optional
-terminal attachments. Start supported harnesses through `muxterm claude`,
-`muxterm codex`, or `muxterm amplifier`. Each wrapper installs invocation-scoped
-native hooks that report through the same durable ingress. Raw vendor commands
-are outside guaranteed fleet coverage. Muxterm does not poll `claude agents` or
-edit global Claude, Codex, or Amplifier settings.
-
-### Amplifier
-
-Add to `.amplifier/mcp.json` (project) or `~/.amplifier/mcp.json` (global):
-
-```json
-{
-  "mcpServers": {
-    "muxterm": {
-      "command": "muxterm",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-### Claude Code
-
-```bash
-claude mcp add muxterm -- muxterm mcp
-```
-
-Or add to `.mcp.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "muxterm": {
-      "command": "muxterm",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-### OpenCode
-
-Add to `opencode.json` in your project root:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "muxterm": {
-      "type": "local",
-      "command": ["muxterm", "mcp"]
-    }
-  }
-}
-```
-
-## Lane approvals
-
-Codex and Claude lanes default to prompting. To opt in to unattended execution,
-set `[lanes] approval = "never"` in your muxterm `config.toml`. This disables
-approval prompts and Codex sandboxing. `spawn_lane` accepts an optional
-`approval: "prompt" | "never"` override; the CLI uses `--approval`.
-
-See [lane approval policy](docs/decisions/2026-09-19-lane-approval.md) for the
-config path, launch flags, verified versions, and fail-loud compatibility checks.
-
-This launch policy is separate from managed `session send` turns. Approval
-brokerage for managed turns and cross-surface terminal takeover remain disabled;
-`session send --help` reports that boundary explicitly.
-
-## Architecture
-
-The browser renders panes with Lit, dockview, and xterm.js. The Go server handles HTTP, authentication, WebSocket relay, and Mission Control. Sessiond owns workspaces, real PTYs, screen replay, pane activity, and agent fleet records. See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and protocol details.
-
-## Requirements
-
-- **Go** 1.24.2+ (the module selects toolchain 1.24.4)
-- **Node.js** 22+ (required by current chat sidecar dependencies)
-
-## Development
-
-```bash
-# Build everything (frontend + Go binary)
-make build
-
-# Build frontend only
-cd web && npm install && npm run build
-
-# Fast frontend checks (lint + types, no build)
-cd web && npm run check:fast
-
-# Run the isolated development stack at http://127.0.0.1:8313
-make dev-local
-```
-
-Before running tests or browser verification on a machine with muxterm installed, read [AGENTS.md](AGENTS.md). Some service tests operate on real user services. Do not use production ports `8311` or `9090` for verification.
-
-## Design
-
-See [DESIGN.md](DESIGN.md) for current interface principles and the [documentation map](docs/README.md) for feature designs and decisions.
-
-## License
-
-MIT
+Muxterm is [MIT licensed](LICENSE).
