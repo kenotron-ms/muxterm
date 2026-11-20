@@ -54,6 +54,13 @@
     "literalDimensions": 0,
     "nativeControls": 5
   },
+  "components/mux-global-palette.ts": {
+    "legacyTokens": 0,
+    "literalColors": 0,
+    "literalScale": 0,
+    "literalDimensions": 0,
+    "nativeControls": 3
+  },
   "components/mux-meetings.ts": {
     "legacyTokens": 0,
     "literalColors": 0,
