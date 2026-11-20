@@ -145,6 +145,7 @@ export class MuxSDKChat extends LitElement {
   @state() private draftHasContent = false;
   @state() private error = '';
   @state() private startingSideChat = false;
+  @state() private sendingToMain = false;
   @state() private clipboardError = '';
   @state() private editingKey = 0;
   @state() private editDraft = '';
@@ -2736,13 +2737,16 @@ export class MuxSDKChat extends LitElement {
     }
   }
   private async sendToMainChat() {
+    if (this.sendingToMain) return;
     const parent = this.sideParentId;
     const side = this.sessionId;
+    const remoteHost = this.sideRemoteHost;
     const draft = this.flushDraft();
     const content = draft.trim();
     if (!this.sideMode || !parent || !side || !content || this.attachments.length) return;
+    this.sendingToMain = true;
     try {
-		const response = await fetch(apiPath(remoteChatPath(this.sideRemoteHost, `/api/sdk-chats/${encodeURIComponent(parent)}`)), {
+      const response = await fetch(apiPath(remoteChatPath(remoteHost, `/api/sdk-chats/${encodeURIComponent(parent)}`)), {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({source: 'side-chat', sideChatId: side, kind: 'user', id: crypto.randomUUID(), content}),
       });
@@ -2752,6 +2756,7 @@ export class MuxSDKChat extends LitElement {
       this.commandFailed = false;
       this.error = '';
     } catch (error) { this.error = String(error); }
+    finally { this.sendingToMain = false; }
   }
   private async startSideChat(prompt: string) {
     if (!prompt || this.startingSideChat) return;
@@ -2996,7 +3001,7 @@ export class MuxSDKChat extends LitElement {
       ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
       <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy ? this.chat?.harness === 'antigravity-sdk' ? 'Stop and continue turn' : 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-haspopup="listbox" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy ? this.chat?.harness === 'antigravity-sdk' ? 'Stop and continue with a new instruction…' : 'Steer this turn…' : `Message ${this.chat?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
       ${this.busy && this.chat?.harness === 'antigravity-sdk' ? html`<div class="steer-notice">Sending stops the current response, then continues this chat.</div>` : nothing}
-      <div class="composer-controls">${sideStart ? nothing : this.attachmentPicker()}${sideStart ? nothing : html`<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>`}${this.sideMode && this.sideParentId && this.sessionId ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${!this.draft.trim() || !!this.attachments.length} @click=${() => void this.sendToMainChat()}>Send to main chat</mux-ui-button>` : nothing}${this.dictationButton()}${this.sendVoiceButton()}</div>`}
+      <div class="composer-controls">${sideStart ? nothing : this.attachmentPicker()}${sideStart ? nothing : html`<mux-sdk-chat-settings .sessionId=${this.sessionId} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>`}${this.sideMode && this.sideParentId && this.sessionId ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${!this.draft.trim() || !!this.attachments.length || this.sendingToMain} @click=${() => void this.sendToMainChat()}>Send to main chat</mux-ui-button>` : nothing}${this.dictationButton()}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, this.mobileWorkDetail
