@@ -59,6 +59,11 @@ func workEventRunID(jobID, eventID string) string {
 
 func (m *sdkJobs) admitWorkEvent(jobID string, event sdkJobWorkEvent) {
 	runID := workEventRunID(jobID, event.ID)
+	// Completed runs can leave the in-memory history after pruning, so the
+	// durable file check is still needed. Keep that syscall outside m.mu.
+	if _, err := os.Stat(filepath.Join(m.dir, "runs", runID+".json")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return
+	}
 	m.mu.Lock()
 	job := m.jobs[jobID]
 	if job == nil || !job.Enabled || !jobWorkTriggerMatches(job.WorkTrigger, &event) || job.ChatID == event.SourceSessionID {
@@ -66,13 +71,6 @@ func (m *sdkJobs) admitWorkEvent(jobID string, event sdkJobWorkEvent) {
 		return
 	}
 	if m.runs[runID] != nil {
-		m.mu.Unlock()
-		return
-	}
-	if _, err := os.Stat(filepath.Join(m.dir, "runs", runID+".json")); err == nil {
-		m.mu.Unlock()
-		return
-	} else if !errors.Is(err, os.ErrNotExist) {
 		m.mu.Unlock()
 		return
 	}
@@ -110,7 +108,7 @@ func (m *sdkJobs) dispatchPendingWorkEvents() {
 		}
 		var pending *sdkJobRun
 		for _, run := range m.runs {
-			if run.JobID == jobID && run.Status == "pending" && (pending == nil || run.WorkEvent.At.Before(pending.WorkEvent.At)) {
+			if run.JobID == jobID && run.Status == "pending" && run.WorkEvent != nil && (pending == nil || run.WorkEvent.At.Before(pending.WorkEvent.At)) {
 				pending = run
 			}
 		}
@@ -174,9 +172,10 @@ func (m *sdkJobs) dispatchPendingWorkEvents() {
 		}
 		copyJob := *job
 		runID := pending.ID
+		dispatchContext := m.ctx
 		m.dispatchWG.Add(1)
 		m.mu.Unlock()
-		go func() { defer m.dispatchWG.Done(); m.dispatch(m.ctx, copyJob, runID) }()
+		go func() { defer m.dispatchWG.Done(); m.dispatch(dispatchContext, copyJob, runID) }()
 	}
 }
 

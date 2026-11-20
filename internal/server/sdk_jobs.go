@@ -526,7 +526,23 @@ func (m *sdkJobs) dispatch(parent context.Context, job sdkJob, runID string) {
 	}
 	m.mu.Unlock()
 	if workEvent != nil {
-		content = fmt.Sprintf("Work event %s: item %s entered %s at revision %d.\nTitle: %s\nUpdate: %s\nBlocked reason: %s\nOutcome: %s\nProjects: %s\nLabels: %s\n\nInspect the current Work item before acting. Use only Work tools authorized for this job chat. Do not approve or revise a Chat Goal or release a human pause.\n\nStanding instructions, revision %d:\n%s\n\nReport what happened and any uncertainty.", runID, workEvent.WorkID, workEvent.Type, workEvent.Revision, workEvent.Title, workEvent.Summary, workEvent.BlockedReason, workEvent.Outcome, strings.Join(workEvent.ProjectIDs, ", "), strings.Join(workEvent.Labels, ", "), job.Revision, job.Brief)
+		lines := []string{fmt.Sprintf("Work event %s: item %s entered %s at revision %d.", runID, workEvent.WorkID, workEvent.Type, workEvent.Revision), "Title: " + workEvent.Title}
+		if workEvent.Summary != "" {
+			lines = append(lines, "Update: "+workEvent.Summary)
+		}
+		if workEvent.BlockedReason != "" {
+			lines = append(lines, "Blocked reason: "+workEvent.BlockedReason)
+		}
+		if workEvent.Outcome != "" {
+			lines = append(lines, "Outcome: "+workEvent.Outcome)
+		}
+		if len(workEvent.ProjectIDs) > 0 {
+			lines = append(lines, "Projects: "+strings.Join(workEvent.ProjectIDs, ", "))
+		}
+		if len(workEvent.Labels) > 0 {
+			lines = append(lines, "Labels: "+strings.Join(workEvent.Labels, ", "))
+		}
+		content = strings.Join(lines, "\n") + fmt.Sprintf("\n\nInspect the current Work item before acting. Use only Work tools authorized for this job chat. Do not approve or revise a Chat Goal or release a human pause.\n\nStanding instructions, revision %d:\n%s\n\nReport what happened and any uncertainty.", job.Revision, job.Brief)
 	}
 	result, err := m.chats.call(ctx, "send", map[string]any{"sessionId": job.ChatID, "input": map[string]any{"kind": "user", "source": "scheduled-job", "id": runID, "content": content, "displayContent": "Run job: " + job.Name, "model": chat.Model, "effort": chat.Effort}})
 	if err != nil {

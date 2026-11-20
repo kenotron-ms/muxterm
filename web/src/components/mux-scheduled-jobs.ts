@@ -19,7 +19,7 @@ import type { MuxUITextArea } from '../ui/text-area.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 
 type WorkTrigger = { events:string[]; projectIds?:string[]; labels?:string[] };
-type WorkEvent = { workId:string; type:string; revision:number; title:string; summary?:string; blockedReason?:string; outcome?:string };
+type WorkEvent = { workId:string; type:string; revision:number; title:string; summary?:string; blockedReason?:string; outcome?:string; projectIds:string[]; labels:string[] };
 type Job = { id:string; chatId:string; name:string; brief:string; revision:number; schedule:string; scheduleLabel?:string; timezone:string; workTrigger?:WorkTrigger; enabled:boolean; nextRun?:string; activeRunId?:string; lastRunId?:string; latestRun?:Run; createdAt:string };
 type Log = { at:string; kind:string; message:string };
 type Run = { id:string; jobId:string; chatId:string; trigger:string; scheduledAt?:string; workEvent?:WorkEvent; revision:number; status:string; startedAt:string; finishedAt?:string; summary?:string; logs?:Log[] };
