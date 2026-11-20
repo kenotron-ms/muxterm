@@ -8,9 +8,11 @@ import { renderSegments } from '../lib/markdown-view.js';
 import '../ui/button.js';
 import '../ui/range-field.js';
 import '../ui/select.js';
+import '../ui/text-area.js';
 import './work-goal-review.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import type { MuxUISelect } from '../ui/select.js';
+import type { MuxUITextArea } from '../ui/text-area.js';
 
 type WorkActor = { kind: 'chat' | 'remote-chat' | 'human' | 'external-tool'; sessionId?: string };
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string; selectionReason?: string; contextWorkId?: string; fallback?: string; configuration?: { harness: string; provider: string; bundle?: string; model?: string; effort?: string } };
@@ -168,8 +170,7 @@ export class MuxChatCoordination extends LitElement {
     .activity-markdown .md-h { margin:var(--ui-space-4) 0 var(--ui-space-2); font-size:var(--ui-text-lg); }
     .activity-evidence { margin-top:var(--ui-space-3); font-size:var(--ui-text-md); }
     .comment-form { margin-top:var(--ui-space-6); display:grid; gap:var(--ui-space-3); }
-    .comment-form label { font-weight:650; }
-    .comment-form textarea { width:100%; min-height:6rem; padding:var(--ui-space-3); border:1px solid var(--ui-border-strong); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; resize:vertical; }
+    .comment-form mux-ui-text-area { width:100%; }
     .comment-form mux-ui-button { justify-self:start; }
     .comment-body { white-space:pre-wrap; overflow-wrap:anywhere; }
     .error { margin:var(--ui-space-5) 0; color:var(--ui-danger); }
@@ -361,7 +362,7 @@ export class MuxChatCoordination extends LitElement {
       ${item.ownerSessionId || item.dispatch?.sessionId ? html`<section class="section"><h3>Who's on it</h3><p>${this.chatLink(item.ownerSessionId || item.dispatch!.sessionId)}</p></section>` : nothing}
       ${item.dispatch?.selectionReason ? html`<section class="section"><h3>Worker selection</h3><p>${item.dispatch.selectionReason}</p>${item.dispatch.configuration ? html`<p>${item.dispatch.configuration.harness} · ${item.dispatch.configuration.provider} · bundle ${item.dispatch.configuration.bundle || 'none'} · model ${item.dispatch.configuration.model || 'none'} · effort ${item.dispatch.configuration.effort || 'none'}</p>` : nothing}${item.dispatch.fallback ? html`<p>Fallback: ${item.dispatch.fallback}</p>` : nothing}</section>` : nothing}
       ${item.dependsOn?.length ? html`<section class="section"><h3>Before this can start</h3><p>${this.dependencyLinks(item.dependsOn)}${item.waitingOn?.length ? ` · ${item.waitingOn.length} still in progress` : ' · all complete'}</p></section>` : nothing}
-      <section class="section"><h3>Recent activity</h3><ol class="timeline">${updates.length ? updates.map(update => this.timelineEntry(update)) : html`<li><span class="timeline-icon">${icon('work')}</span><div><time>${this.date(item.createdAt)}</time><strong>Added to work</strong><p>${item.source || 'Created for this project.'}</p></div></li>`}</ol><div class="comment-form"><label for="work-comment">Add a comment</label><textarea id="work-comment" .value=${this.commentDraft} @input=${(event: Event) => { this.commentDraft = (event.target as HTMLTextAreaElement).value; this.commentRef = ''; }} placeholder="Coordinate here without interrupting the worker"></textarea><mux-ui-button variant="primary" ?disabled=${!this.commentDraft.trim() || this.commentSending} @click=${() => void this.postComment()}>${this.commentSending ? 'Posting…' : 'Post comment'}</mux-ui-button></div></section>
+      <section class="section"><h3>Recent activity</h3><ol class="timeline">${updates.length ? updates.map(update => this.timelineEntry(update)) : html`<li><span class="timeline-icon">${icon('work')}</span><div><time>${this.date(item.createdAt)}</time><strong>Added to work</strong><p>${item.source || 'Created for this project.'}</p></div></li>`}</ol><div class="comment-form"><mux-ui-text-area label="Add a comment" .value=${this.commentDraft} .rows=${4} placeholder="Coordinate here without interrupting the worker" @input=${(event: Event) => { this.commentDraft = (event.target as MuxUITextArea).value; this.commentRef = ''; }}></mux-ui-text-area><mux-ui-button variant="primary" ?disabled=${!this.commentDraft.trim() || this.commentSending} @click=${() => void this.postComment()}>${this.commentSending ? 'Posting…' : 'Post comment'}</mux-ui-button></div></section>
       ${item.labels?.length ? html`<section class="section"><h3>Labels</h3><div class="tags">${item.labels.map(label => html`<span class="tag">${label}</span>`)}</div></section>` : nothing}
       <div class="facts"><span>Created by ${this.actor(item.createdBy)}</span><span>Updated ${this.date(item.updatedAt)}</span></div>
     </article>`;
