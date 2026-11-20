@@ -144,7 +144,8 @@
   --ui-folder-dialog-list-max-height: 420px;
   --ui-chat-content-width: 790px;
   --ui-work-parallel-width: 180px;
-  --ui-work-detail-width: 680px;
+  --ui-work-detail-width: 1060px;
+  --ui-work-wrap-width: 1180px;
   --ui-work-filter-width: 170px;
   --ui-new-chat-starter-min-height: 112px;
   --ui-chat-transcript-width: 760px;

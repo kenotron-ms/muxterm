@@ -147,6 +147,16 @@ func (s *Server) handleSDKWorkGoalApprove(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Work is already in motion", 409)
 		return
 	}
+	if !workGoalCheckCurrent(item) {
+		h.mu.Unlock()
+		http.Error(w, "check the current Work goal revision before approval", 409)
+		return
+	}
+	if !workPreviewReady(item) {
+		h.mu.Unlock()
+		http.Error(w, "attach a versioned design artifact and previews for each affected screen before approval", 409)
+		return
+	}
 	now := time.Now().UTC()
 	copy := *item
 	copy.GoalApproved = item.GoalRevision
