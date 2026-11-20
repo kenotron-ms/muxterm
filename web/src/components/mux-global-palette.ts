@@ -23,7 +23,7 @@ const ACTIONS: Row[] = [
   {key:'action:new-chat',title:'New chat',context:'Start a conversation',kind:'Action',target:{kind:'action',action:'new-chat'},score:0,glyph:Plus},
   {key:'action:new-workspace',title:'New terminal workspace',context:'Create a workspace',kind:'Action',target:{kind:'action',action:'new-workspace'},score:0,glyph:Plus},
   {key:'action:terminal',title:'Terminal',context:'Open terminal',kind:'Place',target:{kind:'action',action:'terminal'},score:0,glyph:Terminal},
-  {key:'action:jobs',title:'Scheduled jobs',context:'Open scheduled jobs',kind:'Place',target:{kind:'action',action:'jobs'},score:0,glyph:ListTodo},
+  {key:'action:jobs',title:'Jobs',context:'Open jobs',kind:'Place',target:{kind:'action',action:'jobs'},score:0,glyph:ListTodo},
   {key:'action:connections',title:'Connections',context:'Open connections',kind:'Place',target:{kind:'action',action:'connections'},score:0,glyph:Folder},
   {key:'action:skills',title:'Skills',context:'Open skills',kind:'Place',target:{kind:'action',action:'skills'},score:0,glyph:Folder},
 ];

@@ -151,6 +151,10 @@ func (s *Server) reconcileWorkFailures() {
 		copy.Updates = append(slices.Clone(copy.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "worker-state:" + sdkID(), At: now, Actor: sdkWorkActor{Kind: "external-tool"}, Text: "Worker chat stopped before completing work", LinkedSessionID: workerID, Status: copy.Status})
 		copy.Revision++
 		copy.UpdatedAt = now
+		if item.Status != copy.Status {
+			last := &copy.Updates[len(copy.Updates)-1]
+			last.JobEvent = newJobWorkEvent(&copy, last)
+		}
 		if err := h.saveWorkLocked(&copy); err != nil {
 			log.Printf("work scheduler: record worker failure %s: %v", item.ID, err)
 			continue

@@ -101,6 +101,7 @@ type sdkWorkUpdate struct {
 	NeedsHuman        *bool                 `json:"needsHuman,omitempty"`
 	DependsOn         *[]string             `json:"dependsOn,omitempty"`
 	ExpectedRevision  *int                  `json:"expectedRevision,omitempty"`
+	JobEvent          *sdkJobWorkEvent      `json:"jobEvent,omitempty"`
 }
 
 type sdkWorkDispatch struct {
@@ -1014,6 +1015,10 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	copy.Revision++
 	copy.UpdatedAt = time.Now().UTC()
+	if item.Status != copy.Status {
+		last := &copy.Updates[len(copy.Updates)-1]
+		last.JobEvent = newJobWorkEvent(&copy, last)
+	}
 	wasReady := item.Readiness == "ready"
 	if err := h.saveWorkLocked(&copy); err != nil {
 		h.mu.Unlock()
