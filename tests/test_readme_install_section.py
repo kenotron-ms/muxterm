@@ -1,148 +1,66 @@
 #!/usr/bin/env python3
-"""Tests that README.md contains the Install section in the correct location and with correct content."""
+"""Check the README's public install and first-use information."""
 
 import sys
 from pathlib import Path
 
 README = Path(__file__).parent.parent / "README.md"
-
-TAGLINE = "A web-first terminal multiplexer. Persistent sessions, split panes, and a browser UI \u2014 backed by a custom Go session daemon, not tmux."
-WHAT_HEADING = "## What is this?"
-INSTALL_HEADING = "## Install"
+INSTALL_GUIDE = Path(__file__).parent.parent / "docs/guides/installation-and-updates.md"
+REMOTE_GUIDE = Path(__file__).parent.parent / "docs/guides/remote-projects-and-chats.md"
+AGENT_GUIDE = Path(__file__).parent.parent / "docs/guides/agent-integration.md"
 
 
 def read_readme():
     return README.read_text(encoding="utf-8")
 
 
-def test_install_heading_exists():
+def test_get_started_follows_value_proposition():
     content = read_readme()
-    assert INSTALL_HEADING in content, "## Install heading not found in README"
+    assert "## Get started" in content
+    assert content.index("## Get started") > content.index("**Use the harnesses and subscriptions")
 
 
-def test_install_after_tagline():
+def test_supported_install_commands():
     content = read_readme()
-    install_idx = content.index(INSTALL_HEADING)
-    tagline_idx = content.index(TAGLINE)
-    assert install_idx > tagline_idx, (
-        f"## Install (pos {install_idx}) should come after tagline (pos {tagline_idx})"
-    )
+    section = content.split("## Get started", 1)[1].split("## A good first workflow", 1)[0]
+    assert "brew install kenotron-ms/tap/muxterm" in section
+    assert "curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh | bash" in section
+    assert "https://github.com/kenotron-ms/muxterm/releases/latest" in section
 
 
-def test_what_is_this_after_install():
+def test_harness_setup_and_workflow():
     content = read_readme()
-    install_idx = content.index(INSTALL_HEADING)
-    what_idx = content.index(WHAT_HEADING)
-    assert what_idx > install_idx, (
-        f"## What is this? (pos {what_idx}) should come after ## Install (pos {install_idx})"
-    )
+    assert "codex login" in content
+    assert "amplifier init" in content
+    assert "**File a Work item for an outcome.**" in content
+    assert "**Pick up from another screen.**" in content
 
 
-def test_install_immediately_after_tagline():
-    """No content between tagline paragraph and ## Install except blank lines."""
+def test_detailed_guides_exist():
     content = read_readme()
-    tagline_end = content.index(TAGLINE) + len(TAGLINE)
-    install_idx = content.index(INSTALL_HEADING)
-    between = content[tagline_end:install_idx].strip()
-    assert between == "", (
-        f"Unexpected content between tagline and ## Install: {repr(between)}"
-    )
-
-
-def test_homebrew_subsection():
-    content = read_readme()
-    install_end = content.index(WHAT_HEADING)
-    install_start = content.index(INSTALL_HEADING)
-    section = content[install_start:install_end]
-    assert "### macOS \u2014 Homebrew" in section, "Homebrew subsection not found"
-    assert "brew install user/tap/muxterm" in section, "brew install command not found"
-
-
-def test_curl_subsection():
-    content = read_readme()
-    install_end = content.index(WHAT_HEADING)
-    install_start = content.index(INSTALL_HEADING)
-    section = content[install_start:install_end]
-    assert "### macOS / Linux \u2014 curl" in section, "curl subsection not found"
-    assert "curl -fsSL" in section, "curl command not found"
-
-
-def test_go_install_subsection():
-    content = read_readme()
-    install_end = content.index(WHAT_HEADING)
-    install_start = content.index(INSTALL_HEADING)
-    section = content[install_start:install_end]
-    assert "### Go install" in section, "Go install subsection not found"
-    assert "go install github.com/user/muxterm/cmd/muxterm@latest" in section, (
-        "go install command not found"
-    )
-
-
-def test_windows_scoop_subsection():
-    content = read_readme()
-    install_end = content.index(WHAT_HEADING)
-    install_start = content.index(INSTALL_HEADING)
-    section = content[install_start:install_end]
-    assert "### Windows \u2014 Scoop (coming soon)" in section, (
-        "Windows Scoop subsection not found"
-    )
-
-
-def test_github_releases_link():
-    content = read_readme()
-    install_end = content.index(WHAT_HEADING)
-    install_start = content.index(INSTALL_HEADING)
-    section = content[install_start:install_end]
-    assert "GitHub Release" in section, "GitHub Releases link not found"
-    assert "https://github.com/user/muxterm/releases" in section, (
-        "GitHub Releases URL not found"
-    )
-
-
-def test_user_placeholder_note():
-    content = read_readme()
-    install_end = content.index(WHAT_HEADING)
-    install_start = content.index(INSTALL_HEADING)
-    section = content[install_start:install_end]
-    assert "Replace `user`" in section, "Placeholder note about 'user' not found"
-
-
-def test_existing_content_unchanged():
-    """Verify ## What is this? and its content are unchanged."""
-    content = read_readme()
-    assert "muxterm is a terminal multiplexer where the UI lives in a browser." in content
-    assert "sessiond (PTY daemon)" in content
-    assert "No tmux required." in content
+    for path in (INSTALL_GUIDE, REMOTE_GUIDE, AGENT_GUIDE):
+        assert path.exists(), f"missing guide: {path}"
+        assert str(path.relative_to(README.parent)) in content
 
 
 def run_all():
-    tests = [
-        test_install_heading_exists,
-        test_install_after_tagline,
-        test_what_is_this_after_install,
-        test_install_immediately_after_tagline,
-        test_homebrew_subsection,
-        test_curl_subsection,
-        test_go_install_subsection,
-        test_windows_scoop_subsection,
-        test_github_releases_link,
-        test_user_placeholder_note,
-        test_existing_content_unchanged,
-    ]
-    passed = 0
+    checks = (
+        test_get_started_follows_value_proposition,
+        test_supported_install_commands,
+        test_harness_setup_and_workflow,
+        test_detailed_guides_exist,
+    )
     failed = 0
-    for t in tests:
+    for check in checks:
         try:
-            t()
-            print(f"  PASS  {t.__name__}")
-            passed += 1
-        except AssertionError as e:
-            print(f"  FAIL  {t.__name__}: {e}")
+            check()
+            print(f"  PASS  {check.__name__}")
+        except AssertionError as error:
+            print(f"  FAIL  {check.__name__}: {error}")
             failed += 1
-    print(f"\n{passed}/{passed + failed} tests passed")
+    print(f"\n{len(checks) - failed}/{len(checks)} checks passed")
     return failed == 0
 
 
 if __name__ == "__main__":
-    ok = run_all()
-    sys.exit(0 if ok else 1)
+    sys.exit(0 if run_all() else 1)
