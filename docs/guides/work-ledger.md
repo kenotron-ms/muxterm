@@ -20,18 +20,35 @@ acceptance criteria, dependencies, and proposed condition with you. It must
 leave the item in `draft` until you approve the exact condition. The draft and
 all later revisions stay in the Work history.
 
-A goal draft appears in two places:
+A goal draft is reachable in two places:
 
-- The creating chat shows an inline review card with the exact condition.
-- The project's Work tab shows the same card on the item's detail page.
+- The creating chat's **View work** action opens the Work detail review sheet.
+- The project's Work tab opens that same sheet from the item row.
 
-Both cards call the same approval action. **Approve only** records your
+The sheet shows the brief and acceptance criteria, an attached design preview
+for UI Work, the exact goal rendered as safe Markdown with a raw view, the
+current revision's goal check, and then the decision. Earlier drafts are
+collapsed in history. **Approve only** records your
 approval and leaves the item in Draft. **Approve & start** approves that exact
 condition and marks the item Ready in one action. If you approved earlier,
 **Start work** marks it Ready later. Ask the chat to revise the condition if it
 has the wrong outcome or stopping point. A changed draft or substantive Work
 brief revokes an unstarted approval. Stale review clicks return 409 and require
 a refresh. Agent tools cannot approve the condition or release a human hold.
+
+New Work must pass the goal check for its exact current revision before the
+browser enables approval. The check reports actionable findings for missing
+outcomes or boundaries, blocked and external-refusal exits, and known goalify
+failure patterns. It checks direct conflicts between stated limits and required
+actions. The human still judges the condition's meaning. Existing Work records
+remain reviewable under their original approval rule.
+
+For new UI Work, set `ui_work=true` on `create_work_item` or use a UI label such
+as `ui`, `ux`, or `frontend`. Attach `design_preview` with a `version`, an
+openable `artifactUrl`, and `desktopImageUrl` and `phoneImageUrl` for affected
+surfaces. Set `affectsDesktop` and `affectsPhone` to name the affected surfaces;
+without either flag, both images are required. Missing previews keep approval
+unavailable. Non-UI Work has no preview requirement.
 
 The Work tab also has project-level play/pause and a parallelism slider.
 Paused projects retain Ready items in the queue. Dependencies must be `done`
@@ -98,8 +115,9 @@ human resumes it.
 brief, source, `acceptanceCriteria`, `nextAction`, project IDs, labels,
 `dependsOn`, status, readiness, progress, blocker, outcome, dispatch, revision,
 and attributed updates. `waitingOn` is derived from unfinished dependencies.
-The goal fields are `goalCondition`, `goalRevision`,
-`goalApprovedRevision`, and `goalApprovedAt`.
+The goal fields are `goalCondition`, `goalRevision`, `goalCheck`,
+`goalApprovedRevision`, and `goalApprovedAt`. New records also carry
+`reviewVersion`, `uiWork`, and `designPreview`.
 
 For progress reports, send `summary` as one short sentence about the change or
 decision (up to 160 characters). Put diagnostics, links, and lists in `text`
@@ -113,7 +131,8 @@ the top of the Work detail page.
 records changes with `client_ref` and `expected_revision`. The browser's
 `POST /api/sdk-work/{id}/goal/approve` accepts the exact condition, both Work
 and goal revisions, a stable `clientRef`, and optional `ready:true`. Only a
-human browser may call it. `list_work_items` and `get_next_work_item` can
+human browser may call it. `POST /api/sdk-work/{id}/goal/check` records a
+revision-bound check after comparing those same exact fields. `list_work_items` and `get_next_work_item` can
 filter by project and labels. `get_next_work_item` is a read, not a claim;
 items without approved goals, held or paused items, full projects, and items
 with unfinished dependencies are skipped. `start_work_item` requests a manual

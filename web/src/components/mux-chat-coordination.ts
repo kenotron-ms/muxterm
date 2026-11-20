@@ -68,7 +68,8 @@ export class MuxChatCoordination extends LitElement {
     * { box-sizing:border-box; }
 
     .wrap { max-width:var(--ui-chat-content-width); margin:0 auto; padding:var(--ui-space-9) var(--ui-space-9) var(--ui-space-13); }
-    .detail-view { max-width:var(--ui-work-detail-width); }
+    .detail-wrap { max-width:1180px; }
+    .detail-view { max-width:1060px; }
     h2,h3,p { margin:0; }
     h2 { font-size:var(--ui-text-3xl); line-height:1.15; letter-spacing:-.035em; }
     h3 { font-size:var(--ui-text-md); line-height:1.35; }
@@ -312,11 +313,11 @@ export class MuxChatCoordination extends LitElement {
       ${this.projectId ? html`<mux-ui-button class="back" variant="quiet" size="small" @click=${() => { this.detail = undefined; }}>${icon('back')}Back to work</mux-ui-button><div class="project detail-project">${icon('folder')}${this.projectName()}</div>` : nothing}
       <div class=${`status ${stateClass}`}>${icon(this.statusIcon(item))}${state}</div>
       <h2>${item.title}</h2>
-      <p class="lead">${item.brief || 'No description yet.'}</p>
+      ${item.status !== 'open' && !item.goalCondition ? html`<p class="lead">${item.brief || 'No description yet.'}</p>` : nothing}
       ${item.status === 'open' || item.goalCondition ? html`<mux-work-goal-review .item=${item} .remoteHost=${this.remoteHost} @work-goal-updated=${(event:CustomEvent<WorkItem>) => { this.detail=event.detail; void this.refresh(); }}></mux-work-goal-review>` : nothing}
       ${item.nextAction || item.blockedReason ? html`<section class=${`next ${item.status === 'blocked' ? 'blocked' : ''}`}><h3>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</h3><p>${item.blockedReason || item.nextAction}</p></section>` : nothing}
       ${item.progress ? html`<section class="section"><h3>Where things stand</h3><p>${item.progress.length > 160 || item.progress.includes('\n') ? activityPreview(item.progress) : item.progress}</p></section>` : nothing}
-      ${item.acceptanceCriteria ? html`<section class="section"><h3>How we'll know it worked</h3><p>${item.acceptanceCriteria}</p></section>` : nothing}
+      ${item.status !== 'open' && !item.goalCondition && item.acceptanceCriteria ? html`<section class="section"><h3>How we'll know it worked</h3><p>${item.acceptanceCriteria}</p></section>` : nothing}
       ${item.outcome ? html`<section class="section"><h3>Outcome</h3><p>${item.outcome}</p></section>` : nothing}
       ${item.ownerSessionId || item.dispatch?.sessionId ? html`<section class="section"><h3>Who's on it</h3><p>${this.chatLink(item.ownerSessionId || item.dispatch!.sessionId)}</p></section>` : nothing}
       ${item.dispatch?.selectionReason ? html`<section class="section"><h3>Worker selection</h3><p>${item.dispatch.selectionReason}</p>${item.dispatch.configuration ? html`<p>${item.dispatch.configuration.harness} · ${item.dispatch.configuration.provider} · bundle ${item.dispatch.configuration.bundle || 'none'} · model ${item.dispatch.configuration.model || 'none'} · effort ${item.dispatch.configuration.effort || 'none'}</p>` : nothing}${item.dispatch.fallback ? html`<p>Fallback: ${item.dispatch.fallback}</p>` : nothing}</section>` : nothing}
@@ -327,6 +328,6 @@ export class MuxChatCoordination extends LitElement {
     </article>`;
   }
   override render() {
-    return html`<div class="wrap"><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId && !this.detail ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.detailView() : this.projectId ? this.list() : nothing}</div>`;
+    return html`<div class=${this.detail ? 'wrap detail-wrap' : 'wrap'}><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId && !this.detail ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.detailView() : this.projectId ? this.list() : nothing}</div>`;
   }
 }
