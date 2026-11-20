@@ -16,6 +16,9 @@ class SDKChatStore {
   projects: SDKProject[] = [];
   remoteHosts: SDKRemoteHost[] = [];
   archivedCount = 0;
+  archiveSearchRevision = 0;
+  private archiveSearchSnapshot = '';
+  private archiveSearchDirty = false;
   private archivedCache = new Map<string, SDKChat>();
   private listeners = new Set<() => void>();
   private nameEvents?: EventSource;
@@ -26,7 +29,14 @@ class SDKChatStore {
     if (!this.nameEvents) {
       this.nameEvents = new EventSource(apiPath('/api/sdk-chat-names/events'));
       this.nameEvents.onopen = () => { void this.refresh(); };
-      this.nameEvents.onmessage = () => { void this.refresh(); };
+      this.nameEvents.onmessage = event => {
+        try {
+          const {id} = JSON.parse(event.data) as {id?: string};
+          const chat = this.chats.find(row => row.id === id);
+          if (!chat || chat.archived) this.archiveSearchDirty = true;
+        } catch { this.archiveSearchDirty = true; }
+        void this.refresh();
+      };
       this.remoteUnsub = remotesStore.subscribe(() => { void this.refresh(); });
     }
     return () => {
@@ -76,6 +86,12 @@ class SDKChatStore {
     if (generation !== this.refreshGeneration) return;
     this.remoteHosts = remoteResults.map(result => result.host);
     this.archivedCount += remoteResults.reduce((sum, result) => sum + result.archived, 0);
+    const archiveSnapshot = JSON.stringify({local:Number(response.headers.get('X-Archived-Count') || 0),hosts:remoteResults.map(result => [result.host.id,result.host.name,result.host.state,result.archived])});
+    if (this.archiveSearchDirty || archiveSnapshot !== this.archiveSearchSnapshot) {
+      this.archiveSearchRevision++;
+      this.archiveSearchDirty = false;
+      this.archiveSearchSnapshot = archiveSnapshot;
+    }
     const activeChats = [...localChats, ...remoteResults.flatMap(result => result.chats.map(chat => ({...chat, remoteHost: result.host.id})))];
     for (const chat of activeChats) this.archivedCache.delete(chat.id);
     this.chats = [...activeChats, ...this.archivedCache.values()];
@@ -124,7 +140,8 @@ class SDKChatStore {
     return {chats,total:available.reduce((sum,result) => sum + result.total,0)};
   }
   async searchArchived(query: string, signal?: AbortSignal): Promise<{chats: SDKChat[]; warnings: string[]}> {
-    const hosts = ['', ...this.remoteHosts.filter(host => host.state === 'connected').map(host => host.id)];
+    const connectedHosts = this.remoteHosts.filter(host => host.state === 'connected');
+    const hosts = ['', ...connectedHosts.map(host => host.id)];
     const load = async (host: string): Promise<SDKChat[]> => {
       const getPage = async (page: number) => {
         const params = new URLSearchParams({archived:'true', page:String(page), q:query});
@@ -139,7 +156,7 @@ class SDKChatStore {
     const results = await Promise.allSettled(hosts.map(load));
     if (signal?.aborted) throw new DOMException('Search cancelled', 'AbortError');
     if (results[0].status === 'rejected') throw results[0].reason;
-    const warnings = results.slice(1).flatMap((result,index) => result.status === 'rejected' ? [`Could not search archived sessions on ${this.remoteHosts.filter(host => host.state === 'connected')[index]?.name || hosts[index+1]}.`] : []);
+    const warnings = results.slice(1).flatMap((result,index) => result.status === 'rejected' ? [`Could not search archived sessions on ${connectedHosts[index]?.name || hosts[index+1]}.`] : []);
     const chats = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
     for (const chat of chats) rememberChatHost(chat.id,chat.remoteHost || '');
     return {chats,warnings};
@@ -156,16 +173,19 @@ class SDKChatStore {
   async rename(id: string, title: string) {
     const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
     if (!response.ok) throw new Error(await response.text());
+    this.archiveSearchDirty = true;
     await this.refresh();
   }
   async setArchived(id: string, archived: boolean) {
     const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived }) });
     if (!response.ok) throw new Error(await response.text());
+    this.archiveSearchDirty = true;
     await this.refresh();
   }
   async setPinned(id: string, pinned: boolean) {
     const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned }) });
     if (!response.ok) throw new Error(await response.text());
+    this.archiveSearchDirty = true;
     await this.refresh();
   }
   async setTerminalWorkspace(id: string, terminalWorkspaceId: string) {
@@ -184,6 +204,7 @@ class SDKChatStore {
   async updateProject(id: string, changes: Partial<Pick<SDKProject, 'name' | 'path' | 'sourceFolders' | 'pinned'>>) {
     const response = await fetch(apiPath(`/api/sdk-projects/${encodeURIComponent(id)}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
     if (!response.ok) throw new Error(await response.text());
+    if (changes.path || changes.sourceFolders) this.archiveSearchDirty = true;
     await this.refresh();
   }
   async removeProject(id: string) {
@@ -197,6 +218,7 @@ class SDKChatStore {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId }),
     });
     if (!response.ok) throw new Error(await response.text());
+    this.archiveSearchDirty = true;
     await this.refresh();
   }
   async folders(path = '', host = ''): Promise<FolderListing> {

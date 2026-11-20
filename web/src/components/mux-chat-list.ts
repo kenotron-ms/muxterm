@@ -420,6 +420,7 @@ export class MuxChatList extends LitElement {
   @state() private searchError = '';
   @state() private searchWarnings: string[] = [];
   private searchGeneration = 0;
+  private lastSearchArchiveRevision = 0;
   private searchTimer?: number;
   private searchAbort?: AbortController;
   @state() private pinError = '';
@@ -532,11 +533,15 @@ export class MuxChatList extends LitElement {
     document.addEventListener('pointerdown', this.onPinnedOutsidePointer);
     document.addEventListener('keydown', this.onPinnedEscape);
     this.lastArchivedCount = sdkChats.archivedCount;
+    this.lastSearchArchiveRevision = sdkChats.archiveSearchRevision;
     this.unsub=sdkChats.subscribe(() => {
       this.version++;
       if (this.archiveExpanded && sdkChats.archivedCount !== this.lastArchivedCount) this.refreshArchive();
       this.lastArchivedCount = sdkChats.archivedCount;
-      if (this.searchActive) this.scheduleSearch();
+      if (sdkChats.archiveSearchRevision !== this.lastSearchArchiveRevision) {
+        this.lastSearchArchiveRevision = sdkChats.archiveSearchRevision;
+        if (this.searchActive) this.scheduleSearch();
+      }
     });
     void sdkChats.refresh();
   }
@@ -563,7 +568,7 @@ export class MuxChatList extends LitElement {
         if (generation !== this.searchGeneration || controller.signal.aborted) return;
         this.searchError = `Could not search archived sessions: ${errorMessage(error)}`;
       } finally { if (generation === this.searchGeneration) this.searchLoading = false; }
-    }, this.searchText.trim() ? 220 : 0);
+    }, this.searchText.trim() ? 220 : 50);
   }
   private clearSearch() {
     this.searchText = ''; this.archiveFilter = 'all'; this.stateFilter = 'all'; this.harnessFilter = 'all'; this.filtersOpen = false;
@@ -774,7 +779,7 @@ export class MuxChatList extends LitElement {
     if (this.searchActive) {
       const query = this.searchText.trim().toLocaleLowerCase();
       const connectedActive = active.filter(chat => !chat.remoteHost || sdkChats.remoteHosts.some(host => host.id === chat.remoteHost && host.state === 'connected'));
-      const matches = [...(this.archiveFilter === 'archived' ? [] : connectedActive), ...(this.archiveFilter === 'active' ? [] : this.searchRows)]
+      const matches = [...(this.archiveFilter === 'active' ? [] : this.searchRows), ...(this.archiveFilter === 'archived' ? [] : connectedActive)]
         .filter(chat => (!query || `${chat.title} ${chat.projectPath}`.toLocaleLowerCase().includes(query))
           && (this.harnessFilter === 'all' || chat.harness === this.harnessFilter)
           && (this.stateFilter === 'all' || (this.stateFilter === 'working' ? chat.state === 'working' || chat.state === 'starting' : chat.state === this.stateFilter)))
