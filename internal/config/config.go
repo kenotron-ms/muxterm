@@ -57,8 +57,9 @@ const (
 	VoiceAuthAPIKey = "api_key"
 )
 
-// VoiceConfig is the realtime speech-to-speech capability: where the realtime
-// endpoint is, which deployment answers on it, and HOW TO AUTHENTICATE.
+// VoiceConfig selects a realtime speech provider and its model and credential
+// source. The endpoint and authentication fields below belong to the existing
+// OpenAI-compatible transport; Gemini uses separate fields and a fixed host.
 //
 // Off by default. Turning it on costs money per minute of speech and opens a
 // microphone, so it is an operator decision, never a default anyone backs
@@ -69,11 +70,16 @@ const (
 // browser PATCH /api/config must not be able to repoint muxterm's credential
 // at a host of the caller's choosing.
 //
-// No secret lives here. AuthMode selects WHICH credential source is used;
-// the credential itself comes from the ambient Azure identity (entra) or an
-// environment variable (api_key), and is never written to this file, never
-// serialized to a browser, and never logged.
+// No secret lives here. The credential comes from Azure identity, an environment
+// variable, or an owner-only credential file. Values are never written to this
+// config, serialized to a browser, or logged.
 type VoiceConfig struct {
+	// Provider selects the SDK chat voice transport. Empty preserves the
+	// historical OpenAI-compatible configuration.
+	Provider        string `toml:"provider,omitempty" json:"provider"`
+	GeminiModel     string `toml:"gemini_model,omitempty" json:"gemini_model"`
+	GeminiKeyEnv    string `toml:"gemini_key_env,omitempty" json:"gemini_key_env"`
+	GeminiKeyStored bool   `toml:"gemini_key_stored,omitempty" json:"gemini_key_stored"`
 	// Enabled gates the whole capability. When false the /api/cos/voice/*
 	// routes answer 404 and the browser never offers the control.
 	Enabled bool `toml:"enabled" json:"enabled"`
@@ -136,6 +142,18 @@ type VoiceConfig struct {
 func (v VoiceConfig) Validate() error {
 	if !v.Enabled {
 		return nil
+	}
+	if v.Provider == "gemini" {
+		if v.GeminiModel == "" {
+			return errors.New(`config: [voice] Gemini model is empty`)
+		}
+		if v.GeminiKeyEnv == "" && !v.GeminiKeyStored {
+			return errors.New(`config: [voice] Gemini requires a saved key or gemini_key_env`)
+		}
+		return nil
+	}
+	if v.Provider != "" && v.Provider != "openai" {
+		return fmt.Errorf("config: [voice] provider %q is not recognized", v.Provider)
 	}
 	if v.Endpoint == "" {
 		return errors.New(`config: [voice] enabled but endpoint is empty; set endpoint (e.g. "https://example.openai.azure.com/openai/v1")`)

@@ -26,6 +26,8 @@ export type VoiceKeySource = 'stored' | 'env' | 'none' | '';
 
 export interface VoiceStatus {
   enabled: boolean;
+  provider: 'openai' | 'gemini';
+  geminiModel: string;
   mode: VoiceMode;
   endpoint: string;
   model: string;
@@ -37,6 +39,14 @@ export interface VoiceStatus {
   keyEnvVar: string;
   /** Whether a credential is set. The only thing said about the secret. */
   keyConfigured: boolean;
+  openaiKeyConfigured: boolean;
+  openaiKeySource: VoiceKeySource;
+  openaiKeyEnvVar: string;
+  geminiKeyConfigured: boolean;
+  geminiKeySource: VoiceKeySource;
+  geminiKeyEnvVar: string;
+  openaiKeyPath: string;
+  geminiKeyPath: string;
   allowedScopes: string[];
   configPath: string;
   keyPath: string;
@@ -46,6 +56,8 @@ export interface VoiceStatus {
 
 export const DEFAULT_VOICE_STATUS: VoiceStatus = {
   enabled: false,
+  provider: 'openai',
+  geminiModel: 'gemini-3.8-live',
   mode: 'azure_entra',
   endpoint: '',
   model: '',
@@ -55,6 +67,14 @@ export const DEFAULT_VOICE_STATUS: VoiceStatus = {
   keySource: '',
   keyEnvVar: '',
   keyConfigured: false,
+  openaiKeyConfigured: false,
+  openaiKeySource: '',
+  openaiKeyEnvVar: '',
+  geminiKeyConfigured: false,
+  geminiKeySource: '',
+  geminiKeyEnvVar: '',
+  openaiKeyPath: '',
+  geminiKeyPath: '',
   allowedScopes: [],
   configPath: '',
   keyPath: '',
@@ -75,6 +95,8 @@ export function parseVoiceStatus(raw: unknown): VoiceStatus {
   const source = r['keySource'];
   return {
     enabled: r['enabled'] === true,
+    provider: r['provider'] === 'gemini' ? 'gemini' : 'openai',
+    geminiModel: str(r, 'geminiModel') || 'gemini-3.8-live',
     mode: mode === 'openai_key' || mode === 'azure_key' || mode === 'azure_entra'
       ? mode
       : 'azure_entra',
@@ -86,6 +108,14 @@ export function parseVoiceStatus(raw: unknown): VoiceStatus {
     keySource: source === 'stored' || source === 'env' || source === 'none' ? source : '',
     keyEnvVar: str(r, 'keyEnvVar'),
     keyConfigured: r['keyConfigured'] === true,
+    openaiKeyConfigured: r['openaiKeyConfigured'] === true,
+    openaiKeySource: r['openaiKeySource'] === 'stored' || r['openaiKeySource'] === 'env' ? r['openaiKeySource'] : '',
+    openaiKeyEnvVar: str(r, 'openaiKeyEnvVar'),
+    geminiKeyConfigured: r['geminiKeyConfigured'] === true,
+    geminiKeySource: r['geminiKeySource'] === 'stored' || r['geminiKeySource'] === 'env' ? r['geminiKeySource'] : '',
+    geminiKeyEnvVar: str(r, 'geminiKeyEnvVar'),
+    openaiKeyPath: str(r, 'openaiKeyPath'),
+    geminiKeyPath: str(r, 'geminiKeyPath'),
     allowedScopes: Array.isArray(r['allowedScopes'])
       ? (r['allowedScopes'] as unknown[]).filter((s): s is string => typeof s === 'string')
       : [],
@@ -116,6 +146,8 @@ export async function fetchVoiceStatus(): Promise<VoiceStatus> {
 
 export interface VoiceSettingsInput {
   enabled: boolean;
+  provider: 'openai' | 'gemini';
+  geminiModel: string;
   mode: VoiceMode;
   endpoint: string;
   model: string;
@@ -146,8 +178,8 @@ export async function saveVoiceSettings(input: VoiceSettingsInput): Promise<Voic
 }
 
 /** DELETE /api/voice/key — idempotent; also turns voice off if it was the only source. */
-export async function clearVoiceKey(): Promise<VoiceStatus> {
-  const res = await fetch(apiPath('/api/voice/key'), { method: 'DELETE' });
+export async function clearVoiceKey(provider: 'openai' | 'gemini'): Promise<VoiceStatus> {
+  const res = await fetch(apiPath(`/api/voice/key?provider=${provider}`), { method: 'DELETE' });
   if (!res.ok) throw new Error(await errorText(res, `Could not remove the key (HTTP ${res.status}).`));
   return parseVoiceStatus(await res.json());
 }

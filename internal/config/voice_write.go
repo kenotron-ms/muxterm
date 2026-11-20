@@ -230,6 +230,18 @@ func refuseDottedVoiceKeys(body string) error {
 func renderVoiceSection(v VoiceConfig) string {
 	var b strings.Builder
 	b.WriteString("[voice]\n")
+	if v.Provider != "" {
+		fmt.Fprintf(&b, "  provider = %s\n", strconv.Quote(v.Provider))
+	}
+	if v.GeminiModel != "" {
+		fmt.Fprintf(&b, "  gemini_model = %s\n", strconv.Quote(v.GeminiModel))
+	}
+	if v.GeminiKeyEnv != "" {
+		fmt.Fprintf(&b, "  gemini_key_env = %s\n", strconv.Quote(v.GeminiKeyEnv))
+	}
+	if v.GeminiKeyStored {
+		b.WriteString("  gemini_key_stored = true\n")
+	}
 	fmt.Fprintf(&b, "  enabled = %t\n", v.Enabled)
 	if v.Endpoint != "" {
 		fmt.Fprintf(&b, "  endpoint = %s\n", strconv.Quote(v.Endpoint))

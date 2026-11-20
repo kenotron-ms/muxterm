@@ -707,6 +707,8 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _voice: VoiceStatus = DEFAULT_VOICE_STATUS;
   @state() private _voiceLoaded = false;
   @state() private _vMode: VoiceMode = 'azure_entra';
+  @state() private _vProvider: 'openai' | 'gemini' = 'openai';
+  @state() private _vGeminiModel = 'gemini-3.8-live';
   @state() private _vEnabled = false;
   @state() private _vEndpoint = '';
   @state() private _vModel = '';
@@ -1538,6 +1540,8 @@ export class MuxSettingsSurface extends LitElement {
   private _applyVoiceStatus(st: VoiceStatus): void {
     this._voice = st;
     this._vMode = st.mode;
+    this._vProvider = st.provider;
+    this._vGeminiModel = st.geminiModel;
     this._vEnabled = st.enabled;
     this._vEndpoint = st.endpoint;
     this._vModel = st.model;
@@ -1572,6 +1576,8 @@ export class MuxSettingsSurface extends LitElement {
       const key = this._vKeyInput.trim();
       const st = await saveVoiceSettings({
         enabled: this._vEnabled,
+        provider: this._vProvider,
+        geminiModel: this._vGeminiModel.trim(),
         mode: this._vMode,
         endpoint: this._vEndpoint.trim(),
         model: this._vModel.trim(),
@@ -1602,7 +1608,7 @@ export class MuxSettingsSurface extends LitElement {
     this._voiceMessage = '';
     this._voiceMessageKind = '';
     try {
-      this._applyVoiceStatus(await clearVoiceKey());
+      this._applyVoiceStatus(await clearVoiceKey(this._vProvider));
       this._voiceMessage = 'The saved key was removed.';
       this._voiceMessageKind = 'ok';
     } catch (e) {
@@ -1642,8 +1648,12 @@ export class MuxSettingsSurface extends LitElement {
 
   private _renderVoice() {
     const st = this._voice;
+    const isGemini = this._vProvider === 'gemini';
     const isEntra = this._vMode === 'azure_entra';
     const isOpenAI = this._vMode === 'openai_key';
+    const selectedSource = isGemini ? st.geminiKeySource : st.openaiKeySource;
+    const selectedEnvVar = isGemini ? st.geminiKeyEnvVar : st.openaiKeyEnvVar;
+    const selectedKeyPath = isGemini ? st.geminiKeyPath : st.openaiKeyPath;
 
     /**
      * A SAVED KEY BELONGS TO THE MODE IT WAS SAVED FOR.
@@ -1654,15 +1664,15 @@ export class MuxSettingsSurface extends LitElement {
      * resource key is also not an OpenAI key, so moving between the two key
      * modes has to forget it too.
      */
-    const savedKeyApplies = st.mode === this._vMode && st.keyConfigured;
+    const savedKeyApplies = isGemini ? st.geminiKeyConfigured : st.mode === this._vMode && st.openaiKeyConfigured;
 
     // What the CREDENTIAL line says. Entra is the interesting case: it stores
     // no secret at all, so "no key configured" would be a lie about a working
     // setup.
-    const credLine = isEntra
+    const credLine = !isGemini && isEntra
       ? this._vLine('ok', 'Entra sign-in uses the identity this machine is signed in as. No key is stored.')
-      : savedKeyApplies && st.keySource === 'env'
-        ? this._vLine('ok', `A key is configured, from the ${st.keyEnvVar} environment variable.`)
+      : savedKeyApplies && selectedSource === 'env'
+        ? this._vLine('ok', `A key is configured, from the ${selectedEnvVar} environment variable.`)
         : savedKeyApplies
           ? this._vLine('ok', 'A key is configured. It cannot be displayed — replace it or remove it.')
           : this._vLine('none', 'No key configured for this mode.');
@@ -1672,6 +1682,10 @@ export class MuxSettingsSurface extends LitElement {
 
       ${this._voiceLoaded ? '' : this._vLine('none', 'Loading…')}
       ${st.enabled ? this._vLine('ok', 'Voice is on.') : this._vLine('none', 'Voice is off.')}
+      ${this._vLine(st.provider === this._vProvider && st.enabled ? 'ok' : 'none',
+        st.provider === this._vProvider
+          ? `${isGemini ? 'Gemini Live' : 'OpenAI GPT-Live'} is ${st.enabled ? 'the active provider.' : 'selected but off.'}`
+          : `${isGemini ? 'Gemini Live' : 'OpenAI GPT-Live'} settings are saved; save to make this provider active.`)}
       ${credLine}
       ${st.restartRequired
         ? this._vLine('bad', 'Voice starts with muxterm, so restart it for the saved change to take effect.')
@@ -1679,6 +1693,30 @@ export class MuxSettingsSurface extends LitElement {
 
       <mux-ui-switch class="v-toggle" layout="row" label="Enable voice" .checked=${this._vEnabled}
         @change=${(event: CustomEvent<{checked:boolean}>) => { this._vEnabled = event.detail.checked; }}></mux-ui-switch>
+
+      <p class="v-label">Voice provider</p>
+      <mux-ui-radio-group class="v-modes" aria-label="Voice provider" name="voice-provider" .value=${this._vProvider}
+        .options=${[
+          {value:'openai',label:'OpenAI GPT-Live',description:'Realtime speech with OpenAI or an Azure OpenAI endpoint.'},
+          {value:'gemini',label:'Gemini Live',description:'Native Gemini streaming audio with spoken interruptions.'},
+        ]}
+        @change=${(event: CustomEvent<{value:string}>) => { this._vProvider = event.detail.value as 'openai' | 'gemini'; this._vKeyInput = ''; this._voiceMessage = ''; }}></mux-ui-radio-group>
+
+      ${isGemini ? html`
+        <div class="v-field">
+          <mux-ui-text-field label="Gemini Live model" type="text" autocomplete="off"
+            .value=${this._vGeminiModel}
+            @input=${(e: Event) => { this._vGeminiModel = (e.target as HTMLInputElement).value; }}></mux-ui-text-field>
+          <p class="v-hint">Gemini Live uses Google's streaming endpoint. OpenAI and Azure settings stay saved when you switch providers.</p>
+        </div>
+        <div class="v-field">
+          <mux-ui-text-field label=${savedKeyApplies ? 'Replace Gemini key' : 'Gemini API key'} type="password" autocomplete="off"
+            placeholder=${savedKeyApplies ? 'Leave blank to keep the saved key' : 'Paste the key'}
+            .value=${this._vKeyInput}
+            @input=${(e: Event) => { this._vKeyInput = (e.target as HTMLInputElement).value; }}></mux-ui-text-field>
+          <p class="v-hint">The key is write-only. The browser receives a short-lived Gemini token when voice starts.</p>
+        </div>
+      ` : html`
 
       <p class="v-label">How voice signs in</p>
       <mux-ui-radio-group class="v-modes" aria-label="How voice signs in" name="voice-mode" .value=${this._vMode}
@@ -1760,11 +1798,12 @@ export class MuxSettingsSurface extends LitElement {
               </p>
             </div>
           `}
+      `}
 
       <div class="v-actions">
         <mux-ui-button size="small" variant="primary" ?disabled="${this._voiceBusy}" @click="${this._saveVoice}">Save</mux-ui-button>
         <mux-ui-button size="small" ?disabled="${this._voiceBusy}" @click="${this._checkVoice}">Check sign-in</mux-ui-button>
-        ${savedKeyApplies && st.keySource === 'stored'
+        ${savedKeyApplies && selectedSource === 'stored'
           ? html`<mux-ui-button size="small" variant="danger" ?disabled="${this._voiceBusy}" @click="${this._clearVoiceKey}">Remove key</mux-ui-button>`
           : ''}
       </div>
@@ -1781,14 +1820,16 @@ export class MuxSettingsSurface extends LitElement {
         : ''}
 
       <p class="v-note">
-        “Check sign-in” authenticates for real against the saved settings and lists
-        the models — it never starts a session, so it costs nothing.
+        “Check sign-in” authenticates against the saved ${isGemini ? 'Gemini model' : 'endpoint'}
+        without starting a realtime session.
         <br /><br />
-        ${isEntra
+        ${!isGemini && isEntra
           ? html`Entra sign-in stores no key.`
-          : html`A key ${savedKeyApplies ? 'is' : 'will be'} stored at
-            <code>${st.keyPath || '$XDG_CONFIG_HOME/muxterm/voice_api_key'}</code> with
-            owner-only permissions, never in the config file.`}
+          : selectedSource === 'env' && savedKeyApplies
+            ? html`The key comes from the <code>${selectedEnvVar}</code> environment variable. Its value is never in the config file.`
+            : html`A key ${savedKeyApplies ? 'is' : 'will be'} stored at
+              <code>${selectedKeyPath || '$XDG_CONFIG_HOME/muxterm/voice_api_key'}</code> with
+              owner-only permissions, never in the config file.`}
         Saving rewrites only the
         <code>[voice]</code> section of
         <code>${st.configPath || '~/.config/muxterm/config.toml'}</code>; the rest of

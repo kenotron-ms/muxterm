@@ -13,6 +13,7 @@ import { apiPath } from '../lib/base-path.js';
 import { chatHost, rememberChatHost, remoteChatPath } from '../lib/remote-chat-routes.js';
 import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
+import { GeminiVoiceSession } from '../lib/gemini-voice-session.js';
 import { voiceInputController, type ComposerDictationCapture, type VoiceTranscriptPayload } from '../lib/voice-input-controller.js';
 import './mux-sdk-chat-settings.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
@@ -180,7 +181,8 @@ export class MuxSDKChat extends LitElement {
   private dictationCapture?: ComposerDictationCapture;
   private dictationBase = '';
   private unsubscribeDictation?: () => void;
-  private voice?: SDKVoiceSession;
+  private voice?: SDKVoiceSession | GeminiVoiceSession;
+  private voiceProvider: 'openai' | 'gemini' = 'openai';
   @state() private showScrollBottom = false;
   private dragDepth = 0;
   private stream?: EventSource;
@@ -617,7 +619,14 @@ export class MuxSDKChat extends LitElement {
       this.requestUpdate();
     });
     this.connect();
-    void fetchVoiceStatus().then(status => { this.voiceAvailable = status.enabled && !status.restartRequired; });
+    void fetchVoiceStatus().then(status => {
+      this.voiceAvailable = status.enabled && !status.restartRequired;
+      this.voiceProvider = status.provider;
+      if (this.sideMode || !this.sessionId || this.voiceState !== 'idle') return;
+      this.voice = new (status.provider === 'gemini' ? GeminiVoiceSession : SDKVoiceSession)(this.sessionId,
+        state => { this.voiceState = state; if (state === 'connecting') this.voiceStartedAt = Date.now(); else if (state === 'idle') this.voiceStartedAt = 0; },
+        levels => this.updateVoiceLevels(levels));
+    });
   }
   override disconnectedCallback() {
     if (this.workDigestTimer) window.clearTimeout(this.workDigestTimer);
@@ -914,7 +923,7 @@ export class MuxSDKChat extends LitElement {
     this.retainChatView();
     this.persistTranscriptCache();
     this.voice?.stop();
-    this.voice = this.sideMode ? undefined : new SDKVoiceSession(this.sessionId, state => { this.voiceState = state; if (state === 'connecting') this.voiceStartedAt = Date.now(); else if (state === 'idle') this.voiceStartedAt = 0; }, levels => this.updateVoiceLevels(levels));
+    this.voice = this.sideMode ? undefined : new (this.voiceProvider === 'gemini' ? GeminiVoiceSession : SDKVoiceSession)(this.sessionId, state => { this.voiceState = state; if (state === 'connecting') this.voiceStartedAt = Date.now(); else if (state === 'idle') this.voiceStartedAt = 0; }, levels => this.updateVoiceLevels(levels));
     this.voiceError = '';
     this.activeSession = this.sessionId;
     if (this.mobileWorkDetail) { this.drawerOpen = false; this.previewFocused = false; }

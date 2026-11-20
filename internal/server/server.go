@@ -129,9 +129,11 @@ type Server struct {
 	cfgMu      sync.RWMutex
 	cfg        muxcfg.Config
 
-	sdkVoice      *sdkVoiceHost
-	geminiLoginMu sync.Mutex
-	geminiLogin   *geminiLogin
+	sdkVoice            *sdkVoiceHost
+	geminiVoiceMu       sync.Mutex
+	geminiVoiceSessions map[string]geminiVoiceSession
+	geminiLoginMu       sync.Mutex
+	geminiLogin         *geminiLogin
 
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
@@ -309,7 +311,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/ai/agents/versions/refresh", protect(http.HandlerFunc(s.handleCodingAgentVersionRefresh)))
 
 	// Opt-in realtime voice for SDK chats.
-	if s.cfg.Voice.Enabled {
+	if s.cfg.Voice.Enabled && s.cfg.Voice.Provider != "gemini" {
 		chatVoice, err := newSDKVoiceHost(s.cfg.Voice, s.sdkChats)
 		if err != nil {
 			log.Printf("sdk voice: unavailable: %v", err)
@@ -318,6 +320,12 @@ func New(cfg Config) *Server {
 			s.mux.Handle("POST /api/sdk-chats/{id}/voice/sdp", protect(http.HandlerFunc(s.handleSDKVoiceSDP)))
 			s.mux.Handle("POST /api/sdk-chats/{id}/voice/end", protect(http.HandlerFunc(s.handleSDKVoiceEnd)))
 		}
+	}
+	if s.cfg.Voice.Enabled && s.cfg.Voice.Provider == "gemini" {
+		s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/start", protect(http.HandlerFunc(s.handleGeminiVoiceStart)))
+		s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/event", protect(http.HandlerFunc(s.handleGeminiVoiceEvent)))
+		s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/tool", protect(http.HandlerFunc(s.handleGeminiVoiceTool)))
+		s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/end", protect(http.HandlerFunc(s.handleGeminiVoiceEnd)))
 	}
 	if s.sdkChats.onEvent == nil {
 		s.sdkChats.onEvent = s.sdkJobs.onChatEvent
