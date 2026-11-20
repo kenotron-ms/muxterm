@@ -141,12 +141,13 @@ export class MuxGlobalPalette extends LitElement {
           const response=await fetch(apiPath(remoteChatPath(host,`/api/sdk-work?${params}`)),{signal:controller.signal});
           if (!response.ok) throw new Error('Work search unavailable');
           const body=await response.json() as {work:WorkResult[]};
-          return (body.work||[]).slice(0,100).flatMap(item => {
+          return (body.work||[]).flatMap(item => {
             const project=projects.find(row => (row.remoteHost||'')===host && item.projectIds?.includes(row.id));
             if (!project) return [];
             const row=this.workRow(item,project);
-            return rank(query,row.title,row.context)>=0 ? [row] : [];
-          });
+            const score=rank(query,row.title,row.context);
+            return score>=0 ? [{...row,score}] : [];
+          }).sort((a,b) => b.score-a.score).slice(0,100);
         })()});
       }
     }
@@ -172,7 +173,11 @@ export class MuxGlobalPalette extends LitElement {
     const results=await Promise.allSettled(jobs.map(job => job.promise));
     window.clearTimeout(deadline);
     if (generation!==this.generation || (controller.signal.aborted && !timedOut)) return;
+    const previousRows=this.rows();
+    const selectedKey=previousRows[Math.max(0,Math.min(this.active,previousRows.length-1))]?.key;
     this.remoteRows=results.flatMap(result => result.status==='fulfilled' ? result.value : []);
+    const nextIndex=selectedKey ? this.rows().findIndex(row => row.key===selectedKey) : -1;
+    this.active=nextIndex>=0 ? nextIndex : 0;
     this.warnings=[...new Set([...this.warnings,...results.flatMap((result,index) => result.status==='rejected' && !timedOut ? [`${jobs[index].label} is partly unavailable.`] : []),...(timedOut ? ['Search timed out; showing available results.'] : [])])];
     this.loading=false;
   }
