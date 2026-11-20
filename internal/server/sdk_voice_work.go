@@ -56,12 +56,7 @@ type voiceWorkRecord struct {
 }
 
 func voiceWorkText(value string, limit int) string {
-	value = strings.Join(strings.Fields(value), " ")
-	runes := []rune(value)
-	if len(runes) > limit {
-		return string(runes[:limit-1]) + "…"
-	}
-	return value
+	return sanitizeVoiceContextText(value, limit)
 }
 
 func voiceWorkMatchesQuery(item *sdkWorkItem, query string) bool {
@@ -97,7 +92,10 @@ func (h *sdkChatHost) readVoiceWork(chatID, rawArguments string) string {
 	if query.Status != "" && !validWorkStatus(query.Status) {
 		return `{"error":"invalid Work status"}`
 	}
-	query.Query = strings.ToLower(voiceWorkText(query.Query, 160))
+	query.Query = strings.ToLower(strings.Join(strings.Fields(query.Query), " "))
+	if len([]rune(query.Query)) > 160 {
+		return `{"error":"Work query too long"}`
+	}
 	if len(query.WorkID) > 128 {
 		return `{"error":"invalid Work ID"}`
 	}
@@ -123,7 +121,7 @@ func (h *sdkChatHost) readVoiceWork(chatID, rawArguments string) string {
 				continue
 			}
 		}
-		if query.Status != "" && item.Status != query.Status || query.WorkID != "" && item.ID != query.WorkID {
+		if (query.Status != "" && item.Status != query.Status) || (query.WorkID != "" && item.ID != query.WorkID) {
 			continue
 		}
 		if !voiceWorkMatchesQuery(item, query.Query) {
