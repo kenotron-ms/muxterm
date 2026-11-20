@@ -9,7 +9,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
-import { ChevronLeft, ChevronRight, MonitorX, PanelLeft, Plus, X } from 'lucide';
+import { ChevronLeft, ChevronRight, Mic, MonitorX, PanelLeft, Plus, Square, X } from 'lucide';
 import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
@@ -20,6 +20,7 @@ import { applyDocumentTitle } from './lib/instance-identity.js';
 import { installPwaWindowControls } from './lib/pwa-window-controls.js';
 import { injectTerminalFonts } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
+import { sdkVoiceCall, type ActiveVoiceCall } from './lib/sdk-voice-session.js';
 import { fetchAIStatus, parseAIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
 
@@ -332,6 +333,14 @@ export class MuxApp extends LitElement {
       overflow: hidden;
       min-height: 0;
     }
+    .voice-call-strip { display:flex; align-items:center; gap:var(--ui-space-3); flex:none; min-height:var(--ui-control-lg); padding:var(--ui-space-2) max(var(--ui-space-4),env(safe-area-inset-right,0px)) var(--ui-space-2) max(var(--ui-space-4),env(safe-area-inset-left,0px)); border-top:1px solid var(--ui-border); background:var(--ui-surface-raised); color:var(--ui-text); }
+    .voice-call-mark { display:grid; place-items:center; flex:none; width:var(--ui-control-md); height:var(--ui-control-md); border-radius:50%; background:var(--ui-accent); color:var(--ui-surface-base); }
+    .voice-call-info { display:flex; flex-direction:column; flex:1; min-width:0; line-height:1.25; }
+    .voice-call-info strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ui-text-sm); }
+    .voice-call-info span { color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .voice-call-actions { display:flex; align-items:center; gap:var(--ui-space-1); flex:none; }
+    @media(max-width:767.98px) { .voice-call-strip { position:relative; z-index:calc(var(--ui-z-sheet) + 1); padding-bottom:max(var(--ui-space-2),env(safe-area-inset-bottom,0px)); box-shadow:var(--ui-shadow-side-strong); } }
+    @media(max-width:359px) { .voice-call-strip { gap:var(--ui-space-2); padding-inline:var(--ui-space-2); } .voice-call-mark { display:none; } }
 
     .main-pane {
       flex: 1;
@@ -673,6 +682,8 @@ export class MuxApp extends LitElement {
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
   private _unsubscribeChats: (() => void) | null = null;
+  private _unsubscribeVoiceCall: (() => void) | null = null;
+  @state() private _activeVoiceCall: ActiveVoiceCall | null = sdkVoiceCall.active;
   private _unsubHomeSessions: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
   private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
@@ -795,6 +806,7 @@ export class MuxApp extends LitElement {
       if (window.__muxtermPendingBrowserOpens?.length) this._onNativeBrowserOpen();
       this.requestUpdate();
     });
+    this._unsubscribeVoiceCall = sdkVoiceCall.subscribe(() => { this._activeVoiceCall = sdkVoiceCall.active; });
 
     // Return from service authorization to the Connections page. Consume only
     // muxterm's own marker and preserve any unrelated URL parameters.
@@ -1193,6 +1205,8 @@ export class MuxApp extends LitElement {
     window.removeEventListener('muxterm-browser-open', this._onNativeBrowserOpen);
     this._unsubscribeChats?.();
     this._unsubscribeChats = null;
+    this._unsubscribeVoiceCall?.();
+    this._unsubscribeVoiceCall = null;
     window.removeEventListener('open-launcher', this._onOpenSettings);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
@@ -1539,6 +1553,13 @@ export class MuxApp extends LitElement {
         </div>
 
       </div>
+
+      ${this._activeVoiceCall && this._activeVoiceCall.chatId !== selectedSDKChat ? html`
+        <aside class="voice-call-strip" aria-label="Active voice call">
+          <span class="voice-call-mark" aria-hidden="true">${icon(Mic,{size:16})}</span>
+          <div class="voice-call-info" role="status"><strong>Voice call in ${sdkChats.chats.find(chat => chat.id === this._activeVoiceCall?.chatId)?.title || 'another chat'}</strong><span>${this._activeVoiceCall.state === 'connecting' ? 'Connecting microphone…' : 'Microphone active'}</span></div>
+          <div class="voice-call-actions"><mux-ui-button size="small" variant="quiet" accessible-label="Return to voice call" @click=${() => this._selectMainSurface(this._activeVoiceCall?.chatId || null)}>Return</mux-ui-button><mux-ui-button size="small" variant="quiet" tone="danger" accessible-label="Stop voice call" @click=${() => sdkVoiceCall.stop()}>${icon(Square,{size:14})}<span> Stop</span></mux-ui-button></div>
+        </aside>` : ''}
 
       ${!isWide
         ? html`

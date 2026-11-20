@@ -225,3 +225,84 @@ export class SDKVoiceSession {
     });
   }
 }
+
+export type ActiveVoiceCall = { chatId: string; state: SDKVoiceState; startedAt: number; providerSessionId: string };
+
+/** Browser-wide call owner. Chat views may be replaced without closing the microphone. */
+class SDKVoiceCallController {
+  private session: SDKVoiceSession | null = null;
+  private call: ActiveVoiceCall | null = null;
+  private listeners = new Set<() => void>();
+  private levelListeners = new Set<(levels: readonly number[]) => void>();
+
+  constructor() {
+    window.addEventListener('pagehide', () => this.stop());
+  }
+
+  get active(): ActiveVoiceCall | null { return this.call; }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    listener();
+    return () => this.listeners.delete(listener);
+  }
+
+  onLevels(listener: (levels: readonly number[]) => void): () => void {
+    this.levelListeners.add(listener);
+    return () => this.levelListeners.delete(listener);
+  }
+
+  async start(chatId: string): Promise<void> {
+    if (this.call) {
+      if (this.call.chatId === chatId) return;
+      throw new Error('A voice call is already active in another chat. Return to that chat or stop its call first.');
+    }
+    const session = new SDKVoiceSession(chatId, state => {
+      if (this.session !== session) return;
+      if (state === 'idle') {
+        this.session = null;
+        this.call = null;
+        this.notify();
+      } else if (this.call && (this.call.state !== state || this.call.providerSessionId !== session.providerSessionId)) {
+        this.call = { ...this.call, state, providerSessionId: session.providerSessionId };
+        this.notify();
+      }
+    }, levels => {
+      if (this.session === session) for (const listener of this.levelListeners) listener(levels);
+    });
+    this.session = session;
+    this.call = { chatId, state: 'connecting', startedAt: Date.now(), providerSessionId: '' };
+    this.notify();
+    try {
+      await session.start();
+      if (this.session === session && this.call) {
+        this.call = { ...this.call, providerSessionId: session.providerSessionId };
+        this.notify();
+      }
+    } catch (error) {
+      if (this.session === session) this.stop();
+      throw error;
+    }
+  }
+
+  stop(): void {
+    const session = this.session;
+    if (!session) return;
+    session.stop();
+    // A failed feature check can leave SDKVoiceSession idle before it emits
+    // any state change. Clear our owner in that case as well.
+    if (this.session === session) {
+      this.session = null;
+      this.call = null;
+      this.notify();
+    }
+  }
+
+  stopProvider(chatId: string, providerId: string): void {
+    if (this.call?.chatId === chatId && this.session?.providerSessionId === providerId) this.stop();
+  }
+
+  private notify(): void { for (const listener of this.listeners) listener(); }
+}
+
+export const sdkVoiceCall = new SDKVoiceCallController();
