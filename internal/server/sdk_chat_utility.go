@@ -165,6 +165,40 @@ func (s *Server) handleSDKUtilitySearch(w http.ResponseWriter, r *http.Request) 
 	serveUtilitySearch(w, r, root)
 }
 
+// Search a registered project's files even when it has no chat yet.
+func (s *Server) handleSDKProjectUtilityRead(w http.ResponseWriter, r *http.Request) {
+	s.sdkChats.mu.Lock()
+	project := s.sdkChats.projects[r.PathValue("id")]
+	path := ""
+	if project != nil {
+		path = project.Path
+	}
+	s.sdkChats.mu.Unlock()
+	if path == "" {
+		http.Error(w, "Project folder unavailable", http.StatusNotFound)
+		return
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		http.Error(w, "Project folder unavailable", http.StatusNotFound)
+		return
+	}
+	defer root.Close()
+	w.Header().Set("Cache-Control", "no-store")
+	switch r.PathValue("kind") {
+	case "search":
+		serveUtilitySearch(w, r, root)
+	case "files":
+		serveUtilityFiles(w, r, root, path)
+	case "file":
+		serveUtilityFile(w, r, root, false)
+	case "raw":
+		serveUtilityFile(w, r, root, true)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
 func serveUtilitySearch(w http.ResponseWriter, r *http.Request, root *os.Root) {
 	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	if len(query) < 2 || len(query) > 128 {

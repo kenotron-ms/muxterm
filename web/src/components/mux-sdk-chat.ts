@@ -842,6 +842,11 @@ export class MuxSDKChat extends LitElement {
     else if (action === 'note' && noteId) await utility?.showNote(noteId);
     else if (action === 'tab' && (tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'notes' || tab === 'meetings' || tab === 'goal')) utility?.showPanel(tab === 'notes' ? 'pages' : tab);
   }
+  async navigateWork(id: string): Promise<void> {
+    this.setPaneMode('split');
+    await this.updateComplete;
+    await this.renderRoot.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id);
+  }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
     this.stopDictation();
     this.flushDraft();
@@ -2949,6 +2954,7 @@ export class MuxSDKChat extends LitElement {
       <span slot="section-icon">${icon(Folder,{size:14})}</span>
       ${this.selectedAgent ? this.agentBreadcrumbs(agents) : html`<div slot="heading" class="chat-title"><h1 title=${this.scheduledJob?.name || this.chat?.title || 'Chat'}>${this.scheduledJob?.name || this.chat?.title || 'Chat'}</h1></div>`}
       <div slot="actions" class="topbar-actions">
+      ${this.compact ? html`<mux-ui-button icon-only size="large" variant="quiet" accessible-label="Search and launch" tooltip="Search" @click=${() => this.dispatchEvent(new CustomEvent('palette-open',{detail:{scope:'all'},bubbles:true,composed:true}))}>${icon(Search,{size:19})}</mux-ui-button>` : nothing}
       ${this.compact ? html`<div class="chat-actions-wrap"><mux-ui-button class="chat-menu-trigger" icon-only size="large" variant="quiet" accessible-label="Chat options" tooltip="Chat options" haspopup="menu" .expanded=${this.chatMenuOpen} @click=${() => { this.chatMenuOpen = !this.chatMenuOpen; this.movingChat = false; }}>${icon(Ellipsis,{size:20})}</mux-ui-button>${this.chatActionsMenu()}</div>` : nothing}
       <div class="pane-controls"><mux-ui-button variant="quiet" size=${this.compact ? 'large' : 'small'} icon-only toggle .pressed=${this.drawerOpen} accessible-label=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} tooltip=${this.drawerOpen ? 'Close utility pane' : 'Open utility pane'} @click=${() => this.setPaneMode(this.drawerOpen ? 'chat' : 'split')}>${icon(PanelRight,{size:this.compact ? 20 : 17})}</mux-ui-button></div></div>
     </mux-ui-screen-header>

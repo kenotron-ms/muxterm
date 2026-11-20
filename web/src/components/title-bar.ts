@@ -6,7 +6,7 @@ import './mux-pane-picker.js';
 import './mic-button.js';
 import '../ui/button.js';
 import { icon } from '../lib/icons.js';
-import { Folder, FolderOpen, Menu, Settings } from 'lucide';
+import { Folder, FolderOpen, Menu, Search, Settings } from 'lucide';
 import { apiPath } from '../lib/base-path.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputCount } from '../lib/session-state.js';
@@ -250,6 +250,7 @@ export class MuxTitleBar extends LitElement {
             <span class="brand-sha">${__GIT_SHA__}</span>
           </div><mux-pane-picker .paneStore=${this.paneStore}></mux-pane-picker>`}
       <div class="right">
+        ${!this.desktop ? html`<mux-ui-button icon-only size="large" variant="quiet" accessible-label="Search and launch" tooltip="Search" @click=${() => this.dispatchEvent(new CustomEvent('palette-open',{detail:{scope:'all'},bubbles:true,composed:true}))}>${icon(Search,{size:19})}</mux-ui-button>` : ''}
         ${!this.desktop && !this.chatTitle && this.terminalActive ? html`<mux-ui-button
           icon-only size="large" variant="quiet" toggle .pressed=${this.filesOpen}
           tooltip="${this.filesOpen ? 'Hide file explorer' : 'Show file explorer'}"

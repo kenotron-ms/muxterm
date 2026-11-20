@@ -409,6 +409,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/artifact/raw", protect(http.HandlerFunc(s.handleArtifactRaw)))
 	s.mux.Handle("POST /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("GET /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))
+	s.mux.Handle("GET /api/sdk-projects/{id}/utility/{kind}", protect(http.HandlerFunc(s.handleSDKProjectUtilityRead)))
 	s.mux.Handle("POST /api/sdk-projects", protect(http.HandlerFunc(s.handleSDKProjects)))
 	s.mux.Handle("PATCH /api/sdk-projects/{id}", protect(http.HandlerFunc(s.handleSDKProject)))
 	s.mux.Handle("DELETE /api/sdk-projects/{id}", protect(http.HandlerFunc(s.handleSDKProject)))

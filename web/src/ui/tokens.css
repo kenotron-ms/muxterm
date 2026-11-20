@@ -124,6 +124,12 @@
   --ui-dialog-height: 640px;
   --ui-dialog-wide-height: 820px;
   --ui-dialog-compact-max-height: 600px;
+  --ui-palette-width: 680px;
+  --ui-palette-top-height: 66px;
+  --ui-palette-body-min-height: 120px;
+  --ui-palette-row-height: 52px;
+  --ui-palette-glyph-size: 34px;
+  --ui-palette-phone-top-height: 58px;
   --ui-menu-min-width: 180px;
   --ui-menu-max-height: 280px;
   --ui-breadcrumb-ancestor-max-width: 130px;
