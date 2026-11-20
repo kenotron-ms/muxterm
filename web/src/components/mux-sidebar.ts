@@ -15,9 +15,6 @@ import './mux-chat-list.js';
 /** Persistent destinations, chat groups, and actions beside the current workspace. */
 @customElement('mux-sidebar')
 export class MuxSidebar extends LitElement {
-  revealProject(id: string): void {
-    this.renderRoot.querySelector<MuxChatList>('mux-chat-list')?.locateProject(id);
-  }
   static override styles = css`
     ${subtleScrollbars}
     ${scrollEdgeFadeStyles}

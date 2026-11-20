@@ -566,7 +566,7 @@ export class MuxChatList extends LitElement {
     this.archivePages.clear(); this.archivePending.clear();
     this.archiveRows = []; this.archiveStart = 0; this.archiveTotal = 0; this.archiveAnchorPage = 0; this.archiveLoading = false; this.archiveError = '';
   }
-  locateProject(id: string) {
+  private locateProject(id: string) {
     this.shadowRoot?.querySelectorAll<MuxChatWorkspace>('mux-chat-workspace').forEach(row => { if (row.model.id === id) row.reveal(); });
   }
   private workspaceForProject(id: string): MuxChatWorkspace | undefined {
