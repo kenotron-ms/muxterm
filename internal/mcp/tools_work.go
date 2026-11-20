@@ -11,8 +11,8 @@ func registerWorkTools(srv *Server) {
 	pt := newPublishTools()
 	stringProp := map[string]any{"type": "string"}
 	stringsProp := map[string]any{"type": "array", "items": stringProp}
-	srv.Register("create_work_item", "Record a project Work item as a draft. Creation never starts implementation. Draft a finite, checkable native goal condition afterward with update_work_item(goal_condition). Ask the human to review and approve that exact condition in the creating chat or Work detail view; approval may also mark the item ready. Muxterm then selects a different eligible worker chat and installs the approved condition as its native Chat Goal before execution input. Omit owner_session_id so the scheduler owns selection; project_ids defaults to this chat's project. source records the originating request. labels are searchable tags; depends_on must finish before dispatch. client_ref makes retries idempotent.",
-		map[string]any{"type": "object", "properties": withMachine(map[string]any{"client_ref": stringProp, "title": stringProp, "brief": stringProp, "source": stringProp, "next_action": stringProp, "owner_session_id": stringProp, "acceptance_criteria": stringProp, "reviewer_session_id": stringProp, "session_ids": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "depends_on": stringsProp}), "required": []string{"client_ref", "title", "brief"}},
+	srv.Register("create_work_item", "Record a project Work item as a draft. Creation never starts implementation. Draft a finite, checkable native goal condition afterward with update_work_item(goal_condition). Ask the human to review and approve that exact condition in the creating chat or Work detail view; approval may also mark the item ready. For UI work set ui_work=true and attach a versioned design_preview with desktop and phone screenshots for affected surfaces before approval. Muxterm then selects a different eligible worker chat and installs the approved condition as its native Chat Goal before execution input. Omit owner_session_id so the scheduler owns selection; project_ids defaults to this chat's project. source records the originating request. labels are searchable tags; depends_on must finish before dispatch. client_ref makes retries idempotent.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"client_ref": stringProp, "title": stringProp, "brief": stringProp, "source": stringProp, "next_action": stringProp, "owner_session_id": stringProp, "acceptance_criteria": stringProp, "reviewer_session_id": stringProp, "session_ids": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "ui_work": map[string]any{"type": "boolean"}, "depends_on": stringsProp}), "required": []string{"client_ref", "title", "brief"}},
 		func(args map[string]any) (string, error) {
 			ref, err := argString(args, "client_ref")
 			if err != nil {
@@ -51,6 +51,13 @@ func registerWorkTools(srv *Server) {
 				return "", err
 			}
 			bodyMap := map[string]any{"clientRef": ref, "title": title, "brief": brief, "source": source, "nextAction": nextAction, "ownerSessionId": owner, "acceptanceCriteria": acceptance, "reviewerSessionId": reviewer, "sessionIds": participants}
+			if value, present := args["ui_work"]; present {
+				flag, ok := value.(bool)
+				if !ok {
+					return "", fmt.Errorf("ui_work must be a boolean")
+				}
+				bodyMap["uiWork"] = flag
+			}
 			if projects, err := argStringSlice(args, "project_ids"); err != nil {
 				return "", err
 			} else if projects != nil {
@@ -188,8 +195,8 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-work/"+url.PathEscape(id)+"/dispatch/reset", body)
 			return string(result), err
 		})
-	srv.Register("update_work_item", "Append progress, evidence, status, or a revision to a Work record. For human-readable activity, give summary as one short sentence (160 characters max) saying what changed or what needs attention; put diagnostic detail in text as Markdown with line breaks, lists, and links. Do not paste a chat transcript or a dense run log into summary. The creator can draft goal_condition after goalifying the brief into a finite, checkable stop condition; this preserves revision history but cannot approve it. The human reviews and approves the exact condition in the creating chat or Work detail before readiness=ready can dispatch. Changing the draft or substantive Work details revokes an unstarted approval. A human hold can only be released by a human. Direct claims require this chat's native goal to match the approved Work condition. Blocked work needs blocked_reason or text; status=review marks evidence ready for review.",
-		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp, "session_id": stringProp, "linked_session_id": stringProp, "summary": map[string]any{"type": "string", "maxLength": 160}, "text": stringProp, "title": stringProp, "brief": stringProp, "acceptance_criteria": stringProp, "goal_condition": stringProp, "readiness": map[string]any{"type": "string", "enum": []string{"draft", "ready", "held"}}, "status": map[string]any{"type": "string", "enum": []string{"open", "active", "blocked", "review", "done", "cancelled"}}, "progress": stringProp, "next_action": stringProp, "outcome": stringProp, "evidence": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "depends_on": stringsProp, "owner_session_id": stringProp, "reviewer_session_id": stringProp, "blocked_reason": stringProp, "needs_human": map[string]any{"type": "boolean"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}), "required": []string{"work_id", "client_ref"}},
+	srv.Register("update_work_item", "Append progress, evidence, status, or a revision to a Work record. For human-readable activity, give summary as one short sentence (160 characters max) saying what changed or what needs attention; put diagnostic detail in text as Markdown with line breaks, lists, and links. Do not paste a chat transcript or a dense run log into summary. The creator can draft goal_condition after goalifying the brief into a finite, checkable stop condition; this preserves revision history but cannot approve it. The human runs the revision-bound goal check and approves the exact condition in Work detail before readiness=ready can dispatch. New UI Work also requires design_preview with version, artifactUrl, and affected desktop/phone image URLs. Changing the draft or substantive Work details revokes an unstarted approval. A human hold can only be released by a human. Direct claims require this chat's native goal to match the approved Work condition. Blocked work needs blocked_reason or text; status=review marks evidence ready for review.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp, "session_id": stringProp, "linked_session_id": stringProp, "summary": map[string]any{"type": "string", "maxLength": 160}, "text": stringProp, "title": stringProp, "brief": stringProp, "acceptance_criteria": stringProp, "goal_condition": stringProp, "design_preview": map[string]any{"type": "object", "properties": map[string]any{"version": stringProp, "artifactUrl": stringProp, "desktopImageUrl": stringProp, "phoneImageUrl": stringProp, "affectsDesktop": map[string]any{"type": "boolean"}, "affectsPhone": map[string]any{"type": "boolean"}}, "required": []string{"version", "artifactUrl"}}, "readiness": map[string]any{"type": "string", "enum": []string{"draft", "ready", "held"}}, "status": map[string]any{"type": "string", "enum": []string{"open", "active", "blocked", "review", "done", "cancelled"}}, "progress": stringProp, "next_action": stringProp, "outcome": stringProp, "evidence": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "depends_on": stringsProp, "owner_session_id": stringProp, "reviewer_session_id": stringProp, "blocked_reason": stringProp, "needs_human": map[string]any{"type": "boolean"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}), "required": []string{"work_id", "client_ref"}},
 		func(args map[string]any) (string, error) {
 			id, err := argString(args, "work_id")
 			if err != nil {
@@ -200,6 +207,12 @@ func registerWorkTools(srv *Server) {
 				return "", err
 			}
 			bodyMap := map[string]any{"clientRef": ref}
+			if preview, present := args["design_preview"]; present {
+				if _, ok := preview.(map[string]any); !ok {
+					return "", fmt.Errorf("design_preview must be an object")
+				}
+				bodyMap["designPreview"] = preview
+			}
 			for _, key := range []struct{ arg, json string }{{"session_id", "sessionId"}, {"linked_session_id", "linkedSessionId"}, {"summary", "summary"}, {"text", "text"}, {"title", "title"}, {"brief", "brief"}, {"acceptance_criteria", "acceptanceCriteria"}, {"goal_condition", "goalCondition"}, {"readiness", "readiness"}, {"status", "status"}, {"progress", "progress"}, {"next_action", "nextAction"}, {"outcome", "outcome"}, {"owner_session_id", "ownerSessionId"}, {"reviewer_session_id", "reviewerSessionId"}, {"blocked_reason", "blockedReason"}} {
 				if value, present, err := argStringOptional(args, key.arg); err != nil {
 					return "", err

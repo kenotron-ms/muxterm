@@ -15,7 +15,6 @@ import { fetchVoiceStatus } from '../lib/voice-settings.js';
 import { SDKVoiceSession, type SDKVoiceState } from '../lib/sdk-voice-session.js';
 import { voiceInputController, type ComposerDictationCapture, type VoiceTranscriptPayload } from '../lib/voice-input-controller.js';
 import './mux-sdk-chat-settings.js';
-import './work-goal-review.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { scrollEdgeFadeStyles, syncScrollEdgeFade } from '../lib/scroll-edge-fade.js';
 import { nativeTextareaSizing, syncTextareaSizing } from '../lib/textarea-sizing.js';
@@ -565,7 +564,6 @@ export class MuxSDKChat extends LitElement {
     }
     @media (prefers-reduced-motion:reduce) { .send-icon { animation:none; } }
     .status { color:color-mix(in srgb,var(--ui-warning) 70%,var(--ui-text)); font-size:var(--ui-content-font-size); }
-    .status mux-work-goal-review,.work-items mux-work-goal-review { margin-top:var(--ui-space-4); }
     .drawer { position:relative; z-index:var(--ui-z-drawer); flex:none; width:var(--utility-width); min-width:0; height:calc(100% + var(--ui-nav-height)); margin-top:calc(-1 * var(--ui-nav-height)); background:var(--ui-surface-raised); animation:drawer-in .16s ease-out; }
     .drawer-resizer { position:absolute; left:0; top:0; bottom:0; }
     @keyframes drawer-in { from { transform:translateX(18px); opacity:.55; } to { transform:translateX(0); opacity:1; } }
@@ -2201,7 +2199,7 @@ export class MuxSDKChat extends LitElement {
         else if (item.kind === 'delegate') steps.push(this.agentCard(item, agents));
         else if (item.kind === 'lane-report') steps.push(this.laneCard(item));
         else if (item.kind === 'chat-message') steps.push(this.chatMessageCard(item));
-        else if (item.kind === 'status' || item.kind === 'error') steps.push(html`<div class="${item.kind}">${item.text}${item.workId ? html` <mux-ui-button size="small" variant="quiet" @click=${(event:Event) => this.openWorkItem(item.workId!, event.currentTarget as HTMLElement, item.text.split(': ').slice(1).join(': '))}>View work</mux-ui-button><mux-work-goal-review .workId=${item.workId} .remoteHost=${this.chat?.remoteHost || ''}></mux-work-goal-review>` : nothing}</div>`);
+        else if (item.kind === 'status' || item.kind === 'error') steps.push(html`<div class="${item.kind}">${item.text}${item.workId ? html` <mux-ui-button size="small" variant="quiet" @click=${(event:Event) => this.openWorkItem(item.workId!, event.currentTarget as HTMLElement, item.text.split(': ').slice(1).join(': '))}>View work</mux-ui-button>` : nothing}</div>`);
         else if (item.kind === 'voice-input' || item.kind === 'voice-output') steps.push(html`<div class="voice-work"><span class="work-icon">${icon(Mic,{size:14})}</span><span><strong>${item.kind === 'voice-input' ? item.source === 'steer' ? 'Voice steer' : 'You said' : 'Voice replied'}</strong>${item.text ? html` · ${item.text}` : nothing}</span></div>`);
       }
     }
@@ -2542,7 +2540,7 @@ export class MuxSDKChat extends LitElement {
         const timeline = open ? this.workTimeline(block.turn, row.work, agents) : nothing;
         return html`<div class="block work" data-row-key=${row.key} data-row-index=${start + offset} ?data-working=${working}><details class="work-disclosure" ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleWorkDisclosure(block.turn, event)}>${working ? html`<span class="pulse" aria-hidden="true"></span>` : nothing}<span class="activity-label">${working ? this.streamingWorkLabel(block.turn) : this.workedLabel(block.turn)}</span>${icon(ChevronDown, { size: 14 })}</summary>${timeline === nothing ? nothing : html`<div class="work-items">${timeline}</div>`}</details></div>`;
       }
-      return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'work-digest' ? this.workDigestView() : block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : block.kind === 'status' && block.workId ? html`<div class="status">${block.text} <mux-ui-button size="small" variant="quiet" @click=${(event:Event) => this.openWorkItem(block.workId!, event.currentTarget as HTMLElement, block.text.split(': ').slice(1).join(': '))}>View work</mux-ui-button></div><mux-work-goal-review .workId=${block.workId} .remoteHost=${this.chat?.remoteHost || ''}></mux-work-goal-review>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
+      return html`<div class="block ${block.kind}" data-row-key=${row.key} data-row-index=${start + offset}>${block.kind === 'work-digest' ? this.workDigestView() : block.kind === 'user' ? this.editingKey === block.key ? this.messageEdit(block) : html`${this.userBubble(block)}${this.messageActions(block)}` : block.kind === 'assistant' ? html`${block.channel === 'voice' ? html`<div class="speaker">Voice</div><div class="text voice-text">${block.text}</div>` : html`<div class="text">${this.markdown(block, block.key)}</div>`}${this.goalifyChoice(block)}${this.messageActions(block)}` : block.kind === 'question' ? this.questionCard(block) : block.kind === 'lane-report' ? this.laneCard(block) : block.kind === 'chat-message' ? this.chatMessageCard(block) : block.kind === 'delegate' ? this.agentCard(block, agents) : block.kind === 'status' && block.workId ? html`<div class="status">${block.text} <mux-ui-button size="small" variant="quiet" @click=${(event:Event) => this.openWorkItem(block.workId!, event.currentTarget as HTMLElement, block.text.split(': ').slice(1).join(': '))}>View work</mux-ui-button></div>` : html`<div class="${block.kind}">${block.text}</div>`}</div>`;
     })}<div class="virtual-spacer" style=${`height:${after}px`}></div>`;
   }
   private toggleWorkDisclosure(turn: number, event: MouseEvent) {
