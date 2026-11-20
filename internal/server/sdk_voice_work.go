@@ -140,7 +140,7 @@ func (h *sdkChatHost) readVoiceWork(chatID, rawArguments string) string {
 			if dependency := h.workItems[id]; dependency != nil {
 				waitingNames = append(waitingNames, voiceWorkText(dependency.Title, 120))
 			} else {
-				waitingNames = append(waitingNames, id)
+				waitingNames = append(waitingNames, voiceWorkText(id, 120))
 			}
 		}
 		record := voiceWorkRecord{
