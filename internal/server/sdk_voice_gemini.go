@@ -153,6 +153,7 @@ func (s *Server) handleGeminiVoiceEvent(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Voice session unavailable", http.StatusConflict)
 		return
 	}
+	message := ""
 	switch body.Type {
 	case "voice.input.delta", "voice.output.delta":
 		if body.Text == "" {
@@ -163,12 +164,13 @@ func (s *Server) handleGeminiVoiceEvent(w http.ResponseWriter, r *http.Request) 
 	case "voice.input.done", "voice.output.done":
 		body.Text = ""
 	case "voice.session.error":
-		body.Text = "Gemini voice connection ended. Start voice again to continue."
+		body.Text = ""
+		message = "Gemini voice connection ended. Start voice again to continue."
 	default:
 		http.Error(w, "Unknown voice event", http.StatusBadRequest)
 		return
 	}
-	s.sdkChats.appendEvent(sdkEvent{SessionID: r.PathValue("id"), Type: body.Type, Text: body.Text, GenerationID: body.SessionID})
+	s.sdkChats.appendEvent(sdkEvent{SessionID: r.PathValue("id"), Type: body.Type, Text: body.Text, Message: message, GenerationID: body.SessionID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
