@@ -94,7 +94,11 @@ func workPreviewReady(item *sdkWorkItem) bool {
 }
 
 func workGoalCheckCurrent(item *sdkWorkItem) bool {
-	return item.ReviewVersion == 0 || item.GoalCheck != nil && item.GoalCheck.Passed && item.GoalCheck.GoalRevision == item.GoalRevision && item.GoalCheck.GoalHash == workGoalHash(item.GoalCondition)
+	return item.ReviewVersion == 0 ||
+		(item.GoalCheck != nil &&
+			item.GoalCheck.Passed &&
+			item.GoalCheck.GoalRevision == item.GoalRevision &&
+			item.GoalCheck.GoalHash == workGoalHash(item.GoalCondition))
 }
 
 func checkWorkGoal(condition string, revision int) sdkWorkGoalCheck {
@@ -116,6 +120,8 @@ func checkWorkGoal(condition string, revision int) sdkWorkGoalCheck {
 		add("External refusal", "", "An external review, merge, or publish step has no explicit refusal path.", "Say how to record a refusal as a named blocker and what action remains.")
 	}
 	for _, finding := range sessiond.LintGoal(condition, sessiond.LaneUnattended) {
+		// L6 flags the absence of a disjunctive exit in otherwise valid Work goals.
+		// The blocked-exit check above supplies a more focused requirement here.
 		if finding.Rule == "L6" {
 			continue
 		}
@@ -171,6 +177,8 @@ func workGoalContradictions(goal string) []string {
 			break
 		}
 	}
+	slices.Sort(found)
+	found = slices.Compact(found)
 	return found
 }
 
