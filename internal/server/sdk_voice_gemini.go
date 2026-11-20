@@ -85,12 +85,15 @@ func (s *Server) handleGeminiVoiceStart(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Voice is unavailable for this chat", http.StatusConflict)
 		return
 	}
-	key, err := geminiVoiceKey(s.cfg.Voice, s.geminiVoiceKeyStore())
+	s.cfgMu.RLock()
+	voiceCfg := s.cfg.Voice
+	s.cfgMu.RUnlock()
+	key, err := geminiVoiceKey(voiceCfg, s.geminiVoiceKeyStore())
 	if err != nil {
 		http.Error(w, "Gemini credential is unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	model := s.cfg.Voice.GeminiModel
+	model := voiceCfg.GeminiModel
 	if model == "" {
 		model = geminiDefaultModel
 	}
@@ -131,9 +134,9 @@ func (s *Server) handleGeminiVoiceStart(w http.ResponseWriter, r *http.Request) 
 	if s.geminiVoiceSessions == nil {
 		s.geminiVoiceSessions = make(map[string]geminiVoiceSession)
 	}
-	for key, entry := range s.geminiVoiceSessions {
+	for sessionKey, entry := range s.geminiVoiceSessions {
 		if entry.chatID == id || time.Now().After(entry.expires) {
-			delete(s.geminiVoiceSessions, key)
+			delete(s.geminiVoiceSessions, sessionKey)
 		}
 	}
 	s.geminiVoiceSessions[sessionID] = geminiVoiceSession{chatID: id, expires: time.Now().Add(30 * time.Minute)}
