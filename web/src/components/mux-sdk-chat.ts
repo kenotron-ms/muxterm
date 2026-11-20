@@ -176,6 +176,7 @@ export class MuxSDKChat extends LitElement {
   @state() private voiceStartedAt = 0;
   @state() private voiceEntries: VoiceEntry[] = [];
   @state() private voiceError = '';
+  @state() private voiceStartPending = false;
   @state() private dictationActive = false;
   @state() private dictationError = '';
   private dictationCapture?: ComposerDictationCapture;
@@ -2836,13 +2837,30 @@ export class MuxSDKChat extends LitElement {
   private async toggleVoice() {
     if (!this.voiceAvailable) return;
     if (this.voiceState !== 'idle') { this.voice?.stop(); this.voice = undefined; return; }
-    if (this.settingsPending || this.dictationActive || this.chat?.branchPending) return;
+    if (this.voiceStartPending || this.settingsPending || this.dictationActive || this.chat?.branchPending) return;
     this.voiceError = '';
-    this.voice ??= new (this.voiceProvider === 'gemini' ? GeminiVoiceSession : SDKVoiceSession)(this.sessionId,
-      state => { this.voiceState = state; if (state === 'connecting') this.voiceStartedAt = Date.now(); else if (state === 'idle') this.voiceStartedAt = 0; },
-      levels => this.updateVoiceLevels(levels));
-    try { await this.voice.start(); }
+    this.voiceStartPending = true;
+    const chatId = this.sessionId;
+    try {
+      const status = await fetchVoiceStatus();
+      if (this.sessionId !== chatId) return;
+      this.voiceProvider = status.provider;
+      this.voiceAvailable = status.enabled && !status.restartRequired;
+      if (status.restartRequired) {
+        this.voiceError = 'Restart muxterm to use the saved voice provider.';
+        return;
+      }
+      if (!status.enabled) {
+        this.voiceError = 'Voice is off. Enable it in Settings.';
+        return;
+      }
+      this.voice ??= new (this.voiceProvider === 'gemini' ? GeminiVoiceSession : SDKVoiceSession)(chatId,
+        state => { this.voiceState = state; if (state === 'connecting') this.voiceStartedAt = Date.now(); else if (state === 'idle') this.voiceStartedAt = 0; },
+        levels => this.updateVoiceLevels(levels));
+      await this.voice.start();
+    }
     catch (error) { this.voiceError = error instanceof Error ? error.message : 'Voice could not start.'; }
+    finally { this.voiceStartPending = false; }
   }
   private showVoice() {
     if (this.sideMode) return;
@@ -2949,7 +2967,7 @@ export class MuxSDKChat extends LitElement {
       ${expanded ? html`<div class="lane-report-detail input-message-detail" id=${detailId}>${this.markdown(block, block.key, true)}</div>` : nothing}</article>`;
   }
   private utilityContent() {
-    return html`<mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.settingsPending && !this.dictationActive && !this.chat?.branchPending} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility>`;
+    return html`<mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.voiceStartPending && !this.settingsPending && !this.dictationActive && !this.chat?.branchPending} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility>`;
   }
   override render() {
     const agents = this.agents();
