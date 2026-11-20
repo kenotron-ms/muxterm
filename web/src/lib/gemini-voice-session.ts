@@ -240,6 +240,7 @@ export class GeminiVoiceSession {
 
   stop(): void {
     ++this.generation;
+    this.toolPending = false;
     this.flushInput(); this.flushOutput();
     this.clearPlayback();
     this.capture?.disconnect(); this.source?.disconnect(); this.silent?.disconnect();
