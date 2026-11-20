@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420" role="img" aria-labelledby="title desc">
+  <title id="title">Muxterm: one workspace, wherever you work</title>
+  <desc id="desc">A compact branded illustration of the shared terminal, agent chat, and Work experience.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16192a"/>
+      <stop offset="1" stop-color="#1a2734"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="718" height="418" rx="28" fill="url(#bg)" stroke="#3c4c62" stroke-width="2"/>
+  <circle cx="59" cy="59" r="24" fill="#334584"/>
+  <path d="M47 67V49l12 12 12-12v18" fill="none" stroke="#e8edff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+  <circle cx="73" cy="73" r="3" fill="#8ce3ad"/>
+  <text x="98" y="68" fill="#e8edff" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="27" font-weight="700">muxterm</text>
+  <text x="42" y="159" fill="#f4f7ff" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="54" font-weight="700">One workspace.</text>
+  <text x="42" y="223" fill="#9ee7bb" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="54" font-weight="700">Wherever you work.</text>
+  <text x="44" y="273" fill="#b9c5d9" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="25">Your harnesses. Your subscriptions.</text>
+  <rect x="43" y="315" width="634" height="69" rx="13" fill="#263e42" stroke="#5c857c"/>
+  <path d="M245 315v69m219-69v69" stroke="#5c857c"/>
+  <text x="69" y="358" fill="#cdebdc" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="19">TERMINAL</text>
+  <text x="275" y="358" fill="#cdebdc" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="19">AGENT CHAT</text>
+  <text x="511" y="358" fill="#cdebdc" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="19">WORK</text>
+</svg>

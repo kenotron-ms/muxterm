@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+  <title id="title">Muxterm: one workspace, wherever you work</title>
+  <desc id="desc">A branded illustration of terminal, agent chat, and Work sharing one workspace.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16192a"/>
+      <stop offset="1" stop-color="#1a2734"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#28344c"/>
+      <stop offset="1" stop-color="#212d40"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="1198" height="338" rx="24" fill="url(#bg)" stroke="#3c4c62" stroke-width="2"/>
+  <path d="M0 314C196 296 266 328 430 310S740 289 1200 314" fill="none" stroke="#335363" stroke-width="2" opacity=".48"/>
+  <circle cx="72" cy="69" r="22" fill="#334584"/>
+  <path d="M60 77V60l12 12 12-12v17" fill="none" stroke="#e8edff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+  <circle cx="85" cy="82" r="3" fill="#8ce3ad"/>
+  <text x="108" y="77" fill="#e8edff" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="21" font-weight="700" letter-spacing=".3">muxterm</text>
+  <text x="50" y="157" fill="#f4f7ff" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="46" font-weight="700">One workspace.</text>
+  <text x="50" y="211" fill="#9ee7bb" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="46" font-weight="700">Wherever you work.</text>
+  <text x="52" y="260" fill="#b9c5d9" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="19">Your harnesses. Your subscriptions. A clear place to get things done.</text>
+  <g transform="translate(724 34)">
+    <rect x="0" y="0" width="425" height="270" rx="16" fill="#121b27" stroke="#5a7086" stroke-width="2"/>
+    <path d="M0 37H425" stroke="#405266"/>
+    <circle cx="21" cy="19" r="4" fill="#8ce3ad"/>
+    <circle cx="36" cy="19" r="4" fill="#8099b0"/>
+    <circle cx="51" cy="19" r="4" fill="#8099b0"/>
+    <text x="326" y="24" fill="#a8b8cc" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="12">workspace</text>
+    <rect x="19" y="55" width="183" height="101" rx="9" fill="url(#card)" stroke="#556a81"/>
+    <rect x="219" y="55" width="187" height="101" rx="9" fill="url(#card)" stroke="#556a81"/>
+    <rect x="19" y="173" width="387" height="78" rx="9" fill="#263e42" stroke="#5c857c"/>
+    <text x="35" y="82" fill="#9ee7bb" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="13" letter-spacing="1">TERMINAL</text>
+    <path d="m35 102 12 10-12 10m23 0h34" fill="none" stroke="#dce6f7" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+    <text x="235" y="82" fill="#9ee7bb" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="13" letter-spacing="1">AGENT CHAT</text>
+    <rect x="235" y="99" width="110" height="9" rx="4" fill="#7997ad"/>
+    <rect x="235" y="116" width="151" height="9" rx="4" fill="#526c85"/>
+    <rect x="235" y="133" width="73" height="9" rx="4" fill="#526c85"/>
+    <text x="35" y="201" fill="#9ee7bb" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="13" letter-spacing="1">WORK</text>
+    <text x="35" y="228" fill="#e0ebf2" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="16">Running · needs you · finished</text>
+  </g>
+</svg>
