@@ -23,10 +23,11 @@ export class MuxVoiceCompanion extends LitElement {
     :host { display:flex; flex-direction:column; height:100%; min-width:0; background:var(--ui-surface-base); color:var(--ui-text); font:var(--ui-text-sm)/1.5 var(--ui-font-sans); }
     .conversation { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; gap:var(--ui-space-5); padding:var(--ui-space-6); }
     .empty { flex:1; display:flex; align-items:center; justify-content:center; color:var(--ui-text-muted); text-align:center; }
-    .entry { max-width:86%; overflow-wrap:anywhere; }
+    .entry { max-width:min(86%,var(--ui-chat-bubble-width)); overflow-wrap:anywhere; }
     .speaker { margin-bottom:var(--ui-space-1); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .message { padding:var(--ui-space-3) var(--ui-space-4); border:1px solid var(--ui-border); white-space:pre-wrap; }
     .user { align-self:flex-end; }
+    .assistant { align-self:flex-start; }
     .user .message { border:0; border-radius:var(--ui-radius-2xl) var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-user-surface); }
     .assistant .message { border-radius:var(--ui-radius-sm) var(--ui-radius-2xl) var(--ui-radius-2xl) var(--ui-radius-2xl); background:var(--ui-chat-assistant-surface); color:var(--ui-chat-assistant-text); }
     .task { align-self:stretch; max-width:none; color:var(--ui-text-muted); }
