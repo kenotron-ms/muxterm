@@ -112,12 +112,10 @@ export class MuxWorkGoalReview extends LitElement {
     if (!item?.goalCondition || this.pending) return;
     await this.post(`/api/sdk-work/${encodeURIComponent(item.id)}/goal/check`,{clientRef:crypto.randomUUID(),expectedRevision:item.revision,goalRevision:item.goalRevision,condition:item.goalCondition});
   }
-  private async submit(ready:boolean, approve:boolean) {
+  private async file() {
     const item=this.current;
     if (!item?.goalCondition || this.pending) return;
-    const path=approve ? `/api/sdk-work/${encodeURIComponent(item.id)}/goal/approve` : `/api/sdk-work/${encodeURIComponent(item.id)}/updates`;
-    const body=approve ? {clientRef:crypto.randomUUID(),expectedRevision:item.revision,goalRevision:item.goalRevision,condition:item.goalCondition,ready} : {clientRef:crypto.randomUUID(),expectedRevision:item.revision,readiness:'ready',text:'Ready for the scheduler'};
-    await this.post(path,body);
+    await this.post(`/api/sdk-work/${encodeURIComponent(item.id)}/updates`,{clientRef:crypto.randomUUID(),expectedRevision:item.revision,readiness:'ready',text:'Ready for the scheduler'});
   }
   private markdown(text:string) { return renderSegments(parseMarkdown(text)); }
   private previewRequired(item:WorkGoalReviewItem) { return !!item.reviewVersion && (!!item.uiWork || !!item.labels?.some(label => ['ui','ux','frontend','visual-design','web-ui','mobile-ui'].includes(label))); }
@@ -155,7 +153,7 @@ export class MuxWorkGoalReview extends LitElement {
         ${checked && item.goalCheck?.findings?.length ? html`<ul class="findings">${item.goalCheck.findings.map(finding => html`<li><strong>${finding.rule}: ${finding.message}</strong>${finding.quote ? html`<q>${finding.quote}</q>` : nothing}<span>${finding.suggestion}</span></li>`)}</ul>` : checked && item.goalCheck?.passed ? html`<p class="muted">No known goalify failure pattern found.</p>` : nothing}
         ${item.reviewVersion && canAct && item.goalCondition && !checked ? html`<div class="check-action"><mux-ui-button variant="secondary" ?disabled=${this.pending} @click=${() => void this.check()}>Check this revision</mux-ui-button></div>` : nothing}
       </section></div>
-      <section class="panel decision" aria-label="Work filing status"><div><h3>${filed ? 'Filed for work' : held ? 'On hold' : 'Draft'}</h3><p>${filed ? 'Muxterm will schedule this item when project capacity and dependencies allow.' : held ? 'A human hold is keeping this item out of the scheduler.' : !passed ? 'Resolve the goal check findings before filing.' : 'File this checked goal to let Muxterm schedule the work.'}</p></div>${canAct ? html`<div class="actions">${changeLink ? html`<a href=${changeLink}>Ask for changes</a>` : nothing}<mux-ui-button variant="primary" ?disabled=${this.pending || !passed} @click=${() => void this.submit(true,false)}>File and schedule</mux-ui-button></div>` : nothing}</section>
+      <section class="panel decision" aria-label="Work filing status"><div><h3>${filed ? 'Filed for work' : held ? 'On hold' : 'Draft'}</h3><p>${filed ? 'Muxterm will schedule this item when project capacity and dependencies allow.' : held ? 'A human hold is keeping this item out of the scheduler.' : !passed ? 'Resolve the goal check findings before filing.' : 'File this checked goal to let Muxterm schedule the work.'}</p></div>${canAct ? html`<div class="actions">${changeLink ? html`<a href=${changeLink}>Ask for changes</a>` : nothing}<mux-ui-button variant="primary" ?disabled=${this.pending || !passed} @click=${() => void this.file()}>File and schedule</mux-ui-button></div>` : nothing}</section>
       ${this.error ? html`<p class="error" role="alert">${this.error} <mux-ui-button variant="secondary" @click=${() => void this.refresh()}>Refresh</mux-ui-button></p>` : nothing}
     </div>`;
   }

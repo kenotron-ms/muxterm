@@ -895,7 +895,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.DesignPreview != nil {
 		copy.DesignPreview = req.DesignPreview
 	}
-	if (req.GoalCondition != nil || req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.DependsOn != nil || req.ProjectIDs != nil || req.Labels != nil) && copy.Dispatch == nil && copy.OwnerSessionID == "" {
+	if (req.GoalCondition != nil || req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.DependsOn != nil || req.ProjectIDs != nil) && copy.Dispatch == nil && copy.OwnerSessionID == "" {
 		copy.GoalApproved = 0
 		copy.GoalApprovedAt = nil
 		if copy.Readiness == "ready" {
