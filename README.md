@@ -75,7 +75,7 @@ See [installation, service mode, and updates](docs/guides/installation-and-updat
 **Connect your other tools.** `muxterm mcp` exposes workspace, terminal, file, and other controls to MCP-compatible agents. The macOS app also has a local browser pane that agents can inspect and operate through its native MCP tool. [See agent integration and permission boundaries](docs/guides/agent-integration.md).
 
 <p align="center">
-  <img src="docs/verification/work-chat-digest/desktop-digest.png" alt="Browser capture of a chat showing several Work items with their latest states and next actions" width="900">
+  <img src="docs/marketing/work-digest.png" alt="Browser capture of a Work digest with current status and next actions for four items" width="800">
 </p>
 <p align="center"><em>Work status stays visible in the conversation; details live in the Work view.</em></p>
 
