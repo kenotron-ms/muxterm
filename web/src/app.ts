@@ -60,7 +60,7 @@ import type { SessionState } from './lib/session-state.js';
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
-import { sdkChats, type SDKProject } from './lib/sdk-chats.js';
+import { sdkChats, type SDKChat, type SDKProject } from './lib/sdk-chats.js';
 import {
   SessiondType,
   SessiondErrorCode,
@@ -755,6 +755,9 @@ export class MuxApp extends LitElement {
     this._settingsOpenSection = null;
     this._showCreateModal = false;
     this._creatingWorkspace = false;
+    this._paletteOpen = false;
+    this._paletteProjectPanel = null;
+    this._paletteReturnFocus = null;
     this._closeDrawer();
     this._showReconnectOverlay = true;
   }
@@ -2396,6 +2399,7 @@ export class MuxApp extends LitElement {
   private _onPaletteSelect = (event: CustomEvent<PaletteTarget>): void => {
     this._paletteOpen = false;
     this._paletteReturnFocus = null;
+    this._overlayPanel = null;
     void this._navigatePaletteTarget(event.detail);
   };
   private async _navigatePaletteTarget(target: PaletteTarget): Promise<void> {
@@ -2415,17 +2419,17 @@ export class MuxApp extends LitElement {
       this._paletteProjectPanel=target.project;
       return;
     }
-    const chat = target.kind === 'chat' ? target.chat : target.chat;
-    if (!chat) {
-      if (target.kind === 'chat') return;
-      const project=target.kind==='file'||target.kind==='work' ? target.project : undefined;
-      if (project) {
-        this._paletteProjectPanel=project;
-        await this.updateComplete;
-        const utility=this.renderRoot.querySelector<import('./components/mux-sdk-utility.js').MuxSDKUtility>('.palette-project-panel mux-sdk-utility');
-        if (target.kind==='file') await utility?.showFile(target.path);
-        else await utility?.showWorkItem(target.id);
-      }
+    let chat: SDKChat;
+    if (target.kind === 'chat') {
+      chat = target.chat;
+    } else if (target.chat) {
+      chat = target.chat;
+    } else {
+      this._paletteProjectPanel = target.project;
+      await this.updateComplete;
+      const utility=this.renderRoot.querySelector<import('./components/mux-sdk-utility.js').MuxSDKUtility>('.palette-project-panel mux-sdk-utility');
+      if (target.kind === 'file') await utility?.showFile(target.path);
+      else await utility?.showWorkItem(target.id);
       return;
     }
     this._paletteProjectPanel = null;
@@ -2523,7 +2527,7 @@ export class MuxApp extends LitElement {
    * the drawer's own popover Escape is untouched.
    */
   private _onOverlayPanelEscape = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape' || !this._overlayPanel || this._paletteOpen) return;
+    if (e.key !== 'Escape' || !this._overlayPanel || this._paletteOpen || this._paletteProjectPanel) return;
     e.preventDefault();
     e.stopPropagation();
     this._closeOverlayPanel();
