@@ -18,10 +18,13 @@ import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextArea } from '../ui/text-area.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 
-type Job = { id:string; chatId:string; name:string; brief:string; revision:number; schedule:string; scheduleLabel?:string; timezone:string; enabled:boolean; nextRun?:string; activeRunId?:string; lastRunId?:string; latestRun?:Run; createdAt:string };
+type WorkTrigger = { events:string[]; projectIds?:string[]; labels?:string[] };
+type WorkEvent = { workId:string; type:string; revision:number; title:string; summary?:string; blockedReason?:string; outcome?:string; projectIds:string[]; labels:string[] };
+type Job = { id:string; chatId:string; name:string; brief:string; revision:number; schedule:string; scheduleLabel?:string; timezone:string; workTrigger?:WorkTrigger; enabled:boolean; nextRun?:string; activeRunId?:string; lastRunId?:string; latestRun?:Run; createdAt:string };
 type Log = { at:string; kind:string; message:string };
-type Run = { id:string; jobId:string; chatId:string; trigger:string; scheduledAt?:string; revision:number; status:string; startedAt:string; finishedAt?:string; summary?:string; logs?:Log[] };
-function timeLabel(value?: string): string { return value ? new Date(value).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'}) : '—'; }
+type Run = { id:string; jobId:string; chatId:string; trigger:string; scheduledAt?:string; workEvent?:WorkEvent; revision:number; status:string; startedAt:string; finishedAt?:string; summary?:string; logs?:Log[] };
+function runLabel(run:Run):string { return run.workEvent ? `Work ${run.workEvent.type} · ${run.workEvent.title}` : run.trigger === 'manual' ? 'Manual' : 'Scheduled'; }
+function timeLabel(value?: string): string { return value && !value.startsWith('0001-') ? new Date(value).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'}) : '—'; }
 function naturalSchedule(input: string): string {
   const phrase = input.trim().toLowerCase();
   if (phrase === 'every hour' || phrase === 'hourly') return '0 * * * *';
@@ -53,6 +56,10 @@ export class MuxScheduledJobs extends LitElement {
   @state() private formName = '';
   @state() private formBrief = '';
   @state() private formSchedule = 'weekdays at 9am';
+  @state() private formScheduleEnabled = true;
+  @state() private formEvents: string[] = [];
+  @state() private formProject = '';
+  @state() private formLabels = '';
   @state() private formZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   @state() private formEnabled = true;
   private timer?: number;
@@ -122,6 +129,10 @@ export class MuxScheduledJobs extends LitElement {
     .editor .inline { display:grid; grid-template-columns:1fr 1fr; gap:var(--ui-space-5); }
     .editor mux-ui-switch { margin-top:var(--ui-space-6); }
     .editor .hint { color:var(--ui-text-muted); font-size:var(--ui-text-xs); margin-top:var(--ui-space-2); }
+    .editor .trigger-group { margin-top:var(--ui-space-6); padding:var(--ui-space-5); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); }
+    .editor .trigger-group h3 { margin:0; font-size:var(--ui-text-md); }
+    .editor .trigger-group mux-ui-switch { margin-top:var(--ui-space-4); }
+    .editor .trigger-group .field { margin-top:var(--ui-space-4); }
     .editor .actions { display:flex; justify-content:flex-end; gap:var(--ui-space-4); margin-top:var(--ui-space-8); }
     @media(max-width:700px) {
       .content { padding:var(--ui-space-6); }
@@ -166,7 +177,12 @@ export class MuxScheduledJobs extends LitElement {
   private chatFor(job:Job):SDKChat|undefined { return sdkChats.chats.find(chat => chat.id === job.chatId); }
   private latest(job:Job):Run|undefined { return job.latestRun; }
   private status(job:Job):string { const latest=this.latest(job); return job.activeRunId ? 'Running' : latest && ['failed','outcome-unknown'].includes(latest.status) ? 'Needs attention' : !job.enabled ? 'Paused' : 'Active'; }
-  private async openHistory(job:Job) { this.selectedJob=job.id; this.detail=undefined; await this.refresh(); await this.loadRun(this.runs[job.id]?.[0]); }
+  private async openHistory(job:Job) {
+    this.selectedJob=job.id; this.detail=undefined;
+    await this.refresh(); await this.loadRun(this.runs[job.id]?.[0]);
+    await this.updateComplete;
+    this.renderRoot.querySelector('.history')?.scrollIntoView({block:'start'});
+  }
   private async loadRun(run?:Run) { if (!run) { this.detail=undefined; return; } try { this.detail=await this.request<Run>(`/api/sdk-jobs/${run.jobId}/runs/${run.id}`); } catch(error) { this.error=String(error); } }
   private async runNow(job:Job) { this.busy=job.id; this.error=''; try { await this.request<Run>(`/api/sdk-jobs/${job.id}/run`,{method:'POST'}); await this.refresh(); await this.openHistory(job); } catch(error) { this.error=String(error); } finally { this.busy=''; } }
   private async toggle(job:Job) { this.busy=job.id; this.error=''; try { await this.request<Job>(`/api/sdk-jobs/${job.id}`,{method:'PATCH',body:JSON.stringify({enabled:!job.enabled})}); await this.refresh(); } catch(error) { this.error=String(error); } finally { this.busy=''; } }
@@ -183,6 +199,10 @@ export class MuxScheduledJobs extends LitElement {
     this.formName=existing?.name || chat?.title || '';
     this.formBrief=existing?.brief || '';
     this.formSchedule=existing?.scheduleLabel || existing?.schedule || 'weekdays at 9am';
+    this.formScheduleEnabled=existing ? !!existing.schedule : true;
+    this.formEvents=[...(existing?.workTrigger?.events || [])];
+    this.formProject=existing?.workTrigger?.projectIds?.[0] || '';
+    this.formLabels=(existing?.workTrigger?.labels || []).join(', ');
     this.formZone=existing?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     this.formEnabled=existing?.enabled ?? true;
     this.editorOpen=true;
@@ -213,10 +233,15 @@ export class MuxScheduledJobs extends LitElement {
   private async saveEditor() {
     this.busy='editor'; this.error='';
     try {
-      const payload={chatId:this.formChat,name:this.formName.trim(),brief:this.formBrief.trim(),schedule:naturalSchedule(this.formSchedule),scheduleLabel:this.formSchedule.trim(),timezone:this.formZone.trim(),enabled:this.formEnabled};
+      if (!this.formScheduleEnabled && !this.formEvents.length) throw new Error('Choose a schedule or at least one Work event.');
+      const labels=this.formLabels.split(',').map(label=>label.trim()).filter(Boolean);
+      const payload={chatId:this.formChat,name:this.formName.trim(),brief:this.formBrief.trim(),schedule:this.formScheduleEnabled?naturalSchedule(this.formSchedule):'',scheduleLabel:this.formScheduleEnabled?this.formSchedule.trim():'',timezone:this.formZone.trim(),workTrigger:this.formEvents.length?{events:this.formEvents,projectIds:this.formProject?[this.formProject]:[],labels}:null,enabled:this.formEnabled};
       await this.request<Job>(this.editorJob ? `/api/sdk-jobs/${this.editorJob}` : '/api/sdk-jobs',{method:this.editorJob?'PATCH':'POST',body:JSON.stringify(payload)});
       this.editorOpen=false; await this.refresh();
     } catch(error) { this.error=String(error); } finally { this.busy=''; }
+  }
+  private toggleEvent(event:string, enabled:boolean) {
+    this.formEvents=enabled ? [...this.formEvents,event] : this.formEvents.filter(value=>value!==event);
   }
   private emit(type:string,detail?:object) { this.dispatchEvent(new CustomEvent(type,{bubbles:true,composed:true,detail})); }
   private renderJobRow(job: Job) {
@@ -235,11 +260,12 @@ export class MuxScheduledJobs extends LitElement {
         <td data-label="Status"><mux-ui-status-badge dot
           tone=${status === 'Needs attention' ? 'warning' : status === 'Running' ? 'info' : status === 'Active' ? 'success' : 'neutral'}
           >${status}</mux-ui-status-badge></td>
-        <td class="schedule" data-label="Schedule" title=${job.schedule}>
-          ${job.scheduleLabel || job.schedule}<small>${job.timezone} · ${job.schedule}</small>
+        <td class="schedule" data-label="Triggers" title=${job.schedule}>
+          ${job.workTrigger ? html`Work: ${job.workTrigger.events.join(', ')}<small>${job.workTrigger.projectIds?.length ? `Project: ${job.workTrigger.projectIds.map(id=>sdkChats.projects.find(project=>project.id===id)?.name || id).join(', ')} · ` : ''}${job.workTrigger.labels?.length ? `Labels: ${job.workTrigger.labels.join(', ')}` : 'All labels'}</small>` : nothing}
+          ${job.schedule ? html`${job.scheduleLabel || job.schedule}<small>${job.timezone} · ${job.schedule}</small>` : nothing}
         </td>
-        <td data-label="Next run">${job.enabled ? timeLabel(job.nextRun) : '—'}</td>
-        <td data-label="Last run">${last ? html`${timeLabel(last.startedAt)}<small>${last.trigger} · ${last.status}</small>` : 'Never'}</td>
+        <td data-label="Next run">${job.enabled ? job.schedule ? timeLabel(job.nextRun) : 'On matching event' : '—'}</td>
+        <td data-label="Last run">${last ? html`${timeLabel(last.startedAt)}<small>${runLabel(last)} · ${last.status}</small>` : 'Never'}</td>
         <td data-label="Actions"><div class="row-actions">
           <mux-ui-button size="small" variant="secondary"
             tooltip=${chatState === 'working' ? 'Wait for the job chat to finish its current turn' : 'Start a manual run'}
@@ -263,7 +289,7 @@ export class MuxScheduledJobs extends LitElement {
         </div>
         ${(this.runs[current.id] || []).map(run => html`
           <mux-ui-nav-item
-            label=${`${run.trigger === 'manual' ? 'Manual' : 'Scheduled'} · ${run.status}`}
+            label=${`${runLabel(run)} · ${run.status}`}
             description=${`${timeLabel(run.startedAt)} · brief v${run.revision}`}
             ?active=${this.detail?.id === run.id}
             @click=${() => void this.loadRun(run)}></mux-ui-nav-item>
@@ -272,8 +298,9 @@ export class MuxScheduledJobs extends LitElement {
       </div>
       <div class="run-detail">
         ${this.detail ? html`
-          <h3>${this.detail.trigger === 'manual' ? 'Manual' : 'Scheduled'} run · ${this.detail.status}</h3>
+          <h3>${runLabel(this.detail)} · ${this.detail.status}</h3>
           <p>${timeLabel(this.detail.startedAt)}${this.detail.finishedAt ? ` → ${timeLabel(this.detail.finishedAt)}` : ''} · brief revision ${this.detail.revision}</p>
+          ${this.detail.workEvent ? html`<p>Work ${this.detail.workEvent.workId} · item revision ${this.detail.workEvent.revision}. ${this.detail.workEvent.summary || this.detail.workEvent.blockedReason || this.detail.workEvent.outcome || ''}</p>` : nothing}
           ${this.detail.summary ? html`<p>${this.detail.summary}</p>` : nothing}
           <mux-ui-button size="small" variant="secondary"
             @click=${() => this.emit('chat-open', { sessionId:current.chatId })}>Open job chat</mux-ui-button>
@@ -289,7 +316,7 @@ export class MuxScheduledJobs extends LitElement {
 
   private renderEditor() {
     const editing = !!this.editorJob;
-    const title = editing ? 'Edit scheduled job' : 'Review scheduled job';
+    const title = editing ? 'Edit job' : 'Create job';
     const conversation = sdkChats.chats.find(chat => chat.id === this.formChat)?.title || this.formChat;
     const chatOptions = [
       { value:'', label:'Choose a chat' },
@@ -299,7 +326,7 @@ export class MuxScheduledJobs extends LitElement {
       @dismiss=${() => { this.editorOpen = false; this.error = ''; }}>
       <div class="editor">
         <h2>${title}</h2>
-        <p>The chat remains this job’s conversation. Scheduled runs use its agent permissions to run tools and change project files, even while you are away.</p>
+        <p>The chat remains this job’s conversation. Runs use its existing agent permissions and Work tools.</p>
         ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
         <div class="field">
           ${editing
@@ -316,7 +343,11 @@ export class MuxScheduledJobs extends LitElement {
         <mux-ui-button class="field" size="small" variant="quiet" ?disabled=${!this.formChat || !!this.busy}
           @click=${() => void this.useLatestChatAnswer()}>Use the latest chat answer as a draft</mux-ui-button>
         <div class="hint">Review the draft before saving. Changes apply to future runs; active runs keep their previous revision.</div>
-        <div class="inline">
+        <section class="trigger-group" aria-label="Schedule trigger">
+          <h3>Schedule</h3>
+          <mux-ui-switch layout="row" label="Run on a schedule" .checked=${this.formScheduleEnabled}
+            @change=${(event:Event) => { this.formScheduleEnabled = (event.target as MuxUISwitch).checked; }}></mux-ui-switch>
+        ${this.formScheduleEnabled ? html`<div class="inline">
           <mux-ui-text-field class="field" label="When should it run?"
             description="Examples: weekdays at 9am, every day at 6pm, every hour, or five-field cron."
             .value=${this.formSchedule}
@@ -324,8 +355,23 @@ export class MuxScheduledJobs extends LitElement {
           <mux-ui-text-field class="field" label="Time zone" description="IANA zone, such as America/New_York."
             .value=${this.formZone}
             @input=${(event:InputEvent) => { this.formZone = (event.target as MuxUITextField).value; }}></mux-ui-text-field>
-        </div>
-        <mux-ui-switch layout="row" label="Enable schedule" description="Run this job at the specified time"
+        </div>` : nothing}
+        </section>
+        <section class="trigger-group" aria-label="Work event trigger">
+          <h3>Work events</h3>
+          <div class="hint">Run when an item enters a selected state. Each transition starts at most one run; updates made by this job are ignored.</div>
+          ${([['review','Enters review'],['blocked','Becomes blocked'],['done','Completes']] as const).map(([event,label])=>html`
+            <mux-ui-switch layout="row" label=${label} .checked=${this.formEvents.includes(event)}
+              @change=${(change:Event) => this.toggleEvent(event,(change.target as MuxUISwitch).checked)}></mux-ui-switch>`)}
+          ${this.formEvents.length ? html`
+            <mux-ui-select class="field" label="Project filter" description="Optional. Match items in this project."
+              .value=${this.formProject} .options=${[{value:'',label:'All projects'},...sdkChats.projects.filter(project=>!project.remoteHost).map(project=>({value:project.id,label:project.name}))]}
+              @change=${(event:Event) => { this.formProject=(event.target as MuxUISelect).value; }}></mux-ui-select>
+            <mux-ui-text-field class="field" label="Label filters" description="Optional. Comma separated; an item must have every label."
+              .value=${this.formLabels} @input=${(event:InputEvent) => { this.formLabels=(event.target as MuxUITextField).value; }}></mux-ui-text-field>
+          ` : nothing}
+        </section>
+        <mux-ui-switch layout="row" label="Enable job" description="Allow automatic schedule and Work event runs"
           .checked=${this.formEnabled} ?disabled=${!!this.busy}
           @change=${(event:Event) => { this.formEnabled = (event.target as MuxUISwitch).checked; }}></mux-ui-switch>
         <div class="actions">
@@ -352,14 +398,14 @@ export class MuxScheduledJobs extends LitElement {
       { value:'needs-attention', label:'Needs attention' },
     ];
     return html`
-      <mux-ui-screen-header section="Automation" heading="Scheduled jobs"></mux-ui-screen-header>
-      <mux-ui-page-intro heading="Scheduled jobs" description="Repeatable work in persistent conversations">
+      <mux-ui-screen-header section="Automation" heading="Jobs"></mux-ui-screen-header>
+      <mux-ui-page-intro heading="Jobs" description="Run on a schedule or when Work changes">
         <mux-ui-button slot="action" variant="primary" @click=${() => void this.openEditorForChat()}>＋ New job</mux-ui-button>
       </mux-ui-page-intro>
       <main class="content">
         ${this.error ? html`<mux-ui-feedback kind="error" appearance="panel">${this.error}</mux-ui-feedback>` : nothing}
         <div class="summary"><span><strong>${this.jobs.length}</strong><small>Total jobs</small></span>
-          <span><strong>${active}</strong><small>Active schedules</small></span>
+          <span><strong>${active}</strong><small>Enabled jobs</small></span>
           <span><strong>${attention}</strong><small>Need attention</small></span></div>
         <div class="toolbar">
           <mux-ui-text-field type="search" aria-label="Search scheduled jobs" placeholder="Search jobs"
@@ -368,10 +414,10 @@ export class MuxScheduledJobs extends LitElement {
             @change=${(event:Event) => { this.statusFilter = (event.target as MuxUISelect).value; }}></mux-ui-select>
         </div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Job</th><th>Status</th><th>Schedule</th><th>Next run</th><th>Last run</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Job</th><th>Status</th><th>Triggers</th><th>Next run</th><th>Last run</th><th>Actions</th></tr></thead>
           <tbody>${rows.map(job => this.renderJobRow(job))}</tbody>
         </table>
-        ${!rows.length ? html`<mux-ui-feedback align="center">${this.jobs.length ? 'No jobs match your filters.' : 'No scheduled jobs yet. Use New job to choose a chat or start one.'}</mux-ui-feedback>` : nothing}
+        ${!rows.length ? html`<mux-ui-feedback align="center">${this.jobs.length ? 'No jobs match your filters.' : 'No jobs yet. Use New job to choose a chat or start one.'}</mux-ui-feedback>` : nothing}
         </div>
         ${current ? this.renderHistory(current) : nothing}
       </main>

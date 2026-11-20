@@ -239,7 +239,7 @@ export class MuxSidebar extends LitElement {
   override render() {
     const navActions = [
       { label: 'Terminal', icon: SquareTerminal, active: this.terminalActive, event: 'terminal-open' },
-      { label: 'Scheduled jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
+      { label: 'Jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
       { label: 'Customizations', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
       { label: 'Skills', icon: Puzzle, active: this.skillsActive, event: 'skills-open' },
     ];

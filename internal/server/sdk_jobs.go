@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -22,21 +23,44 @@ import (
 // Run metadata lives separately so a long-running job never rewrites an endless
 // chat or run-history document when its schedule changes.
 type sdkJob struct {
-	ID            string     `json:"id"`
-	ChatID        string     `json:"chatId"`
-	Name          string     `json:"name"`
-	Brief         string     `json:"brief"`
-	Revision      int        `json:"revision"`
-	Schedule      string     `json:"schedule"`
-	ScheduleLabel string     `json:"scheduleLabel"`
-	Timezone      string     `json:"timezone"`
-	Enabled       bool       `json:"enabled"`
-	NextRun       time.Time  `json:"nextRun,omitempty"`
-	PendingAt     *time.Time `json:"pendingAt,omitempty"`
-	ActiveRunID   string     `json:"activeRunId,omitempty"`
-	LastRunID     string     `json:"lastRunId,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+	ID            string             `json:"id"`
+	ChatID        string             `json:"chatId"`
+	Name          string             `json:"name"`
+	Brief         string             `json:"brief"`
+	Revision      int                `json:"revision"`
+	Schedule      string             `json:"schedule"`
+	ScheduleLabel string             `json:"scheduleLabel"`
+	Timezone      string             `json:"timezone"`
+	WorkTrigger   *sdkJobWorkTrigger `json:"workTrigger,omitempty"`
+	Enabled       bool               `json:"enabled"`
+	NextRun       time.Time          `json:"nextRun,omitempty"`
+	PendingAt     *time.Time         `json:"pendingAt,omitempty"`
+	ActiveRunID   string             `json:"activeRunId,omitempty"`
+	LastRunID     string             `json:"lastRunId,omitempty"`
+	CreatedAt     time.Time          `json:"createdAt"`
+	UpdatedAt     time.Time          `json:"updatedAt"`
+}
+
+type sdkJobWorkTrigger struct {
+	Events     []string  `json:"events"`
+	ProjectIDs []string  `json:"projectIds,omitempty"`
+	Labels     []string  `json:"labels,omitempty"`
+	Since      time.Time `json:"since"`
+}
+
+type sdkJobWorkEvent struct {
+	ID              string    `json:"id"`
+	WorkID          string    `json:"workId"`
+	Type            string    `json:"type"`
+	Revision        int       `json:"revision"`
+	At              time.Time `json:"at"`
+	Title           string    `json:"title"`
+	Summary         string    `json:"summary,omitempty"`
+	BlockedReason   string    `json:"blockedReason,omitempty"`
+	Outcome         string    `json:"outcome,omitempty"`
+	ProjectIDs      []string  `json:"projectIds"`
+	Labels          []string  `json:"labels"`
+	SourceSessionID string    `json:"sourceSessionId,omitempty"`
 }
 
 type sdkJobLog struct {
@@ -46,18 +70,19 @@ type sdkJobLog struct {
 }
 
 type sdkJobRun struct {
-	ID          string      `json:"id"`
-	JobID       string      `json:"jobId"`
-	ChatID      string      `json:"chatId"`
-	Trigger     string      `json:"trigger"`
-	ScheduledAt *time.Time  `json:"scheduledAt,omitempty"`
-	Revision    int         `json:"revision"`
-	Brief       string      `json:"brief"`
-	Status      string      `json:"status"`
-	StartedAt   time.Time   `json:"startedAt"`
-	FinishedAt  *time.Time  `json:"finishedAt,omitempty"`
-	Summary     string      `json:"summary,omitempty"`
-	Logs        []sdkJobLog `json:"logs"`
+	ID          string           `json:"id"`
+	JobID       string           `json:"jobId"`
+	ChatID      string           `json:"chatId"`
+	Trigger     string           `json:"trigger"`
+	ScheduledAt *time.Time       `json:"scheduledAt,omitempty"`
+	WorkEvent   *sdkJobWorkEvent `json:"workEvent,omitempty"`
+	Revision    int              `json:"revision"`
+	Brief       string           `json:"brief"`
+	Status      string           `json:"status"`
+	StartedAt   time.Time        `json:"startedAt"`
+	FinishedAt  *time.Time       `json:"finishedAt,omitempty"`
+	Summary     string           `json:"summary,omitempty"`
+	Logs        []sdkJobLog      `json:"logs"`
 }
 
 type sdkJobSummary struct {
@@ -102,6 +127,64 @@ func jobSchedule(expression, zone string, after time.Time) (time.Time, error) {
 		return time.Time{}, errors.New("schedule has no next occurrence")
 	}
 	return next.UTC(), nil
+}
+
+func validJobWorkTrigger(trigger *sdkJobWorkTrigger) error {
+	if trigger == nil {
+		return nil
+	}
+	if len(trigger.Events) == 0 || len(trigger.Events) > 3 {
+		return errors.New("select at least one Work event")
+	}
+	seen := map[string]bool{}
+	for _, event := range trigger.Events {
+		if event != "review" && event != "blocked" && event != "done" {
+			return errors.New("unknown Work event")
+		}
+		if seen[event] {
+			return errors.New("duplicate Work event")
+		}
+		seen[event] = true
+	}
+	if len(trigger.ProjectIDs) > 32 || len(trigger.Labels) > 32 {
+		return errors.New("too many Work filters")
+	}
+	for _, id := range trigger.ProjectIDs {
+		if id == "" || len(id) > 256 {
+			return errors.New("invalid project filter")
+		}
+	}
+	labels, err := normalizeWorkLabels(trigger.Labels)
+	if err != nil {
+		return err
+	}
+	trigger.Labels = labels
+	trigger.ProjectIDs = normalizeWorkProjectIDs(trigger.ProjectIDs)
+	return nil
+}
+
+func jobWorkTriggerMatches(trigger *sdkJobWorkTrigger, event *sdkJobWorkEvent) bool {
+	if trigger == nil || !slices.Contains(trigger.Events, event.Type) || event.At.Before(trigger.Since) {
+		return false
+	}
+	if len(trigger.ProjectIDs) > 0 {
+		matched := false
+		for _, id := range trigger.ProjectIDs {
+			if slices.Contains(event.ProjectIDs, id) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	for _, label := range trigger.Labels {
+		if !slices.Contains(event.Labels, label) {
+			return false
+		}
+	}
+	return true
 }
 
 func writeJobFile(path string, value any) error {
@@ -434,7 +517,33 @@ func (m *sdkJobs) dispatch(parent context.Context, job sdkJob, runID string) {
 		m.failDispatch(job.ID, runID, "Could not resume job chat: "+err.Error(), false)
 		return
 	}
-	content := fmt.Sprintf("Scheduled job run %s (%s). Standing instructions, revision %d:\n\n%s\n\nPerform the work now. Use code or tools where useful. Report what happened and any uncertainty.", runID, job.Name, job.Revision, job.Brief)
+	content := fmt.Sprintf("Job run %s (%s). Standing instructions, revision %d:\n\n%s\n\nPerform the work now. Use code or tools where useful. Report what happened and any uncertainty.", runID, job.Name, job.Revision, job.Brief)
+	m.mu.Lock()
+	run := m.runs[runID]
+	var workEvent *sdkJobWorkEvent
+	if run != nil {
+		workEvent = run.WorkEvent
+	}
+	m.mu.Unlock()
+	if workEvent != nil {
+		lines := []string{fmt.Sprintf("Work event %s: item %s entered %s at revision %d.", runID, workEvent.WorkID, workEvent.Type, workEvent.Revision), "Title: " + workEvent.Title}
+		if workEvent.Summary != "" {
+			lines = append(lines, "Update: "+workEvent.Summary)
+		}
+		if workEvent.BlockedReason != "" {
+			lines = append(lines, "Blocked reason: "+workEvent.BlockedReason)
+		}
+		if workEvent.Outcome != "" {
+			lines = append(lines, "Outcome: "+workEvent.Outcome)
+		}
+		if len(workEvent.ProjectIDs) > 0 {
+			lines = append(lines, "Projects: "+strings.Join(workEvent.ProjectIDs, ", "))
+		}
+		if len(workEvent.Labels) > 0 {
+			lines = append(lines, "Labels: "+strings.Join(workEvent.Labels, ", "))
+		}
+		content = strings.Join(lines, "\n") + fmt.Sprintf("\n\nInspect the current Work item before acting. Use only Work tools authorized for this job chat. Do not approve or revise a Chat Goal or release a human pause.\n\nStanding instructions, revision %d:\n%s\n\nReport what happened and any uncertainty.", job.Revision, job.Brief)
+	}
 	result, err := m.chats.call(ctx, "send", map[string]any{"sessionId": job.ChatID, "input": map[string]any{"kind": "user", "source": "scheduled-job", "id": runID, "content": content, "displayContent": "Run job: " + job.Name, "model": chat.Model, "effort": chat.Effort}})
 	if err != nil {
 		m.failDispatch(job.ID, runID, "Run delivery uncertain: "+err.Error(), true)
@@ -523,6 +632,8 @@ func (m *sdkJobs) tick(now time.Time) {
 			m.mu.Unlock()
 		}
 	}
+	m.scanWorkEvents()
+	m.dispatchPendingWorkEvents()
 }
 
 func (s *Server) handleSDKJobs(w http.ResponseWriter, r *http.Request) {
@@ -551,6 +662,7 @@ func (s *Server) handleSDKJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		ChatID, Name, Brief, Schedule, ScheduleLabel, Timezone string
+		WorkTrigger                                            *sdkJobWorkTrigger
 		Enabled                                                *bool
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&request) != nil {
@@ -570,10 +682,25 @@ func (s *Server) handleSDKJobs(w http.ResponseWriter, r *http.Request) {
 	if request.Timezone == "" {
 		request.Timezone = "UTC"
 	}
-	next, err := jobSchedule(request.Schedule, request.Timezone, time.Now())
-	if err != nil {
+	if err := validJobWorkTrigger(request.WorkTrigger); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
+	}
+	if request.Schedule == "" && request.WorkTrigger == nil {
+		http.Error(w, "choose a schedule or Work event", 400)
+		return
+	}
+	var next time.Time
+	if request.Schedule != "" {
+		var err error
+		next, err = jobSchedule(request.Schedule, request.Timezone, time.Now())
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
+	if request.WorkTrigger != nil {
+		request.WorkTrigger.Since = time.Now().UTC()
 	}
 	m.chats.mu.Lock()
 	chat := m.chats.chats[request.ChatID]
@@ -587,7 +714,7 @@ func (s *Server) handleSDKJobs(w http.ResponseWriter, r *http.Request) {
 	if request.Enabled != nil {
 		enabled = *request.Enabled
 	}
-	job := &sdkJob{ID: sdkID(), ChatID: request.ChatID, Name: request.Name, Brief: request.Brief, Revision: 1, Schedule: request.Schedule, ScheduleLabel: request.ScheduleLabel, Timezone: request.Timezone, Enabled: enabled, NextRun: next, CreatedAt: now, UpdatedAt: now}
+	job := &sdkJob{ID: sdkID(), ChatID: request.ChatID, Name: request.Name, Brief: request.Brief, Revision: 1, Schedule: request.Schedule, ScheduleLabel: request.ScheduleLabel, Timezone: request.Timezone, WorkTrigger: request.WorkTrigger, Enabled: enabled, NextRun: next, CreatedAt: now, UpdatedAt: now}
 	if !enabled {
 		job.NextRun = time.Time{}
 	}
@@ -623,6 +750,7 @@ func (s *Server) handleSDKJob(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Name, Brief, Schedule, ScheduleLabel, Timezone *string
 		Enabled                                        *bool
+		WorkTrigger                                    json.RawMessage
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&request) != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -657,7 +785,7 @@ func (s *Server) handleSDKJob(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.ScheduleLabel != nil {
 		label := strings.TrimSpace(*request.ScheduleLabel)
-		if label == "" || len(label) > 140 {
+		if (label == "" && job.Schedule != "") || len(label) > 140 {
 			*job = previous
 			http.Error(w, "invalid schedule label", 400)
 			return
@@ -670,14 +798,47 @@ func (s *Server) handleSDKJob(w http.ResponseWriter, r *http.Request) {
 	if request.Enabled != nil {
 		job.Enabled = *request.Enabled
 	}
-	if job.Enabled {
-		next, err := jobSchedule(job.Schedule, job.Timezone, time.Now())
-		if err != nil {
-			*job = previous
-			http.Error(w, err.Error(), 400)
-			return
+	if len(request.WorkTrigger) > 0 {
+		if string(request.WorkTrigger) == "null" {
+			job.WorkTrigger = nil
+		} else {
+			var trigger sdkJobWorkTrigger
+			if err := json.Unmarshal(request.WorkTrigger, &trigger); err != nil {
+				*job = previous
+				http.Error(w, "invalid Work trigger", 400)
+				return
+			}
+			if err := validJobWorkTrigger(&trigger); err != nil {
+				*job = previous
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			trigger.Since = time.Now().UTC()
+			job.WorkTrigger = &trigger
 		}
-		job.NextRun = next
+	}
+	if job.Schedule == "" && job.WorkTrigger == nil {
+		*job = previous
+		http.Error(w, "choose a schedule or Work event", 400)
+		return
+	}
+	if request.Enabled != nil && !previous.Enabled && job.Enabled && job.WorkTrigger != nil {
+		clone := *job.WorkTrigger
+		job.WorkTrigger = &clone
+		job.WorkTrigger.Since = time.Now().UTC()
+	}
+	if job.Enabled {
+		if job.Schedule != "" {
+			next, err := jobSchedule(job.Schedule, job.Timezone, time.Now())
+			if err != nil {
+				*job = previous
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			job.NextRun = next
+		} else {
+			job.NextRun = time.Time{}
+		}
 	} else {
 		job.NextRun = time.Time{}
 	}

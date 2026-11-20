@@ -94,7 +94,7 @@ const SIDEBAR_GUTTER_SIZE = 1;
 const SIDEBAR_SUBPIXEL_ROUNDING_BIAS = 0.001;
 const UTILITY_TITLES = new Map([
   ['new', 'New Chat'],
-  ['jobs', 'Scheduled jobs'],
+  ['jobs', 'Jobs'],
   ['connections', 'Customizations'],
   ['skills', 'Skills'],
 ]);
