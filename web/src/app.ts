@@ -381,7 +381,7 @@ export class MuxApp extends LitElement {
     .terminal-utility { box-sizing:border-box; position:relative; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); }
     .terminal-utility > mux-ui-pane-divider { position:absolute; top:0; bottom:0; left:0; z-index:var(--ui-z-local); }
     .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
-    .palette-project-panel { position:fixed; inset:0; z-index:var(--ui-z-sheet); display:flex; background:var(--ui-surface-base); }
+    .palette-project-panel { position:fixed; inset:0; z-index:var(--ui-z-sheet); display:flex; width:100%; height:100%; max-width:none; max-height:none; margin:0; padding:0; border:0; background:var(--ui-surface-base); }
     .palette-project-panel > mux-sdk-utility { width:100%; height:100%; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,var(--ui-terminal-utility-width)); min-width:0; box-shadow:var(--ui-shadow-side); } }
 
@@ -1261,6 +1261,10 @@ export class MuxApp extends LitElement {
 
   override updated(changed: Map<PropertyKey, unknown>): void {
     super.updated(changed);
+    if (changed.has('_paletteProjectPanel') && this._paletteProjectPanel) {
+      const panel = this.renderRoot.querySelector<HTMLDialogElement>('.palette-project-panel');
+      if (panel && !panel.open) panel.showModal();
+    }
     // Narrow→wide: init Split.js AFTER Lit has placed the sidebar/main-pane
     // elements back in the DOM (updated fires post-render) — see
     // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
@@ -1622,7 +1626,7 @@ export class MuxApp extends LitElement {
           <div class="overlay-body">${this._renderSettings()}</div>
         </mux-ui-dialog>
       ` : ''}
-      ${this._paletteProjectPanel ? html`<section class="palette-project-panel" role="dialog" aria-modal="true" aria-label=${`Project ${this._paletteProjectPanel.name}`}><mux-sdk-utility project-mode .sessionId=${`project:${this._paletteProjectPanel.id}`} .projectId=${this._paletteProjectPanel.id} .projectPath=${this._paletteProjectPanel.path} .remoteHost=${this._paletteProjectPanel.remoteHost||''} @close=${() => { this._paletteProjectPanel=null; }}></mux-sdk-utility></section>` : ''}
+      ${this._paletteProjectPanel ? html`<dialog class="palette-project-panel" aria-label=${`Project ${this._paletteProjectPanel.name}`} @cancel=${(event: Event) => { event.preventDefault(); this._paletteProjectPanel=null; }}><mux-sdk-utility project-mode .sessionId=${`project:${this._paletteProjectPanel.id}`} .projectId=${this._paletteProjectPanel.id} .projectPath=${this._paletteProjectPanel.path} .remoteHost=${this._paletteProjectPanel.remoteHost||''} @close=${() => { this._paletteProjectPanel=null; }}></mux-sdk-utility></dialog>` : ''}
       <mux-global-palette .open=${this._paletteOpen} .scope=${this._paletteScope} @palette-dismiss=${this._onPaletteDismiss} @palette-select=${this._onPaletteSelect}></mux-global-palette>
       ${this._showReconnectOverlay
         ? html`<mux-reconnect-overlay
