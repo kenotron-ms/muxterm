@@ -845,7 +845,7 @@ export class MuxSDKChat extends LitElement {
   async navigateWork(id: string): Promise<void> {
     this.setPaneMode('split');
     await this.updateComplete;
-    await this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id);
+    await this.renderRoot.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id);
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
     this.stopDictation();

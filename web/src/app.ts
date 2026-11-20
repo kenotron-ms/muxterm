@@ -381,7 +381,7 @@ export class MuxApp extends LitElement {
     .terminal-utility { box-sizing:border-box; position:relative; width:min(var(--ui-terminal-utility-width),42%); min-width:var(--ui-terminal-utility-min-width); flex:none; display:flex; flex-direction:column; background:var(--ui-surface-base); color:var(--ui-text); }
     .terminal-utility > mux-ui-pane-divider { position:absolute; top:0; bottom:0; left:0; z-index:var(--ui-z-local); }
     .terminal-utility > mux-sdk-utility { min-height:0; flex:1; }
-    .palette-project-panel { position:fixed; inset:0; z-index:var(--ui-z-sheet); display:flex; width:100%; height:100%; max-width:none; max-height:none; margin:0; padding:0; border:0; background:var(--ui-surface-base); }
+    .palette-project-panel { position:fixed; inset:0; display:flex; width:100%; height:100%; max-width:none; max-height:none; margin:0; padding:0; border:0; background:var(--ui-surface-base); }
     .palette-project-panel > mux-sdk-utility { width:100%; height:100%; }
     @media(max-width:767.98px) { .terminal-utility { position:absolute; z-index:var(--ui-z-utility); top:0; right:0; bottom:0; width:min(88%,var(--ui-terminal-utility-width)); min-width:0; box-shadow:var(--ui-shadow-side); } }
 
@@ -2411,6 +2411,8 @@ export class MuxApp extends LitElement {
     void this._navigatePaletteTarget(target);
   };
   private _closePaletteProjectPanel = (): void => {
+    const panel=this.renderRoot.querySelector<HTMLDialogElement>('.palette-project-panel');
+    if (panel?.open) panel.close();
     this._paletteProjectPanel = null;
     const focus=this._paletteProjectReturnFocus;
     this._paletteProjectReturnFocus=null;
