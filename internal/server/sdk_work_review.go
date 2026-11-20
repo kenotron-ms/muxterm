@@ -108,6 +108,8 @@ func workGoalDispatchAuthorized(item *sdkWorkItem) bool {
 		return false
 	}
 	if item.GoalFiledRevision == item.GoalRevision {
+		// Filed UI Work can develop its preview during execution. The preview gate
+		// remains on the legacy human-approval path for existing records.
 		return true
 	}
 	return item.GoalApproved == item.GoalRevision && item.GoalApprovedAt != nil && workPreviewReady(item)

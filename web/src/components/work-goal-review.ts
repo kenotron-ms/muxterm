@@ -114,7 +114,7 @@ export class MuxWorkGoalReview extends LitElement {
   }
   private async file() {
     const item=this.current;
-    if (!item?.goalCondition || this.pending) return;
+    if (!item?.goalCondition || this.pending || (item.reviewVersion && (!item.goalCheck?.passed || item.goalCheck.goalRevision !== item.goalRevision))) return;
     await this.post(`/api/sdk-work/${encodeURIComponent(item.id)}/updates`,{clientRef:crypto.randomUUID(),expectedRevision:item.revision,readiness:'ready',text:'Ready for the scheduler'});
   }
   private markdown(text:string) { return renderSegments(parseMarkdown(text)); }
@@ -135,14 +135,14 @@ export class MuxWorkGoalReview extends LitElement {
     const canAct=item.status === 'open' && item.readiness === 'draft' && !item.dispatch && !item.ownerSessionId;
     const checked=!!item.goalCheck && item.goalCheck.goalRevision === item.goalRevision;
     const passed=!item.reviewVersion || checked && !!item.goalCheck?.passed;
-    const previewReady=filed || this.previewReady(item);
+    const previewReady=this.previewReady(item);
     const drafts=(item.updates || []).filter(update => !!update.goalCondition && update.goalRevision !== item.goalRevision).reverse();
     const preview=item.designPreview;
     const changeLink=item.createdBy?.sessionId ? `#chat=${encodeURIComponent(item.createdBy.sessionId)}${this.remoteHost ? `&host=${encodeURIComponent(this.remoteHost)}` : ''}` : '';
     return html`<div class="sheet" aria-label=${`Work review for ${item.title}`}>
       <section class="panel" aria-labelledby="brief-heading"><div class="head"><h3 id="brief-heading">What will change</h3><span class="meta">Work brief</span></div><div class="copy brief">${this.markdown(item.brief || 'No brief yet.')}</div>${item.acceptanceCriteria ? html`<div class="criteria"><h4>How we will know it worked</h4><div class="copy">${this.markdown(item.acceptanceCriteria)}</div></div>` : nothing}</section>
-      ${preview ? html`<section class="panel" aria-labelledby="preview-heading"><div class="head"><h3 id="preview-heading">Proposed experience</h3><span class="meta">${preview ? `Design ${preview.version}` : 'Preview needed'}</span></div>
-        ${previewReady ? html`<div class="preview-grid">${preview.desktopImageUrl ? html`<a class="preview" href=${preview.desktopImageUrl} target="_blank" rel="noopener noreferrer"><span>Desktop preview</span><img src=${preview.desktopImageUrl} alt="Proposed desktop experience" loading="lazy"></a>` : nothing}${preview.phoneImageUrl ? html`<a class="preview phone" href=${preview.phoneImageUrl} target="_blank" rel="noopener noreferrer"><span>Phone preview</span><img src=${preview.phoneImageUrl} alt="Proposed phone experience" loading="lazy"></a>` : nothing}</div><a class="preview-link" href=${preview.artifactUrl} target="_blank" rel="noopener noreferrer">Open full design</a>` : html`<p class="missing" role="status">The attached design preview needs a valid artifact link and screenshots for each affected screen.</p>`}
+      ${this.previewRequired(item) || preview ? html`<section class="panel" aria-labelledby="preview-heading"><div class="head"><h3 id="preview-heading">Proposed experience</h3><span class="meta">${preview ? `Design ${preview.version}` : 'Design in progress'}</span></div>
+        ${!preview ? html`<p class="muted">A design preview can be attached as this Work progresses.</p>` : previewReady ? html`<div class="preview-grid">${preview.desktopImageUrl ? html`<a class="preview" href=${preview.desktopImageUrl} target="_blank" rel="noopener noreferrer"><span>Desktop preview</span><img src=${preview.desktopImageUrl} alt="Proposed desktop experience" loading="lazy"></a>` : nothing}${preview.phoneImageUrl ? html`<a class="preview phone" href=${preview.phoneImageUrl} target="_blank" rel="noopener noreferrer"><span>Phone preview</span><img src=${preview.phoneImageUrl} alt="Proposed phone experience" loading="lazy"></a>` : nothing}</div><a class="preview-link" href=${preview.artifactUrl} target="_blank" rel="noopener noreferrer">Open full design</a>` : html`<p class="missing" role="status">The attached design preview needs a valid artifact link and screenshots for each affected screen.</p>`}
       </section>` : nothing}
       <div class="review-grid"><section class="panel" aria-labelledby="goal-heading"><div class="head"><div><h3 id="goal-heading">Exact goal for the worker</h3><p class="muted">${filed ? 'This checked goal was filed for automatic scheduling.' : `Current stored revision ${item.goalRevision || 0}.`}</p></div><span class="meta">Current revision ${item.goalRevision || 0}</span></div>
         ${item.goalCondition ? html`${this.raw ? html`<pre class="raw">${item.goalCondition}</pre>` : html`<div class="copy">${this.markdown(item.goalCondition)}</div>`}<div class="goal-source"><span class="meta">${filed ? 'The worker receives this exact condition.' : 'Changes create a new revision.'}</span><mux-ui-button variant="quiet" size="small" @click=${() => {this.raw=!this.raw;}}>${this.raw ? 'Show formatted goal' : 'Show raw text'}</mux-ui-button></div>` : html`<p class="muted">Ask the creating chat to draft a clear stopping condition.</p>`}

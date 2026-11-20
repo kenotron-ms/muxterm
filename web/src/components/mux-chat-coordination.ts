@@ -239,7 +239,7 @@ export class MuxChatCoordination extends LitElement {
   private chatLink(id: string) { return html`<a href=${`#chat=${encodeURIComponent(id)}${this.remoteHost ? `&host=${encodeURIComponent(this.remoteHost)}` : ''}`} title=${`Open ${this.sessionTitle(id)}`}>${this.sessionTitle(id)}</a>`; }
   private actor(actor?: WorkActor) { return actor?.kind === 'chat' && actor.sessionId ? this.chatLink(actor.sessionId) : actor?.kind === 'human' ? 'You' : 'Muxterm'; }
   private date(value: string) { return new Date(value).toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'}); }
-  private goalReady(item: WorkItem) { return !!item.goalCondition && (item.goalFiledRevision === item.goalRevision || item.goalApprovedRevision === item.goalRevision); }
+  private goalReady(item: WorkItem) { return !!item.goalCondition && !!item.goalRevision && (item.goalFiledRevision === item.goalRevision || item.goalApprovedRevision === item.goalRevision); }
   private attention(item: WorkItem) { return (item.status === 'review' && !item.reviewerSessionId) || (item.status === 'blocked' && !!item.needsHuman) || (item.status === 'open' && item.readiness !== 'draft' && !!item.goalCondition && !this.goalReady(item)) || item.dispatch?.state === 'uncertain' || item.dispatch?.state === 'failed'; }
   private status(item: WorkItem) {
     if (item.status === 'done') return 'Finished';
