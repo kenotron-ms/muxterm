@@ -10,13 +10,13 @@ import (
 	"time"
 )
 
-// installApprovedWorkGoal runs only after a dispatch reservation has pinned an
-// exact human-approved Work condition. It never clears a pause or replaces an
+// installWorkGoal runs only after a dispatch reservation has pinned an
+// exact filed or human-approved Work condition. It never clears a pause or replaces an
 // existing goal on a reused chat. Once native dispatch has been recorded, any
 // missing acknowledgement is uncertain and must be inspected, never replayed.
-func (s *Server) installApprovedWorkGoal(chatID string, item *sdkWorkItem) (string, error) {
-	if item.GoalCondition == "" || item.GoalRevision < 1 || item.GoalApproved != item.GoalRevision || item.GoalApprovedAt == nil {
-		return "failed", errors.New("Work goal condition is not approved")
+func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, error) {
+	if !workGoalDispatchAuthorized(item) {
+		return "failed", errors.New("Work goal condition is not authorized for dispatch")
 	}
 	h := s.sdkChats
 	h.mu.Lock()
@@ -40,6 +40,9 @@ func (s *Server) installApprovedWorkGoal(chatID string, item *sdkWorkItem) (stri
 	}
 	receiptID := "work-start-goal:" + item.ID + ":" + item.Dispatch.ClientRef
 	provenance := "human-work-approval:" + item.ID
+	if item.GoalFiledRevision == item.GoalRevision {
+		provenance = "filed-work:" + item.ID
+	}
 	document, err := h.goals.update(chat, func(document *goalDocument) error {
 		if document.ControlVersion != before.ControlVersion {
 			return errGoalConflict

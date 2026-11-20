@@ -18,7 +18,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/atomicfile"
 )
 
-// Work items coordinate sessions. An approved goal condition is installed as
+// Work items coordinate sessions. A filed goal condition is installed as
 // the selected worker chat's native goal when the scheduler dispatches Work.
 type sdkWorkItem struct {
 	ID                string                `json:"id"`
@@ -39,6 +39,9 @@ type sdkWorkItem struct {
 	Acceptance        string                `json:"acceptanceCriteria,omitempty"`
 	GoalCondition     string                `json:"goalCondition,omitempty"`
 	GoalRevision      int                   `json:"goalRevision,omitempty"`
+	GoalFiledRevision int                   `json:"goalFiledRevision,omitempty"`
+	CreateGoal        *string               `json:"createGoalCondition,omitempty"`
+	CreateDraft       bool                  `json:"createDraft,omitempty"`
 	GoalApproved      int                   `json:"goalApprovedRevision,omitempty"`
 	GoalApprovedAt    *time.Time            `json:"goalApprovedAt,omitempty"`
 	ReviewVersion     int                   `json:"reviewVersion,omitempty"`
@@ -448,6 +451,8 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		NextAction        string    `json:"nextAction"`
 		OwnerSessionID    string    `json:"ownerSessionId"`
 		Acceptance        string    `json:"acceptanceCriteria"`
+		GoalCondition     string    `json:"goalCondition"`
+		Draft             bool      `json:"draft"`
 		ReviewerSessionID string    `json:"reviewerSessionId"`
 		SessionIDs        []string  `json:"sessionIds"`
 		ProjectIDs        *[]string `json:"projectIds"`
@@ -455,9 +460,23 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		DependsOn         []string  `json:"dependsOn"`
 		UIWork            bool      `json:"uiWork"`
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || len(req.Source) > 4096 || len(req.NextAction) > 4096 || len(req.Acceptance) > 16<<10 || len(req.SessionIDs) > 32 || len(req.DependsOn) > 32 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) {
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || len(req.Source) > 4096 || len(req.NextAction) > 4096 || len(req.Acceptance) > 16<<10 || len([]rune(req.GoalCondition)) > 4000 || len(req.SessionIDs) > 32 || len(req.DependsOn) > 32 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) {
 		http.Error(w, "clientRef and title required", 400)
 		return
+	}
+	goal := strings.TrimSpace(req.GoalCondition)
+	if !req.Draft && goal == "" {
+		http.Error(w, "filed Work requires a goal condition; use draft=true only when the human requested a draft", 422)
+		return
+	}
+	var goalCheck *sdkWorkGoalCheck
+	if goal != "" {
+		check := checkWorkGoal(goal, 1)
+		goalCheck = &check
+		if !req.Draft && !check.Passed {
+			writeSDKJSON(w, 422, map[string]any{"error": "revise the goal condition before filing Work", "goalCheck": check})
+			return
+		}
 	}
 	labels, err := normalizeWorkLabels(req.Labels)
 	if err != nil {
@@ -542,7 +561,11 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 			if item.CreateAcceptance != nil {
 				createAcceptance = *item.CreateAcceptance
 			}
-			if createTitle != req.Title || createBrief != req.Brief || item.Source != strings.TrimSpace(req.Source) || createNextAction != strings.TrimSpace(req.NextAction) || createAcceptance != req.Acceptance || createReviewer != req.ReviewerSessionID || createOwner != req.OwnerSessionID || item.UIWork != req.UIWork || !slices.Equal(createdWith, req.SessionIDs) || !slices.Equal(createdProjects, projectIDs) || !slices.Equal(createdDependencies, req.DependsOn) || !slices.Equal(item.CreateLabels, labels) {
+			createGoal := ""
+			if item.CreateGoal != nil {
+				createGoal = *item.CreateGoal
+			}
+			if createTitle != req.Title || createBrief != req.Brief || item.Source != strings.TrimSpace(req.Source) || createNextAction != strings.TrimSpace(req.NextAction) || createAcceptance != req.Acceptance || createGoal != goal || item.CreateDraft != req.Draft || createReviewer != req.ReviewerSessionID || createOwner != req.OwnerSessionID || item.UIWork != req.UIWork || !slices.Equal(createdWith, req.SessionIDs) || !slices.Equal(createdProjects, projectIDs) || !slices.Equal(createdDependencies, req.DependsOn) || !slices.Equal(item.CreateLabels, labels) {
 				h.mu.Unlock()
 				http.Error(w, "clientRef already used for different work", 409)
 				return
@@ -569,7 +592,20 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := time.Now().UTC()
-	item := &sdkWorkItem{ID: sdkID(), ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, CreateTitle: &req.Title, CreateBrief: &req.Brief, Source: strings.TrimSpace(req.Source), Readiness: "draft", NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
+	readiness := "ready"
+	if req.Draft {
+		readiness = "draft"
+	}
+	goalRevision, filedRevision := 0, 0
+	var createGoal *string
+	if goal != "" {
+		goalRevision = 1
+		createGoal = &goal
+		if !req.Draft {
+			filedRevision = 1
+		}
+	}
+	item := &sdkWorkItem{ID: sdkID(), ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, CreateTitle: &req.Title, CreateBrief: &req.Brief, CreateGoal: createGoal, CreateDraft: req.Draft, Source: strings.TrimSpace(req.Source), Readiness: readiness, GoalCondition: goal, GoalRevision: goalRevision, GoalFiledRevision: filedRevision, GoalCheck: goalCheck, NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
 		Status: "open", CreatedBy: creator, OwnerSessionID: req.OwnerSessionID, CreateOwnerID: req.OwnerSessionID, Acceptance: req.Acceptance, CreateAcceptance: &req.Acceptance, ReviewerSessionID: req.ReviewerSessionID, CreateReviewerID: req.ReviewerSessionID, ProjectIDs: projectIDs, CreateProjectIDs: slices.Clone(projectIDs), Labels: labels, CreateLabels: append([]string{}, labels...), SessionIDs: req.SessionIDs,
 		CreateSessionIDs: append([]string{}, req.SessionIDs...), DependsOn: req.DependsOn, CreateDependsOn: append([]string{}, req.DependsOn...), WaitingOn: h.workWaitingOnLocked(&sdkWorkItem{DependsOn: req.DependsOn}),
 		ReviewVersion: 1, UIWork: req.UIWork, Revision: 1, CreatedAt: now, UpdatedAt: now, Updates: []sdkWorkUpdate{}}
@@ -581,6 +617,9 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	if item.OwnerSessionID != "" {
 		h.appendEvent(sdkEvent{SessionID: item.OwnerSessionID, Type: "work.created", WorkID: item.ID, Text: item.Title})
+	}
+	if item.Readiness == "ready" {
+		s.wakeWork()
 	}
 	writeSDKJSON(w, 201, item)
 }
@@ -763,9 +802,9 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Readiness != nil {
-		if *req.Readiness == "ready" && (item.GoalCondition == "" || item.GoalRevision < 1 || item.GoalApproved != item.GoalRevision || item.GoalApprovedAt == nil || !workGoalCheckCurrent(item) || !workPreviewReady(item) || req.GoalCondition != nil || req.DesignPreview != nil || req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.NextAction != nil || req.DependsOn != nil || req.ProjectIDs != nil) {
+		if *req.Readiness == "ready" && (!workGoalCheckCurrent(item) || item.GoalCondition == "" || item.GoalRevision < 1 || req.GoalCondition != nil || req.DesignPreview != nil || req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.NextAction != nil || req.DependsOn != nil || req.ProjectIDs != nil) {
 			h.mu.Unlock()
-			http.Error(w, "approve the current Work goal condition before marking ready", 409)
+			http.Error(w, "check the current Work goal condition before filing", 409)
 			return
 		}
 		if item.HeldByHuman && *req.Readiness != "held" && actor.Kind != "human" {
@@ -797,7 +836,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 			goal, err := h.goals.update(*owner, nil)
 			if err != nil || goal.HumanPaused || goal.RequestedRevision == 0 || goal.AppliedRevision != goal.RequestedRevision || goal.ExecutionAuthorizedRevision != goal.RequestedRevision || len(goal.Revisions) == 0 || goal.Revisions[len(goal.Revisions)-1].Condition != item.GoalCondition {
 				h.mu.Unlock()
-				http.Error(w, "direct claim requires the exact approved condition as this chat's active native goal; use Work start for a handoff", 409)
+				http.Error(w, "direct claim requires the exact filed condition as this chat's active native goal; use Work start for a handoff", 409)
 				return
 			}
 		}
@@ -845,16 +884,27 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.GoalCondition != nil {
 		copy.GoalCondition = strings.TrimSpace(*req.GoalCondition)
 		copy.GoalRevision++
-		copy.GoalCheck = nil
+		check := checkWorkGoal(copy.GoalCondition, copy.GoalRevision)
+		copy.GoalCheck = &check
+		if !check.Passed && item.Readiness == "ready" && (req.Readiness == nil || *req.Readiness != "draft") {
+			h.mu.Unlock()
+			writeSDKJSON(w, 422, map[string]any{"error": "revise the goal condition before filing", "goalCheck": check})
+			return
+		}
 	}
 	if req.DesignPreview != nil {
 		copy.DesignPreview = req.DesignPreview
 	}
-	if (req.GoalCondition != nil || req.DesignPreview != nil || req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.NextAction != nil || req.DependsOn != nil || req.ProjectIDs != nil || req.Labels != nil) && copy.Dispatch == nil && copy.OwnerSessionID == "" {
+	if (req.GoalCondition != nil || req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.DependsOn != nil || req.ProjectIDs != nil) && copy.Dispatch == nil && copy.OwnerSessionID == "" {
 		copy.GoalApproved = 0
 		copy.GoalApprovedAt = nil
-		if copy.Readiness == "ready" && copy.Dispatch == nil && copy.OwnerSessionID == "" {
-			copy.Readiness = "draft"
+		if copy.Readiness == "ready" {
+			if req.GoalCondition != nil && copy.GoalCheck.Passed {
+				copy.GoalFiledRevision = copy.GoalRevision
+			} else {
+				copy.GoalFiledRevision = 0
+				copy.Readiness = "draft"
+			}
 		}
 	}
 	previousOwner := copy.OwnerSessionID
@@ -886,6 +936,11 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Readiness != nil {
 		copy.Readiness = *req.Readiness
 		copy.HeldByHuman = *req.Readiness == "held" && (actor.Kind == "human" || item.HeldByHuman)
+		if *req.Readiness == "ready" {
+			copy.GoalFiledRevision = copy.GoalRevision
+		} else if *req.Readiness == "draft" {
+			copy.GoalFiledRevision = 0
+		}
 	}
 	copy.WaitingOn = h.workWaitingOnLocked(&copy)
 	status := copy.Status
@@ -959,12 +1014,16 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	copy.Revision++
 	copy.UpdatedAt = time.Now().UTC()
+	wasReady := item.Readiness == "ready"
 	if err := h.saveWorkLocked(&copy); err != nil {
 		h.mu.Unlock()
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	h.mu.Unlock()
+	if copy.Readiness == "ready" && !wasReady {
+		s.wakeWork()
+	}
 	message := req.Summary
 	if message == "" {
 		message = req.Text
@@ -988,7 +1047,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	if copy.OwnerSessionID != "" {
 		h.appendEvent(sdkEvent{SessionID: copy.OwnerSessionID, Type: "work.updated", WorkID: copy.ID, Source: req.SessionID, Text: message})
 	}
-	if req.GoalCondition != nil && copy.CreatedBy.SessionID != "" {
+	if req.GoalCondition != nil && copy.Readiness == "draft" && copy.CreatedBy.SessionID != "" {
 		h.appendEvent(sdkEvent{SessionID: copy.CreatedBy.SessionID, Type: "work.goal.proposed", WorkID: copy.ID, Source: req.SessionID, Text: "Goal condition ready for review: " + copy.Title})
 	}
 	if req.SessionID != "" && req.SessionID != copy.OwnerSessionID {

@@ -204,7 +204,7 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mu.Unlock()
-	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The human-approved Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your native goal."
+	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The filed Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your native goal."
 	state, detail := "sent", ""
 	if existing {
 		if err := s.applyReusedWorkConfiguration(r.Context(), workerID, config); err != nil {
@@ -227,7 +227,7 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if state == "sent" {
-		goalState, err := s.installApprovedWorkGoal(workerID, &copy)
+		goalState, err := s.installWorkGoal(workerID, &copy)
 		if err != nil {
 			state, detail = goalState, err.Error()
 		}
