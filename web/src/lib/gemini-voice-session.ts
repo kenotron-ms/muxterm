@@ -190,7 +190,7 @@ export class GeminiVoiceSession {
         this.onLevels([level * .65, level, level * .8, level * .55]);
       }
       let binary = '';
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      for (let i = 0; i < bytes.length; i += 1024) binary += String.fromCharCode(...bytes.subarray(i, i + 1024));
       socket.send(JSON.stringify({ realtimeInput: { audio: { data: btoa(binary), mimeType: 'audio/pcm;rate=16000' } } }));
     };
   }
@@ -243,6 +243,7 @@ export class GeminiVoiceSession {
     this.toolPending = false;
     this.flushInput(); this.flushOutput();
     this.clearPlayback();
+    this.playAt = 0;
     this.capture?.disconnect(); this.source?.disconnect(); this.silent?.disconnect();
     this.capture = null; this.source = null; this.silent = null;
     this.mic?.getTracks().forEach(track => track.stop());

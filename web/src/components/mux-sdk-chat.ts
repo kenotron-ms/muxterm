@@ -2835,7 +2835,7 @@ export class MuxSDKChat extends LitElement {
   }
   private async toggleVoice() {
     if (!this.voiceAvailable) return;
-    if (this.voiceState !== 'idle') { this.voice?.stop(); return; }
+    if (this.voiceState !== 'idle') { this.voice?.stop(); this.voice = undefined; return; }
     if (this.settingsPending || this.dictationActive || this.chat?.branchPending) return;
     this.voiceError = '';
     this.voice ??= new (this.voiceProvider === 'gemini' ? GeminiVoiceSession : SDKVoiceSession)(this.sessionId,
