@@ -1704,6 +1704,7 @@ export class MuxSettingsSurface extends LitElement {
         @change=${(event: CustomEvent<{value:string}>) => { this._vProvider = event.detail.value as 'openai' | 'gemini'; this._vKeyInput = ''; this._voiceMessage = ''; }}></mux-ui-radio-group>
 
       ${isGemini ? html`
+        <p class="v-hint">Gemini Live can read task chat context. To direct task actions by voice, choose OpenAI GPT-Live.</p>
         <div class="v-field">
           <mux-ui-text-field label="Gemini Live model" type="text" autocomplete="off"
             .value=${this._vGeminiModel}

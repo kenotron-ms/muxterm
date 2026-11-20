@@ -221,10 +221,10 @@ export class GeminiVoiceSession {
     this.setState('speaking');
   }
 
-  private clearPlayback(): void {
+  private clearPlayback(resetSchedule = true): void {
     for (const source of this.playback) { try { source.stop(); } catch { /* already ended */ } }
     this.playback.clear();
-    this.playAt = this.audio?.currentTime ?? 0;
+    if (resetSchedule) this.playAt = this.audio?.currentTime ?? 0;
   }
 
   private record(type: string, text = ''): void {
@@ -242,7 +242,7 @@ export class GeminiVoiceSession {
     ++this.generation;
     this.toolPending = false;
     this.flushInput(); this.flushOutput();
-    this.clearPlayback();
+    this.clearPlayback(false);
     this.playAt = 0;
     this.capture?.disconnect(); this.source?.disconnect(); this.silent?.disconnect();
     this.capture = null; this.source = null; this.silent = null;
