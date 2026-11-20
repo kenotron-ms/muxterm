@@ -2170,6 +2170,12 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if (req.Archived != nil || req.Pinned != nil) && req.Title == "" {
+			// Unarchiving can make an existing active Work owner protected again.
+			// Serialize that transition with peer send admission.
+			if req.Archived != nil && !*req.Archived {
+				h.workSendMu.Lock()
+				defer h.workSendMu.Unlock()
+			}
 			adapterLock := h.adapterLock(id)
 			adapterLock.Lock()
 			defer adapterLock.Unlock()
@@ -2194,6 +2200,25 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			h.mu.Lock()
+			if req.Archived != nil && !*req.Archived && c.Archived {
+				for _, item := range h.workItems {
+					if item.OwnerSessionID != id || item.Status != "active" {
+						continue
+					}
+					pending, scanErr := h.unresolvedPeerControlLocked(id)
+					if scanErr != nil {
+						h.mu.Unlock()
+						http.Error(w, "could not verify pending peer input before unarchiving Work owner: "+scanErr.Error(), http.StatusServiceUnavailable)
+						return
+					}
+					if pending {
+						h.mu.Unlock()
+						http.Error(w, "peer chat input is still queued or uncertain; wait for its turn to finish before unarchiving this Work owner", http.StatusConflict)
+						return
+					}
+					break
+				}
+			}
 			previousArchived, previousPinned := c.Archived, c.Pinned
 			if req.Archived != nil {
 				c.Archived = *req.Archived
