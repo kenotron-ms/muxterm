@@ -234,7 +234,7 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if state == "sent" {
 		payload, _ := json.Marshal(map[string]any{"clientRef": "work-start:" + id + ":" + req.ClientRef, "content": prompt})
-		request := httptest.NewRequestWithContext(r.Context(), http.MethodPost, "/api/sdk-chats/"+workerID+"/control-send", bytes.NewReader(payload))
+		request := httptest.NewRequestWithContext(context.WithValue(r.Context(), sdkWorkKickoffContextKey{}, id), http.MethodPost, "/api/sdk-chats/"+workerID+"/control-send", bytes.NewReader(payload))
 		request.SetPathValue("id", workerID)
 		if token := r.Header.Get("X-Muxterm-Origin"); token != "" {
 			request.Header.Set("X-Muxterm-Origin", token)

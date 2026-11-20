@@ -11,6 +11,10 @@ import (
 // authentication path. Goal mutations have separate controls.
 func (s *Server) sdkChatOriginBoundary(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.remoteAgentChatRequest(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		token := r.Header.Get("X-Muxterm-Origin")
 		if token == "" && r.Header.Get("X-Muxterm-Agent") != "1" {
 			next.ServeHTTP(w, r)

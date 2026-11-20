@@ -66,9 +66,18 @@ func (s *Server) handleRemoteChatProxy(w http.ResponseWriter, r *http.Request) {
 	out.Header = r.Header.Clone()
 	out.Header.Del("Cookie")
 	out.Header.Del("Authorization")
+	out.Header.Del("X-Muxterm-Remote-Origin-Chat")
 	if agentRequest {
-		// An origin token identifies a Chat on this server and cannot identify
-		// one on the remote. The remote records this as an external tool input.
+		// The local capability is only valid here. Resolve it before the SSH
+		// hop and overwrite any caller-supplied remote identity.
+		s.sdkChats.mu.Lock()
+		senderID := s.sdkChats.originTokenChats[r.Header.Get("X-Muxterm-Origin")]
+		s.sdkChats.mu.Unlock()
+		if senderID == "" {
+			http.Error(w, "valid sending chat capability required", http.StatusForbidden)
+			return
+		}
+		out.Header.Set("X-Muxterm-Remote-Origin-Chat", senderID)
 		out.Header.Del("X-Muxterm-Origin")
 	}
 	response, err := transport.RoundTrip(out)

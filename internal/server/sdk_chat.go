@@ -158,6 +158,7 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 
 type sdkChatHost struct {
 	mu               sync.Mutex
+	workSendMu       sync.RWMutex // Linearizes agent send admission with Work ownership transitions.
 	inboxDeliveryMu  sync.Mutex
 	nameLocks        map[string]*sync.Mutex
 	adapterLocks     map[string]*sync.Mutex
@@ -2251,9 +2252,16 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		h.appendEvent(sdkEvent{SessionID: id, Type: "session.renamed", Name: name})
 		writeSDKJSON(w, 200, updated)
 	case "POST":
+		// This endpoint is the browser's direct-input path. Chat MCP callers
+		// use control-send, and voice handoff uses its own server-owned path.
+		// A JSON source/kind cannot turn an agent request into human steering.
+		if !humanBrowserRequest(r) && !s.remoteChatBridgeRequest(r) {
+			http.Error(w, "direct chat input requires a human browser", http.StatusForbidden)
+			return
+		}
 		var req struct {
-			Kind, Source, ID, Content string
-			Attachments               []string `json:"attachments"`
+			Kind, Source, ID, Content, SideChatID string
+			Attachments                           []string `json:"attachments"`
 		}
 		if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 			http.Error(w, "invalid JSON", 400)
@@ -2265,8 +2273,26 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		if req.Kind == "" {
 			req.Kind = "user"
 		}
-		if req.Source == "operator-lane" || req.Source == "chat-message" {
-			http.Error(w, "chat origin source is reserved for server messages", 422)
+		if req.Source != "" && req.Source != "browser" && req.Source != "goalify" && req.Source != "recovery" && req.Source != "side-chat" {
+			http.Error(w, "direct input source must be browser-owned", http.StatusForbidden)
+			return
+		}
+		if req.Source == "side-chat" {
+			h.mu.Lock()
+			side := h.chats[req.SideChatID]
+			valid := side != nil && !side.Archived && side.SideParentID == id
+			h.mu.Unlock()
+			if !valid {
+				http.Error(w, "side chat must be linked to the target chat", http.StatusForbidden)
+				return
+			}
+			if chatState == "working" {
+				req.Kind = "steer"
+			} else {
+				req.Kind = "user"
+			}
+		} else if req.SideChatID != "" {
+			http.Error(w, "sideChatId requires a linked side chat message", http.StatusForbidden)
 			return
 		}
 		if req.Source == "goalify" && (!humanBrowserRequest(r) || req.Kind != "user" || len(req.Attachments) != 0) {

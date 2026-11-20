@@ -12,9 +12,9 @@ import './work-goal-review.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import type { MuxUISelect } from '../ui/select.js';
 
-type WorkActor = { kind: 'chat' | 'human' | 'external-tool'; sessionId?: string };
+type WorkActor = { kind: 'chat' | 'remote-chat' | 'human' | 'external-tool'; sessionId?: string };
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string; selectionReason?: string; contextWorkId?: string; fallback?: string; configuration?: { harness: string; provider: string; bundle?: string; model?: string; effort?: string } };
-type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean };
+type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; comment?: boolean; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean };
 type WorkItem = { id: string; title: string; brief: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalApprovedRevision?: number; blockedReason?: string; dependsOn: string[]; waitingOn: string[]; labels: string[]; dispatch?: WorkDispatch; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
 
@@ -59,6 +59,9 @@ export class MuxChatCoordination extends LitElement {
   @state() private labelFilter = '';
   @state() private collapsed: Record<string, boolean> = {};
   @state() private error = '';
+  @state() private commentDraft = '';
+  @state() private commentSending = false;
+  private commentRef = '';
   private poll?: number;
   private loading = false;
   private refreshKey = 0;
@@ -164,6 +167,11 @@ export class MuxChatCoordination extends LitElement {
     .activity-markdown .md-th,.activity-markdown .md-td { padding:var(--ui-space-2) var(--ui-space-3); border-bottom:var(--ui-space-px) solid var(--ui-border); text-align:left; }
     .activity-markdown .md-h { margin:var(--ui-space-4) 0 var(--ui-space-2); font-size:var(--ui-text-lg); }
     .activity-evidence { margin-top:var(--ui-space-3); font-size:var(--ui-text-md); }
+    .comment-form { margin-top:var(--ui-space-6); display:grid; gap:var(--ui-space-3); }
+    .comment-form label { font-weight:650; }
+    .comment-form textarea { width:100%; min-height:6rem; padding:var(--ui-space-3); border:1px solid var(--ui-border-strong); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; resize:vertical; }
+    .comment-form mux-ui-button { justify-self:start; }
+    .comment-body { white-space:pre-wrap; overflow-wrap:anywhere; }
     .error { margin:var(--ui-space-5) 0; color:var(--ui-danger); }
     :focus-visible { outline:var(--ui-space-1) solid var(--ui-accent); outline-offset:var(--ui-space-2); }
     @media(max-width:560px) { .wrap { padding:var(--ui-space-8) var(--ui-space-7) var(--ui-control-lg); } .controls { align-items:flex-start; } .parallel { width:100%; justify-content:flex-start; } .parallel mux-ui-range-field { width:100%; } .label-filter { max-width:var(--ui-work-filter-width); } }
@@ -234,10 +242,31 @@ export class MuxChatCoordination extends LitElement {
       this.error = '';
     } catch (error) { this.error = String(error); void this.refresh(); }
   }
+  private async postComment() {
+    const item = this.detail;
+    const body = this.commentDraft.trim();
+    if (!item || !body || this.commentSending) return;
+    this.commentRef ||= crypto.randomUUID();
+    this.commentSending = true;
+    try {
+      const posted = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(item.id)}/comments`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({clientRef: this.commentRef, text: body}),
+      });
+      if (this.detail?.id === item.id) {
+        this.detail = posted;
+        this.commentDraft = '';
+        this.commentRef = '';
+        this.error = '';
+      }
+      void this.refresh();
+    } catch (error) { this.error = String(error); }
+    finally { this.commentSending = false; }
+  }
   private projectName() { return sdkChats.projects.find(project => project.id === this.projectId && (project.remoteHost || '') === this.remoteHost)?.name || 'This project'; }
   private sessionTitle(id: string) { return sdkChats.chats.find(chat => chat.id === id && (chat.remoteHost || '') === this.remoteHost)?.title || id.slice(0, 8); }
   private chatLink(id: string) { return html`<a href=${`#chat=${encodeURIComponent(id)}${this.remoteHost ? `&host=${encodeURIComponent(this.remoteHost)}` : ''}`} title=${`Open ${this.sessionTitle(id)}`}>${this.sessionTitle(id)}</a>`; }
-  private actor(actor?: WorkActor) { return actor?.kind === 'chat' && actor.sessionId ? this.chatLink(actor.sessionId) : actor?.kind === 'human' ? 'You' : 'Muxterm'; }
+  private actor(actor?: WorkActor) { return actor?.kind === 'chat' && actor.sessionId ? this.chatLink(actor.sessionId) : actor?.kind === 'remote-chat' && actor.sessionId ? `Remote chat ${actor.sessionId.slice(0, 8)}` : actor?.kind === 'human' ? 'You' : 'Muxterm'; }
   private date(value: string) { return new Date(value).toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'}); }
   private goalReady(item: WorkItem) { return !!item.goalCondition && !!item.goalRevision && (item.goalFiledRevision === item.goalRevision || item.goalApprovedRevision === item.goalRevision); }
   private attention(item: WorkItem) { return (item.status === 'review' && !item.reviewerSessionId) || (item.status === 'blocked' && !!item.needsHuman) || (item.status === 'open' && item.readiness !== 'draft' && !!item.goalCondition && !this.goalReady(item)) || item.dispatch?.state === 'uncertain' || item.dispatch?.state === 'failed'; }
@@ -262,7 +291,14 @@ export class MuxChatCoordination extends LitElement {
     return item.readiness === 'ready' ? 'flag' : 'clock';
   }
   private summary(item: WorkItem) { return item.blockedReason || item.nextAction || item.progress || item.brief || 'Open to see the details.'; }
-  private openDetail(item: WorkItem) { this.detail = item; void this.refresh(); }
+  private openDetail(item: WorkItem) {
+    if (this.detail?.id !== item.id) {
+      this.commentDraft = '';
+      this.commentRef = '';
+    }
+    this.detail = item;
+    void this.refresh();
+  }
   showWorkItem(id: string) { void this.openDependency(id); }
   private async openDependency(id: string) {
     const found = this.work.find(item => item.id === id);
@@ -292,6 +328,7 @@ export class MuxChatCoordination extends LitElement {
     return html`<nav class="filters" aria-label="Work filter">${(['open','all','finished'] as const).map(filter => html`<mux-ui-button class="filter" variant="quiet" size="small" ?selected=${this.filter === filter} @click=${() => { this.filter = filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Finished'}</mux-ui-button>`)}${labels.length ? html`<mux-ui-select class="label-filter" size="small" aria-label="Filter by label" .value=${this.labelFilter} .options=${[{value:"",label:"All labels"},...labels.map(label => ({value:label,label}))]} @change=${(event: Event) => { this.labelFilter = (event.target as MuxUISelect).value; }}></mux-ui-select>` : nothing}</nav>${this.controls()}${attention.length ? html`<section class="attention" aria-label="Needs your attention">${attention.map(item => html`<div class="attention-item"><span class=${`kind ${item.status === 'review' ? 'review' : item.status === 'blocked' ? 'blocked' : ''}`}>${icon(this.statusIcon(item))}${this.status(item)}</span><mux-ui-button variant="quiet" @click=${() => this.openDetail(item)}><h3>${item.title}</h3></mux-ui-button><p>${this.summary(item)}</p></div>`)}</section>` : nothing}${this.group('In motion','motion',motion)}${this.group('Ready to start','ready',ready)}${this.group('Waiting & blocked','waiting',waiting)}${this.group('Finished','finished',finished)}${!selected.length ? html`<div class="empty"><strong>${this.work.length ? 'Nothing in this view' : 'No work here yet'}</strong><p>${this.work.length ? 'Try another filter.' : 'Ask a chat to capture an item for this project.'}</p></div>` : nothing}`;
   }
   private timelineEntry(update: WorkUpdate) {
+    if (update.comment) return html`<li><span class="timeline-icon">${icon('chat')}</span><div><time>${this.date(update.at)}</time><strong>Comment from ${this.actor(update.actor)}</strong><p class="comment-body">${update.text}</p></div></li>`;
     const mark = update.status === 'done' || update.status === 'review' || update.goalApproved ? 'check' : update.status === 'blocked' ? 'alert' : update.status === 'active' ? 'play' : update.readiness === 'ready' ? 'flag' : update.linkedSessionId || update.ownerSessionId ? 'chat' : 'clock';
     const title = update.goalApproved ? 'Goal approved' : update.goalCondition ? 'Goal drafted' : update.status === 'done' ? 'Work completed' : update.status === 'blocked' ? 'Blocked' : update.status === 'review' ? 'Ready for review' : update.status === 'active' ? 'Work started' : update.status ? 'Work updated' : update.readiness === 'ready' ? 'Marked ready' : update.readiness === 'held' ? 'Put on hold' : html`Update from ${this.actor(update.actor)}`;
     const body = update.text || update.progress || update.outcome || update.blockedReason || '';
@@ -324,7 +361,7 @@ export class MuxChatCoordination extends LitElement {
       ${item.ownerSessionId || item.dispatch?.sessionId ? html`<section class="section"><h3>Who's on it</h3><p>${this.chatLink(item.ownerSessionId || item.dispatch!.sessionId)}</p></section>` : nothing}
       ${item.dispatch?.selectionReason ? html`<section class="section"><h3>Worker selection</h3><p>${item.dispatch.selectionReason}</p>${item.dispatch.configuration ? html`<p>${item.dispatch.configuration.harness} · ${item.dispatch.configuration.provider} · bundle ${item.dispatch.configuration.bundle || 'none'} · model ${item.dispatch.configuration.model || 'none'} · effort ${item.dispatch.configuration.effort || 'none'}</p>` : nothing}${item.dispatch.fallback ? html`<p>Fallback: ${item.dispatch.fallback}</p>` : nothing}</section>` : nothing}
       ${item.dependsOn?.length ? html`<section class="section"><h3>Before this can start</h3><p>${this.dependencyLinks(item.dependsOn)}${item.waitingOn?.length ? ` · ${item.waitingOn.length} still in progress` : ' · all complete'}</p></section>` : nothing}
-      <section class="section"><h3>Recent activity</h3><ol class="timeline">${updates.length ? updates.map(update => this.timelineEntry(update)) : html`<li><span class="timeline-icon">${icon('work')}</span><div><time>${this.date(item.createdAt)}</time><strong>Added to work</strong><p>${item.source || 'Created for this project.'}</p></div></li>`}</ol></section>
+      <section class="section"><h3>Recent activity</h3><ol class="timeline">${updates.length ? updates.map(update => this.timelineEntry(update)) : html`<li><span class="timeline-icon">${icon('work')}</span><div><time>${this.date(item.createdAt)}</time><strong>Added to work</strong><p>${item.source || 'Created for this project.'}</p></div></li>`}</ol><div class="comment-form"><label for="work-comment">Add a comment</label><textarea id="work-comment" .value=${this.commentDraft} @input=${(event: Event) => { this.commentDraft = (event.target as HTMLTextAreaElement).value; this.commentRef = ''; }} placeholder="Coordinate here without interrupting the worker"></textarea><mux-ui-button variant="primary" ?disabled=${!this.commentDraft.trim() || this.commentSending} @click=${() => void this.postComment()}>${this.commentSending ? 'Posting…' : 'Post comment'}</mux-ui-button></div></section>
       ${item.labels?.length ? html`<section class="section"><h3>Labels</h3><div class="tags">${item.labels.map(label => html`<span class="tag">${label}</span>`)}</div></section>` : nothing}
       <div class="facts"><span>Created by ${this.actor(item.createdBy)}</span><span>Updated ${this.date(item.updatedAt)}</span></div>
     </article>`;
