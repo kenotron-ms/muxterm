@@ -3,15 +3,17 @@ import { apiPath } from '../lib/base-path.js';
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
-import { Archive, ArchiveRestore, Check, Ellipsis, Folder, FolderOpen, FolderPlus, MessageCircle, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Settings2, Trash2, X } from 'lucide';
+import { Archive, ArchiveRestore, Check, Ellipsis, Filter, Folder, FolderOpen, FolderPlus, MessageCircle, MessageSquare, Network, Pencil, Pin, PinOff, Plus, Search, Settings2, Trash2, X } from 'lucide';
 import { icon } from '../lib/icons.js';
 import { sdkChats, sdkHarnessLabel, type SDKChat, type SDKHarnessName, type SDKProject } from '../lib/sdk-chats.js';
 import { remotesStore } from '../lib/remotes-store.js';
 import type { MuxUITextField } from '../ui/text-field.js';
+import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUIDialog } from '../ui/dialog.js';
 import type { MuxUIMenu } from '../ui/menu.js';
 import { pointReference, type PopupReference } from '../lib/floating-popup.js';
 import '../ui/text-field.js';
+import '../ui/select.js';
 import '../ui/button.js';
 import '../ui/dialog.js';
 import '../ui/feedback.js';
@@ -44,6 +46,9 @@ function harnessGlyph(chat: SDKChat) {
 
 const ARCHIVE_PAGE_SIZE = 25;
 const ARCHIVE_ROW_HEIGHT = 32;
+const ARCHIVE_FILTER_OPTIONS = [{value:'all',label:'Active and archived'},{value:'active',label:'Active only'},{value:'archived',label:'Archived only'}];
+const STATE_FILTER_OPTIONS = [{value:'all',label:'Any state'},{value:'working',label:'Working'},{value:'ready',label:'Ready'},{value:'failed',label:'Failed'},{value:'uncertain',label:'Uncertain'}];
+const HARNESS_FILTER_OPTIONS = [{value:'all',label:'Any harness'},...(Object.keys(harnessMarks) as SDKHarnessName[]).map(harness => ({value:harness,label:sdkHarnessLabel(harness)}))];
 interface ChatGroup { id: string; name: string; remoteHost?: string; project?: SDKProject; chats: SDKChat[]; archived?: boolean; archiveStart?: number; total?: number; loading?: boolean; archiveError?: string }
 type PinnedItem =
   | { kind:'project'; id:string; name:string; project:SDKProject }
@@ -59,6 +64,7 @@ export class MuxChatWorkspace extends LitElement {
   @property({ attribute: false }) model!: ChatGroup;
   @property() selectedSession = '';
   @property({ type: Boolean, reflect: true }) drawer = false;
+  @property({ type: Boolean }) filtered = false;
   @state() private open = true;
   @state() private menuFor = '';
   @state() private contextMenu = false;
@@ -83,7 +89,8 @@ export class MuxChatWorkspace extends LitElement {
   };
   override connectedCallback() {
     super.connectedCallback();
-    if (this.model?.archived || (this.model?.id === 'ungrouped' && !this.model.chats.some(chat => chat.id === this.selectedSession))) this.open = false;
+    if (this.filtered) this.open = true;
+    else if (this.model?.archived || (this.model?.id === 'ungrouped' && !this.model.chats.some(chat => chat.id === this.selectedSession))) this.open = false;
     document.addEventListener('pointerdown', this.onOutsidePointer);
     document.addEventListener('keydown', this.onEscape);
   }
@@ -93,6 +100,7 @@ export class MuxChatWorkspace extends LitElement {
     super.disconnectedCallback();
   }
   override willUpdate(changed: Map<string, unknown>) {
+    if (changed.has('filtered') && this.filtered) this.open = true;
     // Archiving the selected chat updates this group's model. Keep the user's
     // Archived folder expansion choice instead of opening it as a side effect.
     if (!this.model?.archived && changed.has('selectedSession') && this.model?.chats.some(chat => chat.id === this.selectedSession)) this.open = true;
@@ -144,6 +152,7 @@ export class MuxChatWorkspace extends LitElement {
     .archive-list .chat-row { height:var(--ui-space-9); min-height:var(--ui-space-9); }
     .archive-spacer { pointer-events:none; }
     .archive-status { padding:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .result-meta { flex:none; margin-right:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .chat-row[selected] { background:var(--ui-nav-selected); }
     .chat-icon { width:var(--ui-icon-md); height:var(--ui-icon-md); display:inline-flex; align-items:center; justify-content:center; flex:none; color:var(--ui-text-muted); }
     .chat-harness {
@@ -385,6 +394,7 @@ export class MuxChatWorkspace extends LitElement {
               ${this.drawer ? html`<span slot="icon" class="chat-icon" aria-hidden="true"></span>` : nothing}
               ${chat.remoteHost ? html`<span slot="label" class="chat-label-copy"><span class="chat-title">${chat.title}</span><span class="chat-host">${sdkChats.remoteHosts.find(host => host.id === chat.remoteHost)?.name || chat.remoteHost}</span></span>` : nothing}
             </mux-ui-list-row>
+            ${this.filtered && chat.archived ? html`<span class="result-meta" title="Archived session">Archived</span>` : nothing}
             ${this.drawer ? this.chatHarnessButton(chat) : nothing}
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`} tooltip=${chat.pinned ? 'Unpin chat' : 'Pin chat'} @click=${() => void this.pinChat(chat)}>${icon(chat.pinned ? PinOff : Pin,{size:14})}</mux-ui-button>
             <mux-ui-button class="action" icon-only size="small" variant="quiet" tone="muted" accessible-label=${`${chat.archived ? 'Restore' : 'Archive'} ${chat.title}`} tooltip=${chat.archived ? 'Restore chat' : 'Archive chat'} @click=${() => void this.toggleArchive(chat)}>${icon(chat.archived ? ArchiveRestore : Archive,{size:14})}</mux-ui-button>`}
@@ -400,6 +410,19 @@ export class MuxChatWorkspace extends LitElement {
 @customElement('mux-chat-list')
 export class MuxChatList extends LitElement {
   @state() private version = 0;
+  @state() private searchText = '';
+  @state() private archiveFilter = 'all';
+  @state() private stateFilter = 'all';
+  @state() private harnessFilter = 'all';
+  @state() private filtersOpen = false;
+  @state() private searchRows: SDKChat[] = [];
+  @state() private searchLoading = false;
+  @state() private searchError = '';
+  @state() private searchWarnings: string[] = [];
+  private searchGeneration = 0;
+  private lastSearchArchiveRevision = 0;
+  private searchTimer?: number;
+  private searchAbort?: AbortController;
   @state() private pinError = '';
   @state() private pinnedMenuFor = '';
   @state() private pinnedMenuContext = false;
@@ -480,6 +503,25 @@ export class MuxChatList extends LitElement {
     .project-form mux-folder-picker { --folder-list-height:var(--ui-picker-trigger-compact-width); }
     .project-preview { overflow-wrap:anywhere; color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
     .project-actions { display:flex; justify-content:flex-end; gap:var(--ui-space-3); }
+    .search-controls { padding:var(--ui-space-1) var(--ui-space-2) var(--ui-space-3); }
+    .search-line { display:flex; align-items:center; min-width:0; gap:var(--ui-space-1); }
+    .search-field { position:relative; flex:1; min-width:0; }
+    .search-input { width:100%; --ui-control-sm:var(--ui-control-md); }
+    .search-input::part(input) { padding-inline-start:var(--ui-space-8); }
+    .search-input::part(input)::-webkit-search-cancel-button { display:none; }
+    .search-field:has(.search-clear) .search-input::part(input) { padding-inline-end:var(--ui-control-md); }
+    .search-icon { position:absolute; top:50%; left:var(--ui-space-3); transform:translateY(-50%); color:var(--ui-text-muted); pointer-events:none; line-height:0; }
+    .search-clear { position:absolute; top:0; right:0; --ui-control-sm:var(--ui-control-md); }
+    .filter-toggle { --ui-control-sm:var(--ui-control-md); }
+    .reset-filters { width:100%; }
+    .filter-fields { display:grid; gap:var(--ui-space-2); padding-top:var(--ui-space-3); }
+    .filter-fields label { display:grid; grid-template-columns:70px minmax(0,1fr); align-items:center; gap:var(--ui-space-2); color:var(--ui-text-muted); }
+    .filter-fields mux-ui-select { min-width:0; width:100%; --ui-control-sm:var(--ui-control-md); }
+    .result-status { margin:0 var(--ui-space-2) var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .result-status.error { color:var(--ui-danger); }
+    .current-result { margin:0 var(--ui-space-2) var(--ui-space-3); }
+    .current-result mux-ui-button { width:100%; }
+    .current-result span { display:block; padding:var(--ui-space-1) var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     @media(hover:none), (max-width:550px) {
       .pin-row:hover .pin-action:not(.more),.pin-row:focus-within .pin-action:not(.more) { display:none; }
       .pin-row .pin-action.more { display:inline-flex; }
@@ -491,14 +533,48 @@ export class MuxChatList extends LitElement {
     document.addEventListener('pointerdown', this.onPinnedOutsidePointer);
     document.addEventListener('keydown', this.onPinnedEscape);
     this.lastArchivedCount = sdkChats.archivedCount;
+    this.lastSearchArchiveRevision = sdkChats.archiveSearchRevision;
     this.unsub=sdkChats.subscribe(() => {
       this.version++;
       if (this.archiveExpanded && sdkChats.archivedCount !== this.lastArchivedCount) this.refreshArchive();
       this.lastArchivedCount = sdkChats.archivedCount;
+      if (sdkChats.archiveSearchRevision !== this.lastSearchArchiveRevision) {
+        this.lastSearchArchiveRevision = sdkChats.archiveSearchRevision;
+        if (this.searchActive) this.scheduleSearch();
+      }
     });
     void sdkChats.refresh();
   }
-  override disconnectedCallback() { this.removeEventListener('chat-open', this.onChatOpen); document.removeEventListener('pointerdown', this.onPinnedOutsidePointer); document.removeEventListener('keydown', this.onPinnedEscape); this.unsub?.(); super.disconnectedCallback(); }
+  override disconnectedCallback() { this.removeEventListener('chat-open', this.onChatOpen); document.removeEventListener('pointerdown', this.onPinnedOutsidePointer); document.removeEventListener('keydown', this.onPinnedEscape); this.unsub?.(); window.clearTimeout(this.searchTimer); this.searchAbort?.abort(); super.disconnectedCallback(); }
+  private get searchActive() { return !!this.searchText.trim() || this.archiveFilter !== 'all' || this.stateFilter !== 'all' || this.harnessFilter !== 'all'; }
+  private scheduleSearch() {
+    window.clearTimeout(this.searchTimer);
+    this.searchAbort?.abort();
+    const generation = ++this.searchGeneration;
+    if (!this.searchActive || this.archiveFilter === 'active') { this.searchRows = []; this.searchLoading = false; this.searchError = ''; this.searchWarnings = []; return; }
+    this.searchLoading = true;
+    this.searchRows = [];
+    this.searchError = '';
+    this.searchWarnings = [];
+    this.searchTimer = window.setTimeout(async () => {
+      const controller = new AbortController();
+      this.searchAbort = controller;
+      try {
+        const result = await sdkChats.searchArchived(this.searchText.trim(), controller.signal);
+        if (generation !== this.searchGeneration) return;
+        this.searchRows = result.chats;
+        this.searchWarnings = result.warnings;
+      } catch (error) {
+        if (generation !== this.searchGeneration || controller.signal.aborted) return;
+        this.searchError = `Could not search archived sessions: ${errorMessage(error)}`;
+      } finally { if (generation === this.searchGeneration) this.searchLoading = false; }
+    }, this.searchText.trim() ? 220 : 50);
+  }
+  private clearSearch() {
+    this.searchText = ''; this.archiveFilter = 'all'; this.stateFilter = 'all'; this.harnessFilter = 'all'; this.filtersOpen = false;
+    this.scheduleSearch();
+    this.renderRoot.querySelector<MuxUITextField>('.search-input')?.focus();
+  }
   override updated(changed: Map<string, unknown>) {
     if (changed.has('pinnedMovingChatId') && this.pinnedMenuFor) requestAnimationFrame(() => this.renderRoot.querySelector<MuxUIMenu>('.pin-row mux-ui-menu')?.focusFirst());
   }
@@ -698,20 +774,44 @@ export class MuxChatList extends LitElement {
     const projects = [...sdkChats.projects].sort((a,b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     const chats = [...sdkChats.chats].sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt) || a.id.localeCompare(b.id));
     const active = chats.filter(chat => !chat.archived);
-    const groups: ChatGroup[] = projects.map(project => ({ id:project.id, name:project.name, project, remoteHost:project.remoteHost, chats:active.filter(chat => chat.workspaceId === project.id && (chat.remoteHost || '') === (project.remoteHost || '')) }));
-    const ungrouped = active.filter(chat => !chat.remoteHost && (!chat.workspaceId || !projects.some(project => project.id === chat.workspaceId && !project.remoteHost)));
-    groups.unshift({ id:'ungrouped', name:'Chat', chats:ungrouped });
-    for (const host of sdkChats.remoteHosts) {
-      const remoteUngrouped = active.filter(chat => chat.remoteHost === host.id && (!chat.workspaceId || !projects.some(project => project.id === chat.workspaceId && project.remoteHost === host.id)));
-      if (remoteUngrouped.length) groups.push({ id:`ungrouped:${host.id}`, name:'Chat', remoteHost:host.id, chats:remoteUngrouped });
+    let groups: ChatGroup[];
+    let resultCount = 0;
+    if (this.searchActive) {
+      const query = this.searchText.trim().toLocaleLowerCase();
+      const connectedActive = active.filter(chat => !chat.remoteHost || sdkChats.remoteHosts.some(host => host.id === chat.remoteHost && host.state === 'connected'));
+      const matches = [...(this.archiveFilter === 'active' ? [] : this.searchRows), ...(this.archiveFilter === 'archived' ? [] : connectedActive)]
+        .filter(chat => (!query || `${chat.title} ${chat.projectPath}`.toLocaleLowerCase().includes(query))
+          && (this.harnessFilter === 'all' || chat.harness === this.harnessFilter)
+          && (this.stateFilter === 'all' || (this.stateFilter === 'working' ? chat.state === 'working' || chat.state === 'starting' : chat.state === this.stateFilter)))
+        .sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt) || a.id.localeCompare(b.id));
+      const unique = [...new Map(matches.map(chat => [`${chat.remoteHost || 'local'}:${chat.id}`,chat])).values()];
+      resultCount = unique.length;
+      groups = projects.map(project => ({id:project.id,name:project.name,project,remoteHost:project.remoteHost,chats:unique.filter(chat => chat.workspaceId === project.id && (chat.remoteHost || '') === (project.remoteHost || ''))})).filter(group => group.chats.length);
+      const ungrouped = unique.filter(chat => !chat.remoteHost && !groups.some(group => group.chats.includes(chat)));
+      if (ungrouped.length) groups.unshift({id:'ungrouped',name:'Chat',chats:ungrouped});
+      for (const host of sdkChats.remoteHosts) {
+        const rows = unique.filter(chat => chat.remoteHost === host.id && !groups.some(group => group.chats.includes(chat)));
+        if (rows.length) groups.push({id:`ungrouped:${host.id}`,name:'Chat',remoteHost:host.id,chats:rows});
+      }
+    } else {
+      groups = projects.map(project => ({ id:project.id, name:project.name, project, remoteHost:project.remoteHost, chats:active.filter(chat => chat.workspaceId === project.id && (chat.remoteHost || '') === (project.remoteHost || '')) }));
+      const ungrouped = active.filter(chat => !chat.remoteHost && (!chat.workspaceId || !projects.some(project => project.id === chat.workspaceId && !project.remoteHost)));
+      groups.unshift({ id:'ungrouped', name:'Chat', chats:ungrouped });
+      for (const host of sdkChats.remoteHosts) {
+        const remoteUngrouped = active.filter(chat => chat.remoteHost === host.id && (!chat.workspaceId || !projects.some(project => project.id === chat.workspaceId && project.remoteHost === host.id)));
+        if (remoteUngrouped.length) groups.push({ id:`ungrouped:${host.id}`, name:'Chat', remoteHost:host.id, chats:remoteUngrouped });
+      }
+      groups.push({ id:'archived', name:'Archived', archived:true, chats:this.archiveRows, archiveStart:this.archiveStart, total:this.archiveTotal, loading:this.archiveLoading, archiveError:this.archiveError });
     }
-    groups.push({ id:'archived', name:'Archived', archived:true, chats:this.archiveRows, archiveStart:this.archiveStart, total:this.archiveTotal, loading:this.archiveLoading, archiveError:this.archiveError });
+    const selectedChat = this.searchActive && this.selectedSession && !groups.some(group => group.chats.some(chat => chat.id === this.selectedSession))
+      ? chats.find(chat => chat.id === this.selectedSession) || {id:this.selectedSession,title:'Open current chat'} : undefined;
+    const unavailableHosts = sdkChats.remoteHosts.filter(host => host.state !== 'connected');
     const pinned: PinnedItem[] = [
       ...projects.filter(project => project.pinned).map(project => ({ kind:'project' as const, id:project.id, name:project.name, project })),
       ...active.filter(chat => chat.pinned).map(chat => ({ kind:'chat' as const, id:chat.id, name:chat.title, chat })),
     ];
     return html`
-      ${pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>
+      ${!this.searchActive && pinned.length ? html`<div class="pinned"><div class="heading">Pinned</div>
         ${repeat(pinned, item => `${item.kind}:${item.id}`, item => html`
           <div class="pin-row" ?selected=${item.kind === 'chat' && this.selectedSession === item.id} @contextmenu=${(event:MouseEvent) => this.showPinnedContext(event,item)}>
             ${item.kind === 'chat' && this.pinnedRenamingChatId === item.id ? html`
@@ -736,7 +836,33 @@ export class MuxChatList extends LitElement {
       </div>` : nothing}
       ${this.pinError ? html`<mux-ui-feedback class="pin-feedback" kind="error" appearance="panel" density="compact">${this.pinError}</mux-ui-feedback>` : nothing}
       <div class="heading-row"><div class="heading">Sessions</div><div class="heading-actions"><mux-ui-button icon-only size="small" variant="quiet" tone="muted" accessible-label="New folder" tooltip="New folder" @click=${() => void this.openProjectDialog()}>${icon(FolderPlus,{size:16})}</mux-ui-button></div></div>
-      ${repeat(groups, group => `${group.remoteHost || 'local'}:${group.id}`, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession} .drawer=${this.drawer} @archive-open=${() => this.openArchive()} @archive-visible=${(event:CustomEvent<{index:number}>) => this.onArchiveVisible(event.detail.index)} @archive-close=${() => this.closeArchive()}></mux-chat-workspace>`)}
+      <div class="search-controls" role="search" aria-label="Find sessions">
+        <div class="search-line">
+          <div class="search-field">
+            <mux-ui-text-field class="search-input" type="search" size="small" aria-label="Search sessions by title or folder" placeholder="Find sessions" autocomplete="off" .value=${this.searchText}
+              @input=${(event:Event) => { this.searchText=(event.target as MuxUITextField).value.slice(0,512); this.scheduleSearch(); }}
+              @keydown=${(event:KeyboardEvent) => { if (event.key === 'Escape' && this.searchActive) this.clearSearch(); }}></mux-ui-text-field>
+            <span class="search-icon" aria-hidden="true">${icon(Search,{size:15})}</span>
+            ${this.searchText ? html`<mux-ui-button class="search-clear" icon-only size="small" variant="quiet" tone="muted" accessible-label="Clear search" @click=${() => { this.searchText=''; this.scheduleSearch(); this.renderRoot.querySelector<MuxUITextField>('.search-input')?.focus(); }}>${icon(X,{size:14})}</mux-ui-button>` : nothing}
+          </div>
+          <mux-ui-button class="filter-toggle" icon-only size="small" variant="quiet" tone="muted" toggle .pressed=${this.archiveFilter !== 'all' || this.stateFilter !== 'all' || this.harnessFilter !== 'all'} expandable .expanded=${this.filtersOpen} .controls=${'session-filters'} accessible-label="Filter sessions" tooltip="Filter sessions" @click=${() => { this.filtersOpen=!this.filtersOpen; }}>${icon(Filter,{size:16})}</mux-ui-button>
+        </div>
+        ${this.filtersOpen ? html`<div class="filter-fields" id="session-filters">
+          <label>Archive<mux-ui-select size="small" aria-label="Archive status" .value=${this.archiveFilter} .options=${ARCHIVE_FILTER_OPTIONS} @change=${(event:Event) => { this.archiveFilter=(event.target as MuxUISelect).value; this.scheduleSearch(); }}></mux-ui-select></label>
+          <label>State<mux-ui-select size="small" aria-label="Session state" .value=${this.stateFilter} .options=${STATE_FILTER_OPTIONS} @change=${(event:Event) => { this.stateFilter=(event.target as MuxUISelect).value; this.scheduleSearch(); }}></mux-ui-select></label>
+          <label>Harness<mux-ui-select size="small" aria-label="Session harness" .value=${this.harnessFilter} .options=${HARNESS_FILTER_OPTIONS} @change=${(event:Event) => { this.harnessFilter=(event.target as MuxUISelect).value; this.scheduleSearch(); }}></mux-ui-select></label>
+          ${this.searchActive ? html`<mux-ui-button class="reset-filters" variant="quiet" size="small" @click=${() => this.clearSearch()}>Clear search and filters</mux-ui-button>` : nothing}
+        </div>` : nothing}
+      </div>
+      ${this.searchActive ? html`
+        ${selectedChat ? html`<div class="current-result"><span>Current chat</span><mux-ui-button full-width align="start" size="small" variant="secondary" @click=${() => this.dispatchEvent(new CustomEvent('chat-open',{detail:{sessionId:selectedChat.id},bubbles:true,composed:true}))}>${selectedChat.title}</mux-ui-button></div>` : nothing}
+        ${!sdkChats.inventoryReady ? html`<p class="result-status" role="status">Loading sessions…</p>` : this.searchLoading ? html`<p class="result-status" role="status">Searching archived sessions…</p>` : html`<p class="result-status" role="status">${resultCount} ${resultCount === 1 ? 'session' : 'sessions'} found</p>`}
+        ${this.searchError ? html`<p class="result-status error" role="alert">${this.searchError} <mux-ui-button variant="quiet" size="small" @click=${() => this.scheduleSearch()}>Retry</mux-ui-button></p>` : nothing}
+        ${this.searchWarnings.map(warning => html`<p class="result-status error" role="alert">${warning}</p>`)}
+        ${unavailableHosts.length ? html`<p class="result-status error" role="alert">Sessions on ${unavailableHosts.map(host => host.name).join(', ')} are unavailable. Reconnect to search them.</p>` : nothing}
+        ${sdkChats.inventoryReady && !this.searchLoading && !this.searchError && !this.searchWarnings.length && !unavailableHosts.length && !resultCount ? html`<p class="result-status">No sessions match. Try another title, folder, or filter.</p>` : nothing}
+      ` : nothing}
+      ${repeat(groups, group => `${this.searchActive ? 'filter' : 'list'}:${group.remoteHost || 'local'}:${group.id}`, group => html`<mux-chat-workspace .model=${group} .selectedSession=${this.selectedSession} .drawer=${this.drawer} .filtered=${this.searchActive} @archive-open=${() => this.openArchive()} @archive-visible=${(event:CustomEvent<{index:number}>) => this.onArchiveVisible(event.detail.index)} @archive-close=${() => this.closeArchive()}></mux-chat-workspace>`)}
       ${this.projectDialogOpen ? html`<mux-ui-dialog open size="compact" presentation="adaptive" label="New folder" .dismissable=${!this.projectCreating} @dismiss=${() => this.closeProjectDialog()}><div class="project-form">
         <h2>New folder</h2>
         <label class="field-label">Parent folder<mux-folder-picker inline label="Parent folder" .value=${this.projectParent} .base=${this.projectParent} @folder-selected=${(event:CustomEvent<{path:string}>) => { this.projectParent=event.detail.path; }}></mux-folder-picker></label>
