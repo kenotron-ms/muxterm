@@ -68,8 +68,8 @@ export class MuxChatCoordination extends LitElement {
     * { box-sizing:border-box; }
 
     .wrap { max-width:var(--ui-chat-content-width); margin:0 auto; padding:var(--ui-space-9) var(--ui-space-9) var(--ui-space-13); }
-    .detail-wrap { max-width:1180px; }
-    .detail-view { max-width:1060px; }
+    .detail-wrap { max-width:var(--ui-work-wrap-width); }
+    .detail-view { max-width:var(--ui-work-detail-width); }
     h2,h3,p { margin:0; }
     h2 { font-size:var(--ui-text-3xl); line-height:1.15; letter-spacing:-.035em; }
     h3 { font-size:var(--ui-text-md); line-height:1.35; }
