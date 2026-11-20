@@ -173,7 +173,8 @@ export class MuxGlobalPalette extends LitElement {
     for (let index=0;index<Math.min(4,projects.length);index++) jobs.push({label:'Files',promise:fileWorker()});
     const results=await Promise.allSettled(jobs.map(job => job.promise));
     window.clearTimeout(deadline);
-    if (generation!==this.generation || (controller.signal.aborted && !timedOut)) return;
+    if (generation!==this.generation) return;
+    if (controller.signal.aborted && !timedOut) { this.loading=false; return; }
     const previousRows=this.rows();
     const selectedKey=previousRows[Math.max(0,Math.min(this.active,previousRows.length-1))]?.key;
     this.remoteRows=results.flatMap(result => result.status==='fulfilled' ? result.value : []);
@@ -213,7 +214,12 @@ export class MuxGlobalPalette extends LitElement {
     return [...recalled,...ACTIONS.filter(row => !recalled.some(recentRow => recentRow.key===row.key)),...active.slice(0,6).filter(row => !recalled.some(recentRow => recentRow.key===row.key))].slice(0,14);
   }
   private choose(row:Row) {
+    this.recentRows.delete(row.key);
     this.recentRows.set(row.key,row);
+    if (this.recentRows.size>12) {
+      const oldest=this.recentRows.keys().next().value;
+      if (oldest) this.recentRows.delete(oldest);
+    }
     try { const previous=JSON.parse(localStorage.getItem(RECENT_KEY)||'[]') as string[]; localStorage.setItem(RECENT_KEY,JSON.stringify([row.key,...previous.filter(key => key!==row.key)].slice(0,12))); } catch { /* storage unavailable */ }
     this.dispatchEvent(new CustomEvent<PaletteTarget>('palette-select',{detail:row.target,bubbles:true,composed:true}));
   }

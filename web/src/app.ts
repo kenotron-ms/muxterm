@@ -575,6 +575,7 @@ export class MuxApp extends LitElement {
   @state() private _paletteScope: PaletteScope = 'all';
   @state() private _paletteProjectPanel: SDKProject | null = null;
   private _paletteReturnFocus: HTMLElement | null = null;
+  private _paletteProjectReturnFocus: HTMLElement | null = null;
   @state() private _connectionSelection = 'github';
   @state() private _newChatFolder = '';
   @state() private _newChatProject = '';
@@ -758,6 +759,7 @@ export class MuxApp extends LitElement {
     this._paletteOpen = false;
     this._paletteProjectPanel = null;
     this._paletteReturnFocus = null;
+    this._paletteProjectReturnFocus = null;
     this._closeDrawer();
     this._showReconnectOverlay = true;
   }
@@ -1626,7 +1628,7 @@ export class MuxApp extends LitElement {
           <div class="overlay-body">${this._renderSettings()}</div>
         </mux-ui-dialog>
       ` : ''}
-      ${this._paletteProjectPanel ? html`<dialog class="palette-project-panel" aria-label=${`Project ${this._paletteProjectPanel.name}`} @cancel=${(event: Event) => { event.preventDefault(); this._paletteProjectPanel=null; }}><mux-sdk-utility project-mode .sessionId=${`project:${this._paletteProjectPanel.id}`} .projectId=${this._paletteProjectPanel.id} .projectPath=${this._paletteProjectPanel.path} .remoteHost=${this._paletteProjectPanel.remoteHost||''} @close=${() => { this._paletteProjectPanel=null; }}></mux-sdk-utility></dialog>` : ''}
+      ${this._paletteProjectPanel ? html`<dialog class="palette-project-panel" aria-label=${`Project ${this._paletteProjectPanel.name}`} @cancel=${(event: Event) => { event.preventDefault(); this._closePaletteProjectPanel(); }}><mux-sdk-utility project-mode .sessionId=${`project:${this._paletteProjectPanel.id}`} .projectId=${this._paletteProjectPanel.id} .projectPath=${this._paletteProjectPanel.path} .remoteHost=${this._paletteProjectPanel.remoteHost||''} @close=${this._closePaletteProjectPanel}></mux-sdk-utility></dialog>` : ''}
       <mux-global-palette .open=${this._paletteOpen} .scope=${this._paletteScope} @palette-dismiss=${this._onPaletteDismiss} @palette-select=${this._onPaletteSelect}></mux-global-palette>
       ${this._showReconnectOverlay
         ? html`<mux-reconnect-overlay
@@ -2401,10 +2403,22 @@ export class MuxApp extends LitElement {
     void this.updateComplete.then(() => { if (focus?.isConnected) focus.focus({preventScroll:true}); });
   };
   private _onPaletteSelect = (event: CustomEvent<PaletteTarget>): void => {
+    const target=event.detail;
+    this._paletteProjectReturnFocus = target.kind==='project' || ((target.kind==='file' || target.kind==='work') && !target.chat) ? this._paletteReturnFocus : null;
     this._paletteOpen = false;
     this._paletteReturnFocus = null;
     this._overlayPanel = null;
-    void this._navigatePaletteTarget(event.detail);
+    void this._navigatePaletteTarget(target);
+  };
+  private _closePaletteProjectPanel = (): void => {
+    this._paletteProjectPanel = null;
+    const focus=this._paletteProjectReturnFocus;
+    this._paletteProjectReturnFocus=null;
+    void this.updateComplete.then(() => {
+      const fallback=this.renderRoot.querySelector('mux-sidebar, mux-title-bar.mobile-title-bar')?.shadowRoot?.querySelector<HTMLElement>('mux-ui-button[accessible-label="Search and launch"]');
+      const sidebarToggle=this.renderRoot.querySelector<HTMLElement>('.sidebar-toggle-position mux-ui-button');
+      (focus?.isConnected ? focus : fallback || sidebarToggle)?.focus({preventScroll:true});
+    });
   };
   private async _navigatePaletteTarget(target: PaletteTarget): Promise<void> {
     if (target.kind === 'action') {
