@@ -232,6 +232,8 @@ var expectedMCPTools = []string{
 	"get_chat_goal",
 	"control_chat_goal",
 	"list_chats",
+	"list_archived_chats",
+	"archive_chat",
 	"search_chats",
 	"list_projects",
 	"list_chat_sessions",
@@ -259,8 +261,8 @@ var expectedMCPTools = []string{
 	"list_triggers",
 }
 
-// TestMCPToolsListReturns54Tools checks the manager's advertised surface.
-func TestMCPToolsListReturns54Tools(t *testing.T) {
+// TestMCPToolsListChecksSurface checks the manager's advertised surface.
+func TestMCPToolsListChecksSurface(t *testing.T) {
 	bin := buildTestBinary(t)
 	assertToolNames(t, mcpToolNames(t, bin, ""), expectedMCPTools)
 }

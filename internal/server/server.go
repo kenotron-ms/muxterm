@@ -446,6 +446,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("PATCH /api/sdk-chats/{id}/project", protect(http.HandlerFunc(s.handleSDKChatProject)))
 	s.mux.Handle("POST /api/chat-ui/navigate", protect(http.HandlerFunc(s.handleChatUINavigation)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/archive", protect(http.HandlerFunc(s.handleSDKChatArchive)))
 	s.mux.Handle("GET /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("PATCH /api/sdk-chats/{id}/settings", protect(http.HandlerFunc(s.handleSDKChatSettings)))
 	s.mux.Handle("POST /api/sdk-chats/{id}", protect(http.HandlerFunc(s.handleSDKChat)))

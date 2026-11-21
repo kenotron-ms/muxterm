@@ -115,6 +115,8 @@ func agentChatPathAllowed(method, path string) bool {
 		return method == http.MethodGet
 	case "control-send":
 		return method == http.MethodPost
+	case "archive":
+		return method == http.MethodPost
 	case "control-notes":
 		return method == http.MethodPost
 	default:

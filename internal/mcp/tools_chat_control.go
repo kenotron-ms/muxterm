@@ -42,7 +42,7 @@ func (pt *publishTools) chatDiscovery(args map[string]any) ([]discoverChat, []di
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	chatBody, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats", nil)
+	chatBody, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats?archived=false", nil)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -100,7 +100,7 @@ func (pt *publishTools) chatDiscovery(args map[string]any) ([]discoverChat, []di
 func registerChatControlTools(srv *Server) {
 	registerGoalControlTools(srv)
 	pt := newPublishTools()
-	srv.Register("list_chats", "List every addressable Chat on this muxterm serve process. IDs can be passed unchanged to send_chat_message. Set machine to a connected remote ID to address its Chats.",
+	srv.Register("list_chats", "List active Chats on this muxterm serve process. IDs can be passed unchanged to send_chat_message. Use list_archived_chats for archived Chats. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{})},
 		func(args map[string]any) (string, error) {
 			chats, _, _, err := pt.chatDiscovery(args)
@@ -108,6 +108,50 @@ func registerChatControlTools(srv *Server) {
 				return "", err
 			}
 			return jsonText(map[string]any{"chats": chats}), nil
+		})
+	srv.Register("list_archived_chats", "List one page of archived Chats without restoring them. The stable IDs remain usable with get_chat_transcript. Set machine to a connected remote ID to address its Chats.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"page": map[string]any{"type": "integer", "description": "zero-based page of 25 chats; default 0"}})},
+		func(args map[string]any) (string, error) {
+			page := 0
+			if _, present := args["page"]; present {
+				var err error
+				page, err = argInt(args, "page")
+				if err != nil {
+					return "", err
+				}
+			}
+			if page < 0 {
+				return "", fmt.Errorf("page must be nonnegative")
+			}
+			machine, err := pt.chatMachine(args)
+			if err != nil {
+				return "", err
+			}
+			body, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats?archived=true&page="+strconv.Itoa(page), nil)
+			if err != nil {
+				return "", err
+			}
+			var result struct {
+				Chats []json.RawMessage `json:"chats"`
+				Total int               `json:"total"`
+			}
+			if err := json.Unmarshal(body, &result); err != nil {
+				return "", fmt.Errorf("decode archived chats: %w", err)
+			}
+			return jsonText(map[string]any{"machine": machine, "page": page, "total": result.Total, "chats": result.Chats}), nil
+		})
+	srv.Register("archive_chat", "Archive exactly one Chat by stable session ID through the same server action as the UI. Preserves its transcript and returns the archived Chat. A repeat call returns its current archived state; working chats and active Work owners are refused. Set machine to a connected remote ID to address its Chats.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"session_id": map[string]any{"type": "string", "description": "stable Chat session ID"}}), "required": []string{"session_id"}},
+		func(args map[string]any) (string, error) {
+			id, err := argString(args, "session_id")
+			if err != nil {
+				return "", err
+			}
+			if strings.TrimSpace(id) == "" {
+				return "", fmt.Errorf("session_id must not be empty")
+			}
+			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-chats/"+url.PathEscape(id)+"/archive", nil)
+			return string(result), err
 		})
 	srv.Register("search_chats", "Search addressable Chats by case-insensitive substring in title, project name, or project path. Set include_content to also search accepted inputs and assistant text. Results carry IDs usable by send_chat_message. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
@@ -165,7 +209,7 @@ func registerChatControlTools(srv *Server) {
 	srv.Register("list_chat_sessions", "List addressable Chats with stable IDs, project, harness, title, current state, last activity and recent output. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{})},
 		func(args map[string]any) (string, error) {
-			chats, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats", nil)
+			chats, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats?archived=false", nil)
 			if err != nil {
 				return "", err
 			}
