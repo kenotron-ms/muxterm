@@ -9,7 +9,11 @@ permissions:
   contents: write
 
 jobs:
+  linux-arm64:
+    uses: ./.github/workflows/linux-arm64.yml
+
   release:
+    needs: linux-arm64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +33,12 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
+
+      - name: Download verified Linux arm64 archive
+        uses: actions/download-artifact@v4
+        with:
+          name: muxterm-linux-arm64
+          path: dist-arm64
 
       - name: Generate Homebrew tap token
         uses: actions/create-github-app-token@v2

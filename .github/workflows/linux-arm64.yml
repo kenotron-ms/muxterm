@@ -1,0 +1,104 @@
+name: Linux arm64
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install PAM development headers
+        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
+
+      - name: Build embedded web assets
+        run: npm --prefix web ci --prefer-offline && npm --prefix web run build
+
+      - name: Build, run, and inspect native arm64 binary
+        run: |
+          version=dev
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          mkdir -p arm64-package/internal/amplifierchat/sidecar
+          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=$version" -o arm64-package/muxterm ./cmd/muxterm
+          test "$(arm64-package/muxterm version)" = "muxterm $version (MCP: stdio)"
+          readelf -h arm64-package/muxterm | grep -E 'Machine:.*AArch64'
+          ldd arm64-package/muxterm | grep -F 'libpam.so.0 =>'
+          cp README.md LICENSE arm64-package/
+          cp internal/amplifierchat/sidecar/main.py internal/amplifierchat/sidecar/loop-live-requirements.txt arm64-package/internal/amplifierchat/sidecar/
+          tar -C arm64-package -czf muxterm_linux_arm64.tar.gz muxterm README.md LICENSE internal/amplifierchat/sidecar/main.py internal/amplifierchat/sidecar/loop-live-requirements.txt
+          tar -tzf muxterm_linux_arm64.tar.gz
+          sha256sum muxterm_linux_arm64.tar.gz
+
+      - name: Exercise installer archive selection and checksum in isolated container
+        run: |
+          expected_version=dev
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            expected_version="${GITHUB_REF_NAME#v}"
+          fi
+          fixture="$RUNNER_TEMP/arm64-installer"
+          mkdir -p "$fixture/bin" "$fixture/release"
+          cp muxterm_linux_arm64.tar.gz "$fixture/release/"
+          (cd "$fixture/release" && sha256sum muxterm_linux_arm64.tar.gz > checksums.txt)
+          printf '%064d  muxterm_linux_arm64.tar.gz\n' 0 > "$fixture/release/bad-checksums.txt"
+          cat > "$fixture/bin/curl" <<'EOF'
+          #!/bin/sh
+          set -eu
+          while [ "$#" -gt 0 ]; do
+            case "$1" in
+              -o) dest="$2"; shift 2 ;;
+              -*) shift ;;
+              *) url="$1"; shift ;;
+            esac
+          done
+          case "$url" in
+            */muxterm_linux_arm64.tar.gz) src=/fixture/release/muxterm_linux_arm64.tar.gz ;;
+            */checksums.txt)
+              src=/fixture/release/checksums.txt
+              if [ "${MUXTERM_TEST_BAD_CHECKSUM:-}" = 1 ]; then src=/fixture/release/bad-checksums.txt; fi
+              ;;
+            *) echo "unexpected download: $url" >&2; exit 1 ;;
+          esac
+          cp "$src" "$dest"
+          EOF
+          chmod +x "$fixture/bin/curl"
+          docker run --rm --platform linux/arm64 \
+            -e MUXTERM_EXPECTED_VERSION="$expected_version" \
+            -v "$PWD/install.sh:/fixture/install.sh:ro" \
+            -v "$fixture/bin:/fixture/bin:ro" \
+            -v "$fixture/release:/fixture/release:ro" \
+            ubuntu:24.04 bash -euo pipefail -c '
+              test "$(uname -m)" = aarch64
+              # Stop before service setup; all download, checksum, extraction,
+              # and binary installation logic above it is unchanged.
+              awk '\''/^# Service setup \/ restart$/{exit} {print}'\'' /fixture/install.sh > /tmp/install-archive-only.sh
+              PATH=/fixture/bin:$PATH HOME=/tmp/muxterm-home bash /tmp/install-archive-only.sh --version v0.0.0 --no-modify-path
+              test "$(/tmp/muxterm-home/.local/bin/muxterm version)" = "muxterm $MUXTERM_EXPECTED_VERSION (MCP: stdio)"
+              if MUXTERM_TEST_BAD_CHECKSUM=1 PATH=/fixture/bin:$PATH HOME=/tmp/muxterm-home bash /tmp/install-archive-only.sh --version v0.0.0 --no-modify-path; then
+                echo "installer accepted a bad checksum" >&2
+                exit 1
+              fi
+            '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxterm-linux-arm64
+          path: muxterm_linux_arm64.tar.gz
+          if-no-files-found: error
