@@ -56,8 +56,12 @@ func applyWorkPlan(item *sdkWorkItem, plan *[]sdkWorkStep, changes []sdkWorkStep
 			old[step.ID] = step
 		}
 		for _, step := range *plan {
-			if previous, exists := old[step.ID]; exists && (previous.Title != step.Title || previous.Status != step.Status) {
-				return fmt.Errorf("existing step %s must keep its title and status during replan", step.ID)
+			if previous, exists := old[step.ID]; exists {
+				if previous.Title != step.Title || previous.Status != step.Status {
+					return fmt.Errorf("existing step %s must keep its title and status during replan", step.ID)
+				}
+			} else if step.Status != "pending" {
+				return fmt.Errorf("new step %s must start pending; use stepUpdates to record its progress", step.ID)
 			}
 		}
 		for _, step := range steps {

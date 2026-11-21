@@ -132,7 +132,8 @@ action. The response includes the current record and owner unread-comment
 attention. Report on claim, meaningful milestones, blockers, replans, and
 completion; read and acknowledge comments before review or done. Replanning
 sends the full plan and `plan_reason`; changing `plan_protocol` also requires
-that explicit replan. Activity retains attributed before/after steps. Done or
+that explicit replan. New steps start pending and can advance through
+`step_updates` in the same call. Activity retains attributed before/after steps. Done or
 skipped steps cannot be rewritten, and Work cannot be done while planned steps
 remain pending, in progress, or blocked. Older Work without a plan still works.
 The Work progress count and bar use steps that are not skipped; skipped steps
