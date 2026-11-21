@@ -23,20 +23,29 @@ FIXTURE = Path("/fixture")
 HOST = "http://127.0.0.1:8765"
 APP = "http://127.0.0.1:8766"
 mode = "missing"
+mode_lock = threading.Lock()
+
+
+def set_mode(value):
+    global mode
+    with mode_lock:
+        mode = value
 
 
 class ReleaseHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        with mode_lock:
+            current_mode = mode
         if self.path == "/release.json":
             assets = [{"name": "checksums.txt", "browser_download_url": HOST + "/checksums.txt"}]
-            if mode != "missing":
+            if current_mode != "missing":
                 assets.append({"name": ASSET, "browser_download_url": HOST + "/" + ASSET})
             self.reply(json.dumps({"tag_name": TAG, "assets": assets}).encode(), "application/json")
         elif self.path == "/checksums.txt":
-            data = ("0" * 64 + "  " + ASSET + "\n").encode() if mode == "bad" else (FIXTURE / "checksums.txt").read_bytes()
+            data = ("0" * 64 + "  " + ASSET + "\n").encode() if current_mode == "bad" else (FIXTURE / "checksums.txt").read_bytes()
             self.reply(data, "text/plain")
         elif self.path == "/" + ASSET:
-            data = b"corrupt archive" if mode == "bad" else (FIXTURE / ASSET).read_bytes()
+            data = b"corrupt archive" if current_mode == "bad" else (FIXTURE / ASSET).read_bytes()
             self.reply(data, "application/gzip")
         else:
             self.send_error(404)
@@ -113,10 +122,10 @@ with tempfile.TemporaryDirectory(prefix="muxterm-arm64-update-") as root:
         print("actionable status:", json.dumps(status, sort_keys=True), flush=True)
 
         expect_apply_failure('has no asset "' + ASSET + '"', original_hash)
-        mode = "bad"
+        set_mode("bad")
         request("/api/update/check", "POST")
         expect_apply_failure("checksum mismatch", original_hash)
-        mode = "good"
+        set_mode("good")
         request("/api/update/check", "POST")
         code, applied = request("/api/update/apply", "POST")
         assert code == 200 and applied["version"] == TARGET_VERSION, applied

@@ -113,8 +113,8 @@ jobs:
           fixture="$RUNNER_TEMP/arm64-self-update"
           mkdir -p "$fixture"
           CGO_ENABLED=1 go build -ldflags '-s -w -X main.version=0.52.149' -o "$fixture/older-muxterm" ./cmd/muxterm
-          curl -fsSL "https://github.com/kenotron-ms/muxterm/releases/download/v0.52.150/muxterm_linux_arm64.tar.gz" -o "$fixture/muxterm_linux_arm64.tar.gz"
-          curl -fsSL "https://github.com/kenotron-ms/muxterm/releases/download/v0.52.150/checksums.txt" -o "$fixture/checksums.txt"
+          curl -fsSL --retry 3 "https://github.com/kenotron-ms/muxterm/releases/download/v0.52.150/muxterm_linux_arm64.tar.gz" -o "$fixture/muxterm_linux_arm64.tar.gz"
+          curl -fsSL --retry 3 "https://github.com/kenotron-ms/muxterm/releases/download/v0.52.150/checksums.txt" -o "$fixture/checksums.txt"
           (cd "$fixture" && sha256sum --ignore-missing -c checksums.txt)
           cp scripts/verify-arm64-self-update.py "$fixture/verify.py"
           docker run --rm --platform linux/arm64 \
