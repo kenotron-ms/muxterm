@@ -418,6 +418,10 @@ export class MuxChatCoordination extends LitElement {
   private detailView() {
     const item = this.detail;
     if (!item) return nothing;
+    const planSteps = item.plan || [];
+    const countableSteps = planSteps.filter(step => step.status !== 'skipped');
+    const doneCount = countableSteps.filter(step => step.status === 'done').length;
+    const skippedCount = planSteps.length - countableSteps.length;
     const updates = [...(item.updates || [])].reverse();
     const state = this.status(item);
     const stateClass = item.status === 'blocked' ? 'blocked' : item.status === 'done' ? 'done' : item.waitingOn?.length ? 'waiting' : '';
@@ -428,7 +432,7 @@ export class MuxChatCoordination extends LitElement {
       ${item.status !== 'open' && !item.goalCondition ? html`<p class="lead">${item.brief || 'No description yet.'}</p>` : nothing}
       ${item.status === 'open' || item.goalCondition ? html`<mux-work-goal-review .item=${item} .remoteHost=${this.remoteHost} @work-goal-updated=${(event:CustomEvent<WorkItem>) => { this.detail=event.detail; void this.refresh(); }}></mux-work-goal-review>` : nothing}
       ${item.nextAction || item.blockedReason ? html`<section class=${`next ${item.status === 'blocked' ? 'blocked' : ''}`}><h3>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</h3><p>${item.blockedReason || item.nextAction}</p></section>` : nothing}
-      ${item.plan?.length ? html`<section class="plan" aria-labelledby="work-plan-title"><div class="plan-head"><h3 id="work-plan-title">Plan</h3><span class="plan-count">${item.plan.filter(step => step.status === 'done').length} of ${item.plan.length} steps done${item.plan.some(step => step.status === 'blocked') ? ' · blocked' : ''}</span></div><progress aria-label="Work plan steps done" .value=${item.plan.filter(step => step.status === 'done').length} .max=${item.plan.length}></progress><ol class="plan-list">${item.plan.map(step => html`<li><span class=${`step-state ${step.status}`}>${step.status === 'in_progress' ? 'In progress' : step.status.charAt(0).toUpperCase() + step.status.slice(1)}</span><span class="step-title">${step.title}</span></li>`)}</ol>${item.planProtocol ? html`<p class="plan-protocol"><strong>Update protocol:</strong> ${item.planProtocol}</p>` : nothing}</section>` : nothing}
+      ${planSteps.length ? html`<section class="plan" aria-labelledby="work-plan-title"><div class="plan-head"><h3 id="work-plan-title">Plan</h3><span class="plan-count">${doneCount} of ${countableSteps.length} steps done${skippedCount ? ` · ${skippedCount} skipped` : ''}${planSteps.some(step => step.status === 'blocked') ? ' · blocked' : ''}</span></div>${countableSteps.length ? html`<progress aria-label="Work plan steps done" .value=${doneCount} .max=${countableSteps.length}></progress>` : nothing}<ol class="plan-list">${planSteps.map(step => html`<li><span class=${`step-state ${step.status}`}>${step.status === 'in_progress' ? 'In progress' : step.status.charAt(0).toUpperCase() + step.status.slice(1)}</span><span class="step-title">${step.title}</span></li>`)}</ol>${item.planProtocol ? html`<p class="plan-protocol"><strong>Update protocol:</strong> ${item.planProtocol}</p>` : nothing}</section>` : nothing}
       ${item.progress ? html`<section class="section"><h3>Where things stand</h3><p>${item.progress.length > 160 || item.progress.includes('\n') ? activityPreview(item.progress) : item.progress}</p></section>` : nothing}
       ${item.status !== 'open' && !item.goalCondition && item.acceptanceCriteria ? html`<section class="section"><h3>How we'll know it worked</h3><p>${item.acceptanceCriteria}</p></section>` : nothing}
       ${item.outcome ? html`<section class="section"><h3>Outcome</h3><p>${item.outcome}</p></section>` : nothing}

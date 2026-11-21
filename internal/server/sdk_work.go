@@ -960,6 +960,9 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Plan != nil || req.PlanProtocol != nil || len(req.StepUpdates) > 0 {
+		// Same-user external tools and authenticated humans administer Work;
+		// chat-origin calls must come from the current owner. This mirrors the
+		// existing assignment boundary without trusting a claimed session ID.
 		if (actor.Kind == "chat" || actor.Kind == "remote-chat") && actor.SessionID != item.OwnerSessionID && !(item.OwnerSessionID == "" && actor.SessionID == h.workCreatorLocked(item).SessionID && len(req.StepUpdates) == 0) {
 			h.mu.Unlock()
 			http.Error(w, "only the owner can update Work steps; creator can plan unassigned Work", 403)
