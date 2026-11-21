@@ -45,6 +45,18 @@ func (s *Server) agentRemoteChatRequest(r *http.Request) bool {
 	return r.PathValue("id") != "" && path != r.URL.Path && agentChatPathAllowed(r.Method, path)
 }
 
+// chat-connect replaces Authorization with the remote server's local token.
+// The home server has already resolved the sender capability and overwritten
+// X-Muxterm-Remote-Origin-Chat before forwarding through SSH.
+func (s *Server) remoteAgentChatRequest(r *http.Request) bool {
+	if r.Header.Get("X-Muxterm-Remote-Chat") != "1" || r.Header.Get("X-Muxterm-Agent") != "1" ||
+		r.Header.Get("X-Muxterm-Remote-Origin-Chat") == "" || s.localToken == "" {
+		return false
+	}
+	token, ok := bearerToken(r)
+	return ok && subtle.ConstantTimeCompare([]byte(token), []byte(s.localToken)) == 1 && agentChatPathAllowed(r.Method, r.URL.Path)
+}
+
 func agentChatPathAllowed(method, path string) bool {
 	if path == "/api/sdk-work" {
 		return method == http.MethodGet || method == http.MethodPost
@@ -52,7 +64,7 @@ func agentChatPathAllowed(method, path string) bool {
 	if strings.HasPrefix(path, "/api/sdk-work/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/api/sdk-work/"), "/")
 		return (len(parts) == 1 && parts[0] != "" && method == http.MethodGet) ||
-			(len(parts) == 2 && parts[0] != "" && (parts[1] == "updates" || parts[1] == "start") && method == http.MethodPost) ||
+			(len(parts) == 2 && parts[0] != "" && (parts[1] == "updates" || parts[1] == "comments" || parts[1] == "start") && method == http.MethodPost) ||
 			(len(parts) == 3 && parts[0] != "" && parts[1] == "dispatch" && parts[2] == "reset" && method == http.MethodPost)
 	}
 	if path == "/api/sdk-chats" {

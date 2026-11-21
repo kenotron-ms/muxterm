@@ -168,6 +168,25 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-work/"+url.PathEscape(id), nil)
 			return string(result), err
 		})
+	srv.Register("comment_work_item", "Post an attributed, idempotent coordination comment on Work. Comments appear in the activity list, do not change Work status or progress, and are never injected as owner chat prompts. Read get_work_item to inspect replies.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp, "text": stringProp}), "required": []string{"work_id", "client_ref", "text"}},
+		func(args map[string]any) (string, error) {
+			id, err := argString(args, "work_id")
+			if err != nil {
+				return "", err
+			}
+			ref, err := argString(args, "client_ref")
+			if err != nil {
+				return "", err
+			}
+			comment, err := argString(args, "text")
+			if err != nil {
+				return "", err
+			}
+			body, _ := json.Marshal(map[string]string{"clientRef": ref, "text": comment})
+			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-work/"+url.PathEscape(id)+"/comments", body)
+			return string(result), err
+		})
 	srv.Register("start_work_item", "Manually ask Muxterm to dispatch a filed Work item when the project's scheduler is playing, has capacity, and dependencies are done. Muxterm selects a suitable goal-free chat or creates one, installs the filed condition as its native Chat Goal, records a dispatch receipt, and asks it to claim. Inspect uncertain delivery before retrying. Reusing client_ref is idempotent.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp}), "required": []string{"work_id", "client_ref"}},
 		func(args map[string]any) (string, error) {

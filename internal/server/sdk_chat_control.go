@@ -29,7 +29,10 @@ type sdkControlReceipt struct {
 	Detail    string          `json:"detail,omitempty"`
 	CreatedAt time.Time       `json:"createdAt"`
 	Origin    *sdkEventOrigin `json:"origin,omitempty"`
+	WorkID    string          `json:"workId,omitempty"` // Server-owned kickoff association.
 }
+
+type sdkWorkKickoffContextKey struct{}
 
 func (h *sdkChatHost) controlPath(id, key string) string {
 	sum := sha256.Sum256([]byte(key))
@@ -63,6 +66,88 @@ func (h *sdkChatHost) acceptedEventLocked(id, inputID string) bool {
 		}
 	}
 	return false
+}
+
+// A harness can acknowledge an input before its next model request. Work must
+// not become protected while a peer input remains queued in that harness.
+// Caller holds workSendMu, so no new control send can cross this file scan.
+func (h *sdkChatHost) unresolvedPeerControlLocked(id string) (bool, error) {
+	entries, err := os.ReadDir(filepath.Join(h.dir, "control", id))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	accepted := map[string]bool{}
+	open := map[string]bool{}
+	terminal := map[string]bool{}
+	f, err := os.Open(filepath.Join(h.dir, id+".ndjson"))
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if err == nil {
+		scan := bufio.NewScanner(f)
+		scan.Buffer(make([]byte, 64*1024), 8*1024*1024)
+		for scan.Scan() {
+			var event sdkEvent
+			if json.Unmarshal(scan.Bytes(), &event) != nil {
+				continue
+			}
+			switch event.Type {
+			case "input.accepted":
+				accepted[event.InputID] = true
+				open[event.InputID] = true
+			case "turn.completed", "turn.cancelled":
+				for _, inputID := range event.InputIDs {
+					terminal[inputID] = true
+					delete(open, inputID)
+				}
+			case "session.uncertain":
+				// Sidecar failure does not replay accepted inputs. Some hosts
+				// report the affected IDs; the supervisor reports the whole chat.
+				if len(event.InputIDs) == 0 {
+					for inputID := range open {
+						terminal[inputID] = true
+					}
+					clear(open)
+				} else {
+					for _, inputID := range event.InputIDs {
+						terminal[inputID] = true
+						delete(open, inputID)
+					}
+				}
+			}
+		}
+		err = scan.Err()
+		_ = f.Close()
+		if err != nil {
+			return false, err
+		}
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(h.dir, "control", id, entry.Name()))
+		if err != nil {
+			return false, err
+		}
+		var receipt sdkControlReceipt
+		if err := json.Unmarshal(data, &receipt); err != nil {
+			return false, err
+		}
+		if receipt.WorkID == "" && receipt.Origin != nil && receipt.Origin.Type == "chat-message" && receipt.Origin.ChatID != id && !terminal[receipt.InputID] {
+			// A send whose three-minute sidecar call ended without any
+			// acceptance event must not block Work ownership forever after
+			// a crash between receipt persistence and dispatch.
+			if !accepted[receipt.InputID] && receipt.Status != "accepted" && !receipt.CreatedAt.IsZero() && time.Since(receipt.CreatedAt) >= 4*time.Minute {
+				continue
+			}
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // The capability is issued by the serve process to one harness MCP process.
@@ -113,6 +198,8 @@ func (h *sdkChatHost) controlOriginLocked(token, targetID string) (sdkEventOrigi
 }
 
 func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
+	s.sdkChats.workSendMu.RLock()
+	defer s.sdkChats.workSendMu.RUnlock()
 	id := r.PathValue("id")
 	adapterLock := s.sdkChats.adapterLock(id)
 	adapterLock.Lock()
@@ -124,8 +211,14 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := s.sdkChats
+	workID, _ := r.Context().Value(sdkWorkKickoffContextKey{}).(string)
+	remoteSender := ""
+	if s.remoteAgentChatRequest(r) {
+		remoteSender = r.Header.Get("X-Muxterm-Remote-Origin-Chat")
+		req.OriginToken = "" // The home capability cannot authenticate on this server.
+	}
 	if !humanBrowserRequest(r) {
-		if req.OriginToken != "" && req.OriginToken != r.Header.Get("X-Muxterm-Origin") {
+		if remoteSender == "" && req.OriginToken != "" && req.OriginToken != r.Header.Get("X-Muxterm-Origin") {
 			http.Error(w, "sender capability mismatch", http.StatusForbidden)
 			return
 		}
@@ -133,12 +226,15 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	originToken := r.Header.Get("X-Muxterm-Origin")
-	if r.Header.Get("X-Muxterm-Agent") == "1" && originToken == "" {
+	if r.Header.Get("X-Muxterm-Agent") == "1" && originToken == "" && remoteSender == "" {
 		h.mu.Unlock()
 		http.Error(w, "chat capability required", http.StatusForbidden)
 		return
 	}
 	originChatID, authorized := h.authorizedChatSenderLocked(originToken, id)
+	if remoteSender != "" {
+		originChatID, authorized = remoteSender, true
+	}
 	if !authorized {
 		h.mu.Unlock()
 		http.Error(w, "valid chat capability required", http.StatusForbidden)
@@ -167,6 +263,10 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	// A missing token is an external tool input; an invalid token is rejected.
 	// Only serve issues tokens that identify a sending chat.
 	origin, valid := h.controlOriginLocked(req.OriginToken, id)
+	if remoteSender != "" {
+		origin = sdkEventOrigin{Type: "chat-message", ChatID: remoteSender, TargetChatID: id, Name: "Remote chat", Relation: "chat-to-chat"}
+		valid = true
+	}
 	if !valid {
 		h.mu.Unlock()
 		http.Error(w, "invalid chat origin", http.StatusForbidden)
@@ -175,7 +275,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	path := h.controlPath(id, req.ClientRef)
 	if data, err := os.ReadFile(path); err == nil {
 		var prior sdkControlReceipt
-		if json.Unmarshal(data, &prior) != nil || prior.ClientRef != req.ClientRef || prior.Content != req.Content ||
+		if json.Unmarshal(data, &prior) != nil || prior.ClientRef != req.ClientRef || prior.Content != req.Content || prior.WorkID != workID ||
 			(prior.Origin == nil && req.OriginToken != "") ||
 			(prior.Origin != nil && (prior.Origin.Type != origin.Type || prior.Origin.ChatID != origin.ChatID)) {
 			h.mu.Unlock()
@@ -202,6 +302,11 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	if workID == "" && h.protectedWorkOwnerLocked(id) && (remoteSender != "" || originChatID != id) && !humanBrowserRequest(r) {
+		h.mu.Unlock()
+		http.Error(w, "active Work owner is protected; read Work status or post a Work comment", http.StatusForbidden)
+		return
+	}
 	// Resume before recording dispatch intent. A failed resume cannot have
 	// submitted this input. Hold no mutex across the sidecar operation.
 	h.mu.Unlock()
@@ -213,9 +318,18 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	// A concurrent caller may have admitted the same key while resume ran.
-	if currentOrigin, stillAuthorized := h.authorizedChatSenderLocked(originToken, id); !stillAuthorized || currentOrigin != originChatID {
+	currentOrigin, stillAuthorized := h.authorizedChatSenderLocked(originToken, id)
+	if remoteSender != "" {
+		currentOrigin, stillAuthorized = remoteSender, s.remoteAgentChatRequest(r)
+	}
+	if !stillAuthorized || currentOrigin != originChatID {
 		h.mu.Unlock()
 		http.Error(w, "chat capability was revoked before dispatch", http.StatusForbidden)
+		return
+	}
+	if workID == "" && h.protectedWorkOwnerLocked(id) && (remoteSender != "" || originChatID != id) && !humanBrowserRequest(r) {
+		h.mu.Unlock()
+		http.Error(w, "active Work owner is protected; read Work status or post a Work comment", http.StatusForbidden)
 		return
 	}
 	if _, err := os.Stat(path); err == nil {
@@ -223,7 +337,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "clientRef admitted concurrently; query the same key again", 409)
 		return
 	}
-	receipt := sdkControlReceipt{SessionID: id, ClientRef: req.ClientRef, InputID: sdkID(), Content: req.Content,
+	receipt := sdkControlReceipt{SessionID: id, ClientRef: req.ClientRef, InputID: sdkID(), Content: req.Content, WorkID: workID,
 		Status: "dispatching", CreatedAt: time.Now().UTC(), Origin: &origin}
 	if err := h.saveInputOrigin(id, receipt.InputID, origin); err != nil {
 		h.mu.Unlock()

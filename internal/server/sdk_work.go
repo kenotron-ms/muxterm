@@ -79,6 +79,7 @@ type sdkWorkUpdate struct {
 	SessionID         string                `json:"sessionId,omitempty"`
 	Summary           string                `json:"summary,omitempty"`
 	Text              string                `json:"text"`
+	Comment           bool                  `json:"comment,omitempty"`
 	Title             *string               `json:"title,omitempty"`
 	Brief             *string               `json:"brief,omitempty"`
 	Acceptance        *string               `json:"acceptanceCriteria,omitempty"`
@@ -143,6 +144,9 @@ func (h *sdkChatHost) workCreatorLocked(item *sdkWorkItem) sdkWorkActor {
 }
 
 func (h *sdkChatHost) requestWorkActorLocked(r *http.Request) sdkWorkActor {
+	if r.Header.Get("X-Muxterm-Remote-Chat") == "1" && r.Header.Get("X-Muxterm-Agent") == "1" {
+		return sdkWorkActor{Kind: "remote-chat", SessionID: r.Header.Get("X-Muxterm-Remote-Origin-Chat")}
+	}
 	if humanBrowserRequest(r) || r.Header.Get("X-Muxterm-Remote-Chat") == "1" {
 		return sdkWorkActor{Kind: "human"}
 	}
@@ -263,6 +267,23 @@ func (h *sdkChatHost) workDependenciesValidLocked(itemID string, ids []string) b
 
 func validWorkStatus(status string) bool {
 	return slices.Contains([]string{"open", "active", "blocked", "review", "done", "cancelled"}, status)
+}
+
+// An active Work owner receives its task through the filed Work goal. Peers
+// coordinate on the record instead of injecting another chat turn. This is
+// evaluated from saved ownership, never a caller-provided source label.
+// Caller holds h.mu.
+func (h *sdkChatHost) protectedWorkOwnerLocked(sessionID string) bool {
+	chat := h.chats[sessionID]
+	if chat == nil || chat.Archived {
+		return false
+	}
+	for _, item := range h.workItems {
+		if item.OwnerSessionID == sessionID && item.Status == "active" {
+			return true
+		}
+	}
+	return false
 }
 
 func validWorkReadiness(value string) bool {
@@ -644,7 +665,69 @@ func (s *Server) handleSDKWorkItem(w http.ResponseWriter, r *http.Request) {
 	writeSDKJSON(w, 200, copy)
 }
 
+// Comments are coordination history, not changes to the Work state and not
+// chat inputs. The author comes from the authenticated request, never JSON.
+func (s *Server) handleSDKWorkComment(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ClientRef string `json:"clientRef"`
+		Text      string `json:"text"`
+	}
+	if json.NewDecoder(io.LimitReader(r.Body, 20<<10)).Decode(&req) != nil ||
+		strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 ||
+		strings.TrimSpace(req.Text) == "" || len(req.Text) > 16<<10 {
+		http.Error(w, "clientRef and comment text required", http.StatusBadRequest)
+		return
+	}
+	h := s.sdkChats
+	h.mu.Lock()
+	item := h.workItems[r.PathValue("id")]
+	if item == nil {
+		h.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	actor := h.requestWorkActorLocked(r)
+	for _, prior := range item.Updates {
+		if prior.ClientRef != req.ClientRef {
+			continue
+		}
+		if !prior.Comment || prior.Text != req.Text || prior.Actor != actor {
+			h.mu.Unlock()
+			http.Error(w, "clientRef already used for different Work activity", http.StatusConflict)
+			return
+		}
+		copy := *item
+		copy.CreatedBy = h.workCreatorLocked(item)
+		copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
+		copy.WaitingOn = h.workWaitingOnLocked(item)
+		h.mu.Unlock()
+		writeSDKJSON(w, http.StatusOK, copy)
+		return
+	}
+	copy := *item
+	copy.CreatedBy = h.workCreatorLocked(item)
+	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
+	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{
+		ID: sdkID(), ClientRef: req.ClientRef, At: time.Now().UTC(),
+		Actor: actor, SessionID: actor.SessionID, Text: req.Text, Comment: true,
+	})
+	copy.Revision++
+	copy.UpdatedAt = time.Now().UTC()
+	copy.WaitingOn = h.workWaitingOnLocked(item)
+	if err := h.saveWorkLocked(&copy); err != nil {
+		h.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.mu.Unlock()
+	writeSDKJSON(w, http.StatusCreated, copy)
+}
+
 func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
+	// A Work claim or status transition cannot cross a control send while that
+	// send is entering a harness. The send path takes the same lock first.
+	s.sdkChats.workSendMu.Lock()
+	defer s.sdkChats.workSendMu.Unlock()
 	var req struct {
 		ClientRef         string                `json:"clientRef"`
 		SessionID         string                `json:"sessionId"`
@@ -851,6 +934,37 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 		http.Error(w, "only the creator or owner can assign this work; an unassigned item may be claimed", 403)
 		return
+	}
+	owner := item.OwnerSessionID
+	if req.OwnerSessionID != nil {
+		owner = *req.OwnerSessionID
+	}
+	targetStatus := item.Status
+	if req.Status != "" {
+		targetStatus = req.Status
+	}
+	if targetStatus == "active" && owner != "" && (item.Status != "active" || item.OwnerSessionID != owner) {
+		// Work updates take workSendMu; only comments can change this item
+		// while h.mu is released. Re-read it afterward to retain them.
+		h.mu.Unlock()
+		pending, scanErr := h.unresolvedPeerControlLocked(owner)
+		h.mu.Lock()
+		item = h.workItems[id]
+		if req.ExpectedRevision != nil && *req.ExpectedRevision != item.Revision {
+			h.mu.Unlock()
+			http.Error(w, "work item changed; refresh before assigning", 409)
+			return
+		}
+		if scanErr != nil {
+			h.mu.Unlock()
+			http.Error(w, "could not verify pending peer input before protecting Work owner: "+scanErr.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if pending {
+			h.mu.Unlock()
+			http.Error(w, "peer chat input is still queued or uncertain; wait for its turn to finish before activating Work ownership", http.StatusConflict)
+			return
+		}
 	}
 	copy := *item
 	copy.CreatedBy = h.workCreatorLocked(item)
