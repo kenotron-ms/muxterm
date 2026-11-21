@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"context"
 	"crypto/sha256"
+	"debug/elf"
+	"debug/macho"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -48,17 +50,55 @@ func antigravityManagedDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(path), "antigravity-acp", antigravityACPVersion), nil
+	return filepath.Join(filepath.Dir(path), "antigravity-acp", antigravityACPVersion, runtime.GOOS+"-"+runtime.GOARCH), nil
 }
 
 func antigravityInstalled(dir string) bool {
 	for _, name := range []string{"agy_acp_server.par", "localharness_external"} {
-		info, err := os.Stat(filepath.Join(dir, name))
-		if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 || !antigravityBinaryMatchesHost(path) {
 			return false
 		}
 	}
 	return true
+}
+
+// Check one managed executable against this process's platform. Legacy installs
+// have no platform component in their path, so file presence alone is unsafe.
+func antigravityBinaryMatchesHost(path string) bool {
+	switch runtime.GOOS {
+	case "linux":
+		file, err := elf.Open(path)
+		if err != nil {
+			return false
+		}
+		defer file.Close()
+		return (runtime.GOARCH == "amd64" && file.Machine == elf.EM_X86_64) ||
+			(runtime.GOARCH == "arm64" && file.Machine == elf.EM_AARCH64)
+	case "darwin":
+		cpu := macho.CpuAmd64
+		if runtime.GOARCH == "arm64" {
+			cpu = macho.CpuArm64
+		} else if runtime.GOARCH != "amd64" {
+			return false
+		}
+		if file, err := macho.Open(path); err == nil {
+			defer file.Close()
+			return file.Cpu == cpu
+		}
+		file, err := macho.OpenFat(path)
+		if err != nil {
+			return false
+		}
+		defer file.Close()
+		for _, arch := range file.Arches {
+			if arch.Cpu == cpu {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func installAntigravityACP(ctx context.Context) error {

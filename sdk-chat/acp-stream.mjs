@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, existsSync, constants } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, existsSync, openSync, readSync, closeSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, delimiter, isAbsolute } from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
@@ -105,17 +105,47 @@ export function antigravityCommand() {
   const dataHome = instanceDataHome();
   // Keep the preferred and previous versions in sync with antigravity_install.go.
   for (const version of ['1.5.2', '1.5.0', '1.4.3']) {
-    const dir = join(dataHome, 'muxterm', 'antigravity-acp', version);
-    const command = join(dir, 'agy_acp_server.par');
-    const helper = join(dir, 'localharness_external');
-    try {
-      if (!statSync(command).isFile() || !statSync(helper).isFile()) continue;
-      accessSync(command, constants.X_OK);
-      accessSync(helper, constants.X_OK);
-      return command;
-    } catch { /* Try the previous version or a separately installed agent. */ }
+    const base = join(dataHome, 'muxterm', 'antigravity-acp', version);
+    for (const dir of [join(base, `${process.platform}-${process.arch === 'x64' ? 'amd64' : process.arch}`), base]) {
+      const command = join(dir, 'agy_acp_server.par');
+      const helper = join(dir, 'localharness_external');
+      try {
+        if (!statSync(command).isFile() || !statSync(helper).isFile()) continue;
+        accessSync(command, constants.X_OK);
+        accessSync(helper, constants.X_OK);
+        if (antigravityBinaryMatchesHost(command) && antigravityBinaryMatchesHost(helper)) return command;
+      } catch { /* Try the previous version or a separately installed agent. */ }
+    }
   }
   return 'agy_acp_server.par';
+}
+
+function antigravityBinaryMatchesHost(path) {
+  const cpu = process.arch === 'x64' ? 0x01000007 : process.arch === 'arm64' ? 0x0100000c : 0;
+  if (!cpu) return false;
+  const fd = openSync(path, 'r');
+  const header = Buffer.alloc(4096);
+  let size;
+  try { size = readSync(fd, header, 0, header.length, 0); }
+  finally { closeSync(fd); }
+  if (process.platform === 'linux') {
+    if (size < 20 || header.toString('binary', 0, 4) !== '\x7fELF') return false;
+    const machine = header[5] === 2 ? header.readUInt16BE(18) : header[5] === 1 ? header.readUInt16LE(18) : 0;
+    return machine === (process.arch === 'x64' ? 62 : 183);
+  }
+  if (process.platform !== 'darwin' || size < 8) return false;
+  const magic = header.readUInt32BE(0);
+  if (magic === 0xfeedface || magic === 0xfeedfacf) return header.readUInt32BE(4) === cpu;
+  if (magic === 0xcefaedfe || magic === 0xcffaedfe) return header.readUInt32LE(4) === cpu;
+  const bigEndian = magic === 0xcafebabe || magic === 0xcafebabf;
+  if (!bigEndian && magic !== 0xbebafeca && magic !== 0xbfbafeca) return false;
+  const is64 = magic === 0xcafebabf || magic === 0xbfbafeca;
+  const read = offset => bigEndian ? header.readUInt32BE(offset) : header.readUInt32LE(offset);
+  const count = read(4);
+  const stride = is64 ? 32 : 20;
+  if (count > 100 || 8 + count * stride > size) return false;
+  for (let i = 0; i < count; i++) if (read(8 + i * stride) === cpu) return true;
+  return false;
 }
 
 export function antigravityMode() {
