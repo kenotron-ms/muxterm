@@ -45,7 +45,7 @@ import {
 } from '../lib/meeting-turn-settings.js';
 
 export type SettingsSection = 'appearance' | 'terminal' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'meetings' | 'remotes' | 'shortcuts' | 'about';
-type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean };
+type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean; installUnsupportedReason?: string };
 type AntigravityLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
 type AgentVersion = { harness: string; installed: boolean; version?: string; latestVersion?: string; installMethod?: string; updateAvailable: boolean; checkedAt?: string };
 type UnifiedConnection = { mode: 'local' | 'existing'; url: string; installed: boolean; installSupported: boolean; tokenConfigured: boolean; connected: boolean; message?: string };
@@ -685,6 +685,7 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _antigravityError = '';
   @state() private _antigravityBusy = false;
   @state() private _antigravityInstalling = false;
+  @state() private _antigravityInstalledNow = false;
   private _antigravityPollTimer?: number;
   private _antigravityEpoch = 0;
   @state() private _unified: UnifiedConnection | null = null;
@@ -1316,11 +1317,13 @@ export class MuxSettingsSurface extends LitElement {
   private async _installAntigravity(): Promise<void> {
     if (this._antigravityInstalling) return;
     this._antigravityInstalling = true;
+    this._antigravityInstalledNow = false;
     this._antigravityError = '';
     try {
       const response = await fetch(apiPath('/api/ai/antigravity/install'), { method:'POST' });
       if (!response.ok) throw new Error((await response.text()).trim());
-      void this._loadAntigravity();
+      this._antigravityInstalledNow = true;
+      await this._loadAntigravity();
     } catch (error) { this._antigravityError = error instanceof Error ? error.message : String(error); }
     finally { this._antigravityInstalling = false; }
   }
@@ -1360,7 +1363,9 @@ export class MuxSettingsSurface extends LitElement {
         ?disabled=${this._antigravityBusy || signingIn || (!apiKeyDetected && mode !== 'api-key')}
         @change=${(event: CustomEvent<{checked:boolean}>) => void this._setAntigravityAuth(event.detail.checked ? 'api-key' : 'google')}></mux-ui-switch>
       <p>${apiKeyDetected ? 'GEMINI_API_KEY detected; its value stays hidden.' : 'No GEMINI_API_KEY detected.'}</p>
-      ${!installed ? html`<p>Install Google's Antigravity ACP agent from the <a href="https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp" target="_blank" rel="noopener noreferrer">ACP registry ↗</a>.</p>${installSupported ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityInstalling} @click=${() => void this._installAntigravity()}>${this._antigravityInstalling ? 'Installing…' : 'Install Antigravity'}</mux-ui-button>` : html`<p>Automatic installation currently supports Linux x86-64. Install the registry agent for this platform and refresh the connection.</p>`}` : nothing}
+      ${!installed ? html`<p>Install Google's Antigravity ACP agent from the <a href="https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp" target="_blank" rel="noopener noreferrer">ACP registry ↗</a>.</p>${installSupported ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityInstalling} @click=${() => void this._installAntigravity()}>${this._antigravityInstalling ? 'Installing…' : 'Install'}</mux-ui-button>` : html`<p>${this._antigravityAuth.installUnsupportedReason || 'Automatic installation is unavailable on this platform. Install the registry agent manually and check the connection.'}</p>`}` : nothing}
+      ${this._antigravityInstalling ? html`<mux-ui-feedback kind="loading" density="compact">Downloading and verifying Antigravity for this computer…</mux-ui-feedback>` : nothing}
+      ${this._antigravityInstalledNow && installed ? html`<mux-ui-feedback kind="success" density="compact">Installed for this Muxterm user. Sign in to start chatting.</mux-ui-feedback>` : nothing}
       ${login.state === 'starting' ? html`<p>Starting Antigravity sign-in…</p>` : nothing}
       ${login.state === 'awaiting_code' && login.url ? html`<p>Open Google's sign-in page. If the browser cannot reach the final localhost page, copy its complete address into the field below.</p><a class="ai-login-link" href=${login.url} target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><mux-ui-text-field class="ai-login-code" aria-label="Google callback URL" placeholder="http://127.0.0.1:…/?code=…" .value=${this._antigravityCallback} @input=${(event: Event) => { this._antigravityCallback = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
       ${login.state === 'verifying' ? html`<p>Checking Google sign-in…</p>` : nothing}
@@ -1497,7 +1502,7 @@ export class MuxSettingsSurface extends LitElement {
       <div class="agent-body">
         <p>${!known ? 'Checking installation…' : installed ? `Installed ${version.version ? `v${version.version}` : '(version unavailable)'}.` : 'Not installed on this computer.'}${version?.latestVersion ? ` Latest v${version.latestVersion}.` : ''}</p>
         <p>${installed ? 'Update in a terminal pane when you choose.' : `Install ${agent.name} in a terminal pane. The agent will guide you through sign-in.`}</p>
-        <div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${!known} @click=${() => this._runAgentCommand(agent, installed ? 'update' : 'install')}>${installed ? 'Update in terminal' : 'Install in terminal'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
+        <div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${!known} @click=${() => this._runAgentCommand(agent, installed ? 'update' : 'install')}>${installed ? 'Update in terminal' : 'Install'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
       </div>
     </details>`;
   }

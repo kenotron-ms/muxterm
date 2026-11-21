@@ -1267,9 +1267,11 @@ func sdkACPExecutable(harness string) string {
 			home, _ := os.UserHomeDir()
 			dataHome = filepath.Join(home, ".local", "share")
 		}
-		managed := filepath.Join(dataHome, "muxterm", "antigravity-acp", antigravityACPVersion, "agy_acp_server.par")
-		if _, err := exec.LookPath(managed); err == nil {
-			return managed
+		for _, version := range antigravityManagedVersions {
+			dir := filepath.Join(dataHome, "muxterm", "antigravity-acp", version)
+			if antigravityInstalled(dir) {
+				return filepath.Join(dir, "agy_acp_server.par")
+			}
 		}
 		return "agy_acp_server.par"
 	}
