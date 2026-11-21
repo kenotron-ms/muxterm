@@ -18,9 +18,8 @@ builds:
       - linux
     goarch:
       - amd64
-    # Linux arm64 excluded: github.com/msteinert/pam/v2 has build constraints
-    # that exclude Linux ARM targets during cross-compilation. Phase 4/5 may add
-    # platform backends without this constraint.
+    # Linux arm64 is built natively in linux-arm64.yml so CGO links against
+    # arm64 PAM. Its archive is added to this release below.
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -59,6 +58,12 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  extra_files:
+    - glob: dist-arm64/muxterm_linux_arm64.tar.gz
+
+release:
+  extra_files:
+    - glob: dist-arm64/muxterm_linux_arm64.tar.gz
 
 changelog:
   sort: asc
