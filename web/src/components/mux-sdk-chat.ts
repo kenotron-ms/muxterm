@@ -316,8 +316,11 @@ export class MuxSDKChat extends LitElement {
     .layout.preview-focused .chat { display:none; }
     .layout.preview-focused .drawer { width:100%; flex:1; border-left:0; }
     .layout.preview-focused .drawer-resizer { display:none; }
-    .chat { flex:1; min-width:0; display:flex; flex-direction:column; background-color:var(--ui-chat-backdrop-color); background-image:linear-gradient(var(--ui-chat-backdrop-wash),var(--ui-chat-backdrop-wash)),var(--ui-chat-backdrop-image); background-position:center; background-size:cover; background-repeat:no-repeat; }
-    :host([side-mode]) .chat { background-color:var(--ui-surface-base); background-image:none; }
+    .chat { position:relative; flex:1; min-width:0; display:flex; flex-direction:column; background-color:var(--ui-chat-backdrop-color); }
+    .chat::before { content:''; position:absolute; inset:0; pointer-events:none; background:var(--ui-chat-art-ink); mask:var(--ui-chat-backdrop-mask) center/cover no-repeat; }
+    .chat > * { position:relative; }
+    :host([side-mode]) .chat { background-color:var(--ui-surface-base); }
+    :host([side-mode]) .chat::before { display:none; }
     .body { flex:1; min-height:0; overflow:auto; padding:var(--ui-space-10) var(--ui-space-8) var(--ui-space-11); display:flex; flex-direction:column; scrollbar-width:none; overflow-anchor:none; }
     .side-empty { justify-content:center; text-align:center; }
     .side-empty h2 { margin:0 0 var(--ui-space-2); font:600 var(--ui-text-lg)/1.35 var(--ui-font-sans); }

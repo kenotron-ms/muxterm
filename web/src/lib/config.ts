@@ -72,7 +72,7 @@ export function patchConfig(partial: Record<string, unknown>): void {
 
 // ResolvedConfig mirrors Go internal/config.Config with camelCase keys.
 export interface ResolvedConfig {
-  theme: { palette: string; app: 'neutral' | 'mist' | 'linden' | 'iris' | 'coral' | 'lagoon'; mode: 'light' | 'dark'; backdrop: 'neutral' | 'mist' | 'linden' | 'iris' | 'coral' | 'lagoon' };
+  theme: { palette: string; app: 'neutral' | 'mist' | 'linden' | 'iris' | 'coral' | 'lagoon' | 'pearl' | 'cobalt' | 'plum' | 'sage' | 'champagne' | 'rose' | 'tangerine'; mode: 'light' | 'dark'; backdrop: string };
   font: { family: string; size: number };
   terminal: {
     cursorStyle: 'block' | 'bar' | 'underline';
@@ -108,7 +108,7 @@ export interface ResolvedConfig {
 
 // DEFAULT_RESOLVED_CONFIG mirrors Go internal/config.Defaults() exactly.
 export const DEFAULT_RESOLVED_CONFIG: ResolvedConfig = {
-  theme: { palette: 'tokyo-night', app: 'neutral', mode: 'dark', backdrop: 'neutral' },
+  theme: { palette: 'tokyo-night', app: 'neutral', mode: 'dark', backdrop: 'contours' },
   font: {
     // Default to the server-bundled JetBrains Mono Nerd Font, served from
     // /fonts/ by the muxterm server itself. This ensures Nerd Font glyphs
@@ -172,6 +172,20 @@ function bool(v: unknown, def: boolean): boolean {
   return typeof v === 'boolean' ? v : def;
 }
 
+const LEGACY_BACKDROPS: Record<string, string> = {
+  neutral: 'contours', mist: 'rainfall', linden: 'botanical',
+  iris: 'orbits', coral: 'petals', lagoon: 'dunes',
+};
+const BACKDROP_IDS = new Set([
+  'none', 'contours', 'ridgeline', 'botanical', 'arcade', 'orbits',
+  'rainfall', 'confetti', 'dunes', 'fan', 'citylights', 'petals', 'geometry',
+]);
+function resolvedBackdrop(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const id = LEGACY_BACKDROPS[value] ?? value;
+  return BACKDROP_IDS.has(id) ? id : fallback;
+}
+
 /**
  * Sidebar preview density is a closed three-value vocabulary, unlike the other
  * string fields here which are passed through and cast. It is validated because
@@ -218,11 +232,10 @@ export function parseResolvedConfig(raw: unknown): ResolvedConfig {
   return {
     theme: {
       palette: str(t['palette'], d.theme.palette),
-      app: ['neutral', 'mist', 'linden', 'iris', 'coral', 'lagoon'].includes(t['app'] as string)
+      app: ['neutral', 'mist', 'linden', 'iris', 'coral', 'lagoon', 'pearl', 'cobalt', 'plum', 'sage', 'champagne', 'rose', 'tangerine'].includes(t['app'] as string)
         ? t['app'] as ResolvedConfig['theme']['app'] : d.theme.app,
       mode: t['mode'] === 'light' || t['mode'] === 'dark' ? t['mode'] : d.theme.mode,
-      backdrop: ['neutral', 'mist', 'linden', 'iris', 'coral', 'lagoon'].includes(t['backdrop'] as string)
-        ? t['backdrop'] as ResolvedConfig['theme']['backdrop'] : d.theme.backdrop,
+      backdrop: resolvedBackdrop(t['backdrop'], d.theme.backdrop),
     },
     font: {
       family: str(f['family'], d.font.family),
