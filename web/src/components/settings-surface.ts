@@ -102,8 +102,8 @@ const SETUP_AGENTS = [
   { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', install:'npm install -g @deepseek-ai/dsh', update:'npm install -g @deepseek-ai/dsh@latest', start:'dsh', docs:'https://github.com/deepseek-ai/deepseek-harness' },
   { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', install:'uv tool install git+https://github.com/microsoft/amplifier', update:'uv tool upgrade amplifier', start:'amplifier', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
-// Existing Gemini CLI chats can resume, but new chats use Antigravity.
-const DEFAULT_HARNESSES: SDKHarnessName[] = ['codex', 'claude', 'copilot', 'amplifier', 'amplifier-unified', 'pi', 'opencode', 'deepseek', 'antigravity'];
+// Existing Gemini CLI and Antigravity ACP chats can resume; new Google chats use the SDK.
+const DEFAULT_HARNESSES: SDKHarnessName[] = ['codex', 'claude', 'copilot', 'amplifier', 'amplifier-unified', 'pi', 'opencode', 'deepseek', 'antigravity-sdk'];
 
 /**
  * The status markers. A glyph in a fixed gutter, not a coloured slab: colour
@@ -1433,9 +1433,9 @@ export class MuxSettingsSurface extends LitElement {
       : this._antigravityStatus === 'missing' ? 'Not installed'
       : signingIn ? 'Signing in' : this._antigravityStatus === 'checking' ? 'Checking' : 'Sign in needed';
     return html`<details class="agent-card ai-harness">
-      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Google Antigravity · ACP</span><span class="agent-description">Google coding agent</span></span><mux-ui-status-badge appearance="plain" tone=${label === 'Ready' ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Google Antigravity · ACP v1</span><span class="agent-description">Existing chats</span></span><mux-ui-status-badge appearance="plain" tone=${label === 'Ready' ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="agent-body">
-      <p>Connect Google's Antigravity ACP agent. It handles Google sign-in and stores its own credentials. A detected API key uses Google AI Studio quota.</p>
+      <p>Existing ACP v1 chats can resume here. New Antigravity chats use the SDK. ACP handles Google sign-in and stores its own credentials. A detected API key uses Google AI Studio quota.</p>
       <mux-ui-switch class="ai-auth-switch" layout="row" label="Use API key"
         description=${mode === 'api-key' ? 'API key selected' : 'Google sign-in selected'}
         .checked=${mode === 'api-key'}
@@ -1473,14 +1473,25 @@ export class MuxSettingsSurface extends LitElement {
       <div class="agent-scan-actions"><mux-ui-button size="small" variant="secondary" ?disabled=${this._refreshingAgentVersions} @click=${() => void this._refreshAgentVersions()}>${this._refreshingAgentVersions ? 'Scanning…' : 'Refresh agent scan'}</mux-ui-button></div>
       ${this._agentVersionError ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._agentVersionError}</mux-ui-feedback>` : nothing}
       <div class="agent-list">
-        ${this._renderAntigravity()}
+        ${this._renderAntigravitySDK()}
         ${this._renderUnified()}
         ${SETUP_AGENTS.map(agent => this._renderSetupAgent(agent))}
-        ${this._renderExistingHarness('gemini', 'Gemini CLI', 'Existing Gemini CLI chats can resume. New Google chats use Antigravity.')}
-        ${this._renderExistingHarness('antigravity-sdk', 'Antigravity SDK', 'Existing Antigravity SDK chats can resume. New Google chats use Antigravity ACP.')}
+        ${this._renderAntigravity()}
+        ${this._renderExistingHarness('gemini', 'Gemini CLI', 'Existing Gemini CLI chats can resume. New Google chats use Antigravity SDK.')}
       </div>
       ${this._runtimeError && !this._runtimeErrorHarness ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._runtimeError}</mux-ui-feedback>` : nothing}
     `;
+  }
+
+  private _renderAntigravitySDK() {
+    const ready = this._readyAgents?.has('antigravity-sdk') ?? false;
+    const stopped = this._agentRuntimes.get('antigravity-sdk')?.state === 'stopped';
+    return html`<details class="agent-card ai-harness">
+      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Antigravity SDK</span><span class="agent-description">Google coding agent · new chats</span></span><mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${stopped ? 'Runtime stopped' : ready ? 'Ready' : 'Set up'}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <div class="agent-body"><p>New Antigravity chats use the Python SDK. Install uv and Python 3, then provide GEMINI_API_KEY to Muxterm or in ~/.amplifier/keys.env. Refresh agent scan to update availability.</p>
+        ${this._renderRuntimeControls('antigravity-sdk', 'Antigravity SDK', ready)}
+      </div>
+    </details>`;
   }
 
   private _renderUnified() {
