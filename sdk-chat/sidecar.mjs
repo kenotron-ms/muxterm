@@ -295,6 +295,9 @@ async function command(cmd) {
   if (op === 'antigravity-login-start') return startAntigravityLogin();
   if (op === 'antigravity-login-cancel') return cancelAntigravityLogin();
   if (op === 'antigravity-login-finish') return await finishAntigravityLogin(cmd.callbackURL);
+  if (op === 'runtime-busy') return { sessionIds: [...sessions.values()]
+    .filter(s => s.busy || s.acp?.busy || s.pendingInputs?.size || s.inFlightInputs?.size)
+    .map(s => s.id) };
   if (op === 'capabilities') return { capabilities: capabilities(harness) };
   if (op === 'copilot-auth-status') return { authenticated: await copilotAuthenticated() };
   if (op === 'catalog' && harness === 'codex') {

@@ -191,6 +191,12 @@ func (h *Host) WaitReady(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
+func (h *Host) Running() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cmd != nil && !h.closed && !h.stopping
+}
 func (h *Host) markReady(err error) {
 	h.readyOnce.Do(func() { h.mu.Lock(); h.readyErr = err; h.mu.Unlock(); close(h.ready) })
 }

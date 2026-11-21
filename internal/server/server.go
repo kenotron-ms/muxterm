@@ -311,6 +311,8 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/ai/unified/install", protect(http.HandlerFunc(s.handleUnifiedInstall)))
 	s.mux.Handle("GET /api/ai/agents/versions", protect(http.HandlerFunc(s.handleCodingAgentVersions)))
 	s.mux.Handle("POST /api/ai/agents/versions/refresh", protect(http.HandlerFunc(s.handleCodingAgentVersionRefresh)))
+	s.mux.Handle("GET /api/ai/agents/runtimes", protect(http.HandlerFunc(s.handleAgentRuntimes)))
+	s.mux.Handle("POST /api/ai/agents/{harness}/runtime/{action}", protect(http.HandlerFunc(s.handleAgentRuntimeAction)))
 
 	// Opt-in realtime voice for SDK chats. Routes stay registered so enabling
 	// Voice from Settings works without rebuilding the mux.
@@ -541,6 +543,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go func() { defer close(workDone); s.workLoop(jobContext) }()
 	s.meetingJobContext = jobContext
 	go s.agentVersions.run(jobContext)
+	go s.sdkChats.watchAgentInstalls(jobContext)
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()

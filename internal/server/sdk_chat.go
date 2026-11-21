@@ -159,6 +159,8 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 
 type sdkChatHost struct {
 	mu               sync.Mutex
+	runtimeGate      sync.RWMutex
+	lifecycleMu      sync.Mutex
 	workSendMu       sync.RWMutex // Linearizes agent send admission with Work ownership transitions.
 	inboxDeliveryMu  sync.Mutex
 	nameLocks        map[string]*sync.Mutex
@@ -168,6 +170,10 @@ type sdkChatHost struct {
 	process          *exec.Cmd
 	done             chan struct{}
 	running          bool
+	manualStopped    bool
+	ampStopped       bool
+	ampVersion       string
+	sidecarVersions  map[string]string
 	ampSup           *amplifierchat.Host
 	ampMu            sync.Mutex
 	chats            map[string]*sdkChat
@@ -625,8 +631,21 @@ func sdkSidecarXDGEnv() []string {
 	return entries
 }
 func (h *sdkChatHost) ensure(harness string) error {
+	h.runtimeGate.Lock()
+	defer h.runtimeGate.Unlock()
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	return h.ensureRuntimeLocked(harness)
+}
+func (h *sdkChatHost) ensureRuntimeLocked(harness string) error {
 	if harness == "amplifier" {
+		if h.ampStopped {
+			return errors.New("Amplifier chat runtime is stopped; restart it in AI Settings")
+		}
 		return h.ensureAmplifier()
+	}
+	if h.manualStopped {
+		return errors.New("shared chat runtime is stopped; restart it in AI Settings")
 	}
 	if harness == "codex" || harness == "claude" {
 		if _, err := sdkAgentExecutable(harness); err != nil {
@@ -636,9 +655,27 @@ func (h *sdkChatHost) ensure(harness string) error {
 	h.mu.Lock()
 	if h.running {
 		h.mu.Unlock()
-		return nil
+		if h.sidecarVersions[harness] == sdkRuntimeFingerprint(harness) {
+			return nil
+		}
+		if active := h.activeRuntimeChats(false); len(active) > 0 {
+			return fmt.Errorf("%s changed, but the shared chat runtime has active turns (%s); finish them before starting another chat", harness, strings.Join(active, ", "))
+		}
+		checkCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		busy, err := h.sharedBusy(checkCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("cannot confirm shared chats are idle before refreshing %s: %w", harness, err)
+		}
+		if len(busy) > 0 {
+			return fmt.Errorf("%s changed, but shared chat turns are active (%s); finish them before starting another chat", harness, strings.Join(busy, ", "))
+		}
+		if err := h.stopNode(); err != nil {
+			return fmt.Errorf("refresh shared chat runtime: %w", err)
+		}
+	} else {
+		h.mu.Unlock()
 	}
-	h.mu.Unlock()
 	// Resolve external commands without holding the host mutex. A slow or
 	// unresponsive OpenCode binary must not stall other SDK chat handlers.
 	openCodePath, _, _ := sdkOpenCodeV2Executable(context.Background())
@@ -669,14 +706,31 @@ func (h *sdkChatHost) ensure(harness string) error {
 		return err
 	}
 	cmd.Env = append(append(os.Environ(), "MUXTERM_CHAT_MCP_BIN="+self), sdkSidecarXDGEnv()...)
-	// ACP launches the user's OpenCode 2 command. User-level installs may be
-	// absent from the service's PATH even when we can discover the command.
-	pathDirs := make([]string, 0, 2)
+	// User-level installs may be absent from the service's PATH even when
+	// executable discovery can find them. Pass those directories to the fresh
+	// sidecar so every managed harness can launch after an install.
+	pathDirs := make([]string, 0, len(managedChatHarnesses))
+	seenDirs := make(map[string]bool, len(managedChatHarnesses))
+	addPathDir := func(path string) {
+		if path == "" {
+			return
+		}
+		dir := filepath.Dir(path)
+		if !seenDirs[dir] {
+			pathDirs = append(pathDirs, dir)
+			seenDirs[dir] = true
+		}
+	}
 	if openCodePath != "" {
-		pathDirs = append(pathDirs, filepath.Dir(openCodePath))
+		addPathDir(openCodePath)
+	}
+	for _, managed := range managedChatHarnesses {
+		if managed != "amplifier" && managed != "amplifier-unified" && managed != "opencode" {
+			addPathDir(sdkRuntimeExecutablePath(managed))
+		}
 	}
 	if uvErr == nil {
-		pathDirs = append(pathDirs, filepath.Dir(uvPath))
+		addPathDir(uvPath)
 	}
 	if len(pathDirs) > 0 {
 		cmd.Env = append(cmd.Env, "PATH="+strings.Join(pathDirs, string(os.PathListSeparator))+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -686,6 +740,7 @@ func (h *sdkChatHost) ensure(harness string) error {
 	}
 	h.process = cmd
 	h.running = true
+	h.sidecarVersions = sdkRuntimeFingerprints()
 	h.done = make(chan struct{})
 	ready := make(chan error, 1)
 	go h.observe(cmd, h.socket, ready)
@@ -710,7 +765,23 @@ func (h *sdkChatHost) ensureAmplifier() error {
 	defer h.ampMu.Unlock()
 	h.mu.Lock()
 	ready := h.ampSup != nil
+	version := h.ampVersion
+	sup := h.ampSup
 	h.mu.Unlock()
+	if ready && version != sdkRuntimeFingerprint("amplifier") {
+		if active := h.activeRuntimeChats(true); len(active) > 0 {
+			return fmt.Errorf("Amplifier changed, but active chats (%s) must finish before its runtime refreshes", strings.Join(active, ", "))
+		}
+		h.mu.Lock()
+		if h.ampSup == sup {
+			h.ampSup = nil
+		}
+		h.mu.Unlock()
+		if err := sup.Close(); err != nil {
+			return fmt.Errorf("refresh Amplifier runtime: %w", err)
+		}
+		ready = false
+	}
 	if ready {
 		return nil
 	}
@@ -723,7 +794,7 @@ func (h *sdkChatHost) ensureAmplifier() error {
 	if err != nil {
 		return err
 	}
-	sup := amplifierchat.New()
+	sup = amplifierchat.New()
 	if err := sup.Start(self); err != nil {
 		return err
 	}
@@ -735,6 +806,7 @@ func (h *sdkChatHost) ensureAmplifier() error {
 	}
 	h.mu.Lock()
 	h.ampSup = sup
+	h.ampVersion = sdkRuntimeFingerprint("amplifier")
 	h.mu.Unlock()
 	// Subscribe before returning: start/send may emit the first frame at once.
 	go h.observeAmplifier(sup.Subscribe(1024))
@@ -857,6 +929,15 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 	if err := h.ensure(harness); err != nil {
 		return nil, err
 	}
+	h.runtimeGate.RLock()
+	defer h.runtimeGate.RUnlock()
+	h.mu.Lock()
+	available := (harness == "amplifier" && !h.ampStopped && h.ampSup != nil) ||
+		(harness != "amplifier" && !h.manualStopped && h.running)
+	h.mu.Unlock()
+	if !available {
+		return nil, errors.New("chat runtime changed during the request; retry after checking AI Settings")
+	}
 	if harness == "amplifier" {
 		args["op"] = op
 		args["requestId"] = sdkID()
@@ -867,6 +948,13 @@ func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) 
 		}
 		return h.ampSup.SDKCommand(ctx, command)
 	}
+	return h.callNode(ctx, op, args)
+}
+
+// callNode sends a control command to an already-running sidecar. Lifecycle
+// actions use it while holding runtimeGate exclusively, so no new input can be
+// admitted between the busy check and process shutdown.
+func (h *sdkChatHost) callNode(ctx context.Context, op string, args map[string]any) (json.RawMessage, error) {
 	socket := h.socket
 	var conn net.Conn
 	var err error
