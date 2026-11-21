@@ -113,17 +113,19 @@ const (
 // This inspects runtime.GOOS/runtime.GOARCH rather than using build tags so
 // the whole package compiles unchanged on every target.
 func Platform() (Method, string) {
+	return platform(runtime.GOOS, runtime.GOARCH)
+}
+
+func platform(goos, goarch string) (Method, string) {
 	switch {
-	case runtime.GOOS == "darwin":
+	case goos == "darwin":
 		// install.sh redirects macOS users to Homebrew, so the binary a mac
 		// user is running is brew-managed; replacing it behind brew's back
 		// would leave the formula and the installed binary out of sync.
 		return MethodHomebrew, "Installed via Homebrew — run `brew upgrade muxterm` to update."
-	case runtime.GOOS == "linux" && runtime.GOARCH == "amd64":
+	case goos == "linux" && (goarch == "amd64" || goarch == "arm64"):
 		return MethodBinary, ""
 	default:
-		// linux/arm64 in particular is deliberately not published -- see the
-		// goreleaser build comment about the PAM binding's build constraints.
-		return MethodUnsupported, fmt.Sprintf("No release build is published for %s/%s.", runtime.GOOS, runtime.GOARCH)
+		return MethodUnsupported, fmt.Sprintf("No release build is published for %s/%s.", goos, goarch)
 	}
 }
