@@ -64,6 +64,7 @@ export class MuxChatCoordination extends LitElement {
   @state() private commentDraft = '';
   @state() private commentSending = false;
   private commentRef = '';
+  private commentRefBody = '';
   private poll?: number;
   private loading = false;
   private refreshKey = 0;
@@ -247,17 +248,24 @@ export class MuxChatCoordination extends LitElement {
     const item = this.detail;
     const body = this.commentDraft.trim();
     if (!item || !body || this.commentSending) return;
-    this.commentRef ||= crypto.randomUUID();
+    if (this.commentRefBody !== body) {
+      this.commentRef = crypto.randomUUID();
+      this.commentRefBody = body;
+    }
+    const commentRef = this.commentRef;
     this.commentSending = true;
     try {
       const posted = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(item.id)}/comments`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({clientRef: this.commentRef, text: body}),
+        body: JSON.stringify({clientRef: commentRef, text: body}),
       });
       if (this.detail?.id === item.id) {
         this.detail = posted;
-        this.commentDraft = '';
-        this.commentRef = '';
+        if (this.commentDraft.trim() === body) {
+          this.commentDraft = '';
+          this.commentRef = '';
+          this.commentRefBody = '';
+        }
         this.error = '';
       }
       void this.refresh();
@@ -296,6 +304,7 @@ export class MuxChatCoordination extends LitElement {
     if (this.detail?.id !== item.id) {
       this.commentDraft = '';
       this.commentRef = '';
+      this.commentRefBody = '';
     }
     this.detail = item;
     void this.refresh();
@@ -362,7 +371,7 @@ export class MuxChatCoordination extends LitElement {
       ${item.ownerSessionId || item.dispatch?.sessionId ? html`<section class="section"><h3>Who's on it</h3><p>${this.chatLink(item.ownerSessionId || item.dispatch!.sessionId)}</p></section>` : nothing}
       ${item.dispatch?.selectionReason ? html`<section class="section"><h3>Worker selection</h3><p>${item.dispatch.selectionReason}</p>${item.dispatch.configuration ? html`<p>${item.dispatch.configuration.harness} · ${item.dispatch.configuration.provider} · bundle ${item.dispatch.configuration.bundle || 'none'} · model ${item.dispatch.configuration.model || 'none'} · effort ${item.dispatch.configuration.effort || 'none'}</p>` : nothing}${item.dispatch.fallback ? html`<p>Fallback: ${item.dispatch.fallback}</p>` : nothing}</section>` : nothing}
       ${item.dependsOn?.length ? html`<section class="section"><h3>Before this can start</h3><p>${this.dependencyLinks(item.dependsOn)}${item.waitingOn?.length ? ` · ${item.waitingOn.length} still in progress` : ' · all complete'}</p></section>` : nothing}
-      <section class="section"><h3>Recent activity</h3><ol class="timeline">${updates.length ? updates.map(update => this.timelineEntry(update)) : html`<li><span class="timeline-icon">${icon('work')}</span><div><time>${this.date(item.createdAt)}</time><strong>Added to work</strong><p>${item.source || 'Created for this project.'}</p></div></li>`}</ol><div class="comment-form"><mux-ui-text-area label="Add a comment" .value=${this.commentDraft} .rows=${4} placeholder="Coordinate here without interrupting the worker" @input=${(event: Event) => { this.commentDraft = (event.target as MuxUITextArea).value; this.commentRef = ''; }}></mux-ui-text-area><mux-ui-button variant="primary" ?disabled=${!this.commentDraft.trim() || this.commentSending} @click=${() => void this.postComment()}>${this.commentSending ? 'Posting…' : 'Post comment'}</mux-ui-button></div></section>
+      <section class="section"><h3>Recent activity</h3><ol class="timeline">${updates.length ? updates.map(update => this.timelineEntry(update)) : html`<li><span class="timeline-icon">${icon('work')}</span><div><time>${this.date(item.createdAt)}</time><strong>Added to work</strong><p>${item.source || 'Created for this project.'}</p></div></li>`}</ol><div class="comment-form"><mux-ui-text-area label="Add a comment" .value=${this.commentDraft} .rows=${4} placeholder="Coordinate here without interrupting the worker" @input=${(event: Event) => { this.commentDraft = (event.target as MuxUITextArea).value; }}></mux-ui-text-area><mux-ui-button variant="primary" ?disabled=${!this.commentDraft.trim() || this.commentSending} @click=${() => void this.postComment()}>${this.commentSending ? 'Posting…' : 'Post comment'}</mux-ui-button></div></section>
       ${item.labels?.length ? html`<section class="section"><h3>Labels</h3><div class="tags">${item.labels.map(label => html`<span class="tag">${label}</span>`)}</div></section>` : nothing}
       <div class="facts"><span>Created by ${this.actor(item.createdBy)}</span><span>Updated ${this.date(item.updatedAt)}</span></div>
     </article>`;
