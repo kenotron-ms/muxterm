@@ -214,7 +214,11 @@ func (s *Server) handleGeminiVoiceTool(w http.ResponseWriter, r *http.Request) {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body) != nil || !s.currentGeminiVoiceSession(r.PathValue("id"), body.SessionID) {
+	if json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&body) != nil {
+		http.Error(w, "Invalid voice tool request", http.StatusBadRequest)
+		return
+	}
+	if !s.currentGeminiVoiceSession(r.PathValue("id"), body.SessionID) {
 		http.Error(w, "Voice session unavailable", http.StatusConflict)
 		return
 	}
