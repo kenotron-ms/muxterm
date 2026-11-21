@@ -34,6 +34,32 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Verify OpenCode 2 and Copilot CLI user installs on native arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          fixture="$RUNNER_TEMP/agent-install-arm64"
+          home="$fixture/home"
+          mkdir -p "$home"
+          trap 'rm -rf "$fixture"' EXIT
+
+          curl -fsSL --retry 3 https://opencode.ai/v2/install -o "$fixture/opencode-install.sh"
+          HOME="$home" bash "$fixture/opencode-install.sh" --no-modify-path
+          opencode_version="$(HOME="$home" "$home/.opencode/bin/opencode" --version)"
+          [[ "$opencode_version" == 'opencode v2.'* ]]
+          echo "Native arm64 $opencode_version"
+
+          curl -fsSL --retry 3 https://gh.io/copilot-install -o "$fixture/copilot-install.sh"
+          HOME="$home" PREFIX="$home/.local" PATH="$home/.local/bin:$PATH" bash "$fixture/copilot-install.sh"
+          copilot_version="$(HOME="$home" "$home/.local/bin/copilot" --version)"
+          [[ "$copilot_version" =~ [0-9]+\.[0-9]+\.[0-9]+ ]]
+          echo "Native arm64 $copilot_version"
+
+          HOME="$home" PREFIX="$home/.local" PATH="$home/.local/bin:$PATH" bash "$fixture/copilot-install.sh"
+          test "$(HOME="$home" "$home/.local/bin/copilot" --version)" = "$copilot_version"
+          echo 'Repeat Copilot install and launch succeeded'
+
       - name: Install PAM development headers
         run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
 

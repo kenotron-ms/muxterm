@@ -24,13 +24,13 @@ var codingAgentVersions = []struct {
 	{"codex", "codex", "@openai/codex"},
 	{"claude", "claude", "@anthropic-ai/claude-code"},
 	{"copilot", "copilot", "@github/copilot"},
-	{"opencode", "opencode", "opencode-ai"},
+	{"opencode", "opencode", "@opencode/cli"},
 	{"pi", "pi", "@earendil-works/pi-coding-agent"},
 	{"deepseek", "dsh", "@deepseek-ai/dsh"},
 	{"amplifier", "amplifier", ""}, // Installed from Git; no comparable registry version.
 }
 
-var agentSemver = regexp.MustCompile(`\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b`)
+var agentSemver = regexp.MustCompile(`\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?`)
 
 type codingAgentVersion struct {
 	Harness         string `json:"harness"`
@@ -91,7 +91,13 @@ func (c *codingAgentVersionCache) refresh(ctx context.Context) {
 
 func inspectCodingAgent(ctx context.Context, harness, executable, npmPackage string) codingAgentVersion {
 	status := codingAgentVersion{Harness: harness, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
-	if path, err := exec.LookPath(executable); err == nil {
+	path, err := sdkExecutablePath(executable)
+	if harness == "opencode" {
+		if v2Path, v2Version, v2Err := sdkOpenCodeV2Executable(ctx); v2Err == nil {
+			path, status.Version, err = v2Path, v2Version, nil
+		}
+	}
+	if err == nil {
 		status.Installed = true
 		if harness == "codex" {
 			if target, err := filepath.EvalSymlinks(path); err == nil && strings.Contains(filepath.ToSlash(target), "/.codex/packages/standalone/") {
@@ -100,13 +106,18 @@ func inspectCodingAgent(ctx context.Context, harness, executable, npmPackage str
 				status.InstallMethod = "npm"
 			}
 		}
-		commandCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		cmd := exec.CommandContext(commandCtx, path, "--version")
-		cmd.Dir = os.TempDir()
-		output, err := cmd.CombinedOutput()
-		cancel()
-		if err == nil {
-			status.Version = agentSemver.FindString(string(output))
+		if status.Version == "" {
+			commandCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+			cmd := exec.CommandContext(commandCtx, path, "--version")
+			cmd.Dir = os.TempDir()
+			output, err := cmd.CombinedOutput()
+			cancel()
+			if err == nil {
+				status.Version = agentSemver.FindString(string(output))
+			}
+		}
+		if harness == "opencode" && !strings.HasPrefix(status.Version, "2.") {
+			status.Installed = false
 		}
 	}
 	if npmPackage != "" {

@@ -62,7 +62,7 @@ One SDK client owns the Copilot runtime; archiving a chat disconnects only its
 native session. A failed runtime marks accepted work uncertain and requires an
 explicit new input to recover it.
 
-## Pi, OpenCode, and DeepSeek native SDKs
+## Pi and DeepSeek native SDKs
 
 Pi uses `@earendil-works/pi-coding-agent` in the sidecar. Its own session file
 is stored under muxterm's data home and resumes by that path. Pi loads its
@@ -71,13 +71,11 @@ connectors through Pi's SDK extension loader with the chat's origin token, and
 uses Pi's native streaming, tool events, model and thinking controls, steering,
 and cancellation.
 
-OpenCode uses `@opencode-ai/sdk` with the installed `opencode` command. Each
-chat owns an SDK-started OpenCode server on an ephemeral loopback port. Its
-server receives only that chat's MCP configuration; the server is closed when
-the chat is archived. OpenCode's session ID survives a muxterm restart and its
-SDK event stream supplies text, tool activity, and turn status.
-Steering stops the active generation and continues in the same OpenCode
-session, retaining the partial answer.
+OpenCode 2 uses the documented `opencode acp` transport. Each chat owns an
+ACP process because OpenCode shares MCP servers across sessions in one process's
+directory. The process stops when the chat is archived; the saved session ID
+resumes in a new process. ACP supplies model choices, streamed text, tool
+activity, turn status, cancellation, and continuation.
 
 DeepSeek uses `@deepseek-ai/dsh-sdk-client` and its same-version bundled `dsh`
 runtime with the `sdk` profile. Each chat owns a runtime and a launch patch
@@ -90,7 +88,7 @@ credentials. A missing key appears as a failed turn rather than an empty reply.
 Steering uses the same runtime boundary, then continues the saved session with
 the new instruction.
 
-All three adapters include enabled GitHub, Microsoft personal, and remote
+Both native SDK adapters include enabled GitHub, Microsoft personal, and remote
 connectors through the same per-chat MCP capability as the other SDK chats.
 Image uploads are passed as native image blocks when the attachment store has
 identified a supported raster MIME type.
