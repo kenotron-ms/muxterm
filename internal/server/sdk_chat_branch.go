@@ -196,16 +196,21 @@ func (s *Server) handleSDKChatBranch(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 		defer cancel()
 		if err = h.resume(ctx, chat); err == nil {
+			h.workSendMu.RLock()
+			notice, boundaryTokens := h.pendingWorkBoundaryNotice(chat.ID)
 			var result json.RawMessage
 			result, err = h.call(ctx, "send", map[string]any{"sessionId": chat.ID, "input": map[string]any{
-				"kind": "user", "source": "browser", "id": sdkID(), "content": contextText + "\n\nContinue this conversation with the user's revised message:\n" + strings.TrimSpace(req.Content), "displayContent": strings.TrimSpace(req.Content), "attachments": attachments,
+				"kind": "user", "source": "browser", "id": sdkID(), "content": contextText + "\n\nContinue this conversation with the user's revised message:\n" + strings.TrimSpace(req.Content) + notice, "displayContent": strings.TrimSpace(req.Content), "attachments": attachments,
 			}})
 			if err == nil {
 				var ack struct{ Status string }
 				if json.Unmarshal(result, &ack) != nil || ack.Status != "accepted" {
 					err = errors.New("harness did not confirm the revised message")
+				} else {
+					h.markWorkBoundaryNotices(boundaryTokens)
 				}
 			}
+			h.workSendMu.RUnlock()
 		}
 		if err != nil {
 			h.mu.Lock()

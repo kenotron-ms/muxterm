@@ -643,9 +643,18 @@ func (c *sdkVoiceCall) delegate(handoff sdkVoiceHandoff) string {
 	if chat.State == "working" {
 		kind = "steer"
 	}
+	content := sdkTaskInputWithVoiceContext(prompt, c.host.chats.recentVoiceContext(c.chatID))
+	var boundaryTokens []sdkWorkBoundaryToken
+	if kind == "user" {
+		c.host.chats.workSendMu.RLock()
+		defer c.host.chats.workSendMu.RUnlock()
+		var notice string
+		notice, boundaryTokens = c.host.chats.pendingWorkBoundaryNotice(c.chatID)
+		content += notice
+	}
 	result, err := c.host.chats.call(ctx, "send", map[string]any{"sessionId": c.chatID,
 		"input": map[string]any{"kind": kind, "source": "voice", "id": sdkID(),
-			"content": sdkTaskInputWithVoiceContext(prompt, c.host.chats.recentVoiceContext(c.chatID)), "displayContent": prompt,
+			"content": content, "displayContent": prompt,
 			"model": chat.Model, "effort": chat.Effort}})
 	if err != nil {
 		return "I could not confirm the instruction reached the task agent."
@@ -660,6 +669,7 @@ func (c *sdkVoiceCall) delegate(handoff sdkVoiceHandoff) string {
 	if ack.Status != "accepted" {
 		return "I could not confirm the instruction reached the task agent."
 	}
+	c.host.chats.markWorkBoundaryNotices(boundaryTokens)
 	if kind == "steer" {
 		return "I passed your correction to the task agent. It is still working."
 	}
