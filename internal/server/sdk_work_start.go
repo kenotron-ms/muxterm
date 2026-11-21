@@ -204,7 +204,10 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mu.Unlock()
-	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The filed Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your native goal."
+	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The filed Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Use the Work plan as execution guidance and the native goal as the completion contract. On claim, each meaningful milestone, blocker, replan, and completion, call update_work_item with expected_revision to move relevant step_updates and update summary, progress, next_action, and status together. A replan sends the full plan and a reason; keep completed steps. Each update response includes unread commentAttention: read and acknowledge any comments before review or done. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your native goal."
+	if copy.PlanProtocol != "" {
+		prompt += " Filed plan update protocol: " + copy.PlanProtocol
+	}
 	state, detail := "sent", ""
 	if existing {
 		if err := s.applyReusedWorkConfiguration(r.Context(), workerID, config); err != nil {

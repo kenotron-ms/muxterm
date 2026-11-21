@@ -1,11 +1,11 @@
 # Shared Work and native goals
 
 A Work item is a durable promise in a project's queue. A Chat Goal is the
-stop condition that lets one worker session pursue that promise. Creating Work
-records the request; it does not start implementation. A goal condition is
-drafted on the Work item, reviewed by a human, and installed as the selected
-worker's native Chat Goal when the item becomes ready and the project scheduler
-has room.
+stop condition that lets one worker session pursue that promise. A filed Work
+item contains its checked goal condition and a short execution plan. Filing
+queues it when project controls and dependencies allow; the scheduler installs
+the condition as the selected worker's native Chat Goal. A human can explicitly
+ask for a draft before filing.
 
 ## Start in a chat
 
@@ -14,11 +14,14 @@ Tell a chat what outcome you want. For example:
 > Add project search. Capture this as a Work item, draft a clear stopping
 > condition for its worker, and let me review it before anything starts.
 
-The chat calls `create_work_item`, then `update_work_item` with
-`goal_condition` and the current `expected_revision`. It can refine the brief,
-acceptance criteria, dependencies, and proposed condition with you. It must
-leave the item in `draft` until you approve the exact condition. The draft and
-all later revisions stay in the Work history.
+For a filed request, the chat calls `create_work_item` with the brief,
+acceptance criteria, goal condition, next action, and a compact `plan` with
+`plan_protocol`. Each step starts `pending` and has a stable lowercase ID.
+The plan describes the major steps and when to report progress; the goal
+condition remains the completion contract. The server checks the condition
+before filing. If you explicitly ask to review a draft first, the chat uses
+`draft=true`; draft revisions stay in Work history until you approve and file
+the exact condition.
 
 A goal draft is reachable in two places:
 
@@ -36,8 +39,8 @@ has the wrong outcome or stopping point. A changed draft or substantive Work
 brief revokes an unstarted approval. Stale review clicks return 409 and require
 a refresh. Agent tools cannot approve the condition or release a human hold.
 
-New Work must pass the goal check for its exact current revision before the
-browser enables approval. The check reports actionable findings for missing
+Filed Work must pass the goal check for its exact current revision. For an
+explicit draft, the browser enables approval after that check passes. The check reports actionable findings for missing
 outcomes or boundaries, blocked and external-refusal exits, and known goalify
 failure patterns. It checks direct conflicts between stated limits and required
 actions. The human still judges the condition's meaning. Existing Work records
@@ -64,12 +67,12 @@ available. A recent chat, similar title, or participant link alone does not
 establish useful context. Archived and human-paused chats are excluded. The
 scheduler never uses the creating chat as the worker. It reserves a dispatch on
 the Work item and creates a new chat without an opening turn if needed. It then
-installs the approved condition as that chat's native goal. Only after native acknowledgement and
+installs the filed or approved condition as that chat's native goal. Only after native acknowledgement and
 observation of the exact applied revision does it send the Work ID and
 execution instructions. The worker reads the record,
 claims it with `update_work_item`, pursues the native goal, and records
-progress, evidence, blockers, and outcome on Work. The goal ledger records the
-same approved condition, its human Work approval provenance, native receipt,
+step changes, progress, evidence, blockers, and outcome on Work. The goal ledger records the
+same condition, its Work filing or approval provenance, native receipt,
 and goal progress.
 
 The supported native goal harnesses are Codex, Claude, Copilot, and Amplifier.
@@ -119,6 +122,24 @@ The goal fields are `goalCondition`, `goalRevision`, `goalCheck`,
 `goalApprovedRevision`, and `goalApprovedAt`. New records also carry
 `reviewVersion`, `uiWork`, and `designPreview`.
 
+`plan` is a list of stable step IDs, readable titles, and statuses: `pending`,
+`in_progress`, `done`, `blocked`, or `skipped`. `planRevision` counts explicit
+replans, and `planProtocol` describes update checkpoints. Supply
+`plan_protocol` whenever `create_work_item` includes `plan`. The worker uses
+one `update_work_item` call with the current `expected_revision` to change one
+or more `step_updates` alongside Work status, summary, progress, and next
+action. The response includes the current record and owner unread-comment
+attention. Report on claim, meaningful milestones, blockers, replans, and
+completion; read and acknowledge comments before review or done. Replanning
+sends the full plan and `plan_reason`; changing `plan_protocol` also requires
+that explicit replan. New steps start pending and can advance through
+`step_updates` in the same call. Activity retains attributed before/after steps. Done or
+skipped steps cannot be rewritten, and Work cannot be done while planned steps
+remain pending, in progress, or blocked. Older Work without a plan still works.
+Resume a blocked step through `in_progress`; `blocked` cannot return to `pending`.
+The Work progress count and bar use steps that are not skipped; skipped steps
+stay visible in the checklist and get their own count.
+
 For progress reports, send `summary` as one short sentence about the change or
 decision (up to 160 characters). Put diagnostics, links, and lists in `text`
 as Markdown. The Work timeline shows the summary first and lets a reader open
@@ -127,17 +148,18 @@ preview; their original text remains available. When a report omits an explicit
 `progress` value, its summary becomes the current one-line progress shown at
 the top of the Work detail page.
 
-`create_work_item` makes a draft. `update_work_item` proposes a condition and
-records changes with `client_ref` and `expected_revision`. The browser's
+`create_work_item` files checked Work by default; use `draft=true` only for an
+explicit draft. `update_work_item` records later changes with `client_ref` and
+`expected_revision`. For draft review, the browser's
 `POST /api/sdk-work/{id}/goal/approve` accepts the exact condition, both Work
 and goal revisions, a stable `clientRef`, and optional `ready:true`. Only a
 human browser may call it. `POST /api/sdk-work/{id}/goal/check` records a
 revision-bound check after comparing those same exact fields. `list_work_items` and `get_next_work_item` can
 filter by project and labels. `get_next_work_item` is a read, not a claim;
-items without approved goals, held or paused items, full projects, and items
+items without a filed or approved goal, held or paused items, full projects, and items
 with unfinished dependencies are skipped. `start_work_item` requests a manual
 handoff when the scheduler is playing. A direct `update_work_item` claim is
-accepted only if that chat already has the exact approved native goal applied
+accepted only if that chat already has the exact filed or approved native goal applied
 and authorized; the ordinary path is the scheduler handoff.
 
 Each Work mutation is idempotent by `client_ref`; revision fences prevent a
