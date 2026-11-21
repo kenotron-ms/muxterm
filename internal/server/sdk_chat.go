@@ -634,6 +634,16 @@ func (h *sdkChatHost) ensure(harness string) error {
 		}
 	}
 	h.mu.Lock()
+	if h.running {
+		h.mu.Unlock()
+		return nil
+	}
+	h.mu.Unlock()
+	// Resolve external commands without holding the host mutex. A slow or
+	// unresponsive OpenCode binary must not stall other SDK chat handlers.
+	openCodePath, _, _ := sdkOpenCodeV2Executable(context.Background())
+	uvPath, uvErr := sdkExecutablePath("uv")
+	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.running {
 		return nil
@@ -662,17 +672,11 @@ func (h *sdkChatHost) ensure(harness string) error {
 	// ACP launches the user's OpenCode 2 command. User-level installs may be
 	// absent from the service's PATH even when we can discover the command.
 	pathDirs := make([]string, 0, 2)
-	for _, name := range []string{"opencode", "uv"} {
-		var path string
-		var err error
-		if name == "opencode" {
-			path, _, err = sdkOpenCodeV2Executable(context.Background())
-		} else {
-			path, err = sdkExecutablePath(name)
-		}
-		if err == nil {
-			pathDirs = append(pathDirs, filepath.Dir(path))
-		}
+	if openCodePath != "" {
+		pathDirs = append(pathDirs, filepath.Dir(openCodePath))
+	}
+	if uvErr == nil {
+		pathDirs = append(pathDirs, filepath.Dir(uvPath))
 	}
 	if len(pathDirs) > 0 {
 		cmd.Env = append(cmd.Env, "PATH="+strings.Join(pathDirs, string(os.PathListSeparator))+string(os.PathListSeparator)+os.Getenv("PATH"))
