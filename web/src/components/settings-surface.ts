@@ -1486,8 +1486,10 @@ export class MuxSettingsSurface extends LitElement {
   private _renderAntigravitySDK() {
     const ready = this._readyAgents?.has('antigravity-sdk') ?? false;
     const stopped = this._agentRuntimes.get('antigravity-sdk')?.state === 'stopped';
+    const label = stopped ? 'Runtime stopped' : this._agentStatusError ? 'Status unavailable'
+      : this._readyAgents === null ? 'Checking' : ready ? 'Ready' : 'Set up';
     return html`<details class="agent-card ai-harness">
-      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Antigravity SDK</span><span class="agent-description">Google coding agent · new chats</span></span><mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${stopped ? 'Runtime stopped' : ready ? 'Ready' : 'Set up'}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Antigravity SDK</span><span class="agent-description">Google coding agent · new chats</span></span><mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="agent-body"><p>New Antigravity chats use the Python SDK. Install uv and Python 3, then provide GEMINI_API_KEY to Muxterm or in ~/.amplifier/keys.env. Refresh agent scan to update availability.</p>
         ${this._renderRuntimeControls('antigravity-sdk', 'Antigravity SDK', ready)}
       </div>
