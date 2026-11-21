@@ -102,11 +102,12 @@ Microsoft personal, and remote MCP connectors. The SDK saves its conversation
 in muxterm's data home. It has no live steer method: sending during a turn uses
 the SDK's `ChatResponse.cancel()` and then continues the same conversation.
 The composer uses the standard steering labels and keeps the partial answer.
-Existing Antigravity ACP v1 chats can resume with Google account sign-in.
+Antigravity ACP v1 remains available as a Google sign-in fallback, and existing
+ACP chats can resume.
 
-Existing Antigravity chats remain on the Google-sign-in ACP agent through `@agentclientprotocol/sdk`
+Antigravity ACP v1 uses `@agentclientprotocol/sdk`
 and muxterm's managed `agy_acp_server.par`. Existing Gemini CLI ACP chats can
-still resume, but new chats use Antigravity SDK. The agent uses its own provider
+still resume, and new chats prefer Antigravity SDK. The ACP agent uses its own provider
 credentials and model configuration; command presence does not prove that a
 provider is ready.
 

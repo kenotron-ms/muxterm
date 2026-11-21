@@ -1723,8 +1723,8 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 	options := make([]option, 0, 6)
 	codexPath, codexErr := sdkAgentExecutable("codex")
 	claudePath, claudeErr := sdkAgentExecutable("claude")
-	availableConfigured := make([]string, 0, 4)
-	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity-sdk"} {
+	availableConfigured := make([]string, 0, 5)
+	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity-sdk", "antigravity"} {
 		if harness == "antigravity-sdk" {
 			if sdkAmplifierProviderKey("GEMINI_API_KEY") != "" {
 				if _, err := sdkExecutablePath("uv"); err == nil {
@@ -1732,6 +1732,12 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 						availableConfigured = append(availableConfigured, harness)
 					}
 				}
+			}
+			continue
+		}
+		if harness == "antigravity" {
+			if antigravityAvailable() {
+				availableConfigured = append(availableConfigured, harness)
 			}
 			continue
 		}
@@ -1962,14 +1968,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported harness", 400)
 		return
 	}
-	// Existing Gemini CLI and Antigravity ACP chats can resume, but new Google
-	// chats use the Antigravity SDK.
+	// Existing Gemini CLI chats can still resume, but new chats use Antigravity.
 	if req.Harness == "gemini" {
 		http.Error(w, "Gemini CLI is no longer offered for new chats; choose Antigravity SDK", 400)
-		return
-	}
-	if req.Harness == "antigravity" {
-		http.Error(w, "Antigravity ACP is no longer offered for new chats; choose Antigravity SDK", 400)
 		return
 	}
 	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" && len(req.Attachments) == 0 {

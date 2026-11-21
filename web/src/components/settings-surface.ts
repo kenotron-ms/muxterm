@@ -102,7 +102,7 @@ const SETUP_AGENTS = [
   { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', install:'npm install -g @deepseek-ai/dsh', update:'npm install -g @deepseek-ai/dsh@latest', start:'dsh', docs:'https://github.com/deepseek-ai/deepseek-harness' },
   { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', install:'uv tool install git+https://github.com/microsoft/amplifier', update:'uv tool upgrade amplifier', start:'amplifier', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
-// Existing Gemini CLI and Antigravity ACP chats can resume; new Google chats use the SDK.
+// Antigravity SDK is the new-chat default; ACP v1 remains available for Google sign-in.
 const DEFAULT_HARNESSES: SDKHarnessName[] = ['codex', 'claude', 'copilot', 'amplifier', 'amplifier-unified', 'pi', 'opencode', 'deepseek', 'antigravity-sdk'];
 
 /**
@@ -1433,9 +1433,9 @@ export class MuxSettingsSurface extends LitElement {
       : this._antigravityStatus === 'missing' ? 'Not installed'
       : signingIn ? 'Signing in' : this._antigravityStatus === 'checking' ? 'Checking' : 'Sign in needed';
     return html`<details class="agent-card ai-harness">
-      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Google Antigravity · ACP v1</span><span class="agent-description">Existing chats</span></span><mux-ui-status-badge appearance="plain" tone=${label === 'Ready' ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Google Antigravity · ACP v1</span><span class="agent-description">Google sign-in fallback</span></span><mux-ui-status-badge appearance="plain" tone=${label === 'Ready' ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="agent-body">
-      <p>Existing ACP v1 chats can resume here. New Antigravity chats use the SDK. ACP handles Google sign-in and stores its own credentials. A detected API key uses Google AI Studio quota.</p>
+      <p>Antigravity SDK is the primary choice for new chats. ACP v1 remains available for Google sign-in and existing chats. It stores its own credentials; a detected API key uses Google AI Studio quota.</p>
       <mux-ui-switch class="ai-auth-switch" layout="row" label="Use API key"
         description=${mode === 'api-key' ? 'API key selected' : 'Google sign-in selected'}
         .checked=${mode === 'api-key'}
