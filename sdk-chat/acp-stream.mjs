@@ -103,9 +103,19 @@ export function connectorServers(mcpBin, originFile) {
 export function antigravityCommand() {
   if (process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND) return process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND;
   const dataHome = instanceDataHome();
-  // Keep this version in sync with antigravityACPVersion in internal/server/antigravity_install.go.
-  const managed = join(dataHome, 'muxterm', 'antigravity-acp', '1.4.3', 'agy_acp_server.par');
-  try { accessSync(managed, constants.X_OK); return managed; } catch { return 'agy_acp_server.par'; }
+  // Keep the preferred and previous versions in sync with antigravity_install.go.
+  for (const version of ['1.5.0', '1.4.3']) {
+    const dir = join(dataHome, 'muxterm', 'antigravity-acp', version);
+    const command = join(dir, 'agy_acp_server.par');
+    const helper = join(dir, 'localharness_external');
+    try {
+      if (!statSync(command).isFile() || !statSync(helper).isFile()) continue;
+      accessSync(command, constants.X_OK);
+      accessSync(helper, constants.X_OK);
+      return command;
+    } catch { /* Try the previous version or a separately installed agent. */ }
+  }
+  return 'agy_acp_server.par';
 }
 
 export function antigravityMode() {
