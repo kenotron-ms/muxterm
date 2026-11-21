@@ -16,7 +16,9 @@ from urllib.request import Request, urlopen
 
 
 ASSET = "muxterm_linux_arm64.tar.gz"
-TAG = "v0.52.150"
+SOURCE_VERSION = os.environ.get("MUXTERM_SOURCE_VERSION", "0.52.149")
+TARGET_VERSION = os.environ.get("MUXTERM_TARGET_VERSION", "0.52.150")
+TAG = "v" + TARGET_VERSION
 FIXTURE = Path("/fixture")
 HOST = "http://127.0.0.1:8765"
 APP = "http://127.0.0.1:8766"
@@ -106,8 +108,8 @@ with tempfile.TemporaryDirectory(prefix="muxterm-arm64-update-") as root:
             raise RuntimeError("muxterm did not start")
         assert status["method"] == "binary", status
         assert status["updateAvailable"] and status["canUpdate"], status
-        assert status["currentVersion"] == "0.52.149", status
-        assert status["latestVersion"] == "0.52.150", status
+        assert status["currentVersion"] == SOURCE_VERSION, status
+        assert status["latestVersion"] == TARGET_VERSION, status
         print("actionable status:", json.dumps(status, sort_keys=True), flush=True)
 
         expect_apply_failure('has no asset "' + ASSET + '"', original_hash)
@@ -117,14 +119,14 @@ with tempfile.TemporaryDirectory(prefix="muxterm-arm64-update-") as root:
         mode = "good"
         request("/api/update/check", "POST")
         code, applied = request("/api/update/apply", "POST")
-        assert code == 200 and applied["version"] == "0.52.150", applied
+        assert code == 200 and applied["version"] == TARGET_VERSION, applied
         assert hashlib.sha256(binary.read_bytes()).hexdigest() != original_hash
-        assert subprocess.check_output([str(binary), "version"], text=True).startswith("muxterm 0.52.150 ")
+        assert subprocess.check_output([str(binary), "version"], text=True).startswith("muxterm " + TARGET_VERSION + " ")
         print("published archive installed:", subprocess.check_output([str(binary), "version"], text=True).strip(), flush=True)
         for _ in range(60):
             try:
                 _, status = request("/api/update/status")
-                if status["currentVersion"] == "0.52.150":
+                if status["currentVersion"] == TARGET_VERSION:
                     break
             except URLError:
                 pass
