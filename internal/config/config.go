@@ -663,7 +663,7 @@ func Defaults() Config {
 			Palette:  "tokyo-night",
 			App:      "neutral",
 			Mode:     "dark",
-			Backdrop: "neutral",
+			Backdrop: "contours",
 		},
 		Font: FontConfig{
 			// Default to the server-bundled JetBrains Mono Nerd Font.

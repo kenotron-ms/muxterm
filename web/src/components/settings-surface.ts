@@ -2,7 +2,7 @@ import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES } from '../lib/theme.js';
-import { APP_THEMES, CHAT_BACKDROPS, appThemeScheme, chatBackdropImage, type AppThemeId, type AppThemeMode, type ChatBackdropId } from '../lib/app-appearance.js';
+import { APP_THEMES, BACKDROPS, appThemeScheme, backdropImage, type AppThemeId, type AppThemeMode, type BackdropId } from '../lib/app-appearance.js';
 import '../ui/button.js';
 import '../ui/feedback.js';
 import '../ui/nav-item.js';
@@ -347,7 +347,9 @@ export class MuxSettingsSurface extends LitElement {
     .appearance-choice { display:block; min-width:0; }
     .appearance-choice::part(button) { display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; gap:0; min-height:0; width:100%; height:100%; padding:var(--ui-space-2); border:2px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; white-space:normal; font:inherit; }
     .appearance-choice[pressed]::part(button) { border-color:var(--ui-accent); }
-    .appearance-preview { display:flex; height:var(--ui-space-15); overflow:hidden; border-radius:var(--ui-radius-md); background:var(--preview-chat); }
+    .appearance-preview { position:relative; display:flex; height:var(--ui-space-15); overflow:hidden; border-radius:var(--ui-radius-md); background:var(--preview-chat); }
+    .appearance-preview::before,.backdrop-preview::before { content:''; position:absolute; inset:0; background:var(--preview-art); mask:var(--preview-mask) center/cover no-repeat; pointer-events:none; }
+    .appearance-preview > * { position:relative; }
     .appearance-preview-side { box-sizing:border-box; width:28%; flex:none; padding:calc(var(--ui-space-4) + var(--ui-space-1)) var(--ui-radius-md); border-right:1px solid var(--preview-border); background:var(--preview-side); }
     .appearance-preview-side span { display:block; height:calc(var(--ui-space-1) + var(--ui-space-px)); width:80%; margin:0 0 var(--ui-radius-md); border-radius:var(--ui-radius-sm); background:var(--preview-border); }
     .appearance-preview-side span:first-child { width:calc(var(--ui-space-5) - var(--ui-space-px)); height:calc(var(--ui-space-5) - var(--ui-space-px)); margin-bottom:calc(var(--ui-space-5) + var(--ui-space-px)); border-radius:var(--ui-radius-sm); background:var(--preview-accent); }
@@ -358,7 +360,7 @@ export class MuxSettingsSurface extends LitElement {
     .appearance-preview-reply { top:calc(var(--ui-space-8) + var(--ui-space-3)); left:var(--ui-radius-md); max-width:78%; padding:var(--ui-space-2) var(--ui-space-3); border-radius:var(--ui-space-1) var(--ui-radius-lg) var(--ui-radius-lg) var(--ui-radius-lg); background:var(--preview-assistant); color:var(--preview-assistant-text); }
     .appearance-preview-composer { bottom:var(--ui-radius-md); left:var(--ui-radius-md); right:var(--ui-radius-md); height:calc(var(--ui-space-5) + var(--ui-space-px)); border:1px solid var(--preview-border); border-radius:var(--ui-radius-md); background:var(--preview-assistant); }
     .backdrop-heading { margin-top:var(--ui-space-8); }
-    .backdrop-choice .backdrop-preview { display:block; height:calc(var(--ui-space-15) + var(--ui-space-2)); border-radius:var(--ui-radius-md); background-image:linear-gradient(var(--ui-chat-backdrop-wash),var(--ui-chat-backdrop-wash)),var(--backdrop-image); background-position:center; background-size:cover; background-repeat:no-repeat; }
+    .backdrop-choice .backdrop-preview { position:relative; display:block; width:100%; height:calc(var(--ui-space-15) + var(--ui-space-2)); overflow:hidden; border-radius:var(--ui-radius-md); background:var(--preview-chat); }
     .backdrop-choice .appearance-choice-label { padding-bottom:var(--ui-space-3); }
     .appearance-choice-label { display:flex; align-items:center; gap:var(--ui-space-3); padding:var(--ui-space-4) var(--ui-space-2) var(--ui-space-2); font-weight:650; }
     .appearance-choice-label::before { content:''; width:var(--ui-space-5); height:var(--ui-space-5); flex:none; border:1px solid var(--ui-border-strong); border-radius:50%; }
@@ -974,7 +976,7 @@ export class MuxSettingsSurface extends LitElement {
     this._emit({ terminal: { ...this.config.terminal, bell } });
   }
 
-  private _setBackdrop(backdrop: ChatBackdropId): void {
+  private _setBackdrop(backdrop: BackdropId): void {
     if (!this.config) return;
     this._emit({ theme: { ...this.config.theme, backdrop } });
   }
@@ -1104,16 +1106,16 @@ export class MuxSettingsSurface extends LitElement {
     const mode = cfg.theme.mode;
     return html`
       <div class="appearance-heading">
-        <div><p class="section-title">App theme</p><p class="appearance-help">Choose colors for chats, navigation, and utility panels.</p></div>
+        <div><p class="section-title">Color palette</p><p class="appearance-help">Choose colors for chats, navigation, and utility panels.</p></div>
         <div class="mode-toggle" role="group" aria-label="App color mode">
           <mux-ui-button variant="quiet" size="small" toggle ?pressed=${mode === 'light'} @click=${() => this._setAppMode('light')}>Light</mux-ui-button>
           <mux-ui-button variant="quiet" size="small" toggle ?pressed=${mode === 'dark'} @click=${() => this._setAppMode('dark')}>Dark</mux-ui-button>
         </div>
       </div>
-      <div class="appearance-grid" role="group" aria-label="App theme">
+      <div class="appearance-grid" role="group" aria-label="Color palette">
         ${APP_THEMES.map(theme => {
           const sample = appThemeScheme(theme.id, mode);
-          const preview = `--preview-chat:${sample.chat};--preview-side:${sample.raised};--preview-border:${sample.border};--preview-accent:${sample.accent};--preview-user:${sample.user};--preview-assistant:${sample.assistant};--preview-text:${sample.text};--preview-assistant-text:${sample.assistantText}`;
+          const preview = `--preview-chat:${sample.chat};--preview-side:${sample.raised};--preview-border:${sample.border};--preview-accent:${sample.accent};--preview-user:${sample.user};--preview-assistant:${sample.assistant};--preview-text:${sample.text};--preview-assistant-text:${sample.assistantText};--preview-art:color-mix(in srgb, ${sample.accent} ${mode === 'light' ? 19 : 28}%, transparent);--preview-mask:${cfg.theme.backdrop === 'none' ? 'none' : `url("${backdropImage(cfg.theme.backdrop)}")`}`;
           return html`<mux-ui-button class="appearance-choice" style=${preview} toggle ?pressed=${cfg.theme.app === theme.id} @click=${() => this._setAppTheme(theme.id)}>
             <span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-side"><span></span><span></span><span></span></span><span class="appearance-preview-chat"><span class="appearance-preview-user">Hello there</span><span class="appearance-preview-reply">Happy to help</span><span class="appearance-preview-composer"></span></span></span>
             <span class="appearance-choice-label">${theme.label}</span><span class="appearance-choice-description">${theme.description}</span>
@@ -1121,12 +1123,16 @@ export class MuxSettingsSurface extends LitElement {
         })}
       </div>
       <div class="appearance-heading backdrop-heading">
-        <div><p class="section-title">Chat backdrop</p><p class="appearance-help">Choose one of six quiet patterns. Each has a light and dark version.</p></div>
+        <div><p class="section-title">Chat backdrop</p><p class="appearance-help">Choose a subject for chats. Its color follows the palette above.</p></div>
       </div>
       <div class="appearance-grid" role="group" aria-label="Chat backdrop">
-        ${CHAT_BACKDROPS.map(backdrop => html`<mux-ui-button class="appearance-choice backdrop-choice" style=${`--backdrop-image:url("${chatBackdropImage(backdrop.id, mode)}")`} toggle ?pressed=${cfg.theme.backdrop === backdrop.id} @click=${() => this._setBackdrop(backdrop.id)}>
-          <span class="backdrop-preview" aria-hidden="true"></span><span class="appearance-choice-label">${backdrop.label}</span>
-        </mux-ui-button>`)}
+        ${BACKDROPS.map(backdrop => {
+          const sample = appThemeScheme(cfg.theme.app, mode);
+          const preview = `--preview-chat:${sample.chat};--preview-art:color-mix(in srgb, ${sample.accent} ${mode === 'light' ? 35 : 45}%, transparent);--preview-mask:${backdrop.image ? `url("${backdrop.image}")` : 'none'}`;
+          return html`<mux-ui-button class="appearance-choice backdrop-choice" style=${preview} toggle ?pressed=${cfg.theme.backdrop === backdrop.id} @click=${() => this._setBackdrop(backdrop.id)}>
+            <span class="backdrop-preview" aria-hidden="true"></span><span class="appearance-choice-label">${backdrop.label}</span><span class="appearance-choice-description">${backdrop.description}</span>
+          </mux-ui-button>`;
+        })}
       </div>
     `;
   }
