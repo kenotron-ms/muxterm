@@ -755,7 +755,7 @@ func (s *Server) handleSDKWorkComment(w http.ResponseWriter, r *http.Request) {
 		copy.CommentBoundary = &sdkWorkCommentNotice{OwnerSessionID: ownerID, AnchorID: commentID, State: "pending", At: time.Now().UTC()}
 	}
 	steer := false
-	if req.Priority == "high" && ownerID != "" && (copy.CommentNotice == nil || copy.CommentNotice.OwnerSessionID != ownerID || copy.CommentNotice.State == "deferred") {
+	if req.Priority == "high" && ownerID != "" && (copy.CommentNotice == nil || copy.CommentNotice.OwnerSessionID != ownerID || copy.CommentNotice.State == "deferred" || copy.CommentNotice.State == "uncertain") {
 		copy.CommentNotice = &sdkWorkCommentNotice{OwnerSessionID: ownerID, AnchorID: commentID, State: "pending", At: time.Now().UTC()}
 		steer = copy.Status == "active" && copy.Readiness != "held" && h.chats[ownerID] != nil && !h.chats[ownerID].Archived && h.chats[ownerID].State == "working"
 		for _, projectID := range h.workProjectIDsLocked(&copy) {
