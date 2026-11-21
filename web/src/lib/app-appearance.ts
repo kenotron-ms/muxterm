@@ -27,18 +27,18 @@ export type AppTheme = { id: AppThemeId; label: string; description: string; lig
 /** Subject artwork is an alpha mask. The selected app palette supplies every visible color. */
 export const BACKDROPS = [
   { id:'none', label:'Plain', description:'No artwork', image:'' },
-  { id:'contours', label:'Contours', description:'Flowing lines', image:contoursArt },
-  { id:'ridgeline', label:'Ridgeline', description:'Mountain horizon', image:ridgelineArt },
-  { id:'botanical', label:'Botanical', description:'Leaves and stems', image:botanicalArt },
-  { id:'arcade', label:'Arcade', description:'Architectural arches', image:arcadeArt },
-  { id:'orbits', label:'Orbits', description:'Celestial paths', image:orbitsArt },
-  { id:'rainfall', label:'Rainfall', description:'Slanting rain', image:rainfallArt },
-  { id:'confetti', label:'Confetti', description:'Playful shapes', image:confettiArt },
-  { id:'dunes', label:'Dunes', description:'Layered desert', image:dunesArt },
-  { id:'fan', label:'Fan', description:'Radiating lines', image:fanArt },
-  { id:'citylights', label:'Citylights', description:'City silhouette', image:citylightsArt },
-  { id:'petals', label:'Petals', description:'Flower study', image:petalsArt },
-  { id:'geometry', label:'Geometry', description:'Nested forms', image:geometryArt },
+  { id:'contours', label:'Contours', description:'Small flowing lines', image:contoursArt },
+  { id:'ridgeline', label:'Ridgeline', description:'Mountain peaks', image:ridgelineArt },
+  { id:'botanical', label:'Botanical', description:'Leaf sprigs', image:botanicalArt },
+  { id:'arcade', label:'Arcade', description:'Little arches', image:arcadeArt },
+  { id:'orbits', label:'Orbits', description:'Miniature planets', image:orbitsArt },
+  { id:'rainfall', label:'Rainfall', description:'Rain strokes', image:rainfallArt },
+  { id:'confetti', label:'Confetti', description:'Scattered shapes', image:confettiArt },
+  { id:'dunes', label:'Dunes', description:'Wind-shaped dunes', image:dunesArt },
+  { id:'fan', label:'Fan', description:'Folding fans', image:fanArt },
+  { id:'citylights', label:'Citylights', description:'Mini skylines', image:citylightsArt },
+  { id:'petals', label:'Petals', description:'Loose blossoms', image:petalsArt },
+  { id:'geometry', label:'Geometry', description:'Nested shapes', image:geometryArt },
 ] as const;
 export type BackdropId = typeof BACKDROPS[number]['id'];
 export function backdropImage(id: string): string {

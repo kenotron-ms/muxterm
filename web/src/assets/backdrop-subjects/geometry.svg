@@ -1,1 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice"><g fill="none" stroke="white" stroke-width="11" opacity=".5"><path d="m180 80 250 0 125 215-125 215H180L55 295Zm600 20 250 0 125 215-125 215H780L655 315ZM470 430h250l125 215-125 215H470L345 645Z"/><circle cx="305" cy="295" r="95"/><circle cx="905" cy="315" r="95"/><circle cx="595" cy="645" r="95"/></g><g fill="white" opacity=".18"><circle cx="305" cy="295" r="65"/><circle cx="905" cy="315" r="65"/><circle cx="595" cy="645" r="65"/></g></svg>
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <g fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(25 27) rotate(-11)" opacity="0.58">
+      <path d="m0-18 17 17L0 16-17-1Zm0 7 10 10L0 9-10-1Z"/>
+    </g>
+    <g transform="translate(85 23) rotate(8)" opacity="0.42">
+      <path d="m-16-11 16-7 16 7v22L0 18l-16-7Zm16-7V5m16-16L0 5m-16-16L0 5"/>
+    </g>
+    <g transform="translate(137 43) rotate(-7)" opacity="0.5">
+      <path d="m0-18 18 16-6 18H-12l-6-18Zm0 7 10 9-4 10H-6l-4-10Z"/>
+    </g>
+    <g transform="translate(49 83) rotate(12)" opacity="0.37">
+      <path d="m0-18 17 17L0 16-17-1Zm0 7 10 10L0 9-10-1Z"/>
+    </g>
+    <g transform="translate(113 90) rotate(-13)" opacity="0.53">
+      <path d="m-16-11 16-7 16 7v22L0 18l-16-7Zm16-7V5m16-16L0 5m-16-16L0 5"/>
+    </g>
+    <g transform="translate(22 136) rotate(7)" opacity="0.44">
+      <path d="m0-18 18 16-6 18H-12l-6-18Zm0 7 10 9-4 10H-6l-4-10Z"/>
+    </g>
+    <g transform="translate(86 139) rotate(-6)" opacity="0.61">
+      <path d="m0-18 17 17L0 16-17-1Zm0 7 10 10L0 9-10-1Z"/>
+    </g>
+    <g transform="translate(145 136) rotate(10)" opacity="0.39">
+      <path d="m-16-11 16-7 16 7v22L0 18l-16-7Zm16-7V5m16-16L0 5m-16-16L0 5"/>
+    </g>
+  </g>
+</svg>

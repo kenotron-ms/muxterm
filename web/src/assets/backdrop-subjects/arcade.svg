@@ -1,1 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice"><g fill="none" stroke="white" stroke-width="22" opacity=".48"><path d="M80 800V260a180 180 0 0 1 360 0v540M430 800V260a180 180 0 0 1 360 0v540M780 800V260a180 180 0 0 1 360 0v540"/><path d="M0 685H1200M0 745H1200"/></g><g fill="white" opacity=".16"><path d="M120 800V270a140 140 0 0 1 280 0v530ZM470 800V270a140 140 0 0 1 280 0v530ZM820 800V270a140 140 0 0 1 280 0v530Z"/></g></svg>
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <g fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(25 27) rotate(-11)" opacity="0.58">
+      <path d="M-14 16V-3a14 14 0 0 1 28 0v19M-8 16V-3a8 8 0 0 1 16 0v19M-18 16h36"/>
+    </g>
+    <g transform="translate(85 23) rotate(8)" opacity="0.42">
+      <path d="M-16 15V1a10 10 0 0 1 20 0v14M4 15V-5a7 7 0 0 1 14 0v20M-18 15h38"/>
+    </g>
+    <g transform="translate(137 43) rotate(-7)" opacity="0.5">
+      <path d="M-15 15V-2a15 15 0 0 1 30 0v17m-23 0V-2a8 8 0 0 1 16 0v17M-18 15h36"/>
+    </g>
+    <g transform="translate(49 83) rotate(12)" opacity="0.37">
+      <path d="M-14 16V-3a14 14 0 0 1 28 0v19M-8 16V-3a8 8 0 0 1 16 0v19M-18 16h36"/>
+    </g>
+    <g transform="translate(113 90) rotate(-13)" opacity="0.53">
+      <path d="M-16 15V1a10 10 0 0 1 20 0v14M4 15V-5a7 7 0 0 1 14 0v20M-18 15h38"/>
+    </g>
+    <g transform="translate(22 136) rotate(7)" opacity="0.44">
+      <path d="M-15 15V-2a15 15 0 0 1 30 0v17m-23 0V-2a8 8 0 0 1 16 0v17M-18 15h36"/>
+    </g>
+    <g transform="translate(86 139) rotate(-6)" opacity="0.61">
+      <path d="M-14 16V-3a14 14 0 0 1 28 0v19M-8 16V-3a8 8 0 0 1 16 0v19M-18 16h36"/>
+    </g>
+    <g transform="translate(145 136) rotate(10)" opacity="0.39">
+      <path d="M-16 15V1a10 10 0 0 1 20 0v14M4 15V-5a7 7 0 0 1 14 0v20M-18 15h38"/>
+    </g>
+  </g>
+</svg>
