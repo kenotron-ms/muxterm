@@ -97,6 +97,23 @@ jobs:
               fi
             '
 
+      - name: Exercise self-update against published arm64 release in isolated container
+        run: |
+          fixture="$RUNNER_TEMP/arm64-self-update"
+          mkdir -p "$fixture"
+          CGO_ENABLED=1 go build -ldflags '-s -w -X main.version=0.52.149' -o "$fixture/older-muxterm" ./cmd/muxterm
+          curl -fsSL "https://github.com/kenotron-ms/muxterm/releases/download/v0.52.150/muxterm_linux_arm64.tar.gz" -o "$fixture/muxterm_linux_arm64.tar.gz"
+          curl -fsSL "https://github.com/kenotron-ms/muxterm/releases/download/v0.52.150/checksums.txt" -o "$fixture/checksums.txt"
+          (cd "$fixture" && sha256sum --ignore-missing -c checksums.txt)
+          cp scripts/verify-arm64-self-update.py "$fixture/verify.py"
+          docker run --rm --platform linux/arm64 \
+            -v "$fixture:/fixture:ro" \
+            python:3.12-bookworm bash -euo pipefail -c '
+              apt-get update -qq
+              apt-get install -y -qq libpam0g
+              python /fixture/verify.py
+            '
+
       - uses: actions/upload-artifact@v4
         with:
           name: muxterm-linux-arm64
