@@ -694,7 +694,7 @@ func (s *Server) handleSDKWorkComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Priority == "high" && !humanBrowserRequest(r) && !s.remoteChatBridgeRequest(r) {
-		http.Error(w, "only an authenticated human browser can post high-priority comments", http.StatusForbidden)
+		http.Error(w, "only an authenticated human browser or trusted remote bridge can post high-priority comments", http.StatusForbidden)
 		return
 	}
 	h := s.sdkChats

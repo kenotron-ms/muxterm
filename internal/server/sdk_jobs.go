@@ -544,22 +544,27 @@ func (m *sdkJobs) dispatch(parent context.Context, job sdkJob, runID string) {
 		}
 		content = strings.Join(lines, "\n") + fmt.Sprintf("\n\nInspect the current Work item before acting. Use only Work tools authorized for this job chat. Do not approve or revise a Chat Goal or release a human pause.\n\nStanding instructions, revision %d:\n%s\n\nReport what happened and any uncertainty.", job.Revision, job.Brief)
 	}
-	m.chats.workSendMu.RLock()
-	notice, boundaryTokens := m.chats.pendingWorkBoundaryNotice(job.ChatID)
-	content += notice
-	result, err := m.chats.call(ctx, "send", map[string]any{"sessionId": job.ChatID, "input": map[string]any{"kind": "user", "source": "scheduled-job", "id": runID, "content": content, "displayContent": "Run job: " + job.Name, "model": chat.Model, "effort": chat.Effort}})
-	if err != nil {
-		m.chats.workSendMu.RUnlock()
-		m.failDispatch(job.ID, runID, "Run delivery uncertain: "+err.Error(), true)
-		return
-	}
-	var acknowledgement struct{ Status, InputID string }
-	if json.Unmarshal(result, &acknowledgement) != nil || acknowledgement.Status != "accepted" || acknowledgement.InputID != runID {
-		m.failDispatch(job.ID, runID, "Run delivery acknowledgement was invalid", true)
-	} else {
+	deliveryFailure := ""
+	func() {
+		m.chats.workSendMu.RLock()
+		defer m.chats.workSendMu.RUnlock()
+		notice, boundaryTokens := m.chats.pendingWorkBoundaryNotice(job.ChatID)
+		content += notice
+		result, err := m.chats.call(ctx, "send", map[string]any{"sessionId": job.ChatID, "input": map[string]any{"kind": "user", "source": "scheduled-job", "id": runID, "content": content, "displayContent": "Run job: " + job.Name, "model": chat.Model, "effort": chat.Effort}})
+		if err != nil {
+			deliveryFailure = "Run delivery uncertain: " + err.Error()
+			return
+		}
+		var acknowledgement struct{ Status, InputID string }
+		if json.Unmarshal(result, &acknowledgement) != nil || acknowledgement.Status != "accepted" || acknowledgement.InputID != runID {
+			deliveryFailure = "Run delivery acknowledgement was invalid"
+			return
+		}
 		m.chats.markWorkBoundaryNotices(boundaryTokens)
+	}()
+	if deliveryFailure != "" {
+		m.failDispatch(job.ID, runID, deliveryFailure, true)
 	}
-	m.chats.workSendMu.RUnlock()
 }
 func (m *sdkJobs) failDispatch(jobID, runID, message string, uncertain bool) {
 	m.mu.Lock()
