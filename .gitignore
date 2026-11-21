@@ -1,5 +1,6 @@
 # Binaries
 bin/
+/dist-arm64/
 /muxterm
 /bridge-poc
 *.exe
