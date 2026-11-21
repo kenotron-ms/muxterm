@@ -305,7 +305,7 @@ async function command(cmd) {
   if (op === 'start' || op === 'resume') {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
     if (harness !== 'codex' && harness !== 'claude' && harness !== 'copilot' &&
-      !['pi', 'opencode', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness) && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
+      !['pi', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness) && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
     const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval,

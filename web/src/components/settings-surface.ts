@@ -1498,11 +1498,12 @@ export class MuxSettingsSurface extends LitElement {
     const version = this._agentVersions.get(agent.harness);
     const known = version !== undefined;
     const installed = version?.installed ?? false;
+    const ready = this._readyAgents?.has(agent.harness) ?? false;
     return html`<details class="agent-card">
       <summary><span class="agent-identity"><span class="agent-title">${agent.name}</span><span class="agent-description">${agent.description}</span></span>${this._agentStatus(agent.harness)}<span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="agent-body">
         <p>${!known ? 'Checking installation…' : installed ? `Installed ${version.version ? `v${version.version}` : '(version unavailable)'}.` : agent.harness === 'opencode' && version?.version?.startsWith('1.') ? `OpenCode v${version.version} found. Install OpenCode 2 to use chat.` : 'Not installed on this computer.'}${version?.latestVersion ? ` Latest v${version.latestVersion}.` : ''}</p>
-        <p>${installed ? 'Update in a terminal pane when you choose.' : `Install ${agent.name} in a terminal pane.`} ${agent.harness === 'copilot' ? 'Run copilot login to connect an authorized Copilot account.' : agent.harness === 'opencode' ? 'Run opencode auth login to connect provider models; built-in free models need no sign-in.' : 'The agent will guide you through sign-in.'} Refresh agent scan after installation or sign-in to update availability.</p>
+        <p>${installed ? 'Update in a terminal pane when you choose.' : `Install ${agent.name} in a terminal pane.`} ${agent.harness === 'copilot' ? ready ? '' : 'Run copilot login to connect an authorized Copilot account.' : agent.harness === 'opencode' ? 'Run opencode auth login to connect provider models; built-in free models need no sign-in.' : 'The agent will guide you through sign-in.'} ${ready && agent.harness === 'copilot' ? '' : 'Refresh agent scan after installation or sign-in to update availability.'}</p>
         <div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${!known} @click=${() => this._runAgentCommand(agent, installed ? 'update' : 'install')}>${installed ? 'Update in terminal' : 'Install'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
       </div>
     </details>`;
