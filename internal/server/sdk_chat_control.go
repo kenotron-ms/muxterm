@@ -356,7 +356,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		kind = "steer"
 	}
 	voiceContext := ""
-	if s.sdkVoice != nil {
+	if s.voiceProvider() != "" {
 		voiceContext = h.recentVoiceContext(id)
 	}
 	content := sdkTaskInputWithVoiceContext(req.Content, voiceContext)

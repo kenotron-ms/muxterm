@@ -52,7 +52,7 @@ export interface VoiceStatus {
   allowedScopes: string[];
   configPath: string;
   keyPath: string;
-  /** Voice routes are wired at startup; a saved change lands on next start. */
+  /** An external config edit is pending; Settings saves apply immediately. */
   restartRequired: boolean;
 }
 
@@ -176,14 +176,18 @@ export async function saveVoiceSettings(input: VoiceSettingsInput): Promise<Voic
     body: JSON.stringify(input),
   });
   if (!res.ok) throw new Error(await errorText(res, `Save failed (HTTP ${res.status}).`));
-  return parseVoiceStatus(await res.json());
+  const status = parseVoiceStatus(await res.json());
+  window.dispatchEvent(new CustomEvent('muxterm-voice-settings-applied', { detail: status }));
+  return status;
 }
 
 /** DELETE /api/voice/key — idempotent; also turns voice off if it was the only source. */
 export async function clearVoiceKey(provider: 'openai' | 'gemini'): Promise<VoiceStatus> {
   const res = await fetch(apiPath(`/api/voice/key?provider=${provider}`), { method: 'DELETE' });
   if (!res.ok) throw new Error(await errorText(res, `Could not remove the key (HTTP ${res.status}).`));
-  return parseVoiceStatus(await res.json());
+  const status = parseVoiceStatus(await res.json());
+  window.dispatchEvent(new CustomEvent('muxterm-voice-settings-applied', { detail: status }));
+  return status;
 }
 
 /**

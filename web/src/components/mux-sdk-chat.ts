@@ -184,6 +184,11 @@ export class MuxSDKChat extends LitElement {
   private unsubscribeDictation?: () => void;
   private unsubscribeVoice?: () => void;
   private unsubscribeVoiceLevels?: () => void;
+  private readonly onVoiceSettingsApplied = (event: Event) => {
+    const status = (event as CustomEvent<{ enabled: boolean; restartRequired: boolean }>).detail;
+    this.voiceAvailable = status.enabled && !status.restartRequired;
+    this.voiceError = '';
+  };
   @state() private showScrollBottom = false;
   private dragDepth = 0;
   private stream?: EventSource;
@@ -627,6 +632,7 @@ export class MuxSDKChat extends LitElement {
     this.unsubscribeVoiceLevels = sdkVoiceCall.onLevels(levels => {
       if (sdkVoiceCall.active?.chatId === this.sessionId) this.updateVoiceLevels(levels);
     });
+    window.addEventListener('muxterm-voice-settings-applied', this.onVoiceSettingsApplied);
     this.connect();
     void fetchVoiceStatus().then(status => {
       this.voiceAvailable = status.enabled && !status.restartRequired;
@@ -663,6 +669,7 @@ export class MuxSDKChat extends LitElement {
     this.unsubscribeVoice?.();
     this.unsubscribeVoice = undefined;
     this.unsubscribeVoiceLevels?.();
+    window.removeEventListener('muxterm-voice-settings-applied', this.onVoiceSettingsApplied);
     this.unsubscribeVoiceLevels = undefined;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.cacheTimer) clearTimeout(this.cacheTimer);
@@ -704,6 +711,9 @@ export class MuxSDKChat extends LitElement {
     const away = Date.now() - this.lastActivationAt;
     this.lastActivationAt = Date.now();
     if (!this.isConnected || !this.activeSession || document.hidden) return;
+    void fetchVoiceStatus().then(status => {
+      this.voiceAvailable = status.enabled && !status.restartRequired;
+    });
     // A sleeping browser may resume without a visibility change or an SSE error.
     if (this.idleSuspended || this.reconnectFailed || away > 60_000 || (this.reconnectFailures > 0 && !this.reconnectTimer)) {
       this.idleSuspended = false;
@@ -1764,7 +1774,12 @@ export class MuxSDKChat extends LitElement {
       const message = event.message || 'Voice connection lost.';
       this.voiceEntries = [...this.voiceEntries, { role:'error', text:message, at:event.at }];
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:message, at:event.at });
-      if (!this.replaying && event.generationId) sdkVoiceCall.stopProvider(this.activeSession, event.generationId);
+      if (!this.replaying) {
+        if (event.generationId) sdkVoiceCall.stopProvider(this.activeSession, event.generationId);
+        void fetchVoiceStatus().then(status => {
+          this.voiceAvailable = status.enabled && !status.restartRequired;
+        });
+      }
     }
     else if (event.type === 'session.renamed') { if (!this.replaying) void sdkChats.refresh(); }
     else if (event.type === 'error' || event.type === 'session.uncertain') { this.turnFinished.set(this.currentTurn, eventTime); this.workExpanded.delete(this.currentTurn); this.workCollapsedWhileWorking.delete(this.currentTurn); if (event.type === 'error') blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'error', text:event.message || 'Session error' }); this.turnStart = blocks.length; this.currentTurn++; this.busy = false; if (event.type === 'session.uncertain') this.recoveryRequired = true; if (!this.replaying) void sdkChats.refresh(); }
@@ -2881,7 +2896,7 @@ export class MuxSDKChat extends LitElement {
       if (this.sessionId !== chatId) return;
       this.voiceAvailable = status.enabled && !status.restartRequired;
       if (status.restartRequired) {
-        this.voiceError = 'Restart muxterm to use the saved voice provider.';
+        this.voiceError = 'Voice settings changed outside Settings. Save them there to apply the change.';
         return;
       }
       if (!status.enabled) {

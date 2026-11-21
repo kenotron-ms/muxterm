@@ -1592,7 +1592,7 @@ export class MuxSettingsSurface extends LitElement {
         ...(key === '' ? {} : { apiKey: key }),
       });
       this._applyVoiceStatus(st);
-      this._voiceMessage = 'Saved.';
+      this._voiceMessage = 'Saved and applied. Start a new Voice call to use these settings.';
       this._voiceMessageKind = 'ok';
     } catch (e) {
       // The server's own words. They name the missing field, which is the
@@ -1694,7 +1694,7 @@ export class MuxSettingsSurface extends LitElement {
           : `${isGemini ? 'Gemini Live' : 'OpenAI GPT-Live'} settings are saved; save to make this provider active.`)}
       ${credLine}
       ${st.restartRequired
-        ? this._vLine('bad', 'Voice starts with muxterm, so restart it for the saved change to take effect.')
+        ? this._vLine('bad', 'The config file changed outside Settings. Save these settings to apply them.')
         : ''}
 
       <mux-ui-switch class="v-toggle" layout="row" label="Enable voice" .checked=${this._vEnabled}

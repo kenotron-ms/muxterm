@@ -69,6 +69,9 @@ func checkGeminiVoiceKey(ctx context.Context, v config.VoiceConfig, store *secre
 }
 
 func (s *Server) currentGeminiVoiceSession(chatID, sessionID string) bool {
+	if s.voiceProvider() != "gemini" {
+		return false
+	}
 	s.geminiVoiceMu.Lock()
 	defer s.geminiVoiceMu.Unlock()
 	entry, ok := s.geminiVoiceSessions[sessionID]
@@ -76,6 +79,10 @@ func (s *Server) currentGeminiVoiceSession(chatID, sessionID string) bool {
 }
 
 func (s *Server) handleGeminiVoiceStart(w http.ResponseWriter, r *http.Request) {
+	if !s.requireVoiceProvider(w, r, "gemini") {
+		return
+	}
+	generation := s.currentVoiceGeneration()
 	id := r.PathValue("id")
 	s.sdkChats.mu.Lock()
 	chat := s.sdkChats.chats[id]
@@ -131,6 +138,11 @@ func (s *Server) handleGeminiVoiceStart(w http.ResponseWriter, r *http.Request) 
 	}
 	sessionID := sdkID()
 	s.geminiVoiceMu.Lock()
+	if s.voiceProvider() != "gemini" || s.currentVoiceGeneration() != generation {
+		s.geminiVoiceMu.Unlock()
+		http.Error(w, "Voice settings changed during connection", http.StatusConflict)
+		return
+	}
 	if s.geminiVoiceSessions == nil {
 		s.geminiVoiceSessions = make(map[string]geminiVoiceSession)
 	}
@@ -147,6 +159,9 @@ func (s *Server) handleGeminiVoiceStart(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleGeminiVoiceEvent(w http.ResponseWriter, r *http.Request) {
+	if !s.requireVoiceProvider(w, r, "gemini") {
+		return
+	}
 	var body struct {
 		SessionID string `json:"sessionId"`
 		Type      string `json:"type"`
@@ -191,6 +206,9 @@ func sanitizeVoiceStreamDelta(value string, limit int) string {
 }
 
 func (s *Server) handleGeminiVoiceTool(w http.ResponseWriter, r *http.Request) {
+	if !s.requireVoiceProvider(w, r, "gemini") {
+		return
+	}
 	var body struct {
 		SessionID string `json:"sessionId"`
 		Name      string `json:"name"`
@@ -209,6 +227,9 @@ func (s *Server) handleGeminiVoiceTool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGeminiVoiceEnd(w http.ResponseWriter, r *http.Request) {
+	if !s.requireVoiceProvider(w, r, "gemini") {
+		return
+	}
 	var body struct {
 		SessionID string `json:"sessionId"`
 	}
