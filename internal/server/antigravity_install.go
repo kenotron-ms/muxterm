@@ -64,8 +64,8 @@ func antigravityInstalled(dir string) bool {
 	return true
 }
 
-// Older managed installs have no platform component in their path. Check both
-// executables before selecting one, including when a scoped install is damaged.
+// Check one managed executable against this process's platform. Legacy installs
+// have no platform component in their path, so file presence alone is unsafe.
 func antigravityBinaryMatchesHost(path string) bool {
 	switch runtime.GOOS {
 	case "linux":
