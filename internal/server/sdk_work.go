@@ -21,88 +21,96 @@ import (
 // Work items coordinate sessions. A filed goal condition is installed as
 // the selected worker chat's native goal when the scheduler dispatches Work.
 type sdkWorkItem struct {
-	ID                string                `json:"id"`
-	ClientRef         string                `json:"clientRef"`
-	Title             string                `json:"title"`
-	Brief             string                `json:"brief"`
-	CreateTitle       *string               `json:"createTitle,omitempty"`
-	CreateBrief       *string               `json:"createBrief,omitempty"`
-	Source            string                `json:"source,omitempty"`
-	Readiness         string                `json:"readiness"`
-	HeldByHuman       bool                  `json:"heldByHuman,omitempty"`
-	NextAction        string                `json:"nextAction,omitempty"`
-	CreateNextAction  string                `json:"createNextAction,omitempty"`
-	Status            string                `json:"status"`
-	CreatedBy         sdkWorkActor          `json:"createdBy"`
-	OwnerSessionID    string                `json:"ownerSessionId"`
-	CreateOwnerID     string                `json:"createOwnerSessionId,omitempty"`
-	Acceptance        string                `json:"acceptanceCriteria,omitempty"`
-	GoalCondition     string                `json:"goalCondition,omitempty"`
-	GoalRevision      int                   `json:"goalRevision,omitempty"`
-	GoalFiledRevision int                   `json:"goalFiledRevision,omitempty"`
-	CreateGoal        *string               `json:"createGoalCondition,omitempty"`
-	CreateDraft       bool                  `json:"createDraft,omitempty"`
-	GoalApproved      int                   `json:"goalApprovedRevision,omitempty"`
-	GoalApprovedAt    *time.Time            `json:"goalApprovedAt,omitempty"`
-	ReviewVersion     int                   `json:"reviewVersion,omitempty"`
-	UIWork            bool                  `json:"uiWork,omitempty"`
-	DesignPreview     *sdkWorkDesignPreview `json:"designPreview,omitempty"`
-	GoalCheck         *sdkWorkGoalCheck     `json:"goalCheck,omitempty"`
-	CreateAcceptance  *string               `json:"createAcceptanceCriteria,omitempty"`
-	ReviewerSessionID string                `json:"reviewerSessionId,omitempty"`
-	CreateReviewerID  string                `json:"createReviewerSessionId,omitempty"`
-	BlockedReason     string                `json:"blockedReason,omitempty"`
-	NeedsHuman        bool                  `json:"needsHuman,omitempty"`
-	ProjectIDs        []string              `json:"projectIds"`
-	CreateProjectIDs  []string              `json:"createProjectIds"`
-	Labels            []string              `json:"labels"`
-	CreateLabels      []string              `json:"createLabels,omitempty"`
-	SessionIDs        []string              `json:"sessionIds"`
-	CreateSessionIDs  []string              `json:"createSessionIds"`
-	DependsOn         []string              `json:"dependsOn"`
-	CreateDependsOn   []string              `json:"createDependsOn,omitempty"`
-	WaitingOn         []string              `json:"waitingOn"`
-	Dispatch          *sdkWorkDispatch      `json:"dispatch,omitempty"`
-	Progress          string                `json:"progress,omitempty"`
-	Outcome           string                `json:"outcome,omitempty"`
-	Revision          int                   `json:"revision"`
-	CreatedAt         time.Time             `json:"createdAt"`
-	UpdatedAt         time.Time             `json:"updatedAt"`
-	Updates           []sdkWorkUpdate       `json:"updates"`
+	ID                string                   `json:"id"`
+	ClientRef         string                   `json:"clientRef"`
+	Title             string                   `json:"title"`
+	Brief             string                   `json:"brief"`
+	CreateTitle       *string                  `json:"createTitle,omitempty"`
+	CreateBrief       *string                  `json:"createBrief,omitempty"`
+	Source            string                   `json:"source,omitempty"`
+	Readiness         string                   `json:"readiness"`
+	HeldByHuman       bool                     `json:"heldByHuman,omitempty"`
+	NextAction        string                   `json:"nextAction,omitempty"`
+	CreateNextAction  string                   `json:"createNextAction,omitempty"`
+	Status            string                   `json:"status"`
+	CreatedBy         sdkWorkActor             `json:"createdBy"`
+	OwnerSessionID    string                   `json:"ownerSessionId"`
+	CreateOwnerID     string                   `json:"createOwnerSessionId,omitempty"`
+	Acceptance        string                   `json:"acceptanceCriteria,omitempty"`
+	GoalCondition     string                   `json:"goalCondition,omitempty"`
+	GoalRevision      int                      `json:"goalRevision,omitempty"`
+	GoalFiledRevision int                      `json:"goalFiledRevision,omitempty"`
+	CreateGoal        *string                  `json:"createGoalCondition,omitempty"`
+	CreateDraft       bool                     `json:"createDraft,omitempty"`
+	GoalApproved      int                      `json:"goalApprovedRevision,omitempty"`
+	GoalApprovedAt    *time.Time               `json:"goalApprovedAt,omitempty"`
+	ReviewVersion     int                      `json:"reviewVersion,omitempty"`
+	UIWork            bool                     `json:"uiWork,omitempty"`
+	DesignPreview     *sdkWorkDesignPreview    `json:"designPreview,omitempty"`
+	GoalCheck         *sdkWorkGoalCheck        `json:"goalCheck,omitempty"`
+	CreateAcceptance  *string                  `json:"createAcceptanceCriteria,omitempty"`
+	ReviewerSessionID string                   `json:"reviewerSessionId,omitempty"`
+	CreateReviewerID  string                   `json:"createReviewerSessionId,omitempty"`
+	BlockedReason     string                   `json:"blockedReason,omitempty"`
+	NeedsHuman        bool                     `json:"needsHuman,omitempty"`
+	ProjectIDs        []string                 `json:"projectIds"`
+	CreateProjectIDs  []string                 `json:"createProjectIds"`
+	Labels            []string                 `json:"labels"`
+	CreateLabels      []string                 `json:"createLabels,omitempty"`
+	SessionIDs        []string                 `json:"sessionIds"`
+	CreateSessionIDs  []string                 `json:"createSessionIds"`
+	DependsOn         []string                 `json:"dependsOn"`
+	CreateDependsOn   []string                 `json:"createDependsOn,omitempty"`
+	WaitingOn         []string                 `json:"waitingOn"`
+	Dispatch          *sdkWorkDispatch         `json:"dispatch,omitempty"`
+	Progress          string                   `json:"progress,omitempty"`
+	Outcome           string                   `json:"outcome,omitempty"`
+	Revision          int                      `json:"revision"`
+	CreatedAt         time.Time                `json:"createdAt"`
+	UpdatedAt         time.Time                `json:"updatedAt"`
+	Updates           []sdkWorkUpdate          `json:"updates"`
+	CommentReadBy     map[string]string        `json:"commentReadBy,omitempty"`
+	CommentNotice     *sdkWorkCommentNotice    `json:"commentNotice,omitempty"`
+	CommentBoundary   *sdkWorkCommentNotice    `json:"commentBoundary,omitempty"`
+	CommentAttention  *sdkWorkCommentAttention `json:"commentAttention,omitempty"`
 }
 
 type sdkWorkUpdate struct {
-	ID                string                `json:"id"`
-	ClientRef         string                `json:"clientRef"`
-	At                time.Time             `json:"at"`
-	Actor             sdkWorkActor          `json:"actor"`
-	SessionID         string                `json:"sessionId,omitempty"`
-	Summary           string                `json:"summary,omitempty"`
-	Text              string                `json:"text"`
-	Comment           bool                  `json:"comment,omitempty"`
-	Title             *string               `json:"title,omitempty"`
-	Brief             *string               `json:"brief,omitempty"`
-	Acceptance        *string               `json:"acceptanceCriteria,omitempty"`
-	GoalCondition     *string               `json:"goalCondition,omitempty"`
-	GoalRevision      int                   `json:"goalRevision,omitempty"`
-	DesignPreview     *sdkWorkDesignPreview `json:"designPreview,omitempty"`
-	GoalApproved      bool                  `json:"goalApproved,omitempty"`
-	Readiness         *string               `json:"readiness,omitempty"`
-	Status            string                `json:"status,omitempty"`
-	Progress          string                `json:"progress,omitempty"`
-	NextAction        *string               `json:"nextAction,omitempty"`
-	Outcome           string                `json:"outcome,omitempty"`
-	Evidence          []string              `json:"evidence,omitempty"`
-	LinkedSessionID   string                `json:"linkedSessionId,omitempty"`
-	ProjectIDs        *[]string             `json:"projectIds,omitempty"`
-	Labels            *[]string             `json:"labels,omitempty"`
-	OwnerSessionID    *string               `json:"ownerSessionId,omitempty"`
-	ReviewerSessionID *string               `json:"reviewerSessionId,omitempty"`
-	BlockedReason     *string               `json:"blockedReason,omitempty"`
-	NeedsHuman        *bool                 `json:"needsHuman,omitempty"`
-	DependsOn         *[]string             `json:"dependsOn,omitempty"`
-	ExpectedRevision  *int                  `json:"expectedRevision,omitempty"`
-	JobEvent          *sdkJobWorkEvent      `json:"jobEvent,omitempty"`
+	ID                 string                `json:"id"`
+	ClientRef          string                `json:"clientRef"`
+	At                 time.Time             `json:"at"`
+	Actor              sdkWorkActor          `json:"actor"`
+	SessionID          string                `json:"sessionId,omitempty"`
+	Summary            string                `json:"summary,omitempty"`
+	Text               string                `json:"text"`
+	Comment            bool                  `json:"comment,omitempty"`
+	CommentPriority    string                `json:"commentPriority,omitempty"`
+	CommentSource      string                `json:"commentSource,omitempty"`
+	CommentReadThrough string                `json:"commentReadThrough,omitempty"`
+	CommentNoticeState string                `json:"commentNoticeState,omitempty"`
+	Title              *string               `json:"title,omitempty"`
+	Brief              *string               `json:"brief,omitempty"`
+	Acceptance         *string               `json:"acceptanceCriteria,omitempty"`
+	GoalCondition      *string               `json:"goalCondition,omitempty"`
+	GoalRevision       int                   `json:"goalRevision,omitempty"`
+	DesignPreview      *sdkWorkDesignPreview `json:"designPreview,omitempty"`
+	GoalApproved       bool                  `json:"goalApproved,omitempty"`
+	Readiness          *string               `json:"readiness,omitempty"`
+	Status             string                `json:"status,omitempty"`
+	Progress           string                `json:"progress,omitempty"`
+	NextAction         *string               `json:"nextAction,omitempty"`
+	Outcome            string                `json:"outcome,omitempty"`
+	Evidence           []string              `json:"evidence,omitempty"`
+	LinkedSessionID    string                `json:"linkedSessionId,omitempty"`
+	ProjectIDs         *[]string             `json:"projectIds,omitempty"`
+	Labels             *[]string             `json:"labels,omitempty"`
+	OwnerSessionID     *string               `json:"ownerSessionId,omitempty"`
+	ReviewerSessionID  *string               `json:"reviewerSessionId,omitempty"`
+	BlockedReason      *string               `json:"blockedReason,omitempty"`
+	NeedsHuman         *bool                 `json:"needsHuman,omitempty"`
+	DependsOn          *[]string             `json:"dependsOn,omitempty"`
+	ExpectedRevision   *int                  `json:"expectedRevision,omitempty"`
+	JobEvent           *sdkJobWorkEvent      `json:"jobEvent,omitempty"`
 }
 
 type sdkWorkDispatch struct {
@@ -665,17 +673,28 @@ func (s *Server) handleSDKWorkItem(w http.ResponseWriter, r *http.Request) {
 	writeSDKJSON(w, 200, copy)
 }
 
-// Comments are coordination history, not changes to the Work state and not
-// chat inputs. The author comes from the authenticated request, never JSON.
+// The author and high-priority authority come from the request, never JSON.
 func (s *Server) handleSDKWorkComment(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ClientRef string `json:"clientRef"`
 		Text      string `json:"text"`
+		Priority  string `json:"priority"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 20<<10)).Decode(&req) != nil ||
 		strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 ||
 		strings.TrimSpace(req.Text) == "" || len(req.Text) > 16<<10 {
 		http.Error(w, "clientRef and comment text required", http.StatusBadRequest)
+		return
+	}
+	if req.Priority == "" {
+		req.Priority = "normal"
+	}
+	if req.Priority != "normal" && req.Priority != "high" {
+		http.Error(w, "priority must be normal or high", http.StatusBadRequest)
+		return
+	}
+	if req.Priority == "high" && !humanBrowserRequest(r) && !s.remoteChatBridgeRequest(r) {
+		http.Error(w, "only an authenticated human browser or trusted remote bridge can post high-priority comments", http.StatusForbidden)
 		return
 	}
 	h := s.sdkChats
@@ -691,7 +710,11 @@ func (s *Server) handleSDKWorkComment(w http.ResponseWriter, r *http.Request) {
 		if prior.ClientRef != req.ClientRef {
 			continue
 		}
-		if !prior.Comment || prior.Text != req.Text || prior.Actor != actor {
+		priority := prior.CommentPriority
+		if priority == "" {
+			priority = "normal"
+		}
+		if !prior.Comment || prior.Text != req.Text || prior.Actor != actor || priority != req.Priority {
 			h.mu.Unlock()
 			http.Error(w, "clientRef already used for different Work activity", http.StatusConflict)
 			return
@@ -700,17 +723,50 @@ func (s *Server) handleSDKWorkComment(w http.ResponseWriter, r *http.Request) {
 		copy.CreatedBy = h.workCreatorLocked(item)
 		copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 		copy.WaitingOn = h.workWaitingOnLocked(item)
+		pendingNotice := item.CommentNotice != nil && item.CommentNotice.AnchorID == prior.ID && item.CommentNotice.State == "pending"
+		ownerID := item.OwnerSessionID
 		h.mu.Unlock()
+		if pendingNotice {
+			s.deliverWorkCommentNotice(r.Context(), item.ID, ownerID, prior.ID)
+		}
 		writeSDKJSON(w, http.StatusOK, copy)
 		return
 	}
 	copy := *item
 	copy.CreatedBy = h.workCreatorLocked(item)
 	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
+	commentID := sdkID()
+	source := actor.Kind
+	if actor.Kind == "human" {
+		source = "work-pane"
+	}
+	if actor.Kind == "chat" {
+		source = "chat"
+		if chat := h.chats[actor.SessionID]; chat != nil && chat.SideParentID != "" {
+			source = "side-chat"
+		}
+	}
 	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{
-		ID: sdkID(), ClientRef: req.ClientRef, At: time.Now().UTC(),
-		Actor: actor, SessionID: actor.SessionID, Text: req.Text, Comment: true,
+		ID: commentID, ClientRef: req.ClientRef, At: time.Now().UTC(),
+		Actor: actor, SessionID: actor.SessionID, Text: req.Text, Comment: true, CommentPriority: req.Priority, CommentSource: source,
 	})
+	ownerID := copy.OwnerSessionID
+	if ownerID != "" && copy.Status == "active" && (copy.CommentBoundary == nil || copy.CommentBoundary.OwnerSessionID != ownerID || copy.CommentBoundary.State != "pending") {
+		copy.CommentBoundary = &sdkWorkCommentNotice{OwnerSessionID: ownerID, AnchorID: commentID, State: "pending", At: time.Now().UTC()}
+	}
+	steer := false
+	if req.Priority == "high" && ownerID != "" && (copy.CommentNotice == nil || copy.CommentNotice.OwnerSessionID != ownerID || copy.CommentNotice.State == "deferred" || copy.CommentNotice.State == "uncertain") {
+		copy.CommentNotice = &sdkWorkCommentNotice{OwnerSessionID: ownerID, AnchorID: commentID, State: "pending", At: time.Now().UTC()}
+		steer = copy.Status == "active" && copy.Readiness != "held" && h.chats[ownerID] != nil && !h.chats[ownerID].Archived && h.chats[ownerID].State == "working"
+		for _, projectID := range h.workProjectIDsLocked(&copy) {
+			if project := h.projects[projectID]; project != nil && project.WorkPaused {
+				steer = false
+			}
+		}
+		if !steer {
+			copy.CommentNotice.State = "deferred"
+		}
+	}
 	copy.Revision++
 	copy.UpdatedAt = time.Now().UTC()
 	copy.WaitingOn = h.workWaitingOnLocked(item)
@@ -720,6 +776,9 @@ func (s *Server) handleSDKWorkComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mu.Unlock()
+	if steer {
+		s.deliverWorkCommentNotice(r.Context(), copy.ID, ownerID, commentID)
+	}
 	writeSDKJSON(w, http.StatusCreated, copy)
 }
 
@@ -846,12 +905,22 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 			copy.CreatedBy = h.workCreatorLocked(item)
 			copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 			copy.WaitingOn = h.workWaitingOnLocked(item)
+			if actor.Kind == "chat" && actor.SessionID == item.OwnerSessionID {
+				copy.CommentAttention = workCommentAttention(item, actor.SessionID)
+			}
 			h.mu.Unlock()
 			writeSDKJSON(w, 200, copy)
 			return
 		}
 	}
 	if req.ExpectedRevision != nil && *req.ExpectedRevision != item.Revision {
+		if actor.Kind == "chat" && actor.SessionID == item.OwnerSessionID {
+			if attention := workCommentAttention(item, actor.SessionID); attention != nil {
+				h.mu.Unlock()
+				writeSDKJSON(w, http.StatusConflict, map[string]any{"error": "Work changed with unread comments; read and acknowledge them before retrying", "commentAttention": attention, "retry": "Call read_work_comments, then acknowledge_work_comments with through_comment_id; retry this update with a new client_ref and current expected_revision."})
+				return
+			}
+		}
 		h.mu.Unlock()
 		http.Error(w, "work item changed; refresh before assigning", 409)
 		return
@@ -1067,6 +1136,13 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "work dependencies must be done before work can start or complete", 409)
 		return
 	}
+	if (req.Status == "review" || req.Status == "done") && copy.OwnerSessionID != "" {
+		if attention := workCommentAttention(item, copy.OwnerSessionID); attention != nil {
+			h.mu.Unlock()
+			writeSDKJSON(w, http.StatusConflict, map[string]any{"error": "unread Work comments; read and acknowledge them before completing", "commentAttention": attention, "retry": "Call read_work_comments, then acknowledge_work_comments with through_comment_id; retry this update with a new client_ref."})
+			return
+		}
+	}
 	if item.Status == "done" && req.Status != "" && req.Status != "done" {
 		for _, dependent := range h.workItems {
 			if slices.Contains(dependent.DependsOn, item.ID) && (dependent.Status == "active" || dependent.Status == "review" || dependent.Status == "done") {
@@ -1127,6 +1203,17 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Outcome != "" {
 		copy.Outcome = req.Outcome
 	}
+	if previousOwner != copy.OwnerSessionID || (item.Status != "active" && copy.Status == "active") {
+		copy.CommentBoundary = nil
+		if previousOwner != copy.OwnerSessionID {
+			copy.CommentNotice = nil
+		}
+		if copy.Status == "active" {
+			if attention := workCommentAttention(&copy, copy.OwnerSessionID); attention != nil {
+				copy.CommentBoundary = &sdkWorkCommentNotice{OwnerSessionID: copy.OwnerSessionID, AnchorID: attention.LatestID, State: "pending", At: time.Now().UTC()}
+			}
+		}
+	}
 	copy.Revision++
 	copy.UpdatedAt = time.Now().UTC()
 	if item.Status != copy.Status {
@@ -1138,6 +1225,10 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 		http.Error(w, err.Error(), 500)
 		return
+	}
+	response := copy
+	if actor.Kind == "chat" && actor.SessionID == copy.OwnerSessionID {
+		response.CommentAttention = workCommentAttention(&copy, actor.SessionID)
 	}
 	h.mu.Unlock()
 	if copy.Readiness == "ready" && !wasReady {
@@ -1193,5 +1284,5 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 			h.appendEvent(sdkEvent{SessionID: creatorID, Type: "work.attention", WorkID: copy.ID, Text: notice + ". Open the Work tab for details."})
 		}
 	}
-	writeSDKJSON(w, 200, copy)
+	writeSDKJSON(w, 200, response)
 }

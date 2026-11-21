@@ -2583,10 +2583,24 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		if req.Kind == "user" || req.Kind == "steer" {
 			content = sdkChatInput(id, content)
 		}
+		var boundaryTokens []sdkWorkBoundaryToken
+		if req.Kind == "user" {
+			h.workSendMu.RLock()
+			defer h.workSendMu.RUnlock()
+			var notice string
+			notice, boundaryTokens = h.pendingWorkBoundaryNotice(id)
+			content += notice
+		}
 		result, err := h.call(ctx, "send", map[string]any{"sessionId": id, "input": map[string]any{"kind": req.Kind, "source": req.Source, "id": req.ID, "content": content, "displayContent": displayContent, "attachments": attachments, "model": c.Model, "effort": c.Effort}})
 		if err != nil {
 			http.Error(w, err.Error(), 422)
 			return
+		}
+		if len(boundaryTokens) > 0 {
+			var ack struct{ Status string }
+			if json.Unmarshal(result, &ack) == nil && ack.Status == "accepted" {
+				h.markWorkBoundaryNotices(boundaryTokens)
+			}
 		}
 		writeSDKJSON(w, 202, result)
 	default:

@@ -212,6 +212,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	}
 	h := s.sdkChats
 	workID, _ := r.Context().Value(sdkWorkKickoffContextKey{}).(string)
+	workNotice, isWorkNotice := r.Context().Value(sdkWorkCommentNoticeContextKey{}).(sdkWorkCommentNotice)
 	remoteSender := ""
 	if s.remoteAgentChatRequest(r) {
 		remoteSender = r.Header.Get("X-Muxterm-Remote-Origin-Chat")
@@ -247,6 +248,11 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chat := *c
+	if isWorkNotice && (workID == "" || !h.workCommentNoticeEligibleLocked(workID, id, workNotice.AnchorID)) {
+		h.mu.Unlock()
+		http.Error(w, "Work comment notice is no longer eligible", http.StatusConflict)
+		return
+	}
 	if !humanBrowserRequest(r) {
 		document, err := h.goals.update(chat, nil)
 		if err != nil {
@@ -263,6 +269,10 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	// A missing token is an external tool input; an invalid token is rejected.
 	// Only serve issues tokens that identify a sending chat.
 	origin, valid := h.controlOriginLocked(req.OriginToken, id)
+	if isWorkNotice {
+		origin = sdkEventOrigin{Type: "work-comment", TargetChatID: id, Name: "Muxterm Work"}
+		valid = true
+	}
 	if remoteSender != "" {
 		origin = sdkEventOrigin{Type: "chat-message", ChatID: remoteSender, TargetChatID: id, Name: "Remote chat", Relation: "chat-to-chat"}
 		valid = true
@@ -332,6 +342,11 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "active Work owner is protected; read Work status or post a Work comment", http.StatusForbidden)
 		return
 	}
+	if isWorkNotice && !h.workCommentNoticeEligibleLocked(workID, id, workNotice.AnchorID) {
+		h.mu.Unlock()
+		http.Error(w, "Work comment notice is no longer eligible", http.StatusConflict)
+		return
+	}
 	if _, err := os.Stat(path); err == nil {
 		h.mu.Unlock()
 		http.Error(w, "clientRef admitted concurrently; query the same key again", 409)
@@ -360,8 +375,18 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		voiceContext = h.recentVoiceContext(id)
 	}
 	content := sdkTaskInputWithVoiceContext(req.Content, voiceContext)
+	var boundaryTokens []sdkWorkBoundaryToken
+	if kind == "user" {
+		var notice string
+		notice, boundaryTokens = h.pendingWorkBoundaryNotice(id)
+		content += notice
+	}
+	source := "chat-message"
+	if isWorkNotice {
+		source = "work-comment"
+	}
 	result, err := h.call(ctx, "send", map[string]any{"sessionId": id,
-		"input": map[string]any{"kind": kind, "source": "chat-message", "id": receipt.InputID,
+		"input": map[string]any{"kind": kind, "source": source, "id": receipt.InputID,
 			"content": content, "displayContent": req.Content}})
 	var ack struct{ Status, InputID string }
 	if err == nil {
@@ -369,6 +394,9 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil && (ack.Status != "accepted" || ack.InputID != receipt.InputID) {
 		err = fmt.Errorf("sidecar did not confirm input acceptance")
+	}
+	if err == nil {
+		h.markWorkBoundaryNotices(boundaryTokens)
 	}
 	h.mu.Lock()
 	if err != nil {
