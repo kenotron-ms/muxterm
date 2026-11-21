@@ -29,6 +29,19 @@ type discoverChat struct {
 	LastActivity   string    `json:"last_activity,omitempty"`
 }
 
+type discoverArchivedChat struct {
+	Machine        string    `json:"machine"`
+	ID             string    `json:"id"`
+	ProjectID      string    `json:"project_id,omitempty"`
+	ProjectPath    string    `json:"project_path"`
+	Harness        string    `json:"harness"`
+	Title          string    `json:"title"`
+	State          string    `json:"state"`
+	LastActivityAt time.Time `json:"last_activity_at"`
+	LastActivity   string    `json:"last_activity,omitempty"`
+	Archived       bool      `json:"archived"`
+}
+
 type discoverProject struct {
 	Machine string         `json:"machine"`
 	ID      string         `json:"id"`
@@ -127,18 +140,32 @@ func registerChatControlTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
-			body, err := pt.chatRequest(args, http.MethodGet, "/api/sdk-chats?archived=true&page="+strconv.Itoa(page), nil)
+			body, err := pt.chatRequestForMachine(machine, http.MethodGet, "/api/sdk-chats?archived=true&page="+strconv.Itoa(page), nil)
 			if err != nil {
 				return "", err
 			}
 			var result struct {
-				Chats []json.RawMessage `json:"chats"`
-				Total int               `json:"total"`
+				Chats []struct {
+					ID, WorkspaceID, ProjectPath, Harness, Title, State, LastActivity string
+					CreatedAt, UpdatedAt                                              time.Time
+					Archived                                                          bool
+				} `json:"chats"`
+				Total int `json:"total"`
 			}
 			if err := json.Unmarshal(body, &result); err != nil {
 				return "", fmt.Errorf("decode archived chats: %w", err)
 			}
-			return jsonText(map[string]any{"machine": machine, "page": page, "total": result.Total, "chats": result.Chats}), nil
+			chats := make([]discoverArchivedChat, 0, len(result.Chats))
+			for _, c := range result.Chats {
+				activityAt := c.UpdatedAt
+				if activityAt.IsZero() {
+					activityAt = c.CreatedAt
+				}
+				chats = append(chats, discoverArchivedChat{Machine: machine, ID: c.ID, ProjectID: c.WorkspaceID,
+					ProjectPath: c.ProjectPath, Harness: c.Harness, Title: c.Title, State: c.State,
+					LastActivityAt: activityAt, LastActivity: c.LastActivity, Archived: c.Archived})
+			}
+			return jsonText(map[string]any{"machine": machine, "page": page, "total": result.Total, "chats": chats}), nil
 		})
 	srv.Register("archive_chat", "Archive exactly one Chat by stable session ID through the same server action as the UI. Preserves its transcript and returns the archived Chat. A repeat call returns its current archived state; working chats and active Work owners are refused. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"session_id": map[string]any{"type": "string", "description": "stable Chat session ID"}}), "required": []string{"session_id"}},
@@ -150,8 +177,25 @@ func registerChatControlTools(srv *Server) {
 			if strings.TrimSpace(id) == "" {
 				return "", fmt.Errorf("session_id must not be empty")
 			}
-			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-chats/"+url.PathEscape(id)+"/archive", nil)
-			return string(result), err
+			machine, err := pt.chatMachine(args)
+			if err != nil {
+				return "", err
+			}
+			body, err := pt.chatRequestForMachine(machine, http.MethodPost, "/api/sdk-chats/"+url.PathEscape(id)+"/archive", nil)
+			if err != nil {
+				return "", err
+			}
+			var archived struct {
+				ID, Title, State string
+				Archived         bool
+			}
+			if err := json.Unmarshal(body, &archived); err != nil {
+				return "", fmt.Errorf("decode archived chat: %w", err)
+			}
+			if archived.ID != id || !archived.Archived {
+				return "", fmt.Errorf("archive response did not confirm chat %q as archived", id)
+			}
+			return jsonText(map[string]any{"machine": machine, "id": archived.ID, "title": archived.Title, "state": archived.State, "archived": true}), nil
 		})
 	srv.Register("search_chats", "Search addressable Chats by case-insensitive substring in title, project name, or project path. Set include_content to also search accepted inputs and assistant text. Results carry IDs usable by send_chat_message. Set machine to a connected remote ID to address its Chats.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{

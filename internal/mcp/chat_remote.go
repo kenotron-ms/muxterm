@@ -63,6 +63,10 @@ func (pt *publishTools) chatRequest(args map[string]any, method, path string, bo
 	if err != nil {
 		return nil, err
 	}
+	return pt.chatRequestForMachine(machine, method, path, body)
+}
+
+func (pt *publishTools) chatRequestForMachine(machine, method, path string, body []byte) ([]byte, error) {
 	if machine != LocalMachine {
 		path = "/api/remote-chat/" + url.PathEscape(machine) + path
 	}
