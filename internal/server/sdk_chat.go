@@ -659,11 +659,15 @@ func (h *sdkChatHost) ensure(harness string) error {
 		return err
 	}
 	cmd.Env = append(append(os.Environ(), "MUXTERM_CHAT_MCP_BIN="+self), sdkSidecarXDGEnv()...)
-	// The OpenCode SDK launches `opencode` by name. User-level installs may
-	// be absent from the service's PATH even when we can discover the command.
+	// ACP launches the user's OpenCode 2 command. User-level installs may be
+	// absent from the service's PATH even when we can discover the command.
 	pathDirs := make([]string, 0, 2)
 	for _, name := range []string{"opencode", "uv"} {
-		if path, err := sdkExecutablePath(name); err == nil {
+		path, err := sdkExecutablePath(name)
+		if name == "opencode" {
+			path, err = sdkOpenCodeV2Executable()
+		}
+		if err == nil {
 			pathDirs = append(pathDirs, filepath.Dir(path))
 		}
 	}
@@ -1281,11 +1285,27 @@ func sdkACPExecutable(harness string) string {
 	return ""
 }
 
-func sdkOpenCodeExecutable() string {
-	if path, err := sdkExecutablePath("opencode"); err == nil {
-		return path
+func sdkOpenCodeV2Executable() (string, error) {
+	home, _ := os.UserHomeDir()
+	candidates := []string{os.Getenv("MUXTERM_ACP_OPENCODE_COMMAND")}
+	if home != "" {
+		candidates = append(candidates, filepath.Join(home, ".opencode", "bin", "opencode"))
 	}
-	return "opencode"
+	if path, err := sdkExecutablePath("opencode"); err == nil {
+		candidates = append(candidates, path)
+	}
+	for _, path := range candidates {
+		if path == "" {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		output, err := exec.CommandContext(ctx, path, "--version").Output()
+		cancel()
+		if err == nil && strings.HasPrefix(agentSemver.FindString(string(output)), "2.") {
+			return path, nil
+		}
+	}
+	return "", errors.New("OpenCode 2 CLI is unavailable; install it from https://opencode.ai/docs/ and refresh agent scan")
 }
 func sdkContains(values []string, value string) bool {
 	for _, item := range values {
@@ -1627,7 +1647,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 			availableConfigured = append(availableConfigured, harness)
 			continue
 		}
-		if _, err := exec.LookPath(sdkOpenCodeExecutable()); err == nil {
+		if _, err := sdkOpenCodeV2Executable(); err == nil {
 			availableConfigured = append(availableConfigured, harness)
 		}
 	}
@@ -1642,7 +1662,17 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if sdkReady {
-		options = append(options, option{Harness: "copilot", Provider: "github"})
+		authCtx, authCancel := context.WithTimeout(r.Context(), 5*time.Second)
+		result, err := s.sdkChats.call(authCtx, "copilot-auth-status", map[string]any{})
+		authCancel()
+		if err == nil {
+			var auth struct {
+				Authenticated bool `json:"authenticated"`
+			}
+			if json.Unmarshal(result, &auth) == nil && auth.Authenticated {
+				options = append(options, option{Harness: "copilot", Provider: "github"})
+			}
+		}
 		for _, harness := range availableConfigured {
 			options = append(options, option{Harness: harness, Provider: "configured"})
 		}
@@ -1946,13 +1976,17 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	// A missing runtime is a setup failure, not a conversation. Check before
 	// writing a chat record or creating a worktree.
 	if isSDKACPHarness(req.Harness) || req.Harness == "opencode" {
-		command := sdkACPExecutable(req.Harness)
 		if req.Harness == "opencode" {
-			command = sdkOpenCodeExecutable()
-		}
-		if _, err := exec.LookPath(command); err != nil {
-			http.Error(w, "harness executable unavailable: "+command, 503)
-			return
+			if _, err := sdkOpenCodeV2Executable(); err != nil {
+				http.Error(w, err.Error(), 503)
+				return
+			}
+		} else {
+			command := sdkACPExecutable(req.Harness)
+			if _, err := exec.LookPath(command); err != nil {
+				http.Error(w, "harness executable unavailable: "+command, 503)
+				return
+			}
 		}
 	}
 	if req.Harness == "antigravity-sdk" {

@@ -6,11 +6,10 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CodexStream, stopCodexRuntime } from './codex-stream.mjs';
 import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
-import { CopilotStream, stopCopilotClient } from './copilot-stream.mjs';
+import { CopilotStream, copilotAuthenticated, stopCopilotClient } from './copilot-stream.mjs';
 import { agentCommand } from './agent-command.mjs';
 import { ACPStream, isACPHarness, stopACPRuntimes } from './acp-stream.mjs';
 import { PiStream } from './pi-stream.mjs';
-import { OpenCodeStream } from './opencode-stream.mjs';
 import { DeepSeekStream } from './deepseek-stream.mjs';
 import { AntigravitySDKStream } from './antigravity-sdk-stream.mjs';
 import { UnifiedStream } from './unified-stream.mjs';
@@ -78,7 +77,7 @@ const capabilities = harness => harness === 'copilot'
   : harness === 'amplifier-unified'
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: true,
       attributed_service_input: false, native_steering: true }
-  : harness === 'pi' || harness === 'opencode' || harness === 'deepseek' || harness === 'antigravity-sdk'
+  : harness === 'pi' || harness === 'deepseek' || harness === 'antigravity-sdk'
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: false,
       attributed_service_input: false, native_steering: harness === 'pi' }
   : harness === 'claude'
@@ -297,6 +296,7 @@ async function command(cmd) {
   if (op === 'antigravity-login-cancel') return cancelAntigravityLogin();
   if (op === 'antigravity-login-finish') return await finishAntigravityLogin(cmd.callbackURL);
   if (op === 'capabilities') return { capabilities: capabilities(harness) };
+  if (op === 'copilot-auth-status') return { authenticated: await copilotAuthenticated() };
   if (op === 'catalog' && harness === 'codex') {
     const catalog = new CodexStream({ cwd, sourceFolders: [], model: '', effort: '' }, () => {}, null, true);
     try { return await catalog.options(); }
@@ -312,9 +312,9 @@ async function command(cmd) {
       catalog: cmd.catalog === true, originFile: cmd.catalog === true ? '' : originFile(sessionId, cmd.originToken),
       inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
-    if (['pi', 'opencode', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness)) {
+    if (['pi', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness)) {
       try {
-        const Adapter = { pi: PiStream, opencode: OpenCodeStream, deepseek: DeepSeekStream,
+        const Adapter = { pi: PiStream, deepseek: DeepSeekStream,
           'antigravity-sdk': AntigravitySDKStream, 'amplifier-unified': UnifiedStream }[harness];
         s.native = new Adapter(s, emit);
         await s.native.ready;

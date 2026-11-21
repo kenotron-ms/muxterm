@@ -95,8 +95,8 @@ const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
 const SETUP_AGENTS = [
   { harness:'codex', name:'Codex', description:'OpenAI coding agent', install:'curl -fsSL https://chatgpt.com/codex/install.sh | sh', update:'npm install -g @openai/codex@latest', start:'codex', docs:'https://developers.openai.com/codex/cli/' },
   { harness:'claude', name:'Claude Code', description:'Anthropic coding agent', install:'curl -fsSL https://claude.ai/install.sh | bash', update:'claude update', start:'claude', docs:'https://code.claude.com/docs/en/setup' },
-  { harness:'copilot', name:'GitHub Copilot · SDK', description:'GitHub coding agent', install:'npm install -g @github/copilot', update:'npm install -g @github/copilot@latest', start:'copilot', docs:'https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli' },
-  { harness:'opencode', name:'OpenCode · ACP', description:'Open source coding agent', install:'curl -fsSL https://opencode.ai/install | bash', update:'curl -fsSL https://opencode.ai/install | bash', start:'opencode', docs:'https://opencode.ai/docs/' },
+  { harness:'copilot', name:'GitHub Copilot · SDK', description:'GitHub coding agent', install:'curl -fsSL https://gh.io/copilot-install | PREFIX="$HOME/.local" PATH="$HOME/.local/bin:$PATH" bash', update:'curl -fsSL https://gh.io/copilot-install | PREFIX="$HOME/.local" PATH="$HOME/.local/bin:$PATH" bash', start:'"$HOME/.local/bin/copilot"', docs:'https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli' },
+  { harness:'opencode', name:'OpenCode 2 · ACP', description:'Open source coding agent', install:'curl -fsSL https://opencode.ai/v2/install | bash -s -- --no-modify-path', update:'curl -fsSL https://opencode.ai/v2/install | bash -s -- --no-modify-path', start:'"$HOME/.opencode/bin/opencode"', docs:'https://opencode.ai/docs/' },
   { harness:'pi', name:'Pi · ACP', description:'Lightweight coding agent', install:'npm install -g @earendil-works/pi-coding-agent pi-acp', update:'npm install -g @earendil-works/pi-coding-agent@latest pi-acp@latest', start:'pi', docs:'https://github.com/svkozak/pi-acp' },
   { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', install:'npm install -g @deepseek-ai/dsh', update:'npm install -g @deepseek-ai/dsh@latest', start:'dsh', docs:'https://github.com/deepseek-ai/deepseek-harness' },
   { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', install:'uv tool install git+https://github.com/microsoft/amplifier', update:'uv tool upgrade amplifier', start:'amplifier', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
@@ -1243,7 +1243,8 @@ export class MuxSettingsSurface extends LitElement {
   private _agentStatus(harness: string) {
     const ready = this._readyAgents?.has(harness) ?? false;
     const updateAvailable = this._agentVersions.get(harness)?.updateAvailable ?? false;
-    const label = updateAvailable ? 'Update available' : this._agentStatusError ? 'Status unavailable' : this._readyAgents === null ? 'Checking' : ready ? 'Ready' : 'Set up';
+    const installed = this._agentVersions.get(harness)?.installed ?? false;
+    const label = updateAvailable ? 'Update available' : this._agentStatusError ? 'Status unavailable' : this._readyAgents === null ? 'Checking' : ready ? 'Ready' : harness === 'copilot' && installed ? 'Sign in' : 'Set up';
     return html`<mux-ui-status-badge appearance="plain" tone=${ready && !updateAvailable ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge>`;
   }
 
@@ -1500,8 +1501,8 @@ export class MuxSettingsSurface extends LitElement {
     return html`<details class="agent-card">
       <summary><span class="agent-identity"><span class="agent-title">${agent.name}</span><span class="agent-description">${agent.description}</span></span>${this._agentStatus(agent.harness)}<span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="agent-body">
-        <p>${!known ? 'Checking installation…' : installed ? `Installed ${version.version ? `v${version.version}` : '(version unavailable)'}.` : 'Not installed on this computer.'}${version?.latestVersion ? ` Latest v${version.latestVersion}.` : ''}</p>
-        <p>${installed ? 'Update in a terminal pane when you choose.' : `Install ${agent.name} in a terminal pane. The agent will guide you through sign-in.`}</p>
+        <p>${!known ? 'Checking installation…' : installed ? `Installed ${version.version ? `v${version.version}` : '(version unavailable)'}.` : agent.harness === 'opencode' && version?.version?.startsWith('1.') ? `OpenCode v${version.version} found. Install OpenCode 2 to use chat.` : 'Not installed on this computer.'}${version?.latestVersion ? ` Latest v${version.latestVersion}.` : ''}</p>
+        <p>${installed ? 'Update in a terminal pane when you choose.' : `Install ${agent.name} in a terminal pane.`} ${agent.harness === 'copilot' ? 'Run copilot login to connect an authorized Copilot account.' : agent.harness === 'opencode' ? 'Run opencode auth login to connect provider models; built-in free models need no sign-in.' : 'The agent will guide you through sign-in.'} Refresh agent scan after installation or sign-in to update availability.</p>
         <div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${!known} @click=${() => this._runAgentCommand(agent, installed ? 'update' : 'install')}>${installed ? 'Update in terminal' : 'Install'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
       </div>
     </details>`;

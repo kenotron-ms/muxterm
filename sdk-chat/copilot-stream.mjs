@@ -54,6 +54,11 @@ function copilotClient() {
   return sharedReady;
 }
 
+export async function copilotAuthenticated() {
+  const status = await (await copilotClient()).getAuthStatus();
+  return status.isAuthenticated === true;
+}
+
 export async function stopCopilotClient() {
   const ready = sharedReady;
   sharedReady = undefined;

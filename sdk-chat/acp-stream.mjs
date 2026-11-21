@@ -8,6 +8,7 @@ import { acknowledgeInboxReminder, readInboxReminder } from './inbox-reminder.mj
 import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
 
 const profiles = {
+  opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
   gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
   antigravity: { command: 'agy_acp_server.par', args: process.platform === 'linux' ? ['--uid='] : [], env: 'MUXTERM_ACP_ANTIGRAVITY_COMMAND', mcp: true },
 };
@@ -16,8 +17,9 @@ export const isACPHarness = harness => Object.hasOwn(profiles, harness);
 
 const runtimes = new Map();
 class ACPRuntime {
-  constructor(harness) {
+  constructor(harness, key) {
     this.harness = harness;
+    this.key = key;
     this.adapters = new Map();
     this.sessionInit = Promise.resolve();
     this.exited = new Promise(resolve => { this.resolveExit = resolve; });
@@ -57,7 +59,7 @@ class ACPRuntime {
     if (this.exitError) return;
     this.exitError = error;
     this.resolveExit(error);
-    if (runtimes.get(this.harness) === this) runtimes.delete(this.harness);
+    if (runtimes.get(this.key) === this) runtimes.delete(this.key);
     for (const adapter of this.adapters.values()) adapter.onExit(error);
     this.adapters.clear();
   }
@@ -70,9 +72,12 @@ class ACPRuntime {
   }
 }
 
-function runtime(harness) {
-  let current = runtimes.get(harness);
-  if (!current || current.exitError) { current = new ACPRuntime(harness); runtimes.set(harness, current); }
+function runtime(harness, sessionId) {
+  // OpenCode attaches MCP servers to every session in one ACP process's
+  // directory. Keep each chat in its own process so origin tokens cannot leak.
+  const key = harness === 'opencode' ? `${harness}:${sessionId}` : harness;
+  let current = runtimes.get(key);
+  if (!current || current.exitError) { current = new ACPRuntime(harness, key); runtimes.set(key, current); }
   return current;
 }
 
@@ -288,7 +293,7 @@ export class ACPStream {
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
     this.profile = profile;
     this.mcpServers = profile.mcp && !session.catalog ? connectorServers(process.env.MUXTERM_CHAT_MCP_BIN, session.originFile) : [];
-    this.runtime = runtime(session.harness);
+    this.runtime = runtime(session.harness, session.id);
     this.exited = this.runtime.exited;
     this.connection = this.runtime.connection;
     this.ready = this.initialize();
@@ -627,6 +632,12 @@ export class ACPStream {
     this.closed = true;
     await this.ready.catch(() => {});
     this.runtime.detach(this);
+    if (this.session.harness === 'opencode') {
+      // This process belongs to one chat. Closing stdin detaches the saved
+      // session; a later resume starts a new ACP process for the same ID.
+      await this.runtime.stop();
+      return;
+    }
     if (!this.runtime.exitError && this.session.nativeId)
       await this.withExit(this.connection.closeSession({ sessionId: this.session.nativeId }));
   }
