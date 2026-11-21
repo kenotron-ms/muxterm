@@ -37,7 +37,7 @@ jobs:
             version="${GITHUB_REF_NAME#v}"
           fi
           mkdir -p arm64-package/internal/amplifierchat/sidecar
-          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=$version" -o arm64-package/muxterm ./cmd/muxterm
+          CGO_ENABLED=1 go build -ldflags "-s -w -X main.version=$version" -o arm64-package/muxterm ./cmd/muxterm
           test "$(arm64-package/muxterm version)" = "muxterm $version (MCP: stdio)"
           readelf -h arm64-package/muxterm | grep -E 'Machine:.*AArch64'
           ldd arm64-package/muxterm | grep -F 'libpam.so.0 =>'
