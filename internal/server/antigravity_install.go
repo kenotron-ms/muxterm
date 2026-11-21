@@ -16,9 +16,11 @@ import (
 	"time"
 )
 
-// Pinned to the official ACP registry's antigravity-acp/agent.json release.
-const antigravityACPVersion = "1.5.0"
-const antigravityPreviousACPVersion = "1.4.3"
+// Pinned to the official ACP registry's antigravity-acp/agent.json at
+// e29b5bf3bfd8756db5d901690b43dc31e926ccd5.
+const antigravityACPVersion = "1.5.2"
+
+var antigravityManagedVersions = []string{antigravityACPVersion, "1.5.0", "1.4.3"}
 
 type antigravityArchive struct {
 	url    string
@@ -26,10 +28,10 @@ type antigravityArchive struct {
 }
 
 var antigravityArchives = map[string]antigravityArchive{
-	"linux/amd64":  {"https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-x86_64.zip", "36f373e8948edf1727b39c7d62b5722d6a4474bdfd72b04ad3d6def571808c9f"},
-	"linux/arm64":  {"https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-arm64.zip", "1e184f439477b54138e94440056b26a78c0a8075a8fd2ffda637ec31267c6459"},
-	"darwin/amd64": {"https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.0-darwin-x86_64.zip", "86a94e33b25d4a38ff30526ad844546860aa9ed98698498d9e87d30eb794426e"},
-	"darwin/arm64": {"https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.0-darwin-arm64.zip", "c82ecb4ef476bfc35cbe5b2745cdddef873b99c9f5bd7fd11e5ca1fc1667a3fc"},
+	"linux/amd64":  {"https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.2-linux-x86_64.zip", "99dd8612450805011619d7b8447ce374c289e00549d8557f36790e1dd6256852"},
+	"linux/arm64":  {"https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.2-linux-arm64.zip", "e729e05ef54ef0763e48900032466b47fa7c9939cde257f93ba49410ab577acb"},
+	"darwin/amd64": {"https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.2-darwin-x86_64.zip", "92addb5580577b5356d35484d72d1a113d9c5312ad766bcb304983aa8e3fbb06"},
+	"darwin/arm64": {"https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.2-darwin-arm64.zip", "123a16d5c40a8ac99e20f01a62b68dd860fd96b1c528dfb8eaa37ca8733d4845"},
 }
 
 func antigravityArchiveFor(goos, goarch string) (antigravityArchive, bool) {

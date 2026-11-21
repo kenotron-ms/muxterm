@@ -104,7 +104,7 @@ export function antigravityCommand() {
   if (process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND) return process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND;
   const dataHome = instanceDataHome();
   // Keep the preferred and previous versions in sync with antigravity_install.go.
-  for (const version of ['1.5.0', '1.4.3']) {
+  for (const version of ['1.5.2', '1.5.0', '1.4.3']) {
     const dir = join(dataHome, 'muxterm', 'antigravity-acp', version);
     const command = join(dir, 'agy_acp_server.par');
     const helper = join(dir, 'localharness_external');
