@@ -1,4 +1,5 @@
 import { apiPath } from './base-path.js';
+import { GeminiVoiceSession } from './gemini-voice-session.js';
 
 export type SDKVoiceState = 'idle' | 'connecting' | 'listening' | 'speaking';
 type VoiceMeter = { source: MediaStreamAudioSourceNode; analyser: AnalyserNode; bins: Uint8Array<ArrayBuffer> };
@@ -230,7 +231,7 @@ export type ActiveVoiceCall = { chatId: string; state: SDKVoiceState; startedAt:
 
 /** Browser-wide call owner. Chat views may be replaced without closing the microphone. */
 class SDKVoiceCallController {
-  private session: SDKVoiceSession | null = null;
+  private session: SDKVoiceSession | GeminiVoiceSession | null = null;
   private call: ActiveVoiceCall | null = null;
   private listeners = new Set<() => void>();
   private levelListeners = new Set<(levels: readonly number[]) => void>();
@@ -252,12 +253,13 @@ class SDKVoiceCallController {
     return () => this.levelListeners.delete(listener);
   }
 
-  async start(chatId: string): Promise<void> {
+  async start(chatId: string, provider: 'openai' | 'gemini'): Promise<void> {
     if (this.call) {
       if (this.call.chatId === chatId) return;
       throw new Error('A voice call is already active in another chat. Return to that chat or stop its call first.');
     }
-    const session = new SDKVoiceSession(chatId, state => {
+    const Session = provider === 'gemini' ? GeminiVoiceSession : SDKVoiceSession;
+    const session = new Session(chatId, state => {
       if (this.session !== session) return;
       if (state === 'idle') {
         this.session = null;

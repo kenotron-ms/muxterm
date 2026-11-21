@@ -96,6 +96,8 @@ var allowedVoiceEndpointSuffixes = []string{
 // absent: any field derived from a secret's value.
 type voiceStatus struct {
 	Enabled            bool   `json:"enabled"`
+	Provider           string `json:"provider"`
+	GeminiModel        string `json:"geminiModel"`
 	Mode               string `json:"mode"`
 	Endpoint           string `json:"endpoint"`
 	Model              string `json:"model"`
@@ -109,7 +111,15 @@ type voiceStatus struct {
 	// sources the key that way. A name, not a value.
 	KeyEnvVar string `json:"keyEnvVar"`
 	// KeyConfigured is the entire truth this API tells about the secret.
-	KeyConfigured bool `json:"keyConfigured"`
+	KeyConfigured       bool   `json:"keyConfigured"`
+	OpenAIKeyConfigured bool   `json:"openaiKeyConfigured"`
+	OpenAIKeySource     string `json:"openaiKeySource"`
+	OpenAIKeyEnvVar     string `json:"openaiKeyEnvVar"`
+	GeminiKeyConfigured bool   `json:"geminiKeyConfigured"`
+	GeminiKeySource     string `json:"geminiKeySource"`
+	GeminiKeyEnvVar     string `json:"geminiKeyEnvVar"`
+	OpenAIKeyPath       string `json:"openaiKeyPath"`
+	GeminiKeyPath       string `json:"geminiKeyPath"`
 	// AllowedScopes drives the Entra scope select.
 	AllowedScopes []string `json:"allowedScopes"`
 	// ConfigPath and KeyPath are locations, shown so a user knows what to
@@ -125,6 +135,10 @@ type voiceStatus struct {
 
 func (s *Server) voiceKeyStore() *secretfile.Store {
 	return secretfile.New(voice.DefaultKeyPath())
+}
+
+func (s *Server) geminiVoiceKeyStore() *secretfile.Store {
+	return secretfile.New(voice.DefaultKeyPath() + "_gemini")
 }
 
 // voiceConfigOnDisk reads the CURRENT file rather than trusting the config
@@ -151,18 +165,42 @@ func (s *Server) buildVoiceStatus() voiceStatus {
 	s.cfgMu.RUnlock()
 	v := s.voiceConfigOnDisk()
 	st := voiceStatus{
-		Enabled:            v.Enabled,
-		Mode:               voiceModeOf(v),
-		Endpoint:           v.Endpoint,
-		Model:              v.Model,
-		TranscriptionModel: v.TranscriptionModel,
-		AuthMode:           v.AuthMode,
-		EntraScope:         v.Resolved().EntraScope,
-		KeySource:          v.KeySource(),
-		KeyEnvVar:          v.APIKeyEnv,
-		AllowedScopes:      allowedEntraScopes,
-		ConfigPath:         s.configPath,
-		KeyPath:            voice.DefaultKeyPath(),
+		Enabled:             v.Enabled,
+		Provider:            v.Provider,
+		GeminiModel:         v.GeminiModel,
+		Mode:                voiceModeOf(v),
+		Endpoint:            v.Endpoint,
+		Model:               v.Model,
+		TranscriptionModel:  v.TranscriptionModel,
+		AuthMode:            v.AuthMode,
+		EntraScope:          v.Resolved().EntraScope,
+		KeySource:           v.KeySource(),
+		KeyEnvVar:           v.APIKeyEnv,
+		AllowedScopes:       allowedEntraScopes,
+		ConfigPath:          s.configPath,
+		KeyPath:             voice.DefaultKeyPath(),
+		OpenAIKeyConfigured: v.AuthMode == muxcfg.VoiceAuthEntra || s.voiceKeyPresent(v),
+		OpenAIKeySource:     v.KeySource(),
+		OpenAIKeyEnvVar:     v.APIKeyEnv,
+		GeminiKeyConfigured: s.geminiVoiceKeyPresent(v),
+		GeminiKeyEnvVar:     v.GeminiKeyEnv,
+		OpenAIKeyPath:       voice.DefaultKeyPath(),
+		GeminiKeyPath:       s.geminiVoiceKeyStore().Path(),
+	}
+	if v.GeminiKeyEnv != "" {
+		st.GeminiKeySource = "env"
+	} else if v.GeminiKeyStored {
+		st.GeminiKeySource = "stored"
+	} else {
+		st.GeminiKeySource = "none"
+	}
+	if v.Provider == "gemini" {
+		st.KeyPath = s.geminiVoiceKeyStore().Path()
+		st.KeyEnvVar = st.GeminiKeyEnvVar
+		st.KeySource = st.GeminiKeySource
+		st.KeyConfigured = st.GeminiKeyConfigured
+		st.RestartRequired = voiceRuntimeDiffers(runtime, v)
+		return st
 	}
 	switch st.KeySource {
 	case "stored":
@@ -199,6 +237,8 @@ func voiceModeOf(v muxcfg.VoiceConfig) string {
 func voiceRuntimeDiffers(running, onDisk muxcfg.VoiceConfig) bool {
 	r, d := running.Resolved(), onDisk.Resolved()
 	return r.Enabled != d.Enabled ||
+		r.Provider != d.Provider || r.GeminiModel != d.GeminiModel ||
+		r.GeminiKeyEnv != d.GeminiKeyEnv || r.GeminiKeyStored != d.GeminiKeyStored ||
 		r.Endpoint != d.Endpoint ||
 		r.Model != d.Model ||
 		r.AuthMode != d.AuthMode ||
@@ -231,6 +271,8 @@ func (s *Server) handleVoiceSettingsGet(w http.ResponseWriter, _ *http.Request) 
 
 type voiceSettingsRequest struct {
 	Enabled            bool   `json:"enabled"`
+	Provider           string `json:"provider"`
+	GeminiModel        string `json:"geminiModel"`
 	Mode               string `json:"mode"`
 	Endpoint           string `json:"endpoint"`
 	Model              string `json:"model"`
@@ -265,13 +307,49 @@ func (s *Server) handleVoiceSettingsPut(w http.ResponseWriter, r *http.Request) 
 	current := s.voiceConfigOnDisk()
 	next := current
 	next.Enabled = body.Enabled
+	if body.Provider != "" && body.Provider != "openai" && body.Provider != "gemini" {
+		writeVoiceSettingsError(w, http.StatusBadRequest, "Choose OpenAI or Gemini Live as the voice provider.")
+		return
+	}
+	next.Provider = body.Provider
+	newKey := strings.TrimSpace(body.APIKey)
+	if next.Provider == "gemini" {
+		next.GeminiModel = strings.TrimSpace(body.GeminiModel)
+		if next.GeminiModel == "" {
+			next.GeminiModel = geminiDefaultModel
+		}
+		if len(next.GeminiModel) > 120 || strings.ContainsAny(next.GeminiModel, " /\\\t\r\n") {
+			writeVoiceSettingsError(w, http.StatusBadRequest, "Enter a Gemini Live model name without spaces or slashes.")
+			return
+		}
+		if newKey != "" {
+			next.GeminiKeyStored = true
+			next.GeminiKeyEnv = ""
+		}
+		if next.Enabled && newKey == "" && !s.geminiVoiceKeyPresent(next) {
+			writeVoiceSettingsError(w, http.StatusBadRequest, "Gemini Live needs a saved API key before it can be enabled.")
+			return
+		}
+		if newKey != "" {
+			if err := s.geminiVoiceKeyStore().Save(newKey); err != nil {
+				log.Printf("voice_settings: save Gemini key: %v", err)
+				writeVoiceSettingsError(w, http.StatusInternalServerError, "The Gemini key could not be saved.")
+				return
+			}
+		}
+		if err := muxcfg.WriteVoiceSection(s.configPath, next); err != nil {
+			writeVoiceSettingsError(w, http.StatusInternalServerError, "Voice settings could not be saved.")
+			return
+		}
+		writeVoiceSettingsJSON(w, http.StatusOK, s.buildVoiceStatus())
+		return
+	}
 	next.Model = strings.TrimSpace(body.Model)
 	next.TranscriptionModel = strings.TrimSpace(body.TranscriptionModel)
 	if len(next.TranscriptionModel) > 120 || strings.ContainsAny(next.TranscriptionModel, " \t\r\n") {
 		writeVoiceSettingsError(w, http.StatusBadRequest, "Meeting transcription model must be a model or deployment name without spaces (120 characters maximum).")
 		return
 	}
-	newKey := strings.TrimSpace(body.APIKey)
 
 	switch body.Mode {
 	case voiceModeAzureEntra:
@@ -381,6 +459,13 @@ func (s *Server) voiceKeyPresent(cfg muxcfg.VoiceConfig) bool {
 	}
 }
 
+func (s *Server) geminiVoiceKeyPresent(cfg muxcfg.VoiceConfig) bool {
+	if cfg.GeminiKeyEnv != "" {
+		return strings.TrimSpace(os.Getenv(cfg.GeminiKeyEnv)) != ""
+	}
+	return cfg.GeminiKeyStored && s.geminiVoiceKeyStore().Present()
+}
+
 // handleVoiceSettingsDeleteKey clears the stored key and, if voice was
 // enabled by it, turns voice off in the same write.
 //
@@ -390,9 +475,32 @@ func (s *Server) voiceKeyPresent(cfg muxcfg.VoiceConfig) bool {
 // exists to eliminate.
 //
 // AuthMiddleware protects this route.
-func (s *Server) handleVoiceSettingsDeleteKey(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleVoiceSettingsDeleteKey(w http.ResponseWriter, r *http.Request) {
 	voiceSettingsMu.Lock()
 	defer voiceSettingsMu.Unlock()
+	requested := r.URL.Query().Get("provider")
+	if requested != "" && requested != "openai" && requested != "gemini" {
+		writeVoiceSettingsError(w, http.StatusBadRequest, "Unknown voice provider.")
+		return
+	}
+	if v := s.voiceConfigOnDisk(); requested == "gemini" || requested == "" && v.Provider == "gemini" {
+		if err := s.geminiVoiceKeyStore().Clear(); err != nil {
+			writeVoiceSettingsError(w, http.StatusInternalServerError, "The Gemini key could not be removed.")
+			return
+		}
+		if v.GeminiKeyStored {
+			v.GeminiKeyStored = false
+			if v.GeminiKeyEnv == "" && v.Provider == "gemini" {
+				v.Enabled = false
+			}
+			if err := muxcfg.WriteVoiceSection(s.configPath, v); err != nil {
+				writeVoiceSettingsError(w, http.StatusInternalServerError, "The key was removed but settings could not be updated.")
+				return
+			}
+		}
+		writeVoiceSettingsJSON(w, http.StatusOK, s.buildVoiceStatus())
+		return
+	}
 
 	if err := s.voiceKeyStore().Clear(); err != nil {
 		log.Printf("voice_settings: clear key: %v", err)
@@ -404,7 +512,7 @@ func (s *Server) handleVoiceSettingsDeleteKey(w http.ResponseWriter, _ *http.Req
 		v := s.voiceConfigOnDisk()
 		if v.APIKeyStored {
 			v.APIKeyStored = false
-			if v.AuthMode == muxcfg.VoiceAuthAPIKey && v.APIKeyEnv == "" {
+			if v.Provider != "gemini" && v.AuthMode == muxcfg.VoiceAuthAPIKey && v.APIKeyEnv == "" {
 				v.Enabled = false
 			}
 			if err := muxcfg.WriteVoiceSection(s.configPath, v); err != nil {
@@ -429,6 +537,14 @@ func (s *Server) handleVoiceSettingsDeleteKey(w http.ResponseWriter, _ *http.Req
 // AuthMiddleware protects this route.
 func (s *Server) handleVoiceSettingsCheck(w http.ResponseWriter, r *http.Request) {
 	v := s.voiceConfigOnDisk()
+	if v.Provider == "gemini" {
+		if err := checkGeminiVoiceKey(r.Context(), v, s.geminiVoiceKeyStore()); err != nil {
+			writeVoiceSettingsJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		writeVoiceSettingsJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": "Gemini Live authentication succeeded."})
+		return
+	}
 	if v.Endpoint == "" || v.AuthMode == "" {
 		writeVoiceSettingsError(w, http.StatusBadRequest,
 			"Nothing to check yet -- save an endpoint and a sign-in mode first.")

@@ -102,11 +102,19 @@ func (h *sdkVoiceHost) chat(id string) (sdkChat, bool) {
 }
 
 func (h *sdkVoiceHost) transcript(id string) string {
-	turns, streaming, err := h.chats.completedChatTurns(id)
+	return h.chats.voiceTranscript(id)
+}
+
+func (h *sdkChatHost) voiceTranscript(id string) string {
+	turns, streaming, err := h.completedChatTurns(id)
 	if err != nil {
 		return `{"status":"unavailable","turns":[]}`
 	}
-	if chat, ok := h.chat(id); ok && chat.State == "working" {
+	h.mu.Lock()
+	chat := h.chats[id]
+	working := chat != nil && chat.State == "working"
+	h.mu.Unlock()
+	if working {
 		streaming = true
 	}
 	if len(turns) > 6 {
