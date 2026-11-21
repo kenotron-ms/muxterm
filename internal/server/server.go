@@ -129,7 +129,9 @@ type Server struct {
 	cfgMu      sync.RWMutex
 	cfg        muxcfg.Config
 
-	sdkVoice            *sdkVoiceHost
+	voiceMu             sync.RWMutex
+	sdkVoice            *sdkVoiceHost // guarded by voiceMu after New returns
+	voiceGeneration     uint64        // guarded by voiceMu
 	geminiVoiceMu       sync.Mutex
 	geminiVoiceSessions map[string]geminiVoiceSession
 	geminiLoginMu       sync.Mutex
@@ -310,23 +312,22 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/ai/agents/versions", protect(http.HandlerFunc(s.handleCodingAgentVersions)))
 	s.mux.Handle("POST /api/ai/agents/versions/refresh", protect(http.HandlerFunc(s.handleCodingAgentVersionRefresh)))
 
-	// Opt-in realtime voice for SDK chats.
+	// Opt-in realtime voice for SDK chats. Routes stay registered so enabling
+	// Voice from Settings works without rebuilding the mux.
 	if s.cfg.Voice.Enabled && s.cfg.Voice.Provider != "gemini" {
 		chatVoice, err := newSDKVoiceHost(s.cfg.Voice, s.sdkChats)
 		if err != nil {
 			log.Printf("sdk voice: unavailable: %v", err)
 		} else {
 			s.sdkVoice = chatVoice
-			s.mux.Handle("POST /api/sdk-chats/{id}/voice/sdp", protect(http.HandlerFunc(s.handleSDKVoiceSDP)))
-			s.mux.Handle("POST /api/sdk-chats/{id}/voice/end", protect(http.HandlerFunc(s.handleSDKVoiceEnd)))
 		}
 	}
-	if s.cfg.Voice.Enabled && s.cfg.Voice.Provider == "gemini" {
-		s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/start", protect(http.HandlerFunc(s.handleGeminiVoiceStart)))
-		s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/event", protect(http.HandlerFunc(s.handleGeminiVoiceEvent)))
-		s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/tool", protect(http.HandlerFunc(s.handleGeminiVoiceTool)))
-		s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/end", protect(http.HandlerFunc(s.handleGeminiVoiceEnd)))
-	}
+	s.mux.Handle("POST /api/sdk-chats/{id}/voice/sdp", protect(http.HandlerFunc(s.handleSDKVoiceSDP)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/voice/end", protect(http.HandlerFunc(s.handleSDKVoiceEnd)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/start", protect(http.HandlerFunc(s.handleGeminiVoiceStart)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/event", protect(http.HandlerFunc(s.handleGeminiVoiceEvent)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/tool", protect(http.HandlerFunc(s.handleGeminiVoiceTool)))
+	s.mux.Handle("POST /api/sdk-chats/{id}/voice/gemini/end", protect(http.HandlerFunc(s.handleGeminiVoiceEnd)))
 	if s.sdkChats.onEvent == nil {
 		s.sdkChats.onEvent = s.sdkJobs.onChatEvent
 	}
@@ -530,9 +531,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	// SDK chat adapters are child processes and are stopped with the server.
 	defer s.sdkChats.close()
-	if s.sdkVoice != nil {
-		defer s.sdkVoice.close()
-	}
+	defer func() {
+		if h := s.currentSDKVoice(); h != nil {
+			h.close()
+		}
+	}()
 	jobContext, stopJobs := context.WithCancel(ctx)
 	workDone := make(chan struct{})
 	go func() { defer close(workDone); s.workLoop(jobContext) }()

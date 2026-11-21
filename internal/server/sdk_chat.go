@@ -2483,7 +2483,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			}
 			content = branchContext + "\n\nContinue this conversation with the user's new message:\n" + content
 		}
-		if (req.Kind == "user" || req.Kind == "steer") && s.sdkVoice != nil {
+		if (req.Kind == "user" || req.Kind == "steer") && s.voiceProvider() != "" {
 			content = sdkTaskInputWithVoiceContext(content, h.recentVoiceContext(id))
 		}
 		if req.Kind == "user" || req.Kind == "steer" {

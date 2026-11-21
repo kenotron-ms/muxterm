@@ -56,12 +56,13 @@ func sanitizeVoiceContextText(text string, limit int) string {
 // Voice is a Realtime audio interface to an SDK chat. Its provider session is
 // temporary; the SDK event log remains the conversation across reconnects.
 type sdkVoiceHost struct {
-	cfg   config.VoiceConfig
-	cred  voice.Credential
-	chats *sdkChatHost
-	http  *http.Client
-	mu    sync.Mutex
-	calls map[string]*sdkVoiceCall
+	cfg    config.VoiceConfig
+	cred   voice.Credential
+	chats  *sdkChatHost
+	http   *http.Client
+	mu     sync.Mutex
+	calls  map[string]*sdkVoiceCall
+	closed bool
 }
 
 type sdkVoiceCall struct {
@@ -240,6 +241,12 @@ func sdkTaskInputWithVoiceContext(content, context string) string {
 }
 
 func (h *sdkVoiceHost) connect(ctx context.Context, chatID, offer string) (string, string, error) {
+	h.mu.Lock()
+	closed := h.closed
+	h.mu.Unlock()
+	if closed {
+		return "", "", errors.New("voice settings changed")
+	}
 	if _, ok := h.chat(chatID); !ok {
 		return "", "", errors.New("chat not found")
 	}
@@ -333,10 +340,11 @@ func (h *sdkVoiceHost) connect(ctx context.Context, chatID, offer string) (strin
 	h.mu.Lock()
 	_, chatExists := h.chat(chatID)
 	var previous *sdkVoiceCall
-	if chatExists {
+	if chatExists && !h.closed {
 		previous = h.calls[chatID]
 		h.calls[chatID] = call
 	}
+	chatExists = chatExists && !h.closed
 	h.mu.Unlock()
 	if !chatExists {
 		call.close()
@@ -368,12 +376,25 @@ func (h *sdkVoiceHost) end(chatID, providerID string) bool {
 }
 
 func (h *sdkVoiceHost) close() {
+	h.closeWithReason("")
+}
+
+func (h *sdkVoiceHost) closeWithReason(reason string) {
 	h.mu.Lock()
 	calls := h.calls
 	h.calls = map[string]*sdkVoiceCall{}
+	h.closed = true
 	h.mu.Unlock()
 	for _, call := range calls {
 		call.close()
+		if reason != "" {
+			// The browser stops its peer connection on this event. Ask the
+			// provider to hang up as well; this is best effort because a key
+			// rotation may already have replaced the old credential on disk.
+			go call.endVoice()
+			h.chats.appendEvent(sdkEvent{SessionID: call.chatID, Type: "voice.session.error",
+				GenerationID: call.providerID, Message: reason})
+		}
 	}
 }
 
@@ -646,7 +667,11 @@ func (c *sdkVoiceCall) delegate(handoff sdkVoiceHandoff) string {
 }
 
 func (s *Server) handleSDKVoiceSDP(w http.ResponseWriter, r *http.Request) {
-	if s.sdkVoice == nil {
+	if !s.requireVoiceProvider(w, r, "openai") {
+		return
+	}
+	h := s.currentSDKVoice()
+	if h == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -658,7 +683,7 @@ func (s *Server) handleSDKVoiceSDP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "send a text message to start this branch before using voice", http.StatusConflict)
 		return
 	}
-	if _, ok := s.sdkVoice.chat(id); !ok {
+	if _, ok := h.chat(id); !ok {
 		http.NotFound(w, r)
 		return
 	}
@@ -667,10 +692,15 @@ func (s *Server) handleSDKVoiceSDP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid SDP offer", 400)
 		return
 	}
-	answer, providerID, err := s.sdkVoice.connect(r.Context(), id, string(offer))
+	answer, providerID, err := h.connect(r.Context(), id, string(offer))
 	if err != nil {
 		log.Printf("sdk voice: start failed: %v", err)
 		http.Error(w, "Voice could not start. Try again.", 502)
+		return
+	}
+	if s.currentSDKVoice() != h {
+		h.end(id, providerID)
+		http.Error(w, "Voice settings changed during connection. Try again.", http.StatusConflict)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -680,7 +710,11 @@ func (s *Server) handleSDKVoiceSDP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSDKVoiceEnd(w http.ResponseWriter, r *http.Request) {
-	if s.sdkVoice == nil {
+	if !s.requireVoiceProvider(w, r, "openai") {
+		return
+	}
+	h := s.currentSDKVoice()
+	if h == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -691,6 +725,6 @@ func (s *Server) handleSDKVoiceEnd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sessionId required", 400)
 		return
 	}
-	s.sdkVoice.end(r.PathValue("id"), req.SessionID)
+	h.end(r.PathValue("id"), req.SessionID)
 	w.WriteHeader(http.StatusNoContent)
 }

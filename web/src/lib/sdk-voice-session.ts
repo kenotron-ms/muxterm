@@ -238,6 +238,7 @@ class SDKVoiceCallController {
 
   constructor() {
     window.addEventListener('pagehide', () => this.stop());
+    window.addEventListener('muxterm-voice-settings-applied', () => this.stop());
   }
 
   get active(): ActiveVoiceCall | null { return this.call; }

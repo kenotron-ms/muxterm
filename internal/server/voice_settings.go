@@ -126,10 +126,8 @@ type voiceStatus struct {
 	// edit by hand and what to back up. Never contents.
 	ConfigPath string `json:"configPath"`
 	KeyPath    string `json:"keyPath"`
-	// RestartRequired is true when the saved configuration differs from
-	// the one this process started with. Voice routes are wired at
-	// startup, so a change lands on the next start, and saying so is
-	// better than a microphone button that quietly does nothing.
+	// RestartRequired is reserved for an external file edit that has not
+	// been applied through Settings. Successful saves apply in this process.
 	RestartRequired bool `json:"restartRequired"`
 }
 
@@ -241,6 +239,8 @@ func voiceRuntimeDiffers(running, onDisk muxcfg.VoiceConfig) bool {
 		r.GeminiKeyEnv != d.GeminiKeyEnv || r.GeminiKeyStored != d.GeminiKeyStored ||
 		r.Endpoint != d.Endpoint ||
 		r.Model != d.Model ||
+		r.TranscriptionModel != d.TranscriptionModel ||
+		r.Voice != d.Voice ||
 		r.AuthMode != d.AuthMode ||
 		r.EntraScope != d.EntraScope ||
 		r.APIKeyEnv != d.APIKeyEnv ||
@@ -337,10 +337,16 @@ func (s *Server) handleVoiceSettingsPut(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
+		host, err := s.prepareVoiceHost(next)
+		if err != nil {
+			writeVoiceSettingsError(w, http.StatusBadRequest, humanizeVoiceValidation(err.Error()))
+			return
+		}
 		if err := muxcfg.WriteVoiceSection(s.configPath, next); err != nil {
 			writeVoiceSettingsError(w, http.StatusInternalServerError, "Voice settings could not be saved.")
 			return
 		}
+		s.applyVoiceConfig(next, host)
 		writeVoiceSettingsJSON(w, http.StatusOK, s.buildVoiceStatus())
 		return
 	}
@@ -437,11 +443,17 @@ func (s *Server) handleVoiceSettingsPut(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	host, err := s.prepareVoiceHost(next)
+	if err != nil {
+		writeVoiceSettingsError(w, http.StatusBadRequest, humanizeVoiceValidation(err.Error()))
+		return
+	}
 	if err := muxcfg.WriteVoiceSection(s.configPath, next); err != nil {
 		log.Printf("voice_settings: write config: %v", err)
 		writeVoiceSettingsError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.applyVoiceConfig(next, host)
 
 	writeVoiceSettingsJSON(w, http.StatusOK, s.buildVoiceStatus())
 }
@@ -497,6 +509,9 @@ func (s *Server) handleVoiceSettingsDeleteKey(w http.ResponseWriter, r *http.Req
 				writeVoiceSettingsError(w, http.StatusInternalServerError, "The key was removed but settings could not be updated.")
 				return
 			}
+			if v.Provider == "gemini" {
+				s.applyVoiceConfig(v, nil)
+			}
 		}
 		writeVoiceSettingsJSON(w, http.StatusOK, s.buildVoiceStatus())
 		return
@@ -520,6 +535,14 @@ func (s *Server) handleVoiceSettingsDeleteKey(w http.ResponseWriter, r *http.Req
 				writeVoiceSettingsError(w, http.StatusInternalServerError,
 					"The key was removed but the config file could not be updated.")
 				return
+			}
+			if v.Provider != "gemini" {
+				host, err := s.prepareVoiceHost(v)
+				if err != nil {
+					writeVoiceSettingsError(w, http.StatusServiceUnavailable, "Voice settings were saved but could not be applied.")
+					return
+				}
+				s.applyVoiceConfig(v, host)
 			}
 		}
 	}
