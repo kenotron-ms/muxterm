@@ -1569,9 +1569,10 @@ export class MuxSDKChat extends LitElement {
       const previous = this.turnStarted.get(turn);
       if (previous === undefined || eventTime < previous) this.turnStarted.set(turn, eventTime);
     };
-    if (event.type === 'input.accepted' && event.source === 'question') {
+    if (event.type === 'input.accepted' && event.source === 'browser' && event.inputId?.startsWith('question-answer:')) {
       for (let i = blocks.length - 1; i >= 0; i--) {
-        if (blocks[i].kind === 'question' && blocks[i].source === 'question.suggested' && !blocks[i].done) {
+        if (blocks[i].kind === 'question' && blocks[i].source === 'question.suggested' &&
+          event.inputId.startsWith(`question-answer:${blocks[i].id}:`) && !blocks[i].done) {
           blocks[i] = { ...blocks[i], done:true };
           break;
         }
@@ -2521,7 +2522,7 @@ export class MuxSDKChat extends LitElement {
     try {
       const blocking = block.source === 'question.requested';
       const response = await fetch(apiPath(blocking ? `/api/sdk-chats/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(block.id)}` : `/api/sdk-chats/${encodeURIComponent(sessionId)}`), {
-        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(blocking ? {answers} : {kind:this.busy ? 'steer' : 'user',source:'question',id:crypto.randomUUID(),content:questions.map(question => `${question.question}\n${answers[question.id]}`).join('\n\n')})
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(blocking ? {answers} : {kind:this.busy ? 'steer' : 'user',source:'browser',id:`question-answer:${block.id}:${crypto.randomUUID()}`,content:questions.map(question => `${question.question}\n${answers[question.id]}`).join('\n\n')})
       });
       if (!response.ok) throw new Error((await response.text()).trim() || 'Could not send answer');
       if (this.activeSession === sessionId) this.blocks = this.blocks.map(item => item.key === block.key ? {...item,done:true} : item);
