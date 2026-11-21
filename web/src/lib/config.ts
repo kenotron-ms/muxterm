@@ -84,7 +84,7 @@ export interface ResolvedConfig {
     /** Live workspace preview density. 'off' also stops all preview traffic. */
     preview: 'full' | 'compact' | 'off';
   };
-  ai: { defaultHarness: 'codex' | 'claude' | 'copilot' | 'amplifier' | 'amplifier-unified' | 'pi' | 'opencode' | 'deepseek' | 'antigravity' };
+  ai: { defaultHarness: 'codex' | 'claude' | 'copilot' | 'amplifier' | 'amplifier-unified' | 'pi' | 'opencode' | 'deepseek' | 'antigravity-sdk' };
   keys: {
     nextSession: string;
     split: string;
@@ -197,8 +197,9 @@ function previewMode(v: unknown, def: ResolvedConfig['sidebar']['preview']): Res
 }
 
 function defaultHarness(v: unknown): ResolvedConfig['ai']['defaultHarness'] {
+  if (v === 'antigravity') return 'antigravity-sdk';
   return v === 'codex' || v === 'claude' || v === 'copilot' || v === 'amplifier' || v === 'amplifier-unified'
-    || v === 'pi' || v === 'opencode' || v === 'deepseek' || v === 'antigravity'
+    || v === 'pi' || v === 'opencode' || v === 'deepseek' || v === 'antigravity-sdk'
     ? v : DEFAULT_RESOLVED_CONFIG.ai.defaultHarness;
 }
 

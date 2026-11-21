@@ -93,20 +93,21 @@ connectors through the same per-chat MCP capability as the other SDK chats.
 Image uploads are passed as native image blocks when the attachment store has
 identified a supported raster MIME type.
 
-## ACP agents
+## Antigravity SDK and ACP agents
 
-Antigravity SDK is an additional API-key chat choice. It runs the pinned
+Antigravity SDK is the primary choice for new Google chats. It runs the pinned
 `google-antigravity` Python SDK in a chat-owned process through `uv`, using a
 configured `GEMINI_API_KEY`. It mounts the same per-chat muxterm, GitHub,
 Microsoft personal, and remote MCP connectors. The SDK saves its conversation
 in muxterm's data home. It has no live steer method: sending during a turn uses
 the SDK's `ChatResponse.cancel()` and then continues the same conversation.
-The composer labels this behavior explicitly and keeps the partial answer.
-The existing Antigravity choice continues to use ACP for Google account sign-in.
+The composer uses the standard steering labels and keeps the partial answer.
+Antigravity ACP v1 remains available as a Google sign-in fallback, and existing
+ACP chats can resume.
 
-Antigravity remains the Google-sign-in ACP agent through `@agentclientprotocol/sdk`
+Antigravity ACP v1 uses `@agentclientprotocol/sdk`
 and muxterm's managed `agy_acp_server.par`. Existing Gemini CLI ACP chats can
-still resume, but new chats use Antigravity. The agent uses its own provider
+still resume, and new chats prefer Antigravity SDK. The ACP agent uses its own provider
 credentials and model configuration; command presence does not prove that a
 provider is ready.
 
