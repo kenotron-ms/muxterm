@@ -2119,6 +2119,16 @@ func (s *Server) handleSDKChatContentSearch(w http.ResponseWriter, r *http.Reque
 	}
 	writeSDKJSON(w, http.StatusOK, map[string]any{"ids": matches})
 }
+
+// MCP uses this narrow route so its agent capability cannot change chat titles,
+// pin state, or other fields through the browser's general PATCH endpoint.
+func (s *Server) handleSDKChatArchive(w http.ResponseWriter, r *http.Request) {
+	request := r.Clone(r.Context())
+	request.Method = http.MethodPatch
+	request.Body = io.NopCloser(strings.NewReader(`{"archived":true}`))
+	s.handleSDKChat(w, request)
+}
+
 func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	id := r.PathValue("id")
@@ -2172,9 +2182,9 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if (req.Archived != nil || req.Pinned != nil) && req.Title == "" {
-			// Unarchiving can make an existing active Work owner protected again.
-			// Serialize that transition with peer send admission.
-			if req.Archived != nil && !*req.Archived {
+			// Work ownership and chat archive state must change atomically with
+			// respect to peer send admission and Work updates.
+			if req.Archived != nil {
 				h.workSendMu.Lock()
 				defer h.workSendMu.Unlock()
 			}
@@ -2183,6 +2193,17 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			defer adapterLock.Unlock()
 			if req.Archived != nil && *req.Archived {
 				h.mu.Lock()
+				if c.Archived {
+					updated := *c
+					h.mu.Unlock()
+					writeSDKJSON(w, 200, updated)
+					return
+				}
+				if h.protectedWorkOwnerLocked(id) {
+					h.mu.Unlock()
+					http.Error(w, "Finish or transfer active Work before archiving this chat", http.StatusConflict)
+					return
+				}
 				working := c.State == "working" || c.State == "starting"
 				resident := (c.Harness == "amplifier" && h.ampSup != nil) ||
 					(c.Harness != "amplifier" && h.running)

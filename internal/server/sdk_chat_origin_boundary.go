@@ -31,7 +31,7 @@ func (s *Server) sdkChatOriginBoundary(next http.Handler) http.Handler {
 		sender := h.chats[senderID]
 		allowed := sender != nil && !sender.Archived && h.originTokens[senderID] == token
 		path := strings.TrimPrefix(r.URL.Path, "/api/sdk-chats/")
-		if allowed && path != r.URL.Path && path != "search-content" {
+		if allowed && path != r.URL.Path && path != "search-content" && !(r.Method == http.MethodPost && strings.HasSuffix(path, "/archive")) {
 			targetID := strings.SplitN(path, "/", 2)[0]
 			if targetID == "self" {
 				targetID = senderID
