@@ -1,1 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice"><g stroke="white" stroke-width="13" stroke-linecap="round" opacity=".48"><path d="M100 0 20 220M300-70 165 310M510-30 355 405M730-70 535 500M960-50 740 570M1200-20 940 680M1310 240 1095 800M510 550 410 800M780 650 710 850"/></g><g fill="white" opacity=".26"><circle cx="300" cy="480" r="8"/><circle cx="870" cy="120" r="8"/><circle cx="1030" cy="720" r="12"/></g></svg>
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <g fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(25 27) rotate(-11)" opacity="0.58">
+      <path d="m-13-15-5 12m18-16-6 13m18-9-6 13m-18 9-5 12M3 5-2 17m18-11-5 12"/>
+    </g>
+    <g transform="translate(85 23) rotate(8)" opacity="0.42">
+      <path d="m-14-10-4 9m16-17-5 12m18-7-5 12m-18 6-5 12M2 4-3 17m18-8-4 9"/>
+    </g>
+    <g transform="translate(137 43) rotate(-7)" opacity="0.5">
+      <path d="m-11-16-5 11M4-18-1-7m16-6-5 11m-20 3-5 12M5 2 0 14m17-7-5 11"/>
+    </g>
+    <g transform="translate(49 83) rotate(12)" opacity="0.37">
+      <path d="m-13-15-5 12m18-16-6 13m18-9-6 13m-18 9-5 12M3 5-2 17m18-11-5 12"/>
+    </g>
+    <g transform="translate(113 90) rotate(-13)" opacity="0.53">
+      <path d="m-14-10-4 9m16-17-5 12m18-7-5 12m-18 6-5 12M2 4-3 17m18-8-4 9"/>
+    </g>
+    <g transform="translate(22 136) rotate(7)" opacity="0.44">
+      <path d="m-11-16-5 11M4-18-1-7m16-6-5 11m-20 3-5 12M5 2 0 14m17-7-5 11"/>
+    </g>
+    <g transform="translate(86 139) rotate(-6)" opacity="0.61">
+      <path d="m-13-15-5 12m18-16-6 13m18-9-6 13m-18 9-5 12M3 5-2 17m18-11-5 12"/>
+    </g>
+    <g transform="translate(145 136) rotate(10)" opacity="0.39">
+      <path d="m-14-10-4 9m16-17-5 12m18-7-5 12m-18 6-5 12M2 4-3 17m18-8-4 9"/>
+    </g>
+  </g>
+</svg>

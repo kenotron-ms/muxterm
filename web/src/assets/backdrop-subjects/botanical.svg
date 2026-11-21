@@ -1,1 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice"><g fill="none" stroke="white" stroke-width="13" stroke-linecap="round" opacity=".56"><path d="M380 850Q570 420 490-70M930 850Q680 430 890-70"/><path d="M490 540Q285 470 190 270M505 440Q720 365 735 130M445 270Q310 170 270-20M780 520Q1030 475 1105 230M750 370Q570 230 600 30"/></g><g fill="white" opacity=".35"><ellipse cx="225" cy="295" rx="94" ry="38" transform="rotate(30 225 295)"/><ellipse cx="710" cy="170" rx="105" ry="40" transform="rotate(-35 710 170)"/><ellipse cx="290" cy="70" rx="88" ry="35" transform="rotate(40 290 70)"/><ellipse cx="1065" cy="250" rx="105" ry="40" transform="rotate(-38 1065 250)"/><ellipse cx="610" cy="70" rx="90" ry="34" transform="rotate(32 610 70)"/></g></svg>
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <g fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(25 27) rotate(-11)" opacity="0.58">
+      <path d="M-2 17C0 3 1-8 4-17M0 7C-4 0-10-2-14-2c0 8 6 12 14 9Zm2-8c6-8 11-9 16-8-2 8-8 12-16 8Z"/>
+    </g>
+    <g transform="translate(85 23) rotate(8)" opacity="0.42">
+      <path d="M-8 16C1 8 4-2 8-15M-3 9c-7-2-12-1-15 3 4 5 10 5 15-3Zm8-15c6-5 11-5 15-3-2 6-7 8-15 3Z"/>
+    </g>
+    <g transform="translate(137 43) rotate(-7)" opacity="0.5">
+      <path d="M-2 18C-5 8-3-2 3-15M-4 7c-8-5-11-5-14-3 0 6 5 10 14 11Zm6-12c7-5 12-4 16-1-4 6-9 8-16 6Z"/>
+    </g>
+    <g transform="translate(49 83) rotate(12)" opacity="0.37">
+      <path d="M-2 17C0 3 1-8 4-17M0 7C-4 0-10-2-14-2c0 8 6 12 14 9Zm2-8c6-8 11-9 16-8-2 8-8 12-16 8Z"/>
+    </g>
+    <g transform="translate(113 90) rotate(-13)" opacity="0.53">
+      <path d="M-8 16C1 8 4-2 8-15M-3 9c-7-2-12-1-15 3 4 5 10 5 15-3Zm8-15c6-5 11-5 15-3-2 6-7 8-15 3Z"/>
+    </g>
+    <g transform="translate(22 136) rotate(7)" opacity="0.44">
+      <path d="M-2 18C-5 8-3-2 3-15M-4 7c-8-5-11-5-14-3 0 6 5 10 14 11Zm6-12c7-5 12-4 16-1-4 6-9 8-16 6Z"/>
+    </g>
+    <g transform="translate(86 139) rotate(-6)" opacity="0.61">
+      <path d="M-2 17C0 3 1-8 4-17M0 7C-4 0-10-2-14-2c0 8 6 12 14 9Zm2-8c6-8 11-9 16-8-2 8-8 12-16 8Z"/>
+    </g>
+    <g transform="translate(145 136) rotate(10)" opacity="0.39">
+      <path d="M-8 16C1 8 4-2 8-15M-3 9c-7-2-12-1-15 3 4 5 10 5 15-3Zm8-15c6-5 11-5 15-3-2 6-7 8-15 3Z"/>
+    </g>
+  </g>
+</svg>

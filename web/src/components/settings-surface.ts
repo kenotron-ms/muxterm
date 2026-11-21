@@ -348,7 +348,7 @@ export class MuxSettingsSurface extends LitElement {
     .appearance-choice::part(button) { display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; gap:0; min-height:0; width:100%; height:100%; padding:var(--ui-space-2); border:2px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); color:var(--ui-text); text-align:left; white-space:normal; font:inherit; }
     .appearance-choice[pressed]::part(button) { border-color:var(--ui-accent); }
     .appearance-preview { position:relative; display:flex; height:var(--ui-space-15); overflow:hidden; border-radius:var(--ui-radius-md); background:var(--preview-chat); }
-    .appearance-preview::before,.backdrop-preview::before { content:''; position:absolute; inset:0; background:var(--preview-art); mask:var(--preview-mask) center/cover no-repeat; pointer-events:none; }
+    .appearance-preview::before,.backdrop-preview::before { content:''; position:absolute; inset:0; background:var(--preview-art); mask:var(--preview-mask) 0 0/var(--ui-chat-backdrop-tile-size) var(--ui-chat-backdrop-tile-size) repeat; pointer-events:none; }
     .appearance-preview > * { position:relative; }
     .appearance-preview-side { box-sizing:border-box; width:28%; flex:none; padding:calc(var(--ui-space-4) + var(--ui-space-1)) var(--ui-radius-md); border-right:1px solid var(--preview-border); background:var(--preview-side); }
     .appearance-preview-side span { display:block; height:calc(var(--ui-space-1) + var(--ui-space-px)); width:80%; margin:0 0 var(--ui-radius-md); border-radius:var(--ui-radius-sm); background:var(--preview-border); }

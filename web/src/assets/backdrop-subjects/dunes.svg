@@ -1,1 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice"><path fill="white" opacity=".27" d="M0 330Q270 120 520 310T1200 260V800H0Z"/><path fill="white" opacity=".24" d="M0 450Q390 300 670 505T1200 390V800H0Z"/><path fill="white" opacity=".28" d="M0 650Q410 440 660 625T1200 550V800H0Z"/><path fill="none" stroke="white" stroke-width="9" opacity=".45" d="M0 330Q270 120 520 310T1200 260M0 450Q390 300 670 505T1200 390M0 650Q410 440 660 625T1200 550"/></svg>
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <g fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(25 27) rotate(-11)" opacity="0.58">
+      <path d="M-19 9Q-9-9 1 7T20 3M-18 17Q-7 3 2 16T18 13"/>
+      <path d="m5-12 3-3m5 1 2-2"/>
+    </g>
+    <g transform="translate(85 23) rotate(8)" opacity="0.42">
+      <path d="M-20 11Q-10-5-2 8T19 3M-17 18Q-9 10-1 17T18 12"/>
+      <circle cx="-9" cy="-13" r="2"/>
+    </g>
+    <g transform="translate(137 43) rotate(-7)" opacity="0.5">
+      <path d="M-19 6Q-7-10 2 7T19 2M-17 15Q-8 4 1 15T18 11"/>
+      <path d="m9-13 4-3"/>
+    </g>
+    <g transform="translate(49 83) rotate(12)" opacity="0.37">
+      <path d="M-19 9Q-9-9 1 7T20 3M-18 17Q-7 3 2 16T18 13"/>
+      <path d="m5-12 3-3m5 1 2-2"/>
+    </g>
+    <g transform="translate(113 90) rotate(-13)" opacity="0.53">
+      <path d="M-20 11Q-10-5-2 8T19 3M-17 18Q-9 10-1 17T18 12"/>
+      <circle cx="-9" cy="-13" r="2"/>
+    </g>
+    <g transform="translate(22 136) rotate(7)" opacity="0.44">
+      <path d="M-19 6Q-7-10 2 7T19 2M-17 15Q-8 4 1 15T18 11"/>
+      <path d="m9-13 4-3"/>
+    </g>
+    <g transform="translate(86 139) rotate(-6)" opacity="0.61">
+      <path d="M-19 9Q-9-9 1 7T20 3M-18 17Q-7 3 2 16T18 13"/>
+      <path d="m5-12 3-3m5 1 2-2"/>
+    </g>
+    <g transform="translate(145 136) rotate(10)" opacity="0.39">
+      <path d="M-20 11Q-10-5-2 8T19 3M-17 18Q-9 10-1 17T18 12"/>
+      <circle cx="-9" cy="-13" r="2"/>
+    </g>
+  </g>
+</svg>

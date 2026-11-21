@@ -1,1 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice"><g fill="white" opacity=".38"><ellipse cx="580" cy="330" rx="90" ry="230" transform="rotate(-45 580 330)"/><ellipse cx="660" cy="330" rx="90" ry="230" transform="rotate(45 660 330)"/><ellipse cx="640" cy="430" rx="90" ry="230" transform="rotate(125 640 430)"/><ellipse cx="540" cy="430" rx="90" ry="230" transform="rotate(-125 540 430)"/><circle cx="600" cy="390" r="72" opacity=".7"/></g><g fill="none" stroke="white" stroke-width="9" opacity=".44"><path d="M600 475Q560 690 670 850M580 630q-175-150-290-70M640 700q140-190 300-125"/></g></svg>
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <g fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(25 27) rotate(-11)" opacity="0.58">
+      <path d="M0-4C-8-17-3-19 0-18c4 0 8 7 0 14Zm4 2C16-12 19-5 17-1c-1 4-7 6-13-1Zm-2 5c4 15-3 18-7 15-4-3-3-10 7-15Zm-5-2C-17 10-20 2-17-2c3-4 9-3 14 3Z"/>
+      <circle r="3"/>
+    </g>
+    <g transform="translate(85 23) rotate(8)" opacity="0.42">
+      <path d="M0-4C-6-16 0-20 4-16c4 4 3 10-4 12Zm4 3C15-9 19-3 16 2c-3 4-9 4-12-3Zm-3 5C9 16 3 20-2 17c-4-3-5-9 3-13Zm-5-2C-16 9-20 2-17-3c3-4 9-4 13 5Z"/>
+      <circle r="3"/>
+    </g>
+    <g transform="translate(137 43) rotate(-7)" opacity="0.5">
+      <path d="M-1-4C-8-17-2-20 2-17c5 4 5 10-3 13Zm5 2C17-11 20-4 16 0c-3 5-9 5-12-2ZM2 4c7 13 0 17-4 14-5-3-6-9 4-14Zm-6-2C-17 11-20 4-17-1c3-5 9-6 13 3Z"/>
+      <circle r="3"/>
+    </g>
+    <g transform="translate(49 83) rotate(12)" opacity="0.37">
+      <path d="M0-4C-8-17-3-19 0-18c4 0 8 7 0 14Zm4 2C16-12 19-5 17-1c-1 4-7 6-13-1Zm-2 5c4 15-3 18-7 15-4-3-3-10 7-15Zm-5-2C-17 10-20 2-17-2c3-4 9-3 14 3Z"/>
+      <circle r="3"/>
+    </g>
+    <g transform="translate(113 90) rotate(-13)" opacity="0.53">
+      <path d="M0-4C-6-16 0-20 4-16c4 4 3 10-4 12Zm4 3C15-9 19-3 16 2c-3 4-9 4-12-3Zm-3 5C9 16 3 20-2 17c-4-3-5-9 3-13Zm-5-2C-16 9-20 2-17-3c3-4 9-4 13 5Z"/>
+      <circle r="3"/>
+    </g>
+    <g transform="translate(22 136) rotate(7)" opacity="0.44">
+      <path d="M-1-4C-8-17-2-20 2-17c5 4 5 10-3 13Zm5 2C17-11 20-4 16 0c-3 5-9 5-12-2ZM2 4c7 13 0 17-4 14-5-3-6-9 4-14Zm-6-2C-17 11-20 4-17-1c3-5 9-6 13 3Z"/>
+      <circle r="3"/>
+    </g>
+    <g transform="translate(86 139) rotate(-6)" opacity="0.61">
+      <path d="M0-4C-8-17-3-19 0-18c4 0 8 7 0 14Zm4 2C16-12 19-5 17-1c-1 4-7 6-13-1Zm-2 5c4 15-3 18-7 15-4-3-3-10 7-15Zm-5-2C-17 10-20 2-17-2c3-4 9-3 14 3Z"/>
+      <circle r="3"/>
+    </g>
+    <g transform="translate(145 136) rotate(10)" opacity="0.39">
+      <path d="M0-4C-6-16 0-20 4-16c4 4 3 10-4 12Zm4 3C15-9 19-3 16 2c-3 4-9 4-12-3Zm-3 5C9 16 3 20-2 17c-4-3-5-9 3-13Zm-5-2C-16 9-20 2-17-3c3-4 9-4 13 5Z"/>
+      <circle r="3"/>
+    </g>
+  </g>
+</svg>

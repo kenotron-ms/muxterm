@@ -1,1 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice"><g fill="white" opacity=".3"><path d="M0 800V390h145v410M145 800V180h155v620M300 800V470h130v330M430 800V260h170v540M600 800V120h145v680M745 800V370h135v430M880 800V230h170v570M1050 800V430h150v370"/></g><g fill="none" stroke="white" stroke-width="8" opacity=".5"><path d="M30 480h75m-75 70h75m75-270h80m-80 75h80m0 70h-80m290-75h85m-85 80h85m90-265h65m-65 75h65m0 75h-65m0 75h65m75 25h75m-75 75h75m75-235h95m-95 75h95m-95 75h95m85 10h65"/></g></svg>
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <g fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(25 27) rotate(-11)" opacity="0.58">
+      <path d="M-17 17V-2h9v19M-5 17v-29H6v29M9 17V2h9v15M-20 17h40M-13 3v2m3-2v2m9-10v2m4-2v2m-4 7v2m4-2v2m10 2v2"/>
+    </g>
+    <g transform="translate(85 23) rotate(8)" opacity="0.42">
+      <path d="M-17 17V3h7v14m3 0V-14H5v31m4 0V-5h9v22M-20 17h40M-3-8v2m5-2v2m-5 8v2m5-2v2m11 0v2m3-2v2"/>
+    </g>
+    <g transform="translate(137 43) rotate(-7)" opacity="0.5">
+      <path d="M-18 17V-4h9v21m3 0V1H4v16m3 0V-12h10v29M-20 17h40M-14 1v2m3-2v2m10 4v2m3-2v2m9-12v2m3-2v2m-3 8v2m3-2v2"/>
+    </g>
+    <g transform="translate(49 83) rotate(12)" opacity="0.37">
+      <path d="M-17 17V-2h9v19M-5 17v-29H6v29M9 17V2h9v15M-20 17h40M-13 3v2m3-2v2m9-10v2m4-2v2m-4 7v2m4-2v2m10 2v2"/>
+    </g>
+    <g transform="translate(113 90) rotate(-13)" opacity="0.53">
+      <path d="M-17 17V3h7v14m3 0V-14H5v31m4 0V-5h9v22M-20 17h40M-3-8v2m5-2v2m-5 8v2m5-2v2m11 0v2m3-2v2"/>
+    </g>
+    <g transform="translate(22 136) rotate(7)" opacity="0.44">
+      <path d="M-18 17V-4h9v21m3 0V1H4v16m3 0V-12h10v29M-20 17h40M-14 1v2m3-2v2m10 4v2m3-2v2m9-12v2m3-2v2m-3 8v2m3-2v2"/>
+    </g>
+    <g transform="translate(86 139) rotate(-6)" opacity="0.61">
+      <path d="M-17 17V-2h9v19M-5 17v-29H6v29M9 17V2h9v15M-20 17h40M-13 3v2m3-2v2m9-10v2m4-2v2m-4 7v2m4-2v2m10 2v2"/>
+    </g>
+    <g transform="translate(145 136) rotate(10)" opacity="0.39">
+      <path d="M-17 17V3h7v14m3 0V-14H5v31m4 0V-5h9v22M-20 17h40M-3-8v2m5-2v2m-5 8v2m5-2v2m11 0v2m3-2v2"/>
+    </g>
+  </g>
+</svg>
