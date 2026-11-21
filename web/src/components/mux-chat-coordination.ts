@@ -180,11 +180,11 @@ export class MuxChatCoordination extends LitElement {
     .comment-body { white-space:pre-wrap; overflow-wrap:anywhere; }
     .comment-meta { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin-top:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .comment-priority { color:var(--ui-accent); font-weight:700; }
-    .comment-priority.high { color:var(--ui-danger, #c65349); }
+    .comment-priority.high { color:var(--ui-danger); }
     .comment-attention { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:var(--ui-space-3); margin-top:var(--ui-space-4); padding:var(--ui-space-4); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
     .comment-attention strong { font-size:var(--ui-text-sm); }
     .comment-priority-field { display:flex; align-items:center; gap:var(--ui-space-3); flex-wrap:wrap; font-size:var(--ui-text-sm); }
-    .comment-priority-field mux-ui-select { min-width:10rem; }
+    .comment-priority-field mux-ui-select { min-width:var(--ui-work-filter-width); }
     @media (max-width:390px) { .comment-attention mux-ui-button, .comment-form > mux-ui-button { width:100%; justify-self:stretch; } }
     .error { margin:var(--ui-space-5) 0; color:var(--ui-danger); }
     :focus-visible { outline:var(--ui-space-1) solid var(--ui-accent); outline-offset:var(--ui-space-2); }
