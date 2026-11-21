@@ -136,6 +136,7 @@ that explicit replan. New steps start pending and can advance through
 `step_updates` in the same call. Activity retains attributed before/after steps. Done or
 skipped steps cannot be rewritten, and Work cannot be done while planned steps
 remain pending, in progress, or blocked. Older Work without a plan still works.
+Resume a blocked step through `in_progress`; `blocked` cannot return to `pending`.
 The Work progress count and bar use steps that are not skipped; skipped steps
 stay visible in the checklist and get their own count.
 
