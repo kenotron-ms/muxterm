@@ -3,6 +3,16 @@ name: Linux arm64
 on:
   pull_request:
   workflow_call:
+  workflow_dispatch:
+    inputs:
+      update_from:
+        description: Older published release tag, such as v0.52.151
+        required: true
+        type: string
+      update_to:
+        description: Newer published release tag, such as v0.52.152
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -95,6 +105,57 @@ jobs:
                 echo "installer accepted a bad checksum" >&2
                 exit 1
               fi
+            '
+
+      - name: Exercise self-update against published arm64 release in isolated container
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          fixture="$RUNNER_TEMP/arm64-self-update"
+          mkdir -p "$fixture"
+          CGO_ENABLED=1 go build -ldflags '-s -w -X main.version=0.52.149' -o "$fixture/older-muxterm" ./cmd/muxterm
+          curl -fsSL --retry 3 "https://github.com/kenotron-ms/muxterm/releases/download/v0.52.150/muxterm_linux_arm64.tar.gz" -o "$fixture/muxterm_linux_arm64.tar.gz"
+          curl -fsSL --retry 3 "https://github.com/kenotron-ms/muxterm/releases/download/v0.52.150/checksums.txt" -o "$fixture/checksums.txt"
+          (cd "$fixture" && sha256sum --ignore-missing -c checksums.txt)
+          cp scripts/verify-arm64-self-update.py "$fixture/verify.py"
+          docker run --rm --platform linux/arm64 \
+            -v "$fixture:/fixture:ro" \
+            python:3.12-bookworm bash -euo pipefail -c '
+              apt-get update -qq
+              apt-get install -y -qq libpam0g
+              python /fixture/verify.py
+            '
+
+      - name: Verify published arm64 release-to-release self-update
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          SOURCE_TAG: ${{ inputs.update_from }}
+          TARGET_TAG: ${{ inputs.update_to }}
+        run: |
+          [[ "$SOURCE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          fixture="$RUNNER_TEMP/arm64-self-update"
+          mkdir -p "$fixture/source" "$fixture/target"
+          for entry in "source:$SOURCE_TAG" "target:$TARGET_TAG"; do
+            directory="${entry%%:*}"
+            tag="${entry#*:}"
+            base="https://github.com/kenotron-ms/muxterm/releases/download/$tag"
+            curl -fsSL --retry 3 "$base/muxterm_linux_arm64.tar.gz" -o "$fixture/$directory/muxterm_linux_arm64.tar.gz"
+            curl -fsSL --retry 3 "$base/checksums.txt" -o "$fixture/$directory/checksums.txt"
+            (cd "$fixture/$directory" && sha256sum --ignore-missing -c checksums.txt)
+          done
+          tar -xOzf "$fixture/source/muxterm_linux_arm64.tar.gz" muxterm > "$fixture/older-muxterm"
+          chmod +x "$fixture/older-muxterm"
+          cp "$fixture/target/muxterm_linux_arm64.tar.gz" "$fixture/muxterm_linux_arm64.tar.gz"
+          cp "$fixture/target/checksums.txt" "$fixture/checksums.txt"
+          cp scripts/verify-arm64-self-update.py "$fixture/verify.py"
+          docker run --rm --platform linux/arm64 \
+            -e MUXTERM_SOURCE_VERSION="${SOURCE_TAG#v}" \
+            -e MUXTERM_TARGET_VERSION="${TARGET_TAG#v}" \
+            -v "$fixture:/fixture:ro" \
+            python:3.12-bookworm bash -euo pipefail -c '
+              apt-get update -qq
+              apt-get install -y -qq libpam0g
+              python /fixture/verify.py
             '
 
       - uses: actions/upload-artifact@v4
