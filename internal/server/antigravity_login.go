@@ -51,10 +51,16 @@ func antigravityAvailable() bool {
 
 func (s *Server) handleAntigravityAuth(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
+		_, installSupported := antigravityArchiveFor(runtime.GOOS, runtime.GOARCH)
+		unsupportedReason := ""
+		if !installSupported {
+			unsupportedReason = antigravityUnsupportedReason
+		}
 		writeSDKJSON(w, http.StatusOK, map[string]any{
 			"mode": antigravityMode(), "apiKeyDetected": sdkAmplifierProviderKey("GEMINI_API_KEY") != "",
-			"installed":        antigravityAvailable(),
-			"installSupported": runtime.GOOS == "linux" && runtime.GOARCH == "amd64",
+			"installed":                antigravityAvailable(),
+			"installSupported":         installSupported,
+			"installUnsupportedReason": unsupportedReason,
 		})
 		return
 	}

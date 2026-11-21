@@ -16,9 +16,28 @@ import (
 	"time"
 )
 
-const antigravityACPVersion = "1.4.3"
-const antigravityACPURL = "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.3-linux-x86_64.zip"
-const antigravityACPSHA256 = "0634ce5306ba92c932945455e7a83fda78e2d99c33fa8aa6ee0566206a382714"
+// Pinned to the official ACP registry's antigravity-acp/agent.json release.
+const antigravityACPVersion = "1.5.0"
+const antigravityPreviousACPVersion = "1.4.3"
+
+type antigravityArchive struct {
+	url    string
+	sha256 string
+}
+
+var antigravityArchives = map[string]antigravityArchive{
+	"linux/amd64":  {"https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-x86_64.zip", "36f373e8948edf1727b39c7d62b5722d6a4474bdfd72b04ad3d6def571808c9f"},
+	"linux/arm64":  {"https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-arm64.zip", "1e184f439477b54138e94440056b26a78c0a8075a8fd2ffda637ec31267c6459"},
+	"darwin/amd64": {"https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.0-darwin-x86_64.zip", "86a94e33b25d4a38ff30526ad844546860aa9ed98698498d9e87d30eb794426e"},
+	"darwin/arm64": {"https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.0-darwin-arm64.zip", "c82ecb4ef476bfc35cbe5b2745cdddef873b99c9f5bd7fd11e5ca1fc1667a3fc"},
+}
+
+func antigravityArchiveFor(goos, goarch string) (antigravityArchive, bool) {
+	archive, ok := antigravityArchives[goos+"/"+goarch]
+	return archive, ok
+}
+
+const antigravityUnsupportedReason = "Automatic Antigravity installation supports Linux and macOS on x86-64 and ARM64; install the ACP registry agent manually on this platform."
 
 var antigravityInstallMu sync.Mutex
 
@@ -41,8 +60,9 @@ func antigravityInstalled(dir string) bool {
 }
 
 func installAntigravityACP(ctx context.Context) error {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return errors.New("automatic Antigravity ACP installation currently supports Linux x86-64")
+	artifact, supported := antigravityArchiveFor(runtime.GOOS, runtime.GOARCH)
+	if !supported {
+		return errors.New(antigravityUnsupportedReason)
 	}
 	antigravityInstallMu.Lock()
 	defer antigravityInstallMu.Unlock()
@@ -61,7 +81,7 @@ func installAntigravityACP(ctx context.Context) error {
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, antigravityACPURL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, artifact.url, nil)
 	if err != nil {
 		return err
 	}
@@ -90,7 +110,7 @@ func installAntigravityACP(ctx context.Context) error {
 	if size >= 500<<20 {
 		return errors.New("Antigravity ACP archive exceeds size limit")
 	}
-	if hex.EncodeToString(hash.Sum(nil)) != antigravityACPSHA256 {
+	if hex.EncodeToString(hash.Sum(nil)) != artifact.sha256 {
 		return errors.New("Antigravity ACP archive checksum mismatch")
 	}
 	reader, err := zip.OpenReader(filepath.Join(tmp, "agent.zip"))
@@ -135,12 +155,33 @@ func installAntigravityACP(ctx context.Context) error {
 	if err := os.Remove(filepath.Join(tmp, "agent.zip")); err != nil {
 		return err
 	}
-	// Replace a partial managed install only after the new archive is verified.
-	if err := os.RemoveAll(dest); err != nil {
-		return fmt.Errorf("replace incomplete Antigravity installation: %w", err)
+	// A valid installation was returned above. Preserve any incomplete directory
+	// until the verified replacement is ready, and restore it if rename fails.
+	backup := ""
+	if _, err := os.Lstat(dest); err == nil {
+		backup, err = os.MkdirTemp(filepath.Dir(dest), ".incomplete-*")
+		if err != nil {
+			return fmt.Errorf("prepare Antigravity replacement: %w", err)
+		}
+		if err := os.Remove(backup); err != nil {
+			return fmt.Errorf("prepare Antigravity replacement: %w", err)
+		}
+		if err := os.Rename(dest, backup); err != nil {
+			return fmt.Errorf("prepare Antigravity replacement: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	if err := os.Rename(tmp, dest); err != nil {
+		if backup != "" {
+			if restoreErr := os.Rename(backup, dest); restoreErr != nil {
+				return fmt.Errorf("install Antigravity: %w; restore incomplete installation: %v", err, restoreErr)
+			}
+		}
 		return err
+	}
+	if backup != "" {
+		_ = os.RemoveAll(backup)
 	}
 	return nil
 }
