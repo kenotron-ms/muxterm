@@ -2199,26 +2199,30 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			h.mu.Lock()
-			if req.Archived != nil && !*req.Archived && c.Archived {
+			needsPendingScan := false
+			if req.Archived != nil && !*req.Archived {
+				h.mu.Lock()
+				archived := c.Archived
 				for _, item := range h.workItems {
-					if item.OwnerSessionID != id || item.Status != "active" {
-						continue
+					if archived && item.OwnerSessionID == id && item.Status == "active" {
+						needsPendingScan = true
+						break
 					}
-					pending, scanErr := h.unresolvedPeerControlLocked(id)
-					if scanErr != nil {
-						h.mu.Unlock()
-						http.Error(w, "could not verify pending peer input before unarchiving Work owner: "+scanErr.Error(), http.StatusServiceUnavailable)
-						return
-					}
-					if pending {
-						h.mu.Unlock()
-						http.Error(w, "peer chat input is still queued or uncertain; wait for its turn to finish before unarchiving this Work owner", http.StatusConflict)
-						return
-					}
-					break
+				}
+				h.mu.Unlock()
+			}
+			if needsPendingScan {
+				pending, scanErr := h.unresolvedPeerControlLocked(id)
+				if scanErr != nil {
+					http.Error(w, "could not verify pending peer input before unarchiving Work owner: "+scanErr.Error(), http.StatusServiceUnavailable)
+					return
+				}
+				if pending {
+					http.Error(w, "peer chat input is still queued or uncertain; wait for its turn to finish before unarchiving this Work owner", http.StatusConflict)
+					return
 				}
 			}
+			h.mu.Lock()
 			previousArchived, previousPinned := c.Archived, c.Pinned
 			if req.Archived != nil {
 				c.Archived = *req.Archived

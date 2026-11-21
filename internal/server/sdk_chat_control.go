@@ -70,7 +70,7 @@ func (h *sdkChatHost) acceptedEventLocked(id, inputID string) bool {
 
 // A harness can acknowledge an input before its next model request. Work must
 // not become protected while a peer input remains queued in that harness.
-// Caller holds workSendMu and h.mu, so no new control send can cross this scan.
+// Caller holds workSendMu, so no new control send can cross this file scan.
 func (h *sdkChatHost) unresolvedPeerControlLocked(id string) (bool, error) {
 	entries, err := os.ReadDir(filepath.Join(h.dir, "control", id))
 	if os.IsNotExist(err) {
@@ -79,7 +79,9 @@ func (h *sdkChatHost) unresolvedPeerControlLocked(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	completed := map[string]bool{}
+	accepted := map[string]bool{}
+	open := map[string]bool{}
+	terminal := map[string]bool{}
 	f, err := os.Open(filepath.Join(h.dir, id+".ndjson"))
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
@@ -89,9 +91,31 @@ func (h *sdkChatHost) unresolvedPeerControlLocked(id string) (bool, error) {
 		scan.Buffer(make([]byte, 64*1024), 8*1024*1024)
 		for scan.Scan() {
 			var event sdkEvent
-			if json.Unmarshal(scan.Bytes(), &event) == nil && (event.Type == "turn.completed" || event.Type == "turn.cancelled") {
+			if json.Unmarshal(scan.Bytes(), &event) != nil {
+				continue
+			}
+			switch event.Type {
+			case "input.accepted":
+				accepted[event.InputID] = true
+				open[event.InputID] = true
+			case "turn.completed", "turn.cancelled":
 				for _, inputID := range event.InputIDs {
-					completed[inputID] = true
+					terminal[inputID] = true
+					delete(open, inputID)
+				}
+			case "session.uncertain":
+				// Sidecar failure does not replay accepted inputs. Some hosts
+				// report the affected IDs; the supervisor reports the whole chat.
+				if len(event.InputIDs) == 0 {
+					for inputID := range open {
+						terminal[inputID] = true
+					}
+					clear(open)
+				} else {
+					for _, inputID := range event.InputIDs {
+						terminal[inputID] = true
+						delete(open, inputID)
+					}
 				}
 			}
 		}
@@ -113,7 +137,13 @@ func (h *sdkChatHost) unresolvedPeerControlLocked(id string) (bool, error) {
 		if err := json.Unmarshal(data, &receipt); err != nil {
 			return false, err
 		}
-		if receipt.WorkID == "" && receipt.Origin != nil && receipt.Origin.Type == "chat-message" && receipt.Origin.ChatID != id && !completed[receipt.InputID] {
+		if receipt.WorkID == "" && receipt.Origin != nil && receipt.Origin.Type == "chat-message" && receipt.Origin.ChatID != id && !terminal[receipt.InputID] {
+			// A send whose three-minute sidecar call ended without any
+			// acceptance event must not block Work ownership forever after
+			// a crash between receipt persistence and dispatch.
+			if !accepted[receipt.InputID] && receipt.Status != "accepted" && !receipt.CreatedAt.IsZero() && time.Since(receipt.CreatedAt) >= 4*time.Minute {
+				continue
+			}
 			return true, nil
 		}
 	}

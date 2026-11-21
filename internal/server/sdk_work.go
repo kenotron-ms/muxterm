@@ -935,6 +935,37 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "only the creator or owner can assign this work; an unassigned item may be claimed", 403)
 		return
 	}
+	owner := item.OwnerSessionID
+	if req.OwnerSessionID != nil {
+		owner = *req.OwnerSessionID
+	}
+	targetStatus := item.Status
+	if req.Status != "" {
+		targetStatus = req.Status
+	}
+	if targetStatus == "active" && owner != "" && (item.Status != "active" || item.OwnerSessionID != owner) {
+		// Work updates take workSendMu; only comments can change this item
+		// while h.mu is released. Re-read it afterward to retain them.
+		h.mu.Unlock()
+		pending, scanErr := h.unresolvedPeerControlLocked(owner)
+		h.mu.Lock()
+		item = h.workItems[id]
+		if req.ExpectedRevision != nil && *req.ExpectedRevision != item.Revision {
+			h.mu.Unlock()
+			http.Error(w, "work item changed; refresh before assigning", 409)
+			return
+		}
+		if scanErr != nil {
+			h.mu.Unlock()
+			http.Error(w, "could not verify pending peer input before protecting Work owner: "+scanErr.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if pending {
+			h.mu.Unlock()
+			http.Error(w, "peer chat input is still queued or uncertain; wait for its turn to finish before activating Work ownership", http.StatusConflict)
+			return
+		}
+	}
 	copy := *item
 	copy.CreatedBy = h.workCreatorLocked(item)
 	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
@@ -1061,19 +1092,6 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Status != "blocked" && req.BlockedReason == nil {
 			copy.BlockedReason = ""
-		}
-	}
-	if copy.Status == "active" && copy.OwnerSessionID != "" && (item.Status != "active" || item.OwnerSessionID != copy.OwnerSessionID) {
-		pending, err := h.unresolvedPeerControlLocked(copy.OwnerSessionID)
-		if err != nil {
-			h.mu.Unlock()
-			http.Error(w, "could not verify pending peer input before protecting Work owner: "+err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		if pending {
-			h.mu.Unlock()
-			http.Error(w, "peer chat input is still queued or uncertain; wait for its turn to finish before activating Work ownership", http.StatusConflict)
-			return
 		}
 	}
 	if req.BlockedReason != nil {
