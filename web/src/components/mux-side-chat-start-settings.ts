@@ -55,7 +55,7 @@ export class MuxSideChatStartSettings extends LitElement {
   private savedSelection(): SideChatSelection | undefined {
     try {
       const value = JSON.parse(localStorage.getItem(storageKey(this.parentId, this.tabId)) || 'null') as SideChatSelection | null;
-      return value && typeof value.harness === 'string' && typeof value.provider === 'string' && typeof value.model === 'string' && typeof value.effort === 'string' ? value : undefined;
+      return value && typeof value.harness === 'string' && typeof value.provider === 'string' && typeof value.bundle === 'string' && typeof value.model === 'string' && typeof value.effort === 'string' ? value : undefined;
     } catch { return undefined; }
   }
   private persist(selection: SideChatSelection) {
@@ -87,7 +87,7 @@ export class MuxSideChatStartSettings extends LitElement {
         || options[0];
       await this.loadCatalog({ harness:choice.harness, provider:choice.provider, bundle:saved?.harness === choice.harness && saved.provider === choice.provider ? saved.bundle : parent.harness === choice.harness ? parent.bundle || '' : '', model:saved?.harness === choice.harness && saved.provider === choice.provider ? saved.model : parent.harness === choice.harness ? parent.model || '' : '', effort:saved?.harness === choice.harness && saved.provider === choice.provider ? saved.effort : parent.harness === choice.harness ? parent.effort || '' : '' }, version);
     } catch (error) {
-      if (this.isConnected && version === this.requestVersion) { this.error = error instanceof Error ? error.message : String(error); this.loading = false; this.announce(null); }
+      if (this.isConnected && version === this.requestVersion) { this.loadedKey = ''; this.error = error instanceof Error ? error.message : String(error); this.loading = false; this.announce(null); }
     }
   }
   private async loadCatalog(requested: SideChatSelection, version = ++this.requestVersion) {
