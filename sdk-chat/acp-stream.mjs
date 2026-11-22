@@ -455,10 +455,11 @@ export class ACPStream {
     if (!clearing) {
       if (this.busy) throw new Error('Finish the current Antigravity turn before starting a goal');
       this.nativeGoal = { objective, revision: cmd.revision, state: 'starting', output: '' };
+      this.goalMarkerTail = '';
       try {
         const input = { kind: 'user', id: randomUUID(), source: 'goal-control', content: `/goal ${objective}` };
         await this.startPrompt(input, await this.promptBlocks(input));
-      } catch (error) { this.nativeGoal = null; throw error; }
+      } catch (error) { this.nativeGoal = null; this.goalMarkerTail = ''; throw error; }
       if (this.nativeGoal.state === 'starting') {
         this.nativeGoal.state = 'active';
         this.emit(this.session.id, 'goal.snapshot', { goal: objective, goalState: 'active',
@@ -476,6 +477,7 @@ export class ACPStream {
     }
     const state = cmd.action === 'clear' ? 'cleared' : 'paused';
     this.nativeGoal = { objective, revision: cmd.revision, state, output: '' };
+    this.goalMarkerTail = '';
     this.emit(this.session.id, 'goal.snapshot', { goal: objective, goalState: state,
       raw: { revision: cmd.revision, source: 'agy-acp-command' } });
     return { goal: objective, goalState: state };
