@@ -109,6 +109,13 @@ function chatFromHash(): string | null {
   if (host) rememberChatHost(id, host);
   return id;
 }
+function workFromHash(chatId: string): string | null {
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const id = params.get('work');
+  const host = params.get('workHost');
+  if (!id || !/^[0-9a-f]{32}$/i.test(id) || (host && host !== chatHost(chatId))) return null;
+  return id;
+}
 
 function setChatHash(id: string | null, replace = false): void {
   if (!id && !chatFromHash()) return;
@@ -822,6 +829,7 @@ export class MuxApp extends LitElement {
       const fromHash = chatFromHash();
       if (fromHash) {
         this._selectMainSurface(fromHash, 'none');
+        void this._openWorkFromHash(fromHash);
       }
     }
     window.addEventListener('hashchange', this._onChatHistory);
@@ -2381,6 +2389,7 @@ export class MuxApp extends LitElement {
     const id = chatFromHash();
     if (id) {
       this._selectMainSurface(id, 'none');
+      void this._openWorkFromHash(id);
     } else {
       const stored = (window.history.state as Record<string, unknown> | null)?.[HISTORY_MAIN_SURFACE_KEY];
       const view = stored === 'terminal' ? null : typeof stored === 'string' && UTILITY_TITLES.has(stored) ? stored : 'new';
@@ -2388,6 +2397,13 @@ export class MuxApp extends LitElement {
     }
     this._closeDrawer();
   };
+
+  private async _openWorkFromHash(chatId: string): Promise<void> {
+    const workId = workFromHash(chatId);
+    if (!workId) return;
+    await this.updateComplete;
+    await this.renderRoot.querySelector<MuxSDKChat>('mux-sdk-chat')?.navigateWork(workId);
+  }
 
   private _onChatOpen = (e: Event): void => {
     const detail = (e as CustomEvent<{ sessionId: string }>).detail;

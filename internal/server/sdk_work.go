@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -22,6 +24,7 @@ import (
 // the selected worker chat's native goal when the scheduler dispatches Work.
 type sdkWorkItem struct {
 	ID                 string                   `json:"id"`
+	Reference          string                   `json:"reference,omitempty"`
 	ClientRef          string                   `json:"clientRef"`
 	Title              string                   `json:"title"`
 	Brief              string                   `json:"brief"`
@@ -313,6 +316,54 @@ func (h *sdkChatHost) workPath(id string) string {
 	return filepath.Join(h.dir, "work", id+".json")
 }
 
+// Work references are machine-local. Allocation and resolution run under h.mu;
+// startup migration runs before requests can reach the host.
+var errAmbiguousWorkReference = errors.New("ambiguous Work reference")
+
+func workReferenceNumber(reference string) (uint64, bool) {
+	if !strings.HasPrefix(reference, "Work #") {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(strings.TrimPrefix(reference, "Work #"), 10, 64)
+	return n, err == nil && n > 0 && fmt.Sprintf("Work #%d", n) == reference
+}
+
+func (h *sdkChatHost) nextWorkReferenceLocked() string {
+	var highest uint64
+	for _, item := range h.workItems {
+		if n, ok := workReferenceNumber(item.Reference); ok && n > highest {
+			highest = n
+		}
+	}
+	if highest == ^uint64(0) {
+		return ""
+	}
+	return fmt.Sprintf("Work #%d", highest+1)
+}
+
+func (h *sdkChatHost) resolveWorkReferenceLocked(reference string) (*sdkWorkItem, error) {
+	if item := h.workItems[reference]; item != nil {
+		return item, nil
+	}
+	if _, ok := workReferenceNumber(reference); !ok {
+		return nil, errors.New("unknown Work reference")
+	}
+	var found *sdkWorkItem
+	for _, item := range h.workItems {
+		if item.Reference != reference {
+			continue
+		}
+		if found != nil {
+			return nil, errAmbiguousWorkReference
+		}
+		found = item
+	}
+	if found == nil {
+		return nil, errors.New("unknown Work reference")
+	}
+	return found, nil
+}
+
 func (h *sdkChatHost) loadWorkItems() {
 	// Startup is single-threaded; h.mu is not yet shared with request handlers.
 	entries, err := os.ReadDir(filepath.Join(h.dir, "work"))
@@ -354,6 +405,31 @@ func (h *sdkChatHost) loadWorkItems() {
 			if err := h.saveWorkLocked(&item); err != nil {
 				log.Printf("mark work dispatch uncertain %s: %v", item.ID, err)
 			}
+		}
+	}
+	// Preserve every previously assigned number. Sort legacy records so a
+	// restart assigns the same numbers even when the filesystem order changes.
+	legacy := make([]*sdkWorkItem, 0)
+	for _, item := range h.workItems {
+		if item.Reference == "" {
+			legacy = append(legacy, item)
+		}
+	}
+	sort.Slice(legacy, func(i, j int) bool {
+		if legacy[i].CreatedAt.Equal(legacy[j].CreatedAt) {
+			return legacy[i].ID < legacy[j].ID
+		}
+		return legacy[i].CreatedAt.Before(legacy[j].CreatedAt)
+	})
+	for _, item := range legacy {
+		copy := *item
+		copy.Reference = h.nextWorkReferenceLocked()
+		if copy.Reference == "" {
+			log.Printf("migrate work reference %s: exhausted reference numbers", item.ID)
+			break
+		}
+		if err := h.saveWorkLocked(&copy); err != nil {
+			log.Printf("migrate work reference %s: %v", item.ID, err)
 		}
 	}
 }
@@ -662,7 +738,13 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 			filedRevision = 1
 		}
 	}
-	item := &sdkWorkItem{ID: sdkID(), ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, CreateTitle: &req.Title, CreateBrief: &req.Brief, CreateGoal: createGoal, CreateDraft: req.Draft, Source: strings.TrimSpace(req.Source), Readiness: readiness, GoalCondition: goal, GoalRevision: goalRevision, GoalFiledRevision: filedRevision, GoalCheck: goalCheck, NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
+	reference := h.nextWorkReferenceLocked()
+	if reference == "" {
+		h.mu.Unlock()
+		http.Error(w, "Work reference space exhausted", http.StatusInsufficientStorage)
+		return
+	}
+	item := &sdkWorkItem{ID: sdkID(), Reference: reference, ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, CreateTitle: &req.Title, CreateBrief: &req.Brief, CreateGoal: createGoal, CreateDraft: req.Draft, Source: strings.TrimSpace(req.Source), Readiness: readiness, GoalCondition: goal, GoalRevision: goalRevision, GoalFiledRevision: filedRevision, GoalCheck: goalCheck, NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
 		Status: "open", CreatedBy: creator, OwnerSessionID: req.OwnerSessionID, CreateOwnerID: req.OwnerSessionID, Acceptance: req.Acceptance, CreateAcceptance: &req.Acceptance, ReviewerSessionID: req.ReviewerSessionID, CreateReviewerID: req.ReviewerSessionID, ProjectIDs: projectIDs, CreateProjectIDs: slices.Clone(projectIDs), Labels: labels, CreateLabels: append([]string{}, labels...), SessionIDs: req.SessionIDs,
 		CreateSessionIDs: append([]string{}, req.SessionIDs...), DependsOn: req.DependsOn, CreateDependsOn: append([]string{}, req.DependsOn...), WaitingOn: h.workWaitingOnLocked(&sdkWorkItem{DependsOn: req.DependsOn}),
 		ReviewVersion: 1, UIWork: req.UIWork, Plan: slices.Clone(req.Plan), CreatePlan: slices.Clone(req.Plan), PlanProtocol: strings.TrimSpace(req.PlanProtocol), CreatePlanProtocol: strings.TrimSpace(req.PlanProtocol), Revision: 1, CreatedAt: now, UpdatedAt: now, Updates: []sdkWorkUpdate{}}
@@ -687,7 +769,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSDKWorkItem(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	h.mu.Lock()
-	item := h.workItems[r.PathValue("id")]
+	item, resolveErr := h.resolveWorkReferenceLocked(r.PathValue("id"))
 	var copy sdkWorkItem
 	if item != nil {
 		copy = *item
@@ -696,8 +778,12 @@ func (s *Server) handleSDKWorkItem(w http.ResponseWriter, r *http.Request) {
 		copy.WaitingOn = h.workWaitingOnLocked(item)
 	}
 	h.mu.Unlock()
+	if errors.Is(resolveErr, errAmbiguousWorkReference) {
+		http.Error(w, resolveErr.Error(), http.StatusConflict)
+		return
+	}
 	if item == nil {
-		http.NotFound(w, r)
+		http.Error(w, "unknown Work reference", http.StatusNotFound)
 		return
 	}
 	writeSDKJSON(w, 200, copy)

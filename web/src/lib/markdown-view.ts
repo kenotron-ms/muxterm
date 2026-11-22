@@ -126,7 +126,7 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
     case 'del':
       return html`<s>${renderInline(t.tokens, policy)}</s>`;
     case 'codespan':
-      return html`<code class="md-code">${policy?.referenceText?.(t.text ?? '') ?? t.text ?? ''}</code>`;
+      return html`<code class="md-code">${t.text ?? ''}</code>`;
     case 'br':
       return html`<br />`;
     case 'link': {
@@ -140,7 +140,7 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
           draggable=${policy?.draggable ?? nothing}
           target="_blank"
           rel="noopener noreferrer nofollow"
-          >${renderInline(t.tokens, policy)}</a
+          >${renderInline(t.tokens, policy ? {...policy, referenceText:undefined} : undefined)}</a
         >`;
       }
       // Inside a published folder, a relative link is the ONE case that is
@@ -151,12 +151,12 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
       const inTree = policy?.resolve?.(href) ?? null;
       if (inTree !== null) {
         return html`<a class="md-link md-link-tree" href="${inTree}" rel="noopener"
-          >${renderInline(t.tokens, policy)}</a
+          >${renderInline(t.tokens, policy ? {...policy, referenceText:undefined} : undefined)}</a
         >`;
       }
       // A refused or not-yet-arrived address renders as its own label: the
       // words are readable, nothing is clickable, and no source leaks through.
-      return html`<span class="md-nolink">${renderInline(t.tokens, policy)}</span>`;
+      return html`<span class="md-nolink">${renderInline(t.tokens, policy ? {...policy, referenceText:undefined} : undefined)}</span>`;
     }
     case 'image': {
       // An image is drawn ONLY when the policy resolves it to something
