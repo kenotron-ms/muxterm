@@ -9,6 +9,7 @@ import '../ui/choice-list.js';
 import '../ui/choice-picker.js';
 import '../ui/choice-section.js';
 import '../ui/feedback.js';
+import '../ui/button.js';
 import '../ui/range-field.js';
 
 export type SideChatSelection = { harness: SDKHarnessName; provider: string; bundle: string; model: string; effort: string };
@@ -127,7 +128,7 @@ export class MuxSideChatStartSettings extends LitElement {
   override render() {
     const selection = this.selection;
     const catalog = this.catalog;
-    if (!selection || !catalog) return html`<mux-ui-feedback class="error" kind=${this.error ? 'error' : 'loading'} density="compact">${this.error || 'Loading agents and models…'}</mux-ui-feedback>`;
+    if (!selection || !catalog) return html`<mux-ui-feedback class="error" kind=${this.error ? 'error' : 'loading'} density="compact">${this.error || 'Loading agents and models…'}${this.error ? html`<mux-ui-button slot="action" size="small" @click=${() => { this.loadedKey = ''; void this.load(); }}>Retry</mux-ui-button>` : nothing}</mux-ui-feedback>`;
     const selectedModel = catalog.models.find(item => item.id === selection.model);
     const efforts = selectedModel?.efforts || [];
     const effortIndex = Math.max(0, efforts.indexOf(selection.effort));
@@ -145,7 +146,7 @@ export class MuxSideChatStartSettings extends LitElement {
         <mux-ui-choice-section heading="Model" separated><mux-ui-choice-list>
           ${catalog.models.map(item => html`<mux-ui-choice-item .label=${item.label} .description=${item.id} ?selected=${selection.model === item.id} ?disabled=${this.loading} @click=${() => this.chooseModel(item)}></mux-ui-choice-item>`)}
         </mux-ui-choice-list></mux-ui-choice-section>
-        ${efforts.length > 1 ? html`<mux-ui-choice-section heading="Thinking" separated><mux-ui-range-field label="Thinking" accessible-label="Side chat thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} ?disabled=${this.loading} @input=${(event:Event) => this.chooseEffort(efforts[(event.target as MuxUIRangeField).value])}></mux-ui-range-field></mux-ui-choice-section>` : nothing}
+        ${efforts.length > 1 ? html`<mux-ui-choice-section heading="Thinking" separated><mux-ui-range-field label="Thinking" accessible-label="Side chat thinking effort" .min=${0} .max=${efforts.length - 1} .value=${effortIndex} .valueLabels=${efforts} .minLabel=${efforts[0]} .maxLabel=${efforts[efforts.length - 1]} ?disabled=${this.loading} @change=${(event:Event) => this.chooseEffort(efforts[(event.target as MuxUIRangeField).value])}></mux-ui-range-field></mux-ui-choice-section>` : nothing}
         ${this.error ? html`<mux-ui-feedback kind="error" density="compact">${this.error}</mux-ui-feedback>` : nothing}
       </mux-ui-choice-picker>
     `;
