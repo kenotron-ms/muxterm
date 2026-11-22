@@ -80,7 +80,7 @@ func installAntigravityCLI(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if info, err := os.Stat(filepath.Join(dest, "agy")); err == nil && info.Mode()&0111 != 0 && antigravityCLIAvailable() {
+	if info, err := os.Stat(filepath.Join(dest, "agy")); err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 && antigravityCLIAvailable() {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
@@ -155,6 +155,9 @@ func installAntigravityCLI(ctx context.Context) error {
 		return closeErr
 	}
 	if _, err := reader.Next(); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("reading Antigravity CLI archive: %w", err)
+		}
 		return errors.New("unexpected additional Antigravity CLI archive file")
 	}
 	if !antigravityBinaryMatchesHost(targetPath) {
@@ -164,7 +167,9 @@ func installAntigravityCLI(ctx context.Context) error {
 		return err
 	}
 	if _, err := os.Lstat(dest); err == nil {
-		return errors.New("incomplete Antigravity CLI install exists")
+		if err := os.RemoveAll(dest); err != nil {
+			return fmt.Errorf("removing unusable Antigravity CLI install: %w", err)
+		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}
