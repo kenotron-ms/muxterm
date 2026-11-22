@@ -20,6 +20,13 @@ type WorkStep = { id: string; title: string; status: 'pending' | 'in_progress' |
 type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; comment?: boolean; commentPriority?: 'normal' | 'high'; commentSource?: string; commentReadThrough?: string; commentNoticeState?: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean; planBefore?: WorkStep[]; planAfter?: WorkStep[]; planReason?: string; stepUpdates?: {id:string;status:WorkStep['status']}[] };
 type WorkItem = { id: string; title: string; brief: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
+type DetailTab = 'description' | 'people' | 'plan' | 'activity';
+const detailTabs: { id: DetailTab; label: string }[] = [
+  { id: 'description', label: 'Description & goal' },
+  { id: 'people', label: 'People & dependencies' },
+  { id: 'plan', label: 'Plan & next move' },
+  { id: 'activity', label: 'Activity' },
+];
 
 function activityPreview(value: string): string {
   const plain = value.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
@@ -66,6 +73,8 @@ export class MuxChatCoordination extends LitElement {
   @state() private commentPriority: 'normal' | 'high' = 'normal';
   @state() private commentSending = false;
   @state() private ackSending = false;
+  @state() private selectedTab: DetailTab = 'description';
+  private selectedTabKey = '';
   private commentRef = '';
   private commentRefBody = '';
   private ackRef = '';
@@ -133,7 +142,23 @@ export class MuxChatCoordination extends LitElement {
     .status.waiting { color:var(--ui-warning); }
     .status.blocked { color:var(--ui-danger); }
     .status.done { color:var(--ui-success); }
-    .lead { margin-top:var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-lg); line-height:1.62; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .detail-view { min-width:0; container-type:inline-size; }
+    .detail-view h2 { overflow-wrap:anywhere; }
+    .detail-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--ui-space-2); margin-top:var(--ui-space-8); border-bottom:1px solid var(--ui-border); }
+    .detail-tab { display:flex; align-items:center; justify-content:center; gap:var(--ui-space-3); min-width:0; min-height:var(--ui-control-lg); padding:var(--ui-space-3) var(--ui-space-4); border:1px solid transparent; border-bottom:0; border-radius:var(--ui-radius-md) var(--ui-radius-md) 0 0; background:transparent; color:var(--ui-text-muted); font:600 var(--ui-text-sm)/1.25 var(--ui-font-sans); text-align:center; cursor:pointer; }
+    .detail-tab:hover { color:var(--ui-text); background:var(--ui-surface-hover); }
+    .detail-tab[aria-selected="true"] { color:var(--ui-text); background:var(--ui-surface-raised); border-color:var(--ui-border); box-shadow:0 1px 0 var(--ui-surface-raised); }
+    .detail-tab-label { min-width:0; overflow-wrap:anywhere; }
+    .detail-tab-count { flex:none; display:inline-grid; place-items:center; min-width:1.5em; padding:0 var(--ui-space-2); border-radius:999px; background:var(--ui-surface-hover); font-size:var(--ui-text-xs); }
+    .detail-panel { min-width:0; padding-top:var(--ui-space-7); }
+    .detail-panel > .plan:first-child,.detail-panel > .next:first-child,.detail-panel > .section:first-child { margin-top:0; }
+    .detail-panel:focus { outline:none; }
+    .detail-panel:focus-visible { outline:var(--ui-space-1) solid var(--ui-accent); outline-offset:var(--ui-space-2); }
+    .next-brief { margin-top:var(--ui-space-6); padding:var(--ui-space-5) var(--ui-space-7); border-left:3px solid var(--ui-accent); background:color-mix(in srgb,var(--ui-accent) 7%,var(--ui-surface-raised)); border-radius:0 var(--ui-radius-md) var(--ui-radius-md) 0; }
+    .next-brief.blocked { border-color:var(--ui-danger); background:color-mix(in srgb,var(--ui-danger) 7%,var(--ui-surface-raised)); }
+    .next-brief strong { display:block; color:var(--ui-accent); font-size:var(--ui-text-sm); }
+    .next-brief.blocked strong { color:var(--ui-danger); }
+    .next-brief p { margin-top:var(--ui-space-1); overflow-wrap:anywhere; }
     .next { margin-top:var(--ui-space-9); padding:var(--ui-space-7) var(--ui-space-8); border-radius:var(--ui-radius-xl); background:color-mix(in srgb,var(--ui-accent) 9%,var(--ui-surface-raised)); }
     .next h3 { color:var(--ui-accent); }
     .next.blocked { background:color-mix(in srgb,var(--ui-danger) 8%,var(--ui-surface-raised)); }
@@ -151,7 +176,7 @@ export class MuxChatCoordination extends LitElement {
     .plan-list .step-state.in_progress { color:var(--ui-accent); }
     .plan-list .step-title { min-width:0; overflow-wrap:anywhere; }
     .plan-protocol { margin-top:var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-sm); white-space:pre-wrap; }
-    mux-work-goal-review { margin-top:var(--ui-space-9); }
+    mux-work-goal-review { display:block; min-width:0; }
     .section { margin-top:var(--ui-space-9); }
     .section h3 { margin-bottom:var(--ui-space-4); }
     .section p { color:var(--ui-text-muted); white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -201,7 +226,8 @@ export class MuxChatCoordination extends LitElement {
     @media (max-width:390px) { .comment-attention mux-ui-button, .comment-form > mux-ui-button { width:100%; justify-self:stretch; } }
     .error { margin:var(--ui-space-5) 0; color:var(--ui-danger); }
     :focus-visible { outline:var(--ui-space-1) solid var(--ui-accent); outline-offset:var(--ui-space-2); }
-    @media(max-width:560px) { .wrap { padding:var(--ui-space-8) var(--ui-space-7) var(--ui-control-lg); } .controls { align-items:flex-start; } .parallel { width:100%; justify-content:flex-start; } .parallel mux-ui-range-field { width:100%; } .label-filter { max-width:var(--ui-work-filter-width); } }
+    @container (max-width:700px) { .detail-tabs { grid-template-columns:repeat(2,minmax(0,1fr)); border-bottom:0; gap:var(--ui-space-2); } .detail-tab { border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); } .detail-tab[aria-selected="true"] { border-color:var(--ui-accent); box-shadow:none; } }
+    @media(max-width:560px) { .wrap { padding:var(--ui-space-8) var(--ui-space-7) var(--ui-control-lg); } .controls { align-items:flex-start; } .parallel { width:100%; justify-content:flex-start; } .parallel mux-ui-range-field { width:100%; } .label-filter { max-width:var(--ui-work-filter-width); } .detail-tab { padding-inline:var(--ui-space-2); } }
     @media(prefers-reduced-motion:reduce) { .group-head .chevron { transition:none; } }
   `;
 
@@ -353,6 +379,30 @@ export class MuxChatCoordination extends LitElement {
     return item.readiness === 'ready' ? 'flag' : 'clock';
   }
   private summary(item: WorkItem) { return item.blockedReason || item.nextAction || item.progress || item.brief || 'Open to see the details.'; }
+  private detailKey(item: WorkItem) { return `muxterm:work-detail-tab:${this.remoteHost || 'local'}:${this.projectId || item.projectIds?.[0] || 'all'}:${item.id}`; }
+  private defaultTab(item: WorkItem): DetailTab { return item.status === 'active' || item.status === 'blocked' ? 'plan' : item.status === 'review' ? 'activity' : 'description'; }
+  private restoreTab(item: WorkItem) {
+    const key = this.detailKey(item);
+    if (key === this.selectedTabKey) return;
+    this.selectedTabKey = key;
+    try {
+      const saved = localStorage.getItem(key);
+      this.selectedTab = detailTabs.some(tab => tab.id === saved) ? saved as DetailTab : this.defaultTab(item);
+    } catch { this.selectedTab = this.defaultTab(item); }
+  }
+  private selectTab(tab: DetailTab) {
+    this.selectedTab = tab;
+    if (this.selectedTabKey) { try { localStorage.setItem(this.selectedTabKey, tab); } catch { /* Storage may be disabled. */ } }
+  }
+  private onDetailTabKeydown(event: KeyboardEvent, tab: DetailTab) {
+    const index = detailTabs.findIndex(entry => entry.id === tab);
+    const next = event.key === 'ArrowRight' ? (index + 1) % detailTabs.length : event.key === 'ArrowLeft' ? (index + detailTabs.length - 1) % detailTabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? detailTabs.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    const nextTab = detailTabs[next].id;
+    this.selectTab(nextTab);
+    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>(`#work-tab-${nextTab}`)?.focus());
+  }
   private openDetail(item: WorkItem) {
     if (this.detail?.id !== item.id) {
       this.commentDraft = '';
@@ -363,6 +413,7 @@ export class MuxChatCoordination extends LitElement {
       this.ackThrough = '';
     }
     this.detail = item;
+    this.restoreTab(item);
     void this.refresh();
   }
   showWorkItem(id: string) { void this.openDependency(id); }
@@ -372,7 +423,7 @@ export class MuxChatCoordination extends LitElement {
     const key = this.refreshKey;
     try {
       const item = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(id)}`);
-      if (key === this.refreshKey) this.detail = item;
+      if (key === this.refreshKey) { this.detail = item; this.restoreTab(item); }
     } catch (error) { if (key === this.refreshKey) this.error = String(error); }
   }
   private dependencyLinks(ids: string[]) { return ids.map((id, index) => html`${index ? ', ' : ''}<a href="#" @click=${(event: Event) => { event.preventDefault(); void this.openDependency(id); }}>${this.work.find(item => item.id === id)?.title || id.slice(0,8)}</a>`); }
@@ -423,25 +474,41 @@ export class MuxChatCoordination extends LitElement {
     const doneCount = countableSteps.filter(step => step.status === 'done').length;
     const skippedCount = planSteps.length - countableSteps.length;
     const updates = [...(item.updates || [])].reverse();
+    const unreadCount = item.ownerSessionId ? this.unreadComments(item).length : 0;
     const state = this.status(item);
     const stateClass = item.status === 'blocked' ? 'blocked' : item.status === 'done' ? 'done' : item.waitingOn?.length ? 'waiting' : '';
+    const move = item.blockedReason || item.nextAction || '';
+    const movePreview = activityPreview(move);
+    const inMotion = item.status === 'active' || item.status === 'blocked' || (item.status === 'open' && !!item.ownerSessionId);
+    const tab = this.selectedTab;
     return html`<article class="detail-view">
       ${this.projectId ? html`<mux-ui-button class="back" variant="quiet" size="small" @click=${() => { this.detail = undefined; }}>${icon('back')}Back to work</mux-ui-button><div class="project detail-project">${icon('folder')}${this.projectName()}</div>` : nothing}
       <div class=${`status ${stateClass}`}>${icon(this.statusIcon(item))}${state}</div>
       <h2>${item.title}</h2>
-      ${item.status !== 'open' && !item.goalCondition ? html`<p class="lead">${item.brief || 'No description yet.'}</p>` : nothing}
-      ${item.status === 'open' || item.goalCondition ? html`<mux-work-goal-review .item=${item} .remoteHost=${this.remoteHost} @work-goal-updated=${(event:CustomEvent<WorkItem>) => { this.detail=event.detail; void this.refresh(); }}></mux-work-goal-review>` : nothing}
-      ${item.nextAction || item.blockedReason ? html`<section class=${`next ${item.status === 'blocked' ? 'blocked' : ''}`}><h3>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</h3><p>${item.blockedReason || item.nextAction}</p></section>` : nothing}
-      ${planSteps.length ? html`<section class="plan" aria-labelledby="work-plan-title"><div class="plan-head"><h3 id="work-plan-title">Plan</h3><span class="plan-count">${doneCount} of ${countableSteps.length} steps done${skippedCount ? ` · ${skippedCount} skipped` : ''}${planSteps.some(step => step.status === 'blocked') ? ' · blocked' : ''}</span></div>${countableSteps.length ? html`<progress aria-label="Work plan steps done" .value=${doneCount} .max=${countableSteps.length}></progress>` : nothing}<ol class="plan-list">${planSteps.map(step => html`<li><span class=${`step-state ${step.status}`}>${step.status === 'in_progress' ? 'In progress' : step.status.charAt(0).toUpperCase() + step.status.slice(1)}</span><span class="step-title">${step.title}</span></li>`)}</ol>${item.planProtocol ? html`<p class="plan-protocol"><strong>Update protocol:</strong> ${item.planProtocol}</p>` : nothing}</section>` : nothing}
-      ${item.progress ? html`<section class="section"><h3>Where things stand</h3><p>${item.progress.length > 160 || item.progress.includes('\n') ? activityPreview(item.progress) : item.progress}</p></section>` : nothing}
-      ${item.status !== 'open' && !item.goalCondition && item.acceptanceCriteria ? html`<section class="section"><h3>How we'll know it worked</h3><p>${item.acceptanceCriteria}</p></section>` : nothing}
-      ${item.outcome ? html`<section class="section"><h3>Outcome</h3><p>${item.outcome}</p></section>` : nothing}
-      ${item.ownerSessionId || item.dispatch?.sessionId ? html`<section class="section"><h3>Who's on it</h3><p>${this.chatLink(item.ownerSessionId || item.dispatch!.sessionId)}</p></section>` : nothing}
-      ${item.dispatch?.selectionReason ? html`<section class="section"><h3>Worker selection</h3><p>${item.dispatch.selectionReason}</p>${item.dispatch.configuration ? html`<p>${item.dispatch.configuration.harness} · ${item.dispatch.configuration.provider} · bundle ${item.dispatch.configuration.bundle || 'none'} · model ${item.dispatch.configuration.model || 'none'} · effort ${item.dispatch.configuration.effort || 'none'}</p>` : nothing}${item.dispatch.fallback ? html`<p>Fallback: ${item.dispatch.fallback}</p>` : nothing}</section>` : nothing}
-      ${item.dependsOn?.length ? html`<section class="section"><h3>Before this can start</h3><p>${this.dependencyLinks(item.dependsOn)}${item.waitingOn?.length ? ` · ${item.waitingOn.length} still in progress` : ' · all complete'}</p></section>` : nothing}
-      <section class="section"><h3>Recent activity</h3>${item.ownerSessionId && this.unreadComments(item).length ? html`<div class="comment-attention"><strong>${this.unreadComments(item).length} unread ${this.unreadComments(item).length === 1 ? 'comment' : 'comments'} for the owner</strong><mux-ui-button variant="secondary" ?disabled=${this.ackSending} @click=${() => void this.acknowledgeComments(item)}>${this.ackSending ? 'Marking…' : 'Mark comments read'}</mux-ui-button></div>` : nothing}<ol class="timeline">${updates.length ? updates.map(update => this.timelineEntry(update, item)) : html`<li><span class="timeline-icon">${icon('work')}</span><div><time>${this.date(item.createdAt)}</time><strong>Added to work</strong><p>${item.source || 'Created for this project.'}</p></div></li>`}</ol><div class="comment-form"><mux-ui-text-area label="Add a comment" .value=${this.commentDraft} .rows=${4} placeholder="Coordinate on this Work item" @input=${(event: Event) => { this.commentDraft = (event.target as MuxUITextArea).value; }}></mux-ui-text-area><div class="comment-priority-field"><span>Delivery</span><mux-ui-select aria-label="Comment delivery priority" .value=${this.commentPriority} .options=${[{value:'normal',label:'Normal · next owner update'}, {value:'high',label:'High · check-comments steer'}]} @change=${(event: Event) => { this.commentPriority = (event.target as MuxUISelect).value as 'normal' | 'high'; }}></mux-ui-select></div><mux-ui-button variant="primary" ?disabled=${!this.commentDraft.trim() || this.commentSending} @click=${() => void this.postComment()}>${this.commentSending ? 'Posting…' : 'Post comment'}</mux-ui-button></div></section>
-      ${item.labels?.length ? html`<section class="section"><h3>Labels</h3><div class="tags">${item.labels.map(label => html`<span class="tag">${label}</span>`)}</div></section>` : nothing}
-      <div class="facts"><span>Created by ${this.actor(item.createdBy)}</span><span>Updated ${this.date(item.updatedAt)}</span></div>
+      ${inMotion && move ? html`<div class=${`next-brief ${item.status === 'blocked' ? 'blocked' : ''}`}><strong>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</strong><p>${movePreview}</p>${unreadCount ? html`<mux-ui-button variant="quiet" size="small" @click=${() => this.selectTab('activity')}>Read ${unreadCount} unread ${unreadCount === 1 ? 'comment' : 'comments'}</mux-ui-button>` : nothing}</div>` : nothing}
+      <div class="detail-tabs" role="tablist" aria-label="Work item details">
+        ${detailTabs.map(entry => html`<button id=${`work-tab-${entry.id}`} class="detail-tab" type="button" role="tab" aria-controls="work-detail-panel" aria-selected=${String(tab === entry.id)} tabindex=${tab === entry.id ? 0 : -1} @click=${() => this.selectTab(entry.id)} @keydown=${(event: KeyboardEvent) => this.onDetailTabKeydown(event, entry.id)}><span class="detail-tab-label">${entry.label}</span>${entry.id === 'plan' && planSteps.length ? html`<span class="detail-tab-count" aria-label=${`${planSteps.length} steps`}>${planSteps.length}</span>` : entry.id === 'activity' && (unreadCount || updates.length) ? html`<span class="detail-tab-count" aria-label=${unreadCount ? `${unreadCount} unread comments` : `${updates.length} updates`}>${unreadCount || updates.length}</span>` : nothing}</button>`)}
+      </div>
+      <div id="work-detail-panel" class="detail-panel" role="tabpanel" aria-labelledby=${`work-tab-${tab}`} tabindex="0">
+      ${tab === 'description' ? html`
+        <mux-work-goal-review .item=${item} .remoteHost=${this.remoteHost} @work-goal-updated=${(event:CustomEvent<WorkItem>) => { this.detail=event.detail; void this.refresh(); }}></mux-work-goal-review>
+        ${item.outcome ? html`<section class="section"><h3>Outcome</h3><p>${item.outcome}</p></section>` : nothing}
+        ${item.source ? html`<section class="section"><h3>Origin</h3><p>${item.source}</p></section>` : nothing}
+      ` : tab === 'people' ? html`
+        <section class="section"><h3>People</h3><p><strong>Owner:</strong> ${item.ownerSessionId ? this.chatLink(item.ownerSessionId) : 'Unassigned'}</p><p><strong>Reviewer:</strong> ${item.reviewerSessionId ? this.chatLink(item.reviewerSessionId) : 'None assigned'}</p><p><strong>Created by:</strong> ${this.actor(item.createdBy)}</p>${item.sessionIds?.length ? html`<p><strong>Linked chats:</strong> ${item.sessionIds.map((id, index) => html`${index ? ', ' : ''}${this.chatLink(id)}`)}</p>` : nothing}</section>
+        ${item.dependsOn?.length ? html`<section class="section"><h3>Dependencies</h3><p>${this.dependencyLinks(item.dependsOn)}${item.waitingOn?.length ? ` · ${item.waitingOn.length} still in progress` : ' · all complete'}</p></section>` : html`<section class="section"><h3>Dependencies</h3><p>None</p></section>`}
+        ${item.dispatch ? html`<section class="section"><h3>Dispatch</h3><p>${item.dispatch.state}${item.dispatch.sessionId ? html` · ${this.chatLink(item.dispatch.sessionId)}` : nothing}</p>${item.dispatch.selectionReason ? html`<p>${item.dispatch.selectionReason}</p>` : nothing}${item.dispatch.configuration ? html`<p>${item.dispatch.configuration.harness} · ${item.dispatch.configuration.provider} · bundle ${item.dispatch.configuration.bundle || 'none'} · model ${item.dispatch.configuration.model || 'none'} · effort ${item.dispatch.configuration.effort || 'none'}</p>` : nothing}${item.dispatch.fallback ? html`<p>Fallback: ${item.dispatch.fallback}</p>` : nothing}${item.dispatch.detail ? html`<p>${item.dispatch.detail}</p>` : nothing}</section>` : nothing}
+        ${item.labels?.length ? html`<section class="section"><h3>Labels</h3><div class="tags">${item.labels.map(label => html`<span class="tag">${label}</span>`)}</div></section>` : nothing}
+      ` : tab === 'plan' ? html`
+        ${move && (!inMotion || movePreview !== move) ? html`<section class=${`next ${item.status === 'blocked' ? 'blocked' : ''}`}><h3>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</h3><p>${move}</p></section>` : nothing}
+        ${planSteps.length ? html`<section class="plan" aria-labelledby="work-plan-title"><div class="plan-head"><h3 id="work-plan-title">Plan</h3><span class="plan-count">${doneCount} of ${countableSteps.length} steps done${skippedCount ? ` · ${skippedCount} skipped` : ''}${planSteps.some(step => step.status === 'blocked') ? ' · blocked' : ''}</span></div>${countableSteps.length ? html`<progress aria-label="Work plan steps done" .value=${doneCount} .max=${countableSteps.length}></progress>` : nothing}<ol class="plan-list">${planSteps.map(step => html`<li><span class=${`step-state ${step.status}`}>${step.status === 'in_progress' ? 'In progress' : step.status.charAt(0).toUpperCase() + step.status.slice(1)}</span><span class="step-title">${step.title}</span></li>`)}</ol></section>` : html`<section class="section"><h3>Plan</h3><p>No steps filed yet.</p></section>`}
+        ${item.progress ? html`<section class="section"><h3>Where things stand</h3><p>${item.progress}</p></section>` : nothing}
+        ${item.planProtocol ? html`<section class="section"><h3>Update protocol</h3><p>${item.planProtocol}</p></section>` : nothing}
+      ` : html`
+        <section class="section"><h3>Recent activity</h3>${unreadCount ? html`<div class="comment-attention"><strong>${unreadCount} unread ${unreadCount === 1 ? 'comment' : 'comments'} for the owner</strong><mux-ui-button variant="secondary" ?disabled=${this.ackSending} @click=${() => void this.acknowledgeComments(item)}>${this.ackSending ? 'Marking…' : 'Mark comments read'}</mux-ui-button></div>` : nothing}<ol class="timeline">${updates.length ? updates.map(update => this.timelineEntry(update, item)) : html`<li><span class="timeline-icon">${icon('work')}</span><div><time>${this.date(item.createdAt)}</time><strong>Added to work</strong><p>${item.source || 'Created for this project.'}</p></div></li>`}</ol><div class="comment-form"><mux-ui-text-area label="Add a comment" .value=${this.commentDraft} .rows=${4} placeholder="Coordinate on this Work item" @input=${(event: Event) => { this.commentDraft = (event.target as MuxUITextArea).value; }}></mux-ui-text-area><div class="comment-priority-field"><span>Delivery</span><mux-ui-select aria-label="Comment delivery priority" .value=${this.commentPriority} .options=${[{value:'normal',label:'Normal · next owner update'}, {value:'high',label:'High · check-comments steer'}]} @change=${(event: Event) => { this.commentPriority = (event.target as MuxUISelect).value as 'normal' | 'high'; }}></mux-ui-select></div><mux-ui-button variant="primary" ?disabled=${!this.commentDraft.trim() || this.commentSending} @click=${() => void this.postComment()}>${this.commentSending ? 'Posting…' : 'Post comment'}</mux-ui-button></div></section>
+        <div class="facts"><span>Created ${this.date(item.createdAt)}</span><span>Updated ${this.date(item.updatedAt)}</span></div>
+      `}
+      </div>
     </article>`;
   }
   override render() {
