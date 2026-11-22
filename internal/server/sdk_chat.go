@@ -1899,32 +1899,7 @@ func (s *Server) handleSDKChatCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	args := map[string]any{"harness": harness, "cwd": cwd}
-	var result json.RawMessage
-	var err error
-	if harness == "codex" {
-		result, err = s.sdkChats.call(ctx, "catalog", args)
-	} else {
-		id := sdkID()
-		args["sessionId"] = id
-		args["approval"] = "never"
-		args["catalog"] = true
-		args["bundle"] = r.URL.Query().Get("bundle")
-		args["provider"] = amplifierProviderModule(harness, r.URL.Query().Get("provider"))
-		_, err = s.sdkChats.call(ctx, "start", args)
-		if err == nil {
-			defer func() {
-				closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer closeCancel()
-				_, _ = s.sdkChats.call(closeCtx, "close", map[string]any{"harness": harness, "sessionId": id})
-			}()
-			if harness == "amplifier" {
-				result, err = s.sdkChats.call(ctx, "settings", map[string]any{"harness": harness, "sessionId": id})
-			} else {
-				result, err = s.sdkChats.call(ctx, "options", map[string]any{"harness": harness, "sessionId": id})
-			}
-		}
-	}
+	result, err := s.sdkChatCatalog(ctx, harness, cwd, r.URL.Query().Get("bundle"), r.URL.Query().Get("provider"))
 	if err != nil {
 		http.Error(w, err.Error(), 502)
 		return
@@ -1932,6 +1907,33 @@ func (s *Server) handleSDKChatCatalog(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(result)
+}
+
+// sdkChatCatalog uses the same runtime discovery for New chat and side chat.
+// Non-Codex discovery sessions are temporary and never enter the chat journal.
+func (s *Server) sdkChatCatalog(ctx context.Context, harness, cwd, bundle, provider string) (json.RawMessage, error) {
+	args := map[string]any{"harness": harness, "cwd": cwd}
+	if harness == "codex" {
+		return s.sdkChats.call(ctx, "catalog", args)
+	}
+	id := sdkID()
+	args["sessionId"] = id
+	args["approval"] = "never"
+	args["catalog"] = true
+	args["bundle"] = bundle
+	args["provider"] = amplifierProviderModule(harness, provider)
+	if _, err := s.sdkChats.call(ctx, "start", args); err != nil {
+		return nil, err
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer closeCancel()
+		_, _ = s.sdkChats.call(closeCtx, "close", map[string]any{"harness": harness, "sessionId": id})
+	}()
+	if harness == "amplifier" {
+		return s.sdkChats.call(ctx, "settings", map[string]any{"harness": harness, "sessionId": id})
+	}
+	return s.sdkChats.call(ctx, "options", map[string]any{"harness": harness, "sessionId": id})
 }
 
 func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
@@ -1993,6 +1995,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, SideParentID string
+		SideConfig                                                                                                         bool     `json:"sideConfig"`
 		Attachments                                                                                                        []string `json:"attachments"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
@@ -2001,6 +2004,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	var sideContext string
 	var sideSourceFolders []string
+	sideRequestedConfig := req.SideConfig || req.Harness != "" || req.Provider != "" || req.Bundle != "" || req.Model != "" || req.Effort != ""
 	if req.SideParentID != "" {
 		h.mu.Lock()
 		parentRecord := h.chats[req.SideParentID]
@@ -2008,8 +2012,23 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		if parentRecord != nil {
 			parent = *parentRecord
 			req.WorkspaceID, req.ProjectPath = parent.WorkspaceID, parent.ProjectPath
-			req.Harness, req.Provider, req.Bundle = parent.Harness, parent.Provider, parent.Bundle
-			req.Model, req.Effort = parent.Model, parent.Effort
+			if req.Harness == "" {
+				req.Harness = parent.Harness
+			}
+			if req.Harness == parent.Harness && !req.SideConfig {
+				if req.Provider == "" {
+					req.Provider = parent.Provider
+				}
+				if req.Bundle == "" {
+					req.Bundle = parent.Bundle
+				}
+				if req.Model == "" {
+					req.Model = parent.Model
+				}
+				if req.Effort == "" {
+					req.Effort = parent.Effort
+				}
+			}
 			sideSourceFolders = append([]string(nil), parent.SourceFolders...)
 		}
 		h.mu.Unlock()
@@ -2018,7 +2037,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Goal != "" || req.WorkMode == "worktree" || len(req.Attachments) != 0 || strings.TrimSpace(req.Prompt) == "" {
-			http.Error(w, "side chat requires a question without attachments or goal", http.StatusBadRequest)
+			http.Error(w, "side chat requires a message without attachments or goal", http.StatusBadRequest)
 			return
 		}
 		req.WorkMode = "local"
@@ -2029,6 +2048,10 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
 		}
+	}
+	if req.SideParentID == "" && req.SideConfig {
+		http.Error(w, "sideConfig is only for side chats", 400)
+		return
 	}
 	if !s.eligibleNewChatHarness(r.Context(), req.Harness) {
 		http.Error(w, "harness is not verified for live steering, native goals, and native history, or its runtime is unavailable", http.StatusUnprocessableEntity)
@@ -2158,6 +2181,91 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if err := h.ensure(req.Harness); err != nil {
 		http.Error(w, err.Error(), 503)
 		return
+	}
+	if req.SideParentID != "" {
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		catalogBytes, catalogErr := s.sdkChatCatalog(ctx, req.Harness, req.ProjectPath, req.Bundle, req.Provider)
+		cancel()
+		if catalogErr != nil {
+			http.Error(w, "side chat choice unavailable: "+catalogErr.Error(), 422)
+			return
+		}
+		var catalog struct {
+			Model, Effort, DefaultModel, Bundle, Provider string
+			Models                                        []struct {
+				ID, DefaultEffort string
+				Efforts           []string
+			}
+			Bundles, Providers []string
+		}
+		if err := json.Unmarshal(catalogBytes, &catalog); err != nil {
+			http.Error(w, "side chat model catalog is invalid", 502)
+			return
+		}
+		contains := func(values []string, value string) bool {
+			for _, item := range values {
+				if item == value {
+					return true
+				}
+			}
+			return false
+		}
+		if req.Harness == "amplifier" {
+			if req.Bundle == "" {
+				req.Bundle = catalog.Bundle
+			}
+			if req.Provider == "configured" {
+				req.Provider = catalog.Provider
+			}
+			if !contains(catalog.Bundles, req.Bundle) || !contains(catalog.Providers, req.Provider) {
+				http.Error(w, "unavailable side chat bundle or provider", 422)
+				return
+			}
+		}
+		if req.Model == "" {
+			req.Model = catalog.Model
+			if req.Model == "" {
+				req.Model = catalog.DefaultModel
+			}
+		}
+		var modelEfforts []string
+		defaultEffort := ""
+		knownModel := req.Model == catalog.Model || req.Model == catalog.DefaultModel
+		for _, model := range catalog.Models {
+			if model.ID == req.Model {
+				knownModel = true
+				modelEfforts = model.Efforts
+				defaultEffort = model.DefaultEffort
+				break
+			}
+		}
+		if !knownModel {
+			if sideRequestedConfig {
+				http.Error(w, "unavailable side chat model", 422)
+				return
+			}
+			req.Model = catalog.Model
+			if req.Model == "" {
+				req.Model = catalog.DefaultModel
+			}
+			req.Effort = ""
+		}
+		if req.Effort == "" {
+			req.Effort = defaultEffort
+			if req.Effort == "" {
+				req.Effort = catalog.Effort
+			}
+		}
+		if req.Effort != "" && len(modelEfforts) > 0 && !contains(modelEfforts, req.Effort) {
+			if sideRequestedConfig {
+				http.Error(w, "unavailable side chat thinking effort", 422)
+				return
+			}
+			req.Effort = defaultEffort
+			if req.Effort == "" {
+				req.Effort = modelEfforts[0]
+			}
+		}
 	}
 	chatID := sdkID()
 	if plannedID, ok := r.Context().Value(workStartChatIDKey{}).(string); ok && plannedID != "" {
