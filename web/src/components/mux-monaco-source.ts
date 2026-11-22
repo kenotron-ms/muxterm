@@ -88,7 +88,7 @@ export class MuxMonacoSource extends HTMLElement {
         accessibilitySupport: 'auto',
       });
       this.themeObserver = new MutationObserver(() => this.syncTheme());
-      this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+      this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'data-app-mode'] });
       this.syncTheme();
     }).catch(() => {
       if (this.isConnected && generation === this.generation) host.textContent = 'Could not load source viewer.';

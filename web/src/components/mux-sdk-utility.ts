@@ -1132,7 +1132,7 @@ export class MuxSDKUtility extends LitElement {
   private changeStatusLabel(status: string): string {
     const code = status.trim();
     if (code === '??') return 'Untracked';
-    if (code.includes('U')) return 'Conflict';
+    if (code === 'AA' || code === 'DD' || code.includes('U')) return 'Conflict';
     if (code.includes('D')) return 'Deleted';
     if (code.includes('R')) return 'Renamed';
     if (code.includes('C')) return 'Copied';
