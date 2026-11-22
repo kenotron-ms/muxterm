@@ -31,6 +31,9 @@ export class MuxUIButton extends LitElement {
   @property({ type: Boolean, reflect: true }) pressed = false;
   @property() tooltip = '';
   @property() keyshortcuts = '';
+  @property({ attribute: 'control-role' }) controlRole = '';
+  @property({ type: Boolean, attribute: 'tab-selected' }) tabSelected = false;
+  @property({ type: Boolean, attribute: 'tab-stop' }) tabStop = false;
   @property() href = '';
   @property() target = '';
   @property() rel = '';
@@ -148,6 +151,8 @@ export class MuxUIButton extends LitElement {
         aria-busy=${String(this.busy)}>${content}</a>`;
     }
     return html`<button part="button" type="button" ?disabled=${this.disabled || this.busy}
+      role=${this.controlRole || nothing} aria-selected=${this.controlRole === 'tab' ? String(this.tabSelected) : nothing}
+      tabindex=${this.controlRole === 'tab' ? (this.tabStop ? '0' : '-1') : nothing}
       title=${this.tooltip || nothing}
       aria-label=${this.accessibleLabel || nothing} aria-current=${this.ariaCurrent || nothing} aria-keyshortcuts=${this.keyshortcuts || nothing} aria-busy=${String(this.busy)}
       aria-haspopup=${this.haspopup || nothing} aria-expanded=${this.haspopup || this.expandable ? String(this.expanded) : nothing}
