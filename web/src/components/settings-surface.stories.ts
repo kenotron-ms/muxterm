@@ -59,15 +59,17 @@ function fixtureForVoice(initialVoice: VoiceStatus): ApiFixture {
   return ({ url, method, init }) => {
     if (url.pathname.endsWith('/api/remotes') && method === 'GET') return fixtureJSON(remotes);
     if (url.pathname.endsWith('/api/sdk-chat-start-options') && method === 'GET') return fixtureJSON([
-      {harness:'codex',provider:'openai'}, {harness:'amplifier',provider:'configured'},
+      {harness:'copilot',provider:'github'},
     ]);
     if (url.pathname.endsWith('/api/ai/antigravity/auth') && method === 'GET') return fixtureJSON({mode:'google',apiKeyDetected:false,installed:false,installSupported:true});
     if (url.pathname.endsWith('/api/ai/antigravity/login') && method === 'GET') return fixtureJSON({state:'idle'});
-    if (url.pathname.endsWith('/api/ai/agents/versions') && method === 'GET') return fixtureJSON({agents:[
+    if ((url.pathname.endsWith('/api/ai/agents/versions') && method === 'GET') || (url.pathname.endsWith('/api/ai/agents/versions/refresh') && method === 'POST')) return fixtureJSON({agents:[
       {harness:'codex',installed:true,version:'0.150.0',latestVersion:'0.160.0',updateAvailable:true,checkedAt:'2026-11-14T07:00:00Z'},
       {harness:'amplifier',installed:true,version:'0.1.0',updateAvailable:false,checkedAt:'2026-11-14T07:00:00Z'},
       ...['claude','copilot','opencode','pi','deepseek'].map(harness => ({harness,installed:false,updateAvailable:false,checkedAt:'2026-11-14T07:00:00Z'})),
     ]});
+    if (url.pathname.endsWith('/api/ai/agents/runtimes') && method === 'GET') return fixtureJSON({agents:['codex','claude','copilot','opencode','pi','deepseek','amplifier','amplifier-unified','antigravity-sdk','antigravity'].map(harness => ({harness,scope:harness === 'amplifier' ? 'amplifier' : 'shared',state:'running',activeChats:0}))});
+    if (url.pathname.endsWith('/api/ai/unified/connection') && method === 'GET') return fixtureJSON({mode:'local',url:'',installed:false,installSupported:true,tokenConfigured:false,connected:false});
     if (url.pathname.endsWith('/api/update/status') && method === 'GET') return fixtureJSON({
       currentVersion:'0.14.0', latestVersion:'0.14.0', updateAvailable:false,
       canUpdate:false, devBuild:true, method:'unsupported', reason:'Development build',
@@ -247,6 +249,11 @@ export const AIAgentInstall: Story = {
     if (!claude) throw new Error('Claude Code row is missing');
     (claude as HTMLElement).click();
   },
+};
+export const PhoneAIAgentInventory: Story = {
+  args:{section:'ai'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  render:renderPhonePage,
 };
 export const AIAgentScanError: Story = {
   args:{section:'ai'},
