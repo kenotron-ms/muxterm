@@ -8,6 +8,9 @@ const CHAT_HASH = /^#chat=([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f-]{27,})(?:&host=[^&#
 const CHAT_MENTION = /[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[“"][^”"]{1,160}[”"]/gi;
 // Codex app-server exposes these IDs in message text without a URL mapping.
 const CODEX_CITATION = /cite(turn\d+(?:search|view)\d+(?:turn\d+(?:search|view)\d+)*)/g;
+const WORK_MENTION = /Work #\d+|(?:Work\s+)?[0-9a-f]{32}/gi;
+
+export type WorkReference = { id: string; reference: string; title: string; remoteHost: string };
 
 function chatForSession(value: string): SDKChat | undefined {
   return sdkChats.chats.find(chat => chat.id.toLowerCase() === value.toLowerCase() || chat.nativeId?.toLowerCase() === value.toLowerCase());
@@ -109,3 +112,72 @@ export const chatMarkdownPolicy: MdLinkPolicy = {
   },
   referenceText: linkedChatReferences,
 };
+
+/** The server-provided index is the authority; unknown text is left untouched. */
+export function chatMarkdownPolicyForWork(
+  items: readonly WorkReference[], sessionId: string, chatHost: string,
+  open: (item: WorkReference, trigger: HTMLElement) => void,
+): MdLinkPolicy {
+  const byReference = new Map<string, WorkReference>();
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    byReference.set(item.id.toLowerCase(), item);
+    counts.set(item.reference.toLowerCase(), (counts.get(item.reference.toLowerCase()) || 0) + 1);
+  }
+  for (const item of items) if (counts.get(item.reference.toLowerCase()) === 1) byReference.set(item.reference.toLowerCase(), item);
+  const workLink = (item: WorkReference): TemplateResult => {
+    const hash = new URLSearchParams({chat:sessionId, work:item.id});
+    if (chatHost) hash.set('host', chatHost);
+    if (item.remoteHost && item.remoteHost !== chatHost) hash.set('workHost', item.remoteHost);
+    const hostLabel = item.remoteHost ? ` on ${item.remoteHost}` : '';
+    return html`<a class="md-link md-work-link" href=${`#${hash}`} draggable="false"
+      title=${`Open ${item.reference}${hostLabel}: ${item.title}`}
+      aria-label=${`Open ${item.reference}${hostLabel} in Work pane: ${item.title}`}
+      @click=${(event: MouseEvent) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        open(item, event.currentTarget as HTMLElement);
+      }}>${item.reference}${item.remoteHost ? html` <span class="md-work-host">${item.remoteHost}</span>` : ''}</a>`;
+  };
+  const linkedText = (text: string): unknown => {
+    const parts: unknown[] = [];
+    let end = 0;
+    for (const match of text.matchAll(WORK_MENTION)) {
+      if (match.index === undefined || match.index < end) continue;
+      const start = match.index;
+      const before = text[start - 1] || '';
+      const after = text[start + match[0].length] || '';
+      if (/[\p{L}\p{N}/?=#:]/u.test(before) || /[\p{L}\p{N}/]/u.test(after)) continue;
+      const item = byReference.get(match[0].replace(/^Work\s+(?=[0-9a-f]{32}$)/i, '').toLowerCase());
+      if (!item) continue;
+      if (start > end) parts.push(linkedChatReferences(text.slice(end, start)));
+      parts.push(workLink(item));
+      end = start + match[0].length;
+    }
+    if (!parts.length) return linkedChatReferences(text);
+    if (end < text.length) parts.push(linkedChatReferences(text.slice(end)));
+    return parts;
+  };
+  const workFromHref = (href: string): WorkReference | undefined => {
+    const raw = href.trim();
+    if (raw.startsWith('work:')) {
+      try { return byReference.get(decodeURIComponent(raw.slice(5)).toLowerCase()); }
+      catch { return undefined; }
+    }
+    if (!raw.startsWith('#')) return undefined;
+    const params = new URLSearchParams(raw.slice(1));
+    if ((params.has('chat') && params.get('chat') !== sessionId) || (params.has('host') && params.get('host') !== chatHost)) return undefined;
+    const item = byReference.get((params.get('work') || '').toLowerCase());
+    if (params.has('workHost') && params.get('workHost') !== item?.remoteHost) return undefined;
+    return item;
+  };
+  return {
+    ...chatMarkdownPolicy,
+    referenceText: linkedText,
+    reference: (href, label) => {
+      const work = workFromHref(href);
+      if (work) return workLink(work);
+      return chatMarkdownPolicy.reference?.(href, label) || null;
+    },
+  };
+}
