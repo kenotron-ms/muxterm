@@ -163,6 +163,7 @@ type sdkChatHost struct {
 	mu               sync.Mutex
 	runtimeGate      sync.RWMutex
 	lifecycleMu      sync.Mutex
+	goalDispatch     goalDispatchState
 	workSendMu       sync.RWMutex // Linearizes agent send admission with Work ownership transitions.
 	inboxDeliveryMu  sync.Mutex
 	nameLocks        map[string]*sync.Mutex
@@ -200,6 +201,14 @@ type unifiedEventProjection struct {
 	textBytes map[string]int
 }
 
+type goalDispatchState struct {
+	mu     sync.Mutex
+	wg     sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
+	closed bool
+}
+
 func sdkDataDir() string {
 	base := os.Getenv("XDG_DATA_HOME")
 	if base == "" {
@@ -210,6 +219,7 @@ func sdkDataDir() string {
 }
 func newSDKChatHost() *sdkChatHost {
 	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, migrationLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
+	h.goalDispatch.ctx, h.goalDispatch.cancel = context.WithCancel(context.Background())
 	h.goals = openGoalLedger(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	h.loadSubscriptions()
@@ -879,6 +889,11 @@ func (h *sdkChatHost) watch(cmd *exec.Cmd, done chan struct{}, harness string) {
 	log.Printf("sdk chat sidecar exited: %v", err)
 }
 func (h *sdkChatHost) close() {
+	h.goalDispatch.mu.Lock()
+	h.goalDispatch.closed = true
+	h.goalDispatch.cancel()
+	h.goalDispatch.mu.Unlock()
+	h.goalDispatch.wg.Wait()
 	h.mu.Lock()
 	cmd := h.process
 	amp := h.ampSup
