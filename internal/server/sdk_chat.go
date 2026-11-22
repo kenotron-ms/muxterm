@@ -2184,6 +2184,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.SideParentID != "" {
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		defer cancel()
 		catalogBytes, catalogErr := s.sdkChatCatalog(ctx, req.Harness, req.ProjectPath, req.Bundle, req.Provider)
 		cancel()
 		if catalogErr != nil {
@@ -2217,7 +2218,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			if req.Provider == "configured" {
 				req.Provider = catalog.Provider
 			}
-			if !contains(catalog.Bundles, req.Bundle) || !contains(catalog.Providers, req.Provider) {
+			bundleAllowed := contains(catalog.Bundles, req.Bundle) || len(catalog.Bundles) == 0 && req.Bundle == catalog.Bundle
+			providerAllowed := contains(catalog.Providers, req.Provider) || len(catalog.Providers) == 0 && req.Provider == catalog.Provider
+			if !bundleAllowed || !providerAllowed {
 				http.Error(w, "unavailable side chat bundle or provider", 422)
 				return
 			}
@@ -2230,7 +2233,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		}
 		var modelEfforts []string
 		defaultEffort := ""
-		knownModel := req.Model == catalog.Model || req.Model == catalog.DefaultModel
+		knownModel := req.Model == "" && len(catalog.Models) == 0
 		for _, model := range catalog.Models {
 			if model.ID == req.Model {
 				knownModel = true
@@ -2238,6 +2241,11 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 				defaultEffort = model.DefaultEffort
 				break
 			}
+		}
+		// Some catalogs advertise their default separately from the selectable
+		// model list. Accept that exact default, but not arbitrary effort values.
+		if !knownModel && req.Model != "" && (req.Model == catalog.Model || req.Model == catalog.DefaultModel) {
+			knownModel = true
 		}
 		if !knownModel {
 			if sideRequestedConfig {
@@ -2252,17 +2260,19 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Effort == "" {
 			req.Effort = defaultEffort
-			if req.Effort == "" {
+			if req.Effort == "" && (req.Model == catalog.Model || req.Model == catalog.DefaultModel) {
 				req.Effort = catalog.Effort
 			}
 		}
-		if req.Effort != "" && len(modelEfforts) > 0 && !contains(modelEfforts, req.Effort) {
+		validEffort := len(modelEfforts) > 0 && contains(modelEfforts, req.Effort) ||
+			len(modelEfforts) == 0 && req.Effort == catalog.Effort && (req.Model == catalog.Model || req.Model == catalog.DefaultModel)
+		if req.Effort != "" && !validEffort {
 			if sideRequestedConfig {
 				http.Error(w, "unavailable side chat thinking effort", 422)
 				return
 			}
 			req.Effort = defaultEffort
-			if req.Effort == "" {
+			if req.Effort == "" && len(modelEfforts) > 0 {
 				req.Effort = modelEfforts[0]
 			}
 		}
