@@ -1,15 +1,15 @@
-import contoursArt from '../assets/backdrop-subjects/contours.svg?url';
-import ridgelineArt from '../assets/backdrop-subjects/ridgeline.svg?url';
-import botanicalArt from '../assets/backdrop-subjects/botanical.svg?url';
-import arcadeArt from '../assets/backdrop-subjects/arcade.svg?url';
-import orbitsArt from '../assets/backdrop-subjects/orbits.svg?url';
-import rainfallArt from '../assets/backdrop-subjects/rainfall.svg?url';
-import confettiArt from '../assets/backdrop-subjects/confetti.svg?url';
-import dunesArt from '../assets/backdrop-subjects/dunes.svg?url';
-import fanArt from '../assets/backdrop-subjects/fan.svg?url';
-import citylightsArt from '../assets/backdrop-subjects/citylights.svg?url';
-import petalsArt from '../assets/backdrop-subjects/petals.svg?url';
-import geometryArt from '../assets/backdrop-subjects/geometry.svg?url';
+import contoursArt from '../assets/backdrop-subjects/contours.webp?url';
+import ridgelineArt from '../assets/backdrop-subjects/ridgeline.webp?url';
+import botanicalArt from '../assets/backdrop-subjects/botanical.webp?url';
+import arcadeArt from '../assets/backdrop-subjects/arcade.webp?url';
+import orbitsArt from '../assets/backdrop-subjects/orbits.webp?url';
+import rainfallArt from '../assets/backdrop-subjects/rainfall.webp?url';
+import confettiArt from '../assets/backdrop-subjects/confetti.webp?url';
+import dunesArt from '../assets/backdrop-subjects/dunes.webp?url';
+import fanArt from '../assets/backdrop-subjects/fan.webp?url';
+import citylightsArt from '../assets/backdrop-subjects/citylights.webp?url';
+import petalsArt from '../assets/backdrop-subjects/petals.webp?url';
+import geometryArt from '../assets/backdrop-subjects/geometry.webp?url';
 import { syncPwaThemeColor } from './theme.js';
 import type { ResolvedConfig } from './config.js';
 
@@ -24,21 +24,21 @@ type Scheme = {
 export type AppTheme = { id: AppThemeId; label: string; description: string; light: Scheme; dark: Scheme };
 
 
-/** Subject artwork is an alpha mask. The selected app palette supplies every visible color. */
+/** Original transparent illustration tiles. IDs remain stable for saved preferences. */
 export const BACKDROPS = [
   { id:'none', label:'Plain', description:'No artwork', image:'' },
-  { id:'contours', label:'Contours', description:'Small flowing lines', image:contoursArt },
-  { id:'ridgeline', label:'Ridgeline', description:'Mountain peaks', image:ridgelineArt },
-  { id:'botanical', label:'Botanical', description:'Leaf sprigs', image:botanicalArt },
-  { id:'arcade', label:'Arcade', description:'Little arches', image:arcadeArt },
-  { id:'orbits', label:'Orbits', description:'Miniature planets', image:orbitsArt },
-  { id:'rainfall', label:'Rainfall', description:'Rain strokes', image:rainfallArt },
-  { id:'confetti', label:'Confetti', description:'Scattered shapes', image:confettiArt },
-  { id:'dunes', label:'Dunes', description:'Wind-shaped dunes', image:dunesArt },
-  { id:'fan', label:'Fan', description:'Folding fans', image:fanArt },
-  { id:'citylights', label:'Citylights', description:'Mini skylines', image:citylightsArt },
-  { id:'petals', label:'Petals', description:'Loose blossoms', image:petalsArt },
-  { id:'geometry', label:'Geometry', description:'Nested shapes', image:geometryArt },
+  { id:'contours', label:'Enchanted Paths', description:'Curious garden companions', image:contoursArt },
+  { id:'ridgeline', label:'Moonlit Trail', description:'Woodland night wanderers', image:ridgelineArt },
+  { id:'botanical', label:'Secret Greenhouse', description:'Little lives among the leaves', image:botanicalArt },
+  { id:'arcade', label:'Pocket Carnival', description:'Playful miniature prizes', image:arcadeArt },
+  { id:'orbits', label:'Stargazer Club', description:'Friends among the stars', image:orbitsArt },
+  { id:'rainfall', label:'Puddle Parade', description:'Rainy day adventures', image:rainfallArt },
+  { id:'confetti', label:'Midnight Celebration', description:'A party of tiny surprises', image:confettiArt },
+  { id:'dunes', label:'Desert Daydream', description:'Warm wandering creatures', image:dunesArt },
+  { id:'fan', label:'The Little Atelier', description:'An artist’s scattered treasures', image:fanArt },
+  { id:'citylights', label:'After Hours Stroll', description:'A city after sunset', image:citylightsArt },
+  { id:'petals', label:'Sweet Shop', description:'Treats and kitchen helpers', image:petalsArt },
+  { id:'geometry', label:'Curiosity Cabinet', description:'Odd little keepsakes', image:geometryArt },
 ] as const;
 export type BackdropId = typeof BACKDROPS[number]['id'];
 export function backdropImage(id: string): string {
@@ -105,8 +105,8 @@ export function applyAppAppearance(id: AppThemeId, mode: AppThemeMode, backdrop:
     '--ui-warning':mode === 'light' ? '#9a681d' : '#e9bd6a',
     '--ui-info':t.accent, '--ui-focus':t.accent,
     '--ui-chat-backdrop-color':t.chat,
-    '--ui-chat-backdrop-mask':backdrop === 'none' ? 'none' : `url("${backdropImage(backdrop)}")`,
-    '--ui-chat-art-ink':`color-mix(in srgb, ${t.accent} ${mode === 'light' ? 9 : 12}%, transparent)`,
+    '--ui-chat-backdrop-image':backdrop === 'none' ? 'none' : `url("${backdropImage(backdrop)}")`,
+    '--ui-chat-backdrop-art-opacity':mode === 'light' ? '0.30' : '0.35',
     '--ui-chat-user-surface':t.user,
     '--ui-chat-assistant-surface':t.assistant,
     '--ui-chat-assistant-text':t.assistantText,
