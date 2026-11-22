@@ -10,6 +10,10 @@ import fanArt from '../assets/backdrop-subjects/fan.svg?url';
 import citylightsArt from '../assets/backdrop-subjects/citylights.svg?url';
 import petalsArt from '../assets/backdrop-subjects/petals.svg?url';
 import geometryArt from '../assets/backdrop-subjects/geometry.svg?url';
+import nightGridArt from '../assets/backdrop-subjects/night-grid.svg?url';
+import wayfarerArt from '../assets/backdrop-subjects/wayfarer.svg?url';
+import skyboundArt from '../assets/backdrop-subjects/skybound.svg?url';
+import moonKeepArt from '../assets/backdrop-subjects/moon-keep.svg?url';
 import { syncPwaThemeColor } from './theme.js';
 import type { ResolvedConfig } from './config.js';
 
@@ -39,6 +43,10 @@ export const BACKDROPS = [
   { id:'citylights', label:'After Hours Stroll', description:'A fox walking through the city', image:citylightsArt },
   { id:'petals', label:'Sweet Shop', description:'Little bakers and tiny treats', image:petalsArt },
   { id:'geometry', label:'Curiosity Cabinet', description:'Odd little creatures and keepsakes', image:geometryArt },
+  { id:'night-grid', label:'Night Grid', description:'Street signals and pocket maps', image:nightGridArt },
+  { id:'wayfarer', label:'Wayfarer', description:'Lanterns and keepsakes for the road', image:wayfarerArt },
+  { id:'skybound', label:'Skybound', description:'Cloud paths and playful tools', image:skyboundArt },
+  { id:'moon-keep', label:'Moon Keep', description:'Ravens and relics after dark', image:moonKeepArt },
 ] as const;
 export type BackdropId = typeof BACKDROPS[number]['id'];
 export function backdropImage(id: string): string {

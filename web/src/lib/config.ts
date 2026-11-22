@@ -179,6 +179,7 @@ const LEGACY_BACKDROPS: Record<string, string> = {
 const BACKDROP_IDS = new Set([
   'none', 'contours', 'ridgeline', 'botanical', 'arcade', 'orbits',
   'rainfall', 'confetti', 'dunes', 'fan', 'citylights', 'petals', 'geometry',
+  'night-grid', 'wayfarer', 'skybound', 'moon-keep',
 ]);
 function resolvedBackdrop(value: unknown, fallback: string): string {
   if (typeof value !== 'string') return fallback;
