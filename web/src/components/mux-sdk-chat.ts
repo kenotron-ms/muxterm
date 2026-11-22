@@ -316,7 +316,7 @@ export class MuxSDKChat extends LitElement {
     .layout.preview-focused .drawer { width:100%; flex:1; border-left:0; }
     .layout.preview-focused .drawer-resizer { display:none; }
     .chat { position:relative; flex:1; min-width:0; display:flex; flex-direction:column; background-color:var(--ui-chat-backdrop-color); }
-    .chat::before { content:''; position:absolute; inset:0; pointer-events:none; background-image:var(--ui-chat-backdrop-image); background-size:var(--ui-chat-backdrop-tile-size); background-repeat:repeat; opacity:var(--ui-chat-backdrop-art-opacity); }
+    .chat::before { content:''; position:absolute; inset:0; pointer-events:none; background:var(--ui-chat-art-ink); mask:var(--ui-chat-backdrop-mask) 0 0/var(--ui-chat-backdrop-tile-size) var(--ui-chat-backdrop-tile-size) repeat; }
     .chat > * { position:relative; }
     :host([side-mode]) .chat { background-color:var(--ui-surface-base); }
     :host([side-mode]) .chat::before { display:none; }
