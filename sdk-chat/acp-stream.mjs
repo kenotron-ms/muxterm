@@ -471,7 +471,11 @@ export class ACPStream {
       const instruction = 'Stop and cancel the current goal now. This is an explicit human pause. Do not continue the goal.';
       const input = { kind: 'steer', id: randomUUID(), source: 'goal-control', content: instruction };
       if (this.busy) await this.send(input);
-      else await this.startPrompt(input, [{ type: 'text', text: instruction }]);
+      else {
+        await this.startPrompt(input, [{ type: 'text', text: instruction }]);
+        // Acceptance may precede the cancellation marker in a later chunk.
+        await this.turnPromise;
+      }
       if (this.nativeGoal.state !== 'cancelled')
         throw new Error('Antigravity did not confirm native goal cancellation');
     }
@@ -592,6 +596,9 @@ export class ACPStream {
         throw new Error('Antigravity steering was cancelled');
       if (result.stopReason !== 'end_turn')
         throw new Error(`Antigravity steering stopped: ${result.stopReason}`);
+      // Either ACP prompt may settle first. Keep the original turn under the
+      // steering guard until its own completion handler has run.
+      await this.turnPromise;
       this.emitAccepted(input);
       this.emit(this.session.id, 'turn.completed', { inputIds, message: result.stopReason });
       return { status: 'accepted', inputId: input.id };
