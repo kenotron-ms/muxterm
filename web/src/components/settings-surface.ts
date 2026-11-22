@@ -1261,12 +1261,12 @@ export class MuxSettingsSurface extends LitElement {
       const data = await response.json() as { agents?: AgentVersion[] };
       if (!Array.isArray(data.agents)) throw new Error('Invalid agent status');
       if (request === this._agentVersionRequest && this.isConnected && this._section === 'ai') {
-        this._agentVersions = new Map(data.agents.map(agent => [agent.harness, agent]));
-        this._agentVersionError = '';
         if (data.agents.length === 0) {
           window.clearTimeout(this._agentVersionRetry);
           this._agentVersionRetry = window.setTimeout(() => void this._loadAgentVersions(), 2_000);
         } else {
+          this._agentVersions = new Map(data.agents.map(agent => [agent.harness, agent]));
+          this._agentVersionError = '';
           window.clearTimeout(this._agentVersionRetry);
         }
       }
@@ -1289,7 +1289,7 @@ export class MuxSettingsSurface extends LitElement {
       const response = await fetch(apiPath('/api/ai/agents/versions/refresh'), { method: 'POST' });
       if (!response.ok) throw new Error('Could not scan agents');
       const data = await response.json() as { agents?: AgentVersion[] };
-      if (!Array.isArray(data.agents)) throw new Error('Invalid agent status');
+      if (!Array.isArray(data.agents) || data.agents.length === 0) throw new Error('Invalid agent status');
       if (request === this._agentVersionRequest && this.isConnected && this._section === 'ai') {
         this._agentVersions = new Map(data.agents.map(agent => [agent.harness, agent]));
         void this._loadAgentAvailability();
