@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
+import { remoteChatPath } from '../lib/remote-chat-routes.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import '../ui/choice-item.js';
 import '../ui/choice-list.js';
@@ -24,6 +25,7 @@ const providerLabel = (value: string) => value === 'provider-anthropic' ? 'Anthr
 @customElement('mux-sdk-chat-settings')
 export class MuxSDKChatSettings extends LitElement {
   @property() sessionId = '';
+  @property() remoteHost = '';
   @property() harness = '';
   @property({ type:Boolean }) turnBusy = false;
   @state() private settings?: Settings;
@@ -40,14 +42,14 @@ export class MuxSDKChatSettings extends LitElement {
     .load-feedback { flex:1; }
   `;
   override updated(changed: Map<string, unknown>) {
-    if (changed.has('sessionId') && this.sessionId) { this.settings = undefined; this.error = ''; void this.load(this.sessionId); }
+    if ((changed.has('sessionId') || changed.has('remoteHost')) && this.sessionId) { this.settings = undefined; this.error = ''; void this.load(this.sessionId); }
   }
   private pending(value: boolean) { this.dispatchEvent(new CustomEvent('settings-pending', { detail:value, bubbles:true, composed:true })); }
   private async load(sessionId: string) {
     const version = ++this.requestVersion;
     this.loading = true; this.error = '';
     try {
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/settings`));
+      const response = await fetch(apiPath(remoteChatPath(this.remoteHost, `/api/sdk-chats/${encodeURIComponent(sessionId)}/settings`)));
       if (!response.ok) throw new Error(await response.text());
       const settings = await response.json() as Settings;
       if (this.sessionId === sessionId && this.requestVersion === version) this.settings = settings;
@@ -58,7 +60,7 @@ export class MuxSDKChatSettings extends LitElement {
     if (this.loading || this.turnBusy || !this.settings) return;
     this.loading = true; this.error = ''; this.pending(true);
     try {
-      const response = await fetch(apiPath(`/api/sdk-chats/${encodeURIComponent(this.sessionId)}/settings`), { method:'PATCH', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(change) });
+      const response = await fetch(apiPath(remoteChatPath(this.remoteHost, `/api/sdk-chats/${encodeURIComponent(this.sessionId)}/settings`)), { method:'PATCH', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(change) });
       if (!response.ok) throw new Error(await response.text());
       this.settings = await response.json() as Settings;
       this.dispatchEvent(new CustomEvent('settings-changed', { detail:this.settings, bubbles:true, composed:true }));

@@ -529,7 +529,7 @@ export class MuxSDKUtility extends LitElement {
   }
   private newTabView(): TemplateResult {
     return html`<section class="new-tab-surface"><div class="new-tab-home"><h2>Open a tool</h2><div class="new-tab-tools">
-      <mux-ui-action-tile label="Side chat" description="Ask about this chat without interrupting it" @click=${() => this.chooseTool('side')}><span slot="icon">${icon(MessageCircleQuestionMark,{size:18})}</span></mux-ui-action-tile>
+      <mux-ui-action-tile label="Side chat" description="Work in a separate chat without interrupting this one" @click=${() => this.chooseTool('side')}><span slot="icon">${icon(MessageCircleQuestionMark,{size:18})}</span></mux-ui-action-tile>
       ${this.voiceAvailable ? html`<mux-ui-action-tile label="Voice" description="Talk with the voice companion" @click=${() => this.chooseTool('voice')}><span slot="icon">${icon(AudioLines,{size:18})}</span></mux-ui-action-tile>` : nothing}
       <mux-ui-action-tile label="Goal" description="Read and control the current goal" @click=${() => this.chooseTool('goal')}><span slot="icon">${icon(Target,{size:18})}</span></mux-ui-action-tile>
       <mux-ui-action-tile label="Files" description="Browse and preview project files" @click=${() => this.chooseTool('files')}><span slot="icon">${icon(Folder,{size:18})}</span></mux-ui-action-tile>

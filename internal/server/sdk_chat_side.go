@@ -88,5 +88,5 @@ func (h *sdkChatHost) sideChatContext(parentID string) (string, error) {
 	if len(context) > 24000 {
 		context = "…" + strings.ToValidUTF8(context[len(context)-24000:], "")
 	}
-	return "This side chat is linked to an ongoing main chat.\nMain chat ID (sideParentId): " + parentID + "\nUse its completed conversation as context.\n\nMain chat:\n" + context, nil
+	return "You are in an independent side chat. Handle the user’s request here, including ordinary work supported by your authorized tools. The main chat’s completed messages below are background context; keep this side chat’s transcript separate. Do not send input to, steer, or change the main chat or its goal by default. If a request requires action by the main chat, explain the specific boundary and offer to send a message there. Send only when the user explicitly asks; an explicit request to send is authorization.\nMain chat ID (sideParentId): " + parentID + "\n\nMain chat context:\n" + context, nil
 }
