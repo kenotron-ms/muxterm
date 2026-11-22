@@ -71,9 +71,9 @@ function broadcast(message) {
   for (const client of clients) if (!client.destroyed) client.write(line);
 }
 const capabilities = harness => harness === 'copilot'
-  ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: true }
+  ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: true, native_history: true }
   : isACPHarness(harness)
-  ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: false }
+  ? { approvals: false, transcript_read: false, interrupt: true, live_input: false, attributed_service_input: false, native_steering: harness === 'antigravity', native_history: harness === 'antigravity' }
   : harness === 'amplifier-unified'
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: true,
       attributed_service_input: false, native_steering: true }
@@ -311,7 +311,8 @@ async function command(cmd) {
       !['pi', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness) && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
-    const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId, approval: cmd.approval,
+    const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId,
+      migrationTranscript: cmd.migrationTranscript || '', approval: cmd.approval,
       catalog: cmd.catalog === true, originFile: cmd.catalog === true ? '' : originFile(sessionId, cmd.originToken),
       inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
@@ -366,6 +367,7 @@ async function command(cmd) {
     return await s.codex.readGoal();
   }
   if (op === 'goal') {
+    if (s.acp && s.harness === 'antigravity') return await s.acp.goal(cmd);
     if (s.copilot) return await s.copilot.goal(cmd);
     if (s.harness === 'codex') {
       s.codex ||= codexStream(s);

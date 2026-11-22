@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +38,9 @@ type sdkChat struct {
 	TitleCheckedTurn    int       `json:"titleCheckedTurn,omitempty"`
 	UserTurns           int       `json:"userTurns,omitempty"`
 	Harness             string    `json:"harness"`
+	RuntimeFlavor       string    `json:"runtimeFlavor,omitempty"`
+	LegacyNativeID      string    `json:"legacyNativeId,omitempty"`
+	MigrationPending    bool      `json:"migrationPending,omitempty"`
 	Approval            string    `json:"approval,omitempty"`
 	Goal                string    `json:"goal,omitempty"`
 	GoalState           string    `json:"goalState,omitempty"`
@@ -161,10 +163,12 @@ type sdkChatHost struct {
 	mu               sync.Mutex
 	runtimeGate      sync.RWMutex
 	lifecycleMu      sync.Mutex
+	goalDispatch     goalDispatchState
 	workSendMu       sync.RWMutex // Linearizes agent send admission with Work ownership transitions.
 	inboxDeliveryMu  sync.Mutex
 	nameLocks        map[string]*sync.Mutex
 	adapterLocks     map[string]*sync.Mutex
+	migrationLocks   map[string]*sync.Mutex
 	dir              string
 	socket           string
 	process          *exec.Cmd
@@ -197,6 +201,14 @@ type unifiedEventProjection struct {
 	textBytes map[string]int
 }
 
+type goalDispatchState struct {
+	mu     sync.Mutex
+	wg     sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
+	closed bool
+}
+
 func sdkDataDir() string {
 	base := os.Getenv("XDG_DATA_HOME")
 	if base == "" {
@@ -206,7 +218,8 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, migrationLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
+	h.goalDispatch.ctx, h.goalDispatch.cancel = context.WithCancel(context.Background())
 	h.goals = openGoalLedger(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	h.loadSubscriptions()
@@ -276,6 +289,14 @@ func (h *sdkChatHost) adapterLock(id string) *sync.Mutex {
 		h.adapterLocks[id] = &sync.Mutex{}
 	}
 	return h.adapterLocks[id]
+}
+func (h *sdkChatHost) migrationLock(id string) *sync.Mutex {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.migrationLocks[id] == nil {
+		h.migrationLocks[id] = &sync.Mutex{}
+	}
+	return h.migrationLocks[id]
 }
 func (h *sdkChatHost) saveLocked(c *sdkChat) error {
 	if err := os.MkdirAll(h.dir, 0700); err != nil {
@@ -374,6 +395,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.State = "working"
 		c.TurnStartedAt = event.At
 	case "input.accepted":
+		if c.MigrationPending && c.Harness == "antigravity" {
+			c.MigrationPending = false
+		}
 		if c.BranchPending && event.Kind == "user" && event.Source != "voice" {
 			c.BranchPending = false
 			c.BranchContext = ""
@@ -865,6 +889,11 @@ func (h *sdkChatHost) watch(cmd *exec.Cmd, done chan struct{}, harness string) {
 	log.Printf("sdk chat sidecar exited: %v", err)
 }
 func (h *sdkChatHost) close() {
+	h.goalDispatch.mu.Lock()
+	h.goalDispatch.closed = true
+	h.goalDispatch.cancel()
+	h.goalDispatch.mu.Unlock()
+	h.goalDispatch.wg.Wait()
 	h.mu.Lock()
 	cmd := h.process
 	amp := h.ampSup
@@ -1004,7 +1033,76 @@ func (h *sdkChatHost) callNode(ctx context.Context, op string, args map[string]a
 		return reply.Result, nil
 	}
 }
+func (h *sdkChatHost) antigravityMigrationTranscript(id string) (string, error) {
+	f, err := os.Open(filepath.Join(h.dir, id+".ndjson"))
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	var transcript strings.Builder
+	reader := bufio.NewScanner(f)
+	reader.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	role := ""
+	for reader.Scan() {
+		var event sdkEvent
+		if json.Unmarshal(reader.Bytes(), &event) != nil {
+			continue
+		}
+		var nextRole, content string
+		switch event.Type {
+		case "input.accepted":
+			if event.Kind == "user" || event.Kind == "steer" {
+				nextRole, content = "User", event.Text
+			}
+		case "assistant.delta":
+			nextRole, content = "Antigravity", event.Text
+		}
+		if content == "" {
+			continue
+		}
+		if transcript.Len()+len(content) > 1024*1024 {
+			return "", errors.New("legacy transcript exceeds the 1 MiB migration limit; the original chat remains unchanged")
+		}
+		if role != nextRole {
+			transcript.WriteString("\n\n" + nextRole + ": ")
+			role = nextRole
+		}
+		transcript.WriteString(content)
+	}
+	if err := reader.Err(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(transcript.String()), nil
+}
+
 func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
+	if c.Harness == "antigravity" || c.Harness == "antigravity-sdk" {
+		lock := h.migrationLock(c.ID)
+		lock.Lock()
+		defer lock.Unlock()
+		original := c
+		h.mu.Lock()
+		if live := h.chats[c.ID]; live != nil {
+			c = live
+		}
+		h.mu.Unlock()
+		defer func() {
+			if original != c {
+				h.mu.Lock()
+				*original = *c
+				h.mu.Unlock()
+			}
+		}()
+	}
+	legacyAntigravity := c.Harness == "antigravity-sdk" || (c.Harness == "antigravity" && c.RuntimeFlavor != "agy-cli-acp")
+	var migrationTranscript string
+	if legacyAntigravity || c.MigrationPending {
+		var err error
+		migrationTranscript, err = h.antigravityMigrationTranscript(c.ID)
+		if err != nil {
+			return fmt.Errorf("cannot prepare Antigravity chat history: %w", err)
+		}
+	}
 	document, err := h.goals.update(*c, nil)
 	if err != nil {
 		return fmt.Errorf("goal ledger unavailable: %w", err)
@@ -1019,8 +1117,38 @@ func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
 	if needsReconciliation && c.Harness != "codex" {
 		return errors.New("native goal requires reconciliation; use the human goal editor or an explicit scoped goal control before loading this session")
 	}
-	if _, err = h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": c.NativeID, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": "never", "permission": c.Permission, "mode": c.Mode, "originToken": h.chatOriginToken(c.ID)}); err != nil {
+	resumeHarness, resumeNativeID := c.Harness, c.NativeID
+	legacyNativeID := c.NativeID
+	if legacyAntigravity {
+		resumeHarness, resumeNativeID = "antigravity", ""
+	}
+	resumeModel, resumeEffort := c.Model, c.Effort
+	if legacyAntigravity {
+		resumeModel, resumeEffort = "", ""
+	}
+	if _, err = h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": resumeHarness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": resumeNativeID, "migrationTranscript": migrationTranscript, "bundle": c.Bundle, "provider": amplifierProviderModule(resumeHarness, c.Provider), "model": resumeModel, "effort": resumeEffort, "approval": "never", "permission": c.Permission, "mode": c.Mode, "originToken": h.chatOriginToken(c.ID)}); err != nil {
+		if legacyAntigravity {
+			h.mu.Lock()
+			c.NativeID = legacyNativeID
+			_ = h.saveLocked(c)
+			h.mu.Unlock()
+		}
 		return err
+	}
+	if legacyAntigravity {
+		h.mu.Lock()
+		c.LegacyNativeID = legacyNativeID
+		c.Harness = "antigravity"
+		c.RuntimeFlavor = "agy-cli-acp"
+		c.MigrationPending = true
+		c.Model, c.Effort = "", ""
+		if err = h.saveLocked(c); err == nil {
+			h.notifyCatalogLocked(c.ID)
+		}
+		h.mu.Unlock()
+		if err != nil {
+			return err
+		}
 	}
 	if !needsReconciliation {
 		return nil
@@ -1359,23 +1487,7 @@ func sdkACPExecutable(harness string) string {
 		}
 		return "gemini"
 	case "antigravity":
-		if value := os.Getenv("MUXTERM_ACP_ANTIGRAVITY_COMMAND"); value != "" {
-			return value
-		}
-		dataHome := os.Getenv("XDG_DATA_HOME")
-		if dataHome == "" {
-			home, _ := os.UserHomeDir()
-			dataHome = filepath.Join(home, ".local", "share")
-		}
-		for _, version := range antigravityManagedVersions {
-			base := filepath.Join(dataHome, "muxterm", "antigravity-acp", version)
-			for _, dir := range []string{filepath.Join(base, runtime.GOOS+"-"+runtime.GOARCH), base} {
-				if antigravityInstalled(dir) {
-					return filepath.Join(dir, "agy_acp_server.par")
-				}
-			}
-		}
-		return "agy_acp_server.par"
+		return antigravityCLIPath()
 	}
 	return ""
 }
@@ -1720,96 +1832,50 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		Harness  string `json:"harness"`
 		Provider string `json:"provider"`
 	}
-	options := make([]option, 0, 6)
-	codexPath, codexErr := sdkAgentExecutable("codex")
-	claudePath, claudeErr := sdkAgentExecutable("claude")
-	availableConfigured := make([]string, 0, 5)
-	for _, harness := range []string{"pi", "opencode", "deepseek", "antigravity-sdk", "antigravity"} {
-		if harness == "antigravity-sdk" {
-			if sdkAmplifierProviderKey("GEMINI_API_KEY") != "" {
-				if _, err := sdkExecutablePath("uv"); err == nil {
-					if _, pythonErr := sdkExecutablePath("python3"); pythonErr == nil {
-						availableConfigured = append(availableConfigured, harness)
-					}
-				}
-			}
-			continue
-		}
-		if harness == "antigravity" {
-			if antigravityAvailable() {
-				availableConfigured = append(availableConfigured, harness)
-			}
-			continue
-		}
-		if harness == "pi" || harness == "deepseek" {
-			availableConfigured = append(availableConfigured, harness)
-			continue
-		}
-		if _, _, err := sdkOpenCodeV2Executable(r.Context()); err == nil {
-			availableConfigured = append(availableConfigured, harness)
-		}
+	options := make([]option, 0, 2)
+	if s.eligibleNewChatHarness(r.Context(), "antigravity") {
+		options = append(options, option{Harness: "antigravity", Provider: "configured"})
 	}
-	sdkReady := s.sdkChats.ensure("") == nil
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-	home, _ := os.UserHomeDir()
-	if sdkReady && codexErr == nil {
-		cmd := exec.CommandContext(ctx, codexPath, "login", "status")
-		if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "" || cmd.Run() == nil {
-			options = append(options, option{Harness: "codex", Provider: "openai"})
-		}
-	}
-	if sdkReady {
-		result, err := s.sdkChats.call(ctx, "copilot-auth-status", map[string]any{})
-		if err == nil {
-			var auth struct {
-				Authenticated bool `json:"authenticated"`
-			}
-			if json.Unmarshal(result, &auth) == nil && auth.Authenticated {
-				options = append(options, option{Harness: "copilot", Provider: "github"})
-			}
-		}
-		for _, harness := range availableConfigured {
-			options = append(options, option{Harness: harness, Provider: "configured"})
-		}
-		if unifiedConnectionAvailable() {
-			options = append(options, option{Harness: "amplifier-unified", Provider: "configured"})
-		}
-	}
-	if sdkReady && claudeErr == nil {
-		ready := os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
-		if !ready && home != "" {
-			data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
-			if err == nil {
-				var settings struct {
-					APIKeyHelper string `json:"apiKeyHelper"`
-				}
-				ready = json.Unmarshal(data, &settings) == nil && strings.TrimSpace(settings.APIKeyHelper) != ""
-			}
-		}
-		if !ready {
-			cmd := exec.CommandContext(ctx, claudePath, "auth", "status")
-			ready = cmd.Run() == nil
-		}
-		if ready {
-			options = append(options, option{Harness: "claude", Provider: "anthropic"})
-		}
-	}
-	if home != "" {
-		if info, err := os.Stat(filepath.Join(home, ".amplifier", "settings.yaml")); err == nil && info.Size() > 0 && s.sdkChats.ensure("amplifier") == nil {
-			options = append(options, option{Harness: "amplifier", Provider: "configured"})
-		}
+	if s.eligibleNewChatHarness(r.Context(), "copilot") {
+		options = append(options, option{Harness: "copilot", Provider: "github"})
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeSDKJSON(w, 200, options)
+}
+
+// Admission is server-owned. Client lists and saved defaults are only hints.
+func (s *Server) eligibleNewChatHarness(parent context.Context, harness string) bool {
+	// Both adapters persist native sessions and resume by native ID. The other
+	// installed adapters lack at least one of live steering, native goals, or
+	// recoverable agent-owned history, so they remain history-only here.
+	verifiedSteeringAndHistory := harness == "copilot" || harness == "antigravity"
+	if !verifiedSteeringAndHistory || !supportsNativeGoalControl(harness) {
+		return false
+	}
+	if s.sdkChats.ensure("") != nil {
+		return false
+	}
+	if harness == "antigravity" {
+		return antigravityAvailable()
+	}
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	defer cancel()
+	result, err := s.sdkChats.call(ctx, "copilot-auth-status", map[string]any{})
+	if err != nil {
+		return false
+	}
+	var auth struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	return json.Unmarshal(result, &auth) == nil && auth.Authenticated
 }
 
 // Discover choices before creating a chat. Temporary sessions are closed before
 // returning, so changing harnesses in the composer leaves no chat behind.
 func (s *Server) handleSDKChatCatalog(w http.ResponseWriter, r *http.Request) {
 	harness := r.URL.Query().Get("harness")
-	if harness != "codex" && harness != "claude" && harness != "copilot" && harness != "amplifier" && !isSDKConfiguredHarness(harness) {
-		http.Error(w, "unsupported harness", 400)
+	if !s.eligibleNewChatHarness(r.Context(), harness) {
+		http.Error(w, "harness is not verified for live steering, native goals, and native history, or its runtime is unavailable", http.StatusUnprocessableEntity)
 		return
 	}
 	cwd := r.URL.Query().Get("projectPath")
@@ -1964,13 +2030,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.Harness != "codex" && req.Harness != "claude" && req.Harness != "copilot" && req.Harness != "amplifier" && !isSDKConfiguredHarness(req.Harness) {
-		http.Error(w, "unsupported harness", 400)
-		return
-	}
-	// Existing Gemini CLI chats can still resume, but new chats use Antigravity.
-	if req.Harness == "gemini" {
-		http.Error(w, "Gemini CLI is no longer offered for new chats; choose Antigravity SDK", 400)
+	if !s.eligibleNewChatHarness(r.Context(), req.Harness) {
+		http.Error(w, "harness is not verified for live steering, native goals, and native history, or its runtime is unavailable", http.StatusUnprocessableEntity)
 		return
 	}
 	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" && len(req.Attachments) == 0 {
@@ -1991,9 +2052,6 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Approval = "never"
-	if req.Goal != "" {
-		req.Prompt = req.Goal
-	}
 	// Older clients omit provider. Resolve that omission to the harness's
 	// actual default before persisting the chat or starting its SDK session.
 	if req.Provider == "" {
@@ -2133,6 +2191,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		title = title[:70] + "…"
 	}
 	c := &sdkChat{ID: chatID, SideParentID: req.SideParentID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Bundle: req.Bundle, Model: req.Model, Effort: req.Effort, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
+	if req.Harness == "antigravity" {
+		c.RuntimeFlavor = "agy-cli-acp"
+	}
 	h.mu.Lock()
 	if h.chats[c.ID] != nil {
 		h.mu.Unlock()

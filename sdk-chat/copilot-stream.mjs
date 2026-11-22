@@ -103,7 +103,7 @@ export class CopilotStream {
     await this.publishGoal('goal.snapshot');
     this.emit(this.session.id, 'session.started', { nativeId: this.session.nativeId,
       capabilities: { approvals: false, transcript_read: false, interrupt: true, live_input: false,
-        attributed_service_input: false, native_steering: true } });
+        attributed_service_input: false, native_steering: true, native_history: true } });
   }
 
   async options() {

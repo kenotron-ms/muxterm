@@ -255,7 +255,15 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *sdkChatHost) dispatchGoal(chat sdkChat, receiptID, action, objective string, paused bool, revision int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	h.goalDispatch.mu.Lock()
+	if h.goalDispatch.closed {
+		h.goalDispatch.mu.Unlock()
+		return
+	}
+	h.goalDispatch.wg.Add(1)
+	h.goalDispatch.mu.Unlock()
+	defer h.goalDispatch.wg.Done()
+	ctx, cancel := context.WithTimeout(h.goalDispatch.ctx, 45*time.Second)
 	defer cancel()
 	ctx = context.WithValue(ctx, goalControlContextKey{}, true)
 	err := h.resume(ctx, &chat)

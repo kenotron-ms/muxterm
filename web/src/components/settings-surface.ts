@@ -102,8 +102,8 @@ const SETUP_AGENTS = [
   { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', install:'npm install -g @deepseek-ai/dsh', update:'npm install -g @deepseek-ai/dsh@latest', start:'dsh', docs:'https://github.com/deepseek-ai/deepseek-harness' },
   { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', install:'uv tool install git+https://github.com/microsoft/amplifier', update:'uv tool upgrade amplifier', start:'amplifier', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
-// Antigravity SDK is the new-chat default; ACP v1 remains available for Google sign-in.
-const DEFAULT_HARNESSES: SDKHarnessName[] = ['codex', 'claude', 'copilot', 'amplifier', 'amplifier-unified', 'pi', 'opencode', 'deepseek', 'antigravity-sdk'];
+// New chats only offer harnesses with verified live steering, native goals, and native history.
+const DEFAULT_HARNESSES: SDKHarnessName[] = ['antigravity', 'copilot'];
 
 /**
  * The status markers. A glyph in a fixed gutter, not a coloured slab: colour
@@ -1330,16 +1330,17 @@ export class MuxSettingsSurface extends LitElement {
     window.clearTimeout(this._antigravityPollTimer);
     this._antigravityStatus = 'checking';
     try {
-      const [authResponse, loginResponse] = await Promise.all([
-        fetch(apiPath('/api/ai/antigravity/auth')),
-        fetch(apiPath('/api/ai/antigravity/login')),
-      ]);
-      if (!authResponse.ok || !loginResponse.ok) throw new Error('Could not read Antigravity connection status');
-      const [auth, login] = await Promise.all([authResponse.json(), loginResponse.json()]) as [AntigravityAuth, AntigravityLoginStatus];
+      const authResponse = await fetch(apiPath('/api/ai/antigravity/auth'));
+      if (!authResponse.ok) throw new Error('Could not read Antigravity installation status');
+      const auth = await authResponse.json() as AntigravityAuth;
       if (epoch !== this._antigravityEpoch) return;
       this._antigravityAuth = auth;
-      this._antigravityLogin = login;
       if (!auth.installed) { this._antigravityStatus = 'missing'; return; }
+      const loginResponse = await fetch(apiPath('/api/ai/antigravity/login'));
+      if (!loginResponse.ok) throw new Error('Could not read Antigravity connection status');
+      const login = await loginResponse.json() as AntigravityLoginStatus;
+      if (epoch !== this._antigravityEpoch) return;
+      this._antigravityLogin = login;
       if (['starting', 'awaiting_code', 'verifying'].includes(login.state)) {
         this._antigravityStatus = 'sign-in';
         this._antigravityPollTimer = window.setTimeout(() => void this._pollAntigravity(), 2000);
@@ -1433,16 +1434,16 @@ export class MuxSettingsSurface extends LitElement {
       : this._antigravityStatus === 'missing' ? 'Not installed'
       : signingIn ? 'Signing in' : this._antigravityStatus === 'checking' ? 'Checking' : 'Sign in needed';
     return html`<details class="agent-card ai-harness">
-      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Google Antigravity · ACP v1</span><span class="agent-description">Google sign-in fallback</span></span><mux-ui-status-badge appearance="plain" tone=${label === 'Ready' ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Google Antigravity</span><span class="agent-description">agy acp · live steering, goals, and native history</span></span><mux-ui-status-badge appearance="plain" tone=${label === 'Ready' ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="agent-body">
-      <p>Antigravity SDK is the primary choice for new chats. ACP v1 remains available for Google sign-in and existing chats. It stores its own credentials; a detected API key uses Google AI Studio quota.</p>
+      <p>New Antigravity chats use agy CLI ACP with native session history. Existing Antigravity chats continue in agy with their saved conversation carried into the first message.</p>
       <mux-ui-switch class="ai-auth-switch" layout="row" label="Use API key"
         description=${mode === 'api-key' ? 'API key selected' : 'Google sign-in selected'}
         .checked=${mode === 'api-key'}
         ?disabled=${this._antigravityBusy || signingIn || (!apiKeyDetected && mode !== 'api-key')}
         @change=${(event: CustomEvent<{checked:boolean}>) => void this._setAntigravityAuth(event.detail.checked ? 'api-key' : 'google')}></mux-ui-switch>
       <p>${apiKeyDetected ? 'GEMINI_API_KEY detected; its value stays hidden.' : 'No GEMINI_API_KEY detected.'}</p>
-      ${!installed ? html`<p>Install Google's Antigravity ACP agent from the <a href="https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp" target="_blank" rel="noopener noreferrer">ACP registry ↗</a>.</p>${installSupported ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityInstalling} @click=${() => void this._installAntigravity()}>${this._antigravityInstalling ? 'Installing…' : 'Install'}</mux-ui-button>` : html`<p>${this._antigravityAuth.installUnsupportedReason || 'Automatic installation is unavailable on this platform. Install the registry agent manually and check the connection.'}</p>`}` : nothing}
+      ${!installed ? html`<p>Install the verified Antigravity CLI for this computer, or use <a href="https://antigravity.google/docs/getting-started" target="_blank" rel="noopener noreferrer">Google's CLI instructions ↗</a>.</p>${installSupported ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityInstalling} @click=${() => void this._installAntigravity()}>${this._antigravityInstalling ? 'Installing…' : 'Install'}</mux-ui-button>` : html`<p>${this._antigravityAuth.installUnsupportedReason || 'Automatic installation is unavailable on this platform. Install agy 1.5.14 manually and check the connection.'}</p>`}` : nothing}
       ${this._antigravityInstalling ? html`<mux-ui-feedback kind="loading" density="compact">Downloading and verifying Antigravity for this computer…</mux-ui-feedback>` : nothing}
       ${this._antigravityInstalledNow && installed ? html`<mux-ui-feedback kind="success" density="compact">Installed for this Muxterm user. Sign in to start chatting.</mux-ui-feedback>` : nothing}
       ${login.state === 'starting' ? html`<p>Starting Antigravity sign-in…</p>` : nothing}
@@ -1462,22 +1463,22 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _renderAI() {
+    const eligible = DEFAULT_HARNESSES.filter(harness => this._readyAgents?.has(harness));
+    const saved = this.config?.ai.defaultHarness;
+    const effective = eligible.find(harness => harness === saved) || eligible[0] || '';
     return html`
       <p class="section-title">New chats</p>
-      <mux-ui-select class="default-harness-setting" label="Default agent" .value=${this.config?.ai.defaultHarness || 'codex'}
-        .options=${DEFAULT_HARNESSES.map(harness => ({value:harness,label:sdkHarnessLabel(harness)}))}
+      <mux-ui-select class="default-harness-setting" label="Default agent" .value=${effective}
+        .options=${eligible.map(harness => ({value:harness,label:sdkHarnessLabel(harness)}))}
         @change=${(event: Event) => this._setDefaultHarness((event.target as MuxUISelect).value as ResolvedConfig['ai']['defaultHarness'])}></mux-ui-select>
-      <p class="agent-intro">New chat starts with this agent when it is available. You can choose another agent in the composer.</p>
+      ${saved && saved !== effective ? html`<p class="agent-intro">${effective ? `Saved default ${sdkHarnessLabel(saved)} is unavailable for new chats. New chats use ${sdkHarnessLabel(effective)}.` : 'No eligible agent is ready. Set up Antigravity or Copilot to start new chats.'}</p>` : html`<p class="agent-intro">New chats start with this agent. You can choose another eligible agent in the composer.</p>`}
       <p class="section-title">Coding agents</p>
-      <p class="agent-intro">Choose an agent to see its setup. Versions are checked automatically every 15 minutes. Ready agents are available in New chat. Chat runtimes refresh after installs and updates when active turns finish.</p>
+      <p class="agent-intro">New chats require live steering, native goals, and resumable agent history. Existing chats remain in history. Versions are checked automatically every 15 minutes.</p>
       <div class="agent-scan-actions"><mux-ui-button size="small" variant="secondary" ?disabled=${this._refreshingAgentVersions} @click=${() => void this._refreshAgentVersions()}>${this._refreshingAgentVersions ? 'Scanning…' : 'Refresh agent scan'}</mux-ui-button></div>
       ${this._agentVersionError ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._agentVersionError}</mux-ui-feedback>` : nothing}
       <div class="agent-list">
-        ${this._renderAntigravitySDK()}
-        ${this._renderUnified()}
-        ${SETUP_AGENTS.map(agent => this._renderSetupAgent(agent))}
         ${this._renderAntigravity()}
-        ${this._renderExistingHarness('gemini', 'Gemini CLI', 'Existing Gemini CLI chats can resume. New Google chats use Antigravity SDK.')}
+        ${SETUP_AGENTS.filter(agent => agent.harness === 'copilot').map(agent => this._renderSetupAgent(agent))}
       </div>
       ${this._runtimeError && !this._runtimeErrorHarness ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._runtimeError}</mux-ui-feedback>` : nothing}
     `;

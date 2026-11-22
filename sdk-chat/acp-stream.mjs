@@ -1,8 +1,9 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, existsSync, openSync, readSync, closeSync, constants } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, existsSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname, delimiter, isAbsolute } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { join, delimiter, isAbsolute } from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 import { acknowledgeInboxReminder, readInboxReminder } from './inbox-reminder.mjs';
 import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
@@ -10,17 +11,18 @@ import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
 const profiles = {
   opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
   gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
-  antigravity: { command: 'agy_acp_server.par', args: process.platform === 'linux' ? ['--uid='] : [], env: 'MUXTERM_ACP_ANTIGRAVITY_COMMAND', mcp: true },
+  antigravity: { command: 'agy', args: ['acp'], env: 'MUXTERM_ACP_ANTIGRAVITY_COMMAND', mcp: true },
 };
 
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
 
 const runtimes = new Map();
 class ACPRuntime {
-  constructor(harness, key) {
+  constructor(harness, key, cwd) {
     this.harness = harness;
     this.key = key;
     this.adapters = new Map();
+    this.pendingCommands = new Map();
     this.sessionInit = Promise.resolve();
     this.exited = new Promise(resolve => { this.resolveExit = resolve; });
     this.stderr = '';
@@ -29,6 +31,7 @@ class ACPRuntime {
     const command = harness === 'gemini' ? geminiCommand()
       : launch?.command || process.env[profile.env] || profile.command;
     this.process = spawn(command, launch?.args || profile.args, {
+      ...(harness === 'antigravity' ? { cwd } : {}),
       env: harness === 'gemini' ? geminiEnvironment() : launch?.env || process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -38,19 +41,33 @@ class ACPRuntime {
       `${harness} ACP process exited (${signal || code}): ${this.stderr}`)));
     const stream = acp.ndJsonStream(Writable.toWeb(this.process.stdin), Readable.toWeb(this.process.stdout));
     this.connection = new acp.ClientSideConnection(() => ({
-      sessionUpdate: params => this.adapters.get(params.sessionId)?.onUpdate(params),
+      sessionUpdate: params => {
+        const adapter = this.adapters.get(params.sessionId);
+        if (adapter) adapter.onUpdate(params);
+        else if (params.update?.sessionUpdate === 'available_commands_update')
+          this.pendingCommands.set(params.sessionId, params);
+      },
       requestPermission: params => this.adapters.get(params.sessionId)?.onPermission(params)
         || { outcome: { outcome: 'cancelled' } },
     }), stream);
     this.ready = this.connection.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} })
-      .then(result => {
+      .then(async result => {
         if (result.protocolVersion !== acp.PROTOCOL_VERSION)
           throw new Error(`Unsupported ACP version: ${result.protocolVersion}`);
+        if (harness === 'antigravity' && antigravityMode() === 'api-key') {
+          if (!result.authMethods?.some(method => method.id === 'gemini-api-key'))
+            throw new Error('Antigravity CLI does not advertise Gemini API key authentication');
+          await this.connection.authenticate({ methodId: 'gemini-api-key' });
+        }
         return result;
       });
   }
 
-  register(adapter) { this.adapters.set(adapter.session.nativeId, adapter); }
+  register(adapter) {
+    this.adapters.set(adapter.session.nativeId, adapter);
+    const commands = this.pendingCommands.get(adapter.session.nativeId);
+    if (commands) { this.pendingCommands.delete(adapter.session.nativeId); adapter.onUpdate(commands); }
+  }
   detach(adapter) {
     if (this.adapters.get(adapter.session.nativeId) === adapter)
       this.adapters.delete(adapter.session.nativeId);
@@ -72,12 +89,12 @@ class ACPRuntime {
   }
 }
 
-function runtime(harness, sessionId) {
+function runtime(harness, session) {
   // OpenCode attaches MCP servers to every session in one ACP process's
   // directory. Keep each chat in its own process so origin tokens cannot leak.
-  const key = harness === 'opencode' ? `${harness}:${sessionId}` : harness;
+  const key = harness === 'opencode' || harness === 'antigravity' ? `${harness}:${session.id}` : harness;
   let current = runtimes.get(key);
-  if (!current || current.exitError) { current = new ACPRuntime(harness, key); runtimes.set(key, current); }
+  if (!current || current.exitError) { current = new ACPRuntime(harness, key, session.cwd); runtimes.set(key, current); }
   return current;
 }
 
@@ -108,49 +125,16 @@ export function connectorServers(mcpBin, originFile) {
 export function antigravityCommand() {
   if (process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND) return process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND;
   const dataHome = instanceDataHome();
-  // Keep the preferred and previous versions in sync with antigravity_install.go.
-  for (const version of ['1.5.2', '1.5.0', '1.4.3']) {
-    const base = join(dataHome, 'muxterm', 'antigravity-acp', version);
-    for (const dir of [join(base, `${process.platform}-${process.arch === 'x64' ? 'amd64' : process.arch}`), base]) {
-      const command = join(dir, 'agy_acp_server.par');
-      const helper = join(dir, 'localharness_external');
-      try {
-        if (!statSync(command).isFile() || !statSync(helper).isFile()) continue;
-        accessSync(command, constants.X_OK);
-        accessSync(helper, constants.X_OK);
-        if (antigravityBinaryMatchesHost(command) && antigravityBinaryMatchesHost(helper)) return command;
-      } catch { /* Try the previous version or a separately installed agent. */ }
-    }
+  const arch = { x64: 'amd64', arm64: 'arm64' }[process.arch] || process.arch;
+  const managed = join(dataHome, 'muxterm', 'antigravity-cli', '1.5.14', `${process.platform}-${arch}`, 'agy');
+  try { accessSync(managed, constants.X_OK); return managed; } catch { /* Try the user's CLI. */ }
+  for (const directory of (process.env.PATH || '').split(delimiter)) {
+    if (!isAbsolute(directory)) continue;
+    const command = join(directory, 'agy');
+    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
+    catch { /* Try the next directory. */ }
   }
-  return 'agy_acp_server.par';
-}
-
-function antigravityBinaryMatchesHost(path) {
-  const cpu = process.arch === 'x64' ? 0x01000007 : process.arch === 'arm64' ? 0x0100000c : 0;
-  if (!cpu) return false;
-  const fd = openSync(path, 'r');
-  const header = Buffer.alloc(4096);
-  let size;
-  try { size = readSync(fd, header, 0, header.length, 0); }
-  finally { closeSync(fd); }
-  if (process.platform === 'linux') {
-    if (size < 20 || header.toString('binary', 0, 4) !== '\x7fELF') return false;
-    const machine = header[5] === 2 ? header.readUInt16BE(18) : header[5] === 1 ? header.readUInt16LE(18) : 0;
-    return machine === (process.arch === 'x64' ? 62 : 183);
-  }
-  if (process.platform !== 'darwin' || size < 8) return false;
-  const magic = header.readUInt32BE(0);
-  if (magic === 0xfeedface || magic === 0xfeedfacf) return header.readUInt32BE(4) === cpu;
-  if (magic === 0xcefaedfe || magic === 0xcffaedfe) return header.readUInt32LE(4) === cpu;
-  const bigEndian = magic === 0xcafebabe || magic === 0xcafebabf;
-  if (!bigEndian && magic !== 0xbebafeca && magic !== 0xbfbafeca) return false;
-  const is64 = magic === 0xcafebabf || magic === 0xbfbafeca;
-  const read = offset => bigEndian ? header.readUInt32BE(offset) : header.readUInt32LE(offset);
-  const count = read(4);
-  const stride = is64 ? 32 : 20;
-  if (count > 100 || 8 + count * stride > size) return false;
-  for (let i = 0; i < count; i++) if (read(8 + i * stride) === cpu) return true;
-  return false;
+  return join(homedir(), '.local', 'bin', 'agy');
 }
 
 export function antigravityMode() {
@@ -161,9 +145,6 @@ export function antigravityMode() {
 
 export function antigravityEnvironment(mode = antigravityMode()) {
   const env = { ...process.env };
-  const command = antigravityCommand();
-  if (!env.ANTIGRAVITY_HARNESS_PATH && isAbsolute(command))
-    env.ANTIGRAVITY_HARNESS_PATH = join(dirname(command), 'localharness_external');
   if (mode === 'api-key') {
     let key = env.GEMINI_API_KEY?.trim();
     if (!key) for (const name of ['keys.env', 'key.env']) {
@@ -198,7 +179,7 @@ function cpuList(spec) {
 
 export function antigravityLaunch(mode = antigravityMode()) {
   const command = antigravityCommand();
-  const args = process.platform === 'linux' ? ['--uid='] : [];
+  const args = ['acp'];
   const env = antigravityEnvironment(mode);
   if (process.platform !== 'linux') return { command, args, env };
   try {
@@ -283,6 +264,7 @@ export class ACPStream {
     this.loading = false;
     this.configOptions = [];
     this.modes = null;
+    this.goalAdvertised = false;
     this.steeringExtension = false;
     this.steerPending = false;
     this.interruptForSteer = false;
@@ -293,7 +275,7 @@ export class ACPStream {
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
     this.profile = profile;
     this.mcpServers = profile.mcp && !session.catalog ? connectorServers(process.env.MUXTERM_CHAT_MCP_BIN, session.originFile) : [];
-    this.runtime = runtime(session.harness, session.id);
+    this.runtime = runtime(session.harness, session);
     this.exited = this.runtime.exited;
     this.connection = this.runtime.connection;
     this.ready = this.initialize();
@@ -301,7 +283,13 @@ export class ACPStream {
 
   async initialize() {
     const result = await this.withExit(this.runtime.ready);
+    if (this.session.harness === 'antigravity' &&
+        (result.agentInfo?.name !== 'Antigravity ACP Server' || result.agentInfo?.version !== '1.5.14'))
+      throw new Error('This Antigravity CLI version has not been verified for live steering and native /goal');
     this.agentCapabilities = result.agentCapabilities || {};
+    if (this.session.harness === 'antigravity' &&
+        !this.agentCapabilities.sessionCapabilities?.resume && !this.agentCapabilities.loadSession)
+      throw new Error('Antigravity ACP does not advertise native session history recovery');
     this.steeringExtension = result._meta?.steering?.supported === true;
     // Some agents stall when two native sessions initialize at cold start.
     const priorInit = this.runtime.sessionInit;
@@ -346,7 +334,8 @@ export class ACPStream {
 
   capabilities() {
     return { approvals: false, transcript_read: false, interrupt: true, live_input: false,
-      attributed_service_input: false, native_steering: this.steeringExtension };
+      attributed_service_input: false, native_steering: this.session.harness === 'antigravity' || this.steeringExtension,
+      native_history: this.session.harness === 'antigravity' };
   }
 
   withExit(promise) {
@@ -371,8 +360,13 @@ export class ACPStream {
   }
 
   onUpdate(params) {
-    if (params.sessionId !== this.session.nativeId || this.closed || this.loading) return;
+    if (params.sessionId !== this.session.nativeId || this.closed) return;
     const update = params.update;
+    if (update.sessionUpdate === 'available_commands_update') {
+      this.goalAdvertised = (update.availableCommands || []).some(command => command.name === 'goal');
+      this.goalCommandReady?.();
+    }
+    if (this.loading) return;
     // ACP may split a native startup banner across text chunks.
     let messageText = update.content?.text;
     if (this.startupInfo && update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text') {
@@ -394,8 +388,28 @@ export class ACPStream {
       this.turnActivity = true;
     if (this.busy && (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan', 'usage_update'].includes(update.sessionUpdate)
       || (update.sessionUpdate === 'session_info_update' && update._meta?.piAcp?.running === true))) this.confirmAccepted?.();
-    if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && messageText)
-      this.emit(this.session.id, 'assistant.delta', { text: messageText });
+    if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && messageText) {
+      if (this.nativeGoal) {
+        this.nativeGoal.output = (this.nativeGoal.output + messageText).slice(-4096);
+        const state = this.nativeGoal.output.includes('<!-- GOAL_COMPLETE -->') ? 'complete'
+          : this.nativeGoal.output.includes('<!-- GOAL_CANCELLED -->') ? 'cancelled' : '';
+        if (state && this.nativeGoal.state !== state) {
+          this.nativeGoal.state = state;
+          this.emit(this.session.id, 'goal.snapshot', { goal: this.nativeGoal.objective,
+            goalState: state, raw: { revision: this.nativeGoal.revision, source: 'agy-acp-marker' } });
+        }
+        let visible = (this.goalMarkerTail || '') + messageText;
+        for (const marker of ['<!-- GOAL_COMPLETE -->', '<!-- GOAL_CANCELLED -->'])
+          visible = visible.replaceAll(marker, '');
+        let hold = 0;
+        for (const marker of ['<!-- GOAL_COMPLETE -->', '<!-- GOAL_CANCELLED -->'])
+          for (let length = 1; length < marker.length; length++)
+            if (visible.endsWith(marker.slice(0, length))) hold = Math.max(hold, length);
+        this.goalMarkerTail = hold ? visible.slice(-hold) : '';
+        messageText = hold ? visible.slice(0, -hold) : visible;
+      }
+      if (messageText) this.emit(this.session.id, 'assistant.delta', { text: messageText });
+    }
     else if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       const id = update.toolCallId;
       const prior = this.tools.get(id);
@@ -423,8 +437,57 @@ export class ACPStream {
 
   async start() { await this.ready; }
 
+  async requireGoalCommand() {
+    if (this.session.harness !== 'antigravity') throw new Error('Native /goal is unavailable for this ACP harness');
+    if (!this.goalAdvertised) await new Promise(resolve => {
+      const timer = setTimeout(resolve, 1500);
+      this.goalCommandReady = () => { clearTimeout(timer); resolve(); };
+    });
+    this.goalCommandReady = null;
+    if (!this.goalAdvertised) throw new Error('Antigravity ACP did not advertise the native /goal command');
+  }
+
+  async goal(cmd) {
+    await this.ready;
+    await this.requireGoalCommand();
+    const objective = cmd.objective || '';
+    const clearing = cmd.action === 'pause' || cmd.action === 'clear' || cmd.paused;
+    if (!clearing) {
+      if (this.busy) throw new Error('Finish the current Antigravity turn before starting a goal');
+      this.nativeGoal = { objective, revision: cmd.revision, state: 'starting', output: '' };
+      this.goalMarkerTail = '';
+      try {
+        const input = { kind: 'user', id: randomUUID(), source: 'goal-control', content: `/goal ${objective}` };
+        await this.startPrompt(input, await this.promptBlocks(input));
+      } catch (error) { this.nativeGoal = null; this.goalMarkerTail = ''; throw error; }
+      if (this.nativeGoal.state === 'starting') {
+        this.nativeGoal.state = 'active';
+        this.emit(this.session.id, 'goal.snapshot', { goal: objective, goalState: 'active',
+          raw: { revision: cmd.revision, source: 'agy-acp-command' } });
+      }
+      return { goal: objective, goalState: this.nativeGoal.state };
+    }
+    if (this.nativeGoal?.state === 'active' || this.nativeGoal?.state === 'starting') {
+      const instruction = 'Stop and cancel the current goal now. This is an explicit human pause. Do not continue the goal.';
+      const input = { kind: 'steer', id: randomUUID(), source: 'goal-control', content: instruction };
+      if (this.busy) await this.send(input);
+      else await this.startPrompt(input, [{ type: 'text', text: instruction }]);
+      if (this.nativeGoal.state !== 'cancelled')
+        throw new Error('Antigravity did not confirm native goal cancellation');
+    }
+    const state = cmd.action === 'clear' ? 'cleared' : 'paused';
+    this.nativeGoal = { objective, revision: cmd.revision, state, output: '' };
+    this.goalMarkerTail = '';
+    this.emit(this.session.id, 'goal.snapshot', { goal: objective, goalState: state,
+      raw: { revision: cmd.revision, source: 'agy-acp-command' } });
+    return { goal: objective, goalState: state };
+  }
+
   async promptBlocks(input) {
     const prompt = [{ type: 'text', text: input.content || 'Please inspect the attached files.' }];
+    if (this.session.harness === 'antigravity' && this.session.migrationTranscript) {
+      prompt[0].text = `The following is the previous conversation from this Muxterm chat. Treat it as historical context, not a new request. Continue this same conversation using the new request after the closing tag.\n<previous_conversation>\n${this.session.migrationTranscript}\n</previous_conversation>\n\nNew request:\n${prompt[0].text}`;
+    }
     if (input.kind === 'user') {
       try {
         const reminder = await readInboxReminder(this.session.id, this.session.originFile);
@@ -450,6 +513,8 @@ export class ACPStream {
   }
 
   emitAccepted(input) {
+    if (this.session.harness === 'antigravity' && this.session.migrationTranscript)
+      this.session.migrationTranscript = '';
     this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source,
       text: input.displayContent || input.content,
       attachments: (input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
@@ -468,6 +533,7 @@ export class ACPStream {
         const prompt = await this.promptBlocks(input);
         if (!this.busy || this.stopDuringSteer)
           throw new Error('Turn ended before the steer could be delivered');
+        if (this.session.harness === 'antigravity') return await this.steerAntigravity(input, prompt);
         if (this.steeringExtension) {
           const result = await this.withExit(this.connection.request('_session/steering', {
             sessionId: this.session.nativeId, prompt, _meta: { steering: { idleBehavior: 'promptRequired' } },
@@ -514,6 +580,31 @@ export class ACPStream {
     }
   }
 
+  async steerAntigravity(input, prompt) {
+    // agy acp 1.5.14 accepts a concurrent session/prompt as a correction to
+    // the running turn. The first RPC may return end_turn while its tool is
+    // still active; keep Muxterm's turn open until the steering RPC settles.
+    this.antigravitySteering = true;
+    const inputIds = [...this.turnInputIds, input.id];
+    try {
+      const result = await this.withExit(this.connection.prompt({ sessionId: this.session.nativeId, prompt }));
+      if (this.stopDuringSteer || result.stopReason === 'cancelled')
+        throw new Error('Antigravity steering was cancelled');
+      if (result.stopReason !== 'end_turn')
+        throw new Error(`Antigravity steering stopped: ${result.stopReason}`);
+      this.emitAccepted(input);
+      this.emit(this.session.id, 'turn.completed', { inputIds, message: result.stopReason });
+      return { status: 'accepted', inputId: input.id };
+    } catch (error) {
+      this.emit(this.session.id, 'session.uncertain', { inputIds, message: String(error) });
+      throw error;
+    } finally {
+      this.antigravitySteering = false;
+      this.busy = false;
+      this.session.busy = false;
+    }
+  }
+
   async startPrompt(input, prompt) {
     this.busy = true;
     this.session.busy = true;
@@ -532,7 +623,9 @@ export class ACPStream {
     };
     this.turnPromise = this.withExit(this.connection.prompt({ sessionId: this.session.nativeId, prompt })).then(result => {
       this.confirmAccepted();
-      if (this.interruptForSteer && !this.stopDuringSteer) {
+      if (this.antigravitySteering) {
+        this.emit(this.session.id, 'turn.continued');
+      } else if (this.interruptForSteer && !this.stopDuringSteer) {
         this.continuedInputIds = this.turnInputIds;
         this.emit(this.session.id, 'turn.continued');
       } else if (result.stopReason === 'cancelled') {
@@ -567,8 +660,10 @@ export class ACPStream {
         if (String(error).includes('ACP connection closed')) void this.runtime.stop();
       }
     }).finally(() => {
-      this.busy = false;
-      this.session.busy = false;
+      if (!this.antigravitySteering) {
+        this.busy = false;
+        this.session.busy = false;
+      }
       this.session.cancelRequested = false;
       this.confirmAccepted = null;
     });

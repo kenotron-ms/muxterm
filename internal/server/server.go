@@ -541,6 +541,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 	}()
 	jobContext, stopJobs := context.WithCancel(ctx)
+	stopGoalDispatch := context.AfterFunc(jobContext, s.sdkChats.goalDispatch.cancel)
+	defer stopGoalDispatch()
 	workDone := make(chan struct{})
 	go func() { defer close(workDone); s.workLoop(jobContext) }()
 	s.meetingJobContext = jobContext
