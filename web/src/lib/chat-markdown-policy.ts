@@ -137,7 +137,7 @@ export function chatMarkdownPolicyForWork(
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();
         open(item, event.currentTarget as HTMLElement);
-      }}>${item.reference}${item.remoteHost ? html` <span class="md-work-host">${item.remoteHost}</span>` : ''}</a>`;
+      }}><span class="md-work-reference">${item.reference}</span>${item.remoteHost ? html`<span class="md-work-host">${item.remoteHost}</span>` : ''}</a>`;
   };
   const linkedText = (text: string): unknown => {
     const parts: unknown[] = [];

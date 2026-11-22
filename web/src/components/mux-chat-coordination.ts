@@ -118,9 +118,10 @@ export class MuxChatCoordination extends LitElement {
     .attention .kind { display:flex; align-items:center; gap:var(--ui-space-4); color:var(--ui-warning); font-size:var(--ui-text-md); font-weight:700; }
     .attention .kind.review { color:var(--ui-accent); }
     .attention .kind.blocked { color:var(--ui-danger); }
-    .attention mux-ui-button::part(button),.row mux-ui-button::part(button) { justify-content:flex-start; padding:0; min-height:0; white-space:normal; text-align:left; }
+    .attention mux-ui-button,.row mux-ui-button { max-width:100%; }
+    .attention mux-ui-button::part(button),.row mux-ui-button::part(button) { justify-content:flex-start; flex-wrap:wrap; padding:0; min-height:0; white-space:normal; text-align:left; }
     .attention mux-ui-button:hover,.row mux-ui-button:hover { color:var(--ui-accent); }
-    .attention h3 { margin-top:var(--ui-space-3); font-size:var(--ui-text-lg); }
+    .attention h3 { flex:1 1 12rem; min-width:0; margin-top:var(--ui-space-3); font-size:var(--ui-text-lg); overflow-wrap:anywhere; }
     .attention p,.row p { margin-top:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-md); overflow-wrap:anywhere; }
     .group { margin-top:var(--ui-space-8); }
     .group-head { display:block; width:100%; }
@@ -136,8 +137,9 @@ export class MuxChatCoordination extends LitElement {
     .row .kind.waiting { color:var(--ui-warning); }
     .row .kind.blocked { color:var(--ui-danger); }
     .row .kind.ready { color:var(--ui-success); }
-    .row strong { display:block; margin-top:var(--ui-space-2); font-size:var(--ui-text-lg); font-weight:650; }
-    .work-reference { display:inline-flex; width:max-content; max-width:100%; align-items:center; border-radius:var(--ui-radius-sm); padding:0 var(--ui-space-2); background:color-mix(in srgb,var(--ui-accent) 10%,transparent); color:var(--ui-accent); font-size:var(--ui-text-sm); font-weight:700; text-decoration:underline; text-underline-offset:2px; }
+    .row strong { display:block; flex:1 1 12rem; min-width:0; margin-top:var(--ui-space-2); font-size:var(--ui-text-lg); font-weight:650; overflow-wrap:anywhere; }
+    .work-reference { display:inline-flex; flex:none; width:max-content; max-width:100%; align-items:center; white-space:nowrap; border-radius:var(--ui-radius-sm); padding:0 var(--ui-space-2); background:color-mix(in srgb,var(--ui-accent) 10%,transparent); color:var(--ui-accent); font-size:var(--ui-text-sm); font-weight:700; text-decoration:underline; text-underline-offset:2px; }
+    .work-dependency-reference { white-space:nowrap; }
     .work-reference-detail { margin-bottom:var(--ui-space-3); }
     .work-reference-host { margin-left:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-sm); overflow-wrap:anywhere; }
     .row .work-reference { margin-top:var(--ui-space-2); }
@@ -455,7 +457,7 @@ export class MuxChatCoordination extends LitElement {
     const reference = this.work.find(item => item.id === id)?.reference || this.dependencyReferences[id] || 'Work item';
     const hash = new URLSearchParams({chat:this.sessionId, work:id});
     if (this.remoteHost) hash.set('host', this.remoteHost);
-    return html`${index ? ', ' : ''}<a href=${`#${hash}`} aria-label=${`Open ${reference} in Work pane`} @click=${(event: MouseEvent) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); void this.openDependency(id); }}>${reference}</a>`;
+    return html`${index ? ', ' : ''}<a class="work-dependency-reference" href=${`#${hash}`} aria-label=${`Open ${reference} in Work pane`} @click=${(event: MouseEvent) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); void this.openDependency(id); }}>${reference}</a>`;
   }); }
   private controls() { const control = this.control; return html`<div class="controls"><div class="controls-main"><mux-ui-button class="play" icon-only variant="secondary" ?disabled=${!control} accessible-label=${control?.paused ? 'Continue project work' : 'Pause project work'} title=${control?.paused ? 'Continue project work' : 'Pause project work'} @click=${() => void this.changeControl({paused: !control?.paused})}>${icon(control?.paused ? 'play' : 'pause')}</mux-ui-button><span class="active-count">${control?.active ?? 0} in motion${control?.paused ? ' · paused' : ''}</span></div><div class="parallel"><mux-ui-range-field label="Parallel" accessible-label="Parallel work in this project" .min=${1} .max=${8} .value=${control?.parallelism ?? 4} .valueLabels=${["1 at once", "2 at once", "3 at once", "4 at once", "5 at once", "6 at once", "7 at once", "8 at once"]} ?disabled=${!control} @change=${(event: Event) => void this.changeControl({parallelism: (event.target as MuxUIRangeField).value})}></mux-ui-range-field></div></div>`; }
   private group(title: string, key: string, items: WorkItem[]) {
