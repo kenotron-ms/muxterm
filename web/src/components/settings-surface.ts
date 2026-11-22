@@ -1127,7 +1127,7 @@ export class MuxSettingsSurface extends LitElement {
       <div class="appearance-grid" role="group" aria-label="Color palette">
         ${APP_THEMES.map(theme => {
           const sample = appThemeScheme(theme.id, mode);
-          const preview = `--preview-chat:${sample.chat};--preview-side:${sample.raised};--preview-border:${sample.border};--preview-accent:${sample.accent};--preview-user:${sample.user};--preview-assistant:${sample.assistant};--preview-text:${sample.text};--preview-assistant-text:${sample.assistantText};--preview-art:color-mix(in srgb, ${sample.accent} ${mode === 'light' ? 19 : 28}%, transparent);--preview-mask:${cfg.theme.backdrop === 'none' ? 'none' : `url("${backdropImage(cfg.theme.backdrop)}")`}`;
+          const preview = `--preview-chat:${sample.chat};--preview-side:${sample.raised};--preview-border:${sample.border};--preview-accent:${sample.accent};--preview-user:${sample.user};--preview-assistant:${sample.assistant};--preview-text:${sample.text};--preview-assistant-text:${sample.assistantText};--preview-art:color-mix(in srgb, ${sample.accent} ${mode === 'light' ? 10 : 12}%, transparent);--preview-mask:${cfg.theme.backdrop === 'none' ? 'none' : `url("${backdropImage(cfg.theme.backdrop)}")`}`;
           return html`<mux-ui-button class="appearance-choice" style=${preview} toggle ?pressed=${cfg.theme.app === theme.id} @click=${() => this._setAppTheme(theme.id)}>
             <span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-side"><span></span><span></span><span></span></span><span class="appearance-preview-chat"><span class="appearance-preview-user">Hello there</span><span class="appearance-preview-reply">Happy to help</span><span class="appearance-preview-composer"></span></span></span>
             <span class="appearance-choice-label">${theme.label}</span><span class="appearance-choice-description">${theme.description}</span>
@@ -1140,7 +1140,7 @@ export class MuxSettingsSurface extends LitElement {
       <div class="appearance-grid" role="group" aria-label="Chat backdrop">
         ${BACKDROPS.map(backdrop => {
           const sample = appThemeScheme(cfg.theme.app, mode);
-          const preview = `--preview-chat:${sample.chat};--preview-art:color-mix(in srgb, ${sample.accent} ${mode === 'light' ? 35 : 45}%, transparent);--preview-mask:${backdrop.image ? `url("${backdrop.image}")` : 'none'}`;
+          const preview = `--preview-chat:${sample.chat};--preview-art:color-mix(in srgb, ${sample.accent} ${mode === 'light' ? 15 : 18}%, transparent);--preview-mask:${backdrop.image ? `url("${backdrop.image}")` : 'none'}`;
           return html`<mux-ui-button class="appearance-choice backdrop-choice" style=${preview} toggle ?pressed=${cfg.theme.backdrop === backdrop.id} @click=${() => this._setBackdrop(backdrop.id)}>
             <span class="backdrop-preview" aria-hidden="true"></span><span class="appearance-choice-label">${backdrop.label}</span><span class="appearance-choice-description">${backdrop.description}</span>
           </mux-ui-button>`;

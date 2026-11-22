@@ -275,7 +275,7 @@
   --ui-chat-composer-surface: var(--ui-surface-raised);
   --ui-focus: var(--chrome-accent);
   --ui-chat-backdrop-mask: none;
-  --ui-chat-backdrop-tile-size: 120px;
+  --ui-chat-backdrop-tile-size: 240px;
   --ui-chat-art-ink: transparent;
   --ui-backdrop: color-mix(in srgb, black 65%, transparent);
   --ui-backdrop-sheet: color-mix(in srgb, var(--ui-surface-base) 62%, transparent);
