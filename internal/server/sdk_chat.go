@@ -2052,9 +2052,6 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Approval = "never"
-	if req.Goal != "" {
-		req.Prompt = req.Goal
-	}
 	// Older clients omit provider. Resolve that omission to the harness's
 	// actual default before persisting the chat or starting its SDK session.
 	if req.Provider == "" {
