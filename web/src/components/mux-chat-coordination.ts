@@ -145,11 +145,12 @@ export class MuxChatCoordination extends LitElement {
     .detail-view { min-width:0; container-type:inline-size; }
     .detail-view h2 { overflow-wrap:anywhere; }
     .detail-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--ui-space-2); margin-top:var(--ui-space-8); border-bottom:1px solid var(--ui-border); }
-    .detail-tab { display:flex; align-items:center; justify-content:center; gap:var(--ui-space-3); min-width:0; min-height:var(--ui-control-lg); padding:var(--ui-space-3) var(--ui-space-4); border:1px solid transparent; border-bottom:0; border-radius:var(--ui-radius-md) var(--ui-radius-md) 0 0; background:transparent; color:var(--ui-text-muted); font:600 var(--ui-text-sm)/1.25 var(--ui-font-sans); text-align:center; cursor:pointer; }
-    .detail-tab:hover { color:var(--ui-text); background:var(--ui-surface-hover); }
-    .detail-tab[aria-selected="true"] { color:var(--ui-text); background:var(--ui-surface-raised); border-color:var(--ui-border); box-shadow:0 1px 0 var(--ui-surface-raised); }
+    .detail-tab { display:flex; min-width:0; }
+    .detail-tab::part(button) { display:flex; align-items:center; justify-content:center; gap:var(--ui-space-3); min-width:0; min-height:var(--ui-control-lg); padding:var(--ui-space-3) var(--ui-space-4); border:1px solid transparent; border-bottom:0; border-radius:var(--ui-radius-md) var(--ui-radius-md) 0 0; background:transparent; color:var(--ui-text-muted); font:600 var(--ui-text-sm)/1.25 var(--ui-font-sans); text-align:center; white-space:normal; }
+    .detail-tab:hover::part(button) { color:var(--ui-text); background:var(--ui-surface-hover); }
+    .detail-tab[tab-selected]::part(button) { color:var(--ui-text); background:var(--ui-surface-raised); border-color:var(--ui-border); box-shadow:0 1px 0 var(--ui-surface-raised); }
     .detail-tab-label { min-width:0; overflow-wrap:anywhere; }
-    .detail-tab-count { flex:none; display:inline-grid; place-items:center; min-width:1.5em; padding:0 var(--ui-space-2); border-radius:999px; background:var(--ui-surface-hover); font-size:var(--ui-text-xs); }
+    .detail-tab-count { flex:none; display:inline-grid; place-items:center; min-width:1.5em; padding:0 var(--ui-space-2); border-radius:var(--ui-radius-pill); background:var(--ui-surface-hover); font-size:var(--ui-text-xs); }
     .detail-panel { min-width:0; padding-top:var(--ui-space-7); }
     .detail-panel > .plan:first-child,.detail-panel > .next:first-child,.detail-panel > .section:first-child { margin-top:0; }
     .detail-panel:focus { outline:none; }
@@ -226,8 +227,8 @@ export class MuxChatCoordination extends LitElement {
     @media (max-width:390px) { .comment-attention mux-ui-button, .comment-form > mux-ui-button { width:100%; justify-self:stretch; } }
     .error { margin:var(--ui-space-5) 0; color:var(--ui-danger); }
     :focus-visible { outline:var(--ui-space-1) solid var(--ui-accent); outline-offset:var(--ui-space-2); }
-    @container (max-width:700px) { .detail-tabs { grid-template-columns:repeat(2,minmax(0,1fr)); border-bottom:0; gap:var(--ui-space-2); } .detail-tab { border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); } .detail-tab[aria-selected="true"] { border-color:var(--ui-accent); box-shadow:none; } }
-    @media(max-width:560px) { .wrap { padding:var(--ui-space-8) var(--ui-space-7) var(--ui-control-lg); } .controls { align-items:flex-start; } .parallel { width:100%; justify-content:flex-start; } .parallel mux-ui-range-field { width:100%; } .label-filter { max-width:var(--ui-work-filter-width); } .detail-tab { padding-inline:var(--ui-space-2); } }
+    @container (max-width:700px) { .detail-tabs { grid-template-columns:repeat(2,minmax(0,1fr)); border-bottom:0; gap:var(--ui-space-2); } .detail-tab::part(button) { border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); } .detail-tab[tab-selected]::part(button) { border-color:var(--ui-accent); box-shadow:none; } }
+    @media(max-width:560px) { .wrap { padding:var(--ui-space-8) var(--ui-space-7) var(--ui-control-lg); } .controls { align-items:flex-start; } .parallel { width:100%; justify-content:flex-start; } .parallel mux-ui-range-field { width:100%; } .label-filter { max-width:var(--ui-work-filter-width); } .detail-tab::part(button) { padding-inline:var(--ui-space-2); } }
     @media(prefers-reduced-motion:reduce) { .group-head .chevron { transition:none; } }
   `;
 
@@ -487,7 +488,7 @@ export class MuxChatCoordination extends LitElement {
       <h2>${item.title}</h2>
       ${inMotion && move ? html`<div class=${`next-brief ${item.status === 'blocked' ? 'blocked' : ''}`}><strong>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</strong><p>${movePreview}</p>${unreadCount ? html`<mux-ui-button variant="quiet" size="small" @click=${() => this.selectTab('activity')}>Read ${unreadCount} unread ${unreadCount === 1 ? 'comment' : 'comments'}</mux-ui-button>` : nothing}</div>` : nothing}
       <div class="detail-tabs" role="tablist" aria-label="Work item details">
-        ${detailTabs.map(entry => html`<button id=${`work-tab-${entry.id}`} class="detail-tab" type="button" role="tab" aria-controls="work-detail-panel" aria-selected=${String(tab === entry.id)} tabindex=${tab === entry.id ? 0 : -1} @click=${() => this.selectTab(entry.id)} @keydown=${(event: KeyboardEvent) => this.onDetailTabKeydown(event, entry.id)}><span class="detail-tab-label">${entry.label}</span>${entry.id === 'plan' && planSteps.length ? html`<span class="detail-tab-count" aria-label=${`${planSteps.length} steps`}>${planSteps.length}</span>` : entry.id === 'activity' && (unreadCount || updates.length) ? html`<span class="detail-tab-count" aria-label=${unreadCount ? `${unreadCount} unread comments` : `${updates.length} updates`}>${unreadCount || updates.length}</span>` : nothing}</button>`)}
+        ${detailTabs.map(entry => html`<mux-ui-button id=${`work-tab-${entry.id}`} class="detail-tab" variant="quiet" control-role="tab" controls="work-detail-panel" ?tab-selected=${tab === entry.id} ?tab-stop=${tab === entry.id} @click=${() => this.selectTab(entry.id)} @keydown=${(event: KeyboardEvent) => this.onDetailTabKeydown(event, entry.id)}><span class="detail-tab-label">${entry.label}</span>${entry.id === 'plan' && planSteps.length ? html`<span class="detail-tab-count" aria-label=${`${planSteps.length} steps`}>${planSteps.length}</span>` : entry.id === 'activity' && (unreadCount || updates.length) ? html`<span class="detail-tab-count" aria-label=${unreadCount ? `${unreadCount} unread comments` : `${updates.length} updates`}>${unreadCount || updates.length}</span>` : nothing}</mux-ui-button>`)}
       </div>
       <div id="work-detail-panel" class="detail-panel" role="tabpanel" aria-labelledby=${`work-tab-${tab}`} tabindex="0">
       ${tab === 'description' ? html`
