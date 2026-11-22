@@ -682,7 +682,7 @@ func Defaults() Config {
 		Sidebar: SidebarConfig{
 			Preview: "full",
 		},
-		AI: AIConfig{DefaultHarness: "codex"},
+		AI: AIConfig{DefaultHarness: "antigravity"},
 		Keys: KeysConfig{
 			NextSession:    "ctrl+shift+]",
 			Split:          `ctrl+shift+\`,

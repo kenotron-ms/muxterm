@@ -84,7 +84,7 @@ export interface ResolvedConfig {
     /** Live workspace preview density. 'off' also stops all preview traffic. */
     preview: 'full' | 'compact' | 'off';
   };
-  ai: { defaultHarness: 'codex' | 'claude' | 'copilot' | 'amplifier' | 'amplifier-unified' | 'pi' | 'opencode' | 'deepseek' | 'antigravity-sdk' };
+  ai: { defaultHarness: 'codex' | 'claude' | 'copilot' | 'amplifier' | 'amplifier-unified' | 'pi' | 'opencode' | 'deepseek' | 'antigravity' | 'antigravity-sdk' };
   keys: {
     nextSession: string;
     split: string;
@@ -126,7 +126,7 @@ export const DEFAULT_RESOLVED_CONFIG: ResolvedConfig = {
   sidebar: {
     preview: 'full',
   },
-  ai: { defaultHarness: 'codex' },
+  ai: { defaultHarness: 'antigravity' },
   keys: {
     nextSession: 'ctrl+shift+]',
     split: 'ctrl+shift+\\',
@@ -197,9 +197,8 @@ function previewMode(v: unknown, def: ResolvedConfig['sidebar']['preview']): Res
 }
 
 function defaultHarness(v: unknown): ResolvedConfig['ai']['defaultHarness'] {
-  if (v === 'antigravity') return 'antigravity-sdk';
   return v === 'codex' || v === 'claude' || v === 'copilot' || v === 'amplifier' || v === 'amplifier-unified'
-    || v === 'pi' || v === 'opencode' || v === 'deepseek' || v === 'antigravity-sdk'
+    || v === 'pi' || v === 'opencode' || v === 'deepseek' || v === 'antigravity' || v === 'antigravity-sdk'
     ? v : DEFAULT_RESOLVED_CONFIG.ai.defaultHarness;
 }
 

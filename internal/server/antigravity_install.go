@@ -41,7 +41,7 @@ func antigravityArchiveFor(goos, goarch string) (antigravityArchive, bool) {
 	return archive, ok
 }
 
-const antigravityUnsupportedReason = "Automatic Antigravity installation supports Linux and macOS on x86-64 and ARM64; install the ACP registry agent manually on this platform."
+const antigravityUnsupportedReason = "Automatic Antigravity installation supports Linux and macOS on x86-64 and ARM64; install agy 1.5.14 manually on this platform."
 
 var antigravityInstallMu sync.Mutex
 
@@ -235,7 +235,7 @@ func (s *Server) handleAntigravityInstall(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	if err := installAntigravityACP(ctx); err != nil {
+	if err := installAntigravityCLI(ctx); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}

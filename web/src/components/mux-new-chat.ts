@@ -38,7 +38,7 @@ type Attachment = { localId: string; file: File; id?: string; kind?: string; pre
 @customElement('mux-new-chat')
 export class MuxNewChat extends LitElement {
   @property({ type: Boolean, reflect: true }) compact = false;
-  @property() initialHarness: SDKHarnessName = 'codex';
+  @property() initialHarness: SDKHarnessName = 'antigravity';
   @property() initialFolder = '';
   @property() initialProject = '';
   @property() initialRemoteHost = '';

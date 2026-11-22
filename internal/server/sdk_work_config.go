@@ -34,8 +34,8 @@ type workCatalog struct {
 	Models       []workModelOption `json:"models"`
 }
 
-// Work needs native goal support. Check the same runtime availability and
-// model catalog that the New Chat composer uses before reserving a dispatch.
+// Work uses the same steering, native goal, and native history admission as
+// New Chat before reserving a dispatch.
 func (s *Server) workHarnessOptions(ctx context.Context) ([]workHarnessOption, error) {
 	request := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/sdk-chats/start-options", nil)
 	response := httptest.NewRecorder()
@@ -162,7 +162,7 @@ func (s *Server) workDefaultHarness() string {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	if s.cfg.AI.DefaultHarness == "" {
-		return "codex"
+		return "antigravity"
 	}
 	return s.cfg.AI.DefaultHarness
 }
@@ -173,7 +173,7 @@ func (s *Server) selectWorkConfiguration(ctx context.Context, candidates []sdkCh
 		return sdkWorkConfiguration{}, "", "", "", err
 	}
 	if len(options) == 0 {
-		return sdkWorkConfiguration{}, "", "", "", errors.New("no available worker harness supports native Chat Goals")
+		return sdkWorkConfiguration{}, "", "", "", errors.New("no available worker harness supports live steering, native Chat Goals, and native history")
 	}
 	var fallback []string
 	// Dependency order is stable because DependsOn is normalized at write time.

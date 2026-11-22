@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -37,21 +36,12 @@ func antigravityMode() string {
 }
 
 func antigravityAvailable() bool {
-	path, err := exec.LookPath(sdkACPExecutable("antigravity"))
-	if err != nil {
-		return false
-	}
-	dir, err := antigravityManagedDir()
-	if err == nil && path == filepath.Join(dir, "agy_acp_server.par") {
-		return antigravityInstalled(dir)
-	}
-	// A separately installed agent or command override is managed by its owner.
-	return true
+	return antigravityCLIAvailable()
 }
 
 func (s *Server) handleAntigravityAuth(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		_, installSupported := antigravityArchiveFor(runtime.GOOS, runtime.GOARCH)
+		_, installSupported := antigravityCLIArchives[runtime.GOOS+"/"+runtime.GOARCH]
 		unsupportedReason := ""
 		if !installSupported {
 			unsupportedReason = antigravityUnsupportedReason
