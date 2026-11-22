@@ -355,7 +355,7 @@ export class MuxSDKChat extends LitElement {
     .work-digest-row[data-tone='attention'] .work-digest-marker { background:var(--ui-warning); }
     .work-digest-row[data-tone='done'] .work-digest-marker { background:var(--ui-success); }
     .work-digest-copy { display:block; min-width:0; }
-    .work-digest-meta { display:flex; align-items:baseline; gap:var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-xs); line-height:1.4; }
+    .work-digest-meta { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-xs); line-height:1.4; }
     .work-digest-status { color:var(--ui-accent); font-weight:700; }
     .work-digest-row[data-tone='attention'] .work-digest-status { color:var(--ui-warning); }
     .work-digest-row[data-tone='done'] .work-digest-status { color:var(--ui-success); }
@@ -485,13 +485,14 @@ export class MuxSDKChat extends LitElement {
     .text .citation-unavailable { color:var(--ui-text-muted); font-size:var(--ui-text-sm); white-space:nowrap; border-bottom:1px dotted currentColor; cursor:help; }
     .text .md-chat-link { display:inline-flex; align-items:baseline; gap:var(--ui-space-2); max-width:100%; padding:var(--ui-space-px) var(--ui-space-3); border:1px solid color-mix(in srgb,var(--ui-accent) 48%,transparent); border-radius:var(--ui-radius-md); background:color-mix(in srgb,var(--ui-accent) 12%,transparent); font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
     .text .md-chat-link:hover { background:color-mix(in srgb,var(--ui-accent) 22%,transparent); text-decoration:underline; }
-    .text .md-work-link { display:inline-flex; align-items:baseline; gap:var(--ui-space-2); min-width:0; max-width:100%; min-height:1.4em; padding:0 var(--ui-space-2); border-radius:var(--ui-radius-sm); background:color-mix(in srgb,var(--ui-accent) 10%,transparent); font-weight:650; text-decoration:underline; text-underline-offset:3px; }
+    .text .md-work-link { display:inline-flex; flex-wrap:wrap; align-items:baseline; gap:var(--ui-space-2); min-width:0; max-width:100%; min-height:1.4em; padding:0 var(--ui-space-2); border-radius:var(--ui-radius-sm); background:color-mix(in srgb,var(--ui-accent) 10%,transparent); font-weight:650; text-decoration:underline; text-underline-offset:3px; }
     .text .md-work-link:hover { background:color-mix(in srgb,var(--ui-accent) 20%,transparent); }
     .text .md-work-link:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
+    .text .md-work-reference { flex:none; white-space:nowrap; }
     .text .md-work-host { min-width:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); font-weight:500; text-decoration:none; overflow-wrap:anywhere; }
-    .work-notice-link { color:var(--ui-accent); font-weight:700; text-decoration:underline; text-underline-offset:3px; }
+    .work-notice-link { color:var(--ui-accent); font-weight:700; white-space:nowrap; text-decoration:underline; text-underline-offset:3px; }
     .work-notice-link:focus-visible { outline:2px solid var(--ui-accent); outline-offset:2px; }
-    .work-digest-reference { color:var(--ui-accent); font-weight:700; text-decoration:underline; text-underline-offset:2px; }
+    .work-digest-reference { flex:none; color:var(--ui-accent); font-weight:700; white-space:nowrap; text-decoration:underline; text-underline-offset:2px; }
     .text .linked-chat-sender .md-chat-link { align-items:center; gap:var(--ui-space-1); padding:var(--ui-space-px) var(--ui-space-2); font-size:var(--ui-text-md); line-height:1.2; }
     .text .linked-chat-sender .md-chat-link svg { display:block; flex:none; }
     .text .md-image-link { display:inline-block; max-width:100%; }
