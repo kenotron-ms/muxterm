@@ -2248,15 +2248,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			knownModel = true
 		}
 		if !knownModel {
-			if sideRequestedConfig {
-				http.Error(w, "unavailable side chat model", 422)
-				return
-			}
-			req.Model = catalog.Model
-			if req.Model == "" {
-				req.Model = catalog.DefaultModel
-			}
-			req.Effort = ""
+			http.Error(w, "unavailable side chat model", 422)
+			return
 		}
 		if req.Effort == "" {
 			req.Effort = defaultEffort
@@ -2270,14 +2263,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		validEffort := len(modelEfforts) > 0 && contains(modelEfforts, req.Effort) ||
 			len(modelEfforts) == 0 && req.Effort == catalog.Effort && (req.Model == catalog.Model || req.Model == catalog.DefaultModel)
 		if req.Effort != "" && !validEffort {
-			if sideRequestedConfig {
-				http.Error(w, "unavailable side chat thinking effort", 422)
-				return
-			}
-			req.Effort = defaultEffort
-			if req.Effort == "" && len(modelEfforts) > 0 {
-				req.Effort = modelEfforts[0]
-			}
+			http.Error(w, "unavailable side chat thinking effort", 422)
+			return
 		}
 	}
 	chatID := sdkID()
