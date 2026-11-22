@@ -1,5 +1,6 @@
 import type * as Monaco from 'monaco-editor';
 import { ensureMonacoStyles, loadMonaco } from './mux-monaco-source.js';
+import { applyMuxMonacoTheme, muxMonacoThemeKey } from './mux-monaco-theme.js';
 
 type Runtime = typeof Monaco;
 
@@ -14,6 +15,8 @@ export class MuxMonacoDiff extends HTMLElement {
   private modified: Monaco.editor.ITextModel | null = null;
   private modelKey = '';
   private resizeObserver: ResizeObserver | null = null;
+  private themeObserver: MutationObserver | null = null;
+  private themeKey = '';
   private generation = 0;
 
   set originalText(value: string) { if (value !== this.oldText) { this.oldText = value; this.syncModels(); } }
@@ -42,6 +45,9 @@ export class MuxMonacoDiff extends HTMLElement {
       this.buildModels(monaco);
       this.resizeObserver = new ResizeObserver(() => this.editor?.updateOptions({ renderSideBySide: host.clientWidth > 900 }));
       this.resizeObserver.observe(host);
+      this.themeObserver = new MutationObserver(() => this.syncTheme(monaco));
+      this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'data-app-mode'] });
+      this.syncTheme(monaco);
     }).catch(() => {
       if (this.isConnected && generation === this.generation) host.textContent = 'Could not load diff viewer.';
     });
@@ -51,6 +57,9 @@ export class MuxMonacoDiff extends HTMLElement {
     this.generation++;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.themeObserver?.disconnect();
+    this.themeObserver = null;
+    this.themeKey = '';
     this.editor?.dispose();
     this.editor = null;
     this.original?.dispose(); this.original = null;
@@ -76,6 +85,12 @@ export class MuxMonacoDiff extends HTMLElement {
     }
     if (this.original.getValue() !== this.oldText) this.original.setValue(this.oldText);
     if (this.modified?.getValue() !== this.newText) this.modified?.setValue(this.newText);
+  }
+
+  private syncTheme(monaco: Runtime): void {
+    if (!this.editor) return;
+    const key = muxMonacoThemeKey(this);
+    if (key !== this.themeKey) this.themeKey = applyMuxMonacoTheme(monaco, this);
   }
 }
 

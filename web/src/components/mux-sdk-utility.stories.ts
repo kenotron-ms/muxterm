@@ -64,11 +64,14 @@ function utilityFixture(id: string, emptyPages = false): ApiFixture {
     }
     if (method === 'GET' && url.pathname === `${base}changes`) {
       if (id.endsWith('-changes-error') || (id.endsWith('-changes-recovery') && changesRequests++ === 0)) return fixtureJSON({error:'Changes unavailable'},503);
-      return fixtureJSON({repos:[{root,name:'muxterm',branch:'design-system'}],changes:[{repo:root,path:'README.md',status:' M'},{repo:root,path:'src/app.ts',status:' M'}],truncated:false});
+      if (id.endsWith('-changes-no-repo')) return fixtureJSON({repos:[],changes:[],truncated:false});
+      if (id.endsWith('-changes-empty')) return fixtureJSON({repos:[{root,name:'muxterm',branch:'design-system'}],changes:[],truncated:false});
+      const longPath = 'src/components/long-path-for-phone-review/changed-file-with-a-descriptive-name.ts';
+      return fixtureJSON({repos:[{root,name:'muxterm',branch:'design-system'}],changes:[{repo:root,path:id.endsWith('-changes-long-path') ? longPath : 'README.md',status:' M'},{repo:root,path:'src/app.ts',status:' M'}],truncated:false});
     }
     if (method === 'GET' && url.pathname === `${base}change`) {
       if (id.endsWith('-diff-error') || (id.endsWith('-diff-recovery') && diffRequests++ === 0)) return fixtureJSON({error:'Diff unavailable'},503);
-      return fixtureJSON({repo:root,path:url.searchParams.get('path'),before:'# Muxterm\n',after:'# Muxterm component library\n',binary:false,tooLarge:false});
+      return fixtureJSON({repo:root,path:url.searchParams.get('path'),before:'# Muxterm\n',after:'# Muxterm component library\n',binary:id.endsWith('-diff-binary'),tooLarge:id.endsWith('-diff-large')});
     }
     if (method === 'GET' && url.pathname === `${base}pages`) {
       if (id.endsWith('-pages-error') || (id.endsWith('-pages-recovery') && pagesRequests++ === 0)) return fixtureJSON({error:'Pages unavailable'},503);
@@ -250,6 +253,26 @@ export const ChangesRecovery: Story = {
   args:{sessionId:sessionId('changes-recovery')},parameters:{apiFixture:utilityFixture(sessionId('changes-recovery'))},
   play:Changes.play,
 };
+export const PhoneChangesBrowse: Story = {
+  args:{sessionId:sessionId('phone-changes-browse')},parameters:{apiFixture:utilityFixture(sessionId('phone-changes-browse'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:Changes.play,
+};
+export const PhoneChangesUnavailable: Story = {
+  args:{sessionId:sessionId('changes-error')},parameters:{apiFixture:utilityFixture(sessionId('changes-error'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:Changes.play,
+};
+export const PhoneChangesRecovery: Story = {
+  args:{sessionId:sessionId('changes-recovery')},parameters:{apiFixture:utilityFixture(sessionId('changes-recovery'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:Changes.play,
+};
+export const PhoneChangesEmpty: Story = {
+  args:{sessionId:sessionId('changes-empty')},parameters:{apiFixture:utilityFixture(sessionId('changes-empty'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:Changes.play,
+};
+export const PhoneChangesNoRepository: Story = {
+  args:{sessionId:sessionId('changes-no-repo')},parameters:{apiFixture:utilityFixture(sessionId('changes-no-repo'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:Changes.play,
+};
 const openFirstChange = async (canvasElement: HTMLElement) => {
   const utility = target(canvasElement);
   utility?.showPanel('changes');
@@ -267,6 +290,30 @@ export const DiffUnavailable: Story = {
 export const DiffRecovery: Story = {
   args:{sessionId:sessionId('diff-recovery')},parameters:{apiFixture:utilityFixture(sessionId('diff-recovery'))},
   play:DiffUnavailable.play,
+};
+export const PhoneChangesLongDiff: Story = {
+  args:{sessionId:sessionId('changes-long-path')},parameters:{apiFixture:utilityFixture(sessionId('changes-long-path'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:DiffUnavailable.play,
+};
+export const PhoneDiffUnavailable: Story = {
+  args:{sessionId:sessionId('diff-error')},parameters:{apiFixture:utilityFixture(sessionId('diff-error'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:DiffUnavailable.play,
+};
+export const PhoneDiffRecovery: Story = {
+  args:{sessionId:sessionId('diff-recovery')},parameters:{apiFixture:utilityFixture(sessionId('diff-recovery'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:DiffUnavailable.play,
+};
+export const PhoneChangesLightDiff: Story = {
+  args:{sessionId:sessionId('phone-light-diff')},parameters:{apiFixture:utilityFixture(sessionId('phone-light-diff'))},
+  globals:{viewport:{value:'phone390',isRotated:false},appMode:'light'},play:DiffUnavailable.play,
+};
+export const PhoneChangesBinary: Story = {
+  args:{sessionId:sessionId('diff-binary')},parameters:{apiFixture:utilityFixture(sessionId('diff-binary'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:DiffUnavailable.play,
+};
+export const PhoneChangesTooLarge: Story = {
+  args:{sessionId:sessionId('diff-large')},parameters:{apiFixture:utilityFixture(sessionId('diff-large'))},
+  globals:{viewport:{value:'phone390',isRotated:false}},play:DiffUnavailable.play,
 };
 export const NotesLibrary: Story = {
   args:{sessionId:sessionId('pages')},parameters:{apiFixture:utilityFixture(sessionId('pages'))},

@@ -1,4 +1,5 @@
 import type * as Monaco from 'monaco-editor';
+import { applyMuxMonacoTheme, muxMonacoThemeKey } from './mux-monaco-theme.js';
 
 type Runtime = typeof Monaco;
 let runtime: Promise<{ monaco: Runtime; stylesheet: string }> | null = null;
@@ -127,24 +128,9 @@ export class MuxMonacoSource extends HTMLElement {
   private syncTheme(): void {
     const monaco = this.monaco;
     if (!monaco) return;
-    const style = getComputedStyle(this);
-    const background = style.getPropertyValue('--chrome-body').trim();
-    const foreground = style.getPropertyValue('--chrome-text-bright').trim();
-    const colors = `${background}\u0000${foreground}`;
+    const colors = muxMonacoThemeKey(this);
     if (colors === this.themeColors) return;
-    this.themeColors = colors;
-    const rgb = /^#([0-9a-f]{6})$/i.exec(background)?.[1];
-    const light = rgb ? parseInt(rgb.slice(0, 2), 16) + parseInt(rgb.slice(2, 4), 16) + parseInt(rgb.slice(4, 6), 16) > 384 : false;
-    monaco.editor.defineTheme('muxterm-chat-source', {
-      base: light ? 'vs' : 'vs-dark',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': background || (light ? '#ffffff' : '#1a1b26'),
-        'editor.foreground': foreground || (light ? '#1c1c1e' : '#c0caf5'),
-      },
-    });
-    monaco.editor.setTheme('muxterm-chat-source');
+    this.themeColors = applyMuxMonacoTheme(monaco, this);
   }
 }
 
