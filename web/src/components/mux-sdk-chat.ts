@@ -2974,7 +2974,7 @@ export class MuxSDKChat extends LitElement {
       ? 'Return to active voice call' : 'Open voice companion';
   }
   private sendVoiceButton() {
-    const sideStart = this.sideParentId && !this.sessionId;
+    const sideStart = this.sideMode && !!this.sideParentId && !this.sessionId;
     const mode = this.sideMode ? this.busy && !this.draftHasContent ? 'task-stop' : 'send' : this.draftHasContent || this.attachments.length ? this.busy ? 'steer' : 'send' : this.busy ? 'task-stop' : 'voice-open';
     const label = mode === 'voice-open' ? this.voiceOpenLabel() : mode === 'task-stop' ? 'Stop current task' : mode === 'steer' ? 'Steer current task' : 'Send message';
     const disabled = sideStart ? !this.draftHasContent || this.startingSideChat || !this.sideSelection

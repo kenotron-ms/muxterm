@@ -17,7 +17,7 @@ type StartOption = { harness: SDKHarnessName; provider: string };
 type ModelOption = { id: string; label: string; efforts: string[]; defaultEffort?: string };
 type Catalog = { model: string; effort: string; defaultModel?: string; models: ModelOption[]; bundle?: string; provider?: string; bundles?: string[]; providers?: string[] };
 const storageKey = (parentId: string, tabId: string) => `muxterm-side-chat-selection:v1:${parentId}:${tabId}`;
-const providerLabel = (value: string) => ({ 'provider-openai':'OpenAI', 'provider-anthropic':'Anthropic' })[value] || value.replace(/^provider-/, '');
+const providerLabel = (value: string) => ({ openai:'OpenAI', anthropic:'Anthropic', github:'GitHub', configured:'Configured', 'provider-openai':'OpenAI', 'provider-anthropic':'Anthropic' })[value] || value.replace(/^provider-/, '');
 
 @customElement('mux-side-chat-start-settings')
 export class MuxSideChatStartSettings extends LitElement {
@@ -48,7 +48,7 @@ export class MuxSideChatStartSettings extends LitElement {
   override updated(changed: Map<string, unknown>) {
     if ((changed.has('parentId') || changed.has('remoteHost') || changed.has('tabId')) && this.loadedKey !== `${this.remoteHost}:${this.parentId}:${this.tabId}`) void this.load();
   }
-  override disconnectedCallback() { this.requestVersion++; super.disconnectedCallback(); }
+  override disconnectedCallback() { this.requestVersion++; this.loadedKey = ''; super.disconnectedCallback(); }
   private announce(selection: SideChatSelection | null) {
     this.dispatchEvent(new CustomEvent<SideChatSelection | null>('side-start-selection', { detail:selection, bubbles:true, composed:true }));
   }

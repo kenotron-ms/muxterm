@@ -2182,7 +2182,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 503)
 		return
 	}
-	if req.SideParentID != "" {
+	if req.SideParentID != "" && sideRequestedConfig {
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
 		catalogBytes, catalogErr := s.sdkChatCatalog(ctx, req.Harness, req.ProjectPath, req.Bundle, req.Provider)
@@ -2218,8 +2218,8 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			if req.Provider == "configured" {
 				req.Provider = catalog.Provider
 			}
-			bundleAllowed := contains(catalog.Bundles, req.Bundle) || len(catalog.Bundles) == 0 && req.Bundle == catalog.Bundle
-			providerAllowed := contains(catalog.Providers, req.Provider) || len(catalog.Providers) == 0 && req.Provider == catalog.Provider
+			bundleAllowed := contains(catalog.Bundles, req.Bundle) || (len(catalog.Bundles) == 0 && req.Bundle == catalog.Bundle)
+			providerAllowed := contains(catalog.Providers, req.Provider) || (len(catalog.Providers) == 0 && req.Provider == catalog.Provider)
 			if !bundleAllowed || !providerAllowed {
 				http.Error(w, "unavailable side chat bundle or provider", 422)
 				return
@@ -2262,6 +2262,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Effort = defaultEffort
 			if req.Effort == "" && (req.Model == catalog.Model || req.Model == catalog.DefaultModel) {
 				req.Effort = catalog.Effort
+			}
+			if req.Effort == "" && len(modelEfforts) > 0 {
+				req.Effort = modelEfforts[0]
 			}
 		}
 		validEffort := len(modelEfforts) > 0 && contains(modelEfforts, req.Effort) ||
