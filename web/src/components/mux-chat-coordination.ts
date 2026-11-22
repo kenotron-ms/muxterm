@@ -21,11 +21,11 @@ type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: strin
 type WorkItem = { id: string; title: string; brief: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
 type DetailTab = 'description' | 'people' | 'plan' | 'activity';
-const detailTabs: { id: DetailTab; label: string }[] = [
-  { id: 'description', label: 'Description & goal' },
-  { id: 'people', label: 'People & dependencies' },
-  { id: 'plan', label: 'Plan & next move' },
-  { id: 'activity', label: 'Activity' },
+const detailTabs: { id: DetailTab; label: string; icon: 'description' | 'ownership' | 'plan' | 'clock' }[] = [
+  { id: 'description', label: 'Description', icon: 'description' },
+  { id: 'people', label: 'Ownership', icon: 'ownership' },
+  { id: 'plan', label: 'Plan', icon: 'plan' },
+  { id: 'activity', label: 'Activity', icon: 'clock' },
 ];
 
 function activityPreview(value: string): string {
@@ -39,8 +39,11 @@ function activityPreview(value: string): string {
   return characters.slice(0, 157).join('').replace(/\s+\S*$/, '').trimEnd() + '…';
 }
 
-const icon = (name: 'work' | 'folder' | 'play' | 'pause' | 'chevron' | 'back' | 'clock' | 'check' | 'chat' | 'wait' | 'alert' | 'flag') => {
+const icon = (name: 'work' | 'folder' | 'play' | 'pause' | 'chevron' | 'back' | 'clock' | 'check' | 'chat' | 'wait' | 'alert' | 'flag' | 'description' | 'ownership' | 'plan') => {
   const paths = {
+    description: svg`<path d="M6 3h9l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M15 3v5h4M8 12h8M8 16h8"/>`,
+    ownership: svg`<circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2H3Zm13-15a3 3 0 0 1 0 6m1 3a5 5 0 0 1 4 5v1h-3"/>`,
+    plan: svg`<path d="M10 6h11M10 12h11M10 18h11M3 6h2M3 12h2M3 18h2"/>`,
     work: svg`<path d="M13 5h8M13 12h8M13 19h8m-18-2 2 2 4-4"/><rect x="3" y="4" width="6" height="6" rx="1"/>`,
     folder: svg`<path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/>`,
     play: svg`<path d="M6 4.5a1 1 0 0 1 1.5-.86l12 7a1.6 1.6 0 0 1 0 2.72l-12 7A1 1 0 0 1 6 19.5z"/>`,
@@ -488,7 +491,7 @@ export class MuxChatCoordination extends LitElement {
       <h2>${item.title}</h2>
       ${inMotion && move ? html`<div class=${`next-brief ${item.status === 'blocked' ? 'blocked' : ''}`}><strong>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</strong><p>${movePreview}</p>${unreadCount ? html`<mux-ui-button variant="quiet" size="small" @click=${() => this.selectTab('activity')}>Read ${unreadCount} unread ${unreadCount === 1 ? 'comment' : 'comments'}</mux-ui-button>` : nothing}</div>` : nothing}
       <div class="detail-tabs" role="tablist" aria-label="Work item details">
-        ${detailTabs.map(entry => html`<mux-ui-button id=${`work-tab-${entry.id}`} class="detail-tab" variant="quiet" control-role="tab" controls="work-detail-panel" ?tab-selected=${tab === entry.id} ?tab-stop=${tab === entry.id} @click=${() => this.selectTab(entry.id)} @keydown=${(event: KeyboardEvent) => this.onDetailTabKeydown(event, entry.id)}><span class="detail-tab-label">${entry.label}</span>${entry.id === 'plan' && planSteps.length ? html`<span class="detail-tab-count" aria-label=${`${planSteps.length} steps`}>${planSteps.length}</span>` : entry.id === 'activity' && (unreadCount || updates.length) ? html`<span class="detail-tab-count" aria-label=${unreadCount ? `${unreadCount} unread comments` : `${updates.length} updates`}>${unreadCount || updates.length}</span>` : nothing}</mux-ui-button>`)}
+        ${detailTabs.map(entry => html`<mux-ui-button id=${`work-tab-${entry.id}`} class="detail-tab" variant="quiet" control-role="tab" controls="work-detail-panel" ?tab-selected=${tab === entry.id} ?tab-stop=${tab === entry.id} @click=${() => this.selectTab(entry.id)} @keydown=${(event: KeyboardEvent) => this.onDetailTabKeydown(event, entry.id)}>${icon(entry.icon)}<span class="detail-tab-label">${entry.label}</span>${entry.id === 'plan' && planSteps.length ? html`<span class="detail-tab-count" aria-label=${`${planSteps.length} steps`}>${planSteps.length}</span>` : entry.id === 'activity' && (unreadCount || updates.length) ? html`<span class="detail-tab-count" aria-label=${unreadCount ? `${unreadCount} unread comments` : `${updates.length} updates`}>${unreadCount || updates.length}</span>` : nothing}</mux-ui-button>`)}
       </div>
       <div id="work-detail-panel" class="detail-panel" role="tabpanel" aria-labelledby=${`work-tab-${tab}`} tabindex="0">
       ${tab === 'description' ? html`
