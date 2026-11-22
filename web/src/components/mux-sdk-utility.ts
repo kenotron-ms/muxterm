@@ -168,7 +168,7 @@ export class MuxSDKUtility extends LitElement {
   private mobileTreeScrollTop = 0;
   private readonly mobileFilesMedia = window.matchMedia('(max-width:767.98px)');
   private readonly onMobileFilesMediaChange = () => this.paintAll();
-  private compactChanges = this.mobileFilesMedia.matches;
+  private compactChanges?: boolean;
   private changesWidthObserver?: ResizeObserver;
   private artifact?: Artifact;
   private fileQuery = '';
@@ -241,11 +241,15 @@ export class MuxSDKUtility extends LitElement {
     void this.updateComplete.then(() => {
       const body = this.querySelector<HTMLElement>('.utility-body');
       if (!this.isConnected || !body || this.changesWidthObserver) return;
-      this.changesWidthObserver = new ResizeObserver(([entry]) => {
-        const compact = entry.contentRect.width <= 520;
+      const updateCompactChanges = (width: number) => {
+        const compact = width <= 520;
         if (compact !== this.compactChanges) { this.compactChanges = compact; this.paintAll(); }
+      };
+      this.changesWidthObserver = new ResizeObserver(([entry]) => {
+        updateCompactChanges(entry.contentRect.width);
       });
       this.changesWidthObserver.observe(body);
+      updateCompactChanges(body.getBoundingClientRect().width);
     });
     if (this.terminalMode || this.projectMode) {
       this.tabs = [{ id:crypto.randomUUID(), kind:'files' }];
@@ -1140,6 +1144,7 @@ export class MuxSDKUtility extends LitElement {
     const changes = this.changes;
     const detail = this.changeDetail;
     const compact = this.compactChanges;
+    if (compact === undefined) return html``;
     return html`<section class="changes-panel split-panel ${compact ? 'compact-changes' : ''} ${compact && this.compactChangeOpen && this.selectedChange ? 'compact-diff' : ''}" style=${`--rail-width:${this.railWidths.changes}px`} @keydown=${(event:KeyboardEvent) => { if (event.key === 'Escape' && compact && this.compactChangeOpen) { event.preventDefault(); this.backToChangesList(); } }}><div class="changes-list" ?inert=${compact && this.compactChangeOpen}><header><div><strong>CHANGES</strong><span>${changes?.changes.length ?? 0}</span></div><mux-ui-button variant="quiet" size="small" icon-only accessible-label="Refresh changes" tooltip="Refresh changes" @click=${() => void this.loadChanges()}>${icon(RefreshCw,{size:15})}</mux-ui-button></header>
       ${this.changesError ? html`<mux-ui-feedback class="rail-feedback" kind="error" density="compact">${this.changesError}<mux-ui-button slot="action" size="small" variant="secondary" @click=${() => void this.loadChanges()}>Retry</mux-ui-button></mux-ui-feedback>` : !changes ? html`<mux-ui-feedback class="rail-feedback" kind="loading" density="compact">Loading Git changes…</mux-ui-feedback>` : changes.repos.length ? changes.repos.map(repo => html`<div class="change-repo"><div class="change-repo-title"><strong>${repo.name}</strong><span>${repo.branch || 'detached HEAD'}</span></div>${changes.changes.filter(change => change.repo === repo.root).length ? changes.changes.filter(change => change.repo === repo.root).map(change => html`<mux-ui-rail-row label=${change.path} detail=${change.status.trim() || 'M'} detail-tone="accent" tooltip=${change.path} data-repo=${change.repo} data-path=${change.path} ?selected=${this.selectedChange?.repo === change.repo && this.selectedChange?.path === change.path} @click=${() => void this.openChange(change)}><span slot="icon">${icon(fileGlyph(change.path),{size:15})}</span></mux-ui-rail-row>`) : html`<mux-ui-feedback class="rail-feedback" kind="empty" density="compact">No changes</mux-ui-feedback>`}</div>`) : html`<mux-ui-feedback class="rail-feedback" kind="empty" density="compact">No Git repository in this chat’s project folders.</mux-ui-feedback>`}
       ${changes?.truncated ? html`<mux-ui-feedback class="rail-feedback" kind="warning" density="compact">Showing the first changes. Refresh after narrowing the project.</mux-ui-feedback>` : nothing}
