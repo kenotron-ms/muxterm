@@ -112,6 +112,11 @@ EOF
 wait_health
 systemctl --user is-active --quiet muxterm.service muxterm-sessiond.service
 api /api/update/automatic | jq -e '.enabled == false and .eligible == true'
+prepared="$(curl --fail --silent --show-error -X POST http://127.0.0.1:8318/api/update/prepare)"
+token="$(jq -r 'select(.safe == true) | .token' <<<"$prepared")"
+[[ "$token" =~ ^[0-9]+$ ]]
+curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+  --data "{\"token\":$token}" http://127.0.0.1:8318/api/update/release >/dev/null
 
 workspace="$("$binary" workspace create auto-update-dtu --json | jq -r .workspaceId)"
 "$binary" pane create --workspace "$workspace"

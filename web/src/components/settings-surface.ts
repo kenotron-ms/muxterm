@@ -628,9 +628,9 @@ export class MuxSettingsSurface extends LitElement {
 
     .application-version { margin:var(--ui-space-7) 0 var(--ui-space-6); font-size:var(--ui-text-3xl); font-weight:600; color:var(--ui-text); }
     .application-actions { display:flex; flex-wrap:wrap; gap:var(--ui-space-5); margin:var(--ui-space-6) 0; }
-	.automatic-update-setting { margin:var(--ui-space-7) 0; padding:var(--ui-space-6) 0; border-top:1px solid var(--ui-border); border-bottom:1px solid var(--ui-border); }
-	.automatic-update-setting p { margin:var(--ui-space-3) 0 0; color:var(--ui-text-muted); line-height:1.5; }
-	.automatic-update-setting mux-ui-feedback { display:block; margin-top:var(--ui-space-4); }
+    .automatic-update-setting { margin:var(--ui-space-7) 0; padding:var(--ui-space-6) 0; border-top:1px solid var(--ui-border); border-bottom:1px solid var(--ui-border); }
+    .automatic-update-setting p { margin:var(--ui-space-3) 0 0; color:var(--ui-text-muted); line-height:1.5; }
+    .automatic-update-setting mux-ui-feedback { display:block; margin-top:var(--ui-space-4); }
     .application-shortcuts { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--ui-space-6); align-items:baseline; }
     .application-shortcuts dd { margin:0; text-align:right; }
     .application-shortcuts kbd { font:inherit; color:var(--ui-text); }
@@ -672,14 +672,14 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _section: SettingsSection = 'appearance';
   private _lastScrolledSection: SettingsSection | null = null;
   @state() private _updateStatus: UpdateStatus | null = null;
-	@state() private _automaticUpdate: AutomaticUpdateStatus | null = null;
-	@state() private _automaticUpdateBusy = false;
+  @state() private _automaticUpdate: AutomaticUpdateStatus | null = null;
+  @state() private _automaticUpdateBusy = false;
   @state() private _automaticUpdateError = '';
-	private _automaticUpdatePoll: number | null = null;
-	private _onMacAutomaticUpdate = (event: Event) => {
-		const detail = (event as CustomEvent<AutomaticUpdateStatus>).detail;
-		if (detail && typeof detail.eligible === 'boolean') this._automaticUpdate = detail;
-	};
+  private _automaticUpdatePoll: number | null = null;
+  private _onMacAutomaticUpdate = (event: Event) => {
+    const detail = (event as CustomEvent<AutomaticUpdateStatus>).detail;
+    if (detail && typeof detail.eligible === 'boolean') this._automaticUpdate = detail;
+  };
   @state() private _macUpdateStatus: MacUpdateStatus | null = null;
   @state() private _checkingVersion = false;
   @state() private _installingUpdate = false;
@@ -778,10 +778,10 @@ export class MuxSettingsSurface extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-	window.addEventListener('muxterm-mac-auto-update', this._onMacAutomaticUpdate);
-	this._automaticUpdatePoll = window.setInterval(() => {
-		if (this._section === 'about' && !macAppVersion()) void this._loadAutomaticUpdate();
-	}, 30_000);
+    window.addEventListener('muxterm-mac-auto-update', this._onMacAutomaticUpdate);
+    this._automaticUpdatePoll = window.setInterval(() => {
+      if (this._section === 'about' && !macAppVersion()) void this._loadAutomaticUpdate();
+    }, 30_000);
     this._refreshNotifPermission();
     // host-state is the only thing that moves a row between sections without
     // this pane asking for it, so it is the only thing that refetches.
@@ -793,9 +793,9 @@ export class MuxSettingsSurface extends LitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-	window.removeEventListener('muxterm-mac-auto-update', this._onMacAutomaticUpdate);
-	if (this._automaticUpdatePoll !== null) window.clearInterval(this._automaticUpdatePoll);
-	this._automaticUpdatePoll = null;
+    window.removeEventListener('muxterm-mac-auto-update', this._onMacAutomaticUpdate);
+    if (this._automaticUpdatePoll !== null) window.clearInterval(this._automaticUpdatePoll);
+    this._automaticUpdatePoll = null;
     window.clearTimeout(this._antigravityPollTimer);
     window.clearInterval(this._agentVersionTimer);
     window.clearInterval(this._runtimeTimer);
@@ -849,10 +849,10 @@ export class MuxSettingsSurface extends LitElement {
       window.clearTimeout(this._agentVersionRetry);
     }
     this._section = section;
-	if (section === 'about') {
-		void this._checkVersion();
-		void this._loadAutomaticUpdate();
-	}
+    if (section === 'about') {
+      void this._checkVersion();
+      void this._loadAutomaticUpdate();
+    }
     return true;
   }
 
@@ -886,27 +886,27 @@ export class MuxSettingsSurface extends LitElement {
     }
   }
 
-	private async _loadAutomaticUpdate(): Promise<void> {
-		try {
-			this._automaticUpdate = await (macAppVersion() ? fetchMacAutomaticUpdateStatus() : fetchAutomaticUpdateStatus());
-			this._automaticUpdateError = '';
-		} catch (error) {
-			this._automaticUpdateError = error instanceof Error ? error.message : String(error);
-		}
-	}
+  private async _loadAutomaticUpdate(): Promise<void> {
+    try {
+      this._automaticUpdate = await (macAppVersion() ? fetchMacAutomaticUpdateStatus() : fetchAutomaticUpdateStatus());
+      this._automaticUpdateError = '';
+    } catch (error) {
+      this._automaticUpdateError = error instanceof Error ? error.message : String(error);
+    }
+  }
 
-	private async _setAutomaticUpdates(enabled: boolean): Promise<void> {
-		if (this._automaticUpdateBusy || (!this._automaticUpdate?.eligible && enabled)) return;
-		this._automaticUpdateBusy = true;
-		this._automaticUpdateError = '';
-		try {
-			this._automaticUpdate = await (macAppVersion() ? setMacAutomaticUpdates(enabled) : setAutomaticUpdates(enabled));
-		} catch (error) {
-			this._automaticUpdateError = error instanceof Error ? error.message : String(error);
-		} finally {
-			this._automaticUpdateBusy = false;
-		}
-	}
+  private async _setAutomaticUpdates(enabled: boolean): Promise<void> {
+    if (this._automaticUpdateBusy || (!this._automaticUpdate?.eligible && enabled)) return;
+    this._automaticUpdateBusy = true;
+    this._automaticUpdateError = '';
+    try {
+      this._automaticUpdate = await (macAppVersion() ? setMacAutomaticUpdates(enabled) : setAutomaticUpdates(enabled));
+    } catch (error) {
+      this._automaticUpdateError = error instanceof Error ? error.message : String(error);
+    } finally {
+      this._automaticUpdateBusy = false;
+    }
+  }
 
   private async _installUpdate(): Promise<void> {
     if (this._checkingVersion || this._installingUpdate || (macAppVersion() ? this._macUpdateStatus?.phase !== 'available' : !this._updateStatus?.canUpdate)) return;
@@ -933,9 +933,9 @@ export class MuxSettingsSurface extends LitElement {
     const status = this._updateStatus;
     const macVersion = macAppVersion();
     const macStatus = this._macUpdateStatus;
-	const automatic = this._automaticUpdate;
-	const checkedAt = automatic?.lastCheck ? new Date(automatic.lastCheck).toLocaleString() : 'Never';
-	const updatedAt = automatic?.lastUpdate ? new Date(automatic.lastUpdate).toLocaleString() : 'Never';
+    const automatic = this._automaticUpdate;
+    const checkedAt = automatic?.lastCheck ? new Date(automatic.lastCheck).toLocaleString() : 'Never';
+    const updatedAt = automatic?.lastUpdate ? new Date(automatic.lastUpdate).toLocaleString() : 'Never';
     const message = macVersion ? this._updateError || (macStatus?.phase === 'checking' ? 'Checking Mac releases…'
       : macStatus?.phase === 'available' ? `Mac app version ${macStatus.latestVersion} is available.`
       : macStatus?.phase === 'downloading' ? 'Downloading the Mac app update…'
@@ -961,15 +961,15 @@ export class MuxSettingsSurface extends LitElement {
           <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>`}
       </div>
       <mux-ui-feedback class="settings-feedback" kind=${macVersion ? this._updateError || macStatus?.phase === 'error' ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : macStatus?.phase === 'available' ? 'info' : 'success' : this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
-	  <div class="automatic-update-setting">
-	    <mux-ui-switch layout="row" label="Automatic updates" .checked=${automatic?.enabled ?? false}
-	      ?disabled=${(!automatic?.eligible && !automatic?.enabled) || this._automaticUpdateBusy}
-	      @change=${(event: CustomEvent<{checked:boolean}>) => void this._setAutomaticUpdates(event.detail.checked)}></mux-ui-switch>
-	    <p>${automatic?.eligible ? 'Checks for published releases even when this page is closed. Installs only when your terminals and chats are safe to restart.' : automatic?.reason || 'Checking whether this installation can update automatically…'}</p>
-	    ${automatic?.message ? html`<p>${automatic.message}</p>` : ''}
-	    ${automatic ? html`<p>Last checked: ${checkedAt}<br>Last updated: ${updatedAt}</p>` : ''}
-	    ${this._automaticUpdateError ? html`<mux-ui-feedback kind="error" density="compact">${this._automaticUpdateError}</mux-ui-feedback>` : ''}
-	  </div>
+      <div class="automatic-update-setting">
+        <mux-ui-switch layout="row" label="Automatic updates" .checked=${automatic?.enabled ?? false}
+          ?disabled=${(!automatic?.eligible && !automatic?.enabled) || this._automaticUpdateBusy}
+          @change=${(event: CustomEvent<{checked:boolean}>) => void this._setAutomaticUpdates(event.detail.checked)}></mux-ui-switch>
+        <p>${automatic?.eligible ? 'Checks for published releases even when this page is closed. Installs only when your terminals and chats are safe to restart.' : automatic?.reason || 'Checking whether this installation can update automatically…'}</p>
+        ${automatic?.message ? html`<p>${automatic.message}</p>` : ''}
+        ${automatic ? html`<p>Last checked: ${checkedAt}<br>Last updated: ${updatedAt}</p>` : ''}
+        ${this._automaticUpdateError ? html`<mux-ui-feedback kind="error" density="compact">${this._automaticUpdateError}</mux-ui-feedback>` : ''}
+      </div>
       <p>Build <code>${__GIT_SHA__}</code></p>
       <p>Config file: <code>~/.config/muxterm/config.toml</code></p>`;
   }

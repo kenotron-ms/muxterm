@@ -360,6 +360,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/update/automatic", protect(http.HandlerFunc(s.handleAutomaticUpdate)))
 	s.mux.Handle("PUT /api/update/automatic", protect(http.HandlerFunc(s.handleAutomaticUpdate)))
 	s.mux.Handle("POST /api/update/prepare", protect(http.HandlerFunc(s.handleUpdatePrepare)))
+	s.mux.Handle("POST /api/update/release", protect(http.HandlerFunc(s.handleUpdateRelease)))
 
 	s.mux.Handle("GET /api/tunnels", protect(http.HandlerFunc(s.handleTunnelList)))
 	s.mux.Handle("POST /api/tunnels", protect(http.HandlerFunc(s.handleTunnelCreate)))

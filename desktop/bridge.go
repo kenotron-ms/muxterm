@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
 	"sort"
@@ -69,7 +70,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			allowed := serverURL == localURL && localURL != ""
 			c.bridgeMu.Unlock()
 			if allowed {
-				c.runMacUpdate(message.Type)
+				c.runMacUpdate(context.Background(), message.Type)
 			} else {
 				c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-mac-update', {detail:{phase:'error',error:'Mac updates require the local Muxterm workspace.'}}))")
 			}

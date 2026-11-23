@@ -320,6 +320,7 @@ func (s *Server) automaticUpdateAttempt(ctx context.Context) {
 	applied = true
 	s.recordAutomaticUpdate("restarting", "Verified update installed; restarting Muxterm.", status.LatestVersion, false, false)
 	if err := update.Restart(update.RestoreCapability{OK: true, Reason: "running daemon verified restore and idle panes"}); err != nil {
+		applied = false
 		s.recordAutomaticUpdate("error", "Update installed but restart failed: "+err.Error(), status.LatestVersion, false, false)
 		log.Printf("automatic update: restart: %v", err)
 	} else {
@@ -386,12 +387,13 @@ func (s *Server) activeUpdateWork() string {
 func (s *Server) beginAutomaticAdmission() (int64, string) {
 	h := s.sdkChats
 	h.updateAdmission.Lock()
-	defer h.updateAdmission.Unlock()
 	if h.updateUntil.Load() > time.Now().UnixNano() {
+		h.updateAdmission.Unlock()
 		return 0, "Another automatic update is preparing."
 	}
 	token := time.Now().Add(automaticAdmissionLifetime).UnixNano()
 	h.updateUntil.Store(token)
+	h.updateAdmission.Unlock()
 	if reason := s.activeUpdateWork(); reason != "" {
 		h.updateUntil.CompareAndSwap(token, 0)
 		return 0, reason
@@ -441,5 +443,42 @@ func (s *Server) handleUpdatePrepare(w http.ResponseWriter, r *http.Request) {
 			keepAdmission = true
 		}
 	}
-	writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": ok, "reason": reason})
+	writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": ok, "reason": reason, "token": token})
+}
+
+// A native companion may abandon a prepared restart after the daemon has
+// entered its temporary update gate. Only that preparation's token releases it.
+func (s *Server) handleUpdateRelease(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Token int64 `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Token <= 0 {
+		http.Error(w, "invalid update token", http.StatusBadRequest)
+		return
+	}
+	h := s.sdkChats
+	h.updateAdmission.Lock()
+	defer h.updateAdmission.Unlock()
+	if h.updateUntil.Load() != request.Token {
+		http.Error(w, "update preparation is no longer active", http.StatusConflict)
+		return
+	}
+	socket, err := sessiond.SocketPath()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	daemon, err := sessiond.Dial(socket)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer daemon.Close()
+	go func() { _ = daemon.Run() }()
+	if err := daemon.ReleaseUpdate(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.updateUntil.CompareAndSwap(request.Token, 0)
+	w.WriteHeader(http.StatusNoContent)
 }

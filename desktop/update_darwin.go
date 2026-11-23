@@ -58,7 +58,7 @@ func (c *Companion) emitMacUpdate(event macUpdateEvent) {
 	c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-mac-update', {detail:" + string(encoded) + "}))")
 }
 
-func (c *Companion) runMacUpdate(action string) {
+func (c *Companion) runMacUpdate(parent context.Context, action string) {
 	if !c.updateMu.TryLock() {
 		c.emitMacUpdate(macUpdateEvent{Phase: "error", Error: "A Mac update is already in progress."})
 		return
@@ -94,7 +94,7 @@ func (c *Companion) runMacUpdate(action string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
 	base.Phase = "checking"
 	c.emitMacUpdate(base)
@@ -143,14 +143,26 @@ func (c *Companion) runMacUpdate(action string) {
 		return
 	}
 	if action == "mac-update-auto" {
-		if err := c.checkMacHostSafety(); err != nil {
+		token, err := c.checkMacHostSafety(ctx)
+		if err != nil {
 			base.Phase, base.Error = "deferred", err.Error()
 			c.emitMacUpdate(base)
 			return
 		}
 		if !c.macAutomaticStatus().Enabled {
+			_ = c.releaseMacHostSafety(token)
 			return
 		}
+		base.Phase = "restarting"
+		c.emitMacUpdate(base)
+		if err := c.app.Updater.Restart(ctx); err != nil {
+			base.Phase, base.Error = "error", fmt.Sprintf("Could not restart into Mac update: %v", err)
+			if releaseErr := c.releaseMacHostSafety(token); releaseErr != nil {
+				base.Error += "; could not release the temporary terminal gate: " + releaseErr.Error()
+			}
+			c.emitMacUpdate(base)
+		}
+		return
 	}
 	base.Phase = "restarting"
 	c.emitMacUpdate(base)
@@ -197,37 +209,76 @@ func (c *Companion) runMacAutomaticUpdates() {
 		}
 		view := c.macAutomaticStatus()
 		if view.Eligible && view.Enabled && (view.LastCheck.IsZero() || time.Since(view.LastCheck) >= 6*time.Hour) {
-			c.runMacUpdate("mac-update-auto")
+			attemptCtx, cancel := context.WithCancel(context.Background())
+			finished := make(chan struct{})
+			go func() {
+				select {
+				case <-c.autoStop:
+					cancel()
+				case <-finished:
+				}
+			}()
+			c.runMacUpdate(attemptCtx, "mac-update-auto")
+			close(finished)
+			cancel()
 		}
 		timer.Reset(time.Hour)
 	}
 }
 
-func (c *Companion) checkMacHostSafety() error {
+func (c *Companion) checkMacHostSafety(ctx context.Context) (int64, error) {
 	c.mu.Lock()
 	local := c.local
 	c.mu.Unlock()
 	if local == nil {
-		return errors.New("The local Muxterm host is unavailable; update deferred.")
+		return 0, errors.New("The local Muxterm host is unavailable; update deferred.")
 	}
 	client := http.Client{Timeout: 5 * time.Second}
-	response, err := client.Post(local.url+"api/update/prepare", "application/json", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, local.url+"api/update/prepare", nil)
 	if err != nil {
-		return fmt.Errorf("Could not check local terminal safety: %w", err)
+		return 0, err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return 0, fmt.Errorf("Could not check local terminal safety: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("Local terminal safety check returned HTTP %d", response.StatusCode)
+		return 0, fmt.Errorf("Local terminal safety check returned HTTP %d", response.StatusCode)
 	}
 	var result struct {
 		Safe   bool   `json:"safe"`
 		Reason string `json:"reason"`
+		Token  int64  `json:"token"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return fmt.Errorf("Could not read local terminal safety: %w", err)
+		return 0, fmt.Errorf("Could not read local terminal safety: %w", err)
 	}
 	if !result.Safe {
-		return errors.New(result.Reason)
+		return 0, errors.New(result.Reason)
+	}
+	if result.Token <= 0 {
+		return 0, errors.New("Local terminal safety check did not return a release token")
+	}
+	return result.Token, nil
+}
+
+func (c *Companion) releaseMacHostSafety(token int64) error {
+	c.mu.Lock()
+	local := c.local
+	c.mu.Unlock()
+	if local == nil {
+		return errors.New("the local Muxterm host is unavailable")
+	}
+	client := http.Client{Timeout: 5 * time.Second}
+	body := strings.NewReader(fmt.Sprintf(`{"token":%d}`, token))
+	response, err := client.Post(local.url+"api/update/release", "application/json", body)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("local terminal gate release returned HTTP %d", response.StatusCode)
 	}
 	return nil
 }
