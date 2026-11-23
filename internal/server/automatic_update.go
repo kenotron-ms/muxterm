@@ -470,7 +470,7 @@ func (s *Server) handleUpdateRelease(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Token int64 `json:"token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Token <= 0 {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&request); err != nil || request.Token <= 0 {
 		http.Error(w, "invalid update token", http.StatusBadRequest)
 		return
 	}

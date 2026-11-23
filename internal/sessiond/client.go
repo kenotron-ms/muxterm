@@ -336,7 +336,7 @@ func (c *Client) ListWorkspaces() ([]WorkspaceInfo, error) {
 // PrepareUpdate asks the running daemon to prove restore and pane safety and
 // hold a short gate over new activity. Old daemons time out and fail closed.
 func (c *Client) PrepareUpdate() (bool, string, error) {
-	reply, err := c.requestWithin(&Message{Type: TypeUpdatePrepare}, 3*time.Second)
+	reply, err := c.requestWithin(&Message{Type: TypeUpdatePrepare}, 5*time.Second)
 	if err != nil {
 		return false, "", err
 	}
