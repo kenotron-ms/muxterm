@@ -22,7 +22,7 @@ export class MuxUIBreadcrumb extends LitElement {
     nav::-webkit-scrollbar { display:none; }
     ol { display:flex; align-items:center; gap:var(--ui-space-3); width:max-content; min-width:0; min-height:var(--ui-control-sm); margin:0; padding:0; list-style:none; white-space:nowrap; }
     li { display:flex; align-items:center; gap:var(--ui-space-3); min-width:0; }
-    button { max-width:var(--ui-breadcrumb-ancestor-max-width); min-height:var(--ui-control-sm); overflow:hidden; border:0; padding:0; background:transparent; color:var(--ui-text-muted); text-overflow:ellipsis; white-space:nowrap; font:500 var(--ui-text-xs) var(--ui-font-sans); cursor:pointer; }
+    button { max-width:var(--ui-breadcrumb-ancestor-max-width); min-height:var(--ui-control-sm); overflow:hidden; border:0; padding:0; background:transparent; color:var(--ui-text-muted); text-overflow:ellipsis; white-space:nowrap; font:500 var(--ui-text-xs) var(--ui-font-sans); cursor:pointer; -webkit-user-select:none; user-select:none; }
     button:hover { color:var(--ui-accent); }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; border-radius:var(--ui-radius-sm); }
     .separator { color:var(--ui-text-muted); }

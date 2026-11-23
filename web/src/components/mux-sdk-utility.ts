@@ -1377,6 +1377,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility *::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--ui-text-muted) 34%,transparent); border-radius:var(--ui-radius-pill); }
     mux-sdk-utility *::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--ui-text-muted) 58%,transparent); }
     mux-sdk-utility .mobile-tab-picker { display:none; }
+    mux-sdk-utility button { -webkit-user-select:none; user-select:none; }
     @media(max-width:767.98px) {
       mux-sdk-utility mux-ui-tab-strip { display:none; }
       mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-1); height:var(--ui-nav-height); padding:0 var(--ui-space-2); }

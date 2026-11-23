@@ -38,6 +38,7 @@ export class MuxTitleBar extends LitElement {
         max(env(safe-area-inset-left, 0px), var(--wco-left-inset, 0px));
       box-sizing: border-box;
       flex-shrink: 0;
+      -webkit-user-select: none;
       user-select: none;
       cursor: default;
       position: relative;

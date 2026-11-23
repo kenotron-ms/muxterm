@@ -22,6 +22,7 @@ export class MuxUIMenu extends LitElement {
       border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg);
       background:var(--ui-surface-raised); background-image:var(--ui-overlay-backdrop-image); box-shadow:var(--ui-shadow-menu);
       color:var(--ui-text); font:var(--ui-text-sm)/1.4 var(--ui-font-sans);
+      -webkit-user-select:none; user-select:none;
     }
     ::slotted([role='separator']) { display:block; height:var(--ui-divider-thickness); margin:var(--ui-space-3) var(--ui-space-2); background:var(--ui-border); }
     @media(max-width:700px) {
