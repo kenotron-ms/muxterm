@@ -558,6 +558,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	workDone := make(chan struct{})
 	go func() { defer close(workDone); s.workLoop(jobContext) }()
 	go s.runAutomaticUpdates(jobContext)
+	go s.recoverUpdateChats(jobContext)
 	s.meetingJobContext = jobContext
 	go s.agentVersions.run(jobContext)
 	go s.sdkChats.watchAgentInstalls(jobContext)
