@@ -112,6 +112,23 @@ EOF
 wait_health
 systemctl --user is-active --quiet muxterm.service muxterm-sessiond.service
 api /api/update/automatic | jq -e '.enabled == false and .eligible == true'
+# An active durable Work record must stop an unattended update before a
+# terminal gate or binary replacement is attempted.
+work_payload='{"clientRef":"automatic-update-dtu-work","title":"Verify active Work update defer","brief":"Disposable updater fixture.","goalCondition":"## Outcome\nThis Work is complete when the disposable VM observes automatic update deferral while this record is active.\n## Scope\nOnly this disposable VM fixture is in scope.\n## Blocked exit\nIf verification fails, record the blocker and recovery action.","nextAction":"Observe automatic update deferral."}'
+work_item="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+  --data "$work_payload" http://127.0.0.1:8318/api/sdk-work)"
+work_id="$(jq -r .id <<<"$work_item")"
+[[ -n "$work_id" && "$work_id" != null ]]
+curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+  --data '{"clientRef":"automatic-update-dtu-activate","status":"active","summary":"Fixture Work is active."}' \
+  "http://127.0.0.1:8318/api/sdk-work/$work_id/updates" >/dev/null
+set_auto true
+wait_phase deferred 'Work is active'
+[[ "$("$binary" version)" == *'0.1.0'* ]]
+curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+  --data '{"clientRef":"automatic-update-dtu-complete","status":"done","summary":"Fixture Work defer observed."}' \
+  "http://127.0.0.1:8318/api/sdk-work/$work_id/updates" >/dev/null
+set_auto false
 prepared="$(curl --fail --silent --show-error -X POST http://127.0.0.1:8318/api/update/prepare)"
 token="$(jq -r 'select(.safe == true) | .token' <<<"$prepared")"
 [[ "$token" =~ ^[0-9]+$ ]]
@@ -153,4 +170,4 @@ set_auto true
 wait_version 0.3.0
 wait_phase current 'Updated to version 0.3.0'
 systemctl --user is-active --quiet muxterm.service muxterm-sessiond.service
-echo 'DTU PASS: busy defer, systemd update and restore, checksum failure, recovery to 0.3.0'
+echo 'DTU PASS: active Work and busy pane defer, systemd update and restore, checksum failure, recovery to 0.3.0'
