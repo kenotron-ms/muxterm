@@ -147,7 +147,8 @@ func (s *Server) recoverUpdateChats(ctx context.Context) {
 				defer h.mu.Unlock()
 				current := h.chats[id]
 				if current == nil || current.UpdateRecoveryUnix == 0 ||
-					current.State != "uncertain" && !(goalOnly && current.State == "ready" && current.UpdateRecoveryGoal) {
+					(goalOnly && (current.State != "ready" || !current.UpdateRecoveryGoal)) ||
+					(!goalOnly && current.State != "uncertain") {
 					return fmt.Errorf("chat is no longer eligible for update recovery")
 				}
 				previous := current.UpdateRecoveryUnix
@@ -226,6 +227,7 @@ func (s *Server) sendSDKRecovery(ctx context.Context, chat *sdkChat, inputID str
 	}
 	h.mu.Lock()
 	branchPending, branchContext := chat.BranchPending, chat.BranchContext
+	model, effort := chat.Model, chat.Effort
 	h.mu.Unlock()
 	if branchPending {
 		if branchContext == "" {
@@ -250,7 +252,7 @@ func (s *Server) sendSDKRecovery(ctx context.Context, chat *sdkChat, inputID str
 	defer h.workSendMu.RUnlock()
 	notice, tokens := h.pendingWorkBoundaryNotice(chat.ID)
 	content += notice
-	result, err := h.call(ctx, "send", map[string]any{"sessionId": chat.ID, "input": map[string]any{"kind": "user", "source": "recovery", "id": inputID, "content": content, "displayContent": displayContent, "model": chat.Model, "effort": chat.Effort}})
+	result, err := h.call(ctx, "send", map[string]any{"sessionId": chat.ID, "input": map[string]any{"kind": "user", "source": "recovery", "id": inputID, "content": content, "displayContent": displayContent, "model": model, "effort": effort}})
 	if err != nil {
 		return nil, err
 	}
