@@ -1,86 +1,52 @@
 package server
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
-
-	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 )
 
-var pwaCharms = []string{"hourglass", "key", "lantern", "rocket"}
-var pwaColors = []string{"coral", "indigo", "ochre", "plum", "teal"}
-
-// A deterministic default differentiates unconfigured servers without writing
-// the config file at startup. Once chosen, the explicit pair is persisted.
-func resolvedAppIcon(choice muxcfg.AppIconConfig, configPath, redirectURI string) muxcfg.AppIconConfig {
-	if validAppIcon(choice) {
-		return choice
-	}
-	digest := sha256.Sum256([]byte(configPath + "\x00" + redirectURI))
-	return muxcfg.AppIconConfig{
-		Charm: pwaCharms[int(digest[0])%len(pwaCharms)],
-		Color: pwaColors[int(digest[1])%len(pwaColors)],
-	}
+// Each chat backdrop has a matching, generated raster launcher icon. The
+// server-persisted theme is authoritative for every browser and install.
+var pwaBackdrops = []string{
+	"none", "contours", "ridgeline", "botanical", "arcade", "orbits",
+	"rainfall", "confetti", "dunes", "fan", "citylights", "petals",
+	"geometry", "night-grid", "wayfarer", "skybound", "moon-keep",
 }
 
-func validAppIcon(choice muxcfg.AppIconConfig) bool {
-	charm, color := false, false
-	for _, name := range pwaCharms {
-		charm = charm || choice.Charm == name
-	}
-	for _, name := range pwaColors {
-		color = color || choice.Color == name
-	}
-	return charm && color
-}
-
-func appIconVersion(choice muxcfg.AppIconConfig) string {
-	return choice.Charm + "-" + choice.Color
-}
-
-func parseAppIconVersion(version string) (muxcfg.AppIconConfig, bool) {
-	for _, charm := range pwaCharms {
-		prefix := charm + "-"
-		if strings.HasPrefix(version, prefix) {
-			choice := muxcfg.AppIconConfig{Charm: charm, Color: strings.TrimPrefix(version, prefix)}
-			return choice, validAppIcon(choice)
+func validPwaBackdrop(backdrop string) bool {
+	for _, name := range pwaBackdrops {
+		if backdrop == name {
+			return true
 		}
 	}
-	return muxcfg.AppIconConfig{}, false
+	return false
 }
 
-func (s *Server) selectedAppIcon() muxcfg.AppIconConfig {
+func resolvedPwaBackdrop(backdrop string) string {
+	if validPwaBackdrop(backdrop) {
+		return backdrop
+	}
+	return "contours"
+}
+
+func (s *Server) selectedPwaBackdrop() string {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
-	return s.cfg.AppIcon
+	return resolvedPwaBackdrop(s.cfg.Theme.Backdrop)
 }
 
-func appIconAssetPath(choice muxcfg.AppIconConfig, filename string) string {
-	return fmt.Sprintf("pwa/variants/%s/%s/%s", choice.Charm, choice.Color, filename)
+func pwaIconAssetPath(backdrop, filename string) string {
+	return fmt.Sprintf("pwa/backdrops/%s/%s", backdrop, filename)
 }
 
-func (s *Server) appIconAssetsAvailable(choice muxcfg.AppIconConfig) error {
-	if s.pwaStaticFS == nil || !validAppIcon(choice) {
-		return fmt.Errorf("app icon assets unavailable")
-	}
-	for _, name := range []string{"icon.svg", "favicon-32.png", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png"} {
-		if _, err := fs.Stat(s.pwaStaticFS, appIconAssetPath(choice, name)); err != nil {
-			return fmt.Errorf("app icon asset %s unavailable: %w", name, err)
-		}
-	}
-	return nil
-}
-
-// The link's v= parameter prompts browser manifest reinspection; the manifest
-// itself is no-store and always describes the current server choice.
+// The link's v= parameter prompts browser manifest reinspection. Historical
+// versioned icon URLs remain available after a backdrop change.
 func (s *Server) handlePWAManifest(w http.ResponseWriter, _ *http.Request) {
-	choice := s.selectedAppIcon()
-	version := appIconVersion(choice)
+	version := s.selectedPwaBackdrop()
 	icons := []map[string]string{
 		{"src": "pwa/icon-192.png?v=" + version, "sizes": "192x192", "type": "image/png", "purpose": "any"},
 		{"src": "pwa/icon-512.png?v=" + version, "sizes": "512x512", "type": "image/png", "purpose": "any"},
@@ -103,8 +69,6 @@ func (s *Server) handlePWAManifest(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handlePWAIcon(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/")
 	switch name {
-	case "favicon.svg":
-		name = "icon.svg"
 	case "favicon-32.png", "apple-touch-icon.png":
 	case "pwa/icon-192.png":
 		name = "icon-192.png"
@@ -116,14 +80,13 @@ func (s *Server) handlePWAIcon(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	choice := s.selectedAppIcon()
+	backdrop := s.selectedPwaBackdrop()
 	if version := r.URL.Query().Get("v"); version != "" {
-		var ok bool
-		choice, ok = parseAppIconVersion(version)
-		if !ok {
+		if !validPwaBackdrop(version) {
 			http.NotFound(w, r)
 			return
 		}
+		backdrop = version
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
 		w.Header().Set("Cache-Control", "no-store")
@@ -132,16 +95,12 @@ func (s *Server) handlePWAIcon(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "app icon assets unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	data, err := fs.ReadFile(s.pwaStaticFS, appIconAssetPath(choice, name))
+	data, err := fs.ReadFile(s.pwaStaticFS, pwaIconAssetPath(backdrop, name))
 	if err != nil {
 		http.Error(w, "app icon assets unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if strings.HasSuffix(name, ".svg") {
-		w.Header().Set("Content-Type", "image/svg+xml")
-	} else {
-		w.Header().Set("Content-Type", "image/png")
-	}
+	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(data)

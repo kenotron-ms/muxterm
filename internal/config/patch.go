@@ -44,18 +44,6 @@ func (p Patch) Apply(base Config) (Config, error) {
 			return Config{}, fmt.Errorf("ai.default_harness: unsupported harness %q", base.AI.DefaultHarness)
 		}
 	}
-	if _, ok := p.fields["app_icon"]; ok {
-		switch base.AppIcon.Charm {
-		case "hourglass", "key", "lantern", "rocket":
-		default:
-			return Config{}, fmt.Errorf("app_icon.charm: unsupported charm %q", base.AppIcon.Charm)
-		}
-		switch base.AppIcon.Color {
-		case "coral", "indigo", "ochre", "plum", "teal":
-		default:
-			return Config{}, fmt.Errorf("app_icon.color: unsupported color %q", base.AppIcon.Color)
-		}
-	}
 	return base, nil
 }
 

@@ -58,12 +58,6 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if patch.HasField("app_icon") {
-		if err := s.appIconAssetsAvailable(newCfg.AppIcon); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
 	if err := muxcfg.Write(s.configPath, newCfg); err != nil {
 		http.Error(w, fmt.Sprintf("%s: persistence failed: %v", patch, err), http.StatusInternalServerError)
 		return
@@ -84,9 +78,6 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cfg = persisted
-	// Disk config may still omit app_icon after an unrelated PATCH. Refill the
-	// same deterministic default before broadcasting the resolved config.
-	s.cfg.AppIcon = resolvedAppIcon(s.cfg.AppIcon, s.configPath, s.webRedirectURI)
 	s.hub.BroadcastConfig(s.cfg)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.cfg) //nolint:errcheck

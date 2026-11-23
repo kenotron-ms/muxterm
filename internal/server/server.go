@@ -219,7 +219,6 @@ func New(cfg Config) *Server {
 	if s.cfg.Theme.Palette == "" {
 		s.cfg = muxcfg.Defaults()
 	}
-	s.cfg.AppIcon = resolvedAppIcon(s.cfg.AppIcon, cfg.ConfigPath, cfg.WebRedirectURI)
 	s.hub.SetResolvedConfig(s.cfg)
 	s.autoUpdate = newAutomaticUpdateState(cfg.ConfigPath)
 	s.reconcileAutomaticUpdate()
@@ -296,7 +295,7 @@ func New(cfg Config) *Server {
 	// bearer token) is required — see internal/server/authmiddleware.go.
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
 	s.mux.Handle("GET /manifest.webmanifest", protect(http.HandlerFunc(s.handlePWAManifest)))
-	for _, path := range []string{"/favicon.svg", "/favicon-32.png", "/apple-touch-icon.png", "/pwa/icon-192.png", "/pwa/icon-512.png", "/pwa/icon-maskable-512.png"} {
+	for _, path := range []string{"/favicon-32.png", "/apple-touch-icon.png", "/pwa/icon-192.png", "/pwa/icon-512.png", "/pwa/icon-maskable-512.png"} {
 		s.mux.Handle("GET "+path, protect(http.HandlerFunc(s.handlePWAIcon)))
 	}
 	s.registerConnectionSetupRoutes(protect)

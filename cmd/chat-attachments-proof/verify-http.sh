@@ -17,7 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$evidence_dir"
-cp "$repo_root/web/public/pwa/variants/rocket/indigo/favicon-32.png" "$evidence_dir/image.png"
+cp "$repo_root/web/public/pwa/backdrops/orbits/favicon-32.png" "$evidence_dir/image.png"
 cat > "$evidence_dir/note.txt" <<'EOF'
 SDK chat attachment HTTP proof: this is a real non-image file.
 EOF

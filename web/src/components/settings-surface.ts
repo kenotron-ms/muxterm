@@ -20,7 +20,7 @@ import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
 import { sdkChats, sdkHarnessLabel, SDK_HARNESSES } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
-import { APP_ICON_CHARMS, APP_ICON_COLORS, appIconImage, type AppIconChoice } from '../lib/pwa-icon.js';
+import { appIconImage } from '../lib/pwa-icon.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
 import geminiMark from '../assets/harness/gemini.svg?url';
@@ -373,17 +373,9 @@ export class MuxSettingsSurface extends LitElement {
     .app-icon-preview-item { display:grid; justify-items:center; gap:var(--ui-space-2); min-width:0; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .app-icon-preview-item img { display:block; width:var(--ui-app-icon-preview-size); height:var(--ui-app-icon-preview-size); }
     .app-icon-preview-item.mask img { border-radius:50%; }
-    .app-icon-options { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--ui-space-3); margin:var(--ui-space-4) 0 var(--ui-space-6); }
-    .app-icon-charm { display:grid; justify-items:center; gap:var(--ui-space-2); width:100%; padding:var(--ui-space-3); border:2px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; font-size:var(--ui-text-sm); cursor:pointer; }
-    .app-icon-charm[aria-pressed='true'] { border-color:var(--ui-accent); }
-    .app-icon-charm img { display:block; width:var(--ui-app-icon-charm-size); height:var(--ui-app-icon-charm-size); border-radius:var(--ui-radius-sm); }
-    .app-icon-charm:focus-visible,.app-icon-color:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
-    .app-icon-colors { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin:var(--ui-space-4) 0 var(--ui-space-6); }
-    .app-icon-color { display:inline-flex; align-items:center; gap:var(--ui-space-2); padding:var(--ui-space-2) var(--ui-space-3); border:2px solid var(--ui-border); border-radius:var(--ui-radius-pill); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; font-size:var(--ui-text-sm); cursor:pointer; }
-    .app-icon-color[aria-pressed='true'] { border-color:var(--ui-accent); }
-    .app-icon-charm:disabled,.app-icon-color:disabled { cursor:progress; opacity:.65; }
-    .app-icon-swatch { width:var(--ui-app-icon-swatch-size); height:var(--ui-app-icon-swatch-size); border-radius:50%; background:var(--swatch); }
-    .app-icon-actions { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-4); }
+    .app-icon-preview-label { align-self:center; color:var(--ui-text); font-weight:600; }
+    .backdrop-choice-label { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; }
+    .backdrop-choice-label img { width:32px; height:32px; border-radius:7px; flex:none; }
     .app-icon-guidance { margin-top:var(--ui-space-6); color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.5; }
     .app-icon-guidance p { margin:var(--ui-space-2) 0; }
 
@@ -657,7 +649,6 @@ export class MuxSettingsSurface extends LitElement {
     .r-actions { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: var(--ui-space-4); }
 
     @media (max-width: 767.98px) {
-      .app-icon-options { grid-template-columns:repeat(2,minmax(0,1fr)); }
       .app-icon-preview { gap:var(--ui-space-4); }
       .app-icon-preview-item img { width:var(--ui-app-icon-preview-phone-size); height:var(--ui-app-icon-preview-phone-size); }
       .header { min-height: var(--ui-row-touch); box-sizing: border-box; padding: var(--ui-space-5) var(--ui-space-6); }
@@ -692,11 +683,6 @@ export class MuxSettingsSurface extends LitElement {
   @property({ type: Boolean, attribute: 'page-mode', reflect: true }) pageMode = false;
 
   @state() private _section: SettingsSection = 'appearance';
-  @state() private _iconDraft: AppIconChoice | null = null;
-  @state() private _iconSaving = false;
-  @state() private _iconMessage = '';
-  @state() private _iconError = false;
-  private _iconDirty = false;
   private _lastScrolledSection: SettingsSection | null = null;
   @state() private _updateStatus: UpdateStatus | null = null;
   @state() private _automaticUpdate: AutomaticUpdateStatus | null = null;
@@ -840,7 +826,6 @@ export class MuxSettingsSurface extends LitElement {
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
-    if (changed.has('config') && this.config && !this._iconDirty && !this._iconSaving) this._iconDraft = { ...this.config.appIcon };
     if (changed.has('openSection') && this.openSection !== null) {
       const changedSection = this._setSection(this.openSection);
       if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
@@ -1089,37 +1074,6 @@ export class MuxSettingsSurface extends LitElement {
     this._emit({ theme: { ...this.config.theme, backdrop } });
   }
 
-  private _setIconDraft(choice: AppIconChoice): void {
-    if (this._iconSaving) return;
-    this._iconDraft = choice;
-    this._iconDirty = true;
-    this._iconMessage = '';
-  }
-
-  private async _saveAppIcon(): Promise<void> {
-    if (!this.config || !this._iconDraft || this._iconSaving) return;
-    const choice = { ...this._iconDraft };
-    this._iconSaving = true;
-    this._iconMessage = '';
-    try {
-      const response = await fetch(apiPath('/api/config'), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ app_icon: choice }),
-      });
-      if (!response.ok) throw new Error((await response.text()).trim() || `Save failed (${response.status})`);
-      this._iconDirty = false;
-      this._iconError = false;
-      this._iconMessage = 'App icon saved. New installs use this icon.';
-      // The server broadcasts the authoritative config to every browser.
-    } catch (error) {
-      this._iconError = true;
-      this._iconMessage = error instanceof Error ? error.message : 'App icon could not be saved. Try again.';
-    } finally {
-      this._iconSaving = false;
-    }
-  }
-
   private _sendTestNotification(): void {
     try {
       new Notification('muxterm', {
@@ -1243,32 +1197,16 @@ export class MuxSettingsSurface extends LitElement {
     const cfg = this.config;
     if (!cfg) return html``;
     const mode = cfg.theme.mode;
-    const draft = this._iconDraft ?? cfg.appIcon;
-    const iconChanged = draft.charm !== cfg.appIcon.charm || draft.color !== cfg.appIcon.color;
     return html`
       <section class="app-icon-section" aria-label="App icon">
-        <div class="appearance-heading"><div><p class="section-title">App icon</p><p class="appearance-help">Choose how this Muxterm server appears when you install it.</p></div></div>
+        <div class="appearance-heading"><div><p class="section-title">App icon</p><p class="appearance-help">Your launcher icon follows this server's chat backdrop. Choose a backdrop below to change its subject and color.</p></div></div>
         <div class="app-icon-preview" aria-label="Icon previews">
-          <div class="app-icon-preview-item"><img src=${appIconImage(draft, 'icon-192.png')} alt=""><span>Launcher</span></div>
-          <div class="app-icon-preview-item mask"><img src=${appIconImage(draft, 'icon-maskable-512.png')} alt=""><span>Android mask</span></div>
-        </div>
-        <p class="section-title">Charm</p>
-        <div class="app-icon-options" role="group" aria-label="App icon charm">
-          ${APP_ICON_CHARMS.map(charm => html`<button type="button" class="app-icon-charm" aria-pressed=${draft.charm === charm.id} ?disabled=${this._iconSaving} @click=${() => this._setIconDraft({ ...draft, charm: charm.id })}>
-            <img src=${appIconImage({ ...draft, charm: charm.id }, 'icon-192.png')} alt=""><span>${charm.label}</span>
-          </button>`)}
-        </div>
-        <p class="section-title">Color</p>
-        <div class="app-icon-colors" role="group" aria-label="App icon color">
-          ${APP_ICON_COLORS.map(color => html`<button type="button" class="app-icon-color" aria-pressed=${draft.color === color.id} ?disabled=${this._iconSaving} @click=${() => this._setIconDraft({ ...draft, color: color.id })}>
-            <span class="app-icon-swatch" style=${`--swatch:${color.hex}`} aria-hidden="true"></span>${color.label}
-          </button>`)}
-        </div>
-        <div class="app-icon-actions"><mux-ui-button variant="primary" size="small" ?disabled=${!iconChanged || this._iconSaving} @click=${() => void this._saveAppIcon()}>${this._iconSaving ? 'Saving…' : 'Save app icon'}</mux-ui-button>
-          ${this._iconMessage ? html`<mux-ui-feedback kind=${this._iconError ? 'error' : 'success'} density="compact" role="status">${this._iconMessage}</mux-ui-feedback>` : ''}
+          <div class="app-icon-preview-item"><img src=${appIconImage(cfg.theme.backdrop, 'icon-192.png')} alt=""><span>Launcher</span></div>
+          <div class="app-icon-preview-item mask"><img src=${appIconImage(cfg.theme.backdrop, 'icon-maskable-512.png')} alt=""><span>Android mask</span></div>
+          <span class="app-icon-preview-label">${BACKDROPS.find(item => item.id === cfg.theme.backdrop)?.label ?? 'Enchanted Paths'}</span>
         </div>
         <div class="app-icon-guidance">
-          <p>Chrome on Android may ask you to review an icon change in the installed app menu. The launcher updates only after Chrome applies it.</p>
+          <p>Chrome on Android may ask you to review an icon change in the installed app menu. The launcher updates after Chrome applies it.</p>
           <p>Desktop Chrome may keep the old launcher icon. If it does, reinstall the app. On iPhone or iPad, remove the Home Screen app and add it again.</p>
         </div>
       </section>
@@ -1297,7 +1235,7 @@ export class MuxSettingsSurface extends LitElement {
           const sample = appThemeScheme(cfg.theme.app, mode);
           const preview = `--preview-chat:${sample.chat};--preview-art:color-mix(in srgb, ${sample.accent} ${mode === 'light' ? 15 : 18}%, transparent);--preview-mask:${backdrop.image ? `url("${backdrop.image}")` : 'none'}`;
           return html`<mux-ui-button class="appearance-choice backdrop-choice" style=${preview} toggle ?pressed=${cfg.theme.backdrop === backdrop.id} @click=${() => this._setBackdrop(backdrop.id)}>
-            <span class="backdrop-preview" aria-hidden="true"></span><span class="appearance-choice-label">${backdrop.label}</span><span class="appearance-choice-description">${backdrop.description}</span>
+            <span class="backdrop-preview" aria-hidden="true"></span><span class="backdrop-choice-label"><img src=${appIconImage(backdrop.id, 'icon-192.png')} alt=""><span class="appearance-choice-label">${backdrop.label}</span></span><span class="appearance-choice-description">${backdrop.description}</span>
           </mux-ui-button>`;
         })}
       </div>

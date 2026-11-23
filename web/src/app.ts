@@ -858,7 +858,7 @@ export class MuxApp extends LitElement {
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     applyChromeTokens(store.config.theme.palette);
     applyAppAppearance(store.config.theme.app, store.config.theme.mode, store.config.theme.backdrop);
-    applyPWAIconLinks(store.config.appIcon);
+    applyPWAIconLinks(store.config.theme.backdrop);
     // Reflect which machine this instance is running on — document title
     // (PWA window title / browser tab / Alt-Tab preview) and, if the user
     // picked one in Settings, a distinguishing title-bar accent color.
@@ -1823,7 +1823,7 @@ export class MuxApp extends LitElement {
       applyThemeTokens(resolvePalette(cfg.theme.palette));
       applyChromeTokens(cfg.theme.palette);
       applyAppAppearance(cfg.theme.app, cfg.theme.mode, cfg.theme.backdrop);
-      applyPWAIconLinks(cfg.appIcon);
+      applyPWAIconLinks(cfg.theme.backdrop);
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
