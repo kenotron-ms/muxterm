@@ -92,3 +92,25 @@ jobs:
             desktop/bin/Muxterm-0.1.0-macos-arm64.zip
             desktop/bin/macos-checksums.txt
           if-no-files-found: error
+
+  automatic-update-dtu:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded web assets
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+      - name: Verify service-manager update path in disposable VM
+        run: bash tools/verify-automatic-updates-dtu.sh
