@@ -457,7 +457,11 @@ func (s *Server) handleUpdatePrepare(w http.ResponseWriter, r *http.Request) {
 			keepGate = true
 		}
 	}
-	writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": ok, "reason": reason, "token": token})
+	if !ok {
+		writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": false, "reason": reason})
+		return
+	}
+	writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": true, "token": token})
 }
 
 // A native companion may abandon a prepared restart after the daemon has
@@ -472,11 +476,17 @@ func (s *Server) handleUpdateRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	h := s.sdkChats
 	h.updateAdmission.Lock()
-	defer h.updateAdmission.Unlock()
 	if h.updateUntil.Load() != request.Token {
+		h.updateAdmission.Unlock()
 		http.Error(w, "update preparation is no longer active", http.StatusConflict)
 		return
 	}
+	// Keep new preparations and chat calls gated while the daemon gate is
+	// being released, without holding the admission lock across socket I/O.
+	releaseToken := time.Now().Add(automaticAdmissionLifetime).UnixNano()
+	h.updateUntil.Store(releaseToken)
+	h.updateAdmission.Unlock()
+	defer h.updateUntil.CompareAndSwap(releaseToken, 0)
 	socket, err := sessiond.SocketPath()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -493,6 +503,5 @@ func (s *Server) handleUpdateRelease(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.updateUntil.CompareAndSwap(request.Token, 0)
 	w.WriteHeader(http.StatusNoContent)
 }

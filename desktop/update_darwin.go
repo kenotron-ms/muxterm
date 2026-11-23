@@ -278,9 +278,17 @@ func (c *Companion) releaseMacHostSafety(token int64) error {
 	if local == nil {
 		return errors.New("the local Muxterm host is unavailable")
 	}
+	// Cleanup must still run when the update attempt's context was cancelled.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	client := http.Client{Timeout: 5 * time.Second}
 	body := strings.NewReader(fmt.Sprintf(`{"token":%d}`, token))
-	response, err := client.Post(local.url+"api/update/release", "application/json", body)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, local.url+"api/update/release", body)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
 	if err != nil {
 		return err
 	}
