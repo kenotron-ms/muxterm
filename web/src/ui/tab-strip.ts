@@ -26,7 +26,7 @@ export class MuxUITabStrip extends LitElement {
     .tab:not(.active):hover { background:var(--ui-surface-hover); }
     .tab:hover,.tab.active { color:var(--ui-text); }
     .tab.active .select { font-weight:600; }
-    button { box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; flex:none; min-height:var(--ui-control-sm); padding:0; border:0; border-radius:var(--ui-radius-md); background:transparent; color:inherit; font:inherit; cursor:pointer; }
+    button { box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; flex:none; min-height:var(--ui-control-sm); padding:0; border:0; border-radius:var(--ui-radius-md); background:transparent; color:inherit; font:inherit; cursor:pointer; -webkit-user-select:none; user-select:none; }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
     .add:hover { background:var(--ui-surface-hover); }
     .select { flex:1; justify-content:flex-start; gap:var(--ui-space-4); min-width:0; min-height:var(--ui-control-md); padding:0 var(--ui-space-3) 0 var(--ui-space-5); font-weight:500; }

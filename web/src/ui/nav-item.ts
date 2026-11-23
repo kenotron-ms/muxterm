@@ -22,7 +22,7 @@ export class MuxUINavItem extends LitElement {
       width:100%; min-height:var(--ui-nav-row-height,var(--ui-control-md)); padding:0 var(--ui-nav-horizontal-padding,var(--ui-space-5));
       border:0; border-radius:var(--ui-radius-md); background:transparent;
       color:var(--ui-text-muted); text-align:left;
-      font:500 var(--ui-nav-font-size,var(--ui-text-md))/1.25 var(--ui-font-sans); cursor:pointer;
+      font:500 var(--ui-nav-font-size,var(--ui-text-md))/1.25 var(--ui-font-sans); cursor:pointer; -webkit-user-select:none; user-select:none;
     }
     button:hover { background:var(--ui-surface-hover); color:var(--ui-text); }
     :host([active]) button { background:var(--ui-nav-selected); color:var(--ui-text); }

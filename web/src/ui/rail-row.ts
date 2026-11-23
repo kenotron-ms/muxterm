@@ -20,7 +20,7 @@ export class MuxUIRailRow extends LitElement {
 
   static override styles = css`
     :host { display:block; min-width:0; color:var(--ui-text); font:var(--ui-text-xs) var(--ui-font-sans); }
-    button { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-width:0; min-height:var(--ui-control-sm); padding:0 var(--ui-space-5) 0 calc(var(--ui-space-4) + var(--ui-row-depth)*var(--ui-space-6)); border:0; background:transparent; color:inherit; text-align:left; font:inherit; cursor:pointer; }
+    button { box-sizing:border-box; display:flex; align-items:center; gap:var(--ui-space-3); width:100%; min-width:0; min-height:var(--ui-control-sm); padding:0 var(--ui-space-5) 0 calc(var(--ui-space-4) + var(--ui-row-depth)*var(--ui-space-6)); border:0; background:transparent; color:inherit; text-align:left; font:inherit; cursor:pointer; -webkit-user-select:none; user-select:none; }
     button:hover { background:var(--ui-surface-hover); }
     button:focus-visible { outline:2px solid var(--ui-focus); outline-offset:-2px; }
     :host([selected]) button { background:color-mix(in srgb,var(--ui-accent) 17%,var(--ui-surface-hover)); box-shadow:inset 2px 0 var(--ui-accent); }

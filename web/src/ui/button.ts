@@ -62,6 +62,8 @@ export class MuxUIButton extends LitElement {
       white-space: nowrap;
       text-decoration: none;
       cursor: pointer;
+      -webkit-user-select: none;
+      user-select: none;
       transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
     }
     :host([size='small']) :is(button,a) { min-height: var(--ui-control-sm); padding: 0 var(--ui-space-4); font-size: var(--ui-text-sm); }

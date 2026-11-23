@@ -18,7 +18,7 @@ export class MuxUIMenuItem extends LitElement {
       box-sizing: border-box; display: flex; align-items: center; gap: var(--ui-space-4);
       width: 100%; min-height: var(--ui-control-md); padding: var(--ui-space-3) var(--ui-space-4);
       border: 0; border-radius: var(--ui-radius-sm); background: transparent; color: inherit;
-      font: inherit; text-align: left; text-decoration: none; cursor: pointer;
+      font: inherit; text-align: left; text-decoration: none; cursor: pointer; -webkit-user-select:none; user-select:none;
     }
     button:hover:not(:disabled), a:hover { background: var(--ui-surface-hover); }
     button:focus-visible, a:focus-visible { background: var(--ui-surface-hover); outline: 2px solid var(--ui-focus); outline-offset: -2px; }

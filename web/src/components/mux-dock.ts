@@ -925,6 +925,8 @@ export class MuxDock extends LitElement {
 
         /* Tabs stay at 180px — no grow, no shrink */
         mux-dock .dv-tab {
+          -webkit-user-select: none;
+          user-select: none;
           border-top: 2px solid transparent;
           flex-grow: 0 !important;   /* beats dv-single-tab full-width rule */
           flex-shrink: 0 !important; /* beats dv-tab { flex-shrink:0 } default; no compression */
