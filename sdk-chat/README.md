@@ -80,6 +80,8 @@ activity, turn status, cancellation, and continuation.
 OpenCode's first web search asks for a provider through an ACP form. Muxterm
 offers **Use Exa**, **Disable web search**, and **Not now**. Choosing Exa sends
 OpenCode's own provider-selection responses; OpenCode remembers the selection.
+The form messages and schemas were verified with OpenCode 2.3.2; if OpenCode
+changes them, the adapter cancels the unfamiliar form until it is updated.
 Exa's [hosted MCP](https://exa.ai/mcp) works without an API key or separate
 subscription and is free at [unspecified rate limits](https://exa.ai/blog/best-web-search-mcp-servers).
 Search requires network access. A rate limit means retrying later; a provider

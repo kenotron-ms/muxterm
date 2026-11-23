@@ -2239,12 +2239,12 @@ export class MuxSDKChat extends LitElement {
     if (kind === 'shell') return `${block.done ? failed ? 'Failed' : 'Ran' : 'Running'} ${command || 'a command'}`;
     if (kind === 'read') return `${block.done ? 'Read' : 'Reading'} ${file || 'a file'}`;
     if (kind === 'search') return `${block.done ? 'Searched' : 'Searching'} for ${query || 'matches'}${file ? ` in ${file}` : ''}`;
-    if (kind === 'web') return `${block.done ? 'Searched the web' : 'Searching the web'}${query ? ` for ${query}` : ''}`;
+    if (kind === 'web') return `${block.done ? failed ? 'Web search failed' : 'Searched the web' : 'Searching the web'}${query ? ` for ${query}` : ''}`;
     if (kind === 'edit') return `${block.done ? 'Edited' : 'Editing'} ${file || 'a file'}`;
     if (kind === 'agent') return `${block.done ? 'Delegated' : 'Delegating'} ${this.toolField(fields, 'description', 'task') || 'an agent'}`;
     return `${block.name || 'Tool'}${file ? ` ${file}` : query ? ` ${query}` : ''}`;
   }
-  private activityLineForTools(tools: { name?: string; failed?: boolean }[]) {
+  private activityLineForTools(tools: Block[]) {
     const counts = new Map<ToolKind, number>();
     for (const tool of tools) {
       const kind = this.toolKind(tool);
@@ -2254,7 +2254,7 @@ export class MuxSDKChat extends LitElement {
       if (kind === 'shell') return count === 1 ? 'ran a command' : `ran ${count} commands`;
       if (kind === 'read') return count === 1 ? 'read a file' : `read ${count} files`;
       if (kind === 'search') return count === 1 ? 'searched files' : `searched files ${count} times`;
-      if (kind === 'web') return tools.some(tool => this.toolKind(tool) === 'web' && tool.failed)
+      if (kind === 'web') return tools.some(tool => this.toolKind(tool) === 'web' && this.toolFailed(tool))
         ? 'web search failed' : count === 1 ? 'searched the web' : `searched the web ${count} times`;
       if (kind === 'edit') return count === 1 ? 'edited a file' : `edited ${count} files`;
       if (kind === 'agent') return count === 1 ? 'delegated an agent' : `delegated ${count} agents`;
