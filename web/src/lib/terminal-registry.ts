@@ -473,8 +473,21 @@ export const terminalRegistry = {
       while (first > 0 && buffer.getLine(first)?.isWrapped && bufferRow - first < 10) first--;
       while (buffer.getLine(last + 1)?.isWrapped && last - bufferRow < 10) last++;
       let text = '';
-      for (let y = first; y <= last; y++) text += buffer.getLine(y)?.translateToString(false) ?? '';
-      const offset = (bufferRow - first) * term.cols + col;
+      let offset = 0;
+      for (let y = first; y <= last; y++) {
+        const line = buffer.getLine(y);
+        if (!line) continue;
+        text += line.translateToString(false);
+        if (y > bufferRow) continue;
+        // URL match indexes are UTF-16 string offsets, while the touch column
+        // is measured in terminal cells. Wide and combined glyphs differ.
+        const limit = y === bufferRow ? col : term.cols;
+        for (let x = 0; x < limit; x++) {
+          const cell = line.getCell(x);
+          if (cell?.getWidth() === 0) continue;
+          offset += cell?.getChars().length || 1;
+        }
+      }
       for (const match of text.matchAll(/https?:\/\/[^\s<>"'`]+/g)) {
         const uri = match[0].replace(/[),.;!?]+$/, '');
         if (offset >= match.index && offset < match.index + uri.length) return uri;
@@ -1261,6 +1274,7 @@ export const terminalRegistry = {
       entry.resizeObserver?.disconnect();
       if (entry.resizeTimer !== undefined) clearTimeout(entry.resizeTimer);
       entry.term.dispose();
+      entry.hostEl.remove();
     }
     _map.clear();
     _preEnsureBuffer.clear();

@@ -13,8 +13,10 @@ export function setExternalLinkPreference(value: ExternalLinkPreference): void {
   try { localStorage.setItem(PREFERENCE_KEY, value); } catch { /* Private browsing can reject storage. */ }
 }
 
+let androidPwaCache: boolean | null = null;
 export function isAndroidPwa(): boolean {
-  return /Android/i.test(navigator.userAgent) && window.matchMedia('(display-mode: standalone)').matches;
+  androidPwaCache ??= /Android/i.test(navigator.userAgent) && window.matchMedia('(display-mode: standalone)').matches;
+  return androidPwaCache;
 }
 
 function externalURL(href: string): string | null {
@@ -142,6 +144,8 @@ function showActions(url: string, focusTarget: HTMLElement | null): void {
 /** Used by the terminal link addon, whose links are rendered as cells rather than anchors. */
 let suppressTerminalLinkUntil = 0;
 let suppressTouchClickUntil = 0;
+// Both anchor and terminal long-press paths arm this; the document capture
+// listener suppresses the synthetic click from that same finger release.
 let suppressReleaseClick = false;
 export function openTerminalLink(event: MouseEvent, uri: string): void {
   if (Date.now() < suppressTerminalLinkUntil) return;
