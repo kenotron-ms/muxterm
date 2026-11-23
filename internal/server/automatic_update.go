@@ -318,8 +318,10 @@ func (s *Server) automaticUpdateAttempt(ctx context.Context) {
 		return
 	}
 	applied = true
+	s.sdkChats.markUpdateRecovery()
 	s.recordAutomaticUpdate("restarting", "Verified update installed; restarting Muxterm.", status.LatestVersion, false, false)
 	if err := update.Restart(update.RestoreCapability{OK: true, Reason: "running daemon verified restore and idle panes"}); err != nil {
+		s.sdkChats.clearUpdateRecovery()
 		applied = false
 		s.recordAutomaticUpdate("error", "Update installed but restart failed: "+err.Error(), status.LatestVersion, false, false)
 		log.Printf("automatic update: restart: %v", err)

@@ -56,6 +56,7 @@ type sdkChat struct {
 	NativeID            string    `json:"nativeId,omitempty"`
 	State               string    `json:"state"`
 	UpdateRecoveryUnix  int64     `json:"updateRecoveryUnix,omitempty"`
+	UpdateRecoveryGoal  bool      `json:"updateRecoveryGoal,omitempty"`
 	Archived            bool      `json:"archived,omitempty"`
 	Pinned              bool      `json:"pinned,omitempty"`
 	WorkMode            string    `json:"workMode,omitempty"`
@@ -2834,7 +2835,7 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 			defer cancel()
-			result, err := s.sendSDKRecovery(ctx, c, req.ID, nil)
+			result, err := s.sendSDKRecovery(ctx, c, req.ID, false, nil)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadGateway)
 				return

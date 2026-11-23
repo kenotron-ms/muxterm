@@ -13,18 +13,47 @@ import (
 
 const updateRecoveryWindow = 15 * time.Minute
 
-// markUpdateRecovery records only turns that were running when a verified
-// update was installed. A normal sidecar failure has no such marker.
+func activeUpdateRecoveryGoal(goal goalDocument) bool {
+	return goal.RequestedRevision > 0 && !goal.HumanPaused && goal.AppliedRevision == goal.RequestedRevision &&
+		goal.ExecutionAuthorizedRevision == goal.RequestedRevision &&
+		slices.Contains([]string{"active", "continuing", "awaiting-native-observation", "uncertain"}, goal.State)
+}
+
+// markUpdateRecovery records turns and approved active goals that could be
+// interrupted by a verified update. A normal sidecar failure has no marker.
 func (h *sdkChatHost) markUpdateRecovery() {
+	h.mu.Lock()
+	candidates := make([]sdkChat, 0, len(h.chats))
+	for _, chat := range h.chats {
+		if !chat.Archived && (chat.State == "ready" || chat.State == "working" || chat.State == "starting") {
+			candidates = append(candidates, *chat)
+		}
+	}
+	h.mu.Unlock()
+	activeGoals := make(map[string]bool)
+	for _, chat := range candidates {
+		goal, err := h.goals.update(chat, nil)
+		if err != nil {
+			log.Printf("update recovery: read goal for chat %s: %v", chat.ID, err)
+			continue
+		}
+		activeGoals[chat.ID] = activeUpdateRecoveryGoal(goal)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, chat := range h.chats {
-		if chat.Archived || chat.State != "working" && chat.State != "starting" {
+		activeTurn := chat.State == "working" || chat.State == "starting"
+		activeGoal := activeGoals[chat.ID] && (activeTurn || chat.State == "ready")
+		if chat.Archived || !activeTurn && !activeGoal {
 			continue
 		}
+		previous := chat.UpdateRecoveryUnix
+		wasGoal := chat.UpdateRecoveryGoal
 		chat.UpdateRecoveryUnix = time.Now().Unix()
+		chat.UpdateRecoveryGoal = activeGoal
 		if err := h.saveLocked(chat); err != nil {
-			chat.UpdateRecoveryUnix = 0
+			chat.UpdateRecoveryUnix = previous
+			chat.UpdateRecoveryGoal = wasGoal
 			log.Printf("update recovery: mark chat %s: %v", chat.ID, err)
 		}
 	}
@@ -38,9 +67,12 @@ func (h *sdkChatHost) clearUpdateRecovery() {
 			continue
 		}
 		previous := chat.UpdateRecoveryUnix
+		wasGoal := chat.UpdateRecoveryGoal
 		chat.UpdateRecoveryUnix = 0
+		chat.UpdateRecoveryGoal = false
 		if err := h.saveLocked(chat); err != nil {
 			chat.UpdateRecoveryUnix = previous
+			chat.UpdateRecoveryGoal = wasGoal
 			log.Printf("update recovery: clear chat %s: %v", chat.ID, err)
 		}
 	}
@@ -82,7 +114,9 @@ func (s *Server) recoverUpdateChats(ctx context.Context) {
 			lock.Unlock()
 			continue
 		}
-		eligible := !chat.Archived && chat.State == "uncertain" && time.Since(time.Unix(chat.UpdateRecoveryUnix, 0)) <= updateRecoveryWindow
+		goalMarked := chat.UpdateRecoveryGoal
+		goalOnly := goalMarked && chat.State == "ready"
+		eligible := !chat.Archived && (chat.State == "uncertain" || goalOnly) && time.Since(time.Unix(chat.UpdateRecoveryUnix, 0)) <= updateRecoveryWindow
 		snapshot := *chat
 		h.mu.Unlock()
 		if eligible {
@@ -92,28 +126,36 @@ func (s *Server) recoverUpdateChats(ctx context.Context) {
 				lock.Unlock()
 				continue
 			}
-			if goal.RequestedRevision > 0 && (goal.HumanPaused || goal.AppliedRevision != goal.RequestedRevision ||
-				goal.ExecutionAuthorizedRevision != goal.RequestedRevision ||
-				!slices.Contains([]string{"active", "continuing", "awaiting-native-observation", "uncertain"}, goal.State)) {
+			if (goalMarked || goal.RequestedRevision > 0) && !activeUpdateRecoveryGoal(goal) {
 				eligible = false
 			}
 		}
 		if eligible {
 			sendCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			_, err := s.sendSDKRecovery(sendCtx, chat, sdkID(), func() error {
+			_, err := s.sendSDKRecovery(sendCtx, chat, sdkID(), goalOnly, func() error {
 				if err := sendCtx.Err(); err != nil {
 					return err
+				}
+				if goalMarked {
+					goal, err := h.goals.update(*chat, nil)
+					if err != nil || !activeUpdateRecoveryGoal(goal) {
+						return fmt.Errorf("approved goal is no longer active")
+					}
 				}
 				h.mu.Lock()
 				defer h.mu.Unlock()
 				current := h.chats[id]
-				if current == nil || current.State != "uncertain" || current.UpdateRecoveryUnix == 0 {
+				if current == nil || current.UpdateRecoveryUnix == 0 ||
+					current.State != "uncertain" && !(goalOnly && current.State == "ready" && current.UpdateRecoveryGoal) {
 					return fmt.Errorf("chat is no longer eligible for update recovery")
 				}
 				previous := current.UpdateRecoveryUnix
+				wasGoal := current.UpdateRecoveryGoal
 				current.UpdateRecoveryUnix = 0
+				current.UpdateRecoveryGoal = false
 				if err := h.saveLocked(current); err != nil {
 					current.UpdateRecoveryUnix = previous
+					current.UpdateRecoveryGoal = wasGoal
 					return fmt.Errorf("consume update recovery marker: %w", err)
 				}
 				return nil
@@ -126,9 +168,12 @@ func (s *Server) recoverUpdateChats(ctx context.Context) {
 			h.mu.Lock()
 			if current := h.chats[id]; current != nil && current.UpdateRecoveryUnix != 0 {
 				previous := current.UpdateRecoveryUnix
+				wasGoal := current.UpdateRecoveryGoal
 				current.UpdateRecoveryUnix = 0
+				current.UpdateRecoveryGoal = false
 				if err := h.saveLocked(current); err != nil {
 					current.UpdateRecoveryUnix = previous
+					current.UpdateRecoveryGoal = wasGoal
 					log.Printf("update recovery: clear ineligible chat %s: %v", id, err)
 				}
 			}
@@ -139,16 +184,21 @@ func (s *Server) recoverUpdateChats(ctx context.Context) {
 }
 
 // sendSDKRecovery is shared by the manual Continue action and update recovery.
-// The caller holds the chat adapter lock and has checked the uncertain state.
-func (s *Server) sendSDKRecovery(ctx context.Context, chat *sdkChat, inputID string, beforeSend func() error) (json.RawMessage, error) {
+// The caller holds the chat adapter lock and has checked the chat state.
+func (s *Server) sendSDKRecovery(ctx context.Context, chat *sdkChat, inputID string, goalOnly bool, beforeSend func() error) (json.RawMessage, error) {
 	h := s.sdkChats
-	lastRequest, err := sdkLastRecoverableInput(filepath.Join(h.dir, chat.ID+".ndjson"))
-	if err != nil {
-		return nil, fmt.Errorf("read interrupted turn: %w", err)
-	}
-	content := "The previous turn was interrupted. Inspect the conversation and current work before acting. Continue only unfinished work, and verify before repeating an action. Briefly note the interruption in your response."
-	if lastRequest != "" {
-		content += "\n\nPrevious user request for reference:\n" + lastRequest
+	content := "Muxterm updated while your approved goal was active. Inspect the conversation and current work. Continue only unfinished work toward the approved goal, and verify before repeating an action. Briefly note the update in your response."
+	displayContent := "Continue goal after update"
+	if !goalOnly {
+		lastRequest, err := sdkLastRecoverableInput(filepath.Join(h.dir, chat.ID+".ndjson"))
+		if err != nil {
+			return nil, fmt.Errorf("read interrupted turn: %w", err)
+		}
+		content = "The previous turn was interrupted. Inspect the conversation and current work before acting. Continue only unfinished work, and verify before repeating an action. Briefly note the interruption in your response."
+		if lastRequest != "" {
+			content += "\n\nPrevious user request for reference:\n" + lastRequest
+		}
+		displayContent = "Continue after interruption"
 	}
 	if err := h.resume(ctx, chat); err != nil {
 		return nil, err
@@ -179,7 +229,7 @@ func (s *Server) sendSDKRecovery(ctx context.Context, chat *sdkChat, inputID str
 	defer h.workSendMu.RUnlock()
 	notice, tokens := h.pendingWorkBoundaryNotice(chat.ID)
 	content += notice
-	result, err := h.call(ctx, "send", map[string]any{"sessionId": chat.ID, "input": map[string]any{"kind": "user", "source": "recovery", "id": inputID, "content": content, "displayContent": "Continue after interruption", "model": chat.Model, "effort": chat.Effort}})
+	result, err := h.call(ctx, "send", map[string]any{"sessionId": chat.ID, "input": map[string]any{"kind": "user", "source": "recovery", "id": inputID, "content": content, "displayContent": displayContent, "model": chat.Model, "effort": chat.Effort}})
 	if err != nil {
 		return nil, err
 	}
