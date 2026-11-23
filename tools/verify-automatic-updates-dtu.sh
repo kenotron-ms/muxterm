@@ -108,23 +108,21 @@ cat > "$HOME/.config/systemd/user/muxterm-sessiond.service.d/fixture.conf" <<'EO
 [Service]
 Environment=SHELL=/bin/bash
 EOF
+# Load a durable active Work record on startup. Work's normal active
+# transition requires a worker chat, which this updater-only VM omits.
+work_id=automatic-update-dtu-work
+work_dir="$HOME/.local/share/muxterm/sdk-chat/work"
+mkdir -p "$work_dir"
+printf '{"id":"%s","reference":"Work #1","clientRef":"automatic-update-dtu-work","title":"Verify active Work defer","readiness":"ready","status":"active","revision":1}\n' \
+  "$work_id" > "$work_dir/$work_id.json"
 "$binary" install --addr 127.0.0.1:8318
 wait_health
 systemctl --user is-active --quiet muxterm.service muxterm-sessiond.service
 api /api/update/automatic | jq -e '.enabled == false and .eligible == true'
 # An active durable Work record must stop an unattended update before a
 # terminal gate or binary replacement is attempted.
-# These Work mutations use the browser authority path; agent mutations also
-# require a live chat capability, which this service fixture does not create.
 work_headers=(-H 'Sec-Fetch-Site: same-origin')
-work_payload='{"clientRef":"automatic-update-dtu-work","title":"Verify active Work update defer","brief":"Disposable updater fixture.","goalCondition":"## Outcome\nThis Work is complete when the disposable VM observes automatic update deferral while this record is active.\n## Scope\nOnly this disposable VM fixture is in scope.\n## Blocked exit\nIf verification fails, record the blocker and recovery action.","nextAction":"Observe automatic update deferral."}'
-work_item="$(curl --fail --silent --show-error -X POST "${work_headers[@]}" -H 'Content-Type: application/json' \
-  --data "$work_payload" http://127.0.0.1:8318/api/sdk-work)"
-work_id="$(jq -r .id <<<"$work_item")"
-[[ -n "$work_id" && "$work_id" != null ]]
-curl --fail --silent --show-error -X POST "${work_headers[@]}" -H 'Content-Type: application/json' \
-  --data '{"clientRef":"automatic-update-dtu-activate","status":"active","summary":"Fixture Work is active."}' \
-  "http://127.0.0.1:8318/api/sdk-work/$work_id/updates" >/dev/null
+api "/api/sdk-work/$work_id" | jq -e '.status == "active"'
 set_auto true
 wait_phase deferred 'Work is active'
 [[ "$("$binary" version)" == *'0.1.0'* ]]
