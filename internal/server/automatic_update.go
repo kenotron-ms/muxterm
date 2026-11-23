@@ -330,7 +330,7 @@ func (s *Server) activeUpdateWork() string {
 		}
 	}
 	for _, chat := range h.chats {
-		if chat.State == "working" || chat.State == "uncertain" {
+		if chat.State == "starting" || chat.State == "working" || chat.State == "uncertain" {
 			return "A chat turn is active or uncertain; automatic update deferred."
 		}
 	}
