@@ -22,7 +22,7 @@ const previewFontOnly = (): Plugin => ({
     // Without this the browser probes /favicon.ico on its own and logs a 404
     // in the console of the page someone was asked to go and look at.
     copyFileSync(
-      resolve(__dirname, 'public/favicon.svg'),
+      resolve(__dirname, 'public/icons/icon.svg'),
       resolve(dist, 'favicon.svg'),
     );
   },
@@ -77,7 +77,7 @@ const singleFileVariant = (): Plugin => ({
       "url('./fonts/Spleen5x8.woff2') format('woff2')",
       () => `url('data:font/woff2;base64,${font}') format('woff2')`,
     );
-    const icon = readFileSync(resolve(__dirname, 'public/favicon.svg')).toString('base64');
+    const icon = readFileSync(resolve(__dirname, 'public/icons/icon.svg')).toString('base64');
     html = html.replace('href="./favicon.svg"', () => `href="data:image/svg+xml;base64,${icon}"`);
 
     // Prove the artifact rather than trust it: the bundle must appear in the
