@@ -2835,7 +2835,23 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 			defer cancel()
-			result, err := s.sendSDKRecovery(ctx, c, req.ID, false, nil)
+			result, err := s.sendSDKRecovery(ctx, c, req.ID, false, func() error {
+				h.mu.Lock()
+				defer h.mu.Unlock()
+				if c.UpdateRecoveryUnix == 0 {
+					return nil
+				}
+				previous := c.UpdateRecoveryUnix
+				wasGoal := c.UpdateRecoveryGoal
+				c.UpdateRecoveryUnix = 0
+				c.UpdateRecoveryGoal = false
+				if err := h.saveLocked(c); err != nil {
+					c.UpdateRecoveryUnix = previous
+					c.UpdateRecoveryGoal = wasGoal
+					return fmt.Errorf("consume update recovery marker: %w", err)
+				}
+				return nil
+			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadGateway)
 				return

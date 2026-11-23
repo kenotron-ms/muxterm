@@ -44,7 +44,7 @@ func (h *sdkChatHost) markUpdateRecovery() {
 	for _, chat := range h.chats {
 		activeTurn := chat.State == "working" || chat.State == "starting"
 		activeGoal := activeGoals[chat.ID] && (activeTurn || chat.State == "ready")
-		if chat.Archived || !activeTurn && !activeGoal {
+		if chat.Archived || (!activeTurn && !activeGoal) {
 			continue
 		}
 		previous := chat.UpdateRecoveryUnix
@@ -137,6 +137,7 @@ func (s *Server) recoverUpdateChats(ctx context.Context) {
 					return err
 				}
 				if goalMarked {
+					// The snapshot supplies the ID; update reads current goal state from SQLite.
 					goal, err := h.goals.update(snapshot, nil)
 					if err != nil || !activeUpdateRecoveryGoal(goal) {
 						return fmt.Errorf("approved goal is no longer active")
@@ -163,6 +164,26 @@ func (s *Server) recoverUpdateChats(ctx context.Context) {
 			cancel()
 			if err != nil {
 				log.Printf("update recovery: continue chat %s: %v", id, err)
+				goalReady := goalMarked
+				if goalMarked {
+					if goal, goalErr := h.goals.update(snapshot, nil); goalErr == nil {
+						goalReady = activeUpdateRecoveryGoal(goal)
+					}
+				}
+				h.mu.Lock()
+				if current := h.chats[id]; current != nil && current.UpdateRecoveryUnix != 0 &&
+					current.State != "uncertain" && !(goalReady && current.State == "ready") {
+					previous := current.UpdateRecoveryUnix
+					wasGoal := current.UpdateRecoveryGoal
+					current.UpdateRecoveryUnix = 0
+					current.UpdateRecoveryGoal = false
+					if saveErr := h.saveLocked(current); saveErr != nil {
+						current.UpdateRecoveryUnix = previous
+						current.UpdateRecoveryGoal = wasGoal
+						log.Printf("update recovery: clear failed chat %s: %v", id, saveErr)
+					}
+				}
+				h.mu.Unlock()
 			}
 		} else {
 			h.mu.Lock()
