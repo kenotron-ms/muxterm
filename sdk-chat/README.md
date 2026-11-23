@@ -77,6 +77,18 @@ directory. The process stops when the chat is archived; the saved session ID
 resumes in a new process. ACP supplies model choices, streamed text, tool
 activity, turn status, cancellation, and continuation.
 
+OpenCode's first web search asks for a provider through an ACP form. Muxterm
+offers **Use Exa**, **Disable web search**, and **Not now**. Choosing Exa sends
+OpenCode's own provider-selection responses; OpenCode remembers the selection.
+Exa's [hosted MCP](https://exa.ai/mcp) works without an API key or separate
+subscription and is free at [unspecified rate limits](https://exa.ai/blog/best-web-search-mcp-servers).
+Search requires network access. A rate limit means retrying later; a provider
+or network error is reported by OpenCode's tool. Muxterm does not switch to a
+paid provider. An explicit `websearch.provider`, `websearch: false`, or
+`websearch` permission rule in the user's OpenCode config remains effective.
+See [OpenCode's web search guide](https://opencode.ai/docs/websearch/) for
+provider settings and permissions.
+
 DeepSeek uses `@deepseek-ai/dsh-sdk-client` and its same-version bundled `dsh`
 runtime with the `sdk` profile. Each chat owns a runtime and a launch patch
 that mounts muxterm's enabled MCP servers with its origin token. Its durable

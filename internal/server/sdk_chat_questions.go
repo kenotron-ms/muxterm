@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// A Codex question is answered on its resident app-server request. The answer
-// is never copied into the chat event journal, including for secret questions.
+// A question is answered on its resident agent request. The answer is never
+// copied into the chat event journal, including for secret questions.
 func (s *Server) handleSDKChatQuestion(w http.ResponseWriter, r *http.Request) {
 	id, questionID := r.PathValue("id"), r.PathValue("questionId")
 	if len(questionID) == 0 || len(questionID) > 128 {
@@ -25,7 +25,7 @@ func (s *Server) handleSDKChatQuestion(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if chat.Harness != "codex" {
+	if chat.Harness != "codex" && chat.Harness != "opencode" {
 		http.Error(w, "questions are unavailable for this agent", http.StatusConflict)
 		return
 	}
@@ -46,7 +46,7 @@ func (s *Server) handleSDKChatQuestion(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	result, err := h.call(ctx, "answerQuestion", map[string]any{"sessionId": id, "questionId": questionID, "answers": request.Answers})
 	if err != nil {
-		if strings.Contains(err.Error(), "no longer waiting") || strings.Contains(err.Error(), "not resident") || strings.Contains(err.Error(), "no pending Codex question") {
+		if strings.Contains(err.Error(), "no longer waiting") || strings.Contains(err.Error(), "not resident") || strings.Contains(err.Error(), "no pending question") {
 			http.Error(w, "This question is no longer active", http.StatusConflict)
 			return
 		}

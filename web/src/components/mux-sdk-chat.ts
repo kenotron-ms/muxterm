@@ -533,6 +533,7 @@ export class MuxSDKChat extends LitElement {
     .tool-detail-title { color:var(--ui-text); font-size:var(--ui-text-lg); font-weight:600; }
     .detail-label { color:var(--ui-accent); font-weight:600; margin:var(--ui-space-4) 0 var(--ui-space-2); }
     .detail pre { margin:0; padding:var(--ui-space-4) var(--ui-space-5); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); white-space:pre-wrap; overflow-wrap:anywhere; max-height:var(--ui-chat-tool-detail-max-height); overflow:auto; color:var(--ui-text); font:var(--ui-text-lg)/1.5 var(--ui-font-mono); }
+    .websearch-hint { margin:var(--ui-space-4) 0 0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.5; }
     /* Offset the composer's text inset against the transcript's narrow-width gutter. */
     .composer-wrap { position:relative; padding:0 var(--ui-space-7) var(--ui-space-7); }
     .recovery-row { box-sizing:border-box; width:min(100%,var(--ui-chat-transcript-width)); min-height:var(--ui-control-md); margin:0 auto var(--ui-space-2); display:flex; align-items:center; gap:var(--ui-space-2); color:var(--ui-text-muted); font-size:var(--ui-text-sm); }
@@ -2243,7 +2244,7 @@ export class MuxSDKChat extends LitElement {
     if (kind === 'agent') return `${block.done ? 'Delegated' : 'Delegating'} ${this.toolField(fields, 'description', 'task') || 'an agent'}`;
     return `${block.name || 'Tool'}${file ? ` ${file}` : query ? ` ${query}` : ''}`;
   }
-  private activityLineForTools(tools: { name?: string }[]) {
+  private activityLineForTools(tools: { name?: string; failed?: boolean }[]) {
     const counts = new Map<ToolKind, number>();
     for (const tool of tools) {
       const kind = this.toolKind(tool);
@@ -2253,7 +2254,8 @@ export class MuxSDKChat extends LitElement {
       if (kind === 'shell') return count === 1 ? 'ran a command' : `ran ${count} commands`;
       if (kind === 'read') return count === 1 ? 'read a file' : `read ${count} files`;
       if (kind === 'search') return count === 1 ? 'searched files' : `searched files ${count} times`;
-      if (kind === 'web') return count === 1 ? 'searched the web' : `searched the web ${count} times`;
+      if (kind === 'web') return tools.some(tool => this.toolKind(tool) === 'web' && tool.failed)
+        ? 'web search failed' : count === 1 ? 'searched the web' : `searched the web ${count} times`;
       if (kind === 'edit') return count === 1 ? 'edited a file' : `edited ${count} files`;
       if (kind === 'agent') return count === 1 ? 'delegated an agent' : `delegated ${count} agents`;
       return count === 1 ? 'used a tool' : `used ${count} tools`;
@@ -2278,7 +2280,17 @@ export class MuxSDKChat extends LitElement {
     const outputLabel = kind === 'shell' ? 'Output' : kind === 'read' ? 'Contents' : kind === 'search' ? 'Matches' : kind === 'web' ? 'Results' : kind === 'agent' ? 'Result' : 'Output';
     const command = this.toolField(fields, 'command', 'cmd');
     const inputText = kind === 'shell' && command ? `$ ${command}` : this.detail(input);
-    return html`<details class="tool-entry ${this.toolFailed(block) ? 'failed' : ''}" aria-label=${`${block.name || 'Tool'} detail`} ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(kind), { size: 14 })}</span><span class="work-line" title=${label}>${label}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><div class="tool-detail-title">${heading}</div><div class="detail-label">${inputLabel}</div><pre>${inputText}</pre><div class="detail-label">${outputLabel}</div><pre>${output}</pre></div>` : nothing}</details>`;
+    const hint = this.websearchFailureHint(block);
+    return html`<details class="tool-entry ${this.toolFailed(block) ? 'failed' : ''}" aria-label=${`${block.name || 'Tool'} detail`} ?open=${open}><summary @click=${(event: MouseEvent) => this.toggleStepDisclosure(key, event)}><span class="work-icon">${icon(this.toolIcon(kind), { size: 14 })}</span><span class="work-line" title=${label}>${label}</span><span class="work-chevron">${icon(ChevronDown, { size: 13 })}</span></summary>${open ? html`<div class="detail"><div class="tool-detail-title">${heading}</div><div class="detail-label">${inputLabel}</div><pre>${inputText}</pre><div class="detail-label">${outputLabel}</div><pre>${output}</pre>${hint ? html`<p class="websearch-hint">${hint}</p>` : nothing}</div>` : nothing}</details>`;
+  }
+  private websearchFailureHint(block: Block): string {
+    if (block.name?.toLowerCase() !== 'websearch' || !this.toolFailed(block)) return '';
+    const result = block.output && typeof block.output === 'object' ? block.output as Record<string, unknown> : {};
+    const error = String(result.error || '');
+    if (/HTTP 429/.test(error)) return 'The selected search provider is rate limited. Retry later; Muxterm will not switch providers automatically.';
+    if (/HTTP 402/.test(error)) return 'The selected provider needs credits. Check its billing, or select Exa in your OpenCode config for keyless search.';
+    if (/HTTP 401/.test(error)) return 'Check the selected provider’s API key, or select Exa in your OpenCode config for keyless search.';
+    return 'Check network access to the selected search provider and retry.';
   }
   private workTimeline(turn: number, items: Block[], agents: AgentView[]) {
     // Raw session events arrive in order. Keep each progress update at its
@@ -2574,7 +2586,7 @@ export class MuxSDKChat extends LitElement {
     if (!this.commandFailed) this.dismissGoalifyChoice(key);
   }
   private questionCard(block: Block) {
-    return html`<mux-ui-question-form agentLabel="Codex" .questions=${block.input as QuestionPrompt[]} .answered=${!!block.done}
+    return html`<mux-ui-question-form agentLabel=${this.chat?.harness === 'opencode' ? 'OpenCode' : 'Codex'} .questions=${block.input as QuestionPrompt[]} .answered=${!!block.done}
       .pending=${this.answeringQuestion === block.id} .error=${this.questionErrorId === block.id ? this.questionError : ''}
       @question-submit=${(event:CustomEvent<Record<string,string>>) => void this.submitQuestion(event,block)}></mux-ui-question-form>`;
   }
