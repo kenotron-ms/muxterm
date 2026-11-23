@@ -44,7 +44,11 @@ func serveSessiond(ctx context.Context, socketPath string) error {
 	}
 
 	cfg, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+	srv.SetRestoreEnabled(cfg.Restore.Enabled)
 	snapshotPath := sessiond.DefaultSnapshotPath()
+	if cfg.Restore.Enabled {
+		srv.RestoreFromSnapshot(true, snapshotPath)
+	}
 	var snapshotWriterDone <-chan struct{}
 	writerCtx, stopWriter := context.WithCancel(ctx)
 	defer stopWriter()

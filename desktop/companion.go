@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -60,6 +61,11 @@ type Companion struct {
 	localStartMu     sync.Mutex
 	bridgeMu         sync.Mutex
 	updateMu         sync.Mutex
+	autoMu           sync.Mutex
+	autoRecord       macAutomaticRecord
+	macUpdaterReady  atomic.Bool
+	autoStop         chan struct{}
+	autoWake         chan struct{}
 	app              *application.App
 	token            string
 	settings         Settings
@@ -87,6 +93,9 @@ func (c *Companion) authorize(token string) error {
 
 func newCompanion() *Companion {
 	c := &Companion{forwards: make(map[int]*runningForward)}
+	c.autoStop = make(chan struct{})
+	c.autoWake = make(chan struct{}, 1)
+	c.loadMacAutomaticUpdate()
 	if data, err := os.ReadFile(settingsPath()); err == nil {
 		_ = json.Unmarshal(data, &c.settings)
 	}
@@ -490,6 +499,9 @@ func (c *Companion) OpenPreview(token string, port int) error {
 
 func (c *Companion) close() {
 	c.stopBrowserControl()
+	// Updater.Restart calls App.Quit synchronously from the automatic-update
+	// goroutine, so shutdown must signal cancellation without joining it.
+	close(c.autoStop)
 	c.mu.Lock()
 	forwards := c.forwards
 	c.forwards = make(map[int]*runningForward)

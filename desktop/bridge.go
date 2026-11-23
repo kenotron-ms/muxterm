@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
 	"sort"
@@ -14,6 +15,7 @@ type browserMessage struct {
 	ID      string      `json:"id"`
 	URL     string      `json:"url"`
 	Visible bool        `json:"visible"`
+	Enabled *bool       `json:"enabled,omitempty"`
 	Rect    browserRect `json:"rect"`
 }
 
@@ -68,7 +70,7 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 			allowed := serverURL == localURL && localURL != ""
 			c.bridgeMu.Unlock()
 			if allowed {
-				c.runMacUpdate(message.Type)
+				c.runMacUpdate(context.Background(), message.Type)
 			} else {
 				c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-mac-update', {detail:{phase:'error',error:'Mac updates require the local Muxterm workspace.'}}))")
 			}
@@ -86,6 +88,26 @@ func (c *Companion) browserMessage(window application.Window, raw string, origin
 				}{ID: message.ID, Fallback: true})
 				c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-folder-chosen', {detail:" + string(encoded) + "}))")
 			}
+			return
+		}
+		if message.Type == "mac-auto-status" || message.Type == "mac-auto-set" {
+			allowed := serverURL == localURL && localURL != ""
+			c.bridgeMu.Unlock()
+			if !allowed {
+				c.emitMacAutomaticUpdateError("Automatic Mac updates require the local Muxterm workspace.")
+				return
+			}
+			if message.Type == "mac-auto-set" {
+				if message.Enabled == nil {
+					c.emitMacAutomaticUpdateError("Choose on or off for automatic updates.")
+					return
+				}
+				if err := c.setMacAutomaticUpdates(*message.Enabled); err != nil {
+					c.emitMacAutomaticUpdateError(err.Error())
+					return
+				}
+			}
+			c.emitMacAutomaticUpdateStatus()
 			return
 		}
 		defer c.bridgeMu.Unlock()

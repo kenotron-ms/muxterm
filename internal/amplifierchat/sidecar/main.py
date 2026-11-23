@@ -761,6 +761,8 @@ class SDKChatSession:
 async def command(cmd):
     op, sid = cmd.get("op"), cmd.get("sessionId")
     if op == "capabilities": return {"capabilities": CAPS}
+    if op == "runtime-busy": return {"sessionIds": [sid for sid, session in SDK_CHAT_SESSIONS.items()
+        if session.active or (session.finish_task and not session.finish_task.done())]}
     if op in ("start", "resume"):
         if cmd.get("harness") != "amplifier": raise ValueError("unsupported harness")
         if cmd.get("approval") != "never":

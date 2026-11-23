@@ -34,6 +34,9 @@ const (
 	TypeRenamePane      = "rename-pane"
 	TypeSaveLayout      = "save-layout"
 	TypeScreenSnapshot  = "screen-snapshot"  // request: MCP → daemon, VT grid for a pane
+	TypeUpdatePrepare   = "update-prepare"   // request: server → daemon, short safe-restart gate
+	TypeUpdateRelease   = "update-release"   // request: server → daemon, cancel gate on failure
+	TypeUpdateSafety    = "update-safety"    // reply: daemon-owned restart decision
 	TypeWorkspaceScreen = "workspace-screen" // request: browser → daemon, current user-active VT grid
 	TypeGetLayout       = "get-layout"       // request: MCP → daemon, ASCII layout diagram
 	// Replies (daemon -> client, echo request cid).
@@ -540,8 +543,6 @@ type Message struct {
 	Triggers       []TriggerView `json:"triggers,omitempty"`
 	TriggerID      string        `json:"triggerId,omitempty"`
 	TriggerEnabled *bool         `json:"triggerEnabled,omitempty"`
-
-
 }
 
 // CloseOutcomeMessage maps a daemon close transaction result onto the additive
@@ -710,8 +711,8 @@ type PaneInfo struct {
 	Rows     int    `json:"rows,omitempty"`
 	Title    string `json:"title,omitempty"`
 	Harness  string `json:"harness,omitempty"`
-	Cwd      string `json:"cwd,omitempty"` // folder used to start the pane
-	Origin   string `json:"origin,omitempty"` // browser, agent, cli, or trigger:<id>
+	Cwd      string `json:"cwd,omitempty"`      // folder used to start the pane
+	Origin   string `json:"origin,omitempty"`   // browser, agent, cli, or trigger:<id>
 	TotalSeq uint64 `json:"totalSeq,omitempty"` // exact byte length of the replay data for this pane
 
 	// Layout placement (only present on pane-added events from create-pane requests

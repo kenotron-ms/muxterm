@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/amplifierchat"
@@ -162,6 +163,8 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 
 type sdkChatHost struct {
 	mu               sync.Mutex
+	updateAdmission  sync.RWMutex
+	updateUntil      atomic.Int64 // Unix nanos; zero or expired permits new turns.
 	runtimeGate      sync.RWMutex
 	lifecycleMu      sync.Mutex
 	goalDispatch     goalDispatchState
@@ -961,6 +964,11 @@ func (h *sdkChatHost) observe(cmd *exec.Cmd, socket string, ready chan error) {
 	}
 }
 func (h *sdkChatHost) call(ctx context.Context, op string, args map[string]any) (json.RawMessage, error) {
+	h.updateAdmission.RLock()
+	defer h.updateAdmission.RUnlock()
+	if h.updateUntil.Load() > time.Now().UnixNano() {
+		return nil, errors.New("Muxterm is preparing an automatic update; retry the chat action shortly")
+	}
 	harness, _ := args["harness"].(string)
 	if harness == "" {
 		if id, ok := args["sessionId"].(string); ok {
