@@ -137,7 +137,7 @@ func (s *Server) recoverUpdateChats(ctx context.Context) {
 					return err
 				}
 				if goalMarked {
-					goal, err := h.goals.update(*chat, nil)
+					goal, err := h.goals.update(snapshot, nil)
 					if err != nil || !activeUpdateRecoveryGoal(goal) {
 						return fmt.Errorf("approved goal is no longer active")
 					}
