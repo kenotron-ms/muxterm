@@ -375,7 +375,7 @@ export class MuxSettingsSurface extends LitElement {
     .app-icon-preview-item.mask img { border-radius:50%; }
     .app-icon-preview-label { align-self:center; color:var(--ui-text); font-weight:600; }
     .backdrop-choice-label { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; }
-    .backdrop-choice-label img { width:32px; height:32px; border-radius:7px; flex:none; }
+    .backdrop-choice-label img { width:var(--ui-space-9); height:var(--ui-space-9); border-radius:var(--ui-radius-sm); flex:none; }
     .app-icon-guidance { margin-top:var(--ui-space-6); color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.5; }
     .app-icon-guidance p { margin:var(--ui-space-2) 0; }
 
