@@ -49,7 +49,7 @@ async function run(current) {
       const error = new Error(`Antigravity ACP exited (${signal || code})`);
       for (const pending of current.pending.values()) pending.reject(error);
       current.pending.clear();
-      if (login === current && !current.stopped && current.state !== 'complete') {
+      if (login === current && !current.stopped && current.state !== 'complete' && current.state !== 'error') {
         current.state = 'error'; current.url = ''; current.message = error.message;
       }
     });
