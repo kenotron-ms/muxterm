@@ -114,18 +114,21 @@ systemctl --user is-active --quiet muxterm.service muxterm-sessiond.service
 api /api/update/automatic | jq -e '.enabled == false and .eligible == true'
 # An active durable Work record must stop an unattended update before a
 # terminal gate or binary replacement is attempted.
+local_token="$(jq -r .token "$XDG_RUNTIME_DIR/muxterm/server.url")"
+[[ -n "$local_token" && "$local_token" != null ]]
+work_headers=(-H 'X-Muxterm-Agent: 1' -H "Authorization: Bearer $local_token")
 work_payload='{"clientRef":"automatic-update-dtu-work","title":"Verify active Work update defer","brief":"Disposable updater fixture.","goalCondition":"## Outcome\nThis Work is complete when the disposable VM observes automatic update deferral while this record is active.\n## Scope\nOnly this disposable VM fixture is in scope.\n## Blocked exit\nIf verification fails, record the blocker and recovery action.","nextAction":"Observe automatic update deferral."}'
-work_item="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+work_item="$(curl --fail --silent --show-error -X POST "${work_headers[@]}" -H 'Content-Type: application/json' \
   --data "$work_payload" http://127.0.0.1:8318/api/sdk-work)"
 work_id="$(jq -r .id <<<"$work_item")"
 [[ -n "$work_id" && "$work_id" != null ]]
-curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+curl --fail --silent --show-error -X POST "${work_headers[@]}" -H 'Content-Type: application/json' \
   --data '{"clientRef":"automatic-update-dtu-activate","status":"active","summary":"Fixture Work is active."}' \
   "http://127.0.0.1:8318/api/sdk-work/$work_id/updates" >/dev/null
 set_auto true
 wait_phase deferred 'Work is active'
 [[ "$("$binary" version)" == *'0.1.0'* ]]
-curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+curl --fail --silent --show-error -X POST "${work_headers[@]}" -H 'Content-Type: application/json' \
   --data '{"clientRef":"automatic-update-dtu-complete","status":"done","summary":"Fixture Work defer observed."}' \
   "http://127.0.0.1:8318/api/sdk-work/$work_id/updates" >/dev/null
 set_auto false
