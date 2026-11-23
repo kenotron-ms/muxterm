@@ -105,6 +105,35 @@ function fixtureForVoice(initialVoice: VoiceStatus): ApiFixture {
   };
 }
 
+function agentForceRestartFixture(actionFails = false): ApiFixture {
+  const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
+  return request => {
+    if (request.url.pathname.endsWith('/api/ai/agents/runtimes') && request.method === 'GET') {
+      return fixtureJSON({agents:['codex','claude','copilot','opencode','pi','deepseek','amplifier','amplifier-unified','antigravity-sdk','antigravity'].map(harness => ({
+        harness,
+        scope:harness === 'amplifier' ? 'amplifier' : 'shared',
+        state:'running',
+        activeChats:harness === 'copilot' ? 2 : harness === 'amplifier' ? 1 : 0,
+        activeChatsExact:true,
+      }))});
+    }
+    if (request.url.pathname.endsWith('/api/ai/agents/copilot/runtime/force-restart') && request.method === 'POST') {
+      return actionFails
+        ? fixtureJSON({error:'The shared chat runtime did not stop gracefully.'}, 502)
+        : fixtureJSON({
+          harness:'copilot',
+          scope:'shared',
+          state:'running',
+          activeChats:0,
+          activeChatsExact:true,
+          interruptedChats:2,
+          recoveryMessage:'Affected chat history and Work ownership are preserved. Accepted input is not replayed; inspect each affected chat before deciding whether to resend.',
+        });
+    }
+    return base(request);
+  };
+}
+
 function remotesLoadFailureFixture(): ApiFixture {
   const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
   let failed = false;
@@ -151,6 +180,32 @@ async function submitRejectedHost(canvasElement: HTMLElement): Promise<void> {
   const add = [...settings.shadowRoot!.querySelectorAll('mux-ui-button')].find(button => button.textContent?.trim() === 'Add host');
   if (!add) throw new Error('Add host action is missing');
   add.click();
+}
+
+async function showAgentForceRestart(canvasElement: HTMLElement, confirm = false): Promise<void> {
+  const settings = canvasElement.querySelector<MuxSettingsSurface>('mux-settings-surface');
+  if (!settings) throw new Error('Settings surface is missing');
+  await settings.updateComplete;
+  await new Promise(resolve => window.setTimeout(resolve, 25));
+  await settings.updateComplete;
+  const card = [...(settings.shadowRoot?.querySelectorAll<HTMLDetailsElement>('details.agent-card') ?? [])]
+    .find(candidate => candidate.querySelector('.agent-title')?.textContent?.trim() === 'GitHub Copilot');
+  if (!card) throw new Error('GitHub Copilot runtime card is missing');
+  card.open = true;
+  await settings.updateComplete;
+  const forceRestart = [...card.querySelectorAll('mux-ui-button')]
+    .find(button => button.textContent?.trim() === 'Force restart');
+  if (!forceRestart) throw new Error('Force restart action is missing');
+  forceRestart.click();
+  if (!confirm) return;
+  const confirmation = settings.shadowRoot?.querySelector('mux-ui-confirmation');
+  if (!confirmation) throw new Error('Force restart confirmation is missing');
+  await confirmation.updateComplete;
+  const confirmButton = [...confirmation.shadowRoot!.querySelectorAll('mux-ui-button')]
+    .find(button => button.textContent?.trim() === 'Force restart');
+  if (!confirmButton) throw new Error('Force restart confirmation action is missing');
+  confirmButton.click();
+  await settings.updateComplete;
 }
 
 function onConfigChange(event: Event): void {
@@ -254,6 +309,28 @@ export const PhoneAIAgentInventory: Story = {
   args:{section:'ai'},
   globals:{viewport:{value:'phone390',isRotated:false}},
   render:renderPhonePage,
+};
+export const AIAgentForceRestart: Story = {
+  args:{section:'ai'},
+  parameters:{apiFixture:agentForceRestartFixture()},
+  play:async ({canvasElement}) => showAgentForceRestart(canvasElement),
+};
+export const PhoneAIAgentForceRestart: Story = {
+  args:{section:'ai'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:agentForceRestartFixture()},
+  render:renderPhonePage,
+  play:async ({canvasElement}) => showAgentForceRestart(canvasElement),
+};
+export const AIAgentForceRestartRecovery: Story = {
+  args:{section:'ai'},
+  parameters:{apiFixture:agentForceRestartFixture()},
+  play:async ({canvasElement}) => showAgentForceRestart(canvasElement, true),
+};
+export const AIAgentForceRestartError: Story = {
+  args:{section:'ai'},
+  parameters:{apiFixture:agentForceRestartFixture(true)},
+  play:async ({canvasElement}) => showAgentForceRestart(canvasElement, true),
 };
 export const AIAgentScanError: Story = {
   args:{section:'ai'},

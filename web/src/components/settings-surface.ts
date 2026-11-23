@@ -26,6 +26,7 @@ import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { macAppVersion, checkMacUpdate, installMacUpdate, type MacUpdateStatus } from '../lib/mac-app.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
+import '../ui/confirmation.js';
 import {
   DEFAULT_GEMINI_MODEL,
   DEFAULT_VOICE_STATUS,
@@ -48,7 +49,8 @@ export type SettingsSection = 'appearance' | 'terminal' | 'notifications' | 'wor
 type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean; installUnsupportedReason?: string };
 type AntigravityLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
 type AgentVersion = { harness: string; installed: boolean; version?: string; latestVersion?: string; installMethod?: string; updateAvailable: boolean; checkedAt?: string };
-type AgentRuntime = { harness: string; scope: 'shared' | 'amplifier'; state: 'running' | 'stopped' | 'not-started'; activeChats: number };
+type AgentRuntime = { harness: string; scope: 'shared' | 'amplifier'; state: 'running' | 'stopped' | 'not-started'; activeChats: number; activeChatsExact?: boolean };
+type RuntimeConfirmation = { harness: string; name: string; scope: string; activeChats: number; activeChatsExact: boolean };
 type UnifiedConnection = { mode: 'local' | 'existing'; url: string; installed: boolean; installSupported: boolean; tokenConfigured: boolean; connected: boolean; message?: string };
 
 const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> = [
@@ -680,9 +682,12 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _agentVersionError = '';
   @state() private _agentRuntimes: ReadonlyMap<string, AgentRuntime> = new Map();
   @state() private _runtimeBusy = '';
-  @state() private _runtimeAction: 'restart' | 'stop' | '' = '';
+  @state() private _runtimeAction: 'restart' | 'stop' | 'force-restart' | '' = '';
   @state() private _runtimeError = '';
   @state() private _runtimeErrorHarness = '';
+  @state() private _runtimeMessage = '';
+  @state() private _runtimeMessageHarness = '';
+  @state() private _runtimeConfirmation: RuntimeConfirmation | null = null;
   private _runtimeTimer?: number;
   private _agentVersionRequest = 0;
   private _agentVersionRefreshQueued = false;
@@ -1213,14 +1218,30 @@ export class MuxSettingsSurface extends LitElement {
     }
   }
 
-  private async _runRuntimeAction(harness: string, action: 'restart' | 'stop'): Promise<void> {
+  private async _runRuntimeAction(harness: string, action: 'restart' | 'stop' | 'force-restart'): Promise<void> {
     this._runtimeBusy = harness;
     this._runtimeAction = action;
     this._runtimeError = '';
     this._runtimeErrorHarness = '';
+    this._runtimeMessage = '';
+    this._runtimeMessageHarness = '';
     try {
-      const response = await fetch(apiPath(`/api/ai/agents/${harness}/runtime/${action}`), { method: 'POST' });
+      const response = await fetch(apiPath(`/api/ai/agents/${harness}/runtime/${action}`), {
+        method: 'POST',
+        ...(action === 'force-restart' ? {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: true }),
+        } : {}),
+      });
       if (!response.ok) throw new Error((await response.text()).trim() || `Could not ${action} chat runtime`);
+      if (action === 'force-restart') {
+        const result = await response.json() as { interruptedChats?: number; recoveryMessage?: string };
+        if (!Number.isInteger(result.interruptedChats) || typeof result.recoveryMessage !== 'string')
+          throw new Error('Force restart returned an invalid recovery status');
+        const count = result.interruptedChats as number;
+        this._runtimeMessage = `${count} active ${count === 1 ? 'chat was' : 'chats were'} marked uncertain. ${result.recoveryMessage}`;
+        this._runtimeMessageHarness = harness;
+      }
       void this._loadAgentAvailability();
     } catch (error) {
       this._runtimeError = error instanceof Error ? error.message : `Could not ${action} chat runtime`;
@@ -1228,8 +1249,16 @@ export class MuxSettingsSurface extends LitElement {
     } finally {
       this._runtimeBusy = '';
       this._runtimeAction = '';
-      void this._loadAgentRuntimes();
+      await this._loadAgentRuntimes();
     }
+  }
+
+  private _confirmRuntimeForceRestart(): void {
+    const confirmation = this._runtimeConfirmation;
+    if (!confirmation) return;
+    void this._runRuntimeAction(confirmation.harness, 'force-restart').finally(() => {
+      this._runtimeConfirmation = null;
+    });
   }
 
   private _renderRuntimeControls(harness: string, name: string, available: boolean) {
@@ -1237,18 +1266,22 @@ export class MuxSettingsSurface extends LitElement {
     const busy = this._runtimeBusy !== '';
     const busyScope = this._agentRuntimes.get(this._runtimeBusy)?.scope;
     const changing = this._runtimeBusy === harness || (busyScope === 'shared' && runtime?.scope === 'shared');
-    const state = changing ? this._runtimeAction === 'restart' ? 'Restarting…' : 'Stopping…' : runtime?.state === 'running' ? 'Running' : runtime?.state === 'stopped' ? 'Stopped' : runtime?.state === 'not-started' ? 'Not started' : 'Checking';
+    const state = changing ? this._runtimeAction === 'force-restart' ? 'Force restarting…' : this._runtimeAction === 'restart' ? 'Restarting…' : 'Stopping…' : runtime?.state === 'running' ? 'Running' : runtime?.state === 'stopped' ? 'Stopped' : runtime?.state === 'not-started' ? 'Not started' : 'Checking';
     const shared = runtime?.scope !== 'amplifier';
+    const scope = shared ? 'shared SDK/ACP chat runtime' : 'Amplifier runtime';
     const active = runtime?.activeChats ?? 0;
+    const canForceRestart = !!runtime && (runtime.state === 'running' || active > 0);
     return html`<div class="agent-runtime">
       <div class="agent-runtime-heading"><span>Chat runtime</span><mux-ui-status-badge appearance="plain" tone=${!changing && runtime?.state === 'running' ? 'success' : 'neutral'} dot>${state}</mux-ui-status-badge></div>
       <p>${shared ? 'Restart and Stop affect all SDK and ACP chats in Muxterm. Amplifier stays separate.' : 'Restart and Stop affect Amplifier chats only.'} ${harness === 'amplifier-unified' ? 'The Unified host keeps running.' : ''} Idle chats resume when the runtime starts again.</p>
-      ${active ? html`<p>Finish ${active} active ${shared ? 'shared' : 'Amplifier'} chat ${active === 1 ? 'turn' : 'turns'} before using these controls. Accepted input is never replayed automatically.</p>` : nothing}
+      ${active ? html`<p>${runtime?.activeChatsExact === false ? `At least ${active} active ${shared ? 'shared' : 'Amplifier'} chat ${active === 1 ? 'turn is' : 'turns are'} reported; the exact count could not be confirmed.` : `${active} active ${shared ? 'shared' : 'Amplifier'} chat ${active === 1 ? 'turn is' : 'turns are'} reported.`} Ordinary Restart and Stop stay disabled while these turns are active. Force restart marks interrupted accepted input uncertain and never replays it.</p>` : nothing}
       <div class="agent-runtime-actions">
         <mux-ui-button size="small" variant="secondary" accessible-label=${`Restart ${name} chat runtime`} ?disabled=${!available || !runtime || busy || active > 0} @click=${() => void this._runRuntimeAction(harness, 'restart')}>Restart</mux-ui-button>
         <mux-ui-button size="small" variant="secondary" accessible-label=${`Stop ${name} chat runtime`} ?disabled=${!available || !runtime || busy || active > 0 || runtime.state === 'stopped'} @click=${() => void this._runRuntimeAction(harness, 'stop')}>Stop</mux-ui-button>
+        <mux-ui-button size="small" variant="danger" accessible-label=${`Force restart ${scope}`} ?disabled=${!available || !runtime || busy || !canForceRestart} @click=${() => { this._runtimeConfirmation = { harness, name, scope, activeChats: active, activeChatsExact: runtime?.activeChatsExact !== false }; }}>Force restart</mux-ui-button>
       </div>
       ${this._runtimeError && this._runtimeErrorHarness === harness ? html`<mux-ui-feedback kind="error" density="compact">${this._runtimeError}</mux-ui-feedback>` : nothing}
+      ${this._runtimeMessage && this._runtimeMessageHarness === harness ? html`<mux-ui-feedback kind="success" density="compact">${this._runtimeMessage}</mux-ui-feedback>` : nothing}
     </div>`;
   }
 
@@ -1499,6 +1532,13 @@ export class MuxSettingsSurface extends LitElement {
         ${this._renderAntigravitySDK()}
       </div>
       ${this._runtimeError && !this._runtimeErrorHarness ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._runtimeError}</mux-ui-feedback>` : nothing}
+      ${this._runtimeConfirmation ? html`<mux-ui-confirmation open .heading=${'Force restart chat runtime?'}
+        .description=${this._runtimeConfirmation.activeChatsExact
+          ? `This restarts the ${this._runtimeConfirmation.scope} and may interrupt ${this._runtimeConfirmation.activeChats} active ${this._runtimeConfirmation.activeChats === 1 ? 'chat' : 'chats'}. Accepted input without a terminal result will be marked uncertain and will not be replayed automatically. Chat history and Work ownership stay intact; inspect affected chats before deciding whether to resend.${this._runtimeConfirmation.harness === 'amplifier-unified' ? ' The Unified host itself keeps running.' : ''}`
+          : `The ${this._runtimeConfirmation.scope} did not confirm an exact active-chat count. At least ${this._runtimeConfirmation.activeChats} locally known ${this._runtimeConfirmation.activeChats === 1 ? 'chat is' : 'chats are'} active; additional shared chats may also be interrupted. Accepted input without a terminal result will be marked uncertain and will not be replayed automatically. Chat history and Work ownership stay intact.${this._runtimeConfirmation.harness === 'amplifier-unified' ? ' The Unified host itself keeps running.' : ''}`}
+        confirmLabel="Force restart" cancelLabel="Cancel" .busy=${this._runtimeBusy !== ''}
+        @confirmation-cancel=${() => { if (!this._runtimeBusy) this._runtimeConfirmation = null; }}
+        @confirmation-confirm=${this._confirmRuntimeForceRestart}></mux-ui-confirmation>` : nothing}
     `;
   }
 

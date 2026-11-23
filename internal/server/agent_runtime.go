@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -204,16 +205,23 @@ func (h *sdkChatHost) sharedBusy(ctx context.Context) ([]string, error) {
 }
 
 type agentRuntimeStatus struct {
-	Harness     string `json:"harness"`
-	Scope       string `json:"scope"`
-	State       string `json:"state"`
-	ActiveChats int    `json:"activeChats"`
+	Harness          string `json:"harness"`
+	Scope            string `json:"scope"`
+	State            string `json:"state"`
+	ActiveChats      int    `json:"activeChats"`
+	ActiveChatsExact bool   `json:"activeChatsExact"`
+}
+
+type agentRuntimeActionResult struct {
+	agentRuntimeStatus
+	InterruptedChats int    `json:"interruptedChats"`
+	RecoveryMessage  string `json:"recoveryMessage,omitempty"`
 }
 
 func (h *sdkChatHost) runtimeStatus(harness string) agentRuntimeStatus {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	status := agentRuntimeStatus{Harness: harness, Scope: "shared", State: "not-started"}
+	status := agentRuntimeStatus{Harness: harness, Scope: "shared", State: "not-started", ActiveChatsExact: true}
 	if harness == "amplifier" {
 		status.Scope = "amplifier"
 		if h.ampStopped {
@@ -234,20 +242,73 @@ func (h *sdkChatHost) runtimeStatus(harness string) agentRuntimeStatus {
 	return status
 }
 
-func (s *Server) handleAgentRuntimes(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+func (h *sdkChatHost) runtimeStatuses(ctx context.Context) []agentRuntimeStatus {
 	statuses := make([]agentRuntimeStatus, 0, len(managedChatHarnesses))
 	for _, harness := range managedChatHarnesses {
-		statuses = append(statuses, s.sdkChats.runtimeStatus(harness))
+		statuses = append(statuses, h.runtimeStatus(harness))
 	}
+	h.mu.Lock()
+	running := h.running
+	h.mu.Unlock()
+	if !running {
+		for i := range statuses {
+			if statuses[i].Scope == "shared" && statuses[i].ActiveChats > 0 {
+				statuses[i].ActiveChatsExact = false
+			}
+		}
+		return statuses
+	}
+	busy, err := h.sharedBusy(ctx)
+	if err != nil {
+		for i := range statuses {
+			if statuses[i].Scope == "shared" {
+				statuses[i].ActiveChatsExact = false
+			}
+		}
+		return statuses
+	}
+	ids := make(map[string]struct{}, len(busy))
+	for _, id := range busy {
+		ids[id] = struct{}{}
+	}
+	for _, id := range h.activeRuntimeChats(false) {
+		ids[id] = struct{}{}
+	}
+	for i := range statuses {
+		if statuses[i].Scope == "shared" {
+			statuses[i].ActiveChats = len(ids)
+		}
+	}
+	return statuses
+}
+
+func (s *Server) handleAgentRuntimes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ctx, cancel := context.WithTimeout(r.Context(), 1500*time.Millisecond)
+	defer cancel()
+	statuses := s.sdkChats.runtimeStatuses(ctx)
 	writeSDKJSON(w, http.StatusOK, map[string]any{"agents": statuses})
 }
 
 func (s *Server) handleAgentRuntimeAction(w http.ResponseWriter, r *http.Request) {
 	harness, action := r.PathValue("harness"), r.PathValue("action")
-	if !managedChatHarness(harness) || (action != "stop" && action != "restart") {
+	force := action == "force-restart"
+	if !managedChatHarness(harness) || (action != "stop" && action != "restart" && !force) {
 		http.Error(w, "unsupported agent runtime action", http.StatusBadRequest)
 		return
+	}
+	if force {
+		if !humanBrowserRequest(r) {
+			http.Error(w, "force restart requires a human browser", http.StatusForbidden)
+			return
+		}
+		var request struct {
+			Confirmed bool `json:"confirmed"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&request) != nil || !request.Confirmed {
+			http.Error(w, "force restart requires explicit confirmation", http.StatusBadRequest)
+			return
+		}
 	}
 	h := s.sdkChats
 	h.runtimeGate.Lock()
@@ -255,7 +316,8 @@ func (s *Server) handleAgentRuntimeAction(w http.ResponseWriter, r *http.Request
 	h.lifecycleMu.Lock()
 	defer h.lifecycleMu.Unlock()
 	amplifier := harness == "amplifier"
-	if active := h.activeRuntimeChats(amplifier); len(active) > 0 {
+	active := h.activeRuntimeChats(amplifier)
+	if len(active) > 0 && !force {
 		verb := "stopping"
 		if action == "restart" {
 			verb = "restarting"
@@ -263,6 +325,7 @@ func (s *Server) handleAgentRuntimeAction(w http.ResponseWriter, r *http.Request
 		http.Error(w, fmt.Sprintf("Finish the active %s chat turns before %s this runtime: %s", map[bool]string{true: "Amplifier", false: "shared"}[amplifier], verb, strings.Join(active, ", ")), http.StatusConflict)
 		return
 	}
+	busyStatusWarning := ""
 	if !amplifier {
 		h.mu.Lock()
 		running := h.running
@@ -272,14 +335,23 @@ func (s *Server) handleAgentRuntimeAction(w http.ResponseWriter, r *http.Request
 			busy, err := h.sharedBusy(ctx)
 			cancel()
 			if err != nil {
-				http.Error(w, "Could not confirm that shared chats are idle: "+err.Error(), http.StatusBadGateway)
-				return
+				if !force {
+					http.Error(w, "Could not confirm that shared chats are idle: "+err.Error(), http.StatusBadGateway)
+					return
+				}
+				busyStatusWarning = "The shared runtime did not report all active sessions. Known active chats were marked uncertain; inspect other chats before resending any input."
+			} else {
+				active = mergeRuntimeChatIDs(active, busy)
 			}
-			if len(busy) > 0 {
+			if len(busy) > 0 && !force {
 				http.Error(w, "Finish the active shared chat turns before changing this runtime: "+strings.Join(busy, ", "), http.StatusConflict)
 				return
 			}
 		}
+	}
+	interrupted := 0
+	if force {
+		interrupted = h.markRuntimeChatsUncertain(active, amplifier)
 	}
 	if amplifier {
 		if action == "stop" {
@@ -295,14 +367,18 @@ func (s *Server) handleAgentRuntimeAction(w http.ResponseWriter, r *http.Request
 				}
 			}
 		} else {
-			h.setRuntimeStopped(true, false)
+			h.setRuntimeStopped(true, true)
 			h.mu.Lock()
 			sup := h.ampSup
 			h.ampSup = nil
 			h.mu.Unlock()
 			if sup != nil {
-				_ = sup.Close()
+				if err := sup.Close(); err != nil {
+					http.Error(w, "Amplifier runtime could not stop before restart: "+err.Error(), http.StatusBadGateway)
+					return
+				}
 			}
+			h.setRuntimeStopped(true, false)
 			if err := h.ensureAmplifier(); err != nil {
 				h.setRuntimeStopped(true, true)
 				http.Error(w, "Amplifier runtime could not restart: "+err.Error(), http.StatusBadGateway)
@@ -310,12 +386,16 @@ func (s *Server) handleAgentRuntimeAction(w http.ResponseWriter, r *http.Request
 			}
 		}
 	} else {
-		h.setRuntimeStopped(false, action == "stop")
+		h.setRuntimeStopped(false, action != "restart" && !force)
+		if action == "restart" || force {
+			h.setRuntimeStopped(false, true)
+		}
 		if err := h.stopNode(); err != nil {
 			http.Error(w, "shared chat runtime could not stop: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		if action == "restart" {
+		if action == "restart" || force {
+			h.setRuntimeStopped(false, false)
 			if err := h.ensureRuntimeLocked(harness); err != nil {
 				h.setRuntimeStopped(false, true)
 				http.Error(w, "shared chat runtime could not restart: "+err.Error(), http.StatusBadGateway)
@@ -324,5 +404,51 @@ func (s *Server) handleAgentRuntimeAction(w http.ResponseWriter, r *http.Request
 		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeSDKJSON(w, http.StatusOK, h.runtimeStatus(harness))
+	status := h.runtimeStatus(harness)
+	if force {
+		recovery := "Affected chat history and Work ownership are preserved. Accepted input is not replayed; inspect each affected chat before deciding whether to resend."
+		if busyStatusWarning != "" {
+			recovery += " " + busyStatusWarning
+		}
+		writeSDKJSON(w, http.StatusOK, agentRuntimeActionResult{
+			agentRuntimeStatus: status,
+			InterruptedChats:   interrupted,
+			RecoveryMessage:    recovery,
+		})
+		return
+	}
+	writeSDKJSON(w, http.StatusOK, status)
+}
+
+func mergeRuntimeChatIDs(existing, additional []string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(additional))
+	merged := make([]string, 0, len(existing)+len(additional))
+	for _, id := range append(existing, additional...) {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		merged = append(merged, id)
+	}
+	sort.Strings(merged)
+	return merged
+}
+
+func (h *sdkChatHost) markRuntimeChatsUncertain(ids []string, amplifier bool) int {
+	marked := 0
+	message := "The chat runtime was force-restarted. The accepted input may have reached the agent but was not replayed; inspect the saved transcript and decide whether to send another message."
+	for _, id := range ids {
+		h.mu.Lock()
+		chat := h.chats[id]
+		eligible := chat != nil && (chat.Harness == "amplifier") == amplifier
+		h.mu.Unlock()
+		if eligible {
+			h.appendEvent(sdkEvent{SessionID: id, Type: "session.uncertain", Message: message})
+			marked++
+		}
+	}
+	return marked
 }

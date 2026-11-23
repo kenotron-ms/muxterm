@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -249,12 +250,49 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 			nativeAction = "resume"
 		}
 		preserveStop := req.Action == "set" && document.RequestedRevision > 1 && slices.Contains([]string{"complete", "achieved", "stalled", "cap_hit", "cancelled", "error", "ended", "cleared", "uncertain"}, document.State)
-		go h.dispatchGoal(chat, req.ClientRef, nativeAction, condition, document.HumanPaused || (document.State == "paused" && nativeAction != "resume") || preserveStop, document.RequestedRevision)
+		go h.dispatchGoal(chat, req.ClientRef, nativeAction, condition, document.HumanPaused || (document.State == "paused" && nativeAction != "resume") || preserveStop, document.RequestedRevision, document.ControlVersion)
 	}
 	writeSDKJSON(w, http.StatusAccepted, document)
 }
 
-func (h *sdkChatHost) dispatchGoal(chat sdkChat, receiptID, action, objective string, paused bool, revision int) {
+func (h *sdkChatHost) waitForCopilotIdle(ctx context.Context, chatID string) error {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		h.mu.Lock()
+		running := h.running
+		chat := h.chats[chatID]
+		locallyActive := chat != nil && (chat.State == "working" || chat.State == "starting")
+		h.mu.Unlock()
+		if !running {
+			if !locallyActive {
+				return nil
+			}
+		} else {
+			checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			busy, err := h.sharedBusy(checkCtx)
+			cancel()
+			if err == nil {
+				if !slices.Contains(busy, chatID) {
+					return nil
+				}
+			} else {
+				lastErr = err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return fmt.Errorf("Copilot turn did not reach a safe boundary; native goal control was not sent because idleness could not be confirmed: %v: %w", lastErr, ctx.Err())
+			}
+			return fmt.Errorf("Copilot turn did not reach a safe boundary; native goal control was not sent: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (h *sdkChatHost) dispatchGoal(chat sdkChat, receiptID, action, objective string, paused bool, revision, controlVersion int) {
 	h.goalDispatch.mu.Lock()
 	if h.goalDispatch.closed {
 		h.goalDispatch.mu.Unlock()
@@ -266,10 +304,16 @@ func (h *sdkChatHost) dispatchGoal(chat sdkChat, receiptID, action, objective st
 	ctx, cancel := context.WithTimeout(h.goalDispatch.ctx, 45*time.Second)
 	defer cancel()
 	ctx = context.WithValue(ctx, goalControlContextKey{}, true)
-	err := h.resume(ctx, &chat)
+	var err error
+	if chat.Harness == "copilot" && action != "pause" {
+		err = h.waitForCopilotIdle(ctx, chat.ID)
+	}
+	if err == nil {
+		err = h.resume(ctx, &chat)
+	}
 	var result json.RawMessage
 	if err == nil {
-		result, err = h.call(ctx, "goal", map[string]any{"sessionId": chat.ID, "action": action, "objective": objective, "paused": paused, "revision": revision})
+		result, err = h.call(ctx, "goal", map[string]any{"sessionId": chat.ID, "action": action, "objective": objective, "paused": paused, "revision": revision, "goalControlVersion": controlVersion})
 	}
 	var native struct {
 		Unsupported bool   `json:"unsupported"`

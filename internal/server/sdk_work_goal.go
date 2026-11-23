@@ -66,7 +66,7 @@ func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, erro
 		return "failed", err
 	}
 	goalRevision := document.RequestedRevision
-	h.dispatchGoal(chat, receiptID, "set", item.GoalCondition, false, goalRevision)
+	h.dispatchGoal(chat, receiptID, "set", item.GoalCondition, false, goalRevision, document.ControlVersion)
 	document, err = h.goals.update(chat, nil)
 	if err != nil {
 		return "uncertain", err

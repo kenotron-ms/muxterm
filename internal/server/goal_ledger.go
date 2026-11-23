@@ -228,11 +228,17 @@ func supportsNativeGoalControl(harness string) bool {
 	return harness == "codex" || harness == "claude" || harness == "copilot" || harness == "amplifier" || harness == "antigravity"
 }
 
-func (h *sdkChatHost) observeGoalLocked(chat *sdkChat, event sdkEvent) {
+func (h *sdkChatHost) observeGoalLocked(chat *sdkChat, event sdkEvent) bool {
 	if event.Type != "goal.progress" && event.Type != "goal.snapshot" && event.Type != "goal.proposal" && event.Type != "goal.command" && event.Type != "goal.capability" && event.Type != "session.uncertain" && event.Type != "error" && event.Type != "turn.started" && event.Type != "turn.completed" && event.Type != "turn.cancelled" && event.Type != "generation.finished" {
-		return
+		return true
 	}
+	staleSnapshot := false
 	_, err := h.goals.update(*chat, func(document *goalDocument) error {
+		if event.Type == "goal.snapshot" && event.GoalControlVersion != nil && document.ControlVersion != *event.GoalControlVersion {
+			document.Observations = append(document.Observations, goalObservation{At: time.Now().UTC(), NativeID: chat.NativeID, Event: event})
+			staleSnapshot = true
+			return nil
+		}
 		if document.RequestedRevision == 0 && event.Type != "goal.progress" && event.Type != "goal.proposal" {
 			return nil
 		}
@@ -252,13 +258,13 @@ func (h *sdkChatHost) observeGoalLocked(chat *sdkChat, event sdkEvent) {
 		if event.Type == "goal.progress" || event.Type == "goal.snapshot" {
 			document.State = event.GoalState
 			if event.Goal != nil {
+				document.AppliedRevision = 0
 				if *event.Goal != "" {
-					document.AppliedRevision = 0
-				}
-				for index := len(document.Revisions) - 1; index >= 0; index-- {
-					if document.Revisions[index].Condition == *event.Goal {
-						document.AppliedRevision = document.Revisions[index].Revision
-						break
+					for index := len(document.Revisions) - 1; index >= 0; index-- {
+						if document.Revisions[index].Condition == *event.Goal {
+							document.AppliedRevision = document.Revisions[index].Revision
+							break
+						}
 					}
 				}
 			}
@@ -275,5 +281,7 @@ func (h *sdkChatHost) observeGoalLocked(chat *sdkChat, event sdkEvent) {
 	})
 	if err != nil {
 		chat.GoalReason = "Goal ledger unavailable: " + err.Error()
+		return event.Type != "goal.snapshot" || event.GoalControlVersion == nil
 	}
+	return !staleSnapshot
 }

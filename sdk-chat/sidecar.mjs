@@ -314,6 +314,7 @@ async function command(cmd) {
     const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId,
       migrationTranscript: cmd.migrationTranscript || '', approval: cmd.approval,
       catalog: cmd.catalog === true, originFile: cmd.catalog === true ? '' : originFile(sessionId, cmd.originToken),
+      goalControlVersion: cmd.goalControlVersion,
       inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
     if (['pi', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness)) {
@@ -362,9 +363,17 @@ async function command(cmd) {
   if (op === 'close' && !s) return { status: 'closed' };
   if (!s) throw new Error('Session is not resident; resume it first');
   if (op === 'goal-snapshot') {
-    if (s.harness !== 'codex') throw new Error('Native goal snapshot unavailable for this adapter');
-    s.codex ||= codexStream(s);
-    return await s.codex.readGoal();
+    if (s.harness === 'copilot' && s.copilot) {
+      const state = await s.copilot.readGoal();
+      return state ? { goal: state.objective, goalState: state.status,
+        goalReason: state.pauseReason || '', goalSummary: state.completionSummary || '' }
+        : { goal: '', goalState: 'cleared' };
+    }
+    if (s.harness === 'codex') {
+      s.codex ||= codexStream(s);
+      return await s.codex.readGoal();
+    }
+    throw new Error('Native goal snapshot unavailable for this adapter');
   }
   if (op === 'goal') {
     if (s.acp && s.harness === 'antigravity') return await s.acp.goal(cmd);
