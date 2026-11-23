@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const updateGateLifetime = 45 * time.Second
+const updateGateLifetime = 3 * time.Minute
 
 // SetRestoreEnabled records what this daemon actually read at boot. Reading
 // config.toml from the web process can disagree with a running daemon and

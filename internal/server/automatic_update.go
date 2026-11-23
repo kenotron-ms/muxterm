@@ -19,6 +19,7 @@ import (
 )
 
 const automaticCheckInterval = 6 * time.Hour
+const automaticAdmissionLifetime = 3 * time.Minute
 
 // The preference and the last outcome belong to the host, not to a browser.
 // They survive both server restarts and a closed PWA. A malformed or missing
@@ -262,7 +263,11 @@ func (s *Server) automaticUpdateAttempt(ctx context.Context) {
 	var daemon *sessiond.Client
 	var safetyError error
 	releaseGate := true
+	var admissionToken int64
 	defer func() {
+		if admissionToken != 0 {
+			s.endAutomaticAdmission(admissionToken)
+		}
 		if daemon != nil {
 			if releaseGate {
 				_ = daemon.ReleaseUpdate()
@@ -275,9 +280,11 @@ func (s *Server) automaticUpdateAttempt(ctx context.Context) {
 		if !s.automaticUpdateView().Enabled {
 			return errors.New("automatic updates were turned off")
 		}
-		if reason := s.activeUpdateWork(); reason != "" {
+		token, reason := s.beginAutomaticAdmission()
+		if reason != "" {
 			return errors.New(reason)
 		}
+		admissionToken = token
 		socket, err := sessiond.SocketPath()
 		if err != nil {
 			return fmt.Errorf("cannot locate terminal daemon: %w", err)
@@ -317,33 +324,99 @@ func (s *Server) automaticUpdateAttempt(ctx context.Context) {
 		log.Printf("automatic update: restart: %v", err)
 	} else {
 		releaseGate = false
+		admissionToken = 0
 	}
 }
 
 func (s *Server) activeUpdateWork() string {
 	h := s.sdkChats
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	for _, item := range h.workItems {
 		if item.Status == "active" || item.Status == "review" {
+			h.mu.Unlock()
 			return "Work is active; automatic update deferred."
+		}
+		if item.Dispatch != nil && (item.Dispatch.State == "preparing" || item.Dispatch.State == "sent" || item.Dispatch.State == "claimed") && item.Status != "done" && item.Status != "cancelled" {
+			h.mu.Unlock()
+			return "Work dispatch is in progress; automatic update deferred."
 		}
 	}
 	for _, chat := range h.chats {
 		if chat.State == "starting" || chat.State == "working" || chat.State == "uncertain" {
+			h.mu.Unlock()
 			return "A chat turn is active or uncertain; automatic update deferred."
+		}
+	}
+	nodeRunning, amplifier := h.running, h.ampSup
+	h.mu.Unlock()
+	checkCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if nodeRunning {
+		busy, err := h.sharedBusy(checkCtx)
+		if err != nil {
+			return "Could not confirm that shared chat turns are idle: " + err.Error()
+		}
+		if len(busy) > 0 {
+			return "A shared chat turn is active; automatic update deferred."
+		}
+	}
+	if amplifier != nil {
+		command, _ := json.Marshal(map[string]string{"op": "runtime-busy"})
+		response, err := amplifier.SDKCommand(checkCtx, command)
+		if err != nil {
+			return "Could not confirm that Amplifier chats are idle: " + err.Error()
+		}
+		var busy struct {
+			SessionIDs []string `json:"sessionIds"`
+		}
+		if err := json.Unmarshal(response, &busy); err != nil {
+			return "Could not read Amplifier chat activity: " + err.Error()
+		}
+		if len(busy.SessionIDs) > 0 {
+			return "An Amplifier chat turn is active; automatic update deferred."
 		}
 	}
 	return ""
 }
 
+// Locking admission waits for any accepted SDK command to finish. Work writes
+// then either complete before the activity scan or fail while the gate is set.
+// The deadline makes a crashed updater fail open for new chat actions only
+// after the matching sessiond gate expires; it never authorizes an update.
+func (s *Server) beginAutomaticAdmission() (int64, string) {
+	h := s.sdkChats
+	h.updateAdmission.Lock()
+	defer h.updateAdmission.Unlock()
+	if h.updateUntil.Load() > time.Now().UnixNano() {
+		return 0, "Another automatic update is preparing."
+	}
+	token := time.Now().Add(automaticAdmissionLifetime).UnixNano()
+	h.updateUntil.Store(token)
+	if reason := s.activeUpdateWork(); reason != "" {
+		h.updateUntil.CompareAndSwap(token, 0)
+		return 0, reason
+	}
+	return token, ""
+}
+
+func (s *Server) endAutomaticAdmission(token int64) {
+	s.sdkChats.updateUntil.CompareAndSwap(token, 0)
+}
+
 // The signed Mac companion calls this just before asking its native updater
 // to restart. The gate expires automatically if the companion crashes.
 func (s *Server) handleUpdatePrepare(w http.ResponseWriter, r *http.Request) {
-	if reason := s.activeUpdateWork(); reason != "" {
+	token, reason := s.beginAutomaticAdmission()
+	if reason != "" {
 		writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": false, "reason": reason})
 		return
 	}
+	keepAdmission := false
+	defer func() {
+		if !keepAdmission {
+			s.endAutomaticAdmission(token)
+		}
+	}()
 	socket, err := sessiond.SocketPath()
 	if err != nil {
 		writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": false, "reason": err.Error()})
@@ -364,6 +437,8 @@ func (s *Server) handleUpdatePrepare(w http.ResponseWriter, r *http.Request) {
 		if work := s.activeUpdateWork(); work != "" {
 			ok, reason = false, work
 			_ = daemon.ReleaseUpdate()
+		} else {
+			keepAdmission = true
 		}
 	}
 	writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": ok, "reason": reason})

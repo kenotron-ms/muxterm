@@ -436,6 +436,9 @@ func (h *sdkChatHost) loadWorkItems() {
 
 // Caller holds h.mu. The old in-memory record is untouched on write failure.
 func (h *sdkChatHost) saveWorkLocked(item *sdkWorkItem) error {
+	if h.updateUntil.Load() > time.Now().UnixNano() {
+		return errors.New("Muxterm is preparing an automatic update; retry the Work change shortly")
+	}
 	data, err := json.Marshal(item)
 	if err != nil {
 		return err
