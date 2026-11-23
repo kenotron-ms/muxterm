@@ -55,6 +55,7 @@ type sdkChat struct {
 	Mode                string    `json:"mode,omitempty"`
 	NativeID            string    `json:"nativeId,omitempty"`
 	State               string    `json:"state"`
+	UpdateRecoveryUnix  int64     `json:"updateRecoveryUnix,omitempty"`
 	Archived            bool      `json:"archived,omitempty"`
 	Pinned              bool      `json:"pinned,omitempty"`
 	WorkMode            string    `json:"workMode,omitempty"`
@@ -2831,21 +2832,18 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "This turn is no longer interrupted. Refresh the chat to see its current state.", http.StatusConflict)
 				return
 			}
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+			defer cancel()
+			result, err := s.sendSDKRecovery(ctx, c, req.ID, nil)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			writeSDKJSON(w, http.StatusAccepted, result)
+			return
 		}
 		content := req.Content
 		displayContent := req.Content
-		if req.Source == "recovery" {
-			lastRequest, readErr := sdkLastRecoverableInput(filepath.Join(h.dir, id+".ndjson"))
-			if readErr != nil {
-				http.Error(w, "Could not read the interrupted turn. Try again.", http.StatusInternalServerError)
-				return
-			}
-			content = "The previous turn was interrupted. Inspect the conversation and current work before acting. Continue only unfinished work, and verify before repeating an action. Briefly note the interruption in your response."
-			if lastRequest != "" {
-				content += "\n\nPrevious user request for reference:\n" + lastRequest
-			}
-			displayContent = "Continue after interruption"
-		}
 		if req.Source == "goalify" {
 			displayContent = "Refine goal with goalify"
 		}

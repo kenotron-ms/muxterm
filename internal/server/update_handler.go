@@ -111,6 +111,9 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	applied = true
+	// The replacement server may find these turns uncertain after the old
+	// sidecar exits. Only this successful update marks them for auto-continue.
+	s.sdkChats.markUpdateRecovery()
 
 	// Probe the daemon HERE, not inside Restart: the 200 below is written and
 	// flushed before the restart is even scheduled, so this is the only moment
@@ -133,7 +136,10 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	// actually reaches the browser before this process goes away.
 	go func() {
 		time.Sleep(500 * time.Millisecond)
+		// A turn may have started during the response grace period.
+		s.sdkChats.markUpdateRecovery()
 		if err := update.Restart(restore); err != nil {
+			s.sdkChats.clearUpdateRecovery()
 			log.Printf("update_handler: restart after update: %v", err)
 		}
 	}()
