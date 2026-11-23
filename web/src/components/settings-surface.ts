@@ -381,6 +381,7 @@ export class MuxSettingsSurface extends LitElement {
     .app-icon-colors { display:flex; flex-wrap:wrap; gap:var(--ui-space-2); margin:var(--ui-space-4) 0 var(--ui-space-6); }
     .app-icon-color { display:inline-flex; align-items:center; gap:var(--ui-space-2); padding:var(--ui-space-2) var(--ui-space-3); border:2px solid var(--ui-border); border-radius:var(--ui-radius-pill); background:var(--ui-surface-raised); color:var(--ui-text); font:inherit; font-size:var(--ui-text-sm); cursor:pointer; }
     .app-icon-color[aria-pressed='true'] { border-color:var(--ui-accent); }
+    .app-icon-charm:disabled,.app-icon-color:disabled { cursor:progress; opacity:.65; }
     .app-icon-swatch { width:var(--ui-app-icon-swatch-size); height:var(--ui-app-icon-swatch-size); border-radius:50%; background:var(--swatch); }
     .app-icon-actions { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ui-space-4); }
     .app-icon-guidance { margin-top:var(--ui-space-6); color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.5; }
@@ -839,7 +840,7 @@ export class MuxSettingsSurface extends LitElement {
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
-    if (changed.has('config') && this.config && !this._iconDirty) this._iconDraft = { ...this.config.appIcon };
+    if (changed.has('config') && this.config && !this._iconDirty && !this._iconSaving) this._iconDraft = { ...this.config.appIcon };
     if (changed.has('openSection') && this.openSection !== null) {
       const changedSection = this._setSection(this.openSection);
       if (changedSection && this.openSection === 'remotes') void this._loadRemotes();
@@ -1089,6 +1090,7 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _setIconDraft(choice: AppIconChoice): void {
+    if (this._iconSaving) return;
     this._iconDraft = choice;
     this._iconDirty = true;
     this._iconMessage = '';
@@ -1252,13 +1254,13 @@ export class MuxSettingsSurface extends LitElement {
         </div>
         <p class="section-title">Charm</p>
         <div class="app-icon-options" role="group" aria-label="App icon charm">
-          ${APP_ICON_CHARMS.map(charm => html`<button type="button" class="app-icon-charm" aria-pressed=${draft.charm === charm.id} @click=${() => this._setIconDraft({ ...draft, charm: charm.id })}>
+          ${APP_ICON_CHARMS.map(charm => html`<button type="button" class="app-icon-charm" aria-pressed=${draft.charm === charm.id} ?disabled=${this._iconSaving} @click=${() => this._setIconDraft({ ...draft, charm: charm.id })}>
             <img src=${appIconImage({ ...draft, charm: charm.id }, 'icon-192.png')} alt=""><span>${charm.label}</span>
           </button>`)}
         </div>
         <p class="section-title">Color</p>
         <div class="app-icon-colors" role="group" aria-label="App icon color">
-          ${APP_ICON_COLORS.map(color => html`<button type="button" class="app-icon-color" aria-pressed=${draft.color === color.id} @click=${() => this._setIconDraft({ ...draft, color: color.id })}>
+          ${APP_ICON_COLORS.map(color => html`<button type="button" class="app-icon-color" aria-pressed=${draft.color === color.id} ?disabled=${this._iconSaving} @click=${() => this._setIconDraft({ ...draft, color: color.id })}>
             <span class="app-icon-swatch" style=${`--swatch:${color.hex}`} aria-hidden="true"></span>${color.label}
           </button>`)}
         </div>
