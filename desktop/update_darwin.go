@@ -148,6 +148,9 @@ func (c *Companion) runMacUpdate(action string) {
 			c.emitMacUpdate(base)
 			return
 		}
+		if !c.macAutomaticStatus().Enabled {
+			return
+		}
 	}
 	base.Phase = "restarting"
 	c.emitMacUpdate(base)
