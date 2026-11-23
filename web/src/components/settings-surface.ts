@@ -22,7 +22,7 @@ import { sdkChats, sdkHarnessLabel, SDK_HARNESSES } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
-import { externalLinkPreference, setExternalLinkPreference, type ExternalLinkPreference } from '../lib/external-links.js';
+import { externalLinkPreference, isAndroidPwa, setExternalLinkPreference, type ExternalLinkPreference } from '../lib/external-links.js';
 import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { macAppVersion, checkMacUpdate, installMacUpdate, type MacUpdateStatus } from '../lib/mac-app.js';
@@ -825,6 +825,7 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _setSection(section: SettingsSection): boolean {
+    if (section === 'links' && !isAndroidPwa()) section = 'appearance';
     if (this._section === section) return false;
     if (this._section === 'ai') {
       ++this._agentStatusEpoch;
@@ -2408,6 +2409,7 @@ export class MuxSettingsSurface extends LitElement {
 
   override render() {
     if (!this.config) return html``;
+    const showLinks = isAndroidPwa();
 
     return html`
       <div class="header">
@@ -2417,14 +2419,14 @@ export class MuxSettingsSurface extends LitElement {
       </div>
       <div class="body">
         <nav class="sidebar" aria-label="Settings sections">
-          ${SETTINGS_SECTIONS.map(section => html`<mux-ui-nav-item variant="section" label=${section.label} ?active=${this._section === section.id} @click=${() => this._selectSection(section.id)}></mux-ui-nav-item>`)}
+          ${SETTINGS_SECTIONS.filter(section => section.id !== 'links' || showLinks).map(section => html`<mux-ui-nav-item variant="section" label=${section.label} ?active=${this._section === section.id} @click=${() => this._selectSection(section.id)}></mux-ui-nav-item>`)}
         </nav>
         <div class="content">
           ${this._section === 'appearance'
             ? this._renderAppearance()
             : this._section === 'terminal'
               ? this._renderTerminal()
-            : this._section === 'links'
+            : this._section === 'links' && showLinks
               ? this._renderLinks()
             : this._section === 'about'
               ? this._renderAbout()

@@ -11,7 +11,6 @@ export function externalLinkPreference(): ExternalLinkPreference {
 
 export function setExternalLinkPreference(value: ExternalLinkPreference): void {
   try { localStorage.setItem(PREFERENCE_KEY, value); } catch { /* Private browsing can reject storage. */ }
-  window.dispatchEvent(new Event('muxterm-external-link-preference'));
 }
 
 export function isAndroidPwa(): boolean {
@@ -45,7 +44,7 @@ class ExternalLinkActions extends LitElement {
   private returnFocus: HTMLElement | null = null;
 
   static override styles = css`
-    :host { display:block; position:fixed; inset:0; box-sizing:border-box; width:100vw; height:100dvh; margin:0; padding:0; border:0; background:transparent; z-index:3000; font:var(--ui-text-md)/1.4 var(--ui-font-sans); color:var(--ui-text); }
+    :host { display:block; position:fixed; inset:0; box-sizing:border-box; width:100vw; height:100dvh; margin:0; padding:0; border:0; background:transparent; z-index:calc(var(--ui-z-reconnect-overlay) + 1); font:var(--ui-text-md)/1.4 var(--ui-font-sans); color:var(--ui-text); }
     .scrim { position:absolute; inset:0; background:rgba(0,0,0,.48); }
     .panel { position:absolute; box-sizing:border-box; top:50%; left:50%; transform:translate(-50%,-50%); width:min(420px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; padding:var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-xl); background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-menu); }
     h2 { margin:0 0 var(--ui-space-1); font-size:var(--ui-text-lg); line-height:1.25; }
