@@ -114,9 +114,9 @@ systemctl --user is-active --quiet muxterm.service muxterm-sessiond.service
 api /api/update/automatic | jq -e '.enabled == false and .eligible == true'
 # An active durable Work record must stop an unattended update before a
 # terminal gate or binary replacement is attempted.
-local_token="$(jq -r .token "$XDG_RUNTIME_DIR/muxterm/server.url")"
-[[ -n "$local_token" && "$local_token" != null ]]
-work_headers=(-H 'X-Muxterm-Agent: 1' -H "Authorization: Bearer $local_token")
+# These Work mutations use the browser authority path; agent mutations also
+# require a live chat capability, which this service fixture does not create.
+work_headers=(-H 'Sec-Fetch-Site: same-origin')
 work_payload='{"clientRef":"automatic-update-dtu-work","title":"Verify active Work update defer","brief":"Disposable updater fixture.","goalCondition":"## Outcome\nThis Work is complete when the disposable VM observes automatic update deferral while this record is active.\n## Scope\nOnly this disposable VM fixture is in scope.\n## Blocked exit\nIf verification fails, record the blocker and recovery action.","nextAction":"Observe automatic update deferral."}'
 work_item="$(curl --fail --silent --show-error -X POST "${work_headers[@]}" -H 'Content-Type: application/json' \
   --data "$work_payload" http://127.0.0.1:8318/api/sdk-work)"
