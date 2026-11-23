@@ -1074,6 +1074,8 @@ export class MuxDock extends LitElement {
 
         /* Inline tab rename input */
         mux-dock .mux-tab-rename-input {
+          -webkit-user-select: text;
+          user-select: text;
           background: var(--ui-surface-nav);
           color: var(--ui-text);
           border: 1px solid var(--ui-accent);
