@@ -22,6 +22,7 @@ import { sdkChats, sdkHarnessLabel, SDK_HARNESSES } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
+import { externalLinkPreference, setExternalLinkPreference, type ExternalLinkPreference } from '../lib/external-links.js';
 import geminiMark from '../assets/harness/gemini.svg?url';
 import { fetchUpdateStatus, installUpdate, type UpdateStatus } from '../lib/update.js';
 import { macAppVersion, checkMacUpdate, installMacUpdate, type MacUpdateStatus } from '../lib/mac-app.js';
@@ -45,7 +46,7 @@ import {
   type MeetingTURNStatus,
 } from '../lib/meeting-turn-settings.js';
 
-export type SettingsSection = 'appearance' | 'terminal' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'meetings' | 'remotes' | 'shortcuts' | 'about';
+export type SettingsSection = 'appearance' | 'terminal' | 'links' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'meetings' | 'remotes' | 'shortcuts' | 'about';
 type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean; installUnsupportedReason?: string };
 type AntigravityLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
 type AgentVersion = { harness: string; installed: boolean; version?: string; latestVersion?: string; installMethod?: string; updateAvailable: boolean; checkedAt?: string };
@@ -56,6 +57,7 @@ type UnifiedConnection = { mode: 'local' | 'existing'; url: string; installed: b
 const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'terminal', label: 'Terminal' },
+  { id: 'links', label: 'Links' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'workspaces', label: 'Workspaces' },
   { id: 'ai', label: 'AI' },
@@ -340,6 +342,7 @@ export class MuxSettingsSurface extends LitElement {
     .appearance-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--ui-space-6); margin-bottom:var(--ui-space-6); }
     .appearance-heading .section-title { margin-bottom:var(--ui-space-2); }
     .appearance-help { margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.45; }
+    .appearance-help.link-policy-help { margin-top:var(--ui-space-5); }
     .mode-toggle { display:flex; flex:none; padding:var(--ui-space-1); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
     .mode-toggle mux-ui-button::part(button) { min-height:0; border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-3) var(--ui-space-5); background:transparent; color:var(--ui-text-muted); font:600 var(--ui-text-sm) var(--ui-font-sans); }
     .mode-toggle mux-ui-button[pressed]::part(button) { background:var(--ui-nav-selected); color:var(--ui-text); }
@@ -667,6 +670,7 @@ export class MuxSettingsSurface extends LitElement {
   @property({ type: Boolean, attribute: 'page-mode', reflect: true }) pageMode = false;
 
   @state() private _section: SettingsSection = 'appearance';
+  @state() private _linkPreference: ExternalLinkPreference = externalLinkPreference();
   private _lastScrolledSection: SettingsSection | null = null;
   @state() private _updateStatus: UpdateStatus | null = null;
   @state() private _macUpdateStatus: MacUpdateStatus | null = null;
@@ -1175,6 +1179,25 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  private _renderLinks() {
+    return html`
+      <p class="section-title">Opening links</p>
+      <p class="appearance-help">Choose what a tap does in the installed Android app. Long-press a link for these actions at any time.</p>
+      <div class="section-gap">
+        <mux-ui-radio-group aria-label="External link tap behavior" name="external-link-tap" .value=${this._linkPreference}
+          .options=${[
+            { value:'normal', label:'Open normally', description:'Use the browser Android normally chooses.' },
+            { value:'ask', label:'Ask each time', description:'Show Open normally, Share / Open with…, and Copy link.' },
+          ]}
+          @change=${(event: CustomEvent<{value:ExternalLinkPreference}>) => {
+            this._linkPreference = event.detail.value;
+            setExternalLinkPreference(event.detail.value);
+          }}></mux-ui-radio-group>
+      </div>
+      <p class="appearance-help link-policy-help">Share uses Android’s app chooser. Work apps appear only when your organization allows sharing between profiles. If work Edge is unavailable, copy the link and paste it there; Muxterm cannot change that policy.</p>
+    `;
+  }
+
   private _renderNotifications() {
     return html`
       <div class="notif-block">
@@ -1489,7 +1512,7 @@ export class MuxSettingsSurface extends LitElement {
       ${this._antigravityInstalling ? html`<mux-ui-feedback kind="loading" density="compact">Downloading and verifying Antigravity for this computer…</mux-ui-feedback>` : nothing}
       ${this._antigravityInstalledNow && installed ? html`<mux-ui-feedback kind="success" density="compact">Installed for this Muxterm user. Sign in to start chatting.</mux-ui-feedback>` : nothing}
       ${login.state === 'starting' ? html`<p>Starting Antigravity sign-in…</p>` : nothing}
-      ${login.state === 'awaiting_code' && login.url ? html`<p>Open Google's sign-in page. If the browser cannot reach the final localhost page, copy its complete address into the field below.</p><a class="ai-login-link" href=${login.url} target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><mux-ui-text-field class="ai-login-code" aria-label="Google callback URL" placeholder="http://127.0.0.1:…/?code=…" .value=${this._antigravityCallback} @input=${(event: Event) => { this._antigravityCallback = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
+      ${login.state === 'awaiting_code' && login.url ? html`<p>Open Google's sign-in page. If the browser cannot reach the final localhost page, copy its complete address into the field below.</p><a class="ai-login-link" href=${login.url} data-external-link-bypass target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><mux-ui-text-field class="ai-login-code" aria-label="Google callback URL" placeholder="http://127.0.0.1:…/?code=…" .value=${this._antigravityCallback} @input=${(event: Event) => { this._antigravityCallback = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
       ${login.state === 'verifying' ? html`<p>Checking Google sign-in…</p>` : nothing}
       ${login.state === 'error' && this._antigravityStatus !== 'connected' ? html`<mux-ui-feedback kind="error" density="compact">${login.message || 'Antigravity sign-in failed.'}</mux-ui-feedback>` : nothing}
       ${this._antigravityError && this._antigravityStatus !== 'connected' ? html`<mux-ui-feedback kind="error" density="compact">${this._antigravityError}</mux-ui-feedback>` : nothing}
@@ -2401,6 +2424,8 @@ export class MuxSettingsSurface extends LitElement {
             ? this._renderAppearance()
             : this._section === 'terminal'
               ? this._renderTerminal()
+            : this._section === 'links'
+              ? this._renderLinks()
             : this._section === 'about'
               ? this._renderAbout()
             : this._section === 'workspaces'

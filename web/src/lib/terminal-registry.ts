@@ -17,6 +17,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebFontsAddon } from '@xterm/addon-web-fonts';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { isAndroidPwa, openTerminalLink, showTerminalLinkActions } from './external-links.js';
 import { paletteAnsiArray, resolvePalette } from './theme.js';
 import { muxLog } from './mux-log.js';
 import { TERMINAL_FONT_FAMILY } from './fonts.js';
@@ -449,14 +450,67 @@ export const terminalRegistry = {
     // WebFontsAddon: loadFonts() is called in attach() before term.open() per
     // the official xterm.js addon-web-fonts guidance.
     const webFontsAddon = new WebFontsAddon();
-    // WebLinksAddon: auto-linkifies http/https URLs in terminal output using
-    // the addon's own default click handler (window.open(uri, '_blank',
-    // 'noopener')). No stored reference needed \u2014 unlike fitAddon/webFontsAddon,
-    // nothing calls a method on it after load; term.dispose() disposes it.
-    const webLinksAddon = new WebLinksAddon();
+    // Send terminal auto-links through the same choice as rendered anchors.
+    const webLinksAddon = new WebLinksAddon(openTerminalLink);
     term.loadAddon(fitAddon);
     term.loadAddon(webFontsAddon);
     term.loadAddon(webLinksAddon);
+
+    // xterm draws links as cells, so a touch has no anchor for the document's
+    // long-press handler. Locate the URL under the touched cell in the same
+    // scrollback buffer used by WebLinksAddon, including wrapped lines.
+    const linkAtPoint = (clientX: number, clientY: number): string | null => {
+      const screen = hostEl.querySelector<HTMLElement>('.xterm-screen');
+      if (!screen || !term.cols || !term.rows) return null;
+      const rect = screen.getBoundingClientRect();
+      if (clientX < rect.left || clientX >= rect.right || clientY < rect.top || clientY >= rect.bottom) return null;
+      const col = Math.min(term.cols - 1, Math.floor((clientX - rect.left) / (rect.width / term.cols)));
+      const row = Math.min(term.rows - 1, Math.floor((clientY - rect.top) / (rect.height / term.rows)));
+      const buffer = term.buffer.active;
+      const bufferRow = buffer.viewportY + row;
+      let first = bufferRow;
+      let last = bufferRow;
+      while (first > 0 && buffer.getLine(first)?.isWrapped && bufferRow - first < 10) first--;
+      while (buffer.getLine(last + 1)?.isWrapped && last - bufferRow < 10) last++;
+      let text = '';
+      for (let y = first; y <= last; y++) text += buffer.getLine(y)?.translateToString(false) ?? '';
+      const offset = (bufferRow - first) * term.cols + col;
+      for (const match of text.matchAll(/https?:\/\/[^\s<>"'`]+/g)) {
+        const uri = match[0].replace(/[),.;!?]+$/, '');
+        if (offset >= match.index && offset < match.index + uri.length) return uri;
+      }
+      return null;
+    };
+    let linkPressTimer = 0;
+    let linkPressStart: { x:number; y:number; uri:string } | null = null;
+    let lastLinkTouchAt = 0;
+    const clearLinkPress = () => { window.clearTimeout(linkPressTimer); linkPressStart = null; };
+    hostEl.addEventListener('pointerdown', event => {
+      clearLinkPress();
+      if (!isAndroidPwa() || event.pointerType !== 'touch') return;
+      const uri = linkAtPoint(event.clientX, event.clientY);
+      if (!uri) return;
+      lastLinkTouchAt = Date.now();
+      linkPressStart = { x:event.clientX, y:event.clientY, uri };
+      linkPressTimer = window.setTimeout(() => {
+        if (linkPressStart && !term.hasSelection() && !window.getSelection()?.toString()) {
+          showTerminalLinkActions(linkPressStart.uri, hostEl, true);
+        }
+        clearLinkPress();
+      }, 550);
+    });
+    hostEl.addEventListener('pointermove', event => {
+      if (linkPressStart && Math.hypot(event.clientX - linkPressStart.x, event.clientY - linkPressStart.y) > 12) clearLinkPress();
+    });
+    hostEl.addEventListener('pointerup', clearLinkPress);
+    hostEl.addEventListener('pointercancel', clearLinkPress);
+    hostEl.addEventListener('contextmenu', event => {
+      if (!isAndroidPwa()) return;
+      const uri = linkAtPoint(event.clientX, event.clientY);
+      if (!uri) return;
+      event.preventDefault();
+      showTerminalLinkActions(uri, hostEl, Date.now() - lastLinkTouchAt < 1200);
+    });
 
     const entry: PaneEntry = {
       term,
