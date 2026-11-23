@@ -74,6 +74,9 @@ function fixtureForVoice(initialVoice: VoiceStatus): ApiFixture {
       currentVersion:'0.14.0', latestVersion:'0.14.0', updateAvailable:false,
       canUpdate:false, devBuild:true, method:'unsupported', reason:'Development build',
     });
+    if (url.pathname.endsWith('/api/update/automatic') && method === 'GET') return fixtureJSON({
+      enabled:false, eligible:false, phase:'off', reason:'Development builds cannot install automatic releases.',
+    });
     if (url.pathname.endsWith('/api/voice/settings')) {
       if (method === 'GET') return fixtureJSON(voice);
       if (method === 'PUT') {
@@ -165,6 +168,22 @@ function updateCheckFailureFixture(): ApiFixture {
   return request => request.url.pathname.endsWith('/api/update/status') && request.method === 'GET'
     ? fixtureJSON({ error:'Version service unavailable.' }, 503)
     : base(request);
+}
+
+function automaticUpdateFixture(phase: 'current' | 'deferred'): ApiFixture {
+  const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
+  return request => {
+    if (request.url.pathname.endsWith('/api/update/status') && request.method === 'GET') return fixtureJSON({
+      currentVersion:'0.14.0', latestVersion:'0.14.0', updateAvailable:false,
+      canUpdate:false, devBuild:false, method:'binary',
+    });
+    if (request.url.pathname.endsWith('/api/update/automatic') && request.method === 'GET') return fixtureJSON({
+      enabled:true, eligible:true, phase, latestVersion:'0.15.0',
+      message:phase === 'deferred' ? 'Pane 1 is busy (foreground-process).' : 'Muxterm is up to date.',
+      lastCheck:'2026-11-23T08:30:00Z', lastUpdate:'2026-11-22T17:00:00Z',
+    });
+    return base(request);
+  };
 }
 
 async function submitRejectedHost(canvasElement: HTMLElement): Promise<void> {
@@ -374,6 +393,12 @@ export const Workspaces: Story = { args: { section:'workspaces' } };
 export const KeyboardShortcuts: Story = { args: { section:'shortcuts' } };
 export const AboutDevelopmentBuild: Story = { args: { section:'about' } };
 export const AboutCheckError: Story = { args:{section:'about'}, parameters:{apiFixture:updateCheckFailureFixture()} };
+export const AboutAutomaticCurrent: Story = { args:{section:'about'}, parameters:{apiFixture:automaticUpdateFixture('current')} };
+export const AboutAutomaticDeferred: Story = { args:{section:'about'}, parameters:{apiFixture:automaticUpdateFixture('deferred')} };
+export const PhoneAboutAutomaticDeferred: Story = {
+  args:{section:'about'}, globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:automaticUpdateFixture('deferred')}, render:renderPhonePage,
+};
 export const RemotesPageMode: Story = {
   args: { section:'remotes' },
   render: (args: SettingsArgs, context: { globals: Record<string, unknown> }) => html`<div style="height:100vh;min-height:500px">
