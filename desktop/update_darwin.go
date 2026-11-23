@@ -149,6 +149,9 @@ func (c *Companion) runMacUpdate(action string) {
 }
 
 func (c *Companion) macAutoEligible() (bool, string) {
+	if !c.macUpdaterReady {
+		return false, "The Mac app updater is unavailable."
+	}
 	if desktopBundleVersion() == "dev" {
 		return false, "Development Mac apps cannot install automatic releases."
 	}

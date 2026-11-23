@@ -62,6 +62,7 @@ type Companion struct {
 	updateMu         sync.Mutex
 	autoMu           sync.Mutex
 	autoRecord       macAutomaticRecord
+	macUpdaterReady  bool
 	autoStop         chan struct{}
 	autoWake         chan struct{}
 	app              *application.App
