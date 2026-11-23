@@ -1832,42 +1832,113 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		Harness  string `json:"harness"`
 		Provider string `json:"provider"`
 	}
-	options := make([]option, 0, 2)
-	if s.eligibleNewChatHarness(r.Context(), "antigravity") {
-		options = append(options, option{Harness: "antigravity", Provider: "configured"})
+	candidates := []option{
+		{Harness: "codex", Provider: "openai"},
+		{Harness: "claude", Provider: "anthropic"},
+		{Harness: "copilot", Provider: "github"},
+		{Harness: "amplifier", Provider: "configured"},
+		{Harness: "amplifier-unified", Provider: "configured"},
+		{Harness: "pi", Provider: "configured"},
+		{Harness: "opencode", Provider: "configured"},
+		{Harness: "deepseek", Provider: "configured"},
+		{Harness: "gemini", Provider: "configured"},
+		{Harness: "antigravity", Provider: "configured"},
+		{Harness: "antigravity-sdk", Provider: "configured"},
 	}
-	if s.eligibleNewChatHarness(r.Context(), "copilot") {
-		options = append(options, option{Harness: "copilot", Provider: "github"})
+	options := make([]option, 0, len(candidates))
+	for _, candidate := range candidates {
+		if s.eligibleNewChatHarness(r.Context(), candidate.Harness) {
+			options = append(options, candidate)
+		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeSDKJSON(w, 200, options)
 }
 
 // Admission is server-owned. Client lists and saved defaults are only hints.
+// Goal capability is checked when a goal is requested, not when starting a chat.
 func (s *Server) eligibleNewChatHarness(parent context.Context, harness string) bool {
-	// Both adapters persist native sessions and resume by native ID. The other
-	// installed adapters lack at least one of live steering, native goals, or
-	// recoverable agent-owned history, so they remain history-only here.
-	verifiedSteeringAndHistory := harness == "copilot" || harness == "antigravity"
-	if !verifiedSteeringAndHistory || !supportsNativeGoalControl(harness) {
+	if harness != "codex" && harness != "claude" && harness != "copilot" && harness != "amplifier" && !isSDKConfiguredHarness(harness) {
 		return false
+	}
+	if harness == "amplifier" {
+		home, _ := os.UserHomeDir()
+		if home == "" {
+			return false
+		}
+		info, err := os.Stat(filepath.Join(home, ".amplifier", "settings.yaml"))
+		return err == nil && info.Size() > 0 && s.sdkChats.ensure("amplifier") == nil
 	}
 	if s.sdkChats.ensure("") != nil {
 		return false
 	}
-	if harness == "antigravity" {
-		return antigravityAvailable()
-	}
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
-	result, err := s.sdkChats.call(ctx, "copilot-auth-status", map[string]any{})
-	if err != nil {
-		return false
+	switch harness {
+	case "codex", "claude":
+		path, err := sdkAgentExecutable(harness)
+		if err != nil {
+			return false
+		}
+		if harness == "codex" && (os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("CODEX_API_KEY") != "") {
+			return true
+		}
+		if harness == "claude" {
+			if os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
+				return true
+			}
+			home, _ := os.UserHomeDir()
+			if home != "" {
+				if data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json")); err == nil {
+					var settings struct {
+						APIKeyHelper string `json:"apiKeyHelper"`
+					}
+					if json.Unmarshal(data, &settings) == nil && strings.TrimSpace(settings.APIKeyHelper) != "" {
+						return true
+					}
+				}
+			}
+		}
+		args := []string{"login", "status"}
+		if harness == "claude" {
+			args = []string{"auth", "status"}
+		}
+		cmd := exec.CommandContext(ctx, path, args...)
+		cmd.Env = append(os.Environ(), sdkSidecarXDGEnv()...)
+		return cmd.Run() == nil
+	case "copilot":
+		result, err := s.sdkChats.call(ctx, "copilot-auth-status", map[string]any{})
+		if err != nil {
+			return false
+		}
+		var auth struct {
+			Authenticated bool `json:"authenticated"`
+		}
+		return json.Unmarshal(result, &auth) == nil && auth.Authenticated
+	case "opencode":
+		_, _, err := sdkOpenCodeV2Executable(ctx)
+		return err == nil
+	case "gemini":
+		_, err := sdkExecutablePath(sdkACPExecutable("gemini"))
+		return err == nil
+	case "antigravity":
+		return antigravityAvailable()
+	case "antigravity-sdk":
+		if sdkAmplifierProviderKey("GEMINI_API_KEY") == "" {
+			return false
+		}
+		for _, command := range []string{"uv", "python3"} {
+			if _, err := sdkExecutablePath(command); err != nil {
+				return false
+			}
+		}
+		return true
+	case "amplifier-unified":
+		return unifiedConnectionAvailable()
+	case "pi", "deepseek":
+		return true // Their SDK adapters are bundled with the shared runtime.
 	}
-	var auth struct {
-		Authenticated bool `json:"authenticated"`
-	}
-	return json.Unmarshal(result, &auth) == nil && auth.Authenticated
+	return false
 }
 
 // Discover choices before creating a chat. Temporary sessions are closed before
@@ -1875,7 +1946,7 @@ func (s *Server) eligibleNewChatHarness(parent context.Context, harness string) 
 func (s *Server) handleSDKChatCatalog(w http.ResponseWriter, r *http.Request) {
 	harness := r.URL.Query().Get("harness")
 	if !s.eligibleNewChatHarness(r.Context(), harness) {
-		http.Error(w, "harness is not verified for live steering, native goals, and native history, or its runtime is unavailable", http.StatusUnprocessableEntity)
+		http.Error(w, "harness is unavailable for a new chat", http.StatusUnprocessableEntity)
 		return
 	}
 	cwd := r.URL.Query().Get("projectPath")
@@ -2054,7 +2125,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.eligibleNewChatHarness(r.Context(), req.Harness) {
-		http.Error(w, "harness is not verified for live steering, native goals, and native history, or its runtime is unavailable", http.StatusUnprocessableEntity)
+		http.Error(w, "harness is unavailable for a new chat", http.StatusUnprocessableEntity)
 		return
 	}
 	if strings.TrimSpace(req.Prompt) == "" && strings.TrimSpace(req.Goal) == "" && len(req.Attachments) == 0 {
