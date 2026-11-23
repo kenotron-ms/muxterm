@@ -59,6 +59,10 @@ func (c *Companion) emitMacUpdate(event macUpdateEvent) {
 }
 
 func (c *Companion) runMacUpdate(parent context.Context, action string) {
+	if !c.macUpdaterReady.Load() {
+		c.emitMacUpdate(macUpdateEvent{Phase: "error", Error: "The Mac app updater is unavailable."})
+		return
+	}
 	if !c.updateMu.TryLock() {
 		c.emitMacUpdate(macUpdateEvent{Phase: "error", Error: "A Mac update is already in progress."})
 		return
@@ -153,6 +157,10 @@ func (c *Companion) runMacUpdate(parent context.Context, action string) {
 			_ = c.releaseMacHostSafety(token)
 			return
 		}
+		if ctx.Err() != nil {
+			_ = c.releaseMacHostSafety(token)
+			return
+		}
 		base.Phase = "restarting"
 		c.emitMacUpdate(base)
 		if err := c.app.Updater.Restart(ctx); err != nil {
@@ -173,7 +181,7 @@ func (c *Companion) runMacUpdate(parent context.Context, action string) {
 }
 
 func (c *Companion) macAutoEligible() (bool, string) {
-	if !c.macUpdaterReady {
+	if !c.macUpdaterReady.Load() {
 		return false, "The Mac app updater is unavailable."
 	}
 	if desktopBundleVersion() == "dev" {

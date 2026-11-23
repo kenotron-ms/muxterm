@@ -676,6 +676,7 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _automaticUpdateBusy = false;
   @state() private _automaticUpdateError = '';
   private _automaticUpdatePoll: number | null = null;
+  private _automaticUpdateRequest = 0;
   private _onMacAutomaticUpdate = (event: Event) => {
     const detail = (event as CustomEvent<AutomaticUpdateStatus>).detail;
     if (detail && typeof detail.eligible === 'boolean') this._automaticUpdate = detail;
@@ -782,6 +783,7 @@ export class MuxSettingsSurface extends LitElement {
     this._automaticUpdatePoll = window.setInterval(() => {
       if (this._section === 'about' && !macAppVersion()) void this._loadAutomaticUpdate();
     }, 30_000);
+    if (this._section === 'about') void this._loadAutomaticUpdate();
     this._refreshNotifPermission();
     // host-state is the only thing that moves a row between sections without
     // this pane asking for it, so it is the only thing that refetches.
@@ -796,6 +798,7 @@ export class MuxSettingsSurface extends LitElement {
     window.removeEventListener('muxterm-mac-auto-update', this._onMacAutomaticUpdate);
     if (this._automaticUpdatePoll !== null) window.clearInterval(this._automaticUpdatePoll);
     this._automaticUpdatePoll = null;
+    ++this._automaticUpdateRequest;
     window.clearTimeout(this._antigravityPollTimer);
     window.clearInterval(this._agentVersionTimer);
     window.clearInterval(this._runtimeTimer);
@@ -887,22 +890,28 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private async _loadAutomaticUpdate(): Promise<void> {
+    const request = ++this._automaticUpdateRequest;
     try {
-      this._automaticUpdate = await (macAppVersion() ? fetchMacAutomaticUpdateStatus() : fetchAutomaticUpdateStatus());
+      const status = await (macAppVersion() ? fetchMacAutomaticUpdateStatus() : fetchAutomaticUpdateStatus());
+      if (!this.isConnected || request !== this._automaticUpdateRequest) return;
+      this._automaticUpdate = status;
       this._automaticUpdateError = '';
     } catch (error) {
+      if (!this.isConnected || request !== this._automaticUpdateRequest) return;
       this._automaticUpdateError = error instanceof Error ? error.message : String(error);
     }
   }
 
   private async _setAutomaticUpdates(enabled: boolean): Promise<void> {
     if (this._automaticUpdateBusy || (!this._automaticUpdate?.eligible && enabled)) return;
+    const request = ++this._automaticUpdateRequest;
     this._automaticUpdateBusy = true;
     this._automaticUpdateError = '';
     try {
-      this._automaticUpdate = await (macAppVersion() ? setMacAutomaticUpdates(enabled) : setAutomaticUpdates(enabled));
+      const status = await (macAppVersion() ? setMacAutomaticUpdates(enabled) : setAutomaticUpdates(enabled));
+      if (this.isConnected && request === this._automaticUpdateRequest) this._automaticUpdate = status;
     } catch (error) {
-      this._automaticUpdateError = error instanceof Error ? error.message : String(error);
+      if (this.isConnected && request === this._automaticUpdateRequest) this._automaticUpdateError = error instanceof Error ? error.message : String(error);
     } finally {
       this._automaticUpdateBusy = false;
     }

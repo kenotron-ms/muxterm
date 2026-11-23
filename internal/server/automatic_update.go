@@ -431,6 +431,18 @@ func (s *Server) handleUpdatePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	defer daemon.Close()
 	go func() { _ = daemon.Run() }()
+	keepGate := false
+	defer func() {
+		if !keepGate {
+			if err := daemon.ReleaseUpdate(); err != nil {
+				log.Printf("automatic update: release prepared Mac terminal gate: %v", err)
+			}
+		}
+	}()
+	if err := r.Context().Err(); err != nil {
+		writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": false, "reason": "Mac companion disconnected before terminal safety check."})
+		return
+	}
 	ok, reason, err := daemon.PrepareUpdate()
 	if err != nil {
 		ok, reason = false, err.Error()
@@ -438,9 +450,11 @@ func (s *Server) handleUpdatePrepare(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		if work := s.activeUpdateWork(); work != "" {
 			ok, reason = false, work
-			_ = daemon.ReleaseUpdate()
+		} else if r.Context().Err() != nil {
+			ok, reason = false, "Mac companion disconnected before update could proceed."
 		} else {
 			keepAdmission = true
+			keepGate = true
 		}
 	}
 	writeUpdateJSON(w, http.StatusOK, map[string]any{"safe": ok, "reason": reason, "token": token})

@@ -46,7 +46,7 @@ func main() {
 	if err := companion.initMacUpdater(); err != nil {
 		log.Printf("Mac updater unavailable: %v", err)
 	} else {
-		companion.macUpdaterReady = true
+		companion.macUpdaterReady.Store(true)
 	}
 	go companion.runMacAutomaticUpdates()
 	app.OnShutdown(companion.close)

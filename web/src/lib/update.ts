@@ -40,14 +40,14 @@ export interface AutomaticUpdateStatus {
 }
 
 export async function fetchAutomaticUpdateStatus(): Promise<AutomaticUpdateStatus> {
-  const response = await fetch(apiPath('/api/update/automatic'));
+  const response = await fetch(apiPath('/api/update/automatic'), { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Could not load automatic update setting (HTTP ${response.status}).`);
   return response.json() as Promise<AutomaticUpdateStatus>;
 }
 
 export async function setAutomaticUpdates(enabled: boolean): Promise<AutomaticUpdateStatus> {
   const response = await fetch(apiPath('/api/update/automatic'), {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }), signal: AbortSignal.timeout(10_000),
   });
   const body = await response.json() as AutomaticUpdateStatus & { error?: string };
   if (!response.ok) throw new Error(body.error || `Could not save automatic update setting (HTTP ${response.status}).`);

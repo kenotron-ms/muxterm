@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -62,7 +63,7 @@ type Companion struct {
 	updateMu         sync.Mutex
 	autoMu           sync.Mutex
 	autoRecord       macAutomaticRecord
-	macUpdaterReady  bool
+	macUpdaterReady  atomic.Bool
 	autoStop         chan struct{}
 	autoWake         chan struct{}
 	app              *application.App
@@ -498,6 +499,8 @@ func (c *Companion) OpenPreview(token string, port int) error {
 
 func (c *Companion) close() {
 	c.stopBrowserControl()
+	// Updater.Restart calls App.Quit synchronously from the automatic-update
+	// goroutine, so shutdown must signal cancellation without joining it.
 	close(c.autoStop)
 	c.mu.Lock()
 	forwards := c.forwards
