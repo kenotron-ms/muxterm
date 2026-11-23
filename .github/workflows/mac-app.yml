@@ -97,9 +97,11 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/muxterm-mac-v1"
           ditto desktop/bin/Muxterm.app "$RUNNER_TEMP/muxterm-mac-v1/Muxterm.app"
+          rm -f desktop/bin/Muxterm-0.1.0-macos-arm64.dmg desktop/bin/Muxterm-0.1.0-macos-arm64.zip
 
       - name: Sign second isolated release
         env:
+          MUXTERM_RELEASE_CLEAN_BUILD_DEPS: '1'
           MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
           MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
