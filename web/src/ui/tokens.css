@@ -57,6 +57,10 @@
   --ui-icon-sm: var(--ui-space-6);
   --ui-icon-md: var(--ui-space-7);
   --ui-icon-lg: var(--ui-space-8);
+  --ui-app-icon-preview-size: 80px;
+  --ui-app-icon-preview-phone-size: 68px;
+  --ui-app-icon-charm-size: 56px;
+  --ui-app-icon-swatch-size: 18px;
   --ui-status-dot-size: var(--ui-space-3);
   --ui-status-dot-lg: var(--ui-space-4);
   --ui-divider-thickness: var(--ui-space-px);

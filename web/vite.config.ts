@@ -52,36 +52,12 @@ export default defineConfig({
       // same '/sw.js' at scope '/' as this snippet did, but only when the app
       // is mounted at the origin root. See web/src/lib/sw.ts.
       injectRegister: null,
-      includeAssets: [
-        'favicon.svg',
-        'favicon-32.png',
-        'apple-touch-icon.png',
-        'icons/icon.svg',
-        'icons/icon-maskable.svg',
-      ],
-      manifest: {
-        name: 'muxterm',
-        short_name: 'muxterm',
-        description: 'A terminal multiplexer in your browser.',
-        id: '/',
-        start_url: '/',
-        scope: '/',
-        display: 'standalone',
-        display_override: ['window-controls-overlay'],
-        orientation: 'any',
-        background_color: '#1a1b26',
-        theme_color: '#1a1b26',
-        icons: [
-          { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
-          {
-            src: 'icons/icon-maskable-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'maskable',
-          },
-        ],
-      },
+      // Workbox requires one precache entry to emit the installability SW.
+      // This legacy source icon is never selected by the manifest or HTML.
+      includeAssets: ['icons/icon.svg'],
+      // The Go server renders the manifest from the server's saved icon choice.
+      // Keep the service worker build, but do not emit a second static manifest.
+      manifest: false,
       workbox: {
         // No precaching — every request goes to the network.
         // The SW exists for PWA installability (launch icon, standalone mode)

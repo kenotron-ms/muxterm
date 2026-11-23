@@ -22,6 +22,7 @@ type Config struct {
 	// Global lane approval policy; omitted preferences preserve the on-disk value.
 	Lanes     LanesConfig     `toml:"lanes" json:"lanes"`
 	Theme     ThemeConfig     `toml:"theme"      json:"theme"`
+	AppIcon   AppIconConfig   `toml:"app_icon"   json:"app_icon"`
 	Font      FontConfig      `toml:"font"       json:"font"`
 	Terminal  TerminalConfig  `toml:"terminal"   json:"terminal"`
 	Sidebar   SidebarConfig   `toml:"sidebar"    json:"sidebar"`
@@ -423,6 +424,13 @@ type ThemeConfig struct {
 	App      string `toml:"app"     json:"app"`
 	Mode     string `toml:"mode"    json:"mode"`
 	Backdrop string `toml:"backdrop" json:"backdrop"`
+}
+
+// AppIconConfig is the server's public PWA launcher identity. Both fields are
+// selected together; an empty pair uses a stable server-derived default.
+type AppIconConfig struct {
+	Charm string `toml:"charm" json:"charm"`
+	Color string `toml:"color" json:"color"`
 }
 
 // FontConfig controls the terminal font family and size.

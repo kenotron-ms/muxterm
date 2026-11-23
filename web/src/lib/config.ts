@@ -1,4 +1,5 @@
 import { apiPath } from './base-path.js';
+import type { AppIconChoice } from './pwa-icon.js';
 
 // ── Persistence helpers ──────────────────────────────────────────────────────
 
@@ -72,6 +73,7 @@ export function patchConfig(partial: Record<string, unknown>): void {
 
 // ResolvedConfig mirrors Go internal/config.Config with camelCase keys.
 export interface ResolvedConfig {
+  appIcon: AppIconChoice;
   theme: { palette: string; app: 'neutral' | 'mist' | 'linden' | 'iris' | 'coral' | 'lagoon' | 'pearl' | 'cobalt' | 'plum' | 'sage' | 'champagne' | 'rose' | 'tangerine'; mode: 'light' | 'dark'; backdrop: string };
   font: { family: string; size: number };
   terminal: {
@@ -108,6 +110,7 @@ export interface ResolvedConfig {
 
 // DEFAULT_RESOLVED_CONFIG mirrors Go internal/config.Defaults() exactly.
 export const DEFAULT_RESOLVED_CONFIG: ResolvedConfig = {
+  appIcon: { charm: 'hourglass', color: 'indigo' },
   theme: { palette: 'tokyo-night', app: 'neutral', mode: 'dark', backdrop: 'contours' },
   font: {
     // Default to the server-bundled JetBrains Mono Nerd Font, served from
@@ -218,6 +221,7 @@ export function parseResolvedConfig(raw: unknown): ResolvedConfig {
   const r = raw as Record<string, unknown>;
 
   const t = obj(r['theme']);
+  const appIcon = obj(r['app_icon']);
   const f = obj(r['font']);
   const term = obj(r['terminal']);
   const sb = obj(r['sidebar']);
@@ -231,6 +235,12 @@ export function parseResolvedConfig(raw: unknown): ResolvedConfig {
     : [...d.workspace.rails];
 
   return {
+    appIcon: {
+      charm: ['hourglass', 'key', 'lantern', 'rocket'].includes(appIcon['charm'] as string)
+        ? appIcon['charm'] as AppIconChoice['charm'] : d.appIcon.charm,
+      color: ['coral', 'indigo', 'ochre', 'plum', 'teal'].includes(appIcon['color'] as string)
+        ? appIcon['color'] as AppIconChoice['color'] : d.appIcon.color,
+    },
     theme: {
       palette: str(t['palette'], d.theme.palette),
       app: ['neutral', 'mist', 'linden', 'iris', 'coral', 'lagoon', 'pearl', 'cobalt', 'plum', 'sage', 'champagne', 'rose', 'tangerine'].includes(t['app'] as string)

@@ -58,6 +58,12 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if newCfg.AppIcon.Charm != "" || newCfg.AppIcon.Color != "" {
+		if err := s.appIconAssetsAvailable(newCfg.AppIcon); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	if err := muxcfg.Write(s.configPath, newCfg); err != nil {
 		http.Error(w, fmt.Sprintf("%s: persistence failed: %v", patch, err), http.StatusInternalServerError)
 		return
@@ -78,7 +84,8 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cfg = persisted
-	s.hub.BroadcastConfig(persisted)
+	s.cfg.AppIcon = resolvedAppIcon(s.cfg.AppIcon, s.configPath, s.webRedirectURI)
+	s.hub.BroadcastConfig(s.cfg)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(persisted) //nolint:errcheck
+	json.NewEncoder(w).Encode(s.cfg) //nolint:errcheck
 }
