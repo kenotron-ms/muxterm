@@ -1379,7 +1379,7 @@ export class MuxSDKUtility extends LitElement {
     mux-sdk-utility .mobile-tab-picker { display:none; }
     @media(max-width:767.98px) {
       mux-sdk-utility mux-ui-tab-strip { display:none; }
-      mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-1); height:var(--ui-control-md); padding:0 var(--ui-space-2); }
+      mux-sdk-utility .mobile-tab-picker { box-sizing:border-box; display:flex; align-items:center; flex:none; gap:var(--ui-space-1); height:var(--ui-nav-height); padding:0 var(--ui-space-2); }
       mux-sdk-utility .mobile-tab-trigger { box-sizing:border-box; display:flex; align-items:center; flex:1; gap:var(--ui-space-3); min-width:0; height:100%; padding:0 var(--ui-space-2); border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); font:600 var(--ui-text-sm) var(--ui-font-sans); text-align:left; cursor:pointer; }
       mux-sdk-utility .mobile-tab-action { box-sizing:border-box; display:grid; place-items:center; flex:none; width:var(--ui-control-md); height:var(--ui-control-md); padding:0; border:0; border-radius:var(--ui-radius-md); background:transparent; color:var(--ui-text); cursor:pointer; }
       mux-sdk-utility .mobile-tab-action.muted { color:var(--ui-text-muted); }
