@@ -18,7 +18,7 @@ import '../ui/text-field.js';
 import '../ui/theme-choice.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
-import { sdkChats, sdkHarnessLabel, type SDKHarnessName } from '../lib/sdk-chats.js';
+import { sdkChats, sdkHarnessLabel, SDK_HARNESSES } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
@@ -104,8 +104,6 @@ const SETUP_AGENTS = [
   { harness:'deepseek', name:'DeepSeek Harness · ACP', description:'DeepSeek coding agent', install:'npm install -g @deepseek-ai/dsh', update:'npm install -g @deepseek-ai/dsh@latest', start:'dsh', docs:'https://github.com/deepseek-ai/deepseek-harness' },
   { harness:'amplifier', name:'Amplifier', description:'Microsoft agent with bundles and provider choice', install:'uv tool install git+https://github.com/microsoft/amplifier', update:'uv tool upgrade amplifier', start:'amplifier', docs:'https://github.com/microsoft/amplifier/blob/main/docs/USER_ONBOARDING.md' },
 ] as const;
-// New chats only offer harnesses with verified live steering, native goals, and native history.
-const DEFAULT_HARNESSES: SDKHarnessName[] = ['antigravity', 'copilot'];
 
 /**
  * The status markers. A glyph in a fixed gutter, not a coloured slab: colour
@@ -1347,7 +1345,7 @@ export class MuxSettingsSurface extends LitElement {
       const response = await fetch(apiPath('/api/sdk-chat-start-options'));
       if (!response.ok) throw new Error('Could not load agent status');
       const options = await response.json() as Array<{harness:string}>;
-      if (epoch === this._agentStatusEpoch && this.isConnected) this._readyAgents = new Set(options.map(option => option.harness));
+      if (epoch === this._agentStatusEpoch && this.isConnected) this._readyAgents = new Set(options.map(option => option.harness).filter(harness => SDK_HARNESSES.some(name => name === harness)));
     } catch {
       if (epoch === this._agentStatusEpoch && this.isConnected) { this._readyAgents = null; this._agentStatusError = true; }
     }
@@ -1359,11 +1357,11 @@ export class MuxSettingsSurface extends LitElement {
     const installed = this._agentVersions.get(harness)?.installed ?? false;
     const stopped = this._agentRuntimes.get(harness)?.state === 'stopped';
     const known = this._agentVersions.has(harness);
-    const label = stopped && (installed || ready) ? 'Runtime stopped' : updateAvailable ? 'Update available'
-      : harness === 'copilot' && ready ? 'Ready for new chats'
+    const label = stopped && (installed || ready) ? 'Runtime stopped' : ready ? 'Ready for new chats'
+      : updateAvailable ? 'Update available'
       : !known ? this._agentVersionError ? 'Scan unavailable' : 'Checking'
       : installed ? 'Installed' : 'Not installed';
-    return html`<mux-ui-status-badge appearance="plain" tone=${ready && !updateAvailable && !stopped ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge>`;
+    return html`<mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge>`;
   }
 
   private async _loadAntigravity(): Promise<void> {
@@ -1507,7 +1505,7 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _renderAI() {
-    const eligible = DEFAULT_HARNESSES.filter(harness => this._readyAgents?.has(harness));
+    const eligible = SDK_HARNESSES.filter(harness => this._readyAgents?.has(harness));
     const saved = this.config?.ai.defaultHarness;
     const effective = eligible.find(harness => harness === saved) || eligible[0] || '';
     return html`
@@ -1515,20 +1513,16 @@ export class MuxSettingsSurface extends LitElement {
       <mux-ui-select class="default-harness-setting" label="Default agent" .value=${effective} ?disabled=${!effective}
         .options=${eligible.map(harness => ({value:harness,label:sdkHarnessLabel(harness)}))}
         @change=${(event: Event) => this._setDefaultHarness((event.target as MuxUISelect).value as ResolvedConfig['ai']['defaultHarness'])}></mux-ui-select>
-      ${!effective ? html`<p class="agent-intro">${this._agentStatusError ? 'New-chat availability is unavailable. Try refreshing the agent scan.' : this._readyAgents === null ? 'Checking new-chat availability…' : 'No eligible agent is ready. Set up Antigravity or Copilot to start new chats.'}</p>` : saved && saved !== effective ? html`<p class="agent-intro">Saved default ${sdkHarnessLabel(saved)} is unavailable for new chats. New chats use ${sdkHarnessLabel(effective)}.</p>` : html`<p class="agent-intro">New chats start with this agent. You can choose another eligible agent in the composer.</p>`}
+      ${!effective ? html`<p class="agent-intro">${this._agentStatusError ? 'New-chat availability is unavailable. Try refreshing the agent scan.' : this._readyAgents === null ? 'Checking new-chat availability…' : 'No agent is ready for new chats. Check the setup and connection status below.'}</p>` : saved && saved !== effective ? html`<p class="agent-intro">Saved default ${sdkHarnessLabel(saved)} is unavailable for new chats. New chats use ${sdkHarnessLabel(effective)}.</p>` : html`<p class="agent-intro">New chats start with this agent. You can choose another available agent in the composer.</p>`}
       <p class="section-title">Supported agents</p>
-      <p class="agent-intro">These adapters have verified live steering, native goals, and resumable history. The default list above shows which are available now.</p>
+      <p class="agent-intro">All agents below support new chats. The default list shows which are ready on this host. Each card shows its installation or connection status.</p>
       <div class="agent-scan-actions"><mux-ui-button size="small" variant="secondary" ?disabled=${this._refreshingAgentVersions} @click=${() => void this._refreshAgentVersions()}>${this._refreshingAgentVersions ? 'Scanning…' : 'Refresh agent scan'}</mux-ui-button></div>
       ${this._agentVersionError ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._agentVersionError}</mux-ui-feedback>` : nothing}
       <div class="agent-list">
         ${this._renderAntigravity()}
-        ${SETUP_AGENTS.filter(agent => agent.harness === 'copilot').map(agent => this._renderSetupAgent(agent))}
-      </div>
-      <p class="section-title">Existing chat agents and setup</p>
-      <p class="agent-intro">These adapters remain available for existing chats. Each card shows its installation or connection state and safe management actions. Installation alone does not qualify an agent for new chats.</p>
-      <div class="agent-list">
-        ${SETUP_AGENTS.filter(agent => agent.harness !== 'copilot').map(agent => this._renderSetupAgent(agent))}
+        ${SETUP_AGENTS.map(agent => this._renderSetupAgent(agent))}
         ${this._renderUnified()}
+        ${this._renderGemini()}
         ${this._renderAntigravitySDK()}
       </div>
       ${this._runtimeError && !this._runtimeErrorHarness ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._runtimeError}</mux-ui-feedback>` : nothing}
@@ -1543,11 +1537,12 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private _renderAntigravitySDK() {
+    const ready = this._readyAgents?.has('antigravity-sdk') ?? false;
     const stopped = this._agentRuntimes.get('antigravity-sdk')?.state === 'stopped';
-    const label = stopped ? 'Runtime stopped' : 'Existing chats';
+    const label = stopped ? 'Runtime stopped' : ready ? 'Ready for new chats' : this._readyAgents === null ? 'Checking' : 'Setup needed';
     return html`<details class="agent-card ai-harness">
-      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Antigravity SDK</span><span class="agent-description">Google coding agent · existing chats</span></span><mux-ui-status-badge appearance="plain" tone="neutral" dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
-      <div class="agent-body"><p>The Python SDK is retained for existing chats, not new chats. It requires uv, Python 3 and a configured GEMINI_API_KEY.</p>
+      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Antigravity SDK</span><span class="agent-description">Google coding agent · Python SDK</span></span><mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <div class="agent-body"><p>The Python SDK supports new chats when uv, Python 3, and GEMINI_API_KEY are available.</p>
         ${this._renderRuntimeControls('antigravity-sdk', 'Antigravity SDK', true)}
       </div>
     </details>`;
@@ -1558,11 +1553,12 @@ export class MuxSettingsSurface extends LitElement {
     const status = this._unified;
     const savedChoiceShown = status?.mode === this._unifiedMode &&
       (this._unifiedMode === 'local' || this._unifiedURL.trim() === status.url && !this._unifiedToken);
-    const label = this._agentRuntimes.get('amplifier-unified')?.state === 'stopped' && ready ? 'Runtime stopped' : status === null ? this._unifiedError ? 'Status unavailable' : 'Checking' : status.connected ? 'Connected' : ready ? 'Configured' : 'Set up';
+    const available = this._readyAgents?.has('amplifier-unified') ?? false;
+    const label = this._agentRuntimes.get('amplifier-unified')?.state === 'stopped' && ready ? 'Runtime stopped' : available ? 'Ready for new chats' : status === null ? this._unifiedError ? 'Status unavailable' : 'Checking' : status.connected ? 'Connected' : ready ? 'Configured' : 'Set up';
     return html`<details class="agent-card ai-harness">
-      <summary><span class="agent-identity"><span class="agent-title">Amplifier Unified</span><span class="agent-description">Unified host · separate from Amplifier CLI</span></span><mux-ui-status-badge appearance="plain" tone=${status?.connected ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <summary><span class="agent-identity"><span class="agent-title">Amplifier Unified</span><span class="agent-description">Unified host · separate from Amplifier CLI</span></span><mux-ui-status-badge appearance="plain" tone=${available ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="agent-body">
-        <p>Unified runs its own service and keeps its own sessions. It is retained for existing chats, not new chats. Install it here or connect an existing host; it can update independently of Muxterm.</p>
+        <p>Unified runs its own service and keeps its own sessions. Install it here or connect an existing host to start new chats; it can update independently of Muxterm.</p>
         <mux-ui-radio-group aria-label="Unified location" name="unified-location" .value=${this._unifiedMode}
           .options=${[{value:'local',label:'This computer',description:'Install and connect automatically'}, {value:'existing',label:'Existing host',description:'Enter its address and control token'}]}
           ?disabled=${this._unifiedBusy}
@@ -1627,7 +1623,7 @@ export class MuxSettingsSurface extends LitElement {
       await this._unifiedRequest('/api/ai/unified/install', 'POST');
       this._applyUnified(await this._unifiedRequest('/api/ai/unified/connection', 'PUT', { mode: 'local' }));
       this._applyUnified(await this._unifiedRequest('/api/ai/unified/check', 'POST'));
-      this._unifiedMessage = 'Unified is installed and connected for existing chats.';
+      this._unifiedMessage = 'Unified is installed and connected. Refresh the agent scan to check new-chat availability.';
       void this._loadAgentAvailability();
     } catch (error) { this._unifiedError = error instanceof Error ? error.message : 'Could not install Unified'; }
     finally { this._unifiedBusy = false; }
@@ -1647,11 +1643,13 @@ export class MuxSettingsSurface extends LitElement {
     this._emit({ ai: { ...this.config.ai, defaultHarness } });
   }
 
-  private _renderExistingHarness(harness: string, name: string, description: string) {
-    const stopped = this._agentRuntimes.get(harness)?.state === 'stopped';
+  private _renderGemini() {
+    const ready = this._readyAgents?.has('gemini') ?? false;
+    const stopped = this._agentRuntimes.get('gemini')?.state === 'stopped';
+    const label = stopped ? 'Runtime stopped' : ready ? 'Ready for new chats' : this._readyAgents === null ? 'Checking' : 'Setup needed';
     return html`<details class="agent-card">
-      <summary><span class="agent-identity"><span class="agent-title">${name}</span><span class="agent-description">Existing chats</span></span><mux-ui-status-badge appearance="plain" tone="neutral" dot>${stopped ? 'Runtime stopped' : 'Existing chats'}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
-      <div class="agent-body"><p>${description}</p>${this._renderRuntimeControls(harness, name, true)}</div>
+      <summary><span class="agent-identity"><span class="agent-title">Gemini CLI</span><span class="agent-description">Google coding agent · ACP</span></span><mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
+      <div class="agent-body"><p>Install and authenticate Gemini CLI to start new chats. <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Setup guide ↗</a></p>${this._renderRuntimeControls('gemini', 'Gemini CLI', ready)}</div>
     </details>`;
   }
 
@@ -1664,7 +1662,7 @@ export class MuxSettingsSurface extends LitElement {
       <summary><span class="agent-identity"><span class="agent-title">${agent.name}</span><span class="agent-description">${agent.description}</span></span>${this._agentStatus(agent.harness)}<span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
       <div class="agent-body">
         <p>${!known ? this._agentVersionError ? 'Installation status unavailable.' : 'Checking installation…' : installed ? `CLI installed ${version.version ? `v${version.version}` : '(version unavailable)'}.` : agent.harness === 'opencode' && version?.version?.startsWith('1.') ? `OpenCode v${version.version} found. Install OpenCode 2 to use chat.` : 'CLI not installed on this computer.'}${version?.latestVersion ? ` Latest v${version.latestVersion}.` : ''}</p>
-        <p>${agent.harness === 'copilot' ? ready ? 'The Copilot SDK is ready for new chats, independently of CLI installation.' : this._agentStatusError ? 'New-chat availability is unavailable.' : this._readyAgents === null ? 'Checking new-chat availability…' : 'Copilot supports new chats when its SDK is authenticated and available.' : 'This adapter is kept for existing chats. Its live steering, native goal, and resumable history support has not been verified together for new chats.'}</p>
+        <p>${ready ? `${agent.name} is ready for new chats.` : this._agentStatusError ? 'New-chat availability is unavailable.' : this._readyAgents === null ? 'Checking new-chat availability…' : `${agent.name} supports new chats when its runtime is set up and available.`}</p>
         <p>${installed ? 'Update in a terminal pane when you choose.' : `Install ${agent.name} in a terminal pane.`} ${agent.harness === 'copilot' ? ready ? '' : 'Run copilot login to connect an authorized Copilot account.' : agent.harness === 'opencode' ? 'Run opencode auth login to connect provider models; built-in free models need no sign-in.' : 'The agent will guide you through sign-in.'} Refresh agent scan after installation or sign-in.</p>
         <div class="agent-card-actions"><mux-ui-button size="small" variant="primary" ?disabled=${!known} @click=${() => this._runAgentCommand(agent, installed ? 'update' : 'install')}>${installed ? 'Update in terminal' : 'Install'}</mux-ui-button><a href=${agent.docs} target="_blank" rel="noopener noreferrer">Setup guide ↗</a></div>
         ${this._renderRuntimeControls(agent.harness, agent.name, installed || ready)}
