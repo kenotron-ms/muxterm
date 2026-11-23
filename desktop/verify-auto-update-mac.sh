@@ -80,6 +80,17 @@ raise SystemExit(0 if state.get('enabled') and state.get('phase') == phase
                  and message in state.get('message', '') else 1)
 PY
 }
+updated_state_matches() {
+  python3 - "$state" <<'PY'
+import json, sys
+try:
+    state = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if state.get('enabled') and state.get('phase') == 'current'
+                 and state.get('latestVersion') == '0.2.0' and state.get('lastUpdate') else 1)
+PY
+}
 
 launch_app
 deferred=false
@@ -107,7 +118,7 @@ launch_app
 
 for _ in {1..120}; do
   version="$(plutil -extract CFBundleVersion raw -o - "$app/Contents/Info.plist" 2>/dev/null || true)"
-  if [[ "$version" == '0.2.0' ]] && state_matches current 'Updated to Mac app version 0.2.0'; then
+  if [[ "$version" == '0.2.0' ]] && updated_state_matches; then
     codesign --verify --deep --strict "$app"
     echo 'MAC PASS: signed 0.1.0 app deferred a foreground job, then installed and relaunched signed 0.2.0 without a browser window'
     cat "$state"
