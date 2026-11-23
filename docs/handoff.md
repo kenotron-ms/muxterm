@@ -229,3 +229,9 @@ Error: app server is running but is not managed by codex app-server daemon
 The retired `features.remote_control` flag is not the supported disable mechanism for the investigated version.
 
 These machine-specific mitigations are background context, not the implementation of shared muxterm adapter ownership.
+
+## Human force restart and Copilot goal recovery
+
+AI Settings keeps ordinary Restart and Stop disabled while a shared SDK/ACP or Amplifier chat is active. Force restart is a separate same-origin human-browser action with explicit confirmation. The shared scope stops and restarts the SDK sidecar and its managed SDK/ACP adapters; Amplifier has its own supervisor and is restarted independently. `amplifier-unified` remains part of the shared scope, while its external Unified host is not stopped. The server marks every known affected working/starting chat uncertain before shutdown, preserves the native chat IDs, transcripts, and Work links, and never resubmits accepted input. If shared active-session discovery fails, the UI explains that the displayed count is only a minimum and that additional shared chats may be interrupted.
+
+Copilot goal controls that can race with an active prompt wait for the target session to reach a confirmed idle boundary before sending the native command. If idleness cannot be confirmed, no native command is sent and the receipt remains uncertain rather than being replayed. Native goal snapshots carry the ledger `controlVersion`; stale snapshots are retained as observations but cannot overwrite newer requested state or clear `HumanPaused`. Snapshot recovery after a failed Copilot control restores the chat without silently changing the approved condition or releasing a human pause.

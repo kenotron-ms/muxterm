@@ -78,6 +78,7 @@ export class CopilotStream {
     this.onDead = onDead;
     this.seenText = new Map();
     this.inputIds = [];
+    this.goalControlPending = false;
     this.ready = this.initialize().catch(error => { adapters.delete(this); throw error; });
   }
 
@@ -131,12 +132,18 @@ export class CopilotStream {
     return { ...options, model, effort };
   }
 
-  async publishGoal(type = 'goal.progress') {
+  async readGoal() {
     const { state } = await this.native.rpc.autopilotObjective.getState();
+    return state;
+  }
+
+  async publishGoal(type = 'goal.progress', controlVersion = this.session.goalControlVersion) {
+    const state = await this.readGoal();
+    const version = Number.isInteger(controlVersion) ? { goalControlVersion: controlVersion } : {};
     this.emit(this.session.id, type, state
       ? { goal: state.objective, goalState: state.status,
-          goalReason: state.pauseReason || '', goalSummary: state.completionSummary || '', raw: state }
-      : { goal: '', goalState: 'cleared' });
+          goalReason: state.pauseReason || '', goalSummary: state.completionSummary || '', raw: state, ...version }
+      : { goal: '', goalState: 'cleared', ...version });
     return state;
   }
 
@@ -144,48 +151,57 @@ export class CopilotStream {
     await this.ready;
     if (cmd.action === 'clear') return { unsupported: true,
       message: 'This Copilot runtime removed /goal clear. Pause the objective with /goal off instead.' };
-    const commands = await this.native.rpc.commands.list();
-    if (!commands.commands?.some(item => item.kind === 'builtin' &&
-      (item.name === 'goal' || item.aliases?.includes('goal'))))
-      return { unsupported: true, message: 'This Copilot runtime does not advertise the native /goal command.' };
+    if (this.goalControlPending || this.admitting)
+      throw new Error('Wait for the current chat input or native goal control to finish before changing the goal');
     if (cmd.action !== 'pause' && this.session.busy)
       throw new Error('Finish the current Copilot turn before starting a goal');
-    const pausing = cmd.action === 'pause' || cmd.paused;
-    const args = pausing ? 'off' : cmd.objective;
-    if (!args || (!pausing && ['on', 'off', 'clear'].includes(args)))
-      throw new Error('Choose a goal condition other than a reserved /goal command');
-    const result = await this.native.rpc.commands.invoke({ name: 'goal', input: args });
-    if (result.kind !== 'agent-prompt' && result.kind !== 'completed' && result.kind !== 'text')
-      throw new Error(`Native /goal returned an unsupported result: ${result.kind}`);
-    const state = await this.publishGoal('goal.snapshot');
-    if (pausing) {
-      if (state?.status !== 'paused') throw new Error('Native Copilot goal did not pause');
-    } else if (state?.objective !== cmd.objective || state.status !== 'active') {
-      throw new Error('Native Copilot goal was not activated');
-    }
-    if (!pausing) {
-      // /goal produces a prompt on first start; refocusing an existing goal
-      // only updates native state, so explicitly resume its next turn.
-      const prompt = result.kind === 'agent-prompt' ? result.prompt
-        : `Continue the active autopilot objective: ${cmd.objective}`;
-      this.session.busy = true;
-      this.session.cancelRequested = false;
-      this.admitting = true;
-      this.pendingIdle = null;
-      try {
-        await this.native.send({ prompt,
-          displayPrompt: result.kind === 'agent-prompt' ? result.displayPrompt : `Autopilot objective: ${cmd.objective}`,
-          agentMode: 'autopilot' });
-        this.admitting = false;
-        if (this.pendingIdle) void this.finishTurn(this.pendingIdle);
-      } catch (error) {
-        this.session.busy = false;
-        this.admitting = false;
-        this.pendingIdle = null;
-        throw error;
+    this.goalControlPending = true;
+    try {
+      const commands = await this.native.rpc.commands.list();
+      if (!commands.commands?.some(item => item.kind === 'builtin' &&
+        (item.name === 'goal' || item.aliases?.includes('goal'))))
+        return { unsupported: true, message: 'This Copilot runtime does not advertise the native /goal command.' };
+      if (cmd.action !== 'pause' && this.session.busy)
+        throw new Error('Finish the current Copilot turn before starting a goal');
+      const pausing = cmd.action === 'pause' || cmd.paused;
+      const args = pausing ? 'off' : cmd.objective;
+      if (!args || (!pausing && ['on', 'off', 'clear'].includes(args)))
+        throw new Error('Choose a goal condition other than a reserved /goal command');
+      const result = await this.native.rpc.commands.invoke({ name: 'goal', input: args });
+      if (result.kind !== 'agent-prompt' && result.kind !== 'completed' && result.kind !== 'text')
+        throw new Error(`Native /goal returned an unsupported result: ${result.kind}`);
+      const state = await this.publishGoal('goal.snapshot', cmd.goalControlVersion);
+      if (pausing) {
+        if (state?.status !== 'paused') throw new Error('Native Copilot goal did not pause');
+      } else if (state?.objective !== cmd.objective || state.status !== 'active') {
+        throw new Error('Native Copilot goal was not activated');
       }
+      if (!pausing) {
+        // /goal produces a prompt on first start; refocusing an existing goal
+        // only updates native state, so explicitly resume its next turn.
+        const prompt = result.kind === 'agent-prompt' ? result.prompt
+          : `Continue the active autopilot objective: ${cmd.objective}`;
+        this.session.busy = true;
+        this.session.cancelRequested = false;
+        this.admitting = true;
+        this.pendingIdle = null;
+        try {
+          await this.native.send({ prompt,
+            displayPrompt: result.kind === 'agent-prompt' ? result.displayPrompt : `Autopilot objective: ${cmd.objective}`,
+            agentMode: 'autopilot' });
+          this.admitting = false;
+          if (this.pendingIdle) void this.finishTurn(this.pendingIdle);
+        } catch (error) {
+          this.session.busy = false;
+          this.admitting = false;
+          this.pendingIdle = null;
+          throw error;
+        }
+      }
+      return { command: { kind: result.kind }, objective: state };
+    } finally {
+      this.goalControlPending = false;
     }
-    return { command: { kind: result.kind }, objective: state };
   }
 
   title(cmd) {
@@ -198,6 +214,7 @@ export class CopilotStream {
     try { await this.client.ping(); }
     catch (error) { failCopilotClient(this.client, error); throw error; }
     if (input.kind === 'steer') return this.steer(input);
+    if (this.goalControlPending) throw new Error('Wait for native goal control to finish before sending another message');
     if (this.session.busy) throw new Error('Finish the current Copilot turn before sending another message');
     if (input.kind !== 'user') throw new Error(`Copilot does not support ${input.kind} input`);
     this.session.busy = true;
@@ -224,6 +241,7 @@ export class CopilotStream {
   }
 
   async steer(input) {
+    if (this.goalControlPending) throw new Error('Wait for native goal control to finish before steering this turn');
     if (!this.session.busy) throw new Error('No active Copilot turn to steer');
     if (this.admitting) throw new Error('Copilot is still accepting the previous message; retry steering shortly');
     this.admitting = true;

@@ -81,41 +81,42 @@ type sdkProject struct {
 	WorkControlVersion int      `json:"workControlVersion,omitempty"`
 }
 type sdkEvent struct {
-	ID              string                 `json:"id,omitempty"`
-	SessionID       string                 `json:"sessionId"`
-	At              time.Time              `json:"at,omitempty"`
-	Type            string                 `json:"type"`
-	NativeID        string                 `json:"nativeId,omitempty"`
-	InputID         string                 `json:"inputId,omitempty"`
-	ItemID          string                 `json:"itemId,omitempty"`
-	InputIDs        []string               `json:"inputIds,omitempty"`
-	GenerationID    string                 `json:"generationId,omitempty"`
-	Delivery        string                 `json:"delivery,omitempty"`
-	Persisted       *bool                  `json:"persisted,omitempty"`
-	Kind            string                 `json:"kind,omitempty"`
-	Source          string                 `json:"source,omitempty"`
-	Origin          *sdkEventOrigin        `json:"origin,omitempty"`
-	Cumulative      bool                   `json:"cumulative,omitempty"`
-	Text            string                 `json:"text,omitempty"`
-	Name            string                 `json:"name,omitempty"`
-	ToolID          string                 `json:"toolId,omitempty"`
-	ChildSessionID  string                 `json:"childSessionId,omitempty"`
-	ParentSessionID string                 `json:"parentSessionId,omitempty"`
-	Agent           string                 `json:"agent,omitempty"`
-	Message         string                 `json:"message,omitempty"`
-	Model           string                 `json:"model,omitempty"`
-	Provider        string                 `json:"provider,omitempty"`
-	Bundle          string                 `json:"bundle,omitempty"`
-	Raw             json.RawMessage        `json:"raw,omitempty"`
-	GoalState       string                 `json:"goalState,omitempty"`
-	Goal            *string                `json:"goal,omitempty"`
-	GoalReason      string                 `json:"goalReason,omitempty"`
-	GoalSummary     string                 `json:"goalSummary,omitempty"`
-	Topic           string                 `json:"topic,omitempty"`
-	WorkID          string                 `json:"workId,omitempty"`
-	Failed          bool                   `json:"failed,omitempty"`
-	Complete        bool                   `json:"complete,omitempty"`
-	Attachments     []sdkDisplayAttachment `json:"attachments,omitempty"`
+	ID                 string                 `json:"id,omitempty"`
+	SessionID          string                 `json:"sessionId"`
+	At                 time.Time              `json:"at,omitempty"`
+	Type               string                 `json:"type"`
+	NativeID           string                 `json:"nativeId,omitempty"`
+	InputID            string                 `json:"inputId,omitempty"`
+	ItemID             string                 `json:"itemId,omitempty"`
+	InputIDs           []string               `json:"inputIds,omitempty"`
+	GenerationID       string                 `json:"generationId,omitempty"`
+	Delivery           string                 `json:"delivery,omitempty"`
+	Persisted          *bool                  `json:"persisted,omitempty"`
+	Kind               string                 `json:"kind,omitempty"`
+	Source             string                 `json:"source,omitempty"`
+	Origin             *sdkEventOrigin        `json:"origin,omitempty"`
+	Cumulative         bool                   `json:"cumulative,omitempty"`
+	Text               string                 `json:"text,omitempty"`
+	Name               string                 `json:"name,omitempty"`
+	ToolID             string                 `json:"toolId,omitempty"`
+	ChildSessionID     string                 `json:"childSessionId,omitempty"`
+	ParentSessionID    string                 `json:"parentSessionId,omitempty"`
+	Agent              string                 `json:"agent,omitempty"`
+	Message            string                 `json:"message,omitempty"`
+	Model              string                 `json:"model,omitempty"`
+	Provider           string                 `json:"provider,omitempty"`
+	Bundle             string                 `json:"bundle,omitempty"`
+	Raw                json.RawMessage        `json:"raw,omitempty"`
+	GoalState          string                 `json:"goalState,omitempty"`
+	Goal               *string                `json:"goal,omitempty"`
+	GoalReason         string                 `json:"goalReason,omitempty"`
+	GoalSummary        string                 `json:"goalSummary,omitempty"`
+	GoalControlVersion *int                   `json:"goalControlVersion,omitempty"`
+	Topic              string                 `json:"topic,omitempty"`
+	WorkID             string                 `json:"workId,omitempty"`
+	Failed             bool                   `json:"failed,omitempty"`
+	Complete           bool                   `json:"complete,omitempty"`
+	Attachments        []sdkDisplayAttachment `json:"attachments,omitempty"`
 }
 type sdkEventOrigin struct {
 	Type         string `json:"type"`
@@ -367,6 +368,11 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		h.mu.Unlock()
 		return
 	}
+	if event.Type == "error" && c.State == "uncertain" && strings.TrimSpace(event.Message) == "" && len(event.InputIDs) > 0 {
+		log.Printf("ignoring empty runtime-close error for uncertain SDK chat %s", c.ID)
+		h.mu.Unlock()
+		return
+	}
 	if c.Harness == "amplifier-unified" && (strings.HasPrefix(event.ID, "unified:") || event.Cumulative) {
 		if !h.acceptUnifiedEventLocked(&event) {
 			h.mu.Unlock()
@@ -389,6 +395,12 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	c.UpdatedAt = time.Now().UTC()
 	if event.Type == "voice.input.delta" || event.Type == "voice.output.delta" {
 		c.HasVoiceHistory = true
+	}
+	goalSnapshotObserved := false
+	goalSnapshotCurrent := true
+	if event.Type == "goal.snapshot" && event.GoalControlVersion != nil {
+		goalSnapshotCurrent = h.observeGoalLocked(c, event)
+		goalSnapshotObserved = true
 	}
 	switch event.Type {
 	case "turn.started":
@@ -429,11 +441,13 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		}
 		c.LastActivity = "Turn completed"
 	case "goal.progress", "goal.snapshot":
-		if event.Goal != nil {
-			c.Goal = *event.Goal
+		if event.Type != "goal.snapshot" || goalSnapshotCurrent {
+			if event.Goal != nil {
+				c.Goal = *event.Goal
+			}
+			c.GoalState, c.GoalReason, c.GoalSummary = event.GoalState, event.GoalReason, event.GoalSummary
+			c.LastActivity = "Goal: " + event.GoalState
 		}
-		c.GoalState, c.GoalReason, c.GoalSummary = event.GoalState, event.GoalReason, event.GoalSummary
-		c.LastActivity = "Goal: " + event.GoalState
 	case "turn.cancelled":
 		c.State = "ready"
 		c.LastTurnOutcome = "cancelled"
@@ -445,7 +459,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.State = "uncertain"
 		c.LastActivity = "Delivery uncertain"
 	}
-	h.observeGoalLocked(c, event)
+	if !goalSnapshotObserved {
+		h.observeGoalLocked(c, event)
+	}
 	_ = h.saveLocked(c)
 	delivery := h.planSubscriptionsLocked(event)
 	pendingSaved := false
@@ -1111,10 +1127,11 @@ func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
 	if len(document.Revisions) > 0 {
 		approvedGoal = document.Revisions[len(document.Revisions)-1].Condition
 	}
+	controlVersion := document.ControlVersion
 	needsReconciliation := ctx.Value(goalControlContextKey{}) != true &&
 		((document.RequestedRevision > 0 && document.State == "uncertain") ||
 			(c.Goal != "" && (document.RequestedRevision == 0 || (c.Harness == "codex" && c.Goal != approvedGoal))))
-	if needsReconciliation && c.Harness != "codex" {
+	if needsReconciliation && c.Harness != "codex" && c.Harness != "copilot" {
 		return errors.New("native goal requires reconciliation; use the human goal editor or an explicit scoped goal control before loading this session")
 	}
 	resumeHarness, resumeNativeID := c.Harness, c.NativeID
@@ -1126,7 +1143,7 @@ func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
 	if legacyAntigravity {
 		resumeModel, resumeEffort = "", ""
 	}
-	if _, err = h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": resumeHarness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": resumeNativeID, "migrationTranscript": migrationTranscript, "bundle": c.Bundle, "provider": amplifierProviderModule(resumeHarness, c.Provider), "model": resumeModel, "effort": resumeEffort, "approval": "never", "permission": c.Permission, "mode": c.Mode, "originToken": h.chatOriginToken(c.ID)}); err != nil {
+	if _, err = h.call(ctx, "resume", map[string]any{"sessionId": c.ID, "harness": resumeHarness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "nativeId": resumeNativeID, "migrationTranscript": migrationTranscript, "bundle": c.Bundle, "provider": amplifierProviderModule(resumeHarness, c.Provider), "model": resumeModel, "effort": resumeEffort, "approval": "never", "permission": c.Permission, "mode": c.Mode, "originToken": h.chatOriginToken(c.ID), "goalControlVersion": controlVersion}); err != nil {
 		if legacyAntigravity {
 			h.mu.Lock()
 			c.NativeID = legacyNativeID
@@ -1153,24 +1170,51 @@ func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
 	if !needsReconciliation {
 		return nil
 	}
-	result, err := h.call(ctx, "goal-snapshot", map[string]any{"sessionId": c.ID})
+	result, err := h.call(ctx, "goal-snapshot", map[string]any{"sessionId": c.ID, "goalControlVersion": controlVersion})
 	if err != nil {
 		return fmt.Errorf("native goal could not be reconciled after restart: %w", err)
 	}
 	var snapshot struct {
-		Goal      string `json:"goal"`
-		GoalState string `json:"goalState"`
+		Goal        string `json:"goal"`
+		GoalState   string `json:"goalState"`
+		GoalReason  string `json:"goalReason"`
+		GoalSummary string `json:"goalSummary"`
 	}
-	if err := json.Unmarshal(result, &snapshot); err != nil || snapshot.GoalState == "" || (snapshot.Goal == "" && snapshot.GoalState != "cleared") {
+	if err := json.Unmarshal(result, &snapshot); err != nil || snapshot.GoalState == "" || (c.Harness != "copilot" && snapshot.Goal == "" && snapshot.GoalState != "cleared") {
 		return errors.New("native goal returned an invalid snapshot after restart")
 	}
-	if snapshot.Goal != "" {
-		if document.RequestedRevision == 0 || snapshot.Goal != approvedGoal {
+	mismatch := false
+	if c.Harness == "copilot" {
+		mismatch = document.RequestedRevision == 0 && snapshot.Goal != "" ||
+			document.RequestedRevision > 0 && ((document.HumanPaused && snapshot.Goal != "") || (!document.HumanPaused && snapshot.Goal != approvedGoal))
+	} else if snapshot.Goal != "" && (document.RequestedRevision == 0 || snapshot.Goal != approvedGoal) {
+		return errors.New("native goal differs from the human goal; use the goal editor to reconcile it before continuing")
+	}
+	if mismatch {
+		if c.Harness != "copilot" {
 			return errors.New("native goal differs from the human goal; use the goal editor to reconcile it before continuing")
 		}
 	}
 	goal := snapshot.Goal
-	h.appendEvent(sdkEvent{SessionID: c.ID, Type: "goal.snapshot", Goal: &goal, GoalState: snapshot.GoalState})
+	reason := snapshot.GoalReason
+	if mismatch {
+		reason = "The native Copilot goal differs from the approved Muxterm goal. The live chat was restored from the native snapshot without changing the approved condition or releasing a human pause."
+	}
+	h.appendEvent(sdkEvent{SessionID: c.ID, Type: "goal.snapshot", Goal: &goal, GoalState: snapshot.GoalState, GoalReason: reason, GoalSummary: snapshot.GoalSummary, GoalControlVersion: &controlVersion})
+	if c.Harness == "copilot" {
+		if mismatch {
+			_, err = h.goals.update(*c, func(document *goalDocument) error {
+				if document.ControlVersion == controlVersion {
+					document.Gap = "The native Copilot goal differs from the approved Muxterm goal. The chat is available; review the goal ledger before starting or resuming the objective."
+				}
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("goal ledger unavailable after native snapshot: %w", err)
+			}
+		}
+		return nil
+	}
 	if document.RequestedRevision > 0 {
 		reconciled, err := h.goals.update(*c, nil)
 		if err != nil {
