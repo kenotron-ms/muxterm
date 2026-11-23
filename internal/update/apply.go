@@ -45,6 +45,12 @@ var downloadClient = &http.Client{Timeout: 10 * time.Minute}
 // over a running binary is safe on Linux and macOS: the running process keeps
 // its original inode until it exits.
 func Apply(ctx context.Context, rel *Release) error {
+	return ApplyWithPreInstall(ctx, rel, nil)
+}
+
+// ApplyWithPreInstall downloads and verifies first, then asks the caller for
+// final authorization immediately before replacing the executable.
+func ApplyWithPreInstall(ctx context.Context, rel *Release, preInstall func() error) error {
 	if rel == nil {
 		return errors.New("no release to apply")
 	}
@@ -102,6 +108,11 @@ func Apply(ctx context.Context, rel *Release) error {
 	// After a successful rename this path no longer exists and Remove is a
 	// harmless no-op; on any failure below it cleans up the extracted binary.
 	defer func() { _ = os.Remove(tmpBin) }()
+	if preInstall != nil {
+		if err := preInstall(); err != nil {
+			return err
+		}
+	}
 
 	if err := os.Rename(tmpBin, exe); err != nil {
 		return fmt.Errorf("install new binary over %s: %w", exe, err)

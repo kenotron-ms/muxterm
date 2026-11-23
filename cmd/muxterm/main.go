@@ -30,6 +30,7 @@ import (
 )
 
 var version = "dev"
+var releaseBuild = "false"
 
 func main() {
 	cfg, err := ParseArgs(os.Args[1:])
@@ -525,6 +526,7 @@ func runLocal(cfg Config) error {
 		WebRedirectURI: webRedirectURIFor(cfg.Addr, localServerCfg),
 		LocalToken:     localToken,
 		Version:        version,
+		ReleaseBuild:   releaseBuild == "true",
 		Remotes:        rt,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
@@ -682,6 +684,7 @@ func runServe(cfg Config) error {
 		BehindReverseProxy: srvCfg.BehindReverseProxy,
 		LocalToken:         localToken,
 		Version:            version,
+		ReleaseBuild:       releaseBuild == "true",
 		Remotes:            rt,
 	})
 	srv.Hub().SetResolvedConfig(resolved)

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
 )
 
 // Client is the serve-side handle to a single sessiond Unix-socket connection.
@@ -332,6 +331,24 @@ func (c *Client) requestWithin(msg *Message, timeout time.Duration) (*Message, e
 // ListWorkspaces requests the daemon's current workspace list.
 func (c *Client) ListWorkspaces() ([]WorkspaceInfo, error) {
 	return c.ListWorkspacesWithin(0)
+}
+
+// PrepareUpdate asks the running daemon to prove restore and pane safety and
+// hold a short gate over new activity. Old daemons time out and fail closed.
+func (c *Client) PrepareUpdate() (bool, string, error) {
+	reply, err := c.requestWithin(&Message{Type: TypeUpdatePrepare}, 3*time.Second)
+	if err != nil {
+		return false, "", err
+	}
+	if reply.Type != TypeUpdateSafety {
+		return false, "", fmt.Errorf("unexpected update safety reply %q", reply.Type)
+	}
+	return reply.OK, reply.Error, nil
+}
+
+func (c *Client) ReleaseUpdate() error {
+	_, err := c.requestWithin(&Message{Type: TypeUpdateRelease}, 2*time.Second)
+	return err
 }
 
 // ListWorkspacesWithin requests the daemon's current workspace list, bounding

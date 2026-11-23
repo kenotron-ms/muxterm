@@ -38,13 +38,14 @@ func main() {
 		RawMessageHandler: companion.browserMessage,
 		ShouldQuit:        companion.shouldQuit,
 		Mac: application.MacOptions{
-			ApplicationShouldTerminateAfterLastWindowClosed: true,
+			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 	})
 	companion.app = app
 	if err := companion.initMacUpdater(); err != nil {
 		log.Printf("Mac updater unavailable: %v", err)
 	}
+	go companion.runMacAutomaticUpdates()
 	app.OnShutdown(companion.close)
 	menu := app.NewMenu()
 	if runtime.GOOS == "darwin" {

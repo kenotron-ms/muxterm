@@ -28,6 +28,32 @@ export interface UpdateStatus {
   error?: string;
 }
 
+export interface AutomaticUpdateStatus {
+  enabled: boolean;
+  eligible: boolean;
+  reason?: string;
+  phase: string;
+  message?: string;
+  latestVersion?: string;
+  lastCheck?: string;
+  lastUpdate?: string;
+}
+
+export async function fetchAutomaticUpdateStatus(): Promise<AutomaticUpdateStatus> {
+  const response = await fetch(apiPath('/api/update/automatic'));
+  if (!response.ok) throw new Error(`Could not load automatic update setting (HTTP ${response.status}).`);
+  return response.json() as Promise<AutomaticUpdateStatus>;
+}
+
+export async function setAutomaticUpdates(enabled: boolean): Promise<AutomaticUpdateStatus> {
+  const response = await fetch(apiPath('/api/update/automatic'), {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+  });
+  const body = await response.json() as AutomaticUpdateStatus & { error?: string };
+  if (!response.ok) throw new Error(body.error || `Could not save automatic update setting (HTTP ${response.status}).`);
+  return body;
+}
+
 export const DEFAULT_UPDATE_STATUS: UpdateStatus = {
   currentVersion: '',
   latestVersion: '',

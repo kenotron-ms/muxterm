@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
 
 // Connection kinds carried by Message.ClientKind on attach and recorded in
@@ -32,13 +31,16 @@ const (
 // dispatches frozen-protocol requests, and fans out replay-before-live data on
 // attach.
 type Server struct {
-	reg               *Registry
-	socket            string
-	machineIdentity   machineIdentity
+	reg             *Registry
+	socket          string
+	machineIdentity machineIdentity
 
-	mu    sync.Mutex
-	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
-	conns map[*conn]bool            // all live connections
+	mu              sync.Mutex
+	subs            map[string]map[*conn]bool // workspaceId -> set of attached connections
+	conns           map[*conn]bool            // all live connections
+	updateGateMu    sync.Mutex
+	updateGateUntil time.Time
+	restoreEnabled  bool
 
 	// preview is the sidebar preview ticker's per-workspace change-gating
 	// state, keyed by workspace id. Guarded by mu, pruned each tick to the
@@ -72,8 +74,6 @@ type Server struct {
 	// completion log this Server owns. See docs/designs/2026-09-09-triggers.md.
 	triggers *triggerStore
 	engine   *triggerEngine
-
-
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -632,6 +632,9 @@ func (c *conn) serve() {
 			}
 			c.handle(msg)
 		case FramePaneData:
+			if c.srv.updateGateActive() {
+				continue
+			}
 			paneID, data := DecodePaneData(payload)
 			if c.attached == "" {
 				continue
@@ -665,6 +668,10 @@ func (c *conn) cleanup() {
 func (c *conn) handle(msg Message) {
 	switch msg.Type {
 	case TypeCreateWorkspace:
+		if c.srv.updateGateActive() {
+			c.replyError(msg.CID, "update-in-progress", "Muxterm is preparing a safe update; retry shortly")
+			return
+		}
 		if msg.ProjectPath != "" {
 			if !filepath.IsAbs(msg.ProjectPath) {
 				c.replyError(msg.CID, CodeFSNotDir, "project path must be an absolute directory")
@@ -681,6 +688,12 @@ func (c *conn) handle(msg Message) {
 		c.srv.broadcastWorkspaceList()
 	case TypeListWorkspaces:
 		c.srv.replyWorkspaceList(c, msg.CID)
+	case TypeUpdatePrepare:
+		ok, reason := c.srv.prepareUpdate()
+		c.reply(&Message{Type: TypeUpdateSafety, CID: msg.CID, OK: ok, Error: reason})
+	case TypeUpdateRelease:
+		c.srv.releaseUpdateGate()
+		c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	case TypeRenameWorkspace:
 		if c.srv.reg.RenameWorkspace(msg.WorkspaceID, msg.Name) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})
@@ -695,6 +708,10 @@ func (c *conn) handle(msg Message) {
 	case TypeCloseConfirm:
 		c.closeConfirm(msg)
 	case TypeAttach:
+		if c.srv.updateGateActive() {
+			c.replyError(msg.CID, "update-in-progress", "Muxterm is preparing a safe update; reconnect shortly")
+			return
+		}
 		c.attach(msg)
 	case TypeCreateTrigger:
 		c.createTrigger(msg)
@@ -705,6 +722,10 @@ func (c *conn) handle(msg Message) {
 	case TypeDeleteTrigger:
 		c.deleteTrigger(msg)
 	case TypeCreatePane:
+		if c.srv.updateGateActive() {
+			c.replyError(msg.CID, "update-in-progress", "Muxterm is preparing a safe update; retry shortly")
+			return
+		}
 		c.createPane(msg)
 	case TypeClosePane:
 		c.closePane(msg)

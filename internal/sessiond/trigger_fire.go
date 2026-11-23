@@ -33,6 +33,10 @@ func (e *triggerEngine) attemptFire(id, reason string) {
 	if !t.Enabled {
 		return
 	}
+	if e.srv.updateGateActive() {
+		e.store.RecordFire(id, TriggerFire{At: now, Outcome: FireSkippedOverlap, Detail: "automatic update preparing"}, nil)
+		return
+	}
 
 	// REFUSAL 1: max_runs. Checked before overlap so a trigger that has done
 	// its work turns itself off rather than reporting skips forever.

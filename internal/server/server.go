@@ -77,6 +77,9 @@ type Config struct {
 	// Version is the running binary's version string (main.version). Empty or
 	// "dev" marks a development build, for which self-update is not offered.
 	Version string
+	// ReleaseBuild is stamped by the release pipeline. A semver-looking local
+	// binary alone does not authorize unattended replacement.
+	ReleaseBuild bool
 
 	// Remotes is how this process reaches machines that are not this one.
 	// nil means the whole remote feature is inert: nothing is discoverable,
@@ -145,7 +148,9 @@ type Server struct {
 	// /api/update/* routes. updating serializes apply requests so two
 	// concurrent clients cannot both rewrite the binary.
 	version       string
+	releaseBuild  bool
 	updating      atomic.Bool
+	autoUpdate    *automaticUpdateState
 	agentVersions *codingAgentVersionCache
 
 	sdkChats              *sdkChatHost
@@ -182,6 +187,7 @@ func New(cfg Config) *Server {
 		authSrv:        cfg.AuthServer,
 		webRedirectURI: cfg.WebRedirectURI,
 		version:        cfg.Version,
+		releaseBuild:   cfg.ReleaseBuild,
 	}
 	s.sdkChats = newSDKChatHost()
 	s.workWake = make(chan struct{}, 1)
@@ -211,6 +217,8 @@ func New(cfg Config) *Server {
 	if s.cfg.Theme.Palette == "" {
 		s.cfg = muxcfg.Defaults()
 	}
+	s.autoUpdate = newAutomaticUpdateState(cfg.ConfigPath)
+	s.reconcileAutomaticUpdate()
 
 	aiKeyPath := cfg.AIKeyPath
 	if aiKeyPath == "" {
@@ -349,6 +357,9 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/update/status", protect(http.HandlerFunc(s.handleUpdateStatus)))
 	s.mux.Handle("POST /api/update/check", protect(http.HandlerFunc(s.handleUpdateCheck)))
 	s.mux.Handle("POST /api/update/apply", protect(http.HandlerFunc(s.handleUpdateApply)))
+	s.mux.Handle("GET /api/update/automatic", protect(http.HandlerFunc(s.handleAutomaticUpdate)))
+	s.mux.Handle("PUT /api/update/automatic", protect(http.HandlerFunc(s.handleAutomaticUpdate)))
+	s.mux.Handle("POST /api/update/prepare", protect(http.HandlerFunc(s.handleUpdatePrepare)))
 
 	s.mux.Handle("GET /api/tunnels", protect(http.HandlerFunc(s.handleTunnelList)))
 	s.mux.Handle("POST /api/tunnels", protect(http.HandlerFunc(s.handleTunnelCreate)))
@@ -545,6 +556,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	defer stopGoalDispatch()
 	workDone := make(chan struct{})
 	go func() { defer close(workDone); s.workLoop(jobContext) }()
+	go s.runAutomaticUpdates(jobContext)
 	s.meetingJobContext = jobContext
 	go s.agentVersions.run(jobContext)
 	go s.sdkChats.watchAgentInstalls(jobContext)

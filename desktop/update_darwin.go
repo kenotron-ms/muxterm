@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,13 +19,6 @@ import (
 )
 
 const macBundleID = "io.ampbox.muxterm.desktop"
-
-type macUpdateEvent struct {
-	Phase          string `json:"phase"`
-	CurrentVersion string `json:"currentVersion,omitempty"`
-	LatestVersion  string `json:"latestVersion,omitempty"`
-	Error          string `json:"error,omitempty"`
-}
 
 func (c *Companion) initMacUpdater() error {
 	provider, err := github.New(github.Config{
@@ -50,6 +44,7 @@ func (c *Companion) initMacUpdater() error {
 }
 
 func (c *Companion) emitMacUpdate(event macUpdateEvent) {
+	c.recordMacAutomaticUpdate(event)
 	encoded, _ := json.Marshal(event)
 	c.evalMuxtermJS("window.dispatchEvent(new CustomEvent('muxterm-mac-update', {detail:" + string(encoded) + "}))")
 }
@@ -116,6 +111,9 @@ func (c *Companion) runMacUpdate(action string) {
 		c.emitMacUpdate(base)
 		return
 	}
+	if action == "mac-update-auto" && !c.macAutomaticStatus().Enabled {
+		return
+	}
 	base.Phase = "downloading"
 	c.emitMacUpdate(base)
 	if err := c.app.Updater.DownloadAndInstall(ctx); err != nil {
@@ -130,12 +128,93 @@ func (c *Companion) runMacUpdate(action string) {
 		c.emitMacUpdate(base)
 		return
 	}
+	if action == "mac-update-auto" && !c.macAutomaticStatus().Enabled {
+		base.Phase, base.Error = "deferred", "Automatic updates were turned off."
+		c.emitMacUpdate(base)
+		return
+	}
+	if action == "mac-update-auto" {
+		if err := c.checkMacHostSafety(); err != nil {
+			base.Phase, base.Error = "deferred", err.Error()
+			c.emitMacUpdate(base)
+			return
+		}
+	}
 	base.Phase = "restarting"
 	c.emitMacUpdate(base)
 	if err := c.app.Updater.Restart(ctx); err != nil {
 		base.Phase, base.Error = "error", fmt.Sprintf("Could not restart into Mac update: %v", err)
 		c.emitMacUpdate(base)
 	}
+}
+
+func (c *Companion) macAutoEligible() (bool, string) {
+	if desktopBundleVersion() == "dev" {
+		return false, "Development Mac apps cannot install automatic releases."
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return false, "Could not locate this Mac app."
+	}
+	path := filepath.Clean(executable)
+	for !strings.HasSuffix(path, ".app") && path != filepath.Dir(path) {
+		path = filepath.Dir(path)
+	}
+	if !strings.HasSuffix(path, ".app") {
+		return false, "Run Muxterm from an installed Mac app to update it."
+	}
+	team, err := signingTeam(path)
+	if err != nil || team == "" || team == "not set" {
+		return false, "This Mac app is not signed for in-app updates."
+	}
+	return true, ""
+}
+
+func (c *Companion) runMacAutomaticUpdates() {
+	timer := time.NewTimer(time.Minute)
+	defer timer.Stop()
+	for {
+		select {
+		case <-c.autoStop:
+			return
+		case <-c.autoWake:
+		case <-timer.C:
+		}
+		view := c.macAutomaticStatus()
+		if view.Eligible && view.Enabled && (view.LastCheck.IsZero() || time.Since(view.LastCheck) >= 6*time.Hour) {
+			c.runMacUpdate("mac-update-auto")
+		}
+		timer.Reset(time.Hour)
+	}
+}
+
+func (c *Companion) checkMacHostSafety() error {
+	c.mu.Lock()
+	local := c.local
+	c.mu.Unlock()
+	if local == nil {
+		return errors.New("The local Muxterm host is unavailable; update deferred.")
+	}
+	client := http.Client{Timeout: 5 * time.Second}
+	response, err := client.Post(local.url+"api/update/prepare", "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("Could not check local terminal safety: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("Local terminal safety check returned HTTP %d", response.StatusCode)
+	}
+	var result struct {
+		Safe   bool   `json:"safe"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return fmt.Errorf("Could not read local terminal safety: %w", err)
+	}
+	if !result.Safe {
+		return errors.New(result.Reason)
+	}
+	return nil
 }
 
 func verifyMacUpdate(path, version, team string) error {

@@ -60,6 +60,10 @@ type Companion struct {
 	localStartMu     sync.Mutex
 	bridgeMu         sync.Mutex
 	updateMu         sync.Mutex
+	autoMu           sync.Mutex
+	autoRecord       macAutomaticRecord
+	autoStop         chan struct{}
+	autoWake         chan struct{}
 	app              *application.App
 	token            string
 	settings         Settings
@@ -87,6 +91,9 @@ func (c *Companion) authorize(token string) error {
 
 func newCompanion() *Companion {
 	c := &Companion{forwards: make(map[int]*runningForward)}
+	c.autoStop = make(chan struct{})
+	c.autoWake = make(chan struct{}, 1)
+	c.loadMacAutomaticUpdate()
 	if data, err := os.ReadFile(settingsPath()); err == nil {
 		_ = json.Unmarshal(data, &c.settings)
 	}
@@ -490,6 +497,7 @@ func (c *Companion) OpenPreview(token string, port int) error {
 
 func (c *Companion) close() {
 	c.stopBrowserControl()
+	close(c.autoStop)
 	c.mu.Lock()
 	forwards := c.forwards
 	c.forwards = make(map[int]*runningForward)

@@ -23,6 +23,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
+      - -X main.releaseBuild=true
   - id: muxterm-darwin
     main: ./cmd/muxterm
     binary: muxterm
@@ -38,6 +39,7 @@ builds:
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
+      - -X main.releaseBuild=true
 
 archives:
   - formats:
