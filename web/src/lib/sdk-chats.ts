@@ -1,7 +1,8 @@
 import { apiPath } from './base-path.js';
 import { remotesStore } from './remotes-store.js';
 import { chatHost, projectHost, rememberChatHost, rememberProjectHost, remoteChatPath } from './remote-chat-routes.js';
-export type SDKHarnessName = 'codex' | 'claude' | 'copilot' | 'amplifier' | 'amplifier-unified' | 'pi' | 'opencode' | 'deepseek' | 'gemini' | 'antigravity' | 'antigravity-sdk';
+export const SDK_HARNESSES = ['codex', 'claude', 'copilot', 'amplifier', 'amplifier-unified', 'pi', 'opencode', 'deepseek', 'gemini', 'antigravity', 'antigravity-sdk'] as const;
+export type SDKHarnessName = typeof SDK_HARNESSES[number];
 export function sdkHarnessLabel(harness: SDKHarnessName): string {
   return { codex:'Codex', claude:'Claude Code', copilot:'GitHub Copilot', amplifier:'Amplifier', 'amplifier-unified':'Amplifier Unified', pi:'Pi', opencode:'OpenCode', deepseek:'DeepSeek Harness', gemini:'Gemini CLI', antigravity:'Antigravity', 'antigravity-sdk':'Antigravity SDK (legacy)' }[harness];
 }
