@@ -49,8 +49,11 @@ class ACPRuntime {
       },
       requestPermission: params => this.adapters.get(params.sessionId)?.onPermission(params)
         || { outcome: { outcome: 'cancelled' } },
+      createElicitation: params => this.adapters.get(params.sessionId)?.onElicitation(params)
+        || { action: 'cancel' },
     }), stream);
-    this.ready = this.connection.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} })
+    this.ready = this.connection.initialize({ protocolVersion: acp.PROTOCOL_VERSION,
+      clientCapabilities: harness === 'opencode' ? { elicitation: { form: {} } } : {} })
       .then(async result => {
         if (result.protocolVersion !== acp.PROTOCOL_VERSION)
           throw new Error(`Unsupported ACP version: ${result.protocolVersion}`);
@@ -258,6 +261,8 @@ export class ACPStream {
     this.emit = emit;
     this.onProcessExit = onProcessExit;
     this.tools = new Map();
+    this.pendingElicitations = new Map();
+    this.selectExaNext = false;
     this.busy = false;
     this.preparingPrompt = false;
     this.closed = false;
@@ -345,6 +350,7 @@ export class ACPStream {
   onExit(error) {
     if (this.closed || this.exitError) return;
     this.exitError = error;
+    this.resolveElicitations();
     if (this.busy) this.emit(this.session.id, 'session.uncertain', { message: String(error) });
     this.onProcessExit?.();
   }
@@ -357,6 +363,65 @@ export class ACPStream {
     this.confirmAccepted?.();
     const option = params.options.find(item => item.kind === 'allow_once');
     return { outcome: option ? { outcome: 'selected', optionId: option.optionId } : { outcome: 'cancelled' } };
+  }
+
+  onElicitation(params) {
+    if (this.session.harness !== 'opencode' || params.sessionId !== this.session.nativeId ||
+        this.closed || this.session.cancelRequested || params.mode !== 'form') return { action: 'cancel' };
+    const fields = params.requestedSchema?.properties;
+    const choices = fields && Object.keys(fields).length === 1 ? fields.choice?.oneOf : null;
+    // OpenCode asks for consent before it asks for a provider. Offer only Exa
+    // here: its `allow` option enables random selection across providers.
+    if (params.message === 'Web Search' && params.requestedSchema?.required?.length === 1 &&
+        params.requestedSchema.required[0] === 'choice' &&
+        Array.isArray(choices) && ['allow', 'choose', 'disable'].every(value => choices.some(item => item.const === value))) {
+      const questionId = randomUUID();
+      const questions = [{ id: 'choice', header: 'Web search',
+        question: 'Allow this OpenCode chat to search the web with Exa?', isOther: false, isSecret: false,
+        options: [{ label: 'Use Exa', description: 'Free without an API key; rate limited.' },
+          { label: 'Disable web search', description: 'OpenCode will remember this choice.' },
+          { label: 'Not now', description: 'Cancel this search without saving a choice.' }] }];
+      return new Promise(resolve => {
+        this.pendingElicitations.set(questionId, resolve);
+        this.emit(this.session.id, 'question.requested', { itemId: questionId, raw: { questions, isBlocking: true } });
+      });
+    }
+    const providers = fields && Object.keys(fields).length === 1 ? fields.provider?.oneOf : null;
+    // This second form follows a user's explicit Use Exa answer. Never choose
+    // a provider for an unrelated form or a preconfigured OpenCode session.
+    if (this.selectExaNext && params.message === 'Choose a web search provider' &&
+        params.requestedSchema?.required?.length === 1 && params.requestedSchema.required[0] === 'provider' &&
+        Array.isArray(providers) && providers.some(item => item.const === 'exa')) {
+      this.selectExaNext = false;
+      return { action: 'accept', content: { provider: 'exa' } };
+    }
+    this.selectExaNext = false;
+    return { action: 'cancel' };
+  }
+
+  answerElicitation(questionId, answers) {
+    const resolve = this.pendingElicitations.get(questionId);
+    if (!resolve) throw new Error('This question is no longer waiting for an answer');
+    const choice = answers?.choice;
+    if (!['Use Exa', 'Disable web search', 'Not now'].includes(choice))
+      throw new Error('Choose one of the offered answers');
+    this.pendingElicitations.delete(questionId);
+    if (choice === 'Use Exa') {
+      this.selectExaNext = true;
+      resolve({ action: 'accept', content: { choice: 'choose' } });
+    } else if (choice === 'Disable web search') resolve({ action: 'accept', content: { choice: 'disable' } });
+    else resolve({ action: 'cancel' });
+    this.emit(this.session.id, 'question.answered', { itemId: questionId });
+    return { status: 'accepted' };
+  }
+
+  resolveElicitations() {
+    for (const [questionId, resolve] of this.pendingElicitations) {
+      resolve({ action: 'cancel' });
+      this.emit(this.session.id, 'question.resolved', { itemId: questionId });
+    }
+    this.pendingElicitations.clear();
+    this.selectExaNext = false;
   }
 
   onUpdate(params) {
@@ -682,6 +747,7 @@ export class ACPStream {
     if (!this.busy) throw new Error('No active turn to stop');
     if (this.steerPending) this.stopDuringSteer = true;
     this.session.cancelRequested = true;
+    this.resolveElicitations();
     await this.connection.cancel({ sessionId: this.session.nativeId });
     return { status: 'accepted' };
   }
@@ -732,6 +798,7 @@ export class ACPStream {
   async close() {
     if (this.closed) return;
     this.closed = true;
+    this.resolveElicitations();
     await this.ready.catch(() => {});
     this.runtime.detach(this);
     if (this.session.harness === 'opencode') {
