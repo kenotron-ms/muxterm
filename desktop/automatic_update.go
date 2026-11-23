@@ -59,6 +59,12 @@ func (c *Companion) loadMacAutomaticUpdate() {
 			}
 			_ = c.saveMacAutomaticLocked(c.autoRecord)
 		}
+		if c.autoRecord.Enabled {
+			select {
+			case c.autoWake <- struct{}{}:
+			default:
+			}
+		}
 	}
 }
 

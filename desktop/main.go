@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"log"
+	"os"
 	"runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -87,9 +88,11 @@ func main() {
 		},
 	})
 	if localErr == nil {
-		if err := companion.openMuxtermWindow(); err != nil {
-			log.Printf("could not open local muxterm: %v", err)
-			companion.showSettings()
+		if os.Getenv("GITHUB_ACTIONS") != "true" || os.Getenv("MUXTERM_MAC_AUTO_VERIFY_HIDDEN") != "1" {
+			if err := companion.openMuxtermWindow(); err != nil {
+				log.Printf("could not open local muxterm: %v", err)
+				companion.showSettings()
+			}
 		}
 	}
 	if err := companion.startBrowserControl(); err != nil {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +22,7 @@ import (
 const macBundleID = "io.ampbox.muxterm.desktop"
 
 func (c *Companion) initMacUpdater() error {
-	provider, err := github.New(github.Config{
+	providerConfig := github.Config{
 		Repository:    "kenotron-ms/muxterm",
 		ChecksumAsset: "macos-checksums.txt",
 		AssetMatcher: func(_ updater.CheckRequest, assets []github.ReleaseAsset) int {
@@ -32,7 +33,15 @@ func (c *Companion) initMacUpdater() error {
 			}
 			return -1
 		},
-	})
+	}
+	if fixture := os.Getenv("MUXTERM_MAC_UPDATE_FIXTURE_BASE_URL"); fixture != "" {
+		parsed, err := url.Parse(fixture)
+		if os.Getenv("GITHUB_ACTIONS") != "true" || err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" {
+			return errors.New("Mac update fixture URL is restricted to a loopback GitHub Actions runner")
+		}
+		providerConfig.BaseURL = fixture
+	}
+	provider, err := github.New(providerConfig)
 	if err != nil {
 		return err
 	}
