@@ -76,6 +76,8 @@ func (s *Server) appIconAssetsAvailable(choice muxcfg.AppIconConfig) error {
 	return nil
 }
 
+// The link's v= parameter prompts browser manifest reinspection; the manifest
+// itself is no-store and always describes the current server choice.
 func (s *Server) handlePWAManifest(w http.ResponseWriter, _ *http.Request) {
 	choice := s.selectedAppIcon()
 	version := appIconVersion(choice)

@@ -65,6 +65,12 @@ func (p Patch) Verify(actual Config) error {
 	return walkPatch(reflect.ValueOf(&actual).Elem(), p.fields, "", true)
 }
 
+// HasField reports whether the caller explicitly supplied a top-level section.
+func (p Patch) HasField(key string) bool {
+	_, ok := p.fields[key]
+	return ok
+}
+
 // String identifies the requested sections in persistence errors.
 func (p Patch) String() string { return strings.Join(patchKeys(p.fields), ", ") }
 
