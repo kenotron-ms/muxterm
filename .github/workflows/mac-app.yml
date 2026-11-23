@@ -133,5 +133,7 @@ jobs:
         run: |
           npm ci --prefix web
           npm run build --prefix web
+      - name: Install Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - name: Verify service-manager update path in disposable VM
         run: bash tools/verify-automatic-updates-dtu.sh
