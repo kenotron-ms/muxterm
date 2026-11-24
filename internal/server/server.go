@@ -305,6 +305,11 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
 	s.registerConnectionSetupRoutes(protect)
 	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
+	s.mux.Handle("GET /api/agent-instances", protect(http.HandlerFunc(s.handleAgentInstances)))
+	s.mux.Handle("POST /api/agent-instances", protect(http.HandlerFunc(s.handleAgentInstances)))
+	s.mux.Handle("GET /api/agent-instances/{id}/chats", protect(http.HandlerFunc(s.handleAgentInstanceChats)))
+	s.mux.Handle("GET /api/agent-instances/{id}/conversations", protect(http.HandlerFunc(s.handleAgentInstanceConversations)))
+	s.mux.Handle("POST /api/agent-instances/{id}/conversations", protect(http.HandlerFunc(s.handleAgentInstanceConversations)))
 
 	// Opt-in AI capability. Deliberately a separate route family from
 	// /api/config: the key goes in via PUT and only a derived Status comes out.
