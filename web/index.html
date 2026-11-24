@@ -18,8 +18,8 @@
     <title>muxterm</title>
     <meta name="description" content="A terminal multiplexer in your browser." />
 
-    <!-- PWA: theme + installability. The web app manifest itself is generated
-         and injected by vite-plugin-pwa at build time. -->
+    <!-- The server renders the manifest from this server's App icon choice. -->
+    <link rel="manifest" href="./manifest.webmanifest" />
     <meta name="theme-color" content="#16161e" />
     <meta name="color-scheme" content="dark" />
     <script>
@@ -37,15 +37,14 @@
           light ? '#ffffff' : '#262d33';
       } catch { /* Browser storage may be unavailable. */ }
     </script>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png" />
 
     <!-- iOS standalone / home-screen support -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="muxterm" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <style>
       *, *::before, *::after {
         margin: 0;

@@ -20,6 +20,7 @@ import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
 import { sdkChats, sdkHarnessLabel, SDK_HARNESSES } from '../lib/sdk-chats.js';
 import { apiPath } from '../lib/base-path.js';
+import { appIconImage } from '../lib/pwa-icon.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
 import geminiMark from '../assets/harness/gemini.svg?url';
@@ -366,6 +367,16 @@ export class MuxSettingsSurface extends LitElement {
     .appearance-choice-label::before { content:''; width:var(--ui-space-5); height:var(--ui-space-5); flex:none; border:1px solid var(--ui-border-strong); border-radius:50%; }
     .appearance-choice[pressed] .appearance-choice-label::before { border:4px solid var(--ui-accent); box-sizing:border-box; }
     .appearance-choice-description { display:block; padding:0 var(--ui-space-2) var(--ui-space-3) calc(var(--ui-space-5) + var(--ui-space-5)); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .app-icon-section { max-width:var(--ui-settings-content-width); margin-bottom:var(--ui-space-9); padding-bottom:var(--ui-space-8); border-bottom:1px solid var(--ui-border); }
+    .app-icon-preview { display:flex; gap:var(--ui-space-7); align-items:center; margin:var(--ui-space-6) 0; padding:var(--ui-space-6); border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); background:var(--ui-surface-raised); }
+    .app-icon-preview-item { display:grid; justify-items:center; gap:var(--ui-space-2); min-width:0; color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
+    .app-icon-preview-item img { display:block; width:var(--ui-app-icon-preview-size); height:var(--ui-app-icon-preview-size); }
+    .app-icon-preview-item.mask img { border-radius:50%; }
+    .app-icon-preview-label { align-self:center; color:var(--ui-text); font-weight:600; }
+    .backdrop-choice-label { display:flex; align-items:center; gap:var(--ui-space-3); width:100%; }
+    .backdrop-choice-label img { width:var(--ui-space-9); height:var(--ui-space-9); border-radius:var(--ui-radius-sm); flex:none; }
+    .app-icon-guidance { margin-top:var(--ui-space-6); color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.5; }
+    .app-icon-guidance p { margin:var(--ui-space-2) 0; }
 
     /* ── Font size slider ── */
     mux-ui-range-field.font-size { margin-top:var(--ui-space-2); }
@@ -637,6 +648,8 @@ export class MuxSettingsSurface extends LitElement {
     .r-actions { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: var(--ui-space-4); }
 
     @media (max-width: 767.98px) {
+      .app-icon-preview { gap:var(--ui-space-4); }
+      .app-icon-preview-item img { width:var(--ui-app-icon-preview-phone-size); height:var(--ui-app-icon-preview-phone-size); }
       .header { min-height: var(--ui-row-touch); box-sizing: border-box; padding: var(--ui-space-5) var(--ui-space-6); }
       .body { min-height: 0; flex-direction: column; }
       .sidebar {
@@ -1170,6 +1183,18 @@ export class MuxSettingsSurface extends LitElement {
     if (!cfg) return html``;
     const mode = cfg.theme.mode;
     return html`
+      <section class="app-icon-section" aria-label="App icon">
+        <div class="appearance-heading"><div><p class="section-title">App icon</p><p class="appearance-help">Your launcher icon follows this server's chat backdrop. Choose a backdrop below to change its subject and color.</p></div></div>
+        <div class="app-icon-preview" aria-label="Icon previews">
+          <div class="app-icon-preview-item"><img src=${appIconImage(cfg.theme.backdrop, 'icon-192.png')} alt=""><span>Launcher</span></div>
+          <div class="app-icon-preview-item mask"><img src=${appIconImage(cfg.theme.backdrop, 'icon-maskable-512.png')} alt=""><span>Android mask</span></div>
+          <span class="app-icon-preview-label">${BACKDROPS.find(item => item.id === cfg.theme.backdrop)?.label ?? 'Enchanted Paths'}</span>
+        </div>
+        <div class="app-icon-guidance">
+          <p>Chrome on Android may ask you to review an icon change in the installed app menu. The launcher updates after Chrome applies it.</p>
+          <p>Desktop Chrome may keep the old launcher icon. If it does, reinstall the app. On iPhone or iPad, remove the Home Screen app and add it again.</p>
+        </div>
+      </section>
       <div class="appearance-heading">
         <div><p class="section-title">Color palette</p><p class="appearance-help">Choose colors for chats, navigation, and utility panels.</p></div>
         <div class="mode-toggle" role="group" aria-label="App color mode">
@@ -1195,7 +1220,7 @@ export class MuxSettingsSurface extends LitElement {
           const sample = appThemeScheme(cfg.theme.app, mode);
           const preview = `--preview-chat:${sample.chat};--preview-art:color-mix(in srgb, ${sample.accent} ${mode === 'light' ? 15 : 18}%, transparent);--preview-mask:${backdrop.image ? `url("${backdrop.image}")` : 'none'}`;
           return html`<mux-ui-button class="appearance-choice backdrop-choice" style=${preview} toggle ?pressed=${cfg.theme.backdrop === backdrop.id} @click=${() => this._setBackdrop(backdrop.id)}>
-            <span class="backdrop-preview" aria-hidden="true"></span><span class="appearance-choice-label">${backdrop.label}</span><span class="appearance-choice-description">${backdrop.description}</span>
+            <span class="backdrop-preview" aria-hidden="true"></span><span class="backdrop-choice-label"><img src=${appIconImage(backdrop.id, 'icon-192.png')} alt=""><span class="appearance-choice-label">${backdrop.label}</span></span><span class="appearance-choice-description">${backdrop.description}</span>
           </mux-ui-button>`;
         })}
       </div>

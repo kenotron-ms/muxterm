@@ -78,7 +78,7 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cfg = persisted
-	s.hub.BroadcastConfig(persisted)
+	s.hub.BroadcastConfig(s.cfg)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(persisted) //nolint:errcheck
+	json.NewEncoder(w).Encode(s.cfg) //nolint:errcheck
 }

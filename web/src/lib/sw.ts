@@ -13,7 +13,7 @@
 // tunnel is a review URL, not an install target — no offline support there.
 //
 // The root-scoped SW does NOT interfere with a prefixed mount: it precaches
-// only origin-root URLs (/favicon.svg, /manifest.webmanifest, /icons/*) and
+// only the origin-root icons/icon.svg Workbox placeholder and
 // `navigateFallback: null` keeps it out of navigations, so requests under
 // /t/<id>/ miss every precache route and go to the network.
 

@@ -529,7 +529,6 @@ func runLocal(cfg Config) error {
 		ReleaseBuild:   releaseBuild == "true",
 		Remotes:        rt,
 	})
-	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
 
 	// Publish serve-layer URL + local token so the MCP server can discover
@@ -687,7 +686,6 @@ func runServe(cfg Config) error {
 		ReleaseBuild:       releaseBuild == "true",
 		Remotes:            rt,
 	})
-	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
 
 	// Publish serve-layer URL + local token so the MCP server can discover
