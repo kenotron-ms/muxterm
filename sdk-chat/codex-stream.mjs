@@ -33,6 +33,17 @@ function toolDetails(item) {
   return { name: item.type, input: item, output: item };
 }
 
+function codexInput(input) {
+  const attachments = input.attachments || [];
+  const manifest = attachments.map(a => `- ${JSON.stringify(a.name)} (${a.kind}): ${JSON.stringify(a.path)}`).join('\n');
+  const prompt = attachments.length
+    ? `${input.content || 'Please inspect the attached files.'}\n\nAttached files on the local filesystem (absolute paths):\n${manifest}\nRead the files at these paths before answering. Inspect each image's contents.`
+    : input.content;
+  const items = [{ type: 'text', text: prompt, text_elements: [] }];
+  for (const item of attachments) if (item.kind === 'image') items.push({ type: 'localImage', path: item.path });
+  return items;
+}
+
 let sharedRuntime;
 function runtime() {
   if (!sharedRuntime || sharedRuntime.closed) sharedRuntime = new CodexRuntime();
@@ -163,6 +174,13 @@ export async function stopCodexRuntime() {
   await sharedRuntime?.stop();
 }
 
+export async function codexAuthenticated() {
+  const server = runtime();
+  await server.ready;
+  const result = await server.request('account/read', { refreshToken: false });
+  return !!result.account || result.requiresOpenaiAuth === false;
+}
+
 export class CodexStream {
   constructor(session, emit, onFailure = null, catalogOnly = false) {
     this.session = session;
@@ -288,19 +306,13 @@ export class CodexStream {
   async run(input) {
     await this.ready;
     this.session.busy = true;
-    this.inputId = input.id;
-    this.inputIds = [input.id];
+    const turn = { id: null, inputIds: [input.id], pending: 1, pendingIds: new Set([input.id]), completed: null, deferred: [] };
+    this.activeTurn = turn;
+    this.inputIds = turn.inputIds;
     this.cancelRequested = false;
     this.textByItem.clear();
     this.phaseByItem.clear();
     try {
-      const attachments = input.attachments || [];
-      const manifest = attachments.map(a => `- ${JSON.stringify(a.name)} (${a.kind}): ${JSON.stringify(a.path)}`).join('\n');
-      const prompt = attachments.length
-        ? `${input.content || 'Please inspect the attached files.'}\n\nAttached files on the local filesystem (absolute paths):\n${manifest}\nRead the files at these paths before answering. Inspect each image's contents.`
-        : input.content;
-      const turnInput = [{ type: 'text', text: prompt, text_elements: [] }];
-      for (const item of attachments) if (item.kind === 'image') turnInput.push({ type: 'localImage', path: item.path });
       const model = input.model || this.session.model;
       const result = await this.request('turn/start', { threadId: this.session.nativeId,
         summary: 'none',
@@ -308,34 +320,60 @@ export class CodexStream {
         ...(model ? { collaborationMode: { mode: this.session.mode === 'plan' ? 'plan' : 'default', settings: { model, reasoning_effort: input.effort || this.session.effort || null, developer_instructions: null } } } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { effort: input.effort } : {}),
-        input: turnInput });
-      this.turnId = result.turn.id;
+        input: codexInput(input) });
+      turn.id ||= result.turn.id;
+      if (!turn.completed) this.turnId = result.turn.id;
+      this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source,
+        text: input.displayContent || input.content,
+        attachments: (input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
     } catch (error) {
-      this.session.busy = false;
+      if (!turn.completed) {
+        this.session.busy = false;
+        if (this.activeTurn === turn) this.activeTurn = null;
+      }
       throw error;
+    } finally {
+      turn.pendingIds.delete(input.id);
+      turn.pending--;
+      this.finishTurn(turn);
     }
   }
 
   async steer(input) {
     await this.ready;
-    if (!this.turnId || !this.session.busy) throw new Error('No active Codex turn to steer');
-    // turn/steer waits for the current model request to finish. Stop that
-    // request and continue on the same thread while retaining streamed text.
+    const turn = this.activeTurn;
+    if (!turn || !this.turnId || turn.completed || !this.session.busy) throw new Error('No active Codex turn to steer');
     const turnId = this.turnId;
-    const ended = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.steeringResolve = null; reject(new Error('Codex turn did not stop for steering')); }, 15000);
-      this.steeringResolve = () => { clearTimeout(timer); resolve(); };
-    });
+    turn.pending++;
+    turn.pendingIds.add(input.id);
     try {
-      await this.request('turn/interrupt', { threadId: this.session.nativeId, turnId });
-      await ended;
-      await this.run(input);
-      this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: 'steer', source: input.source, text: input.displayContent || input.content });
-    } catch (error) {
-      this.steeringResolve?.();
-      this.steeringResolve = null;
-      throw error;
+      const result = await this.request('turn/steer', { threadId: this.session.nativeId, expectedTurnId: turnId,
+        clientUserMessageId: input.id, input: codexInput(input) });
+      if (result?.turnId !== turnId) throw new Error('Codex returned an unexpected steer turn ID; inspect the native session before retrying');
+      turn.inputIds.push(input.id);
+      this.emit(this.session.id, 'input.accepted', { inputId: input.id, kind: 'steer', source: input.source,
+        text: input.displayContent || input.content,
+        attachments: (input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
+    } finally {
+      turn.pendingIds.delete(input.id);
+      turn.pending--;
+      this.finishTurn(turn);
     }
+  }
+
+  finishTurn(turn) {
+    if (!turn.completed || turn.pending || turn.finished || turn.uncertain) return;
+    turn.finished = true;
+    if (this.activeTurn === turn) {
+      this.activeTurn = null;
+      this.turnId = null;
+      this.session.busy = false;
+    }
+    const completed = turn.completed;
+    this.emit(this.session.id, this.cancelRequested || completed.status === 'interrupted' ? 'turn.cancelled'
+      : completed.status === 'completed' ? 'turn.completed' : 'error',
+      { inputIds: turn.inputIds, generationId: completed.id, message: completed.error?.message || completed.status });
+    for (const [method, params] of turn.deferred) this.onNotification(method, params);
   }
 
   onServerRequest(message) {
@@ -386,6 +424,13 @@ export class CodexStream {
       return;
     }
     if (p.threadId !== this.session.nativeId) return;
+    const turn = this.activeTurn;
+    if (turn?.completed && turn.pending && (method === 'turn/started' ||
+        (p.turnId && p.turnId !== turn.id) ||
+        (method === 'turn/completed' && p.turn?.id !== turn.id))) {
+      turn.deferred.push([method, p]);
+      return;
+    }
     if (method === 'turn/plan/updated' && Array.isArray(p.plan)) {
       const plan = p.plan.map(item => ({ step: item.step, status: item.status === 'inProgress' ? 'in_progress' : item.status }));
       const toolId = `codex-plan:${p.turnId}`;
@@ -405,6 +450,12 @@ export class CodexStream {
       return;
     }
     if (method === 'turn/started') {
+      if (!this.activeTurn || this.activeTurn.finished) {
+        this.activeTurn = { id: p.turn.id, inputIds: [], pending: 0, pendingIds: new Set(), completed: null, deferred: [] };
+        this.inputIds = this.activeTurn.inputIds;
+      } else {
+        this.activeTurn.id = p.turn.id;
+      }
       this.turnId = p.turn.id;
       this.session.busy = true;
       this.textByItem.clear();
@@ -445,17 +496,12 @@ export class CodexStream {
       this.emit(this.session.id, 'tool.completed', { name: tool.name, toolId: p.item.id,
         raw: tool.output, failed: p.item.status === 'failed' || !!p.item.error });
     } else if (method === 'turn/completed') {
-      this.turnId = null;
-      if (this.steeringResolve) {
-        const resolve = this.steeringResolve;
-        this.steeringResolve = null;
-        resolve();
-        return;
+      const turn = this.activeTurn;
+      if (turn && (!turn.id || turn.id === p.turn.id) && !turn.completed) {
+        turn.id = p.turn.id;
+        turn.completed = p.turn;
+        this.finishTurn(turn);
       }
-      this.session.busy = false;
-      this.emit(this.session.id, this.cancelRequested || p.turn.status === 'interrupted' ? 'turn.cancelled'
-        : p.turn.status === 'completed' ? 'turn.completed' : 'error',
-        { inputIds: this.inputIds, generationId: p.turn.id, message: p.turn.error?.message || p.turn.status });
     }
   }
 
@@ -486,11 +532,12 @@ export class CodexStream {
   }
 
   fail(error) {
-    this.steeringResolve?.();
     this.userInputRequests.clear();
     if (this.session.busy) {
+      const turn = this.activeTurn;
+      if (turn) turn.uncertain = true;
       this.session.busy = false;
-      this.emit(this.session.id, 'session.uncertain', { inputIds: this.inputIds,
+      this.emit(this.session.id, 'session.uncertain', { inputIds: [...new Set([...(turn?.inputIds || []), ...(turn?.pendingIds || [])])],
         message: `Codex app-server stopped before the turn completed: ${error}. The input was not replayed.` });
     }
     this.onFailure?.();
