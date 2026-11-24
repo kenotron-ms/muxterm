@@ -291,13 +291,17 @@ func New(cfg Config) *Server {
 		s.mux.HandleFunc("POST /auth/logout", s.handleAuthLogout)
 	}
 
+	// Chrome may fetch install metadata outside the page's authenticated session.
+	// These routes expose only the selected public icon artwork and stable app
+	// identity, so keep them reachable when the rest of the server requires auth.
+	s.mux.HandleFunc("GET /manifest.webmanifest", s.handlePWAManifest)
+	for _, path := range []string{"/favicon-32.png", "/apple-touch-icon.png", "/pwa/icon-192.png", "/pwa/icon-512.png", "/pwa/icon-maskable-512.png"} {
+		s.mux.HandleFunc("GET "+path, s.handlePWAIcon)
+	}
+
 	// Protected routes: loopback bypass, else a valid session (cookie or
 	// bearer token) is required — see internal/server/authmiddleware.go.
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
-	s.mux.Handle("GET /manifest.webmanifest", protect(http.HandlerFunc(s.handlePWAManifest)))
-	for _, path := range []string{"/favicon-32.png", "/apple-touch-icon.png", "/pwa/icon-192.png", "/pwa/icon-512.png", "/pwa/icon-maskable-512.png"} {
-		s.mux.Handle("GET "+path, protect(http.HandlerFunc(s.handlePWAIcon)))
-	}
 	s.registerConnectionSetupRoutes(protect)
 	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
 
