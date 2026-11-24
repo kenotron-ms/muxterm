@@ -704,7 +704,8 @@ export class ACPStream {
   emitAntigravityStop() {
     if (this.antigravityStopEmitted) return;
     this.antigravityStopEmitted = true;
-    this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: 'cancelled' });
+    this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: 'cancelled',
+      cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
   }
 
   async startPrompt(input, prompt) {
