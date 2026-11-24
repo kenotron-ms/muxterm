@@ -122,19 +122,14 @@ agent may therefore remain available for existing chats without being offered
 for new ones.
 
 In **Settings → AI**, choose **Google sign-in** or **Detected API key**.
-Google sign-in uses the Google account associated with a Google AI Pro or Ultra
-subscription. Muxterm
-starts Gemini CLI's interactive login in a managed PTY, shows the Google link,
-and sends the one-time authorization code back to Gemini CLI. Gemini CLI stores
-its own credentials for later ACP chats; muxterm does not exchange or store its
-OAuth token. `NO_BROWSER=true gemini` in a muxterm terminal remains a fallback.
-The API-key option appears when `GEMINI_API_KEY` is in the server environment or
-`~/.amplifier/keys.env`. Muxterm gives Gemini CLI a separate configuration home
-for API-key chats, so choosing it leaves Google sign-in credentials untouched.
-Muxterm only passes the key to the Gemini child process and never returns it to
-the browser. An API key uses a separate billing path. After choosing a method,
-check the connection before resuming an existing Gemini CLI chat. A running
-Gemini process keeps the auth choice with which it started.
+Google sign-in runs the supported `agy acp --login` flow in a Muxterm-managed,
+echo-disabled PTY. Settings shows the Google URL and accepts the one-time code
+or localhost callback URL in a password-style field, then passes it directly
+to the PTY. The code is not placed in chat or terminal scrollback. The `agy`
+CLI stores its own credentials; Muxterm does not store the OAuth token. After
+the CLI exits successfully, Settings checks ACP chat availability before
+showing the connection as ready. The API-key option appears when
+`GEMINI_API_KEY` is configured; its value stays hidden from the browser.
 
 The client keeps one ACP process per supported harness and saves each native
 ACP session ID. Native session initialization is serialized on a shared
