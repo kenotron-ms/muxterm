@@ -80,6 +80,7 @@ func (s *Server) workLoop(ctx context.Context) {
 
 func (s *Server) reconcileWork(ctx context.Context) {
 	s.reconcileWorkFailures()
+	s.reconcileWorkOwnedGoals(ctx)
 	for ctx.Err() == nil {
 		h := s.sdkChats
 		h.mu.Lock()
@@ -129,6 +130,15 @@ func (s *Server) reconcileWorkFailures() {
 			workerID = item.Dispatch.SessionID
 		}
 		worker := h.chats[workerID]
+		if item.OwnerSessionID == "" && item.Dispatch != nil && item.Dispatch.State == "sent" &&
+			item.Dispatch.GoalMode == "muxterm-work" && worker != nil && worker.State == "ready" && worker.LastTurnOutcome == "cancelled" {
+			// A human pause can cancel kickoff before the agent claims Work.
+			// The explicit human resume path owns the next input receipt.
+			goal, err := h.goals.update(*worker, nil)
+			if err == nil && goal.Mode == "muxterm-work" && (goal.HumanPaused || goal.State == "active" || goal.State == "paused") {
+				continue
+			}
+		}
 		if workerID == "" || (worker != nil && worker.State != "failed" && worker.State != "uncertain" && !(item.OwnerSessionID == "" && worker.State == "ready" && item.Dispatch != nil && time.Since(item.Dispatch.UpdatedAt) >= 30*time.Second)) {
 			continue
 		}

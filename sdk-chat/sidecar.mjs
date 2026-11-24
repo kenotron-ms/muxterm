@@ -298,7 +298,7 @@ async function command(cmd) {
   if (op === 'runtime-busy') return { sessionIds: [...sessions.values()]
     .filter(s => s.busy || s.acp?.busy || s.pendingInputs?.size || s.inFlightInputs?.size)
     .map(s => s.id) };
-  if (op === 'capabilities') return { capabilities: capabilities(harness) };
+  if (op === 'capabilities') return { capabilities: sessions.get(sessionId)?.acp?.capabilities() || capabilities(harness) };
   if (op === 'copilot-auth-status') return { authenticated: await copilotAuthenticated() };
   if (op === 'catalog' && harness === 'codex') {
     const catalog = new CodexStream({ cwd, sourceFolders: [], model: '', effort: '' }, () => {}, null, true);
@@ -354,7 +354,7 @@ async function command(cmd) {
         await s.acp?.close().catch(() => {}); sessions.delete(sessionId); forgetOriginFile(s.originFile);
         throw error;
       }
-      return { sessionId, capabilities: capabilities(harness) };
+      return { sessionId, capabilities: s.acp.capabilities() };
     }
     if (op === 'start') emit(sessionId, 'session.started', { capabilities: capabilities(harness), pendingNativeId: true });
     return { sessionId, capabilities: capabilities(harness) };

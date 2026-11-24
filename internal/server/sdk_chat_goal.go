@@ -125,7 +125,24 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown goal action", 400)
 		return
 	}
-	if !supportsNativeGoalControl(chat.Harness) && slices.Contains([]string{"set", "approve", "start", "pause", "resume", "clear"}, req.Action) {
+	currentGoal, err := h.goals.update(chat, nil)
+	if err != nil {
+		http.Error(w, "goal ledger unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	workOwned := chat.Harness == "opencode" && currentGoal.Mode == "muxterm-work"
+	if workOwned {
+		// Control sends hold the read side through admission. A human pause
+		// waits for in-flight admission, then closes the gate before another
+		// Work continuation can enter the adapter.
+		h.workSendMu.Lock()
+		defer h.workSendMu.Unlock()
+	}
+	if workOwned && slices.Contains([]string{"set", "approve"}, req.Action) {
+		http.Error(w, "Muxterm-owned Work goal conditions are filed on the Work record", http.StatusConflict)
+		return
+	}
+	if !supportsNativeGoalControl(chat.Harness) && !workOwned && slices.Contains([]string{"set", "approve", "start", "pause", "resume", "clear"}, req.Action) {
 		http.Error(w, goalCapabilityGap(chat.Harness), http.StatusUnprocessableEntity)
 		return
 	}
@@ -213,9 +230,11 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 			document.HumanPaused = false
 		}
 		document.ControlVersion++
-		document.Gap = goalCapabilityGap(chat.Harness)
+		if document.Mode != "muxterm-work" {
+			document.Gap = goalCapabilityGap(chat.Harness)
+		}
 		status := "dispatching"
-		if !supportsNativeGoalControl(chat.Harness) {
+		if !supportsNativeGoalControl(chat.Harness) && document.Mode != "muxterm-work" {
 			status = "unsupported"
 		}
 		if req.Action == "evidence" || req.Action == "propose" {
@@ -301,6 +320,12 @@ func (h *sdkChatHost) dispatchGoal(chat sdkChat, receiptID, action, objective st
 	h.goalDispatch.wg.Add(1)
 	h.goalDispatch.mu.Unlock()
 	defer h.goalDispatch.wg.Done()
+	if chat.Harness == "opencode" {
+		if document, err := h.goals.update(chat, nil); err == nil && document.Mode == "muxterm-work" {
+			h.dispatchMuxtermWorkGoal(chat, receiptID, action, objective, revision, controlVersion)
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(h.goalDispatch.ctx, 45*time.Second)
 	defer cancel()
 	ctx = context.WithValue(ctx, goalControlContextKey{}, true)

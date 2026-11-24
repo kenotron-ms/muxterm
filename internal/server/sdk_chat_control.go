@@ -33,6 +33,7 @@ type sdkControlReceipt struct {
 }
 
 type sdkWorkKickoffContextKey struct{}
+type sdkWorkContinuationContextKey struct{}
 
 func (h *sdkChatHost) controlPath(id, key string) string {
 	sum := sha256.Sum256([]byte(key))
@@ -212,6 +213,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	}
 	h := s.sdkChats
 	workID, _ := r.Context().Value(sdkWorkKickoffContextKey{}).(string)
+	continuationEventID, _ := r.Context().Value(sdkWorkContinuationContextKey{}).(string)
 	workNotice, isWorkNotice := r.Context().Value(sdkWorkCommentNoticeContextKey{}).(sdkWorkCommentNotice)
 	remoteSender := ""
 	if s.remoteAgentChatRequest(r) {
@@ -248,6 +250,11 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chat := *c
+	if continuationEventID != "" && !h.workContinuationEligibleLocked(workID, id, continuationEventID) {
+		h.mu.Unlock()
+		http.Error(w, "Work continuation changed before admission", http.StatusConflict)
+		return
+	}
 	if isWorkNotice && (workID == "" || !h.workCommentNoticeEligibleLocked(workID, id, workNotice.AnchorID)) {
 		h.mu.Unlock()
 		http.Error(w, "Work comment notice is no longer eligible", http.StatusConflict)
@@ -335,6 +342,11 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	if !stillAuthorized || currentOrigin != originChatID {
 		h.mu.Unlock()
 		http.Error(w, "chat capability was revoked before dispatch", http.StatusForbidden)
+		return
+	}
+	if continuationEventID != "" && !h.workContinuationEligibleLocked(workID, id, continuationEventID) {
+		h.mu.Unlock()
+		http.Error(w, "Work continuation changed before dispatch", http.StatusConflict)
 		return
 	}
 	if workID == "" && h.protectedWorkOwnerLocked(id) && (remoteSender != "" || originChatID != id) && !humanBrowserRequest(r) {

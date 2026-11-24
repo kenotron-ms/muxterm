@@ -340,7 +340,7 @@ export class ACPStream {
   capabilities() {
     return { approvals: false, transcript_read: false, interrupt: true, live_input: false,
       attributed_service_input: false, native_steering: this.session.harness === 'antigravity' || this.steeringExtension,
-      native_history: this.session.harness === 'antigravity' };
+      native_history: this.session.harness === 'antigravity' || Boolean(this.agentCapabilities?.sessionCapabilities?.resume || this.agentCapabilities?.loadSession) };
   }
 
   withExit(promise) {

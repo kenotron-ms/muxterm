@@ -46,6 +46,7 @@ type goalDocument struct {
 	Schema                      int               `json:"schema"`
 	ChatID                      string            `json:"chatId"`
 	Harness                     string            `json:"harness"`
+	Mode                        string            `json:"mode,omitempty"`
 	Version                     int               `json:"version"`
 	ControlVersion              int               `json:"controlVersion"`
 	RequestedRevision           int               `json:"requestedRevision"`

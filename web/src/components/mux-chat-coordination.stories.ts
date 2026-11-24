@@ -9,11 +9,13 @@ const projectId = 'storybook-project';
 const intake = 'storybook-work-intake';
 const builder = 'storybook-work-builder';
 const reviewer = 'storybook-work-reviewer';
+const openCodeWorker = 'storybook-work-opencode';
 const now = '2026-11-18T18:30:00Z';
 const chats: SDKChat[] = [
   { id:intake, workspaceId:projectId, title:'Member welcome planning', harness:'codex', state:'ready', projectPath:'/work/member-welcome', createdAt:now },
   { id:builder, workspaceId:projectId, title:'Build invitations', harness:'codex', state:'working', projectPath:'/work/member-welcome', createdAt:now },
   { id:reviewer, workspaceId:projectId, title:'Review onboarding', harness:'codex', state:'ready', projectPath:'/work/member-welcome', createdAt:now },
+  { id:openCodeWorker, workspaceId:projectId, title:'OpenCode implementation', harness:'opencode', state:'working', projectPath:'/work/member-welcome', createdAt:now },
 ];
 const base = { createdBy:{kind:'chat',sessionId:intake}, reviewerSessionId:'', sessionIds:[], projectIds:[projectId], labels:[], dependsOn:[], waitingOn:[], ownerSessionId:'', revision:2, createdAt:now, updatedAt:now, updates:[] };
 const work = [
@@ -28,7 +30,8 @@ const work = [
   { ...base, id:'docs', title:'Document project search', brief:'Explain search once it ships.', status:'open', readiness:'ready', dependsOn:['search'], waitingOn:['search'], nextAction:'Draft a short guide.', labels:['docs'] },
   { ...base, id:'provider', title:'Check provider credentials', brief:'Confirm the pilot account can use the selected model.', status:'blocked', readiness:'ready', needsHuman:false, blockedReason:'Waiting for the provider to finish provisioning.', labels:['pilot'] },
   { ...base, id:'fresh-worker', title:'Draft welcome checklist', brief:'Prepare a short checklist for new members.', status:'active', readiness:'ready', ownerSessionId:reviewer, labels:['onboarding'], dispatch:{clientRef:'storybook-fresh-dispatch',sessionId:reviewer,state:'sent',selectionReason:'Created a fresh worker; no eligible completed prerequisite worker has compatible, goal-free task context.',configuration:{harness:'codex',provider:'openai',bundle:'',model:'gpt-6-sol',effort:'medium'}} },
-  { ...base, id:'fallback-worker', title:'Prepare launch notes', brief:'Draft the launch notes for the pilot.', status:'active', readiness:'ready', ownerSessionId:reviewer, labels:['pilot'], dispatch:{clientRef:'storybook-fallback-dispatch',sessionId:reviewer,state:'sent',selectionReason:'Created a fresh worker; no eligible completed prerequisite worker has compatible, goal-free task context.',fallback:'configured harness pi is unavailable for Work',configuration:{harness:'codex',provider:'openai',bundle:'',model:'gpt-6-sol',effort:'medium'}} },
+  { ...base, id:'unavailable-worker', title:'Prepare launch notes', brief:'Draft the launch notes for the pilot.', harness:'antigravity-sdk', status:'blocked', readiness:'ready', blockedReason:'Selected Work harness "antigravity-sdk" is unavailable or lacks a safe Work goal path; install or qualify that harness, then retry this Work item.', labels:['pilot'], dispatch:{clientRef:'storybook-unavailable-dispatch',sessionId:'',state:'failed',choiceSource:'item',configuration:{harness:'antigravity-sdk',provider:'',bundle:'',model:'',effort:''}} },
+  { ...base, id:'opencode-worker', title:'Implement the welcome page', brief:'Build and verify the welcome page.', harness:'opencode', status:'active', readiness:'ready', ownerSessionId:openCodeWorker, labels:['onboarding'], dispatch:{clientRef:'storybook-opencode-dispatch',sessionId:openCodeWorker,state:'claimed',choiceSource:'item',goalMode:'muxterm-work',selectionReason:'Created a fresh worker; no eligible completed prerequisite worker has compatible, goal-free task context.',configuration:{harness:'opencode',provider:'configured',bundle:'',model:'opencode/tidepool-alpha-free',effort:'default'}} },
   { ...base, id:'welcome-email', title:'Write welcome email', brief:'Prepare the welcome note for new members.', status:'open', readiness:'draft', labels:['onboarding'] },
   { ...base, id:'goal-review', title:'Plan the member welcome pilot', brief:'Make the first invitation flow understandable and reliable for new members.', status:'open', readiness:'draft', goalCondition:'Finish when the invitation can be sent, accepted, and verified in a real browser on desktop and phone, with the result and any remaining gaps recorded in Work. If access or dependencies prevent verification, record the blocker and stop for a human decision.', goalRevision:1, goalApprovedRevision:0, labels:['onboarding','pilot'] },
   { ...base, id:'signup', title:'Build signup form', brief:'Create the signup form and verify it in a browser.', status:'done', readiness:'ready', ownerSessionId:builder, outcome:'Verified the signup path at desktop and phone widths.', labels:['onboarding'] },
@@ -77,7 +80,9 @@ export const InboxPhone: Story = {globals:{viewport:{value:'phone390',isRotated:
 export const Detail: Story = {play:openDetail('Build invitation flow')};
 export const DetailPhone: Story = {globals:{viewport:{value:'phone390',isRotated:false}},play:openDetail('Build invitation flow')};
 export const FreshDetail: Story = {play:openDetail('Draft welcome checklist')};
-export const FallbackDetail: Story = {play:openDetail('Prepare launch notes')};
+export const UnavailableHarnessDetail: Story = {play:openDetail('Prepare launch notes')};
+export const UnavailableHarnessDetailPhone: Story = {globals:{viewport:{value:'phone390',isRotated:false}},play:openDetail('Prepare launch notes')};
+export const OpenCodeDetail: Story = {play:openDetail('Implement the welcome page')};
 export const ActivityExpanded: Story = {play:async context => {
   await openDetail('Build invitation flow')(context);
   const view = context.canvasElement.querySelector<MuxChatCoordination>('mux-chat-coordination');

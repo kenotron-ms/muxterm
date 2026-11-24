@@ -65,6 +65,7 @@ type sdkChat struct {
 	TurnStartedAt       time.Time `json:"turnStartedAt,omitempty"`
 	LastTurnSeconds     int       `json:"lastTurnSeconds,omitempty"`
 	LastTurnOutcome     string    `json:"lastTurnOutcome,omitempty"`
+	LastTurnEventID     string    `json:"lastTurnEventId,omitempty"`
 	LastActivity        string    `json:"lastActivity,omitempty"`
 	LastOutput          string    `json:"lastOutput,omitempty"`
 	HasVoiceHistory     bool      `json:"hasVoiceHistory,omitempty"`
@@ -193,6 +194,7 @@ type sdkChatHost struct {
 	inboxStreams     map[string]map[chan struct{}]struct{}
 	workItems        map[string]*sdkWorkItem
 	onWorkChange     func()
+	onWorkResume     func(string, int)
 	nameStreams      map[chan string]struct{}
 	naming           map[string]bool
 	onEvent          func(sdkEvent)
@@ -441,6 +443,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	case "turn.completed":
 		c.State = "ready"
 		c.LastTurnOutcome = "completed"
+		c.LastTurnEventID = event.ID
 		if !c.TurnStartedAt.IsZero() && event.At.After(c.TurnStartedAt) {
 			c.LastTurnSeconds = int(event.At.Sub(c.TurnStartedAt).Seconds() + .5)
 		}
@@ -456,6 +459,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	case "turn.cancelled":
 		c.State = "ready"
 		c.LastTurnOutcome = "cancelled"
+		c.LastTurnEventID = event.ID
 		c.LastActivity = "Turn stopped by user"
 	case "error":
 		c.State = "failed"
@@ -1138,7 +1142,7 @@ func (h *sdkChatHost) resume(ctx context.Context, c *sdkChat) error {
 		approvedGoal = document.Revisions[len(document.Revisions)-1].Condition
 	}
 	controlVersion := document.ControlVersion
-	needsReconciliation := ctx.Value(goalControlContextKey{}) != true &&
+	needsReconciliation := document.Mode != "muxterm-work" && ctx.Value(goalControlContextKey{}) != true &&
 		((document.RequestedRevision > 0 && document.State == "uncertain") ||
 			(c.Goal != "" && (document.RequestedRevision == 0 || (c.Harness == "codex" && c.Goal != approvedGoal))))
 	if needsReconciliation && c.Harness != "codex" && c.Harness != "copilot" {

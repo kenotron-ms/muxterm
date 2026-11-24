@@ -17,6 +17,12 @@ type workHarnessOption struct {
 	Provider string `json:"provider"`
 }
 
+// A saved choice stays valid when its runtime is temporarily unavailable.
+// Dispatch reports that condition instead of silently choosing another agent.
+func validWorkHarness(harness string) bool {
+	return harness == "" || slices.Contains([]string{"codex", "claude", "copilot", "amplifier", "amplifier-unified", "pi", "opencode", "deepseek", "gemini", "antigravity", "antigravity-sdk"}, harness)
+}
+
 type workModelOption struct {
 	ID            string   `json:"id"`
 	Efforts       []string `json:"efforts"`
@@ -47,8 +53,14 @@ func (s *Server) workHarnessOptions(ctx context.Context) ([]workHarnessOption, e
 	if err := json.Unmarshal(response.Body.Bytes(), &options); err != nil {
 		return nil, fmt.Errorf("worker harness discovery: %w", err)
 	}
-	options = slices.DeleteFunc(options, func(option workHarnessOption) bool { return !supportsNativeGoalControl(option.Harness) })
+	options = slices.DeleteFunc(options, func(option workHarnessOption) bool { return !supportsWorkGoalControl(option.Harness) })
 	return options, nil
+}
+
+func supportsWorkGoalControl(harness string) bool {
+	// OpenCode uses Muxterm's Work ledger and continuation loop. Its ACP
+	// adapter does not expose native goal state or control.
+	return supportsNativeGoalControl(harness) || harness == "opencode"
 }
 
 func (s *Server) workModelCatalog(ctx context.Context, harness, provider, bundle, projectPath string) (workCatalog, error) {
@@ -167,61 +179,52 @@ func (s *Server) workDefaultHarness() string {
 	return s.cfg.AI.DefaultHarness
 }
 
-func (s *Server) selectWorkConfiguration(ctx context.Context, candidates []sdkChat, related map[string]string, goalReady map[string]bool, projectPath string) (sdkWorkConfiguration, string, string, string, error) {
+func (s *Server) selectWorkConfiguration(ctx context.Context, chosen string, candidates []sdkChat, related map[string]string, goalReady map[string]bool, projectPath string) (sdkWorkConfiguration, string, string, string, error) {
 	options, err := s.workHarnessOptions(ctx)
 	if err != nil {
 		return sdkWorkConfiguration{}, "", "", "", err
 	}
-	if len(options) == 0 {
-		return sdkWorkConfiguration{}, "", "", "", errors.New("no available worker harness supports live steering, native Chat Goals, and native history")
+	index := slices.IndexFunc(options, func(option workHarnessOption) bool { return option.Harness == chosen })
+	if index < 0 {
+		return sdkWorkConfiguration{}, "", "", "", fmt.Errorf("selected Work harness %q is unavailable or lacks a safe Work goal path; install or qualify that harness, then retry this Work item", chosen)
 	}
-	var fallback []string
+	option := options[index]
+	catalog, err := s.workModelCatalog(ctx, chosen, option.Provider, "", projectPath)
+	if err != nil {
+		return sdkWorkConfiguration{}, "", "", "", fmt.Errorf("selected Work harness %q has no available configuration: %w; fix its setup, then retry", chosen, err)
+	}
+	selected, err := workCatalogConfig(option, catalog, nil)
+	if err != nil {
+		return sdkWorkConfiguration{}, "", "", "", fmt.Errorf("selected Work harness %q has incompatible settings: %w; update its model settings, then retry", chosen, err)
+	}
+	var skipped []string
 	// Dependency order is stable because DependsOn is normalized at write time.
 	for _, chat := range candidates {
-		if related[chat.ID] == "" || !goalReady[chat.ID] {
+		if related[chat.ID] == "" {
 			continue
 		}
-		index := slices.IndexFunc(options, func(option workHarnessOption) bool { return option.Harness == chat.Harness })
-		if index < 0 {
-			fallback = append(fallback, "related chat "+chat.ID+" has an unavailable harness")
+		if chat.Harness != chosen {
+			skipped = append(skipped, "related chat "+chat.ID+" uses "+chat.Harness+", not "+chosen)
 			continue
 		}
-		catalog, err := s.workModelCatalog(ctx, chat.Harness, chat.Provider, chat.Bundle, chat.ProjectPath)
-		if err == nil {
-			var config sdkWorkConfiguration
-			config, err = workCatalogConfig(options[index], catalog, &chat)
-			if err == nil {
-				return config, chat.ID, related[chat.ID], strings.Join(fallback, "; "), nil
+		if !goalReady[chat.ID] {
+			skipped = append(skipped, "related chat "+chat.ID+" has an active or paused goal")
+			continue
+		}
+		priorCatalog, catalogErr := s.workModelCatalog(ctx, chosen, chat.Provider, chat.Bundle, chat.ProjectPath)
+		if catalogErr == nil {
+			var prior sdkWorkConfiguration
+			prior, catalogErr = workCatalogConfig(option, priorCatalog, &chat)
+			if catalogErr == nil && prior == selected {
+				return selected, chat.ID, related[chat.ID], strings.Join(skipped, "; "), nil
+			}
+			if catalogErr == nil {
+				catalogErr = errors.New("provider, bundle, model, or effort differs from the selected configuration")
 			}
 		}
-		fallback = append(fallback, "related chat "+chat.ID+" is incompatible: "+err.Error())
+		skipped = append(skipped, "related chat "+chat.ID+" is incompatible: "+catalogErr.Error())
 	}
-	preferred := s.workDefaultHarness()
-	order := []string{preferred, "codex", "claude", "copilot", "amplifier"}
-	seen := map[string]bool{}
-	for _, harness := range order {
-		if seen[harness] {
-			continue
-		}
-		seen[harness] = true
-		index := slices.IndexFunc(options, func(option workHarnessOption) bool { return option.Harness == harness })
-		if index < 0 {
-			fallback = append(fallback, "configured harness "+harness+" is unavailable for Work")
-			continue
-		}
-		catalog, err := s.workModelCatalog(ctx, harness, options[index].Provider, "", projectPath)
-		failure := "catalog unavailable"
-		if err == nil {
-			var config sdkWorkConfiguration
-			config, err = workCatalogConfig(options[index], catalog, nil)
-			if err == nil {
-				return config, "", "", strings.Join(fallback, "; "), nil
-			}
-			failure = "configuration incompatible"
-		}
-		fallback = append(fallback, harness+" "+failure+": "+err.Error())
-	}
-	return sdkWorkConfiguration{}, "", "", "", fmt.Errorf("no compatible Work worker configuration: %s", strings.Join(fallback, "; "))
+	return selected, "", "", strings.Join(skipped, "; "), nil
 }
 
 // Pin the resolved settings on a reused chat before installing its Work goal.
