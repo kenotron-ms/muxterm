@@ -107,6 +107,7 @@ type sdkEvent struct {
 	ParentSessionID    string                 `json:"parentSessionId,omitempty"`
 	Agent              string                 `json:"agent,omitempty"`
 	Message            string                 `json:"message,omitempty"`
+	CancelReason       string                 `json:"cancelReason,omitempty"`
 	Model              string                 `json:"model,omitempty"`
 	Provider           string                 `json:"provider,omitempty"`
 	Bundle             string                 `json:"bundle,omitempty"`
@@ -460,7 +461,14 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		c.State = "ready"
 		c.LastTurnOutcome = "cancelled"
 		c.LastTurnEventID = event.ID
-		c.LastActivity = "Turn stopped by user"
+		switch {
+		case event.CancelReason == "question_dismissed":
+			c.LastActivity = "Question dismissed"
+		case c.Harness == "opencode" && event.CancelReason != "user":
+			c.LastActivity = "Turn cancelled by OpenCode"
+		default:
+			c.LastActivity = "Turn stopped by user"
+		}
 	case "error":
 		c.State = "failed"
 		c.LastActivity = "Error: " + sdkPreview(event.Message, 160)
