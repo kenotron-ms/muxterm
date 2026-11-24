@@ -464,8 +464,8 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		switch {
 		case event.CancelReason == "question_dismissed":
 			c.LastActivity = "Question dismissed"
-		case c.Harness == "opencode" && event.CancelReason != "user":
-			c.LastActivity = "Turn cancelled by OpenCode"
+		case event.CancelReason == "agent" || (event.CancelReason == "" && event.Message == "cancelled"):
+			c.LastActivity = "Turn cancelled"
 		default:
 			c.LastActivity = "Turn stopped by user"
 		}

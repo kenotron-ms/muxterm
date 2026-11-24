@@ -1803,9 +1803,11 @@ export class MuxSDKChat extends LitElement {
       this.workCollapsedWhileWorking.delete(this.currentTurn);
       this.stopping = false;
       for (const b of blocks) if (b.kind === 'assistant' || b.kind === 'commentary') b.done = true;
+      // Older ACP cancelled events use message='cancelled'; legacy harness Stop events have no reason.
       const status = event.cancelReason === 'question_dismissed'
         ? 'Question dismissed · partial output kept'
-        : event.cancelReason === 'user' ? 'Stopped by you · partial output kept'
+        : event.cancelReason === 'user' || (!event.cancelReason && event.message !== 'cancelled')
+          ? 'Stopped by you · partial output kept'
         : 'Turn cancelled · partial output kept';
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:status });
       this.turnStart = blocks.length;
