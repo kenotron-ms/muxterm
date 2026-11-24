@@ -262,7 +262,7 @@ const meta = {
   parameters: { layout:'fullscreen', apiFixture:fixtureForVoice(DEFAULT_VOICE_STATUS) },
   args: { section:'appearance' as SettingsSection },
   argTypes: {
-    section: { control:'select', options:['appearance','terminal','notifications','workspaces','ai','voice','remotes','shortcuts','about'] },
+    section: { control:'select', options:['appearance','terminal','notifications','ai','voice','remotes','shortcuts','about'] },
   },
   render: (args: SettingsArgs, context: { globals: Record<string, unknown> }) => html`
     <mux-ui-dialog open size="wide" label="Settings">
@@ -393,7 +393,6 @@ export const PhoneRemotesReconnecting: Story = {args:{section:'remotes'},globals
 export const RemotesLoadError: Story = { args:{section:'remotes'}, parameters:{apiFixture:remotesLoadFailureFixture()} };
 export const PhoneRemotesLoadError: Story = { args:{section:'remotes'}, globals:{viewport:{value:'phone390',isRotated:false}}, parameters:{apiFixture:remotesLoadFailureFixture()}, render:renderPhonePage };
 export const PhoneRemotesAddError: Story = { args:{section:'remotes'}, globals:{viewport:{value:'phone390',isRotated:false}}, parameters:{apiFixture:remotesAddFailureFixture()}, render:renderPhonePage, play:async ({canvasElement}) => submitRejectedHost(canvasElement) };
-export const Workspaces: Story = { args: { section:'workspaces' } };
 export const KeyboardShortcuts: Story = { args: { section:'shortcuts' } };
 export const AboutDevelopmentBuild: Story = { args: { section:'about' } };
 export const AboutCheckError: Story = { args:{section:'about'}, parameters:{apiFixture:updateCheckFailureFixture()} };
