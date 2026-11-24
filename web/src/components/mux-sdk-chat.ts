@@ -2357,12 +2357,17 @@ export class MuxSDKChat extends LitElement {
   }
   private transcriptRows(): TranscriptRow[] {
     if (this.rowsCache?.blocks === this.blocks) return this.rowsCache.rows;
+    // Keep whitespace in the event blocks so later text in the same segment
+    // retains its intended spacing. A segment that never gains visible text
+    // must not create an empty reply or progress row when a tool interrupts it.
+    const visibleBlocks = this.blocks.filter(block =>
+      (block.kind !== 'assistant' && block.kind !== 'commentary') || block.channel === 'voice' || !!block.text.trim());
     const work = new Map<number, Block[]>();
     const latestInput = new Map<number, number>();
     const latestActiveUser = new Map<number, number>();
-    const segmentedTurns = new Set(this.blocks.filter(block => (block.kind === 'question' || block.kind === 'delegate') && this.turnFinished.has(block.turn)).map(block => block.turn));
+    const segmentedTurns = new Set(visibleBlocks.filter(block => (block.kind === 'question' || block.kind === 'delegate') && this.turnFinished.has(block.turn)).map(block => block.turn));
     const isWork = (block: Block) => block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output' || block.kind === 'question' || block.kind === 'delegate';
-    for (const block of this.blocks) {
+    for (const block of visibleBlocks) {
       if (!this.turnFinished.has(block.turn)) {
         if (block.kind === 'user') latestActiveUser.set(block.turn, block.key);
         else if (block.kind === 'work-digest') continue;
@@ -2383,7 +2388,7 @@ export class MuxSDKChat extends LitElement {
     const shown = new Set<number>();
     const segmentedWorkShown = new Set<number>();
     const rows: TranscriptRow[] = [];
-    for (const block of this.blocks) {
+    for (const block of visibleBlocks) {
       if (!this.turnFinished.has(block.turn)) {
         if (block.kind === 'user') rows.push({ key:`block-${block.key}`, block });
         else if (block.kind === 'work-digest') rows.push({ key:`block-${block.key}`, block });
@@ -2548,7 +2553,7 @@ export class MuxSDKChat extends LitElement {
     const copied = this.copiedKey === block.key;
     const completed = this.turnFinished.has(block.turn) && !this.busy && this.chat?.state !== 'uncertain';
     const canBranch = completed && !this.sideMode && !this.chat?.goal;
-    const finalAssistant = block.kind === 'assistant' && block.channel !== 'voice' && !this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key);
+    const finalAssistant = block.kind === 'assistant' && block.channel !== 'voice' && !this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key && !!other.text.trim());
     return html`<div class="message-actions" role="group" aria-label=${`${block.kind === 'user' ? 'Your' : 'Assistant'} message actions`}>
       <mux-ui-button variant="quiet" size="small" icon-only accessible-label=${copied ? 'Message copied' : `Copy ${block.kind} message`} tooltip=${copied ? 'Copied' : 'Copy message'} @click=${(event: MouseEvent) => { event.stopPropagation(); void this.copyMessage(block); }}>${icon(copied ? Check : Copy, { size:14 })}<span class="sr-only" aria-live="polite">${copied ? 'Copied' : ''}</span></mux-ui-button>
       ${!this.sideMode && (block.kind === 'user' || block.kind === 'assistant') ? html`<mux-ui-button variant="quiet" size="small" icon-only accessible-label="Ask in side chat" tooltip="Ask in side chat" @click=${(event: MouseEvent) => { event.stopPropagation(); void this.askInSideChat(block); }}>${icon(MessageCircleQuestionMark,{size:14})}</mux-ui-button>` : nothing}
@@ -2566,7 +2571,7 @@ export class MuxSDKChat extends LitElement {
   private goalifyChoice(block: Block) {
     const input = this.blocks.find(item => item.kind === 'user' && item.turn === block.turn && item.source === 'goalify');
     if (!block.done || !block.text.trim() || !input ||
-      this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key)) return nothing;
+      this.blocks.some(other => other.kind === 'assistant' && other.turn === block.turn && other.key > block.key && !!other.text.trim())) return nothing;
     const key = `muxterm-goalify-choice:${this.activeSession}:${input.id || input.at || input.key}`;
     const revisionAt = Date.parse(this.goalDocument?.revisions.at(-1)?.at || '');
     const replyAt = Date.parse(block.at || '');
