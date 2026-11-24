@@ -17,9 +17,9 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/atomicfile"
 )
 
-// agentConversationLink joins a source-owned conversation to a Go-owned chat.
+// AgentConversationLink joins a source-owned conversation to a Go-owned chat.
 // The source platform retains its original messages and audience.
-type agentConversationLink struct {
+type AgentConversationLink struct {
 	AgentID            string    `json:"agentId"`
 	ConnectionID       string    `json:"connectionId"`
 	SourceConversation string    `json:"sourceConversation"`
@@ -40,7 +40,7 @@ func (h *sdkChatHost) loadAgentConversations() error {
 	if err != nil {
 		return fmt.Errorf("read agent conversation links: %w", err)
 	}
-	var links map[string]*agentConversationLink
+	var links map[string]*AgentConversationLink
 	if err := json.Unmarshal(data, &links); err != nil {
 		return fmt.Errorf("invalid agent conversation links: %w", err)
 	}
@@ -70,18 +70,18 @@ func (h *sdkChatHost) saveAgentConversationsLocked() error {
 
 // linkAgentConversationLocked is idempotent. It never silently moves a
 // source conversation to another chat after a reconnect or lost receipt.
-func (h *sdkChatHost) linkAgentConversationLocked(link agentConversationLink) (agentConversationLink, bool, error) {
+func (h *sdkChatHost) linkAgentConversationLocked(link AgentConversationLink) (AgentConversationLink, bool, error) {
 	if h.agents[link.AgentID] == nil {
-		return agentConversationLink{}, false, errors.New("unknown agent")
+		return AgentConversationLink{}, false, errors.New("unknown agent")
 	}
 	chat := h.chats[link.ChatID]
 	if chat == nil || chat.Archived || chat.AgentID != link.AgentID {
-		return agentConversationLink{}, false, errors.New("chat is unavailable or belongs to another agent")
+		return AgentConversationLink{}, false, errors.New("chat is unavailable or belongs to another agent")
 	}
 	key := agentConversationKey(link.AgentID, link.ConnectionID, link.SourceConversation)
 	if prior := h.agentConversations[key]; prior != nil {
 		if prior.ChatID != link.ChatID {
-			return agentConversationLink{}, false, errors.New("source conversation is already linked to another chat")
+			return AgentConversationLink{}, false, errors.New("source conversation is already linked to another chat")
 		}
 		return *prior, false, nil
 	}
@@ -89,9 +89,26 @@ func (h *sdkChatHost) linkAgentConversationLocked(link agentConversationLink) (a
 	h.agentConversations[key] = &link
 	if err := h.saveAgentConversationsLocked(); err != nil {
 		delete(h.agentConversations, key)
-		return agentConversationLink{}, false, err
+		return AgentConversationLink{}, false, err
 	}
 	return link, true, nil
+}
+
+// LinkAgentConnectionConversation is the in-process connector seam for
+// associating an authorized source conversation with an existing agent chat.
+// Connector implementations validate source identity before calling it.
+func (s *Server) LinkAgentConnectionConversation(agentID, connectionID, sourceConversation, chatID string) (AgentConversationLink, bool, error) {
+	if agentID == "" || len(agentID) > 128 || connectionID == "" || len(connectionID) > 128 ||
+		sourceConversation == "" || len(sourceConversation) > 2048 || chatID == "" || len(chatID) > 128 {
+		return AgentConversationLink{}, false, errors.New("invalid agent conversation link")
+	}
+	h := s.sdkChats
+	if h.agentDataErr != nil {
+		return AgentConversationLink{}, false, fmt.Errorf("agent registry unavailable: %w", h.agentDataErr)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.linkAgentConversationLocked(AgentConversationLink{AgentID: agentID, ConnectionID: connectionID, SourceConversation: sourceConversation, ChatID: chatID})
 }
 
 func (s *Server) handleAgentInstanceConversations(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +125,7 @@ func (s *Server) handleAgentInstanceConversations(w http.ResponseWriter, r *http
 			http.NotFound(w, r)
 			return
 		}
-		links := make([]agentConversationLink, 0)
+		links := make([]AgentConversationLink, 0)
 		for _, link := range h.agentConversations {
 			if link.AgentID == id {
 				links = append(links, *link)
@@ -136,7 +153,7 @@ func (s *Server) handleAgentInstanceConversations(w http.ResponseWriter, r *http
 		return
 	}
 	h.mu.Lock()
-	link, created, err := h.linkAgentConversationLocked(agentConversationLink{
+	link, created, err := h.linkAgentConversationLocked(AgentConversationLink{
 		AgentID: id, ConnectionID: req.ConnectionID,
 		SourceConversation: req.SourceConversation, ChatID: req.ChatID,
 	})

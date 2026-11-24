@@ -191,7 +191,7 @@ type sdkChatHost struct {
 	ampMu              sync.Mutex
 	chats              map[string]*sdkChat
 	agents             map[string]*agentInstance
-	agentConversations map[string]*agentConversationLink
+	agentConversations map[string]*AgentConversationLink
 	agentDataErr       error
 	projects           map[string]*sdkProject
 	streams            map[string]map[chan sdkEvent]struct{}
@@ -231,7 +231,7 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, agents: map[string]*agentInstance{}, agentConversations: map[string]*agentConversationLink{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, migrationLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, agents: map[string]*agentInstance{}, agentConversations: map[string]*AgentConversationLink{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, migrationLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
 	h.goalDispatch.ctx, h.goalDispatch.cancel = context.WithCancel(context.Background())
 	h.goals = openGoalLedger(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
