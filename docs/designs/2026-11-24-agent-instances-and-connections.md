@@ -51,7 +51,7 @@ This Teams profile requires a development tenant able to register an agent ident
 
 ## Implementation checkpoint
 
-The first Go slice persists agent records, optional defaults, chat associations, and source conversation links. Its in-process connection admission method accepts a person-authored message for an existing link, saves a receipt before harness dispatch, and reconciles a lost acknowledgment from the chat's durable `input.accepted` event. It carries source and audience facts as structured receipt data and into the harness input. It does not yet create a chat for an unseen source conversation, publish replies, supervise agent-owned Work, or run a platform connector. Those behaviors remain required before any live integration cutover.
+The first Go slice persists agent records, optional defaults, chat associations, and source conversation links. Its in-process connection admission method accepts a person-authored message for an existing link, saves a receipt before harness dispatch, and reconciles a lost acknowledgment from the chat's durable `input.accepted` event. It carries source and audience facts as structured receipt data and into the harness input. A connector can read a completed turn from the linked chat's durable event history. It does not yet create a chat for an unseen source conversation, publish replies, supervise agent-owned Work, or run a platform connector. Those behaviors remain required before any live integration cutover.
 
 ## Qualification
 
