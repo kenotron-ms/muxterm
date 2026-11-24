@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing, unsafeCSS } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { CalendarClock, ChevronLeft, ChevronRight, Plug, Plus, Puzzle, Search, Settings, SquareTerminal } from 'lucide';
+import { CalendarClock, ChevronLeft, ChevronRight, Plus, Puzzle, Search, Settings, SquareTerminal } from 'lucide';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { scrollEdgeFadeStyles, syncScrollEdgeFade } from '../lib/scroll-edge-fade.js';
 import { icon } from '../lib/icons.js';
@@ -240,7 +240,6 @@ export class MuxSidebar extends LitElement {
     const navActions = [
       { label: 'Terminal', icon: SquareTerminal, active: this.terminalActive, event: 'terminal-open' },
       { label: 'Jobs', icon: CalendarClock, active: this.jobsActive, event: 'jobs-open' },
-      { label: 'Customizations', icon: Plug, active: this.connectionsActive, event: 'connections-open' },
       { label: 'Skills', icon: Puzzle, active: this.skillsActive, event: 'skills-open' },
     ];
     const nav = html`<nav class="nav-actions" aria-label="Sidebar actions">
