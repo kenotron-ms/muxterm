@@ -23,6 +23,7 @@ import { voiceInputController } from './lib/voice-input-controller.js';
 import { sdkVoiceCall, type ActiveVoiceCall } from './lib/sdk-voice-session.js';
 import { fetchAIStatus, parseAIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
+import { installExternalLinkHandling } from './lib/external-links.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
@@ -31,6 +32,7 @@ injectTerminalFonts();
 // PWA service worker. No-op unless the app is served at the origin root —
 // see lib/sw.ts. Was an index.html snippet injected by vite-plugin-pwa.
 registerServiceWorker();
+installExternalLinkHandling();
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
@@ -2584,7 +2586,8 @@ export class MuxApp extends LitElement {
    * the drawer's own popover Escape is untouched.
    */
   private _onOverlayPanelEscape = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape' || !this._overlayPanel || this._paletteOpen || this._paletteProjectPanel) return;
+    if (e.key !== 'Escape' || !this._overlayPanel || this._paletteOpen || this._paletteProjectPanel ||
+        document.querySelector('mux-external-link-actions:popover-open')) return;
     e.preventDefault();
     e.stopPropagation();
     this._closeOverlayPanel();
