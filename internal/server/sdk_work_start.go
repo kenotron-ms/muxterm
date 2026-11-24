@@ -284,6 +284,27 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if state == "sent" {
+		if config.Harness == "opencode" {
+			// Ordinary OpenCode chats may use older ACP builds. Require the
+			// advertised steering and recovery capabilities only for Work,
+			// after the selected runtime has initialized this exact chat.
+			capCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			raw, capErr := h.call(capCtx, "capabilities", map[string]any{"sessionId": workerID, "harness": config.Harness})
+			cancel()
+			var reported struct {
+				Capabilities struct {
+					NativeSteering bool `json:"native_steering"`
+					NativeHistory  bool `json:"native_history"`
+				} `json:"capabilities"`
+			}
+			if capErr != nil || json.Unmarshal(raw, &reported) != nil {
+				state, detail = "uncertain", "selected OpenCode ACP capability receipt was not confirmed; inspect the chat before retrying"
+			} else if !reported.Capabilities.NativeSteering || !reported.Capabilities.NativeHistory {
+				state, detail = "failed", "selected OpenCode ACP does not advertise both live steering and resumed history; update or qualify this runtime before retrying Work"
+			}
+		}
+	}
+	if state == "sent" {
 		goalState, err := s.installWorkGoal(workerID, &copy)
 		if err != nil {
 			state, detail = goalState, err.Error()

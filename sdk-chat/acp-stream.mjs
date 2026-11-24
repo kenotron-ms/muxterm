@@ -296,12 +296,6 @@ export class ACPStream {
         !this.agentCapabilities.sessionCapabilities?.resume && !this.agentCapabilities.loadSession)
       throw new Error('Antigravity ACP does not advertise native session history recovery');
     this.steeringExtension = result._meta?.steering?.supported === true;
-    if (this.session.harness === 'opencode') {
-      if (!this.steeringExtension)
-        throw new Error('OpenCode ACP did not advertise live _session/steering; Work requires this runtime capability');
-      if (!this.agentCapabilities.sessionCapabilities?.resume && !this.agentCapabilities.loadSession)
-        throw new Error('OpenCode ACP did not advertise native session history recovery; Work cannot resume safely');
-    }
     // Some agents stall when two native sessions initialize at cold start.
     const priorInit = this.runtime.sessionInit;
     let releaseInit;
@@ -346,7 +340,7 @@ export class ACPStream {
   capabilities() {
     return { approvals: false, transcript_read: false, interrupt: true, live_input: false,
       attributed_service_input: false, native_steering: this.session.harness === 'antigravity' || this.steeringExtension,
-      native_history: this.session.harness === 'antigravity' || this.session.harness === 'opencode' };
+      native_history: this.session.harness === 'antigravity' || Boolean(this.agentCapabilities?.sessionCapabilities?.resume || this.agentCapabilities?.loadSession) };
   }
 
   withExit(promise) {
