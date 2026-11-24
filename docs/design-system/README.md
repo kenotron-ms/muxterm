@@ -22,7 +22,7 @@ component-library pull request workflow uploads the built catalog and a curated
 reviewers. Those PNGs are generated in CI and stay outside git.
 
 The public catalog is deployed as static files to
-`https://kenotron-ms.github.io/muxterm/` by the `Storybook Pages` workflow.
+`https://kenotron-ms.github.io/muxterm/storybook/` by the `Muxterm Pages` workflow. The Pages root is the public Muxterm landing page.
 That workflow builds from this review branch until merge and from `main` after
 merge. It needs no AI keys or application server: Storybook API requests and
 event streams stay inside browser fixtures, and an unconfigured request gets a
