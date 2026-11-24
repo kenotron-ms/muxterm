@@ -2,6 +2,8 @@
 
 **Status:** Muxterm product contract. Teams is the first intended connection.
 
+Microsoft's [Agents in Teams overview](https://learn.microsoft.com/en-us/microsoftteams/platform/agents-in-teams/overview) calls a Teams SDK conversational app an agent. The existing custom-upload Agent Bridge already provides that bot-backed entry point. Its current one-shot OpenAI command supplies replies, but does not yet give the bot Muxterm agent identity, durable Muxterm chat history, or task/tool execution. The first live integration should connect that bot to a Muxterm agent through the generic connection contract; it does not depend on Agentic User factory approval.
+
 ## Core ownership
 
 `muxterm serve` hosts independently addressable, durable **agent instances**. Each agent has a stable `agentId`, configuration, accepted Work, and one continuation owner for each Work item. An agent may participate in several conversations, run several chats, and change harnesses or machines without changing identity. A harness session is an execution choice, not an agent.
@@ -43,11 +45,15 @@ An agent can move to another Muxterm host, but only one home service owns contin
 
 ## Teams connection profile
 
-The intended Teams shape is an **Agentic User factory**: one shared blueprint and relay, with a separate named Teams Agentic User per Muxterm agent. The relay resolves activities by tenant ID and addressed Agentic User ID, not by Teams conversation ID alone. It stores the per-agent identity client ID and Agentic User object ID, plus Teams conversation, thread, activity, and service URL references. It sends as the addressed Agentic User. Teams owns thread history and membership.
+**First live route: existing custom-upload app.** Keep the working Teams SDK bot registration, ZIP, and HTTPS callback. Replace its standalone OpenAI command path with a relay connection to one Muxterm agent, using the same authenticated source facts, receipts, and source reply boundary as other connectors. This gives the current bot real Muxterm agent behavior and shared Muxterm chat history while the Teams app identity remains Agent Bridge. Preserve the current live runner until this replacement is verified end to end.
 
-The relay runs on the dedicated `teamsbot-relay` Incus instance. Each Muxterm Go service opens an authenticated outbound connection. The relay runs no model; the old standalone OpenAI runner must stop before the same events are forwarded to Muxterm. The current custom-upload bot stays online until the Agentic User path is verified. Its app registration cannot be silently reinterpreted as a factory blueprint.
+**Per-agent Teams identities: Agentic User factory.** The separate named identity requested for each Muxterm agent is a later Teams-specific profile. It extends the same Muxterm contract and needs tenant activation; it is not a prerequisite for the first bot-backed route.
 
-This Teams profile requires a development tenant able to register an agent identity blueprint, admin activation and consent, and preview Agentic User support. Provisioning uses Microsoft Graph beta. These are external prerequisites, not part of Muxterm's generic agent contract.
+The per-agent identity shape is an **Agentic User factory**: one shared blueprint and relay, with a separate named Teams Agentic User per Muxterm agent. The relay resolves activities by tenant ID and addressed Agentic User ID, not by Teams conversation ID alone. It stores the per-agent identity client ID and Agentic User object ID, plus Teams conversation, thread, activity, and service URL references. It sends as the addressed Agentic User. Teams owns thread history and membership.
+
+The relay runs on the dedicated `teamsbot-relay` Incus instance. Each Muxterm Go service opens an authenticated outbound connection. The relay runs no model; the old standalone OpenAI runner must stop before the same events are forwarded to Muxterm. The current custom-upload bot stays online until the bot-backed route is verified. Its app registration cannot be silently reinterpreted as a factory blueprint.
+
+The **Agentic User profile** requires a development tenant able to register an agent identity blueprint, admin activation and consent, and preview Agentic User support. Provisioning uses Microsoft Graph beta. These are external prerequisites for per-agent Teams identities, not for bot-backed agent capability or Muxterm's generic contract.
 
 ## Implementation checkpoint
 
