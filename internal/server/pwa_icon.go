@@ -17,8 +17,8 @@ var pwaBackdrops = []string{
 	"geometry", "night-grid", "wayfarer", "skybound", "moon-keep",
 }
 
-// Bump this when the raster artwork changes so installed browsers request
-// fresh icon bytes even if the selected backdrop stays the same.
+// Bump this together with artworkRevision in web/src/lib/pwa-icon.ts when the
+// raster artwork changes, so installed browsers request fresh icon bytes.
 const pwaIconArtworkRevision = "2"
 
 func validPwaBackdrop(backdrop string) bool {

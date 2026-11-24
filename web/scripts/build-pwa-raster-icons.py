@@ -10,6 +10,7 @@ does not draw icon subjects.
 """
 
 import argparse
+import math
 import subprocess
 import tempfile
 from pathlib import Path
@@ -56,8 +57,9 @@ def main() -> None:
         ["magick", "identify", "-format", "%wx%h %[opaque]", str(source)], text=True
     ).strip().split()
     width, height = map(int, dimensions.split("x"))
-    if width != height or width < 512:
-        parser.error(f"source must be square and at least 512px: {dimensions}")
+    minimum_size = math.ceil(512 / min(CROP_FRACTIONS.values()))
+    if width != height or width < minimum_size:
+        parser.error(f"source must be square and at least {minimum_size}px before cropping: {dimensions}")
     if opaque != "True":
         parser.error("source needs an opaque, solid-color background for launcher masks")
 

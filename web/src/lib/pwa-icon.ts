@@ -1,5 +1,6 @@
 import { apiPath } from './base-path.js';
 
+// Keep in sync with pwaIconArtworkRevision in internal/server/pwa_icon.go.
 const artworkRevision = 2;
 
 export function appIconImage(backdrop: string, filename: string): string {
