@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -56,6 +57,15 @@ func (s *Server) finishWorkDispatch(id, ref, state, detail string) (sdkWorkItem,
 		dispatch.State, dispatch.Detail = state, detail
 		dispatch.UpdatedAt = time.Now().UTC()
 		copy.Dispatch = &dispatch
+		if state == "failed" || state == "uncertain" {
+			copy.Status = "blocked"
+			copy.BlockedReason = "Selected Work harness " + dispatch.Configuration.Harness + " could not start: " + detail
+			copy.NextAction = "Inspect the selected runtime and dispatch receipts; set Work back to open and retry with a new client_ref once safe."
+			copy.NeedsHuman = true
+			copy.Updates = append(slices.Clone(copy.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "dispatch-outcome:" + ref,
+				At: dispatch.UpdatedAt, Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Selected worker could not start",
+				Text: copy.BlockedReason, Status: "blocked", BlockedReason: &copy.BlockedReason, NextAction: &copy.NextAction})
+		}
 		copy.Revision++
 		copy.UpdatedAt = dispatch.UpdatedAt
 		if err := h.saveWorkLocked(&copy); err != nil {
@@ -66,6 +76,30 @@ func (s *Server) finishWorkDispatch(id, ref, state, detail string) (sdkWorkItem,
 	copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(&copy))
 	copy.WaitingOn = h.workWaitingOnLocked(&copy)
 	return copy, nil
+}
+
+// Record a choice that cannot run so the scheduler never substitutes a worker
+// or retries a failing runtime without an explicit Work update.
+func (s *Server) recordWorkSelectionFailure(id, ref string, revision int, harness, source string, selectionErr error) {
+	h := s.sdkChats
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	item := h.workItems[id]
+	if item == nil || item.Revision != revision || !h.workEligibleLocked(item, true) {
+		return
+	}
+	now := time.Now().UTC()
+	copy := *item
+	copy.Status = "blocked"
+	copy.BlockedReason = selectionErr.Error()
+	copy.NextAction = "Fix the selected harness, set Work back to open, then retry dispatch with a new client_ref."
+	copy.Dispatch = &sdkWorkDispatch{ClientRef: ref, State: "failed", Detail: selectionErr.Error(), ChoiceSource: source, Configuration: &sdkWorkConfiguration{Harness: harness}, CreatedAt: now, UpdatedAt: now}
+	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "dispatch:" + ref, At: now, Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Selected worker unavailable", Text: "Choice source: " + source + ". Selected harness: " + harness + ". " + selectionErr.Error(), Status: "blocked", BlockedReason: &copy.BlockedReason, NextAction: &copy.NextAction})
+	copy.Revision++
+	copy.UpdatedAt = now
+	if err := h.saveWorkLocked(&copy); err != nil {
+		log.Printf("record Work selection failure %s: %v", id, err)
+	}
 }
 
 func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +140,13 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	}
 	projects := slices.Clone(h.workProjectIDsLocked(item))
 	projectPath := h.projects[projects[0]].Path
+	selectedHarness := item.Harness
+	choiceSource := "item"
+	if selectedHarness == "" {
+		selectedHarness = s.workDefaultHarness()
+		choiceSource = "AI default"
+	}
+	selectedRevision := item.Revision
 	related := h.workContextCandidatesLocked(item)
 	candidates := make([]sdkChat, 0)
 	for _, chat := range h.chats {
@@ -124,10 +165,11 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	goalReady := make(map[string]bool, len(candidates))
 	for _, chat := range candidates {
 		goal, err := h.goals.update(chat, nil)
-		goalReady[chat.ID] = err == nil && !goal.HumanPaused && goal.RequestedRevision == 0 && supportsNativeGoalControl(chat.Harness)
+		goalReady[chat.ID] = err == nil && !goal.HumanPaused && goal.RequestedRevision == 0 && supportsWorkGoalControl(chat.Harness)
 	}
-	config, relatedChatID, contextWorkID, fallback, err := s.selectWorkConfiguration(r.Context(), candidates, related, goalReady, projectPath)
+	config, relatedChatID, contextWorkID, skipped, err := s.selectWorkConfiguration(r.Context(), selectedHarness, candidates, related, goalReady, projectPath)
 	if err != nil {
+		s.recordWorkSelectionFailure(id, req.ClientRef, selectedRevision, selectedHarness, choiceSource, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -157,6 +199,11 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "work is not eligible to start", 409)
 		return
 	}
+	if item.Harness != "" && item.Harness != selectedHarness || item.Harness == "" && s.workDefaultHarness() != selectedHarness {
+		h.mu.Unlock()
+		http.Error(w, "Work harness choice changed during selection; retry", http.StatusConflict)
+		return
+	}
 	projects = slices.Clone(h.workProjectIDsLocked(item))
 	workerID, existing := sdkID(), false
 	if relatedChatID != "" {
@@ -184,16 +231,20 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		reason = "Reused this chat because it completed direct prerequisite Work " + contextWorkID + " and its configuration is compatible."
 	}
 	configuration := config
-	copy.Dispatch = &sdkWorkDispatch{ClientRef: req.ClientRef, SessionID: workerID, State: "preparing", SelectionReason: reason, ContextWorkID: contextWorkID, Configuration: &configuration, Fallback: fallback, CreatedAt: now, UpdatedAt: now}
+	goalMode := "native"
+	if config.Harness == "opencode" {
+		goalMode = "muxterm-work"
+	}
+	copy.Dispatch = &sdkWorkDispatch{ClientRef: req.ClientRef, SessionID: workerID, State: "preparing", SelectionReason: reason, ContextWorkID: contextWorkID, Configuration: &configuration, ChoiceSource: choiceSource, GoalMode: goalMode, CreatedAt: now, UpdatedAt: now}
 	setting := func(value string) string {
 		if value == "" {
 			return "none"
 		}
 		return value
 	}
-	selectionText := reason + " Effective worker: " + config.Harness + "/" + config.Provider + ", bundle=" + setting(config.Bundle) + ", model=" + setting(config.Model) + ", effort=" + setting(config.Effort) + "."
-	if fallback != "" {
-		selectionText += " Fallback: " + fallback + "."
+	selectionText := reason + " Choice source: " + choiceSource + ". Effective worker: " + config.Harness + "/" + config.Provider + ", bundle=" + setting(config.Bundle) + ", model=" + setting(config.Model) + ", effort=" + setting(config.Effort) + ". Goal control: " + goalMode + "."
+	if skipped != "" {
+		selectionText += " Related chats skipped: " + skipped + "."
 	}
 	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "dispatch:" + req.ClientRef, At: now, Actor: actor, Summary: "Worker selected", Text: selectionText, LinkedSessionID: workerID})
 	copy.Revision++
@@ -204,7 +255,10 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mu.Unlock()
-	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The filed Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Use the Work plan as execution guidance and the native goal as the completion contract. On claim, each meaningful milestone, blocker, replan, and completion, call update_work_item with expected_revision to move relevant step_updates and update summary, progress, next_action, and status together. A replan sends the full plan and a reason; keep completed steps. Each update response includes unread commentAttention: read and acknowledge any comments before review or done. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your native goal."
+	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The filed Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Use the Work plan as execution guidance and the goal as the completion contract. On claim, each meaningful milestone, blocker, replan, and completion, call update_work_item with expected_revision to move relevant step_updates and update summary, progress, next_action, and status together. A replan sends the full plan and a reason; keep completed steps. Each update response includes unread commentAttention: read and acknowledge any comments before review or done. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your goal."
+	if goalMode == "muxterm-work" {
+		prompt = "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". Muxterm owns this Work goal; OpenCode does not expose native goal controls through ACP. The exact filed condition is below. Continue until Work is done or blocked; Muxterm may send a continuation after each completed turn. Read the Work record, claim it with your chat ID and latest expected_revision, then update its plan, summary, progress, next_action, and status at each milestone. Read and acknowledge Work comments before review or done. Report evidence or blockers in the Work record.\n\nFiled Work condition:\n" + copy.GoalCondition
+	}
 	if copy.PlanProtocol != "" {
 		prompt += " Filed plan update protocol: " + copy.PlanProtocol
 	}

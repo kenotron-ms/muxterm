@@ -1,14 +1,120 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 )
+
+func (h *sdkChatHost) dispatchMuxtermWorkGoal(chat sdkChat, receiptID, action, objective string, revision, controlVersion int) {
+	ctx, cancel := context.WithTimeout(h.goalDispatch.ctx, 45*time.Second)
+	defer cancel()
+	document, err := h.goals.update(chat, nil)
+	if err == nil && (document.Mode != "muxterm-work" || document.ControlVersion != controlVersion) {
+		err = errGoalConflict
+	}
+	if err == nil && (action == "pause" || action == "clear") {
+		h.mu.Lock()
+		working := h.chats[chat.ID] != nil && h.chats[chat.ID].State == "working"
+		h.mu.Unlock()
+		if working {
+			_, err = h.call(ctx, "interrupt", map[string]any{"sessionId": chat.ID})
+			if err != nil {
+				h.mu.Lock()
+				settled := h.chats[chat.ID] != nil && h.chats[chat.ID].State == "ready"
+				h.mu.Unlock()
+				if settled {
+					err = nil
+				}
+			}
+		}
+	}
+	state := "active"
+	if action == "pause" {
+		state = "paused"
+	} else if action == "clear" {
+		state = "cleared"
+	}
+	_, saveErr := h.goals.update(chat, func(document *goalDocument) error {
+		if document.Mode != "muxterm-work" {
+			return errors.New("Muxterm Work goal mode changed")
+		}
+		for index := range document.Receipts {
+			receipt := &document.Receipts[index]
+			if receipt.ID != receiptID {
+				continue
+			}
+			if receipt.Status != "dispatching" {
+				return nil
+			}
+			if document.ControlVersion != controlVersion || document.RequestedRevision != revision || err != nil {
+				receipt.Status = "uncertain"
+				if err != nil {
+					receipt.Detail = err.Error()
+				} else {
+					receipt.Detail = "Work goal control changed before acknowledgement"
+				}
+				document.State = "uncertain"
+				return nil
+			}
+			receipt.Status = "acknowledged"
+			receipt.Detail = "Muxterm-owned Work goal control; no native OpenCode goal API was called."
+			document.State = state
+			if state == "cleared" {
+				document.AppliedRevision = 0
+			} else {
+				document.AppliedRevision = revision
+			}
+			return nil
+		}
+		return errors.New("Muxterm Work control receipt missing")
+	})
+	if saveErr != nil {
+		h.appendEvent(sdkEvent{SessionID: chat.ID, Type: "session.uncertain", Message: "Work goal receipt persistence failed: " + saveErr.Error()})
+		return
+	}
+	if err != nil {
+		h.appendEvent(sdkEvent{SessionID: chat.ID, Type: "session.uncertain", Message: "Work goal control uncertain: " + err.Error()})
+		return
+	}
+	goal := objective
+	if state == "cleared" {
+		goal = ""
+	}
+	h.appendEvent(sdkEvent{SessionID: chat.ID, Type: "goal.snapshot", Goal: &goal, GoalState: state,
+		GoalReason: "Muxterm-owned Work goal control", GoalControlVersion: &controlVersion,
+		Raw: json.RawMessage(`{"source":"muxterm-work"}`)})
+	if state == "cleared" {
+		h.mu.Lock()
+		for _, item := range h.workItems {
+			if item.OwnerSessionID == chat.ID && item.Status == "active" && item.Dispatch != nil && item.Dispatch.GoalMode == "muxterm-work" {
+				copy := *item
+				copy.Status = "blocked"
+				copy.BlockedReason = "Human cleared the Muxterm-owned Work goal. The filed condition remains on the Work record."
+				copy.NextAction = "Review the Work record and assign a new goal-authorized worker before resuming."
+				copy.NeedsHuman = true
+				copy.Revision++
+				copy.UpdatedAt = time.Now().UTC()
+				if saveErr := h.saveWorkLocked(&copy); saveErr != nil {
+					log.Printf("Work goal clear could not update Work %s: %v", item.ID, saveErr)
+				}
+			}
+		}
+		h.mu.Unlock()
+	}
+	if state == "active" && h.onWorkChange != nil {
+		h.onWorkChange()
+	}
+	if state == "active" && action == "resume" && h.onWorkResume != nil {
+		h.onWorkResume(chat.ID, controlVersion)
+	}
+}
 
 // installWorkGoal runs only after a dispatch reservation has pinned an
 // exact filed or human-approved Work condition. It never clears a pause or replaces an
@@ -31,8 +137,8 @@ func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, erro
 	}
 	chat := *current
 	h.mu.Unlock()
-	if !supportsNativeGoalControl(chat.Harness) {
-		return "failed", errors.New("selected chat has no native goal control")
+	if !supportsWorkGoalControl(chat.Harness) {
+		return "failed", errors.New("selected chat has no safe Work goal control")
 	}
 	before, err := h.goals.update(chat, nil)
 	if err != nil {
@@ -60,12 +166,41 @@ func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, erro
 		document.ControlVersion++
 		document.Revisions = append(document.Revisions, goalRevision{Revision: document.RequestedRevision, Condition: item.GoalCondition, Provenance: provenance, At: time.Now().UTC()})
 		document.Receipts = append(document.Receipts, goalReceipt{ID: receiptID, Action: "set", Objective: item.GoalCondition, Revision: document.RequestedRevision, Actor: provenance, Status: "dispatching", At: time.Now().UTC()})
+		if item.Dispatch.GoalMode == "muxterm-work" {
+			document.Mode = "muxterm-work"
+			document.Gap = "Muxterm-owned Work goal. OpenCode ACP does not expose native goal state or controls; Work status and this ledger are authoritative."
+		}
 		return nil
 	})
 	if err != nil {
 		return "failed", err
 	}
 	goalRevision := document.RequestedRevision
+	if item.Dispatch.GoalMode == "muxterm-work" {
+		_, err = h.goals.update(chat, func(document *goalDocument) error {
+			if document.ControlVersion != before.ControlVersion+1 || document.RequestedRevision != goalRevision || document.HumanPaused {
+				return errGoalConflict
+			}
+			for index := range document.Receipts {
+				if document.Receipts[index].ID == receiptID && document.Receipts[index].Status == "dispatching" {
+					document.Receipts[index].Status = "acknowledged"
+					document.Receipts[index].Detail = "Muxterm Work ledger recorded the exact filed condition; kickoff input has a separate delivery receipt."
+					document.AppliedRevision = goalRevision
+					document.State = "active"
+					return nil
+				}
+			}
+			return errors.New("Muxterm Work goal receipt missing or changed")
+		})
+		if err != nil {
+			return "uncertain", err
+		}
+		goal := item.GoalCondition
+		h.appendEvent(sdkEvent{SessionID: chat.ID, Type: "goal.snapshot", Goal: &goal, GoalState: "active",
+			GoalReason:         "Muxterm-owned Work goal; the exact condition is sent in the kickoff input",
+			GoalControlVersion: &document.ControlVersion, Raw: json.RawMessage(`{"source":"muxterm-work"}`)})
+		return "sent", nil
+	}
 	h.dispatchGoal(chat, receiptID, "set", item.GoalCondition, false, goalRevision, document.ControlVersion)
 	document, err = h.goals.update(chat, nil)
 	if err != nil {

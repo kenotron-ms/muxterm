@@ -28,6 +28,8 @@ type sdkWorkItem struct {
 	ClientRef          string                   `json:"clientRef"`
 	Title              string                   `json:"title"`
 	Brief              string                   `json:"brief"`
+	Harness            string                   `json:"harness,omitempty"`
+	CreateHarness      string                   `json:"createHarness,omitempty"`
 	CreateTitle        *string                  `json:"createTitle,omitempty"`
 	CreateBrief        *string                  `json:"createBrief,omitempty"`
 	Source             string                   `json:"source,omitempty"`
@@ -98,6 +100,7 @@ type sdkWorkUpdate struct {
 	CommentNoticeState string                `json:"commentNoticeState,omitempty"`
 	Title              *string               `json:"title,omitempty"`
 	Brief              *string               `json:"brief,omitempty"`
+	Harness            *string               `json:"harness,omitempty"`
 	Acceptance         *string               `json:"acceptanceCriteria,omitempty"`
 	GoalCondition      *string               `json:"goalCondition,omitempty"`
 	GoalRevision       int                   `json:"goalRevision,omitempty"`
@@ -128,16 +131,21 @@ type sdkWorkUpdate struct {
 }
 
 type sdkWorkDispatch struct {
-	ClientRef       string                `json:"clientRef"`
-	SessionID       string                `json:"sessionId"`
-	State           string                `json:"state"`
-	Detail          string                `json:"detail,omitempty"`
-	SelectionReason string                `json:"selectionReason,omitempty"`
-	ContextWorkID   string                `json:"contextWorkId,omitempty"`
-	Configuration   *sdkWorkConfiguration `json:"configuration,omitempty"`
-	Fallback        string                `json:"fallback,omitempty"`
-	CreatedAt       time.Time             `json:"createdAt"`
-	UpdatedAt       time.Time             `json:"updatedAt"`
+	ClientRef           string                `json:"clientRef"`
+	SessionID           string                `json:"sessionId"`
+	State               string                `json:"state"`
+	Detail              string                `json:"detail,omitempty"`
+	SelectionReason     string                `json:"selectionReason,omitempty"`
+	ContextWorkID       string                `json:"contextWorkId,omitempty"`
+	Configuration       *sdkWorkConfiguration `json:"configuration,omitempty"`
+	ChoiceSource        string                `json:"choiceSource,omitempty"`
+	GoalMode            string                `json:"goalMode,omitempty"`
+	ContinuationEventID string                `json:"continuationEventId,omitempty"`
+	ContinuationState   string                `json:"continuationState,omitempty"`
+	ContinuationCount   int                   `json:"continuationCount,omitempty"`
+	Fallback            string                `json:"fallback,omitempty"`
+	CreatedAt           time.Time             `json:"createdAt"`
+	UpdatedAt           time.Time             `json:"updatedAt"`
 }
 
 type sdkWorkConfiguration struct {
@@ -406,6 +414,15 @@ func (h *sdkChatHost) loadWorkItems() {
 				log.Printf("mark work dispatch uncertain %s: %v", item.ID, err)
 			}
 		}
+		if item.Dispatch != nil && item.Dispatch.ContinuationState == "preparing" {
+			item.Dispatch.ContinuationState = "uncertain"
+			item.Status = "blocked"
+			item.BlockedReason = "Muxterm restarted before Work continuation acknowledgement; inspect the chat input receipt before retrying."
+			item.NextAction = "Inspect the Work continuation and chat receipt; resume the goal only after confirming delivery."
+			if err := h.saveWorkLocked(&item); err != nil {
+				log.Printf("mark Work continuation uncertain %s: %v", item.ID, err)
+			}
+		}
 	}
 	// Preserve every previously assigned number. Sort legacy records so a
 	// restart assigns the same numbers even when the filesystem order changes.
@@ -451,6 +468,7 @@ func (h *sdkChatHost) saveWorkLocked(item *sdkWorkItem) error {
 		return err
 	}
 	h.workItems[item.ID] = item
+	h.syncWorkOwnedTerminalGoalLocked(item)
 	if h.onWorkChange != nil {
 		h.onWorkChange()
 	}
@@ -567,6 +585,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		ClientRef         string        `json:"clientRef"`
 		Title             string        `json:"title"`
 		Brief             string        `json:"brief"`
+		Harness           string        `json:"harness"`
 		Source            string        `json:"source"`
 		NextAction        string        `json:"nextAction"`
 		OwnerSessionID    string        `json:"ownerSessionId"`
@@ -582,7 +601,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		Plan              []sdkWorkStep `json:"plan"`
 		PlanProtocol      string        `json:"planProtocol"`
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || len(req.Source) > 4096 || len(req.NextAction) > 4096 || len(req.Acceptance) > 16<<10 || len([]rune(req.GoalCondition)) > 4000 || len(req.SessionIDs) > 32 || len(req.DependsOn) > 32 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) {
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || !validWorkHarness(req.Harness) || len(req.Source) > 4096 || len(req.NextAction) > 4096 || len(req.Acceptance) > 16<<10 || len([]rune(req.GoalCondition)) > 4000 || len(req.SessionIDs) > 32 || len(req.DependsOn) > 32 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) {
 		http.Error(w, "clientRef and title required", 400)
 		return
 	}
@@ -701,7 +720,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 			if createdPlan == nil {
 				createdPlan = item.Plan
 			}
-			if createTitle != req.Title || createBrief != req.Brief || item.Source != strings.TrimSpace(req.Source) || createNextAction != strings.TrimSpace(req.NextAction) || createAcceptance != req.Acceptance || createGoal != goal || item.CreateDraft != req.Draft || createReviewer != req.ReviewerSessionID || createOwner != req.OwnerSessionID || item.UIWork != req.UIWork || !slices.Equal(createdWith, req.SessionIDs) || !slices.Equal(createdProjects, projectIDs) || !slices.Equal(createdDependencies, req.DependsOn) || !slices.Equal(item.CreateLabels, labels) || !slices.Equal(createdPlan, req.Plan) || item.CreatePlanProtocol != strings.TrimSpace(req.PlanProtocol) {
+			if createTitle != req.Title || createBrief != req.Brief || item.CreateHarness != req.Harness || item.Source != strings.TrimSpace(req.Source) || createNextAction != strings.TrimSpace(req.NextAction) || createAcceptance != req.Acceptance || createGoal != goal || item.CreateDraft != req.Draft || createReviewer != req.ReviewerSessionID || createOwner != req.OwnerSessionID || item.UIWork != req.UIWork || !slices.Equal(createdWith, req.SessionIDs) || !slices.Equal(createdProjects, projectIDs) || !slices.Equal(createdDependencies, req.DependsOn) || !slices.Equal(item.CreateLabels, labels) || !slices.Equal(createdPlan, req.Plan) || item.CreatePlanProtocol != strings.TrimSpace(req.PlanProtocol) {
 				h.mu.Unlock()
 				http.Error(w, "clientRef already used for different work", 409)
 				return
@@ -747,7 +766,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Work reference space exhausted", http.StatusInsufficientStorage)
 		return
 	}
-	item := &sdkWorkItem{ID: sdkID(), Reference: reference, ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, CreateTitle: &req.Title, CreateBrief: &req.Brief, CreateGoal: createGoal, CreateDraft: req.Draft, Source: strings.TrimSpace(req.Source), Readiness: readiness, GoalCondition: goal, GoalRevision: goalRevision, GoalFiledRevision: filedRevision, GoalCheck: goalCheck, NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
+	item := &sdkWorkItem{ID: sdkID(), Reference: reference, ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, Harness: req.Harness, CreateHarness: req.Harness, CreateTitle: &req.Title, CreateBrief: &req.Brief, CreateGoal: createGoal, CreateDraft: req.Draft, Source: strings.TrimSpace(req.Source), Readiness: readiness, GoalCondition: goal, GoalRevision: goalRevision, GoalFiledRevision: filedRevision, GoalCheck: goalCheck, NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
 		Status: "open", CreatedBy: creator, OwnerSessionID: req.OwnerSessionID, CreateOwnerID: req.OwnerSessionID, Acceptance: req.Acceptance, CreateAcceptance: &req.Acceptance, ReviewerSessionID: req.ReviewerSessionID, CreateReviewerID: req.ReviewerSessionID, ProjectIDs: projectIDs, CreateProjectIDs: slices.Clone(projectIDs), Labels: labels, CreateLabels: append([]string{}, labels...), SessionIDs: req.SessionIDs,
 		CreateSessionIDs: append([]string{}, req.SessionIDs...), DependsOn: req.DependsOn, CreateDependsOn: append([]string{}, req.DependsOn...), WaitingOn: h.workWaitingOnLocked(&sdkWorkItem{DependsOn: req.DependsOn}),
 		ReviewVersion: 1, UIWork: req.UIWork, Plan: slices.Clone(req.Plan), CreatePlan: slices.Clone(req.Plan), PlanProtocol: strings.TrimSpace(req.PlanProtocol), CreatePlanProtocol: strings.TrimSpace(req.PlanProtocol), Revision: 1, CreatedAt: now, UpdatedAt: now, Updates: []sdkWorkUpdate{}}
@@ -913,6 +932,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		Text              string                `json:"text"`
 		Title             *string               `json:"title"`
 		Brief             *string               `json:"brief"`
+		Harness           *string               `json:"harness"`
 		Acceptance        *string               `json:"acceptanceCriteria"`
 		GoalCondition     *string               `json:"goalCondition"`
 		DesignPreview     *sdkWorkDesignPreview `json:"designPreview"`
@@ -936,11 +956,11 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		DependsOn         *[]string             `json:"dependsOn"`
 		ExpectedRevision  *int                  `json:"expectedRevision"`
 	}
-	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || len([]rune(req.Summary)) > 160 || strings.ContainsAny(req.Summary, "\r\n") || len(req.Text) > 16<<10 || (req.Title != nil && (strings.TrimSpace(*req.Title) == "" || len(*req.Title) > 200)) || (req.Brief != nil && len(*req.Brief) > 32<<10) || (req.Acceptance != nil && len(*req.Acceptance) > 16<<10) || (req.GoalCondition != nil && (strings.TrimSpace(*req.GoalCondition) == "" || len([]rune(*req.GoalCondition)) > 4000)) || (req.DesignPreview != nil && !validWorkDesignPreview(req.DesignPreview)) || len(req.Progress) > 4096 || (req.Readiness != nil && !validWorkReadiness(*req.Readiness)) || (req.NextAction != nil && len(*req.NextAction) > 4096) || len(req.Outcome) > 16<<10 || len(req.Evidence) > 20 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) || (req.DependsOn != nil && len(*req.DependsOn) > 32) || (req.Status != "" && !validWorkStatus(req.Status)) || (req.OwnerSessionID != nil && len(*req.OwnerSessionID) > 256) || (req.ReviewerSessionID != nil && len(*req.ReviewerSessionID) > 256) || (req.BlockedReason != nil && len(*req.BlockedReason) > 4096) || len(req.StepUpdates) > 24 || len(req.PlanReason) > 2048 || (req.PlanProtocol != nil && len(*req.PlanProtocol) > 2048) || (req.Summary == "" && req.Text == "" && req.Title == nil && req.Brief == nil && req.Acceptance == nil && req.GoalCondition == nil && req.DesignPreview == nil && req.Readiness == nil && req.Status == "" && req.Progress == "" && req.NextAction == nil && req.Outcome == "" && req.LinkedSessionID == "" && req.ProjectIDs == nil && req.Labels == nil && req.OwnerSessionID == nil && req.ReviewerSessionID == nil && req.BlockedReason == nil && req.NeedsHuman == nil && req.DependsOn == nil && req.Plan == nil && req.PlanProtocol == nil && len(req.StepUpdates) == 0) {
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || len([]rune(req.Summary)) > 160 || strings.ContainsAny(req.Summary, "\r\n") || len(req.Text) > 16<<10 || (req.Title != nil && (strings.TrimSpace(*req.Title) == "" || len(*req.Title) > 200)) || (req.Brief != nil && len(*req.Brief) > 32<<10) || (req.Harness != nil && !validWorkHarness(*req.Harness)) || (req.Acceptance != nil && len(*req.Acceptance) > 16<<10) || (req.GoalCondition != nil && (strings.TrimSpace(*req.GoalCondition) == "" || len([]rune(*req.GoalCondition)) > 4000)) || (req.DesignPreview != nil && !validWorkDesignPreview(req.DesignPreview)) || len(req.Progress) > 4096 || (req.Readiness != nil && !validWorkReadiness(*req.Readiness)) || (req.NextAction != nil && len(*req.NextAction) > 4096) || len(req.Outcome) > 16<<10 || len(req.Evidence) > 20 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) || (req.DependsOn != nil && len(*req.DependsOn) > 32) || (req.Status != "" && !validWorkStatus(req.Status)) || (req.OwnerSessionID != nil && len(*req.OwnerSessionID) > 256) || (req.ReviewerSessionID != nil && len(*req.ReviewerSessionID) > 256) || (req.BlockedReason != nil && len(*req.BlockedReason) > 4096) || len(req.StepUpdates) > 24 || len(req.PlanReason) > 2048 || (req.PlanProtocol != nil && len(*req.PlanProtocol) > 2048) || (req.Summary == "" && req.Text == "" && req.Title == nil && req.Brief == nil && req.Harness == nil && req.Acceptance == nil && req.GoalCondition == nil && req.DesignPreview == nil && req.Readiness == nil && req.Status == "" && req.Progress == "" && req.NextAction == nil && req.Outcome == "" && req.LinkedSessionID == "" && req.ProjectIDs == nil && req.Labels == nil && req.OwnerSessionID == nil && req.ReviewerSessionID == nil && req.BlockedReason == nil && req.NeedsHuman == nil && req.DependsOn == nil && req.Plan == nil && req.PlanProtocol == nil && len(req.StepUpdates) == 0) {
 		http.Error(w, "clientRef and a valid work update required", 400)
 		return
 	}
-	if (req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.GoalCondition != nil || req.DesignPreview != nil || req.Readiness != nil || req.OwnerSessionID != nil || req.ReviewerSessionID != nil || req.DependsOn != nil || req.Labels != nil || req.Plan != nil || req.PlanProtocol != nil || len(req.StepUpdates) > 0) && req.ExpectedRevision == nil {
+	if (req.Title != nil || req.Brief != nil || req.Harness != nil || req.Acceptance != nil || req.GoalCondition != nil || req.DesignPreview != nil || req.Readiness != nil || req.OwnerSessionID != nil || req.ReviewerSessionID != nil || req.DependsOn != nil || req.Labels != nil || req.Plan != nil || req.PlanProtocol != nil || len(req.StepUpdates) > 0) && req.ExpectedRevision == nil {
 		http.Error(w, "expectedRevision required to change assignment or dependencies", 400)
 		return
 	}
@@ -1019,7 +1039,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, prior := range item.Updates {
 		if prior.ClientRef == req.ClientRef {
-			if (prior.Actor.Kind != "" && prior.Actor != actor) || prior.SessionID != req.SessionID || prior.Summary != req.Summary || prior.Text != req.Text || (prior.Title == nil) != (req.Title == nil) || (prior.Title != nil && *prior.Title != *req.Title) || (prior.Brief == nil) != (req.Brief == nil) || (prior.Brief != nil && *prior.Brief != *req.Brief) || (prior.Acceptance == nil) != (req.Acceptance == nil) || (prior.Acceptance != nil && *prior.Acceptance != *req.Acceptance) || (prior.GoalCondition == nil) != (req.GoalCondition == nil) || (prior.GoalCondition != nil && *prior.GoalCondition != *req.GoalCondition) || !reflect.DeepEqual(prior.DesignPreview, req.DesignPreview) || (prior.Readiness == nil) != (req.Readiness == nil) || (prior.Readiness != nil && *prior.Readiness != *req.Readiness) || prior.Status != req.Status || prior.Progress != req.Progress || (prior.NextAction == nil) != (req.NextAction == nil) || (prior.NextAction != nil && *prior.NextAction != *req.NextAction) || prior.Outcome != req.Outcome || prior.LinkedSessionID != req.LinkedSessionID || !slices.Equal(prior.Evidence, req.Evidence) || (prior.ProjectIDs == nil) != (req.ProjectIDs == nil) || (prior.ProjectIDs != nil && !slices.Equal(*prior.ProjectIDs, *req.ProjectIDs)) || (prior.Labels == nil) != (req.Labels == nil) || (prior.Labels != nil && !slices.Equal(*prior.Labels, *req.Labels)) || (prior.DependsOn == nil) != (req.DependsOn == nil) || (prior.DependsOn != nil && !slices.Equal(*prior.DependsOn, *req.DependsOn)) || (prior.OwnerSessionID == nil) != (req.OwnerSessionID == nil) || (prior.OwnerSessionID != nil && *prior.OwnerSessionID != *req.OwnerSessionID) || (prior.ReviewerSessionID == nil) != (req.ReviewerSessionID == nil) || (prior.ReviewerSessionID != nil && *prior.ReviewerSessionID != *req.ReviewerSessionID) || (prior.BlockedReason == nil) != (req.BlockedReason == nil) || (prior.BlockedReason != nil && *prior.BlockedReason != *req.BlockedReason) || (prior.NeedsHuman == nil) != (req.NeedsHuman == nil) || (prior.NeedsHuman != nil && *prior.NeedsHuman != *req.NeedsHuman) || (prior.ExpectedRevision == nil) != (req.ExpectedRevision == nil) || (prior.ExpectedRevision != nil && *prior.ExpectedRevision != *req.ExpectedRevision) || !slices.Equal(prior.StepUpdates, req.StepUpdates) || prior.PlanReason != req.PlanReason || !reflect.DeepEqual(prior.PlanRequest, req.Plan) || (prior.PlanProtocol == nil) != (req.PlanProtocol == nil) || (prior.PlanProtocol != nil && *prior.PlanProtocol != *req.PlanProtocol) {
+			if (prior.Actor.Kind != "" && prior.Actor != actor) || prior.SessionID != req.SessionID || prior.Summary != req.Summary || prior.Text != req.Text || (prior.Title == nil) != (req.Title == nil) || (prior.Title != nil && *prior.Title != *req.Title) || (prior.Brief == nil) != (req.Brief == nil) || (prior.Brief != nil && *prior.Brief != *req.Brief) || (prior.Harness == nil) != (req.Harness == nil) || (prior.Harness != nil && *prior.Harness != *req.Harness) || (prior.Acceptance == nil) != (req.Acceptance == nil) || (prior.Acceptance != nil && *prior.Acceptance != *req.Acceptance) || (prior.GoalCondition == nil) != (req.GoalCondition == nil) || (prior.GoalCondition != nil && *prior.GoalCondition != *req.GoalCondition) || !reflect.DeepEqual(prior.DesignPreview, req.DesignPreview) || (prior.Readiness == nil) != (req.Readiness == nil) || (prior.Readiness != nil && *prior.Readiness != *req.Readiness) || prior.Status != req.Status || prior.Progress != req.Progress || (prior.NextAction == nil) != (req.NextAction == nil) || (prior.NextAction != nil && *prior.NextAction != *req.NextAction) || prior.Outcome != req.Outcome || prior.LinkedSessionID != req.LinkedSessionID || !slices.Equal(prior.Evidence, req.Evidence) || (prior.ProjectIDs == nil) != (req.ProjectIDs == nil) || (prior.ProjectIDs != nil && !slices.Equal(*prior.ProjectIDs, *req.ProjectIDs)) || (prior.Labels == nil) != (req.Labels == nil) || (prior.Labels != nil && !slices.Equal(*prior.Labels, *req.Labels)) || (prior.DependsOn == nil) != (req.DependsOn == nil) || (prior.DependsOn != nil && !slices.Equal(*prior.DependsOn, *req.DependsOn)) || (prior.OwnerSessionID == nil) != (req.OwnerSessionID == nil) || (prior.OwnerSessionID != nil && *prior.OwnerSessionID != *req.OwnerSessionID) || (prior.ReviewerSessionID == nil) != (req.ReviewerSessionID == nil) || (prior.ReviewerSessionID != nil && *prior.ReviewerSessionID != *req.ReviewerSessionID) || (prior.BlockedReason == nil) != (req.BlockedReason == nil) || (prior.BlockedReason != nil && *prior.BlockedReason != *req.BlockedReason) || (prior.NeedsHuman == nil) != (req.NeedsHuman == nil) || (prior.NeedsHuman != nil && *prior.NeedsHuman != *req.NeedsHuman) || (prior.ExpectedRevision == nil) != (req.ExpectedRevision == nil) || (prior.ExpectedRevision != nil && *prior.ExpectedRevision != *req.ExpectedRevision) || !slices.Equal(prior.StepUpdates, req.StepUpdates) || prior.PlanReason != req.PlanReason || !reflect.DeepEqual(prior.PlanRequest, req.Plan) || (prior.PlanProtocol == nil) != (req.PlanProtocol == nil) || (prior.PlanProtocol != nil && *prior.PlanProtocol != *req.PlanProtocol) {
 				h.mu.Unlock()
 				http.Error(w, "clientRef already used for different update", 409)
 				return
@@ -1052,7 +1072,8 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		// Same-user external tools and authenticated humans administer Work;
 		// chat-origin calls must come from the current owner. This mirrors the
 		// existing assignment boundary without trusting a claimed session ID.
-		if (actor.Kind == "chat" || actor.Kind == "remote-chat") && actor.SessionID != item.OwnerSessionID && !(item.OwnerSessionID == "" && actor.SessionID == h.workCreatorLocked(item).SessionID && len(req.StepUpdates) == 0) {
+		claiming := item.OwnerSessionID == "" && req.OwnerSessionID != nil && *req.OwnerSessionID == actor.SessionID
+		if (actor.Kind == "chat" || actor.Kind == "remote-chat") && actor.SessionID != item.OwnerSessionID && !claiming && !(item.OwnerSessionID == "" && actor.SessionID == h.workCreatorLocked(item).SessionID && len(req.StepUpdates) == 0) {
 			h.mu.Unlock()
 			http.Error(w, "only the owner can update Work steps; creator can plan unassigned Work", 403)
 			return
@@ -1137,7 +1158,12 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "goal condition cannot change after work is dispatched", 409)
 		return
 	}
-	if actor.Kind == "chat" && (req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.GoalCondition != nil || req.DesignPreview != nil || req.Readiness != nil || req.OwnerSessionID != nil || req.ReviewerSessionID != nil || req.DependsOn != nil || req.Labels != nil) && actor.SessionID != item.OwnerSessionID && actor.SessionID != h.workCreatorLocked(item).SessionID && !(req.Title == nil && req.Brief == nil && req.Acceptance == nil && req.GoalCondition == nil && req.DesignPreview == nil && req.Readiness == nil && item.OwnerSessionID == "" && req.OwnerSessionID != nil && *req.OwnerSessionID == actor.SessionID && req.ReviewerSessionID == nil && req.DependsOn == nil && req.Labels == nil) {
+	if req.Harness != nil && (item.OwnerSessionID != "" || item.Status != "open" && item.Status != "blocked" || item.Dispatch != nil && item.Dispatch.State != "failed") {
+		h.mu.Unlock()
+		http.Error(w, "worker harness cannot change after work starts", 409)
+		return
+	}
+	if actor.Kind == "chat" && (req.Title != nil || req.Brief != nil || req.Harness != nil || req.Acceptance != nil || req.GoalCondition != nil || req.DesignPreview != nil || req.Readiness != nil || req.OwnerSessionID != nil || req.ReviewerSessionID != nil || req.DependsOn != nil || req.Labels != nil) && actor.SessionID != item.OwnerSessionID && actor.SessionID != h.workCreatorLocked(item).SessionID && !(req.Title == nil && req.Brief == nil && req.Harness == nil && req.Acceptance == nil && req.GoalCondition == nil && req.DesignPreview == nil && req.Readiness == nil && item.OwnerSessionID == "" && req.OwnerSessionID != nil && *req.OwnerSessionID == actor.SessionID && req.ReviewerSessionID == nil && req.DependsOn == nil && req.Labels == nil) {
 		h.mu.Unlock()
 		http.Error(w, "only the creator or owner can assign this work; an unassigned item may be claimed", 403)
 		return
@@ -1216,12 +1242,21 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		copy.PlanProtocol = strings.TrimSpace(*req.PlanProtocol)
 	}
 	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: req.ClientRef, At: time.Now().UTC(), Actor: actor, SessionID: req.SessionID,
-		Summary: req.Summary, Text: req.Text, Title: req.Title, Brief: req.Brief, Acceptance: req.Acceptance, GoalCondition: req.GoalCondition, GoalRevision: goalRevision, DesignPreview: req.DesignPreview, Readiness: req.Readiness, Status: req.Status, Progress: req.Progress, NextAction: req.NextAction, Outcome: req.Outcome, Evidence: req.Evidence, LinkedSessionID: req.LinkedSessionID, ProjectIDs: req.ProjectIDs, Labels: req.Labels, DependsOn: req.DependsOn, OwnerSessionID: req.OwnerSessionID, ReviewerSessionID: req.ReviewerSessionID, BlockedReason: req.BlockedReason, NeedsHuman: req.NeedsHuman, ExpectedRevision: req.ExpectedRevision, PlanBefore: planBeforeForUpdate(req.Plan, planBefore), PlanAfter: planAfterForUpdate(req.Plan, copy.Plan), PlanRequest: req.Plan, PlanReason: req.PlanReason, PlanProtocol: req.PlanProtocol, StepUpdates: slices.Clone(req.StepUpdates)})
+		Summary: req.Summary, Text: req.Text, Title: req.Title, Brief: req.Brief, Harness: req.Harness, Acceptance: req.Acceptance, GoalCondition: req.GoalCondition, GoalRevision: goalRevision, DesignPreview: req.DesignPreview, Readiness: req.Readiness, Status: req.Status, Progress: req.Progress, NextAction: req.NextAction, Outcome: req.Outcome, Evidence: req.Evidence, LinkedSessionID: req.LinkedSessionID, ProjectIDs: req.ProjectIDs, Labels: req.Labels, DependsOn: req.DependsOn, OwnerSessionID: req.OwnerSessionID, ReviewerSessionID: req.ReviewerSessionID, BlockedReason: req.BlockedReason, NeedsHuman: req.NeedsHuman, ExpectedRevision: req.ExpectedRevision, PlanBefore: planBeforeForUpdate(req.Plan, planBefore), PlanAfter: planAfterForUpdate(req.Plan, copy.Plan), PlanRequest: req.Plan, PlanReason: req.PlanReason, PlanProtocol: req.PlanProtocol, StepUpdates: slices.Clone(req.StepUpdates)})
 	if req.Title != nil {
 		copy.Title = strings.TrimSpace(*req.Title)
 	}
 	if req.Brief != nil {
 		copy.Brief = *req.Brief
+	}
+	if req.Harness != nil {
+		copy.Harness = *req.Harness
+		if copy.Dispatch != nil && copy.Dispatch.State == "failed" {
+			copy.Dispatch = nil
+			copy.BlockedReason = ""
+			copy.Status = "open"
+			copy.NextAction = "Scheduler will retry the selected harness."
+		}
 	}
 	if req.Acceptance != nil {
 		copy.Acceptance = *req.Acceptance

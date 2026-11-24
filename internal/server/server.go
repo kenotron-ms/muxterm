@@ -196,6 +196,7 @@ func New(cfg Config) *Server {
 	// saveWorkLocked invokes this callback while holding the chat host mutex.
 	// Keep it non-blocking and never acquire that mutex here.
 	s.sdkChats.onWorkChange = s.wakeWork
+	s.sdkChats.onWorkResume = s.resumeUnclaimedWorkKickoff
 	s.agentVersions = &codingAgentVersionCache{}
 	s.sdkChats.goals.onChange = s.hub.BroadcastGoalChanged
 	s.sdkJobs = newSDKJobs(s.sdkChats)
