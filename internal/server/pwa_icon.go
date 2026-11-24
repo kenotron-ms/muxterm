@@ -17,6 +17,10 @@ var pwaBackdrops = []string{
 	"geometry", "night-grid", "wayfarer", "skybound", "moon-keep",
 }
 
+// Bump this when the raster artwork changes so installed browsers request
+// fresh icon bytes even if the selected backdrop stays the same.
+const pwaIconArtworkRevision = "2"
+
 func validPwaBackdrop(backdrop string) bool {
 	for _, name := range pwaBackdrops {
 		if backdrop == name {
@@ -46,7 +50,7 @@ func pwaIconAssetPath(backdrop, filename string) string {
 // The link's v= parameter prompts browser manifest reinspection. Historical
 // versioned icon URLs remain available after a backdrop change.
 func (s *Server) handlePWAManifest(w http.ResponseWriter, _ *http.Request) {
-	version := s.selectedPwaBackdrop()
+	version := s.selectedPwaBackdrop() + "." + pwaIconArtworkRevision
 	icons := []map[string]string{
 		{"src": "pwa/icon-192.png?v=" + version, "sizes": "192x192", "type": "image/png", "purpose": "any"},
 		{"src": "pwa/icon-512.png?v=" + version, "sizes": "512x512", "type": "image/png", "purpose": "any"},
@@ -83,11 +87,12 @@ func (s *Server) handlePWAIcon(w http.ResponseWriter, r *http.Request) {
 	backdrop := s.selectedPwaBackdrop()
 	cacheControl := "no-store"
 	if version := r.URL.Query().Get("v"); version != "" {
-		if !validPwaBackdrop(version) {
+		backdropVersion, revision, hasRevision := strings.Cut(version, ".")
+		if !validPwaBackdrop(backdropVersion) || (hasRevision && revision != pwaIconArtworkRevision) {
 			http.NotFound(w, r)
 			return
 		}
-		backdrop = version
+		backdrop = backdropVersion
 		cacheControl = "public, max-age=31536000, immutable"
 	}
 	if s.pwaStaticFS == nil {
