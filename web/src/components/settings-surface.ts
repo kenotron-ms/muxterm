@@ -46,7 +46,7 @@ import {
   type MeetingTURNStatus,
 } from '../lib/meeting-turn-settings.js';
 
-export type SettingsSection = 'appearance' | 'terminal' | 'notifications' | 'workspaces' | 'ai' | 'voice' | 'meetings' | 'remotes' | 'shortcuts' | 'about';
+export type SettingsSection = 'appearance' | 'terminal' | 'notifications' | 'ai' | 'voice' | 'meetings' | 'remotes' | 'shortcuts' | 'about';
 type AntigravityAuth = { mode: 'google' | 'api-key'; apiKeyDetected: boolean; installed: boolean; installSupported: boolean; installUnsupportedReason?: string };
 type AntigravityLoginStatus = { state: 'idle' | 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'; url?: string; message?: string };
 type AgentVersion = { harness: string; installed: boolean; version?: string; latestVersion?: string; installMethod?: string; updateAvailable: boolean; checkedAt?: string };
@@ -58,7 +58,6 @@ const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string }> =
   { id: 'appearance', label: 'Appearance' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'notifications', label: 'Notifications' },
-  { id: 'workspaces', label: 'Workspaces' },
   { id: 'ai', label: 'AI' },
   { id: 'voice', label: 'Voice' },
   { id: 'meetings', label: 'Meetings' },
@@ -947,10 +946,6 @@ export class MuxSettingsSurface extends LitElement {
     }
   }
 
-  private _applicationAction(action: 'reconnect' | 'new-workspace'): void {
-    this.dispatchEvent(new CustomEvent('launcher-action', { detail: { action }, bubbles: true, composed: true }));
-  }
-
   private _renderAbout() {
     const status = this._updateStatus;
     const macVersion = macAppVersion();
@@ -994,16 +989,6 @@ export class MuxSettingsSurface extends LitElement {
       </div>
       <p>Build <code>${__GIT_SHA__}</code></p>
       <p>Config file: <code>~/.config/muxterm/config.toml</code></p>`;
-  }
-
-  private _renderWorkspaces() {
-    return html`
-      <h3>Workspaces</h3>
-      <p>Create a workspace for your terminals or reconnect to this Muxterm instance.</p>
-      <div class="application-actions">
-        <mux-ui-button variant="secondary" @click=${() => this._applicationAction('new-workspace')}>New workspace</mux-ui-button>
-        <mux-ui-button variant="secondary" @click=${() => this._applicationAction('reconnect')}>Reconnect</mux-ui-button>
-      </div>`;
   }
 
   private _renderShortcuts() {
@@ -2492,8 +2477,6 @@ export class MuxSettingsSurface extends LitElement {
               ? this._renderTerminal()
             : this._section === 'about'
               ? this._renderAbout()
-            : this._section === 'workspaces'
-              ? this._renderWorkspaces()
             : this._section === 'shortcuts'
               ? this._renderShortcuts()
             : this._section === 'notifications'
