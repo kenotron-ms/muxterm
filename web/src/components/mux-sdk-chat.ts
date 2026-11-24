@@ -1806,7 +1806,6 @@ export class MuxSDKChat extends LitElement {
       const status = event.cancelReason === 'question_dismissed'
         ? 'Question dismissed · partial output kept'
         : event.cancelReason === 'user' ? 'Stopped by you · partial output kept'
-        : event.cancelReason === 'agent' ? 'OpenCode cancelled this turn · partial output kept'
         : 'Turn cancelled · partial output kept';
       blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:status });
       this.turnStart = blocks.length;
