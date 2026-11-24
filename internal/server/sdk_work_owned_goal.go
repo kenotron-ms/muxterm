@@ -93,6 +93,8 @@ func (h *sdkChatHost) syncWorkOwnedTerminalGoalLocked(item *sdkWorkItem) {
 		state = "complete"
 	case "review":
 		state = "awaiting-review"
+	case "active":
+		state = "active"
 	case "blocked":
 		state = "blocked"
 	case "cancelled":
@@ -109,6 +111,12 @@ func (h *sdkChatHost) syncWorkOwnedTerminalGoalLocked(item *sdkWorkItem) {
 		if err != nil {
 			log.Printf("read Work goal %s: %v", item.ID, err)
 		}
+		return
+	}
+	// A reviewer can return Work for more execution. Restore the goal only
+	// from the review state; a human pause or another stopped state still
+	// requires its own authorized control action.
+	if item.Status == "active" && (document.HumanPaused || (document.State != "awaiting-review" && document.State != "active")) {
 		return
 	}
 	if document.State == "cleared" && item.Status == "blocked" {
