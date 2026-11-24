@@ -61,3 +61,4 @@ DONE.json
 # Machine-local symlink; the node_modules/ rule above matches directories only
 web/node_modules
 web/storybook-static/
+pages-dist/

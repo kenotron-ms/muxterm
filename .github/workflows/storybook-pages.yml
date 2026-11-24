@@ -1,13 +1,18 @@
-name: Storybook Pages
+name: Muxterm Pages
 
 on:
   push:
     branches:
       - main
-      # Publish this review branch before merge; main becomes the source after merge.
-      - feat/lit-storybook-main
     paths:
       - 'web/**'
+      - 'site/**'
+      - 'docs/design-system/**'
+      - '.github/workflows/storybook-pages.yml'
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'site/**'
       - 'docs/design-system/**'
       - '.github/workflows/storybook-pages.yml'
 
@@ -15,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: github-pages
+  group: github-pages-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -50,13 +55,17 @@ jobs:
           curl --fail --silent http://127.0.0.1:6006/index.json > /dev/null
           npm run capture:storybook-review
         working-directory: web
+      - name: Build landing page and Storybook artifact
+        run: bash site/build-pages.sh
       - uses: actions/upload-pages-artifact@v4
+        if: github.event_name == 'push'
         with:
-          path: web/storybook-static
+          path: pages-dist
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
+    if: github.event_name == 'push'
     permissions:
       contents: read
       pages: write
