@@ -7,8 +7,8 @@ import "embed"
 //go:embed all:dist/*
 var Dist embed.FS
 
-// PublicDist embeds the ONE asset served without authentication: the renderer
-// that turns a published markdown file into a page at /p/{id}.
+// PublicDist embeds the static renderer served without authentication: it
+// turns a published markdown file into a page at /p/{id}.
 //
 // It is a separate embed because it is a separate build with a separate output
 // directory -- see web/vite.public-doc.config.ts for why, and
