@@ -12,6 +12,7 @@ Start with the current guides:
 | [Installation and updates](guides/installation-and-updates.md) | Platform setup, services, updates, and local development |
 | [Remote projects](guides/remote-projects-and-chats.md) | Connect project machines and their chats |
 | [Agent integration](guides/agent-integration.md) | MCP setup, native session reporting, and lane approvals |
+| [Scheduled jobs through MCP](guides/scheduled-jobs-mcp.md) | Job tools, machine routing, and safe retries |
 
 ## Contracts and decisions
 

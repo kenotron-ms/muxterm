@@ -58,6 +58,19 @@ func (s *Server) remoteAgentChatRequest(r *http.Request) bool {
 }
 
 func agentChatPathAllowed(method, path string) bool {
+	if path == "/api/sdk-jobs" {
+		return method == http.MethodGet || method == http.MethodPost
+	}
+	if strings.HasPrefix(path, "/api/sdk-jobs/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/api/sdk-jobs/"), "/")
+		if len(parts) == 1 && parts[0] != "" {
+			return method == http.MethodGet || method == http.MethodPatch
+		}
+		if len(parts) == 2 && parts[0] != "" {
+			return (parts[1] == "runs" && method == http.MethodGet) || (parts[1] == "run" && method == http.MethodPost)
+		}
+		return len(parts) == 3 && parts[0] != "" && parts[1] == "runs" && parts[2] != "" && method == http.MethodGet
+	}
 	if path == "/api/sdk-work" {
 		return method == http.MethodGet || method == http.MethodPost
 	}

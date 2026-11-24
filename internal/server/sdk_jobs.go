@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,22 +24,24 @@ import (
 // Run metadata lives separately so a long-running job never rewrites an endless
 // chat or run-history document when its schedule changes.
 type sdkJob struct {
-	ID            string             `json:"id"`
-	ChatID        string             `json:"chatId"`
-	Name          string             `json:"name"`
-	Brief         string             `json:"brief"`
-	Revision      int                `json:"revision"`
-	Schedule      string             `json:"schedule"`
-	ScheduleLabel string             `json:"scheduleLabel"`
-	Timezone      string             `json:"timezone"`
-	WorkTrigger   *sdkJobWorkTrigger `json:"workTrigger,omitempty"`
-	Enabled       bool               `json:"enabled"`
-	NextRun       time.Time          `json:"nextRun,omitempty"`
-	PendingAt     *time.Time         `json:"pendingAt,omitempty"`
-	ActiveRunID   string             `json:"activeRunId,omitempty"`
-	LastRunID     string             `json:"lastRunId,omitempty"`
-	CreatedAt     time.Time          `json:"createdAt"`
-	UpdatedAt     time.Time          `json:"updatedAt"`
+	ID              string             `json:"id"`
+	CreateClientRef string             `json:"createClientRef,omitempty"`
+	CreateHash      string             `json:"createHash,omitempty"`
+	ChatID          string             `json:"chatId"`
+	Name            string             `json:"name"`
+	Brief           string             `json:"brief"`
+	Revision        int                `json:"revision"`
+	Schedule        string             `json:"schedule"`
+	ScheduleLabel   string             `json:"scheduleLabel"`
+	Timezone        string             `json:"timezone"`
+	WorkTrigger     *sdkJobWorkTrigger `json:"workTrigger,omitempty"`
+	Enabled         bool               `json:"enabled"`
+	NextRun         time.Time          `json:"nextRun,omitempty"`
+	PendingAt       *time.Time         `json:"pendingAt,omitempty"`
+	ActiveRunID     string             `json:"activeRunId,omitempty"`
+	LastRunID       string             `json:"lastRunId,omitempty"`
+	CreatedAt       time.Time          `json:"createdAt"`
+	UpdatedAt       time.Time          `json:"updatedAt"`
 }
 
 type sdkJobWorkTrigger struct {
@@ -71,6 +74,7 @@ type sdkJobLog struct {
 
 type sdkJobRun struct {
 	ID          string           `json:"id"`
+	ClientRef   string           `json:"clientRef,omitempty"`
 	JobID       string           `json:"jobId"`
 	ChatID      string           `json:"chatId"`
 	Trigger     string           `json:"trigger"`
@@ -288,8 +292,9 @@ func newSDKJobs(chats *sdkChatHost) *sdkJobs {
 	return manager
 }
 
-// Keep recent run summaries and active runs in memory. Completed run files stay
-// on disk, so the process footprint does not grow for the lifetime of a job.
+// Keep recent run summaries, active runs, and keyed manual runs in memory.
+// Keyed runs remain addressable so an old uncertain retry cannot start a
+// second run after the ordinary 300-run history window has moved on.
 func (m *sdkJobs) pruneRunsLocked() {
 	byJob := make(map[string][]*sdkJobRun)
 	for _, run := range m.runs {
@@ -298,7 +303,7 @@ func (m *sdkJobs) pruneRunsLocked() {
 	for jobID, runs := range byJob {
 		sort.Slice(runs, func(i, j int) bool { return runs[i].StartedAt.After(runs[j].StartedAt) })
 		for i, run := range runs {
-			if i >= 300 && run.ID != m.jobs[jobID].ActiveRunID && run.ID != m.jobs[jobID].LastRunID && run.FinishedAt != nil {
+			if i >= 300 && run.ClientRef == "" && run.ID != m.jobs[jobID].ActiveRunID && run.ID != m.jobs[jobID].LastRunID && run.FinishedAt != nil {
 				delete(m.runs, run.ID)
 			}
 		}
@@ -428,7 +433,7 @@ func (m *sdkJobs) onChatEvent(event sdkEvent) {
 	_ = m.saveRunLocked(run)
 }
 
-func (m *sdkJobs) startRun(jobID, trigger string, occurrence *time.Time) (*sdkJobRun, error) {
+func (m *sdkJobs) startRun(jobID, trigger string, occurrence *time.Time, clientRef string) (*sdkJobRun, error) {
 	// Read the chat state before taking the jobs lock. No code path should need
 	// to acquire the chat lock while holding the jobs lock.
 	m.mu.Lock()
@@ -452,6 +457,21 @@ func (m *sdkJobs) startRun(jobID, trigger string, occurrence *time.Time) (*sdkJo
 		m.mu.Unlock()
 		return nil, errors.New("job not found")
 	}
+	if clientRef != "" {
+		for _, previous := range m.runs {
+			if previous.ClientRef != clientRef {
+				continue
+			}
+			if previous.JobID != jobID || previous.Trigger != "manual" {
+				m.mu.Unlock()
+				return nil, errors.New("clientRef already belongs to another run")
+			}
+			copy := *previous
+			copy.Logs = append([]sdkJobLog(nil), previous.Logs...)
+			m.mu.Unlock()
+			return &copy, nil
+		}
+	}
 	if occurrence != nil {
 		for _, previous := range m.runs {
 			if previous.JobID == jobID && previous.ScheduledAt != nil && previous.ScheduledAt.Equal(*occurrence) {
@@ -473,6 +493,7 @@ func (m *sdkJobs) startRun(jobID, trigger string, occurrence *time.Time) (*sdkJo
 		return nil, fmt.Errorf("job chat is %s", state)
 	}
 	run := m.newRunLocked(job, trigger, occurrence, "queued")
+	run.ClientRef = clientRef
 	m.appendLogLocked(run, "admission", "Run queued from "+trigger+" trigger using brief revision "+fmt.Sprint(job.Revision)+".")
 	job.ActiveRunID = run.ID
 	previousPending := job.PendingAt
@@ -632,7 +653,7 @@ func (m *sdkJobs) tick(now time.Time) {
 		m.mu.Unlock()
 	}
 	for _, entry := range due {
-		if _, err := m.startRun(entry.id, "schedule", &entry.occurrence); err != nil {
+		if _, err := m.startRun(entry.id, "schedule", &entry.occurrence, ""); err != nil {
 			if errors.Is(err, errJobOccurrenceRecorded) {
 				continue
 			}
@@ -673,9 +694,9 @@ func (s *Server) handleSDKJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		ChatID, Name, Brief, Schedule, ScheduleLabel, Timezone string
-		WorkTrigger                                            *sdkJobWorkTrigger
-		Enabled                                                *bool
+		ClientRef, ChatID, Name, Brief, Schedule, ScheduleLabel, Timezone string
+		WorkTrigger                                                       *sdkJobWorkTrigger
+		Enabled                                                           *bool
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&request) != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -683,7 +704,12 @@ func (s *Server) handleSDKJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	request.Name = strings.TrimSpace(request.Name)
 	request.Brief = strings.TrimSpace(request.Brief)
+	request.ClientRef = strings.TrimSpace(request.ClientRef)
 	request.ScheduleLabel = strings.TrimSpace(request.ScheduleLabel)
+	if len(request.ClientRef) > 128 {
+		http.Error(w, "clientRef is too long", 400)
+		return
+	}
 	if request.ScheduleLabel == "" {
 		request.ScheduleLabel = request.Schedule
 	}
@@ -714,6 +740,33 @@ func (s *Server) handleSDKJobs(w http.ResponseWriter, r *http.Request) {
 	if request.WorkTrigger != nil {
 		request.WorkTrigger.Since = time.Now().UTC()
 	}
+	// The hash binds an idempotency key to the original definition. Exclude
+	// the Work cursor, which is assigned at admission and changes with time.
+	createDefinition := request
+	if createDefinition.WorkTrigger != nil {
+		trigger := *createDefinition.WorkTrigger
+		trigger.Since = time.Time{}
+		createDefinition.WorkTrigger = &trigger
+	}
+	definitionJSON, _ := json.Marshal(createDefinition)
+	createHash := fmt.Sprintf("%x", sha256.Sum256(definitionJSON))
+	if request.ClientRef != "" {
+		m.mu.Lock()
+		for _, existing := range m.jobs {
+			if existing.CreateClientRef != request.ClientRef {
+				continue
+			}
+			copy := *existing
+			m.mu.Unlock()
+			if copy.CreateHash != createHash {
+				http.Error(w, "clientRef already belongs to a different job creation request", 409)
+				return
+			}
+			writeSDKJSON(w, 200, copy)
+			return
+		}
+		m.mu.Unlock()
+	}
 	m.chats.mu.Lock()
 	chat := m.chats.chats[request.ChatID]
 	m.chats.mu.Unlock()
@@ -726,12 +779,25 @@ func (s *Server) handleSDKJobs(w http.ResponseWriter, r *http.Request) {
 	if request.Enabled != nil {
 		enabled = *request.Enabled
 	}
-	job := &sdkJob{ID: sdkID(), ChatID: request.ChatID, Name: request.Name, Brief: request.Brief, Revision: 1, Schedule: request.Schedule, ScheduleLabel: request.ScheduleLabel, Timezone: request.Timezone, WorkTrigger: request.WorkTrigger, Enabled: enabled, NextRun: next, CreatedAt: now, UpdatedAt: now}
+	job := &sdkJob{ID: sdkID(), CreateClientRef: request.ClientRef, CreateHash: createHash, ChatID: request.ChatID, Name: request.Name, Brief: request.Brief, Revision: 1, Schedule: request.Schedule, ScheduleLabel: request.ScheduleLabel, Timezone: request.Timezone, WorkTrigger: request.WorkTrigger, Enabled: enabled, NextRun: next, CreatedAt: now, UpdatedAt: now}
 	if !enabled {
 		job.NextRun = time.Time{}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if request.ClientRef != "" {
+		for _, existing := range m.jobs {
+			if existing.CreateClientRef != request.ClientRef {
+				continue
+			}
+			if existing.CreateHash != createHash {
+				http.Error(w, "clientRef already belongs to a different job creation request", 409)
+				return
+			}
+			writeSDKJSON(w, 200, existing)
+			return
+		}
+	}
 	if m.byChat[job.ChatID] != "" {
 		http.Error(w, "this chat already has a scheduled job", 409)
 		return
@@ -825,7 +891,13 @@ func (s *Server) handleSDKJob(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			trigger.Since = time.Now().UTC()
+			if previous.WorkTrigger != nil && slices.Equal(previous.WorkTrigger.Events, trigger.Events) &&
+				slices.Equal(previous.WorkTrigger.ProjectIDs, trigger.ProjectIDs) && slices.Equal(previous.WorkTrigger.Labels, trigger.Labels) {
+				// Retrying the same definition must not move the Work event cursor.
+				trigger.Since = previous.WorkTrigger.Since
+			} else {
+				trigger.Since = time.Now().UTC()
+			}
 			job.WorkTrigger = &trigger
 		}
 	}
@@ -865,6 +937,21 @@ func (s *Server) handleSDKJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSDKJobRun(w http.ResponseWriter, r *http.Request) {
 	m := s.sdkJobs
 	jobID := r.PathValue("id")
+	var request struct{ ClientRef string }
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1024))
+	if err != nil {
+		http.Error(w, "invalid run request", 400)
+		return
+	}
+	if len(body) > 0 && json.Unmarshal(body, &request) != nil {
+		http.Error(w, "invalid run request", 400)
+		return
+	}
+	request.ClientRef = strings.TrimSpace(request.ClientRef)
+	if len(request.ClientRef) > 128 {
+		http.Error(w, "clientRef is too long", 400)
+		return
+	}
 	m.mu.Lock()
 	job := m.jobs[jobID]
 	m.mu.Unlock()
@@ -872,7 +959,7 @@ func (s *Server) handleSDKJobRun(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	run, err := m.startRun(jobID, "manual", nil)
+	run, err := m.startRun(jobID, "manual", nil, request.ClientRef)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
