@@ -81,15 +81,14 @@ func (s *Server) handlePWAIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backdrop := s.selectedPwaBackdrop()
+	cacheControl := "no-store"
 	if version := r.URL.Query().Get("v"); version != "" {
 		if !validPwaBackdrop(version) {
 			http.NotFound(w, r)
 			return
 		}
 		backdrop = version
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	} else {
-		w.Header().Set("Cache-Control", "no-store")
+		cacheControl = "public, max-age=31536000, immutable"
 	}
 	if s.pwaStaticFS == nil {
 		http.Error(w, "app icon assets unavailable", http.StatusServiceUnavailable)
@@ -100,6 +99,7 @@ func (s *Server) handlePWAIcon(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "app icon assets unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	w.Header().Set("Cache-Control", cacheControl)
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
