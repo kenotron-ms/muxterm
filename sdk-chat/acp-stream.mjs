@@ -17,8 +17,23 @@ const profiles = {
 export const isACPHarness = harness => Object.hasOwn(profiles, harness);
 
 const runtimes = new Map();
+function opencodeEnvironment(mcpServers) {
+  let config = {};
+  if (process.env.OPENCODE_CONFIG_CONTENT) {
+    try { config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT); }
+    catch { throw new Error('OpenCode inline configuration is not valid JSON'); }
+  }
+  const servers = Object.fromEntries(mcpServers.map(server => [server.name, {
+    type: 'local', command: [server.command, ...server.args],
+    environment: Object.fromEntries(server.env.map(({ name, value }) => [name, value])),
+  }]));
+  return { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config,
+    mcp: { ...config.mcp, servers: { ...config.mcp?.servers, ...servers } },
+  }) };
+}
+
 class ACPRuntime {
-  constructor(harness, key, cwd) {
+  constructor(harness, key, session, mcpServers) {
     this.harness = harness;
     this.key = key;
     this.adapters = new Map();
@@ -31,8 +46,10 @@ class ACPRuntime {
     const command = harness === 'gemini' ? geminiCommand()
       : launch?.command || process.env[profile.env] || profile.command;
     this.process = spawn(command, launch?.args || profile.args, {
-      ...(harness === 'antigravity' ? { cwd } : {}),
-      env: harness === 'gemini' ? geminiEnvironment() : launch?.env || process.env,
+      ...(harness === 'antigravity' ? { cwd: session.cwd } : {}),
+      env: harness === 'gemini' ? geminiEnvironment()
+        : harness === 'opencode' && !session.catalog ? opencodeEnvironment(mcpServers)
+        : launch?.env || process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.process.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk).slice(-4000); });
@@ -92,12 +109,12 @@ class ACPRuntime {
   }
 }
 
-function runtime(harness, session) {
+function runtime(harness, session, mcpServers) {
   // OpenCode attaches MCP servers to every session in one ACP process's
   // directory. Keep each chat in its own process so origin tokens cannot leak.
   const key = harness === 'opencode' || harness === 'antigravity' ? `${harness}:${session.id}` : harness;
   let current = runtimes.get(key);
-  if (!current || current.exitError) { current = new ACPRuntime(harness, key, session.cwd); runtimes.set(key, current); }
+  if (!current || current.exitError) { current = new ACPRuntime(harness, key, session, mcpServers); runtimes.set(key, current); }
   return current;
 }
 
@@ -274,13 +291,24 @@ export class ACPStream {
     this.steerPending = false;
     this.interruptForSteer = false;
     this.stopDuringSteer = false;
+    this.userStopRequested = false;
+    this.questionDismissed = false;
     this.turnInputIds = [];
     this.continuedInputIds = [];
     const profile = profiles[session.harness];
     if (!profile) throw new Error(`Unknown ACP harness: ${session.harness}`);
     this.profile = profile;
     this.mcpServers = profile.mcp && !session.catalog ? connectorServers(process.env.MUXTERM_CHAT_MCP_BIN, session.originFile) : [];
-    this.runtime = runtime(session.harness, session);
+    if (session.harness === 'opencode' && !session.catalog) {
+      const muxterm = this.mcpServers.find(server => server.name === 'muxterm');
+      if (!muxterm) throw new Error('Muxterm MCP executable is unavailable for this OpenCode chat; check the dev stack and retry.');
+      if (!session.originFile) throw new Error('Muxterm MCP origin file is missing for this OpenCode chat; reopen the chat to restore its scoped credentials.');
+      try { accessSync(muxterm.command, constants.X_OK); }
+      catch { throw new Error('Muxterm MCP executable cannot run for this OpenCode chat; rebuild the dev stack and retry.'); }
+      try { accessSync(session.originFile, constants.R_OK); }
+      catch { throw new Error('Muxterm MCP origin file cannot be read for this OpenCode chat; reopen the chat to restore its scoped credentials.'); }
+    }
+    this.runtime = runtime(session.harness, session, this.mcpServers);
     this.exited = this.runtime.exited;
     this.connection = this.runtime.connection;
     this.ready = this.initialize();
@@ -454,6 +482,7 @@ export class ACPStream {
     if (this.busy && (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan', 'usage_update'].includes(update.sessionUpdate)
       || (update.sessionUpdate === 'session_info_update' && update._meta?.piAcp?.running === true))) this.confirmAccepted?.();
     if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && messageText) {
+      this.questionDismissed = false;
       if (this.nativeGoal) {
         this.nativeGoal.output = (this.nativeGoal.output + messageText).slice(-4096);
         const state = this.nativeGoal.output.includes('<!-- GOAL_COMPLETE -->') ? 'complete'
@@ -488,6 +517,9 @@ export class ACPStream {
         this.emit(this.session.id, 'tool.started', { toolId: id, name, raw: input });
       }
       if (update.status === 'completed' || update.status === 'failed') {
+        if (this.session.harness === 'opencode' && name === 'question' && update.status === 'failed' &&
+            /the user dismissed this question/i.test(JSON.stringify(update.rawOutput ?? update.content ?? '')))
+          this.questionDismissed = true;
         this.emit(this.session.id, 'tool.completed', { toolId: id, name, raw: update.rawOutput ?? update.content ?? null,
           failed: update.status === 'failed' });
         this.tools.delete(id);
@@ -681,6 +713,8 @@ export class ACPStream {
     this.busy = true;
     this.session.busy = true;
     this.session.cancelRequested = false;
+    this.userStopRequested = false;
+    this.questionDismissed = false;
     this.turnActivity = false;
     this.turnInputIds = [...this.continuedInputIds, input.id];
     this.continuedInputIds = [];
@@ -702,7 +736,8 @@ export class ACPStream {
         this.emit(this.session.id, 'turn.continued');
       } else if (result.stopReason === 'cancelled') {
         this.reminderCursor = 0;
-        this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: result.stopReason });
+        this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds,
+          message: result.stopReason, cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
       }
       else if (result.stopReason === 'end_turn' && !this.turnActivity) {
         this.reminderCursor = 0;
@@ -718,7 +753,8 @@ export class ACPStream {
     }).catch(error => {
       if (!accepted) rejectEvidence(error);
       else if (this.interruptForSteer && this.stopDuringSteer && !this.exitError && !this.closed)
-        this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: 'cancelled' });
+        this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds,
+          message: 'cancelled', cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
       else if (this.interruptForSteer && !this.exitError && !this.closed) {
         this.continuedInputIds = this.turnInputIds;
         this.emit(this.session.id, 'turn.continued');
@@ -737,6 +773,7 @@ export class ACPStream {
         this.session.busy = false;
       }
       this.session.cancelRequested = false;
+      this.userStopRequested = false;
       this.confirmAccepted = null;
     });
     await evidence;
@@ -747,8 +784,10 @@ export class ACPStream {
     if (!this.busy) throw new Error('No active turn to stop');
     if (this.steerPending) this.stopDuringSteer = true;
     this.session.cancelRequested = true;
+    this.userStopRequested = true;
     this.resolveElicitations();
-    await this.connection.cancel({ sessionId: this.session.nativeId });
+    try { await this.connection.cancel({ sessionId: this.session.nativeId }); }
+    catch (error) { this.userStopRequested = false; throw error; }
     return { status: 'accepted' };
   }
 

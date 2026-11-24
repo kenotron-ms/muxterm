@@ -54,7 +54,7 @@ import goalifySkill from '../../../skills/goalify/SKILL.md?raw';
 
 type DisplayAttachment = { id: string; name: string; kind: string };
 type LaneOrigin = { type: 'operator-lane' | 'chat-message' | 'external-tool'; chatId: string; targetChatId?: string; relation?: 'operator-to-lane' | 'lane-to-lane' | 'lane-to-operator' | 'chat-to-chat'; name: string; harness: string; status: string };
-type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; workId?: string; name?: string; toolId?: string; itemId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; kind?: string; source?: string; origin?: LaneOrigin; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
+type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; parentSessionId?: string; agent?: string; type: string; text?: string; workId?: string; name?: string; toolId?: string; itemId?: string; inputId?: string; inputIds?: string[]; generationId?: string; message?: string; cancelReason?: 'user' | 'agent' | 'question_dismissed'; kind?: string; source?: string; origin?: LaneOrigin; raw?: unknown; failed?: boolean; summary?: boolean; attachments?: DisplayAttachment[]; goalState?: string; goalReason?: string; goalSummary?: string };
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
@@ -1803,7 +1803,13 @@ export class MuxSDKChat extends LitElement {
       this.workCollapsedWhileWorking.delete(this.currentTurn);
       this.stopping = false;
       for (const b of blocks) if (b.kind === 'assistant' || b.kind === 'commentary') b.done = true;
-      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:'Stopped by you · partial output kept' });
+      // Older ACP cancelled events use message='cancelled'; legacy harness Stop events have no reason.
+      const status = event.cancelReason === 'question_dismissed'
+        ? 'Question dismissed · partial output kept'
+        : event.cancelReason === 'user' || (!event.cancelReason && event.message !== 'cancelled')
+          ? 'Stopped by you · partial output kept'
+        : 'Turn cancelled · partial output kept';
+      blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'status', text:status });
       this.turnStart = blocks.length;
       this.currentTurn++;
       if (!this.replaying) void sdkChats.refresh();

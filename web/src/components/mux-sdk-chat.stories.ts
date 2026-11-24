@@ -11,6 +11,7 @@ type ChatEvent = {
   inputId?:string; inputIds?:string[]; itemId?:string; complete?:boolean;
   toolId?:string; name?:string; raw?:unknown; summary?:boolean;
   agent?:string; childSessionId?:string; parentSessionId?:string;
+  cancelReason?:'user'|'agent'|'question_dismissed';
   origin?:{type:'chat-message';chatId:string;name:string;harness:string;status:string;relation?:'chat-to-chat'};
 };
 
@@ -38,6 +39,22 @@ const running: ChatEvent[] = [
 const interrupted: ChatEvent[] = [
   ...running,
   {at:at(27),type:'session.uncertain',text:'The SDK sidecar stopped before the turn reached a terminal event. The accepted input was not replayed.'},
+];
+const userStopped: ChatEvent[] = [
+  {at:at(1),type:'input.accepted',kind:'user',source:'browser',inputId:'stop-1',text:'Explain terminal multiplexers in detail.'},
+  {at:at(2),type:'assistant.delta',text:'A terminal multiplexer keeps several shell sessions available within one terminal. You can split panes, switch windows, and detach while processes continue running.'},
+  {at:at(3),type:'turn.cancelled',inputIds:['stop-1'],cancelReason:'user'},
+];
+const questionDismissed: ChatEvent[] = [
+  {at:at(1),type:'input.accepted',kind:'user',source:'browser',inputId:'question-1',text:'Ask which terminal multiplexer I use.'},
+  {at:at(2),type:'tool.started',toolId:'question-tool',name:'question'},
+  {at:at(3),type:'tool.completed',toolId:'question-tool',name:'question',raw:{error:'The user dismissed this question'}},
+  {at:at(4),type:'turn.cancelled',inputIds:['question-1'],cancelReason:'question_dismissed'},
+];
+const agentCancelled: ChatEvent[] = [
+  {at:at(1),type:'input.accepted',kind:'user',source:'browser',inputId:'agent-cancel-1',text:'Explain this terminal state.'},
+  {at:at(2),type:'assistant.delta',text:'I started inspecting the terminal state, but the turn ended before I could finish the explanation.'},
+  {at:at(3),type:'turn.cancelled',inputIds:['agent-cancel-1'],cancelReason:'agent'},
 ];
 const mermaidTranscript: ChatEvent[] = [
   {at:at(1),type:'input.accepted',kind:'user',source:'browser',inputId:'diagram-1',text:'Show the path from a new chat to a rendered answer.'},
@@ -74,11 +91,13 @@ const settings = {
   ],
 };
 
-function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal'|'cleared' = 'none', scenario:'default'|'delegated'|'goalify'|'mermaid'|'citation' = 'default'): ApiFixture {
+function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', goalState:'none'|'active'|'proposal'|'cleared' = 'none', scenario:'default'|'delegated'|'goalify'|'mermaid'|'citation'|'user-stop'|'question-dismissed'|'agent-cancelled' = 'default'): ApiFixture {
   let historyRequests = 0;
+  const openCode = scenario === 'user-stop' || scenario === 'question-dismissed' || scenario === 'agent-cancelled';
   const chat: SDKChat = {
     id, title:'Component library review', workspaceId:'project-1',
-    projectPath:'/home/demo/muxterm', harness:'codex', state,
+    projectPath:'/home/demo/muxterm', harness:openCode ? 'opencode' : 'codex', state,
+    ...(openCode ? {provider:'configured',model:'opencode/tidepool-alpha-free'} : {}),
     createdAt:'2026-10-22T10:00:00Z',
   };
   const goal = {
@@ -96,7 +115,7 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     ],
     observations:goalState === 'none' ? [] : [{at:at(4),event:{type:'goal.started',goalState:'active',goalSummary:'The native harness acknowledged revision 1.'}}],
   };
-  const events = scenario === 'delegated' ? delegated : scenario === 'goalify' ? goalify : scenario === 'mermaid' ? mermaidTranscript : scenario === 'citation' ? citationTranscript : state === 'working' ? running : state === 'uncertain' ? interrupted : transcript;
+  const events = scenario === 'delegated' ? delegated : scenario === 'goalify' ? goalify : scenario === 'mermaid' ? mermaidTranscript : scenario === 'citation' ? citationTranscript : scenario === 'user-stop' ? userStopped : scenario === 'question-dismissed' ? questionDismissed : scenario === 'agent-cancelled' ? agentCancelled : state === 'working' ? running : state === 'uncertain' ? interrupted : transcript;
   const messages = events.filter(event => event.type !== 'tool.started' && event.type !== 'tool.completed');
   return ({url,method,init}) => {
     if (method === 'GET' && url.pathname.endsWith('/api/sdk-chats')) return fixtureJSON([chat]);
@@ -110,7 +129,7 @@ function chatFixture(id:string, state:'ready'|'working'|'uncertain' = 'ready', g
     if (method === 'GET' && url.pathname.endsWith('/api/voice/settings')) return fixtureJSON({enabled:false,restartRequired:false});
     if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/agents`)) return fixtureJSON(scenario === 'delegated' ? delegated.filter(event => event.type.startsWith('delegate.') || event.type.startsWith('tool.')) : []);
     if (url.pathname.endsWith(`/api/sdk-chats/${id}/settings`)) {
-      if (method === 'GET') return fixtureJSON(settings);
+      if (method === 'GET') return fixtureJSON(openCode ? {...settings,model:'opencode/tidepool-alpha-free',models:[{id:'opencode/tidepool-alpha-free',label:'Tidepool Alpha Free',efforts:['default'],defaultEffort:'default'}]} : settings);
       if (method === 'PATCH') return fixtureJSON({...settings,...JSON.parse(String(init?.body || '{}')) as Record<string,unknown>});
     }
     if (method === 'GET' && url.pathname.endsWith(`/api/sdk-chats/${id}/history`)) {
@@ -137,6 +156,33 @@ export default meta;
 type Story = StoryObj<ChatArgs>;
 
 export const Conversation: Story = {};
+export const OpenCodeUserStop: Story = {
+  args:{sessionId:'storybook-chat-opencode-user-stop'},
+  parameters:{apiFixture:chatFixture('storybook-chat-opencode-user-stop','ready','none','user-stop')},
+};
+export const PhoneOpenCodeUserStop: Story = {
+  args:{sessionId:'storybook-chat-phone-opencode-user-stop'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-opencode-user-stop','ready','none','user-stop')},
+};
+export const OpenCodeQuestionDismissed: Story = {
+  args:{sessionId:'storybook-chat-opencode-question-dismissed'},
+  parameters:{apiFixture:chatFixture('storybook-chat-opencode-question-dismissed','ready','none','question-dismissed')},
+};
+export const PhoneOpenCodeQuestionDismissed: Story = {
+  args:{sessionId:'storybook-chat-phone-opencode-question-dismissed'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-opencode-question-dismissed','ready','none','question-dismissed')},
+};
+export const OpenCodeAgentCancelled: Story = {
+  args:{sessionId:'storybook-chat-opencode-agent-cancelled'},
+  parameters:{apiFixture:chatFixture('storybook-chat-opencode-agent-cancelled','ready','none','agent-cancelled')},
+};
+export const PhoneOpenCodeAgentCancelled: Story = {
+  args:{sessionId:'storybook-chat-phone-opencode-agent-cancelled'},
+  globals:{viewport:{value:'phone390',isRotated:false}},
+  parameters:{apiFixture:chatFixture('storybook-chat-phone-opencode-agent-cancelled','ready','none','agent-cancelled')},
+};
 export const MermaidDiagram: Story = {
   args:{sessionId:'storybook-chat-mermaid'},
   parameters:{apiFixture:chatFixture('storybook-chat-mermaid','ready','none','mermaid')},
