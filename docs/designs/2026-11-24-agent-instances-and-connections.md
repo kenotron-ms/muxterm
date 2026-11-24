@@ -8,7 +8,7 @@
 
 Muxterm owns agent identity, the Work ledger, source conversation links, execution routing, and the UI for inspecting them. Slack, Discord, Telegram, Mattermost, and Teams each remain authoritative for their own conversation IDs, history, audience, permissions, and publication receipts.
 
-A **connection** translates between one source and a Muxterm agent. It owns platform credentials, installation state, routing, delivery bookkeeping, and platform tools. Its transport may be a hosted relay, local adapter, or another arrangement. The common contract must not require a sidecar or public port on every Muxterm installation. An outbound connector in the Go service starts and stops with that service when configured.
+A **connection** translates between one source and a Muxterm agent. It owns platform credentials, installation state, routing, delivery bookkeeping, and platform tools. Its transport may be a hosted relay, local adapter, or another arrangement. The common contract must not require a sidecar or public port on every Muxterm installation. An outbound connector in the Go service starts and stops with that service when configured. Teams, Slack, Discord, Telegram, and Mattermost are adapters to this contract; none defines Muxterm's agent, chat, Work, or receipt model.
 
 ## Stable references
 
@@ -51,7 +51,7 @@ This Teams profile requires a development tenant able to register an agent ident
 
 ## Implementation checkpoint
 
-The first Go slice persists agent records, optional defaults, chat associations, and source conversation links. Its in-process connection admission method accepts a person-authored message for an existing link, saves a receipt before harness dispatch, and reconciles a lost acknowledgment from the chat's durable `input.accepted` event. It carries source and audience facts as structured receipt data and into the harness input. A connector can read a completed turn from the linked chat's durable event history. It does not yet create a chat for an unseen source conversation, publish replies, supervise agent-owned Work, or run a platform connector. Those behaviors remain required before any live integration cutover.
+The first Go slice persists agent records, optional defaults, chat associations, and source conversation links. Its in-process connection seam can create an idle chat for a new source conversation at a deterministic ID, then link it without sending an unreceipted opening turn. It admits a person-authored message, saves a receipt before harness dispatch, and reconciles a lost acknowledgment from the chat's durable `input.accepted` event. It carries source and audience facts as structured receipt data and into the harness input. A connector can read a completed turn from the linked chat's durable event history. It does not yet publish replies, supervise agent-owned Work, or run a platform connector. Those behaviors remain required before any live integration cutover.
 
 ## Qualification
 

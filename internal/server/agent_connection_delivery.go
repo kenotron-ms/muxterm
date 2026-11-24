@@ -201,9 +201,12 @@ func (s *Server) AcceptAgentConnectionInput(ctx context.Context, input AgentConn
 	defer cancel()
 	if err := h.resume(ctx, &chatCopy); err != nil {
 		// No send was attempted. The original delivery can be retried.
+		h.mu.Lock()
 		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+			h.mu.Unlock()
 			return AgentConnectionReceipt{}, removeErr
 		}
+		h.mu.Unlock()
 		return AgentConnectionReceipt{}, err
 	}
 	facts := map[string]string{

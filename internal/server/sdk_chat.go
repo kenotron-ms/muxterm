@@ -2459,6 +2459,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if plannedID, ok := r.Context().Value(workStartChatIDKey{}).(string); ok && plannedID != "" {
 		chatID = plannedID
 	}
+	if plannedID, ok := r.Context().Value(agentConnectionChatIDContextKey{}).(string); ok && plannedID != "" {
+		chatID = plannedID
+	}
 	if req.WorkMode == "worktree" {
 		root, err := exec.CommandContext(r.Context(), "git", "-C", req.ProjectPath, "rev-parse", "--show-toplevel").Output()
 		if err != nil || strings.TrimSpace(string(root)) != req.ProjectPath {
@@ -2517,7 +2520,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("chat %s could not start: %v", c.ID, err), 502)
 		return
 	}
-	if idle, ok := r.Context().Value(workStartIdleChatKey{}).(bool); ok && idle {
+	workIdle, _ := r.Context().Value(workStartIdleChatKey{}).(bool)
+	connectionIdle, _ := r.Context().Value(agentConnectionIdleChatContextKey{}).(bool)
+	if workIdle || connectionIdle {
 		// Work installs its approved native goal before admitting any opening
 		// input. This internal context is never accepted from an HTTP body.
 		writeSDKJSON(w, 201, c)

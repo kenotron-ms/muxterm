@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +19,21 @@ import (
 
 	"github.com/kenotron-ms/muxterm/internal/atomicfile"
 )
+
+type agentConnectionChatIDContextKey struct{}
+type agentConnectionIdleChatContextKey struct{}
+
+// AgentConnectionChatOptions selects an execution chat for one source-owned
+// conversation. Harness and project are per-chat choices; the agent's optional
+// defaults are used when they are empty.
+type AgentConnectionChatOptions struct {
+	AgentID            string
+	ConnectionID       string
+	SourceConversation string
+	Harness            string
+	ProjectPath        string
+	OpeningTitle       string
+}
 
 // AgentConversationLink joins a source-owned conversation to a Go-owned chat.
 // The source platform retains its original messages and audience.
@@ -109,6 +127,65 @@ func (s *Server) LinkAgentConnectionConversation(agentID, connectionID, sourceCo
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.linkAgentConversationLocked(AgentConversationLink{AgentID: agentID, ConnectionID: connectionID, SourceConversation: sourceConversation, ChatID: chatID})
+}
+
+// EnsureAgentConnectionChat creates an idle chat at a deterministic ID, then
+// links it. The connector sends the first input through
+// AcceptAgentConnectionInput so its delivery ID has a durable receipt. A crash
+// between chat creation and link persistence can be reconciled without a
+// second chat or a second model turn.
+func (s *Server) EnsureAgentConnectionChat(ctx context.Context, options AgentConnectionChatOptions) (AgentConversationLink, error) {
+	if options.AgentID == "" || len(options.AgentID) > 128 || options.ConnectionID == "" || len(options.ConnectionID) > 128 ||
+		options.SourceConversation == "" || len(options.SourceConversation) > 2048 || !validWorkHarness(options.Harness) ||
+		(options.ProjectPath != "" && !filepath.IsAbs(options.ProjectPath)) || len(options.OpeningTitle) > 256 {
+		return AgentConversationLink{}, errors.New("invalid agent connection chat options")
+	}
+	h := s.sdkChats
+	if h.agentDataErr != nil {
+		return AgentConversationLink{}, fmt.Errorf("agent registry unavailable: %w", h.agentDataErr)
+	}
+	key := agentConversationKey(options.AgentID, options.ConnectionID, options.SourceConversation)
+	lock := h.nameLock("connection:" + key)
+	lock.Lock()
+	defer lock.Unlock()
+	h.mu.Lock()
+	if link := h.agentConversations[key]; link != nil {
+		copy := *link
+		h.mu.Unlock()
+		return copy, nil
+	}
+	if h.agents[options.AgentID] == nil {
+		h.mu.Unlock()
+		return AgentConversationLink{}, errors.New("unknown agent")
+	}
+	chatID := key[:32]
+	chat := h.chats[chatID]
+	if chat != nil && (chat.AgentID != options.AgentID || chat.Archived || chat.State != "ready") {
+		h.mu.Unlock()
+		return AgentConversationLink{}, errors.New("existing source chat requires reconciliation")
+	}
+	h.mu.Unlock()
+	if chat == nil {
+		title := strings.TrimSpace(options.OpeningTitle)
+		if title == "" {
+			title = "Connected conversation"
+		}
+		body, _ := json.Marshal(map[string]string{
+			"agentId": options.AgentID, "harness": options.Harness,
+			"projectPath": options.ProjectPath, "prompt": title,
+		})
+		request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/sdk-chats", bytes.NewReader(body))
+		request = request.WithContext(context.WithValue(request.Context(), agentLinkContextKey{}, true))
+		request = request.WithContext(context.WithValue(request.Context(), agentConnectionChatIDContextKey{}, chatID))
+		request = request.WithContext(context.WithValue(request.Context(), agentConnectionIdleChatContextKey{}, true))
+		response := httptest.NewRecorder()
+		s.handleSDKChats(response, request)
+		if response.Code != http.StatusCreated {
+			return AgentConversationLink{}, fmt.Errorf("create agent chat: HTTP %d: %s", response.Code, strings.TrimSpace(response.Body.String()))
+		}
+	}
+	link, _, err := s.LinkAgentConnectionConversation(options.AgentID, options.ConnectionID, options.SourceConversation, chatID)
+	return link, err
 }
 
 func (s *Server) handleAgentInstanceConversations(w http.ResponseWriter, r *http.Request) {
