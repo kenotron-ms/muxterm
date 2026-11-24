@@ -146,7 +146,7 @@ export function antigravityCommand() {
   if (process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND) return process.env.MUXTERM_ACP_ANTIGRAVITY_COMMAND;
   const dataHome = instanceDataHome();
   const arch = { x64: 'amd64', arm64: 'arm64' }[process.arch] || process.arch;
-  const managed = join(dataHome, 'muxterm', 'antigravity-cli', '1.5.14', `${process.platform}-${arch}`, 'agy');
+  const managed = join(dataHome, 'muxterm', 'antigravity-cli', '1.5.15', `${process.platform}-${arch}`, 'agy');
   try { accessSync(managed, constants.X_OK); return managed; } catch { /* Try the user's CLI. */ }
   for (const directory of (process.env.PATH || '').split(delimiter)) {
     if (!isAbsolute(directory)) continue;
@@ -317,7 +317,7 @@ export class ACPStream {
   async initialize() {
     const result = await this.withExit(this.runtime.ready);
     if (this.session.harness === 'antigravity' &&
-        (result.agentInfo?.name !== 'Antigravity ACP Server' || result.agentInfo?.version !== '1.5.14'))
+        (result.agentInfo?.name !== 'Antigravity ACP Server' || result.agentInfo?.version !== '1.5.15'))
       throw new Error('This Antigravity CLI version has not been verified for live steering and native /goal');
     this.agentCapabilities = result.agentCapabilities || {};
     if (this.session.harness === 'antigravity' &&
@@ -630,40 +630,31 @@ export class ACPStream {
       if (this.steerPending) throw new Error('A steer is already being delivered');
       this.steerPending = true;
       this.stopDuringSteer = false;
+      if (this.session.harness !== 'antigravity')
+        this.steerDecision = new Promise(resolve => { this.resolveSteerDecision = resolve; });
       try {
         const prompt = await this.promptBlocks(input);
         if (!this.busy || this.stopDuringSteer)
           throw new Error('Turn ended before the steer could be delivered');
         if (this.session.harness === 'antigravity') return await this.steerAntigravity(input, prompt);
-        if (this.steeringExtension) {
-          const result = await this.withExit(this.connection.request('_session/steering', {
-            sessionId: this.session.nativeId, prompt, _meta: { steering: { idleBehavior: 'promptRequired' } },
-          }));
-          if (result.outcome === 'injected') {
-            if (this.stopDuringSteer) throw new Error('Turn stopped before the steer was delivered');
-            this.turnInputIds.push(input.id);
-            this.emitAccepted(input);
-            this.emit(this.session.id, 'turn.continued');
-            return { status: 'accepted', inputId: input.id };
-          }
-          if (result.outcome !== 'promptRequired') throw new Error(`Unsupported ACP steering outcome: ${result.outcome}`);
-          this.interruptForSteer = true;
-          await this.turnPromise;
-          this.interruptForSteer = false;
-        } else {
-          // ACP v1 has no standard mid-turn injection. Stop the active prompt,
-          // keep its partial output, and immediately continue with the steer.
-          this.interruptForSteer = true;
-          this.session.cancelRequested = true;
-          await this.connection.cancel({ sessionId: this.session.nativeId });
-          await this.turnPromise;
-          // The next prompt is a normal turn; clear this before it can resolve.
-          this.interruptForSteer = false;
-        }
-        if (this.stopDuringSteer) throw new Error('Turn stopped before the steer was delivered');
-        if (this.exitError || this.closed) throw new Error('ACP session ended before the steer was delivered');
-        return await this.startPrompt(input, prompt);
+        if (!this.steeringExtension)
+          throw new Error(`${this.session.harness} ACP does not advertise native steering`);
+        const result = await this.withExit(this.connection.request('_session/steering', {
+          sessionId: this.session.nativeId, prompt, _meta: { steering: { idleBehavior: 'promptRequired' } },
+        }));
+        if (result.outcome === 'promptRequired')
+          throw new Error('The ACP turn finished before native steering could be delivered');
+        if (result.outcome !== 'injected') throw new Error(`Unsupported ACP steering outcome: ${result.outcome}`);
+        this.turnInputIds.push(input.id);
+        this.emitAccepted(input);
+        if (this.stopDuringSteer) this.emit(this.session.id, 'session.uncertain', { inputIds: [input.id],
+          message: 'Stop raced with an injected ACP steer; inspect native history before retrying.' });
+        else this.emit(this.session.id, 'turn.continued');
+        return { status: 'accepted', inputId: input.id };
       } finally {
+        this.resolveSteerDecision?.();
+        this.resolveSteerDecision = null;
+        this.steerDecision = null;
         this.steerPending = false;
         this.interruptForSteer = false;
         // Keep a concurrent user stop pending until its active turn settles.
@@ -682,10 +673,10 @@ export class ACPStream {
   }
 
   async steerAntigravity(input, prompt) {
-    // agy acp 1.5.14 accepts a concurrent session/prompt as a correction to
-    // the running turn. The first RPC may return end_turn while its tool is
-    // still active; keep Muxterm's turn open until the steering RPC settles.
+    // agy acp 1.5.15 accepts a concurrent session/prompt as a correction to
+    // the running turn. Keep Muxterm's turn open until the steering RPC settles.
     this.antigravitySteering = true;
+    this.antigravityStopEmitted = false;
     const inputIds = [...this.turnInputIds, input.id];
     try {
       const result = await this.withExit(this.connection.prompt({ sessionId: this.session.nativeId, prompt }));
@@ -700,6 +691,7 @@ export class ACPStream {
       this.emit(this.session.id, 'turn.completed', { inputIds, message: result.stopReason });
       return { status: 'accepted', inputId: input.id };
     } catch (error) {
+      if (this.stopDuringSteer) this.emitAntigravityStop();
       this.emit(this.session.id, 'session.uncertain', { inputIds, message: String(error) });
       throw error;
     } finally {
@@ -707,6 +699,13 @@ export class ACPStream {
       this.busy = false;
       this.session.busy = false;
     }
+  }
+
+  emitAntigravityStop() {
+    if (this.antigravityStopEmitted) return;
+    this.antigravityStopEmitted = true;
+    this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: 'cancelled',
+      cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
   }
 
   async startPrompt(input, prompt) {
@@ -727,10 +726,15 @@ export class ACPStream {
       this.emitAccepted(input);
       resolveEvidence();
     };
-    this.turnPromise = this.withExit(this.connection.prompt({ sessionId: this.session.nativeId, prompt })).then(result => {
+    this.turnPromise = this.withExit(this.connection.prompt({ sessionId: this.session.nativeId, prompt })).then(async result => {
       this.confirmAccepted();
+      // The native prompt can finish while _session/steering is resolving.
+      // Wait for its injected/promptRequired answer before committing the
+      // completion event and its input IDs.
+      if (this.steerDecision) await this.steerDecision;
       if (this.antigravitySteering) {
-        this.emit(this.session.id, 'turn.continued');
+        if (this.stopDuringSteer || result.stopReason === 'cancelled') this.emitAntigravityStop();
+        else this.emit(this.session.id, 'turn.continued');
       } else if (this.interruptForSteer && !this.stopDuringSteer) {
         this.continuedInputIds = this.turnInputIds;
         this.emit(this.session.id, 'turn.continued');

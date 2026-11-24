@@ -688,6 +688,20 @@ func sdkSidecarXDGEnv() []string {
 	return entries
 }
 func (h *sdkChatHost) ensure(harness string) error {
+	// A running, unchanged sidecar needs no lifecycle work. Keep this check
+	// under the shared gate so Stop can reach it while another call waits for
+	// a native steer receipt. The exclusive path still handles refreshes.
+	if harness != "" && harness != "amplifier" {
+		h.runtimeGate.RLock()
+		h.mu.Lock()
+		running := h.running
+		h.mu.Unlock()
+		ready := running && !h.manualStopped && h.sidecarVersions[harness] == sdkRuntimeFingerprint(harness)
+		h.runtimeGate.RUnlock()
+		if ready {
+			return nil
+		}
+	}
 	h.runtimeGate.Lock()
 	defer h.runtimeGate.Unlock()
 	h.lifecycleMu.Lock()

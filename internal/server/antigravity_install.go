@@ -41,7 +41,7 @@ func antigravityArchiveFor(goos, goarch string) (antigravityArchive, bool) {
 	return archive, ok
 }
 
-const antigravityUnsupportedReason = "Automatic Antigravity installation supports Linux and macOS on x86-64 and ARM64; install agy 1.5.14 manually on this platform."
+const antigravityUnsupportedReason = "Automatic Antigravity installation supports Linux and macOS on x86-64 and ARM64; install agy 1.5.15 manually on this platform."
 
 var antigravityInstallMu sync.Mutex
 

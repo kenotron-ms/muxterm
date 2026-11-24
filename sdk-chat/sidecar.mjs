@@ -4,7 +4,7 @@ import { unlink } from 'node:fs/promises';
 import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CodexStream, stopCodexRuntime } from './codex-stream.mjs';
+import { CodexStream, codexAuthenticated, stopCodexRuntime } from './codex-stream.mjs';
 import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
 import { CopilotStream, copilotAuthenticated, stopCopilotClient } from './copilot-stream.mjs';
 import { agentCommand } from './agent-command.mjs';
@@ -136,7 +136,7 @@ async function* claudeInputs(s) {
     while (s.inputs.length) {
       const input = s.inputs.shift();
       const pending = s.pendingInputs.get(input.uuid);
-      if (pending) {
+      if (pending && pending.input.kind !== 'steer') {
         s.pendingInputs.delete(input.uuid);
         emit(s.id, 'input.accepted', { inputId: input.uuid, kind: pending.input.kind,
           source: pending.input.source, text: pending.input.displayContent || pending.input.content,
@@ -146,6 +146,18 @@ async function* claudeInputs(s) {
       yield input;
     }
   }
+}
+function confirmClaudeSteer(s, ids) {
+  if (!s.steerInputId || !ids.includes(s.steerInputId) || !ids.includes(s.steerOriginalId)) return;
+  const pending = s.pendingInputs.get(s.steerInputId);
+  s.pendingInputs.delete(s.steerInputId);
+  s.steerInputId = null;
+  s.steerOriginalId = null;
+  if (!pending) return;
+  emit(s.id, 'input.accepted', { inputId: pending.input.id, kind: 'steer', source: pending.input.source,
+    text: pending.input.displayContent || pending.input.content,
+    attachments: (pending.input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
+  pending.resolve();
 }
 async function runClaude(s) {
   const toolNames = new Map();
@@ -190,6 +202,7 @@ async function runClaude(s) {
         if (msg.state === 'running') { s.busy = true; emit(s.id, 'turn.started'); }
         if (msg.state === 'idle') s.busy = false;
       } else if (msg.type === 'stream_event') {
+        confirmClaudeSteer(s, msg.user_message_uuids || (msg.user_message_uuid ? [msg.user_message_uuid] : []));
         const event = msg.event;
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta')
           emit(s.id, msg.parent_tool_use_id ? 'delegate.message' : 'assistant.delta',
@@ -203,6 +216,7 @@ async function runClaude(s) {
             }
             emit(s.id, 'tool.started', { toolId: event.content_block.id, name: event.content_block.name, raw: event.content_block.input }); }
       } else if (msg.type === 'assistant') {
+        confirmClaudeSteer(s, msg.user_message_uuids || (msg.user_message_uuid ? [msg.user_message_uuid] : []));
         const control = s.goalControl;
         if (control && msg.local_command_run?.command === 'goal' && msg.local_command_run.args === control.args) {
           emit(s.id, 'goal.command', { raw: msg.local_command_run });
@@ -227,27 +241,28 @@ async function runClaude(s) {
             agent: toolNames.get(block.tool_use_id) || 'Agent', toolId: block.tool_use_id, failed: !!block.is_error });
         }
       } else if (msg.type === 'result') {
+        s.claudeResultSeen = true;
         // The SDK's result echoes the UUIDs of user inputs the native turn
         // consumed. A local input queue is not proof that a turn was accepted.
         const accepted = msg.user_message_uuids || (msg.user_message_uuid ? [msg.user_message_uuid] : []);
-        // Claude reports an acknowledged steer interrupt as either
-        // `interrupted` or `error_during_execution`. Only the result for the
-        // original input is a continuation; an error on the steer itself is not.
-        const steeringAbort = s.steering && s.steerInterruptAck && !s.cancelRequested &&
-          accepted.length > 0 && !accepted.includes(s.steerInputId) &&
-          (msg.subtype === 'interrupted' ||
-            (msg.subtype === 'error_during_execution' && msg.is_error && !msg.result));
+        confirmClaudeSteer(s, accepted);
+        if (s.steerInputId && accepted.includes(s.steerOriginalId) && !accepted.includes(s.steerInputId)) {
+          const pending = s.pendingInputs.get(s.steerInputId);
+          s.pendingInputs.delete(s.steerInputId);
+          pending?.reject(new Error('Claude finished the original turn before consuming the steer; native delivery is uncertain'));
+          emit(s.id, 'session.uncertain', { inputIds: [s.steerInputId],
+            message: 'Claude finished the original turn before consuming the steer; inspect native history before retrying.' });
+          s.steerInputId = null;
+        }
         for (const id of accepted) s.inFlightInputs.delete(id);
-        if (s.cancelRequested || (msg.subtype !== 'success' && !steeringAbort)) s.inFlightInputs.clear();
+        if (s.cancelRequested || msg.subtype !== 'success') s.inFlightInputs.clear();
         s.busy = s.inFlightInputs.size > 0;
-        emit(s.id, steeringAbort ? 'turn.continued'
-          : s.cancelRequested || msg.subtype === 'interrupted' ? 'turn.cancelled'
+        emit(s.id, s.cancelRequested || msg.subtype === 'interrupted' ? 'turn.cancelled'
           : msg.subtype === 'success' && !msg.is_error ? (s.busy ? 'turn.continued' : 'turn.completed') : 'error',
           { inputIds: accepted, message: msg.is_error ? msg.result || msg.subtype : msg.subtype });
         s.cancelRequested = false;
-        s.steering = false;
         s.steerInputId = null;
-        s.steerInterruptAck = false;
+        s.steerOriginalId = null;
         if (!s.busy) {
           // Finite input lets the SDK child exit on its own after each turn.
           // A later turn starts a new query with the saved native session ID.
@@ -264,9 +279,10 @@ async function runClaude(s) {
     s.busy = false;
     s.inFlightInputs.clear();
     s.steerInputId = null;
-    s.steerInterruptAck = false;
-    emit(s.id, accepted.length ? 'session.uncertain' : 'error',
-      { inputIds: accepted, message: String(error) });
+    s.steerOriginalId = null;
+    if (accepted.length || !s.stopRequested || !s.claudeResultSeen)
+      emit(s.id, accepted.length ? 'session.uncertain' : 'error',
+        { inputIds: accepted, message: String(error) });
   }
   finally {
     s.claudeEnded = true;
@@ -275,6 +291,8 @@ async function runClaude(s) {
     s.runPromise = null;
     s.closeInput = false;
     s.claudeReady = null;
+    s.stopRequested = false;
+    s.claudeResultSeen = false;
     for (const pending of s.pendingInputs.values()) pending.reject(new Error('Claude stream ended before input acceptance was confirmed'));
     s.pendingInputs.clear();
     s.inFlightInputs.clear();
@@ -283,6 +301,8 @@ async function runClaude(s) {
 function startClaude(s) {
   if (s.runPromise) return;
   s.closeInput = false;
+  s.stopRequested = false;
+  s.claudeResultSeen = false;
   let resolve, reject;
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
   promise.catch(() => {});
@@ -300,6 +320,7 @@ async function command(cmd) {
     .map(s => s.id) };
   if (op === 'capabilities') return { capabilities: sessions.get(sessionId)?.acp?.capabilities() || capabilities(harness) };
   if (op === 'copilot-auth-status') return { authenticated: await copilotAuthenticated() };
+  if (op === 'codex-auth-status') return { authenticated: await codexAuthenticated() };
   if (op === 'catalog' && harness === 'codex') {
     const catalog = new CodexStream({ cwd, sourceFolders: [], model: '', effort: '' }, () => {}, null, true);
     try { return await catalog.options(); }
@@ -315,7 +336,7 @@ async function command(cmd) {
       migrationTranscript: cmd.migrationTranscript || '', approval: cmd.approval,
       catalog: cmd.catalog === true, originFile: cmd.catalog === true ? '' : originFile(sessionId, cmd.originToken),
       goalControlVersion: cmd.goalControlVersion,
-      inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, steering: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
+      inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
     if (['pi', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness)) {
       try {
@@ -384,11 +405,11 @@ async function command(cmd) {
       return snapshot;
     }
     if (s.harness === 'claude') {
+      // A completed finite-input query may still be exiting. Its input
+      // iterator is closed, so a goal queued there would never be consumed.
+      if (s.runPromise && !s.busy) await s.runPromise;
       startClaude(s);
-      await s.claudeReady.promise;
       if (s.goalControl) throw new Error('A native goal command is already pending; inspect its receipt');
-      const commands = await s.query.supportedCommands();
-      if (!commands.some(item => item.name === 'goal' && item.builtin)) return { unsupported: true, message: 'The installed Claude runtime does not advertise the native goal command.' };
       const clearing = cmd.action === 'pause' || cmd.action === 'clear' || cmd.paused;
       const args = clearing ? 'clear' : cmd.objective;
       if (!clearing && (!args || args === 'clear')) throw new Error('The native command reserves clear; choose another goal condition');
@@ -397,6 +418,8 @@ async function command(cmd) {
       s.goalControl = control;
       const timer = setTimeout(() => control.reject(new Error('Native goal command acknowledgement unavailable; do not blindly retry')), 35000);
       try {
+        // The SDK starts a resumed query when its input iterator yields. Queue
+        // the command before awaiting native init or an idle chat deadlocks.
         queue(s, { id: randomUUID(), kind: 'user', content: `/goal ${args}` });
         return await acknowledgement;
       } finally { clearTimeout(timer); if (s.goalControl === control) s.goalControl = null; }
@@ -465,7 +488,8 @@ async function command(cmd) {
     if (!input?.id || (!input?.content && !input?.attachments?.length) || !['user', 'service', 'steer'].includes(input.kind)) throw new Error('Invalid input');
     if (input.kind === 'service' && !capabilities(s.harness).attributed_service_input)
       throw new Error('unsupported: attributed service input');
-    if (input.kind === 'steer' && !s.busy) throw new Error('No active turn to steer');
+    if (input.kind === 'steer' && !(s.harness === 'claude' ? s.inFlightInputs.size : s.busy))
+      throw new Error('No active turn to steer');
     if (s.busy && input.kind !== 'steer' && !capabilities(s.harness).live_input) throw new Error('unsupported: live input');
     if (s.acp) return await s.acp.send(input);
     if (s.copilot) return await s.copilot.send(input);
@@ -486,41 +510,31 @@ async function command(cmd) {
         if (input.kind === 'steer') await s.codex.steer(input);
         else await s.codex.run(input);
       } catch (error) {
-        s.busy = false;
-        if (input.kind === 'steer') emit(sessionId, 'error', { message: String(error) });
+        if (input.kind !== 'steer') s.busy = false;
         throw error;
       }
     } else {
       startClaude(s);
+      if (input.kind === 'steer') {
+        if (s.inFlightInputs.size !== 1 || s.steerInputId)
+          throw new Error('No unambiguous active Claude turn to steer');
+        s.steerOriginalId = [...s.inFlightInputs][0];
+        s.steerInputId = input.id;
+      }
       s.busy = true;
       s.inFlightInputs.add(input.id);
       try {
-        if (input.kind === 'steer') {
-          // Streaming text has no request boundary at which Claude can fold a
-          // queued correction. Abort that generation, then continue with the
-          // correction while keeping its already-streamed transcript visible.
-          s.steering = true;
-          s.steerInputId = input.id;
-          s.steerInterruptAck = false;
-          await s.query.interrupt();
-          s.steerInterruptAck = true;
-          if (s.cancelRequested) throw new Error('Steer was cancelled');
-        }
         await new Promise((resolve, reject) => {
           s.pendingInputs.set(input.id, { input, resolve, reject });
           queue(s, input);
         });
       } catch (error) {
         s.inFlightInputs.delete(input.id);
-        s.steering = false;
         s.steerInputId = null;
-        s.steerInterruptAck = false;
+        s.steerOriginalId = null;
         throw error;
       }
     }
-    if (s.harness === 'codex' && input.kind !== 'steer') emit(sessionId, 'input.accepted', { inputId: input.id, kind: input.kind, source: input.source, text: input.displayContent || input.content,
-      attachments: (input.attachments || []).map(({ id, name, kind }) => ({ id, name, kind })) });
-
     return { status: 'accepted', inputId: input.id };
   }
   if (op === 'answerQuestion') {
@@ -529,15 +543,16 @@ async function command(cmd) {
     throw new Error('This chat has no pending question');
   }
   if (op === 'interrupt') {
-    if (!s.busy) throw new Error('No active turn to stop');
+    if (!(s.harness === 'claude' ? s.inFlightInputs.size : s.busy))
+      throw new Error('No active turn to stop');
     if (s.acp) return await s.acp.interrupt();
     if (s.copilot) return await s.copilot.interrupt();
     if (s.native) return await s.native.interrupt();
     if (s.harness === 'codex') await s.codex?.interrupt();
     else {
       s.cancelRequested = true;
+      s.stopRequested = true;
       s.inputs.length = 0;
-      s.inFlightInputs.clear();
       for (const pending of s.pendingInputs.values()) pending.reject(new Error('Input cancelled'));
       s.pendingInputs.clear();
       await s.query?.interrupt({ cancelQueued: true });
