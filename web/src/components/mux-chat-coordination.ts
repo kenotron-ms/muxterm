@@ -18,7 +18,7 @@ type WorkActor = { kind: 'chat' | 'remote-chat' | 'human' | 'external-tool'; ses
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string; selectionReason?: string; choiceSource?: string; goalMode?: 'native' | 'muxterm-work'; contextWorkId?: string; fallback?: string; configuration?: { harness: string; provider: string; bundle?: string; model?: string; effort?: string } };
 type WorkStep = { id: string; title: string; status: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped' };
 type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; harness?: string; comment?: boolean; commentPriority?: 'normal' | 'high'; commentSource?: string; commentReadThrough?: string; commentNoticeState?: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean; planBefore?: WorkStep[]; planAfter?: WorkStep[]; planReason?: string; stepUpdates?: {id:string;status:WorkStep['status']}[] };
-type WorkItem = { id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
+type WorkItem = { id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; graphIntegrationId?: string; graphLinks?: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
 type DetailTab = 'description' | 'people' | 'plan' | 'activity';
 const detailTabs: { id: DetailTab; label: string; icon: 'description' | 'ownership' | 'plan' | 'clock' }[] = [
@@ -68,7 +68,7 @@ export class MuxChatCoordination extends LitElement {
   @property() remoteHost = '';
   @state() private work: WorkItem[] = [];
   @state() private detail?: WorkItem;
-  @state() private dependencyReferences: Record<string,string> = {};
+  @state() private dependencyReferences: Record<string,WorkItem> = {};
   private loadingDependencies = new Set<string>();
   @state() private control?: WorkControl;
   @state() private filter: 'open' | 'all' | 'finished' = 'open';
@@ -141,7 +141,10 @@ export class MuxChatCoordination extends LitElement {
     .row .kind.ready { color:var(--ui-success); }
     .row strong { display:block; flex:1 1 12rem; min-width:0; margin-top:var(--ui-space-2); font-size:var(--ui-text-lg); font-weight:650; overflow-wrap:anywhere; }
     .work-reference { display:inline-flex; flex:none; width:max-content; max-width:100%; align-items:center; white-space:nowrap; border-radius:var(--ui-radius-sm); padding:0 var(--ui-space-2); background:color-mix(in srgb,var(--ui-accent) 10%,transparent); color:var(--ui-accent); font-size:var(--ui-text-sm); font-weight:700; text-decoration:underline; text-underline-offset:2px; }
-    .work-dependency-reference { white-space:nowrap; }
+    .work-dependency-reference { overflow-wrap:anywhere; }
+    .work-links { display:grid; gap:var(--ui-space-4); margin:0; padding:0; list-style:none; }
+    .work-links li { display:flex; align-items:baseline; flex-wrap:wrap; gap:var(--ui-space-2) var(--ui-space-5); }
+    .work-links li span { font-size:85%; }
     .work-reference-detail { margin-bottom:var(--ui-space-3); }
     .work-reference-host { margin-left:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-sm); overflow-wrap:anywhere; }
     .row .work-reference { margin-top:var(--ui-space-2); }
@@ -449,7 +452,7 @@ export class MuxChatCoordination extends LitElement {
     }
     this.detail = item;
     this.restoreTab(item);
-    this.loadDependencyReferences(item.dependsOn || []);
+    this.loadDependencyReferences([...(item.dependsOn || []), ...(item.graphLinks || [])]);
     void this.refresh();
   }
   showWorkItem(id: string) { void this.openDependency(id); }
@@ -459,7 +462,7 @@ export class MuxChatCoordination extends LitElement {
     const key = this.refreshKey;
     try {
       const item = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(id)}`);
-      if (key === this.refreshKey) { this.detail = item; this.restoreTab(item); this.loadDependencyReferences(item.dependsOn || []); }
+      if (key === this.refreshKey) { this.detail = item; this.restoreTab(item); this.loadDependencyReferences([...(item.dependsOn || []), ...(item.graphLinks || [])]); }
     } catch (error) { if (key === this.refreshKey) this.error = String(error); }
   }
   private loadDependencyReferences(ids: string[]) {
@@ -467,16 +470,36 @@ export class MuxChatCoordination extends LitElement {
       if (this.work.some(item => item.id === id) || this.dependencyReferences[id] || this.loadingDependencies.has(id)) continue;
       this.loadingDependencies.add(id);
       void this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(id)}`).then(item => {
-        if (item.reference) this.dependencyReferences = {...this.dependencyReferences, [id]:item.reference};
+        this.dependencyReferences = {...this.dependencyReferences, [id]:item};
       }).catch(() => {}).finally(() => this.loadingDependencies.delete(id));
     }
   }
-  private dependencyLinks(ids: string[]) { return ids.map((id, index) => {
-    const reference = this.work.find(item => item.id === id)?.reference || this.dependencyReferences[id] || 'Work item';
+  private workLink(id: string) {
+    const target = this.work.find(item => item.id === id) || this.dependencyReferences[id];
+    const reference = target?.reference || 'Work item';
     const hash = new URLSearchParams({chat:this.sessionId, work:id});
     if (this.remoteHost) hash.set('host', this.remoteHost);
-    return html`${index ? ', ' : ''}<a class="work-dependency-reference" href=${`#${hash}`} aria-label=${`Open ${reference} in Work pane`} @click=${(event: MouseEvent) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); void this.openDependency(id); }}>${reference}</a>`;
-  }); }
+    return html`<a class="work-dependency-reference" href=${`#${hash}`} @click=${(event: MouseEvent) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); void this.openDependency(id); }}>${reference}${target ? ` · ${target.title}` : ''}</a>`;
+  }
+  private dependencies(item: WorkItem) {
+    const related = (item.graphLinks || []).filter(id => !item.dependsOn?.includes(id) && id !== item.graphIntegrationId);
+    const integration = item.graphIntegrationId && item.graphIntegrationId !== item.id ? item.graphIntegrationId : '';
+    return html`
+      <section class="section"><h3>Prerequisites</h3>
+        ${item.dependsOn?.length ? html`<ul class="work-links">${item.dependsOn.map(id => {
+          const target = this.work.find(row => row.id === id) || this.dependencyReferences[id];
+          const state = item.waitingOn?.includes(id) ? target?.status === 'blocked' ? 'Blocked' : target?.status === 'cancelled' ? 'Cancelled' : 'Awaiting completion' : 'Done';
+          return html`<li>${this.workLink(id)}<span>${state}</span></li>`;
+        })}</ul>` : html`<p>None</p>`}
+      </section>
+      ${integration || related.length ? html`<section class="section"><h3>Linked work</h3>
+        <ul class="work-links">
+          ${integration ? html`<li>${this.workLink(integration)}<span>Integration and release</span></li>` : nothing}
+          ${related.map(id => html`<li>${this.workLink(id)}</li>`)}
+        </ul>
+      </section>` : nothing}
+    `;
+  }
   private controls() { const control = this.control; return html`<div class="controls"><div class="controls-main"><mux-ui-button class="play" icon-only variant="secondary" ?disabled=${!control} accessible-label=${control?.paused ? 'Continue project work' : 'Pause project work'} title=${control?.paused ? 'Continue project work' : 'Pause project work'} @click=${() => void this.changeControl({paused: !control?.paused})}>${icon(control?.paused ? 'play' : 'pause')}</mux-ui-button><span class="active-count">${control?.active ?? 0} in motion${control?.paused ? ' · paused' : ''}</span></div><div class="parallel"><mux-ui-range-field label="Parallel" accessible-label="Parallel work in this project" .min=${1} .max=${8} .value=${control?.parallelism ?? 4} .valueLabels=${["1 at once", "2 at once", "3 at once", "4 at once", "5 at once", "6 at once", "7 at once", "8 at once"]} ?disabled=${!control} @change=${(event: Event) => void this.changeControl({parallelism: (event.target as MuxUIRangeField).value})}></mux-ui-range-field></div></div>`; }
   private group(title: string, key: string, items: WorkItem[]) {
     if (!items.length) return nothing;
@@ -548,7 +571,7 @@ export class MuxChatCoordination extends LitElement {
       ` : tab === 'people' ? html`
         <section class="section"><h3>Worker agent</h3>${(item.status === 'open' || item.status === 'blocked') && !item.ownerSessionId && (!item.dispatch || item.dispatch.state === 'failed') ? html`<mux-ui-select label="Work harness" .value=${item.harness || ''} .options=${[{value:'',label:'AI default at dispatch'},...workHarnesses.map(harness => ({value:harness,label:harness}))]} ?disabled=${this.harnessSaving} @change=${(event: Event) => void this.changeHarness(item, (event.target as MuxUISelect).value)}></mux-ui-select><p>The selected agent must be available and able to run this Work goal.</p>` : html`<p>${item.harness ? `Selected on item: ${item.harness}` : 'AI default at dispatch'}${item.dispatch?.choiceSource ? ` · source: ${item.dispatch.choiceSource}` : ''}</p>`}</section>
         <section class="section"><h3>People</h3><p><strong>Owner:</strong> ${item.ownerSessionId ? this.chatLink(item.ownerSessionId) : 'Unassigned'}</p><p><strong>Reviewer:</strong> ${item.reviewerSessionId ? this.chatLink(item.reviewerSessionId) : 'None assigned'}</p><p><strong>Created by:</strong> ${this.actor(item.createdBy)}</p>${item.sessionIds?.length ? html`<p><strong>Linked chats:</strong> ${item.sessionIds.map((id, index) => html`${index ? ', ' : ''}${this.chatLink(id)}`)}</p>` : nothing}</section>
-        ${item.dependsOn?.length ? html`<section class="section"><h3>Dependencies</h3><p>${this.dependencyLinks(item.dependsOn)}${item.waitingOn?.length ? ` · ${item.waitingOn.length} still in progress` : ' · all complete'}</p></section>` : html`<section class="section"><h3>Dependencies</h3><p>None</p></section>`}
+        ${this.dependencies(item)}
         ${item.dispatch ? html`<section class="section"><h3>Dispatch</h3><p>${item.dispatch.state}${item.dispatch.sessionId ? html` · ${this.chatLink(item.dispatch.sessionId)}` : nothing}${item.dispatch.choiceSource ? ` · ${item.dispatch.choiceSource}` : ''}</p>${item.dispatch.selectionReason ? html`<p>${item.dispatch.selectionReason}</p>` : nothing}${item.dispatch.configuration ? html`<p>${item.dispatch.configuration.harness} · ${item.dispatch.configuration.provider || 'none'} · bundle ${item.dispatch.configuration.bundle || 'none'} · model ${item.dispatch.configuration.model || 'none'} · effort ${item.dispatch.configuration.effort || 'none'}</p>` : nothing}${item.dispatch.goalMode ? html`<p>Goal control: ${item.dispatch.goalMode === 'muxterm-work' ? 'Muxterm-owned Work goal' : 'Native agent goal'}</p>` : nothing}${item.dispatch.detail ? html`<p>${item.dispatch.detail}</p>` : nothing}</section>` : nothing}
         ${item.labels?.length ? html`<section class="section"><h3>Labels</h3><div class="tags">${item.labels.map(label => html`<span class="tag">${label}</span>`)}</div></section>` : nothing}
       ` : tab === 'plan' ? html`

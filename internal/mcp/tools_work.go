@@ -14,7 +14,7 @@ func registerWorkTools(srv *Server) {
 	stepProp := map[string]any{"type": "object", "properties": map[string]any{"id": stringProp, "title": stringProp, "status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "done", "blocked", "skipped"}}}, "required": []string{"id", "title", "status"}}
 	planProp := map[string]any{"type": "array", "items": stepProp}
 	stepUpdateProp := map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"id": stringProp, "status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "done", "blocked", "skipped"}}}, "required": []string{"id", "status"}}}
-	srv.Register("create_work_item", "File project Work for automatic scheduling. Before calling, turn the request into a finite goalify-style goal_condition with a checkable outcome, scope boundary, blocked exit, and verification evidence; put the readable task in brief and acceptance_criteria. For implementation Work, include a compact plan of meaningful steps with stable lowercase IDs, all initially pending, and a plan_protocol saying when the worker will update steps, summary, and next action. The plan guides execution; the goal is the completion contract. For product implementation, include a merged PR and published, verified release in the outcome unless the human explicitly scoped the item as design-only. The server checks the goal and rejects weak conditions with findings. Filing queues the Work immediately when project controls and dependencies allow; no second human review is required. Set draft=true only when the human explicitly asks for a draft; an explicit draft can omit the goal and will not run. For UI work set ui_work=true; develop design as part of the Work unless the human requests a design review first. Set harness to require a specific agent, or omit it to resolve the AI default at dispatch; unavailable choices block visibly and never fall back. Omit owner_session_id so the scheduler selects a suitable session; project_ids defaults to this chat's project. source records the request. labels are searchable tags; depends_on must finish before dispatch. client_ref makes retries idempotent.",
+	srv.Register("create_work_item", "File project Work for automatic scheduling. First state the smallest observable user outcome. Use this tool when that outcome can be delivered and verified as a unit, or when the human explicitly requests a draft. For a broader request with independently verifiable deliverables, use create_work_graph. Keep implementation with its verification when they only make sense together and omit optional enhancements from the core path. Before calling, turn the request into a finite goalify-style goal_condition with a checkable outcome, scope boundary, blocked exit, and verification evidence; put the readable task in brief and acceptance_criteria. For implementation Work, include a compact plan of meaningful steps with stable lowercase IDs, all initially pending, and a plan_protocol saying when the worker will update steps, summary, and next action. The plan guides execution; the goal is the completion contract. For product implementation, include a merged PR and published, verified release in the outcome unless the human explicitly scoped the item as design-only. The server checks the goal and rejects weak conditions with findings. Filing queues the Work immediately when project controls and dependencies allow; no second human review is required. Set draft=true only when the human explicitly asks for a draft; an explicit draft can omit the goal and will not run. For UI work set ui_work=true; develop design as part of the Work unless the human requests a design review first. Set harness to require a specific agent, or omit it to resolve the AI default at dispatch; unavailable choices block visibly and never fall back. Omit owner_session_id so the scheduler selects a suitable session; project_ids defaults to this chat's project. source records the request. labels are searchable tags; depends_on must finish before dispatch. client_ref makes retries idempotent.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"client_ref": stringProp, "title": stringProp, "brief": stringProp, "harness": stringProp, "source": stringProp, "next_action": stringProp, "owner_session_id": stringProp, "acceptance_criteria": stringProp, "goal_condition": stringProp, "plan": planProp, "plan_protocol": stringProp, "draft": map[string]any{"type": "boolean"}, "reviewer_session_id": stringProp, "session_ids": stringsProp, "project_ids": stringsProp, "labels": stringsProp, "ui_work": map[string]any{"type": "boolean"}, "depends_on": stringsProp}), "required": []string{"client_ref", "title", "brief"}, "dependentRequired": map[string]any{"plan": []string{"plan_protocol"}}},
 		func(args map[string]any) (string, error) {
 			ref, err := argString(args, "client_ref")
@@ -102,6 +102,46 @@ func registerWorkTools(srv *Server) {
 			}
 			body, _ := json.Marshal(bodyMap)
 			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-work", body)
+			return workToolResult(args, result, err)
+		})
+	graphNode := map[string]any{"type": "object", "properties": map[string]any{
+		"key": stringProp, "title": stringProp, "brief": stringProp, "acceptance_criteria": stringProp,
+		"goal_condition": stringProp, "depends_on": stringsProp, "next_action": stringProp, "plan": planProp,
+		"plan_protocol": stringProp, "ui_work": map[string]any{"type": "boolean"},
+	}, "required": []string{"key", "title", "brief", "acceptance_criteria", "goal_condition", "plan", "plan_protocol"}}
+	srv.Register("create_work_graph", "File a broad request as one atomic submission of linked ordinary Work items. First state the smallest observable integrated outcome. Split only where a node can deliver an independently verifiable capability or reusable handoff. Keep implementation with its verification and omit optional enhancements from the core path. Each node needs a finite goal with an observable outcome, scope, its own evidence and a blocked exit, plus a pending plan and protocol. Add a depends_on edge using a node key only when the downstream node needs a specific upstream result. Use integration to name the final node that verifies the overall outcome and tracks the merged PR and published, verified release for product implementation. Each node must lead to integration. Use create_work_item for focused requests and explicit drafts. Before filing, revise the whole proposal against these criteria. If a goal check rejects a node, revise it using the returned findings and recheck topology and evidence before resubmitting. No items are filed on validation failure. Use a stable client_ref for the original request and retry an uncertain submission with the same payload and ref. Filed nodes queue automatically under existing project and prerequisite controls.",
+		map[string]any{"type": "object", "properties": withMachine(map[string]any{
+			"client_ref": stringProp, "integration": stringProp, "source": stringProp, "project_ids": stringsProp,
+			"nodes": map[string]any{"type": "array", "minItems": 2, "maxItems": 12, "items": graphNode},
+		}), "required": []string{"client_ref", "integration", "nodes"}},
+		func(args map[string]any) (string, error) {
+			nodes, ok := args["nodes"].([]any)
+			if !ok {
+				return "", fmt.Errorf("nodes must be an array")
+			}
+			fields := map[string]string{"acceptance_criteria": "acceptanceCriteria", "goal_condition": "goalCondition",
+				"depends_on": "dependsOn", "next_action": "nextAction", "plan_protocol": "planProtocol", "ui_work": "uiWork"}
+			graph := make([]map[string]any, 0, len(nodes))
+			for _, raw := range nodes {
+				node, ok := raw.(map[string]any)
+				if !ok {
+					return "", fmt.Errorf("each node must be an object")
+				}
+				mapped := make(map[string]any, len(node))
+				for key, value := range node {
+					if name, ok := fields[key]; ok {
+						key = name
+					}
+					mapped[key] = value
+				}
+				graph = append(graph, mapped)
+			}
+			body, err := json.Marshal(map[string]any{"clientRef": args["client_ref"], "source": args["source"],
+				"integration": args["integration"], "projectIds": args["project_ids"], "nodes": graph})
+			if err != nil {
+				return "", err
+			}
+			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-work/graph", body)
 			return workToolResult(args, result, err)
 		})
 	srv.Register("list_work_items", "Inspect work status, creator, current owner, labels, and progress across sessions. Optionally filter by project_id or project_ids (OR), labels (all required), creator/owner/participant session, and/or status (open, active, blocked, review, done, cancelled).",

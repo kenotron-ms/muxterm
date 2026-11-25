@@ -23,6 +23,9 @@ import (
 // Work items coordinate sessions. A filed goal condition is installed as
 // the selected worker chat's native goal when the scheduler dispatches Work.
 type sdkWorkItem struct {
+	GraphID            string                   `json:"graphId,omitempty"`
+	GraphIntegrationID string                   `json:"graphIntegrationId,omitempty"`
+	GraphLinks         []string                 `json:"graphLinks,omitempty"`
 	ID                 string                   `json:"id"`
 	Reference          string                   `json:"reference,omitempty"`
 	ClientRef          string                   `json:"clientRef"`
@@ -374,6 +377,7 @@ func (h *sdkChatHost) resolveWorkReferenceLocked(reference string) (*sdkWorkItem
 
 func (h *sdkChatHost) loadWorkItems() {
 	// Startup is single-threaded; h.mu is not yet shared with request handlers.
+	h.loadWorkGraphs()
 	entries, err := os.ReadDir(filepath.Join(h.dir, "work"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("read work items: %v", err)
@@ -798,6 +802,7 @@ func (s *Server) handleSDKWorkItem(w http.ResponseWriter, r *http.Request) {
 		copy.CreatedBy = h.workCreatorLocked(item)
 		copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 		copy.WaitingOn = h.workWaitingOnLocked(item)
+		copy.GraphLinks = h.workGraphLinksLocked(item)
 	}
 	h.mu.Unlock()
 	if errors.Is(resolveErr, errAmbiguousWorkReference) {
