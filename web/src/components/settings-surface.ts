@@ -24,7 +24,7 @@ import { appIconImage } from '../lib/pwa-icon.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
 import geminiMark from '../assets/harness/gemini.svg?url';
-import { fetchUpdateStatus, fetchAutomaticUpdateStatus, setAutomaticUpdates, installUpdate, type UpdateStatus, type AutomaticUpdateStatus } from '../lib/update.js';
+import { fetchUpdateStatus, checkUpdateNow, fetchAutomaticUpdateStatus, setAutomaticUpdates, installUpdate, type UpdateStatus, type AutomaticUpdateStatus } from '../lib/update.js';
 import { macAppVersion, checkMacUpdate, installMacUpdate, fetchMacAutomaticUpdateStatus, setMacAutomaticUpdates, type MacUpdateStatus } from '../lib/mac-app.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import '../ui/confirmation.js';
@@ -883,7 +883,7 @@ export class MuxSettingsSurface extends LitElement {
     if (section === 'remotes') void this._loadRemotes();
   }
 
-  private async _checkVersion(): Promise<void> {
+  private async _checkVersion(force = false): Promise<void> {
     if (this._checkingVersion || this._installingUpdate) return;
     this._checkingVersion = true;
     this._updateError = '';
@@ -892,7 +892,7 @@ export class MuxSettingsSurface extends LitElement {
         this._macUpdateStatus = await checkMacUpdate(status => { this._macUpdateStatus = status; });
         return;
       }
-      this._updateStatus = await fetchUpdateStatus();
+      this._updateStatus = await (force ? checkUpdateNow() : fetchUpdateStatus());
       window.dispatchEvent(new CustomEvent('muxterm-update-checked', { detail: this._updateStatus }));
     } catch (error) {
       this._updateError = macAppVersion() && error instanceof Error ? error.message : 'Could not check the version. Try again.';
@@ -974,7 +974,7 @@ export class MuxSettingsSurface extends LitElement {
         ${macVersion ? html`
           <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
           <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${this._checkingVersion || this._installingUpdate || macStatus?.phase !== 'available'} @click=${() => void this._installUpdate()}>Update and restart</mux-ui-button>` : html`
-          <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
+          <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion(true)}>Check version</mux-ui-button>
           <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>`}
       </div>
       <mux-ui-feedback class="settings-feedback" kind=${macVersion ? this._updateError || macStatus?.phase === 'error' ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : macStatus?.phase === 'available' ? 'info' : 'success' : this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
