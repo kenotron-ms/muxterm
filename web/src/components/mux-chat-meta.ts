@@ -120,7 +120,7 @@ export class MuxChatMeta extends LitElement {
   static override styles = css`
     :host { display: block; box-sizing: border-box; height: 100%; overflow: auto; padding: var(--ui-space-5); color: var(--ui-text); font: var(--ui-text-sm)/1.5 var(--ui-font-sans); }
     header, summary, dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--ui-space-3); }
-    h2, h3 { margin: 0; font-size: 1em; }
+    h2, h3 { margin: 0; font-size: var(--ui-text-sm); }
     h3 { margin-top: var(--ui-space-5); }
     dl { margin: var(--ui-space-3) 0; }
     dl > div { padding: var(--ui-space-2) 0; border-bottom: 1px solid var(--ui-border); }
