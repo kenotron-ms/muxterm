@@ -1611,6 +1611,7 @@ export class MuxSDKChat extends LitElement {
   }
   private onEvent(event: SDKEvent) {
     if (event.type === 'thinking.delta') return;
+    const orderedAssistantText = this.chat?.harness === 'opencode';
     if (!this.replaying) { this.loadedEvents.push(event); this.liveEvents.push(event); }
     if (!this.replaying && this.agentEvents && (event.type.startsWith('delegate.') || event.type === 'tool.started' || event.type === 'tool.completed'))
       this.agentEvents = [...this.agentEvents, event];
@@ -1737,10 +1738,13 @@ export class MuxSDKChat extends LitElement {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || ''), at:event.at || last.at };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'assistant', channel:'task', at:event.at, text:event.text || '' });
-    } else if (event.type === 'assistant.interim') {
+    } else if (event.type === 'assistant.interim' && !orderedAssistantText) {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
     } else if (event.type === 'work.activity') {
+      const last = blocks.at(-1);
+      if (orderedAssistantText && event.kind === 'completed' && last?.kind === 'assistant' && last.turn === this.currentTurn && last.channel !== 'voice')
+        blocks[blocks.length - 1] = { ...last, done:true };
       // The compact history view knows the tool names and boundaries. Render
       // those rows immediately so opening a chat does not insert them later.
       const index = event.toolId ? blocks.findIndex(block => block.kind === 'tool' && block.turn === this.currentTurn && block.id === event.toolId && block.lightweight) : -1;
@@ -1754,15 +1758,18 @@ export class MuxSDKChat extends LitElement {
       else if (event.text) blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'commentary', text:event.text, id:event.itemId, done:event.complete });
     } else if (event.type === 'tool.started') {
       markStart(this.currentTurn);
-      // Text before a tool call was an interim progress note, not the final answer.
+      // OpenCode publishes pre-tool prose as assistant messages.
       const last = blocks[blocks.length - 1];
-      if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
+      if (!orderedAssistantText && last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
       const existing = blocks.findIndex(b => b.kind === 'tool' && b.id === event.toolId && !b.done);
       if (existing >= 0) blocks[existing] = { ...blocks[existing], lightweight:false, name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input, summary:event.summary || blocks[existing].summary };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw, summary:event.summary });
     }
     else if (event.type === 'tool.completed') {
       markStart(this.currentTurn);
+      const last = blocks.at(-1);
+      if (orderedAssistantText && last?.kind === 'assistant' && last.turn === this.currentTurn && last.channel !== 'voice')
+        blocks[blocks.length - 1] = { ...last, done:true };
       let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId && !blocks[i].done) { index = i; break; }
       if (index >= 0) blocks[index] = { ...blocks[index], done:true, lightweight:false, text:event.failed ? 'Failed' : 'Completed', failed:event.failed, summary:event.summary || blocks[index].summary,
         output:event.raw };
@@ -2375,8 +2382,10 @@ export class MuxSDKChat extends LitElement {
     const latestInput = new Map<number, number>();
     const latestActiveUser = new Map<number, number>();
     const segmentedTurns = new Set(visibleBlocks.filter(block => (block.kind === 'question' || block.kind === 'delegate') && this.turnFinished.has(block.turn)).map(block => block.turn));
+    const orderedAssistantText = this.chat?.harness === 'opencode';
     const isWork = (block: Block) => block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output' || block.kind === 'question' || block.kind === 'delegate';
     for (const block of visibleBlocks) {
+      if (orderedAssistantText) continue;
       if (!this.turnFinished.has(block.turn)) {
         if (block.kind === 'user') latestActiveUser.set(block.turn, block.key);
         else if (block.kind === 'work-digest') continue;
@@ -2398,7 +2407,7 @@ export class MuxSDKChat extends LitElement {
     const segmentedWorkShown = new Set<number>();
     const rows: TranscriptRow[] = [];
     for (const block of visibleBlocks) {
-      if (!this.turnFinished.has(block.turn)) {
+      if (!orderedAssistantText && !this.turnFinished.has(block.turn)) {
         if (block.kind === 'user') rows.push({ key:`block-${block.key}`, block });
         else if (block.kind === 'work-digest') rows.push({ key:`block-${block.key}`, block });
         if (!shown.has(block.turn) && (block.key === latestActiveUser.get(block.turn) || latestActiveUser.get(block.turn) === undefined)) {
@@ -2408,7 +2417,7 @@ export class MuxSDKChat extends LitElement {
             rows.push({ key:`work-${block.turn}`, block:items[0], work:items });
           }
         }
-      } else if (segmentedTurns.has(block.turn)) {
+      } else if (orderedAssistantText || segmentedTurns.has(block.turn)) {
         if (isWork(block)) {
           const previous = rows.at(-1);
           if (previous?.work && previous.block.turn === block.turn) previous.work.push(block);
