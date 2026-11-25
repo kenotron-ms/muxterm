@@ -10,8 +10,9 @@ GitHub Copilot login state; no credentials are written. The sidecar accepts `sta
 `capabilities`, and `close` operations. Unsupported service attribution and
 busy Codex input return explicit errors.
 
-Codex uses the packaged native `@openai/codex` binary through its app-server
-protocol. One app-server serves all Codex chats; each native thread receives its
+Codex uses the user's installed `codex` command through its app-server
+protocol. Set `MUXTERM_CODEX_COMMAND` to an absolute path before starting muxterm
+if the command is outside `PATH`. One app-server serves all Codex chats; each native thread receives its
 own working directory and MCP configuration. The app-server's
 `item/agentMessage/delta` notifications provide live text for the existing SSE
 renderer. Native Codex thread IDs still resume chats.
@@ -107,34 +108,24 @@ connectors through the same per-chat MCP capability as the other SDK chats.
 Image uploads are passed as native image blocks when the attachment store has
 identified a supported raster MIME type.
 
-## Antigravity SDK and ACP agents
+## Antigravity ACP agents
 
-New Google chats use the verified Antigravity `agy` ACP adapter. The older
-Antigravity Python SDK and Gemini CLI ACP adapters remain available for existing
-chats; the Python SDK uses `uv`, a configured `GEMINI_API_KEY`, and a saved
-conversation in muxterm's data home. Command presence does not prove that a
-provider is ready.
+Google chats use the verified Antigravity `agy` ACP adapter. Existing
+Antigravity SDK chats migrate to ACP when resumed; their recorded history is
+preserved. Command presence does not prove that a provider is ready.
 
 Settings → AI shows agent installation and management separately from the
 new-chat default. Only available adapters verified for live steering, native
-goals, and resumable native history are offered for new chats. An installed
-agent may therefore remain available for existing chats without being offered
-for new ones.
+goals, and resumable native history are offered for new chats.
 
 In **Settings → AI**, choose **Google sign-in** or **Detected API key**.
 Google sign-in uses the Google account associated with a Google AI Pro or Ultra
-subscription. Muxterm
-starts Gemini CLI's interactive login in a managed PTY, shows the Google link,
-and sends the one-time authorization code back to Gemini CLI. Gemini CLI stores
-its own credentials for later ACP chats; muxterm does not exchange or store its
-OAuth token. `NO_BROWSER=true gemini` in a muxterm terminal remains a fallback.
+subscription. Antigravity's ACP login flow owns the OAuth exchange; muxterm does
+not store its OAuth token.
 The API-key option appears when `GEMINI_API_KEY` is in the server environment or
-`~/.amplifier/keys.env`. Muxterm gives Gemini CLI a separate configuration home
-for API-key chats, so choosing it leaves Google sign-in credentials untouched.
-Muxterm only passes the key to the Gemini child process and never returns it to
-the browser. An API key uses a separate billing path. After choosing a method,
-check the connection before resuming an existing Gemini CLI chat. A running
-Gemini process keeps the auth choice with which it started.
+`~/.amplifier/keys.env`. Muxterm passes the key to the Antigravity ACP process
+and never returns it to the browser. An API key uses a separate billing path.
+After choosing a method, check the connection before starting a chat.
 
 The client keeps one ACP process per supported harness and saves each native
 ACP session ID. Native session initialization is serialized on a shared
@@ -148,8 +139,7 @@ remote connector servers. The remote server carries authorized Google tools.
 ACP v1 has no general live input method for steering an active prompt. When an
 agent advertises the ACP steering extension, muxterm sends an injected steer.
 Otherwise, a steer cancels the current prompt and immediately sends the new
-instruction in the same ACP session, keeping the partial answer visible. Gemini
-CLI currently uses this cancel-and-continue behavior. Image uploads use their
+instruction in the same ACP session, keeping the partial answer visible. Image uploads use their
 detected MIME type in ACP image blocks when the agent advertises image prompts;
 the filename extension does not determine the type. ACP chats currently use muxterm's
 existing `approval=never` policy: one-shot agent permission options may be

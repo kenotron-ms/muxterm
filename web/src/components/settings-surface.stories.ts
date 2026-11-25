@@ -68,7 +68,7 @@ function fixtureForVoice(initialVoice: VoiceStatus): ApiFixture {
       {harness:'amplifier',installed:true,version:'0.1.0',updateAvailable:false,checkedAt:'2026-11-14T07:00:00Z'},
       ...['claude','copilot','opencode','pi','deepseek'].map(harness => ({harness,installed:false,updateAvailable:false,checkedAt:'2026-11-14T07:00:00Z'})),
     ]});
-    if (url.pathname.endsWith('/api/ai/agents/runtimes') && method === 'GET') return fixtureJSON({agents:['codex','claude','copilot','opencode','pi','deepseek','amplifier','amplifier-unified','antigravity-sdk','antigravity'].map(harness => ({harness,scope:harness === 'amplifier' ? 'amplifier' : 'shared',state:'running',activeChats:0}))});
+    if (url.pathname.endsWith('/api/ai/agents/runtimes') && method === 'GET') return fixtureJSON({agents:['codex','claude','copilot','opencode','pi','deepseek','amplifier','amplifier-unified','antigravity'].map(harness => ({harness,scope:harness === 'amplifier' ? 'amplifier' : 'shared',state:'running',activeChats:0}))});
     if (url.pathname.endsWith('/api/ai/unified/connection') && method === 'GET') return fixtureJSON({mode:'local',url:'',installed:false,installSupported:true,tokenConfigured:false,connected:false});
     if (url.pathname.endsWith('/api/update/status') && method === 'GET') return fixtureJSON({
       currentVersion:'0.14.0', latestVersion:'0.14.0', updateAvailable:false,
@@ -112,7 +112,7 @@ function agentForceRestartFixture(actionFails = false): ApiFixture {
   const base = fixtureForVoice(DEFAULT_VOICE_STATUS);
   return request => {
     if (request.url.pathname.endsWith('/api/ai/agents/runtimes') && request.method === 'GET') {
-      return fixtureJSON({agents:['codex','claude','copilot','opencode','pi','deepseek','amplifier','amplifier-unified','antigravity-sdk','antigravity'].map(harness => ({
+      return fixtureJSON({agents:['codex','claude','copilot','opencode','pi','deepseek','amplifier','amplifier-unified','antigravity'].map(harness => ({
         harness,
         scope:harness === 'amplifier' ? 'amplifier' : 'shared',
         state:'running',

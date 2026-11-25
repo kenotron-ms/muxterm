@@ -138,8 +138,6 @@ type Server struct {
 	voiceGeneration     uint64        // guarded by voiceMu
 	geminiVoiceMu       sync.Mutex
 	geminiVoiceSessions map[string]geminiVoiceSession
-	geminiLoginMu       sync.Mutex
-	geminiLogin         *geminiLogin
 
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
@@ -312,12 +310,6 @@ func New(cfg Config) *Server {
 	s.mux.Handle("PUT /api/ai/key", protect(http.HandlerFunc(s.handleAIPutKey)))
 	s.mux.Handle("DELETE /api/ai/key", protect(http.HandlerFunc(s.handleAIDeleteKey)))
 	s.mux.Handle("POST /api/ai/ping", protect(http.HandlerFunc(s.handleAIPing)))
-	s.mux.Handle("GET /api/ai/gemini/login", protect(http.HandlerFunc(s.handleGeminiLogin)))
-	s.mux.Handle("POST /api/ai/gemini/login", protect(http.HandlerFunc(s.handleGeminiLogin)))
-	s.mux.Handle("DELETE /api/ai/gemini/login", protect(http.HandlerFunc(s.handleGeminiLogin)))
-	s.mux.Handle("POST /api/ai/gemini/login/code", protect(http.HandlerFunc(s.handleGeminiLoginCode)))
-	s.mux.Handle("GET /api/ai/gemini/auth", protect(http.HandlerFunc(s.handleGeminiAuth)))
-	s.mux.Handle("PUT /api/ai/gemini/auth", protect(http.HandlerFunc(s.handleGeminiAuth)))
 	s.mux.Handle("GET /api/ai/antigravity/auth", protect(http.HandlerFunc(s.handleAntigravityAuth)))
 	s.mux.Handle("PUT /api/ai/antigravity/auth", protect(http.HandlerFunc(s.handleAntigravityAuth)))
 	s.mux.Handle("GET /api/ai/antigravity/login", protect(http.HandlerFunc(s.handleAntigravityLogin)))
