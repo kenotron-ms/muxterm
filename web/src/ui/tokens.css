@@ -1,21 +1,21 @@
 /* Muxterm UI contract. App themes override these semantic properties on :root.
    --chrome-* and --mux-* remain the compatibility inputs during migration. */
 :root {
-  --ui-font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ui-font-sans: var(--app-font-family, system-ui, -apple-system, 'Segoe UI', sans-serif);
   --ui-font-mono: 'JetBrains Mono', ui-monospace, monospace;
-  --ui-content-font-family: var(--mux-font-family, var(--ui-font-sans));
-  --ui-content-font-size: var(--mux-font-size, var(--ui-text-xl));
+  --ui-content-font-family: var(--app-font-family, var(--mux-font-family, var(--ui-font-sans)));
+  --ui-content-font-size: calc(var(--mux-font-size, 16px) * var(--app-text-scale, 1));
 
   --ui-text-preview: 8px;
-  --ui-text-xs: 11px;
-  --ui-text-sm: 12px;
-  --ui-text-md: 13px;
-  --ui-text-lg: 14px;
-  --ui-text-xl: 16px;
-  --ui-text-2xl: 20px;
-  --ui-text-3xl: 24px;
-  --ui-text-4xl: 30px;
-  --ui-text-5xl: 36px;
+  --ui-text-xs: calc(11px * var(--app-text-scale, 1));
+  --ui-text-sm: calc(12px * var(--app-text-scale, 1));
+  --ui-text-md: calc(13px * var(--app-text-scale, 1));
+  --ui-text-lg: calc(14px * var(--app-text-scale, 1));
+  --ui-text-xl: calc(16px * var(--app-text-scale, 1));
+  --ui-text-2xl: calc(20px * var(--app-text-scale, 1));
+  --ui-text-3xl: calc(24px * var(--app-text-scale, 1));
+  --ui-text-4xl: calc(30px * var(--app-text-scale, 1));
+  --ui-text-5xl: calc(36px * var(--app-text-scale, 1));
   --ui-attention-mark-size: 9px;
 
   --ui-space-px: 1px;
@@ -83,8 +83,8 @@
   --ui-nav-height: var(--mux-titlebar-height, var(--mux-dock-height, 44px));
   --ui-sidebar-nav-row-height: 48px;
   --ui-sidebar-session-row-height: 44px;
-  --ui-sidebar-item-font-size: 14px;
-  --ui-sidebar-section-label-font-size: 13px;
+  --ui-sidebar-item-font-size: calc(14px * var(--app-text-scale, 1));
+  --ui-sidebar-section-label-font-size: calc(13px * var(--app-text-scale, 1));
   --ui-sidebar-nav-icon-label-gap: 16px;
   --ui-sidebar-nav-horizontal-padding: 4px;
   --ui-sidebar-wordmark-size: 32px;
