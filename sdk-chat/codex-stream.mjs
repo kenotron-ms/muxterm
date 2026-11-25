@@ -416,6 +416,15 @@ export class CodexStream {
       turn.deferred.push([method, p]);
       return;
     }
+    if (method === 'thread/tokenUsage/updated' && p.turnId && p.tokenUsage?.total) {
+      const { inputTokens, outputTokens, cachedInputTokens } = p.tokenUsage.total;
+      this.emit(this.session.id, 'usage.observed', {
+        generationId: p.turnId,
+        kind: 'thread-total',
+        raw: { inputTokens, outputTokens, cachedInputTokens },
+      });
+      return;
+    }
     if (method === 'turn/plan/updated' && Array.isArray(p.plan)) {
       const plan = p.plan.map(item => ({ step: item.step, status: item.status === 'inProgress' ? 'in_progress' : item.status }));
       const toolId = `codex-plan:${p.turnId}`;
