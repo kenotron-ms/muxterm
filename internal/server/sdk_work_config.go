@@ -20,7 +20,7 @@ type workHarnessOption struct {
 // A saved choice stays valid when its runtime is temporarily unavailable.
 // Dispatch reports that condition instead of silently choosing another agent.
 func validWorkHarness(harness string) bool {
-	return harness == "" || slices.Contains([]string{"codex", "claude", "copilot", "amplifier", "amplifier-unified", "pi", "opencode", "deepseek", "gemini", "antigravity", "antigravity-sdk"}, harness)
+	return harness == "" || slices.Contains([]string{"codex", "claude", "copilot", "amplifier", "amplifier-unified", "pi", "opencode", "deepseek", "antigravity"}, harness)
 }
 
 type workModelOption struct {

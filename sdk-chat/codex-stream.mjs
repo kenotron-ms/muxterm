@@ -1,26 +1,11 @@
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import readline from 'node:readline';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { agentCommand } from './agent-command.mjs';
 import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
 
-const require = createRequire(import.meta.url);
-const target = {
-  'linux:x64': ['@openai/codex-linux-x64', 'x86_64-unknown-linux-musl'],
-  'linux:arm64': ['@openai/codex-linux-arm64', 'aarch64-unknown-linux-musl'],
-  'darwin:x64': ['@openai/codex-darwin-x64', 'x86_64-apple-darwin'],
-  'darwin:arm64': ['@openai/codex-darwin-arm64', 'aarch64-apple-darwin'],
-  'win32:x64': ['@openai/codex-win32-x64', 'x86_64-pc-windows-msvc'],
-  'win32:arm64': ['@openai/codex-win32-arm64', 'aarch64-pc-windows-msvc'],
-}[`${process.platform}:${process.arch}`];
-if (!target) throw new Error(`Unsupported Codex platform: ${process.platform}/${process.arch}`);
-let vendorRoot;
-try { vendorRoot = join(dirname(require.resolve(`${target[0]}/package.json`)), 'vendor'); }
-catch { vendorRoot = join(dirname(require.resolve('@openai/codex/bin/codex.js')), '..', 'vendor'); }
-const codexCLI = join(vendorRoot, target[1], 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
-if (!existsSync(codexCLI)) throw new Error(`Codex native binary is missing: ${codexCLI}`);
 function toolDetails(item) {
   if (item.type === 'commandExecution') return {
     name: 'Command', input: { command: item.command, cwd: item.cwd },
@@ -88,7 +73,7 @@ class CodexRuntime {
     this.closed = false;
     this.stopping = false;
     this.stderr = '';
-    this.process = spawn(codexCLI, ['app-server', '--stdio', '-c', 'model_reasoning_summary="none"', '-c', 'tools.update_plan.enabled=true'], {
+    this.process = spawn(agentCommand('codex', 'MUXTERM_CODEX_COMMAND'), ['app-server', '--stdio', '-c', 'model_reasoning_summary="none"', '-c', 'tools.update_plan.enabled=true'], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.process.stderr.on('data', data => { this.stderr = (this.stderr + data).slice(-4000); });

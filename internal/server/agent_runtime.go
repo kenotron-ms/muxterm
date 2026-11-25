@@ -17,7 +17,7 @@ import (
 
 var managedChatHarnesses = []string{
 	"codex", "claude", "copilot", "amplifier", "pi", "opencode", "deepseek",
-	"gemini", "antigravity", "antigravity-sdk", "amplifier-unified",
+	"antigravity", "amplifier-unified",
 }
 
 func managedChatHarness(harness string) bool {
@@ -55,8 +55,8 @@ func sdkRuntimeExecutablePath(harness string) string {
 	switch harness {
 	case "codex", "claude":
 		command, _ = sdkAgentExecutable(harness)
-	case "copilot", "pi", "deepseek", "gemini":
-		command = map[string]string{"copilot": "copilot", "pi": "pi", "deepseek": "dsh", "gemini": "gemini"}[harness]
+	case "copilot", "pi", "deepseek":
+		command = map[string]string{"copilot": "copilot", "pi": "pi", "deepseek": "dsh"}[harness]
 	case "opencode":
 		command = os.Getenv("MUXTERM_ACP_OPENCODE_COMMAND")
 		if command == "" {
@@ -70,8 +70,6 @@ func sdkRuntimeExecutablePath(harness string) string {
 		}
 	case "antigravity":
 		command = sdkACPExecutable(harness)
-	case "antigravity-sdk":
-		command = "uv"
 	case "amplifier":
 		command = "amplifier"
 	default:

@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, existsSync, constants } from 'node:fs';
+import { readFileSync, accessSync, statSync, existsSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join, delimiter, isAbsolute } from 'node:path';
@@ -10,7 +10,6 @@ import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
 
 const profiles = {
   opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
-  gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
   antigravity: { command: 'agy', args: ['acp'], env: 'MUXTERM_ACP_ANTIGRAVITY_COMMAND', mcp: true },
 };
 
@@ -43,12 +42,10 @@ class ACPRuntime {
     this.stderr = '';
     const profile = profiles[harness];
     const launch = harness === 'antigravity' ? antigravityLaunch() : null;
-    const command = harness === 'gemini' ? geminiCommand()
-      : launch?.command || process.env[profile.env] || profile.command;
+    const command = launch?.command || process.env[profile.env] || profile.command;
     this.process = spawn(command, launch?.args || profile.args, {
       ...(harness === 'antigravity' ? { cwd: session.cwd } : {}),
-      env: harness === 'gemini' ? geminiEnvironment()
-        : harness === 'opencode' && !session.catalog ? opencodeEnvironment(mcpServers)
+      env: harness === 'opencode' && !session.catalog ? opencodeEnvironment(mcpServers)
         : launch?.env || process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -214,64 +211,6 @@ export function antigravityLaunch(mode = antigravityMode()) {
   return { command, args, env };
 }
 
-function geminiCommand() {
-  if (process.env.MUXTERM_ACP_GEMINI_COMMAND) return process.env.MUXTERM_ACP_GEMINI_COMMAND;
-  for (const directory of (process.env.PATH || '').split(delimiter)) {
-    if (!isAbsolute(directory)) continue;
-    const command = join(directory, 'gemini');
-    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
-    catch { /* Try the next directory. */ }
-  }
-  const prefix = spawnSync('npm', ['config', 'get', 'prefix'], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
-  const root = prefix.stdout?.trim();
-  if (prefix.status === 0 && isAbsolute(root || '')) {
-    const command = join(root, 'bin', 'gemini');
-    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
-    catch { /* Let spawn report the unavailable CLI. */ }
-  }
-  return 'gemini';
-}
-
-function geminiEnvironment() {
-  const env = { ...process.env };
-  const dataHome = env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
-  let mode = 'google';
-  try { mode = readFileSync(join(dataHome, 'muxterm', 'gemini-auth-mode'), 'utf8').trim(); } catch { /* Google sign-in is the default. */ }
-  if (mode !== 'api-key') {
-    // The CLI may have saved API-key auth from a prior session. Force this
-    // launch to use the Google choice selected in muxterm without editing its settings.
-    delete env.GEMINI_API_KEY;
-    delete env.GOOGLE_API_KEY;
-    env.GEMINI_CLI_AUTH_OVERRIDE = 'oauth-personal';
-    return env;
-  }
-  delete env.GEMINI_CLI_AUTH_OVERRIDE;
-  let key = env.GEMINI_API_KEY?.trim();
-  if (!key) {
-    for (const name of ['keys.env', 'key.env']) {
-      try {
-        const data = readFileSync(join(homedir(), '.amplifier', name), 'utf8').slice(0, 65536);
-        const line = data.split('\n').find(line => /^\s*(?:export\s+)?GEMINI_API_KEY\s*=/.test(line));
-        if (line) { key = line.replace(/^\s*(?:export\s+)?GEMINI_API_KEY\s*=\s*/, '').trim().replace(/^(['"])(.*)\1$/, '$2'); break; }
-      } catch { /* Try the next standard key file. */ }
-    }
-  }
-  if (!key) throw new Error('GEMINI_API_KEY is not configured');
-  const root = join(dataHome, 'muxterm', 'gemini-api-key');
-  mkdirSync(join(root, '.gemini'), { recursive: true, mode: 0o700 });
-  const settings = join(root, '.gemini', 'settings.json');
-  try { readFileSync(settings); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    try { writeFileSync(settings, '{"security":{"auth":{"selectedType":"gemini-api-key"}}}\n', { flag: 'wx', mode: 0o600 }); }
-    catch (createError) { if (createError.code !== 'EEXIST') throw createError; }
-  }
-  env.GEMINI_CLI_HOME = root;
-  env.GEMINI_API_KEY = key;
-  delete env.GOOGLE_API_KEY;
-  return env;
-}
-
 export class ACPStream {
   constructor(session, emit, onProcessExit) {
     this.session = session;
@@ -338,11 +277,7 @@ export class ACPStream {
       this.loading = true;
       try {
         if (this.agentCapabilities.sessionCapabilities?.resume) session = await this.withExit(this.connection.resumeSession({ ...params, sessionId: this.session.nativeId }));
-        // Gemini CLI advertises the legacy load capability and uses its raw
-        // session/load RPC here; revisit this when its ACP shape changes.
-        else if (this.agentCapabilities.loadSession) session = await this.withExit(this.session.harness === 'gemini'
-          ? this.connection.request('session/load', { ...params, sessionId: this.session.nativeId })
-          : this.connection.loadSession({ ...params, sessionId: this.session.nativeId }));
+        else if (this.agentCapabilities.loadSession) session = await this.withExit(this.connection.loadSession({ ...params, sessionId: this.session.nativeId }));
         else throw new Error(`${this.session.harness} does not advertise ACP session recovery`);
       } finally { this.loading = false; }
     } else {
@@ -353,9 +288,6 @@ export class ACPStream {
     this.runtime.register(this);
     this.configOptions = session.configOptions || [];
     this.modes = session.modes || null;
-    // Gemini CLI still publishes its model selector in the older ACP `models`
-    // response field. Remove this shim when Gemini publishes configOptions.
-    this.legacyModels = this.session.harness === 'gemini' ? session.models || null : null;
     this.startupInfo = session._meta?.piAcp?.startupInfo || '';
     this.startupBuffer = '';
     // A resumed ACP process starts with the agent's own defaults. Restore the
@@ -800,9 +732,6 @@ export class ACPStream {
     const effort = this.configOptions.find(item => item.type === 'select' && item.category === 'thought_level');
     const entries = model?.options?.flatMap(item => item.options || [item]) || [];
     const effortEntries = effort?.options?.flatMap(item => item.options || [item]) || [];
-    if (!model && this.legacyModels) return { provider: 'configured', model: this.legacyModels.currentModelId || '', effort: '',
-      models: (this.legacyModels.availableModels || []).map(item => ({ id: item.modelId, label: item.name || item.modelId,
-        efforts: [], defaultEffort: '' })) };
     return { provider: 'configured', model: model?.currentValue || '', effort: effort?.currentValue || '',
       models: entries.map(item => ({ id: item.value, label: item.name,
         efforts: effortEntries.map(value => value.value), defaultEffort: effort?.currentValue || '' })) };
@@ -810,14 +739,6 @@ export class ACPStream {
 
   async applySelection(model, effort) {
     if (this.busy) throw new Error('Finish the current turn before changing settings');
-    if (model && this.legacyModels && !this.configOptions.some(item => item.type === 'select' && item.category === 'model')) {
-      if (!(this.legacyModels.availableModels || []).some(item => item.modelId === model)) throw new Error('Unsupported Gemini model');
-      if (model !== this.legacyModels.currentModelId) {
-        await this.withExit(this.connection.request('session/set_model', { sessionId: this.session.nativeId, modelId: model }));
-        this.legacyModels.currentModelId = model;
-      }
-      model = '';
-    }
     for (const [category, value] of [['model', model], ['thought_level', effort]]) {
       const option = this.configOptions.find(item => item.type === 'select' && item.category === category);
       if (value && option && value !== option.currentValue) {

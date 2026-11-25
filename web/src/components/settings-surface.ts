@@ -1596,8 +1596,6 @@ export class MuxSettingsSurface extends LitElement {
         ${this._renderAntigravity()}
         ${SETUP_AGENTS.map(agent => this._renderSetupAgent(agent))}
         ${this._renderUnified()}
-        ${this._renderGemini()}
-        ${this._renderAntigravitySDK()}
       </div>
       ${this._runtimeError && !this._runtimeErrorHarness ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._runtimeError}</mux-ui-feedback>` : nothing}
       ${this._runtimeConfirmation ? html`<mux-ui-confirmation open .heading=${'Force restart chat runtime?'}
@@ -1608,18 +1606,6 @@ export class MuxSettingsSurface extends LitElement {
         @confirmation-cancel=${() => { if (!this._runtimeBusy) this._runtimeConfirmation = null; }}
         @confirmation-confirm=${this._confirmRuntimeForceRestart}></mux-ui-confirmation>` : nothing}
     `;
-  }
-
-  private _renderAntigravitySDK() {
-    const ready = this._readyAgents?.has('antigravity-sdk') ?? false;
-    const stopped = this._agentRuntimes.get('antigravity-sdk')?.state === 'stopped';
-    const label = stopped ? 'Runtime stopped' : ready ? 'Ready for new chats' : this._readyAgents === null ? 'Checking' : 'Setup needed';
-    return html`<details class="agent-card ai-harness">
-      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Antigravity SDK</span><span class="agent-description">Google coding agent · Python SDK</span></span><mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
-      <div class="agent-body"><p>The Python SDK supports new chats when uv, Python 3, and GEMINI_API_KEY are available.</p>
-        ${this._renderRuntimeControls('antigravity-sdk', 'Antigravity SDK', true)}
-      </div>
-    </details>`;
   }
 
   private _renderUnified() {
@@ -1715,16 +1701,6 @@ export class MuxSettingsSurface extends LitElement {
   private _setDefaultHarness(defaultHarness: ResolvedConfig['ai']['defaultHarness']): void {
     if (!this.config) return;
     this._emit({ ai: { ...this.config.ai, defaultHarness } });
-  }
-
-  private _renderGemini() {
-    const ready = this._readyAgents?.has('gemini') ?? false;
-    const stopped = this._agentRuntimes.get('gemini')?.state === 'stopped';
-    const label = stopped ? 'Runtime stopped' : ready ? 'Ready for new chats' : this._readyAgents === null ? 'Checking' : 'Setup needed';
-    return html`<details class="agent-card">
-      <summary><span class="agent-identity"><span class="agent-title">Gemini CLI</span><span class="agent-description">Google coding agent · ACP</span></span><mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
-      <div class="agent-body"><p>Install and authenticate Gemini CLI to start new chats. <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Setup guide ↗</a></p>${this._renderRuntimeControls('gemini', 'Gemini CLI', ready)}</div>
-    </details>`;
   }
 
   private _renderSetupAgent(agent: typeof SETUP_AGENTS[number]) {

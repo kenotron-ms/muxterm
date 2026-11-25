@@ -27,7 +27,7 @@ const detailTabs: { id: DetailTab; label: string; icon: 'description' | 'ownersh
   { id: 'plan', label: 'Plan', icon: 'plan' },
   { id: 'activity', label: 'Activity', icon: 'clock' },
 ];
-const workHarnesses = ['codex', 'claude', 'copilot', 'amplifier', 'amplifier-unified', 'pi', 'opencode', 'deepseek', 'gemini', 'antigravity', 'antigravity-sdk'];
+const workHarnesses = ['codex', 'claude', 'copilot', 'amplifier', 'amplifier-unified', 'pi', 'opencode', 'deepseek', 'antigravity'];
 
 function activityPreview(value: string): string {
   const plain = value.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')

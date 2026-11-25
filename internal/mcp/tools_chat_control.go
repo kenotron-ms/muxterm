@@ -267,7 +267,7 @@ func registerChatControlTools(srv *Server) {
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{
 			"project":    map[string]any{"type": "string", "description": "exact name of an existing project; omit for Ungrouped"},
 			"project_id": map[string]any{"type": "string", "description": "stable ID from list_projects"},
-			"harness":    map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex", "pi", "opencode", "deepseek", "gemini"}},
+			"harness":    map[string]any{"type": "string", "enum": []string{"amplifier", "claude", "codex", "pi", "opencode", "deepseek", "antigravity"}},
 			"prompt":     map[string]any{"type": "string", "description": "opening user turn"},
 			"goal":       map[string]any{"type": "string", "description": "Amplifier stop condition; starts a real goal loop and supersedes prompt"},
 			"approval":   map[string]any{"type": "string", "enum": []string{"never"}, "description": "optional explicit unattended policy; chats always use never"},
@@ -277,7 +277,7 @@ func registerChatControlTools(srv *Server) {
 			if err != nil {
 				return "", err
 			}
-			if harness != "amplifier" && harness != "claude" && harness != "codex" && harness != "pi" && harness != "opencode" && harness != "deepseek" && harness != "gemini" {
+			if harness != "amplifier" && harness != "claude" && harness != "codex" && harness != "pi" && harness != "opencode" && harness != "deepseek" && harness != "antigravity" {
 				return "", fmt.Errorf("unsupported harness %q", harness)
 			}
 			prompt, err := argString(args, "prompt")
