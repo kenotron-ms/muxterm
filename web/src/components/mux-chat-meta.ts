@@ -101,6 +101,8 @@ export class MuxChatMeta extends LitElement {
     const calls = assignedCalls + (this.metrics?.orphanTools ?? 0);
     const durations = turns.map(turn => elapsed(turn.started, turn.ended));
     const responseTimes = turns.map(turn => elapsed(turn.started, turn.firstOutput));
+    const scale = [...durations, ...responseTimes].reduce<number>((max, value) => Math.max(max, value ?? 0), 0);
+    const width = (value: number | undefined) => `${scale ? 100 * (value ?? 0) / scale : 0}%`;
     return html`
       <header><h2>Chat statistics</h2>
         <mux-ui-button size="small" variant="quiet" ?disabled=${this.loading} @click=${() => void this.load()}>Refresh</mux-ui-button>
@@ -122,11 +124,20 @@ export class MuxChatMeta extends LitElement {
             ${this.timingSummary('Elapsed time', durations)}
             ${this.timingSummary('Time to first visible output', responseTimes)}
           </details>
-          <h3>Turns</h3>
+          <div class="turn-heading"><h3>Turns</h3><small>Newest first</small></div>
+          ${scale ? html`<div class="turn-legend"><span><i class="first"></i>First visible output</span><span><i></i>Elapsed</span><small>0–${duration(scale)}</small></div>` : nothing}
           ${turns.map((turn, index) => {
-            const elapsedTime = elapsed(turn.started, turn.ended);
-            const firstOutput = elapsed(turn.started, turn.firstOutput);
-            return html`<details><summary><strong>Turn ${index + 1}</strong><span>${turn.outcome ?? 'No recorded end'}</span></summary>
+            const elapsedTime = durations[index];
+            const firstOutput = responseTimes[index];
+            return html`<details class="turn" name="meta-turn">
+              <summary>
+                <span class="turn-label"><strong>Turn ${index + 1}</strong><small>${turn.outcome ?? 'No recorded end'}</small></span>
+                <span class="turn-time">${elapsedTime === undefined ? 'Unavailable' : duration(elapsedTime)}</span>
+                ${scale ? html`<span class="turn-track" aria-hidden="true">
+                  <i style=${`width:${width(elapsedTime)}`}></i>
+                  <i class="first" style=${`width:${width(firstOutput)}`}></i>
+                </span>` : nothing}
+              </summary>
               <dl>
                 ${this.metric('Model', turn.model)}
                 ${this.metric('Elapsed time', elapsedTime === undefined ? undefined : duration(elapsedTime))}
@@ -154,6 +165,22 @@ export class MuxChatMeta extends LitElement {
     details { border-bottom: 1px solid var(--ui-border); }
     summary { display: list-item; padding: var(--ui-space-3) 0; cursor: pointer; }
     summary span { float: inline-end; margin-inline-start: var(--ui-space-3); }
+    .turn-heading, .turn-legend { display: flex; align-items: baseline; justify-content: space-between; gap: var(--ui-space-2); }
+    .turn-heading { margin-top: var(--ui-space-5); }
+    .turn-heading h3 { margin: 0; }
+    .turn-legend { flex-wrap: wrap; color: var(--ui-text-muted); font-size: var(--ui-text-xs); margin-top: var(--ui-space-2); }
+    .turn-legend span { display: inline-flex; align-items: center; gap: var(--ui-space-2); }
+    .turn-legend i { inline-size: var(--ui-space-2); block-size: var(--ui-space-2); background: var(--ui-border-strong); }
+    .turn-legend .first, .turn-track .first { background: var(--ui-focus); }
+    .turn summary { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: var(--ui-space-2); }
+    .turn summary span { float: none; margin: 0; }
+    .turn-label { display: flex; align-items: baseline; gap: var(--ui-space-2); }
+    .turn-label strong { color: var(--ui-text); }
+    .turn-label::before { content: '›'; }
+    .turn[open] .turn-label::before { transform: rotate(90deg); }
+    .turn-time { font-variant-numeric: tabular-nums; }
+    .turn .turn-track { grid-column: 1 / -1; position: relative; block-size: var(--ui-space-2); background: var(--ui-border); }
+    .turn-track i { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--ui-border-strong); }
     summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
   `;
 }
