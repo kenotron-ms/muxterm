@@ -8,6 +8,7 @@ export class MuxUIRangeField extends LitElement {
   @property({ attribute:'accessible-label' }) accessibleLabel = '';
   @property({ attribute:false }) valueLabels: string[] = [];
   @property() unit = '';
+  @property({ type:Boolean, attribute:'hide-value', reflect:true }) hideValue = false;
   @property({ attribute:'min-label' }) minLabel = '';
   @property({ attribute:'max-label' }) maxLabel = '';
   @property({ type:Number }) min = 0;
@@ -28,6 +29,7 @@ export class MuxUIRangeField extends LitElement {
     input:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; border-radius:var(--ui-radius-sm); }
     .ends { grid-column:1/-1; display:flex; justify-content:space-between; gap:var(--ui-space-4); color:var(--ui-text-muted); font-size:var(--ui-text-xs); }
     .ends:empty { display:none; }
+    :host([hide-value]) .ends { margin-top:var(--ui-space-3); }
     :host([layout='inline']) { padding:var(--ui-space-3) var(--ui-space-5); }
     :host([layout='inline']) .field { grid-template-columns:var(--ui-row-touch) minmax(0,1fr) auto; gap:var(--ui-space-5); }
     :host([layout='inline']) .label { color:var(--ui-text-muted); font-weight:400; }
@@ -54,7 +56,7 @@ export class MuxUIRangeField extends LitElement {
     const displayValue = this.valueLabels[labelIndex] ?? `${this.value}${this.unit}`;
     return html`<div class="field">
       <span class="label">${this.label}</span>
-      <span class="value">${displayValue}</span>
+      ${this.hideValue ? nothing : html`<span class="value">${displayValue}</span>`}
       <input type="range" aria-label=${this.accessibleLabel || this.label || nothing}
         aria-valuetext=${this.valueLabels.length ? displayValue : nothing} min=${this.min} max=${this.max} step=${this.step}
         .value=${String(this.value)} ?disabled=${this.disabled}

@@ -16,6 +16,7 @@ import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig }
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
 import { applyAppAppearance } from './lib/app-appearance.js';
+import { applyAppTypography, readAppTypography } from './lib/app-typography.js';
 import { applyPWAIconLinks } from './lib/pwa-icon.js';
 import { applyDocumentTitle } from './lib/instance-identity.js';
 import { installPwaWindowControls } from './lib/pwa-window-controls.js';
@@ -857,6 +858,7 @@ export class MuxApp extends LitElement {
     // Apply default theme tokens immediately so --mux-* and --chrome-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     applyChromeTokens(store.config.theme.palette);
+    applyAppTypography(readAppTypography());
     applyAppAppearance(store.config.theme.app, store.config.theme.mode, store.config.theme.backdrop);
     applyPWAIconLinks(store.config.theme.backdrop);
     // Reflect which machine this instance is running on — document title
