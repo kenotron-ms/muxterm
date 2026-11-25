@@ -117,6 +117,7 @@ export const chatMarkdownPolicy: MdLinkPolicy = {
 export function chatMarkdownPolicyForWork(
   items: readonly WorkReference[], sessionId: string, chatHost: string,
   open: (item: WorkReference, trigger: HTMLElement) => void,
+  showRawIds = false,
 ): MdLinkPolicy {
   const byReference = new Map<string, WorkReference>();
   const counts = new Map<string, number>();
@@ -139,7 +140,7 @@ export function chatMarkdownPolicyForWork(
         open(item, event.currentTarget as HTMLElement);
       }}><span class="md-work-reference">${item.reference}</span>${item.remoteHost ? html`<span class="md-work-host">${item.remoteHost}</span>` : ''}</a>`;
   };
-  const linkedText = (text: string): unknown => {
+  const linkedText = (text: string, fallback: (text: string) => unknown): unknown => {
     const parts: unknown[] = [];
     let end = 0;
     for (const match of text.matchAll(WORK_MENTION)) {
@@ -148,14 +149,15 @@ export function chatMarkdownPolicyForWork(
       const before = text[start - 1] || '';
       const after = text[start + match[0].length] || '';
       if (/[\p{L}\p{N}/?=#:]/u.test(before) || /[\p{L}\p{N}/]/u.test(after)) continue;
+      if (showRawIds && !/^Work #/i.test(match[0])) continue;
       const item = byReference.get(match[0].replace(/^Work\s+(?=[0-9a-f]{32}$)/i, '').toLowerCase());
       if (!item) continue;
-      if (start > end) parts.push(linkedChatReferences(text.slice(end, start)));
+      if (start > end) parts.push(fallback(text.slice(end, start)));
       parts.push(workLink(item));
       end = start + match[0].length;
     }
-    if (!parts.length) return linkedChatReferences(text);
-    if (end < text.length) parts.push(linkedChatReferences(text.slice(end)));
+    if (!parts.length) return fallback(text);
+    if (end < text.length) parts.push(fallback(text.slice(end)));
     return parts;
   };
   const workFromHref = (href: string): WorkReference | undefined => {
@@ -173,10 +175,11 @@ export function chatMarkdownPolicyForWork(
   };
   return {
     ...chatMarkdownPolicy,
-    referenceText: linkedText,
+    referenceText: text => linkedText(text, linkedChatReferences),
+    referenceCode: text => linkedText(text, chunk => chunk),
     reference: (href, label) => {
       const work = workFromHref(href);
-      if (work) return workLink(work);
+      if (work) return showRawIds && label.toLowerCase().includes(work.id.toLowerCase()) ? null : workLink(work);
       return chatMarkdownPolicy.reference?.(href, label) || null;
     },
   };

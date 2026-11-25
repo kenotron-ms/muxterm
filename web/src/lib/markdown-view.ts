@@ -74,6 +74,7 @@ export interface MdLinkPolicy {
   remoteImages?: boolean;
   reference?(href: string, label: string): TemplateResult | null;
   referenceText?(text: string): unknown;
+  referenceCode?(text: string): unknown;
   /** Chat policies opt in; published documents keep Mermaid as code. */
   diagrams?: boolean;
 }
@@ -126,7 +127,7 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
     case 'del':
       return html`<s>${renderInline(t.tokens, policy)}</s>`;
     case 'codespan':
-      return html`<code class="md-code">${t.text ?? ''}</code>`;
+      return html`<code class="md-code">${policy?.referenceCode?.(t.text ?? '') ?? t.text ?? ''}</code>`;
     case 'br':
       return html`<br />`;
     case 'link': {
@@ -140,7 +141,7 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
           draggable=${policy?.draggable ?? nothing}
           target="_blank"
           rel="noopener noreferrer nofollow"
-          >${renderInline(t.tokens, policy ? {...policy, referenceText:undefined} : undefined)}</a
+          >${renderInline(t.tokens, policy ? {...policy, referenceText:undefined, referenceCode:undefined} : undefined)}</a
         >`;
       }
       // Inside a published folder, a relative link is the ONE case that is
@@ -151,12 +152,12 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
       const inTree = policy?.resolve?.(href) ?? null;
       if (inTree !== null) {
         return html`<a class="md-link md-link-tree" href="${inTree}" rel="noopener"
-          >${renderInline(t.tokens, policy ? {...policy, referenceText:undefined} : undefined)}</a
+          >${renderInline(t.tokens, policy ? {...policy, referenceText:undefined, referenceCode:undefined} : undefined)}</a
         >`;
       }
       // A refused or not-yet-arrived address renders as its own label: the
       // words are readable, nothing is clickable, and no source leaks through.
-      return html`<span class="md-nolink">${renderInline(t.tokens, policy ? {...policy, referenceText:undefined} : undefined)}</span>`;
+      return html`<span class="md-nolink">${renderInline(t.tokens, policy ? {...policy, referenceText:undefined, referenceCode:undefined} : undefined)}</span>`;
     }
     case 'image': {
       // An image is drawn ONLY when the policy resolves it to something
@@ -230,7 +231,7 @@ function renderBlockToken(t: AnyToken, streaming: boolean, policy?: MdLinkPolicy
         class="md-pre"
         data-lang="${t.lang || ''}"
         ?data-streaming="${streaming}"
-      ><code>${t.text ?? ''}</code></pre>`;
+      ><code>${policy?.referenceCode?.(t.text ?? '') ?? t.text ?? ''}</code></pre>`;
 
     case 'blockquote':
       return html`<blockquote class="md-quote">

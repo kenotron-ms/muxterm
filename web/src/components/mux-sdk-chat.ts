@@ -119,7 +119,7 @@ export class MuxSDKChat extends LitElement {
   @state() private workReferences: WorkReference[] = [];
   private workReferenceScope = '';
   private workReferenceTimer?: number;
-  private cachedWorkPolicy?: { references: WorkReference[]; sessionId: string; host: string; policy: MdLinkPolicy };
+  private cachedWorkPolicy?: { references: WorkReference[]; sessionId: string; host: string; showRawIds: boolean; policy: MdLinkPolicy };
   private pendingWorkNavigation = '';
   @state() private goalDocument?: GoalDocument;
   @state() private goalNotice = '';
@@ -1874,7 +1874,10 @@ export class MuxSDKChat extends LitElement {
     });
   }
   private markdown(block: Block, index: number, preserveNewlines = false) {
-    const policy = this.workMarkdownPolicy();
+    const showRawIds = this.blocks.some(input => input.turn === block.turn &&
+      (input.kind === 'user' || input.kind === 'interjection') &&
+      /(?:^|[.!?]\s+)(?:please\s+)?(?:show|give|include|provide|print|display|return|list|what (?:is|are))\b[^.!?\n]{0,80}\b(?:raw|canonical|internal)\s+(?:work(?: item)?\s+)?ids?\b/i.test(input.text));
+    const policy = this.workMarkdownPolicy(showRawIds);
     const markerStart = 'visualize';
     const markerEnd = '';
     const pieces: unknown[] = [];
@@ -1926,12 +1929,12 @@ export class MuxSDKChat extends LitElement {
     pieces.push(markdownPart(block.text.slice(position)));
     return html`${pieces}`;
   }
-  private workMarkdownPolicy(): MdLinkPolicy {
+  private workMarkdownPolicy(showRawIds: boolean): MdLinkPolicy {
     const host = this.chat?.remoteHost || '';
     const cached = this.cachedWorkPolicy;
-    if (cached?.references === this.workReferences && cached.sessionId === this.sessionId && cached.host === host) return cached.policy;
-    const policy = chatMarkdownPolicyForWork(this.workReferences, this.sessionId, host, (item, trigger) => this.openWorkItem(item.id, trigger, item.title));
-    this.cachedWorkPolicy = {references:this.workReferences, sessionId:this.sessionId, host, policy};
+    if (cached?.references === this.workReferences && cached.sessionId === this.sessionId && cached.host === host && cached.showRawIds === showRawIds) return cached.policy;
+    const policy = chatMarkdownPolicyForWork(this.workReferences, this.sessionId, host, (item, trigger) => this.openWorkItem(item.id, trigger, item.title), showRawIds);
+    this.cachedWorkPolicy = {references:this.workReferences, sessionId:this.sessionId, host, showRawIds, policy};
     return policy;
   }
   private userBubble(block: Block) {
