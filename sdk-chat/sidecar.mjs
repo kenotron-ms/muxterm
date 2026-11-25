@@ -261,6 +261,7 @@ async function runClaude(s) {
           emit(s.id, 'usage.observed', {
             inputIds: accepted,
             kind: 'result',
+            model: Object.keys(msg.modelUsage || {}).join(', '),
             raw: {
               inputTokens: [input_tokens, cache_read_input_tokens, cache_creation_input_tokens].every(Number.isSafeInteger)
                 ? input_tokens + cache_read_input_tokens + cache_creation_input_tokens : undefined,

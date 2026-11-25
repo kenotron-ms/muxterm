@@ -291,14 +291,14 @@ export class CodexStream {
   async run(input) {
     await this.ready;
     this.session.busy = true;
-    const turn = { id: null, inputIds: [input.id], pending: 1, pendingIds: new Set([input.id]), completed: null, deferred: [] };
+    const model = input.model || this.session.model;
+    const turn = { id: null, model, inputIds: [input.id], pending: 1, pendingIds: new Set([input.id]), completed: null, deferred: [] };
     this.activeTurn = turn;
     this.inputIds = turn.inputIds;
     this.cancelRequested = false;
     this.textByItem.clear();
     this.phaseByItem.clear();
     try {
-      const model = input.model || this.session.model;
       const result = await this.request('turn/start', { threadId: this.session.nativeId,
         summary: 'none',
         approvalPolicy: 'never', sandboxPolicy: this.sandboxPolicy(),
@@ -454,7 +454,7 @@ export class CodexStream {
       this.session.busy = true;
       this.textByItem.clear();
       this.phaseByItem.clear();
-      this.emit(this.session.id, 'turn.started', { generationId: p.turn.id });
+      this.emit(this.session.id, 'turn.started', { generationId: p.turn.id, model: this.activeTurn.model });
     }
     if (method === 'item/started' && p.item?.type === 'subAgentActivity' && p.item.kind === 'started' && p.item.agentThreadId) {
       this.childThreads.set(p.item.agentThreadId, p.item.agentPath || 'Agent');

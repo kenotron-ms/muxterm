@@ -6,6 +6,7 @@ export type MetaEvent = {
   inputId?: string;
   inputIds?: string[];
   toolId?: string;
+  model?: string;
   raw?: Partial<Record<UsageKey, number>>;
 };
 
@@ -18,6 +19,7 @@ export type MetaTurn = {
   ended?: number;
   firstOutput?: number;
   outcome?: string;
+  model?: string;
   tools: Set<string>;
   usage: Usage;
 };
@@ -61,6 +63,7 @@ export function chatMeta(events: MetaEvent[]) {
       const turn = !active || (event.generationId && generation && generation !== event.generationId) ||
         (event.inputId && inputs.size > 0 && !inputs.has(event.inputId)) ? start() : active;
       turn.started ??= at;
+      turn.model ||= event.model;
       if (event.inputId) inputs.add(event.inputId);
       if (event.generationId) {
         generation = event.generationId;
@@ -73,6 +76,7 @@ export function chatMeta(events: MetaEvent[]) {
       if (event.kind === 'thread-total' && event.generationId) {
         snapshots.set(event.generationId, event.raw);
       } else if (event.kind === 'result' && active && event.inputIds?.some(id => inputs.has(id))) {
+        active.model ||= event.model;
         for (const key of usageKeys) {
           const value = event.raw[key];
           if (measured(value)) active.usage[key] = (active.usage[key] ?? 0) + value;

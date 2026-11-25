@@ -236,6 +236,7 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 					InputID      string          `json:"inputId,omitempty"`
 					InputIDs     []string        `json:"inputIds,omitempty"`
 					ToolID       string          `json:"toolId,omitempty"`
+					Model        string          `json:"model,omitempty"`
 					Raw          json.RawMessage `json:"raw,omitempty"`
 				}
 				if err := json.Unmarshal(line, &event); err != nil {

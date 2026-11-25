@@ -5,7 +5,7 @@ import { remoteChatPath } from '../lib/remote-chat-routes.js';
 import { chatMeta, elapsed, usageKeys, type MetaEvent } from '../lib/chat-meta.js';
 
 const number = new Intl.NumberFormat();
-const seconds = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+const decimal = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const usageLabels = {
   inputTokens: 'Input tokens',
   outputTokens: 'Output tokens',
@@ -13,7 +13,7 @@ const usageLabels = {
 };
 
 function duration(value: number) {
-  return value > 0 && value < 10 ? '<0.01 s' : `${seconds.format(value / 1000)} s`;
+  return value > 0 && value < 10 ? '<0.01 s' : `${decimal.format(value / 1000)} s`;
 }
 
 @customElement('mux-chat-meta')
@@ -77,6 +77,19 @@ export class MuxChatMeta extends LitElement {
       ${coverage ? html`<small>${coverage}</small>` : nothing}</dd></div>`;
   }
 
+  private timingSummary(label: string, values: (number | undefined)[]) {
+    const observed = values.filter((value): value is number => value !== undefined).sort((a, b) => a - b);
+    const count = observed.length;
+    const midpoint = Math.floor(count / 2);
+    const median = count % 2 ? observed[midpoint] : (observed[midpoint - 1] + observed[midpoint]) / 2;
+    return html`<h4>${label} <small>${count} of ${values.length} turns</small></h4>
+      <dl>
+        ${this.metric('Average', count ? duration(observed.reduce((sum, value) => sum + value, 0) / count) : undefined)}
+        ${this.metric('Median', count ? duration(median) : undefined)}
+        ${this.metric('Maximum', count ? duration(observed[count - 1]) : undefined)}
+      </dl>`;
+  }
+
   protected override render() {
     const turns = this.metrics?.turns ?? [];
     const total = (label: string, values: (number | undefined)[], format: (value: number) => string) => {
@@ -84,7 +97,10 @@ export class MuxChatMeta extends LitElement {
       return this.metric(label, observed.length ? format(observed.reduce((sum, value) => sum + value, 0)) : undefined,
         observed.length && observed.length < turns.length ? `${observed.length} of ${turns.length} turns` : undefined);
     };
-    const calls = turns.reduce((sum, turn) => sum + turn.tools.size, 0) + (this.metrics?.orphanTools ?? 0);
+    const assignedCalls = turns.reduce((sum, turn) => sum + turn.tools.size, 0);
+    const calls = assignedCalls + (this.metrics?.orphanTools ?? 0);
+    const durations = turns.map(turn => elapsed(turn.started, turn.ended));
+    const responseTimes = turns.map(turn => elapsed(turn.started, turn.firstOutput));
     return html`
       <header><h2>Chat statistics</h2>
         <mux-ui-button size="small" variant="quiet" ?disabled=${this.loading} @click=${() => void this.load()}>Refresh</mux-ui-button>
@@ -94,18 +110,25 @@ export class MuxChatMeta extends LitElement {
       ${this.metrics ? html`
         <dl>
           ${this.metric('Recorded turns', number.format(turns.length))}
-          ${total('Elapsed turn time', turns.map(turn => elapsed(turn.started, turn.ended)), duration)}
+          ${total('Elapsed turn time', durations, duration)}
           ${this.metric('Tool calls observed', number.format(calls))}
+          ${this.metric('Tool calls per recorded turn', turns.length ? decimal.format(assignedCalls / turns.length) : undefined)}
           ${usageKeys.map(key => total(usageLabels[key], turns.map(turn => turn.usage[key]), number.format))}
         </dl>
-        <p class="muted">Timing uses recorded chat events. Token totals cover turns with usage data. Tool counts reflect recorded calls.</p>
+        <p class="muted">Elapsed time includes tools and waits. The recorded events do not isolate generation time for a tokens-per-second rate.</p>
         ${this.metrics.orphanTools ? html`<p class="muted">${this.metrics.orphanTools} observed tool calls could not be assigned to a turn.</p>` : nothing}
-        ${turns.length ? html`<h3>Turns</h3>
+        ${turns.length ? html`
+          <details><summary><strong>Timing summary</strong></summary>
+            ${this.timingSummary('Elapsed time', durations)}
+            ${this.timingSummary('Time to first visible output', responseTimes)}
+          </details>
+          <h3>Turns</h3>
           ${turns.map((turn, index) => {
             const elapsedTime = elapsed(turn.started, turn.ended);
             const firstOutput = elapsed(turn.started, turn.firstOutput);
             return html`<details><summary><strong>Turn ${index + 1}</strong><span>${turn.outcome ?? 'No recorded end'}</span></summary>
               <dl>
+                ${this.metric('Model', turn.model)}
                 ${this.metric('Elapsed time', elapsedTime === undefined ? undefined : duration(elapsedTime))}
                 ${this.metric('First visible output', firstOutput === undefined ? undefined : duration(firstOutput))}
                 ${this.metric('Tool calls observed', number.format(turn.tools.size))}
@@ -120,11 +143,12 @@ export class MuxChatMeta extends LitElement {
   static override styles = css`
     :host { display: block; box-sizing: border-box; height: 100%; overflow: auto; padding: var(--ui-space-5); color: var(--ui-text); font: var(--ui-text-sm)/1.5 var(--ui-font-sans); }
     header, summary, dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--ui-space-3); }
-    h2, h3 { margin: 0; font-size: var(--ui-text-sm); }
+    h2, h3, h4 { margin: 0; font-size: var(--ui-text-sm); }
+    h4 { margin-top: var(--ui-space-3); }
     h3 { margin-top: var(--ui-space-5); }
     dl { margin: var(--ui-space-3) 0; }
     dl > div { padding: var(--ui-space-2) 0; border-bottom: 1px solid var(--ui-border); }
-    dd { margin: 0; text-align: end; font-variant-numeric: tabular-nums; }
+    dd { margin: 0; min-width: 0; overflow-wrap: anywhere; text-align: end; font-variant-numeric: tabular-nums; }
     small, .muted, summary span { color: var(--ui-text-muted); }
     small { display: block; }
     details { border-bottom: 1px solid var(--ui-border); }
