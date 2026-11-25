@@ -142,9 +142,9 @@ export class MuxChatCoordination extends LitElement {
     .row strong { display:block; flex:1 1 12rem; min-width:0; margin-top:var(--ui-space-2); font-size:var(--ui-text-lg); font-weight:650; overflow-wrap:anywhere; }
     .work-reference { display:inline-flex; flex:none; width:max-content; max-width:100%; align-items:center; white-space:nowrap; border-radius:var(--ui-radius-sm); padding:0 var(--ui-space-2); background:color-mix(in srgb,var(--ui-accent) 10%,transparent); color:var(--ui-accent); font-size:var(--ui-text-sm); font-weight:700; text-decoration:underline; text-underline-offset:2px; }
     .work-dependency-reference { overflow-wrap:anywhere; }
-    .work-links { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
-    .work-links li { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 12px; }
-    .work-links li span { font-size:0.85em; }
+    .work-links { display:grid; gap:var(--ui-space-4); margin:0; padding:0; list-style:none; }
+    .work-links li { display:flex; align-items:baseline; flex-wrap:wrap; gap:var(--ui-space-2) var(--ui-space-5); }
+    .work-links li span { font-size:85%; }
     .work-reference-detail { margin-bottom:var(--ui-space-3); }
     .work-reference-host { margin-left:var(--ui-space-3); color:var(--ui-text-muted); font-size:var(--ui-text-sm); overflow-wrap:anywhere; }
     .row .work-reference { margin-top:var(--ui-space-2); }
