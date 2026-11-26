@@ -452,6 +452,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/sdk-chats/{id}/inbox-attention/ack", protect(http.HandlerFunc(s.handleSDKInboxAttentionAck)))
 	s.mux.Handle("GET /api/sdk-work", protect(http.HandlerFunc(s.handleSDKWork)))
 	s.mux.Handle("GET /api/sdk-work/next", protect(http.HandlerFunc(s.handleSDKNextWork)))
+	s.mux.Handle("POST /api/sdk-work/graph", protect(http.HandlerFunc(s.handleSDKWorkGraph)))
 	s.mux.Handle("POST /api/sdk-work", protect(http.HandlerFunc(s.handleSDKWork)))
 	s.mux.Handle("GET /api/sdk-work/{id}", protect(http.HandlerFunc(s.handleSDKWorkItem)))
 	s.mux.Handle("POST /api/sdk-work/{id}/start", protect(http.HandlerFunc(s.handleSDKWorkStart)))

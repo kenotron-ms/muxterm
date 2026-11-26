@@ -552,7 +552,7 @@ async function command(cmd) {
   }
   if (op === 'answerQuestion') {
     if (s.harness === 'codex' && s.codex) return s.codex.answerUserInput(cmd.questionId, cmd.answers);
-    if (s.harness === 'opencode' && s.acp) return s.acp.answerElicitation(cmd.questionId, cmd.answers);
+    if (s.harness === 'opencode' && s.acp) return s.acp.answerElicitation(cmd.questionId, cmd.answers, cmd.dismiss);
     throw new Error('This chat has no pending question');
   }
   if (op === 'interrupt') {

@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 
-export type QuestionPrompt = { id:string; header:string; question:string; isOther:boolean; isSecret:boolean; options:{label:string;description:string}[]|null };
+export type QuestionPrompt = { id:string; header:string; question:string; isOther:boolean; isSecret:boolean; multiple?:boolean; options:{label:string;value?:string;description:string}[]|null };
 
 /** A compact, accessible answer form for agent questions. Answers leave only
  * through the submit event; the completed view removes every input. */
@@ -12,6 +12,9 @@ export class MuxUIQuestionForm extends LitElement {
   @property({ type:Boolean }) pending = false;
   @property({ type:Boolean }) answered = false;
   @property() error = '';
+  @property() outcome = '';
+  @property({ type:Boolean }) dismissible = false;
+
   @state() private validationError = '';
 
   static override styles = css`
@@ -41,6 +44,11 @@ export class MuxUIQuestionForm extends LitElement {
     for (const [index, question] of this.questions.entries()) {
       const choice = String(data.get(`q-${index}`) || '');
       const typed = String(data.get(`other-${index}`) || '').trim();
+      const values = data.getAll(`q-${index}`).map(String);
+      if (question.multiple && (values.length || typed)) {
+        answers[question.id] = JSON.stringify({ values, custom:typed });
+        continue;
+      }
       const answer = choice === '__other__' || !question.options?.length ? typed : choice;
       if (!answer) { this.validationError = `Answer ${question.header || index + 1} to continue.`; return; }
       answers[question.id] = answer;
@@ -50,17 +58,17 @@ export class MuxUIQuestionForm extends LitElement {
   }
 
   override render() {
-    if (this.answered) return html`<section class="card" aria-label="Question from ${this.agentLabel}"><h3>${this.agentLabel} asked</h3>${this.questions.map(question => html`<p>${question.question}</p>`)}<span class="done">Answered</span></section>`;
+    if (this.answered) return html`<section class="card" aria-label="Question from ${this.agentLabel}"><h3>${this.agentLabel} asked</h3>${this.questions.map(question => html`<p>${question.question}</p>`)}<span class="done">${this.outcome || 'Answered'}</span></section>`;
     const error = this.error || this.validationError;
     return html`<form class="card" aria-label="Question from ${this.agentLabel}" @submit=${this.submit}>
       <h3>${this.agentLabel} asks</h3>
       ${this.questions.map((question,index) => html`<fieldset ?disabled=${this.pending}>
         <legend>${question.header ? html`<strong>${question.header}</strong> · ` : nothing}${question.question}</legend>
-        ${question.options?.map(option => html`<label class="option"><input type="radio" name=${`q-${index}`} value=${option.label}><span>${option.label}${option.description ? html`<small>${option.description}</small>` : nothing}</span></label>`)}
-        ${question.isOther && question.options?.length ? html`<label class="option"><input type="radio" name=${`q-${index}`} value="__other__"><span>Other answer</span></label>` : nothing}
+        ${question.options?.map(option => html`<label class="option"><input type=${question.multiple ? 'checkbox' : 'radio'} name=${`q-${index}`} value=${option.value ?? option.label}><span>${option.label}${option.description ? html`<small>${option.description}</small>` : nothing}</span></label>`)}
+        ${question.isOther && !question.multiple && question.options?.length ? html`<label class="option"><input type="radio" name=${`q-${index}`} value="__other__"><span>Other answer</span></label>` : nothing}
         ${!question.options?.length || question.isOther ? html`<input class="answer" name=${`other-${index}`} type=${question.isSecret ? 'password' : 'text'} aria-label=${question.options?.length ? `Other answer for ${question.header || question.question}` : question.question} placeholder="Type your answer…" autocomplete="off">` : nothing}
       </fieldset>`)}
-      <div class="actions"><span class="error" role=${error ? 'alert' : nothing}>${error}</span><button type="submit" ?disabled=${this.pending}>${this.pending ? 'Sending…' : 'Send answer'}</button></div>
+      <div class="actions"><span class="error" role=${error ? 'alert' : nothing}>${error}</span>${this.dismissible ? html`<button type="button" ?disabled=${this.pending} @click=${() => this.dispatchEvent(new CustomEvent('question-dismiss', { bubbles:true, composed:true }))}>Dismiss</button>` : nothing}<button type="submit" ?disabled=${this.pending}>${this.pending ? 'Sending…' : 'Send answer'}</button></div>
     </form>`;
   }
 }
