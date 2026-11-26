@@ -2423,7 +2423,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "sourceFolders": c.SourceFolders, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": c.Approval, "originToken": h.chatOriginToken(c.ID)}); err != nil {
+	if _, err = h.call(ctx, "start", map[string]any{"sessionId": c.ID, "harness": c.Harness, "cwd": c.ProjectPath, "openingTitle": c.Title, "sourceFolders": c.SourceFolders, "bundle": c.Bundle, "provider": amplifierProviderModule(c.Harness, c.Provider), "model": c.Model, "effort": c.Effort, "approval": c.Approval, "originToken": h.chatOriginToken(c.ID)}); err != nil {
 		h.appendEvent(sdkEvent{SessionID: c.ID, Type: "error", Message: err.Error()})
 		http.Error(w, fmt.Sprintf("chat %s could not start: %v", c.ID, err), 502)
 		return
