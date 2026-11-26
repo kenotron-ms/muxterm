@@ -25,6 +25,7 @@ const providerLabel = (value: string) => value === 'provider-anthropic' ? 'Anthr
 @customElement('mux-sdk-chat-settings')
 export class MuxSDKChatSettings extends LitElement {
   @property() sessionId = '';
+  @property({attribute:false}) deferLoad = false;
   @property() remoteHost = '';
   @property() harness = '';
   @property({ type:Boolean }) turnBusy = false;
@@ -42,7 +43,15 @@ export class MuxSDKChatSettings extends LitElement {
     .load-feedback { flex:1; }
   `;
   override updated(changed: Map<string, unknown>) {
-    if ((changed.has('sessionId') || changed.has('remoteHost')) && this.sessionId) { this.settings = undefined; this.error = ''; void this.load(this.sessionId); }
+    if (changed.has('sessionId') || changed.has('remoteHost')) {
+      this.requestVersion++;
+      this.settings = undefined;
+      this.loading = false;
+      this.error = '';
+    }
+    if (this.sessionId && !this.deferLoad && !this.settings && (changed.has('sessionId') || changed.has('remoteHost') || changed.has('deferLoad'))) {
+      void this.load(this.sessionId);
+    }
   }
   private pending(value: boolean) { this.dispatchEvent(new CustomEvent('settings-pending', { detail:value, bubbles:true, composed:true })); }
   private async load(sessionId: string) {
@@ -87,6 +96,9 @@ export class MuxSDKChatSettings extends LitElement {
   }
   override render() {
     const s = this.settings;
+    if (!s && this.deferLoad && !this.loading && !this.error) {
+      return html`<mux-ui-button variant="quiet" size="small" @click=${() => void this.load(this.sessionId)}>Load chat controls</mux-ui-button>`;
+    }
     if (!s) return html`<mux-ui-feedback class="load-feedback" kind=${this.error ? 'error' : 'loading'} density="compact">${this.error || 'Loading controls…'}${this.error ? html`<mux-ui-button slot="action" size="small" @click=${() => void this.load(this.sessionId)}>Retry</mux-ui-button>` : nothing}</mux-ui-feedback>`;
     if (this.harness === 'amplifier-unified') return html`
       <mux-ui-choice-picker class="picker" label="Amplifier Unified controls" summary="Controls in Unified" placement="above" appearance="plain" panel-align="left">

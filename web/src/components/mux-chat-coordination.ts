@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing, svg, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { apiPath } from '../lib/base-path.js';
-import { remoteChatPath } from '../lib/remote-chat-routes.js';
+import { chatHost, remoteChatPath } from '../lib/remote-chat-routes.js';
 import { sdkChats } from '../lib/sdk-chats.js';
 import { parseMarkdown } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
@@ -441,7 +441,11 @@ export class MuxChatCoordination extends LitElement {
     this.selectTab(nextTab);
     void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>(`#work-tab-${nextTab}`)?.focus());
   }
-  private openDetail(item: WorkItem) {
+  @state() private navigationNotice = '';
+
+  private openDetail(item: WorkItem, notice = '') {
+    this.navigationNotice = notice;
+    this.error = '';
     if (this.detail?.id !== item.id) {
       this.commentDraft = '';
       this.commentPriority = 'normal';
@@ -455,14 +459,14 @@ export class MuxChatCoordination extends LitElement {
     this.loadDependencyReferences([...(item.dependsOn || []), ...(item.graphLinks || [])]);
     void this.refresh();
   }
-  showWorkItem(id: string) { void this.openDependency(id); }
-  private async openDependency(id: string) {
+  showWorkItem(id: string, notice?: string) { void this.openDependency(id, notice); }
+  private async openDependency(id: string, notice?: string) {
     const found = this.work.find(item => item.id === id);
-    if (found) { this.openDetail(found); return; }
+    if (found) { this.openDetail(found, notice); return; }
     const key = this.refreshKey;
     try {
       const item = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(id)}`);
-      if (key === this.refreshKey) { this.detail = item; this.restoreTab(item); this.loadDependencyReferences([...(item.dependsOn || []), ...(item.graphLinks || [])]); }
+      if (key === this.refreshKey) this.openDetail(item, notice);
     } catch (error) { if (key === this.refreshKey) this.error = String(error); }
   }
   private loadDependencyReferences(ids: string[]) {
@@ -478,8 +482,17 @@ export class MuxChatCoordination extends LitElement {
     const target = this.work.find(item => item.id === id) || this.dependencyReferences[id];
     const reference = target?.reference || 'Work item';
     const hash = new URLSearchParams({chat:this.sessionId, work:id});
-    if (this.remoteHost) hash.set('host', this.remoteHost);
-    return html`<a class="work-dependency-reference" href=${`#${hash}`} @click=${(event: MouseEvent) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); void this.openDependency(id); }}>${reference}${target ? ` · ${target.title}` : ''}</a>`;
+    const sourceHost = chatHost(this.sessionId);
+    if (sourceHost) hash.set('host', sourceHost);
+    if (this.remoteHost !== sourceHost) hash.set('workHost', this.remoteHost);
+    return html`<a class="work-dependency-reference" href=${`#${hash}`} @click=${(event: MouseEvent) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      const link = new CustomEvent('work-reference-open', {
+        bubbles:true, composed:true, cancelable:true, detail:{id, host:this.remoteHost, trigger:event.currentTarget},
+      });
+      if (this.dispatchEvent(link)) void this.openDependency(id);
+    }}>${reference}${target ? ` · ${target.title}` : ''}</a>`;
   }
   private dependencies(item: WorkItem) {
     const related = (item.graphLinks || []).filter(id => !item.dependsOn?.includes(id) && id !== item.graphIntegrationId);
@@ -559,6 +572,7 @@ export class MuxChatCoordination extends LitElement {
       <div class=${`status ${stateClass}`}>${icon(this.statusIcon(item))}${state}</div>
       ${item.reference ? html`<span class="work-reference work-reference-detail">${item.reference}</span>${this.remoteHost ? html`<span class="work-reference-host">on ${this.remoteHost}</span>` : nothing}` : nothing}
       <h2>${item.title}</h2>
+      ${this.navigationNotice ? html`<p role="status">${this.navigationNotice}</p>` : nothing}
       ${inMotion && move ? html`<div class=${`next-brief ${item.status === 'blocked' ? 'blocked' : ''}`}><strong>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</strong><p>${movePreview}</p>${unreadCount ? html`<mux-ui-button variant="quiet" size="small" @click=${() => this.selectTab('activity')}>Read ${unreadCount} unread ${unreadCount === 1 ? 'comment' : 'comments'}</mux-ui-button>` : nothing}</div>` : nothing}
       <div class="detail-tabs" role="tablist" aria-label="Work item details">
         ${detailTabs.map(entry => html`<mux-ui-button id=${`work-tab-${entry.id}`} class="detail-tab" variant="quiet" control-role="tab" controls="work-detail-panel" ?tab-selected=${tab === entry.id} ?tab-stop=${tab === entry.id} @click=${() => this.selectTab(entry.id)} @keydown=${(event: KeyboardEvent) => this.onDetailTabKeydown(event, entry.id)}>${icon(entry.icon)}<span class="detail-tab-label">${entry.label}</span>${entry.id === 'plan' && planSteps.length ? html`<span class="detail-tab-count" aria-label=${`${planSteps.length} steps`}>${planSteps.length}</span>` : entry.id === 'activity' && (unreadCount || updates.length) ? html`<span class="detail-tab-count" aria-label=${unreadCount ? `${unreadCount} unread comments` : `${updates.length} updates`}>${unreadCount || updates.length}</span>` : nothing}</mux-ui-button>`)}

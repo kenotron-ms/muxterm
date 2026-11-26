@@ -129,7 +129,7 @@ export function chatMarkdownPolicyForWork(
   const workLink = (item: WorkReference): TemplateResult => {
     const hash = new URLSearchParams({chat:sessionId, work:item.id});
     if (chatHost) hash.set('host', chatHost);
-    if (item.remoteHost && item.remoteHost !== chatHost) hash.set('workHost', item.remoteHost);
+    if ((item.remoteHost || '') !== chatHost) hash.set('workHost', item.remoteHost || '');
     const hostLabel = item.remoteHost ? ` on ${item.remoteHost}` : '';
     return html`<a class="md-link md-work-link" href=${`#${hash}`} draggable="false"
       title=${`Open ${item.reference}${hostLabel}: ${item.title}`}
