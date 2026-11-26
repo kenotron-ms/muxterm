@@ -106,6 +106,7 @@ type GoalDocument = { schema:number; chatId:string; harness:string; version:numb
 type Attachment = { localId: string; file: File; id?: string; kind?: string; preview?: string; error?: string; uploading: boolean };
 @customElement('mux-sdk-chat')
 export class MuxSDKChat extends LitElement {
+  @property({attribute:false}) deferSettings = false;
   @property() sessionId = '';
   @property({ type: Boolean, reflect: true, attribute: 'side-mode' }) sideMode = false;
   @property() sideParentId = '';
@@ -120,7 +121,7 @@ export class MuxSDKChat extends LitElement {
   private workReferenceScope = '';
   private workReferenceTimer?: number;
   private cachedWorkPolicy?: { references: WorkReference[]; sessionId: string; host: string; showRawIds: boolean; policy: MdLinkPolicy };
-  private pendingWorkNavigation = '';
+  private pendingWorkNavigation?: {sessionId:string; id:string; host?:string; notice?:string; title?:string};
   @state() private goalDocument?: GoalDocument;
   @state() private goalNotice = '';
   @state() private commandNotice = '';
@@ -766,9 +767,9 @@ export class MuxSDKChat extends LitElement {
   }
   override updated(changed: Map<string, unknown>) {
     if (changed.has('chat') && this.pendingWorkNavigation && this.chat?.id === this.sessionId) {
-      const id = this.pendingWorkNavigation;
-      this.pendingWorkNavigation = '';
-      void this.navigateWork(id);
+      const pending = this.pendingWorkNavigation;
+      this.pendingWorkNavigation = undefined;
+      if (pending.sessionId === this.sessionId) void this.navigateWork(pending.id, pending.host, pending.notice, pending.title);
     }
     if ((changed.has('chat') || changed.has('sessionId')) && this.chat?.id === this.sessionId) {
       const scope = `${this.sessionId}|${this.chat.remoteHost || ''}`;
@@ -902,11 +903,17 @@ export class MuxSDKChat extends LitElement {
     else if (action === 'note' && noteId) await utility?.showNote(noteId);
     else if (action === 'tab' && (tab === 'files' || tab === 'changes' || tab === 'pages' || tab === 'notes' || tab === 'meetings' || tab === 'goal')) utility?.showPanel(tab === 'notes' ? 'pages' : tab);
   }
-  async navigateWork(id: string): Promise<void> {
-    if (!this.chat || this.chat.id !== this.sessionId) { this.pendingWorkNavigation = id; return; }
+  async navigateWork(id: string, host?: string, notice?: string, title?: string, trigger?: HTMLElement): Promise<void> {
+    if (!this.chat || this.chat.id !== this.sessionId) {
+      this.pendingWorkNavigation = {sessionId:this.sessionId, id, host, notice, title};
+      return;
+    }
+    this.workReturnFocus = this.compact ? trigger : undefined;
+    this.mobileWorkDetail = this.compact;
+    this.openWorkTitle = title || this.workDigest.get(id)?.work?.title || 'Work item';
     this.setPaneMode('split');
     await this.updateComplete;
-    await this.renderRoot.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id);
+    await this.renderRoot.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id, host, notice);
   }
   private stageFileReference(event: CustomEvent<{ path: string; selected?: string }>) {
     this.stopDictation();
@@ -1940,7 +1947,7 @@ export class MuxSDKChat extends LitElement {
     const host = this.chat?.remoteHost || '';
     const cached = this.cachedWorkPolicy;
     if (cached?.references === this.workReferences && cached.sessionId === this.sessionId && cached.host === host && cached.showRawIds === showRawIds) return cached.policy;
-    const policy = chatMarkdownPolicyForWork(this.workReferences, this.sessionId, host, (item, trigger) => this.openWorkItem(item.id, trigger, item.title), showRawIds);
+    const policy = chatMarkdownPolicyForWork(this.workReferences, this.sessionId, host, (item, trigger) => this.openWorkItem(item.id, trigger, item.title, item.remoteHost || ''), showRawIds);
     this.cachedWorkPolicy = {references:this.workReferences, sessionId:this.sessionId, host, showRawIds, policy};
     return policy;
   }
@@ -3060,12 +3067,9 @@ export class MuxSDKChat extends LitElement {
     this.setPaneMode('split');
     void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showPanel('goal'));
   }
-  private openWorkItem(id: string, trigger?: HTMLElement, title?: string) {
-    this.workReturnFocus = this.compact ? trigger : undefined;
-    this.mobileWorkDetail = this.compact;
-    this.openWorkTitle = this.workDigest.get(id)?.work?.title || title || 'Work item';
-    this.setPaneMode('split');
-    void this.updateComplete.then(() => this.shadowRoot?.querySelector<MuxSDKUtility>('mux-sdk-utility')?.showWorkItem(id));
+  private openWorkItem(id: string, trigger?: HTMLElement, title?: string, host = this.chat?.remoteHost || '') {
+    const event = new CustomEvent('work-open', {bubbles:true, composed:true, cancelable:true, detail:{id, host, source:this, trigger}});
+    if (this.dispatchEvent(event)) void this.navigateWork(id, host, undefined, title, trigger);
   }
   private workHref(id: string): string {
     const hash = new URLSearchParams({chat:this.sessionId, work:id});
@@ -3124,7 +3128,10 @@ export class MuxSDKChat extends LitElement {
       ${expanded ? html`<div class="lane-report-detail input-message-detail" id=${detailId}>${this.markdown(block, block.key, true)}</div>` : nothing}</article>`;
   }
   private utilityContent() {
-    return html`<mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.voiceStartPending && !this.settingsPending && !this.dictationActive && !this.chat?.branchPending && (!sdkVoiceCall.active || sdkVoiceCall.active.chatId === this.sessionId)} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility>`;
+    return html`<mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.voiceStartPending && !this.settingsPending && !this.dictationActive && !this.chat?.branchPending && (!sdkVoiceCall.active || sdkVoiceCall.active.chatId === this.sessionId)} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} @work-reference-open=${(event: CustomEvent<{id:string; host:string; trigger:HTMLElement}>) => {
+      event.preventDefault();
+      this.openWorkItem(event.detail.id, event.detail.trigger, undefined, event.detail.host);
+    }} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility>`;
   }
   override render() {
     const agents = this.agents();
@@ -3161,7 +3168,7 @@ export class MuxSDKChat extends LitElement {
       ${this.selectedAgent ? html`<div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label="Steer delegated agent through root" placeholder="Ask the root to steer this agent…" .value=${live(this.pendingAgentDraft ?? this.agentDraft)} @input=${this.onAgentDraftInput} @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void this.steerAgent(); } }}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div><div class="composer-controls"><span class="agent-notice">${this.agentNotice}</span>${this.dictationButton()}${this.sendAgentButton()}</div>` : html`
       ${this.attachments.length ? html`<div class="attachments" role="list" aria-label="Attached files">${this.attachments.map(a => html`<mux-ui-attachment role="listitem" file-name=${a.file.name} preview-url=${a.preview ?? ''} state=${a.error ? 'error' : a.uploading ? 'uploading' : 'ready'} error=${a.error ?? ''} @attachment-remove=${() => this.removeAttachment(a.localId)}></mux-ui-attachment>`)}</div>` : nothing}
       <div class="composer-row"><div class="textarea-sizing ${nativeTextareaSizing ? 'native-textarea-sizing' : 'legacy-textarea-sizing'}"><textarea aria-label=${this.busy ? 'Steer running turn' : 'Message'} aria-autocomplete="list" aria-haspopup="listbox" aria-expanded=${slashSuggestions.length > 0} aria-controls=${slashSuggestions.length ? 'chat-slash-menu' : nothing} aria-activedescendant=${slashSuggestions.length ? `chat-slash-option-${this.slashSelection}` : nothing} placeholder=${this.busy ? 'Steer this turn…' : `Message ${this.chat?.harness || this.sideSelection?.harness || 'agent'}…`} .value=${live(this.pendingDraft ?? this.draft)} @input=${this.onDraftInput} @keydown=${this.onMessageKeyDown}></textarea><div class="textarea-mirror" aria-hidden="true"></div></div></div>
-      <div class="composer-controls">${sideStart ? html`<mux-side-chat-start-settings .parentId=${this.sideParentId} .remoteHost=${this.sideRemoteHost} .tabId=${this.sideTabId} @side-start-selection=${(event:CustomEvent<SideChatSelection | null>) => { this.sideSelection = event.detail || undefined; }}></mux-side-chat-start-settings>` : html`${this.attachmentPicker()}${this.sideMode ? html`<span class="side-agent-name">${sdkHarnessLabel(this.chat?.harness || 'codex')}</span>` : nothing}<mux-sdk-chat-settings .sessionId=${this.sessionId} .remoteHost=${this.sideMode ? this.sideRemoteHost : this.chat?.remoteHost || ''} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>`}${this.dictationButton()}${this.sendVoiceButton()}</div>`}
+      <div class="composer-controls">${sideStart ? html`<mux-side-chat-start-settings .parentId=${this.sideParentId} .remoteHost=${this.sideRemoteHost} .tabId=${this.sideTabId} @side-start-selection=${(event:CustomEvent<SideChatSelection | null>) => { this.sideSelection = event.detail || undefined; }}></mux-side-chat-start-settings>` : html`${this.attachmentPicker()}${this.sideMode ? html`<span class="side-agent-name">${sdkHarnessLabel(this.chat?.harness || 'codex')}</span>` : nothing}<mux-sdk-chat-settings .deferLoad=${this.deferSettings} .sessionId=${this.sessionId} .remoteHost=${this.sideMode ? this.sideRemoteHost : this.chat?.remoteHost || ''} .harness=${this.chat?.harness || ''} .turnBusy=${this.busy} @settings-pending=${(e: CustomEvent<boolean>) => { this.settingsPending = e.detail; }}></mux-sdk-chat-settings>`}${this.dictationButton()}${this.sendVoiceButton()}</div>`}
 
     </div></div></div>
       ${this.drawerOpen ? keyed(this.sessionId, this.mobileWorkDetail
