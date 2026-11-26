@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && (!darwin || !cgo)
 
 package loginbackend
 
@@ -8,7 +8,7 @@ import (
 )
 
 // New reports that no login backend is implemented for this GOOS yet.
-// macOS (OpenDirectory) arrives in Phase 4; Windows (LogonUser) in Phase 5.
+// This includes macOS builds made without cgo; they must fail closed.
 // Callers MUST treat this error as "fail closed for non-loopback access,"
 // per the design doc's Error Handling section — never as "no auth needed."
 func New() (LoginBackend, error) {

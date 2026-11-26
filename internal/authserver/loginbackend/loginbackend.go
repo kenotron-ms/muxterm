@@ -6,8 +6,8 @@
 package loginbackend
 
 // LoginBackend verifies a password against the current OS user's own
-// credentials (PAM on Linux; OpenDirectory on macOS in Phase 4; LogonUser
-// on Windows in Phase 5).
+// credentials (PAM on Linux; OpenDirectory on macOS). Other platforms fail
+// closed until they have a login backend.
 type LoginBackend interface {
 	// Authenticate returns nil if password is correct for the current OS
 	// user, or a non-nil error otherwise (wrong password, backend

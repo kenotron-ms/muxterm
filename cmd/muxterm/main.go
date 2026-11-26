@@ -450,8 +450,8 @@ func webRedirectURIFor(addr string, sc config.ServerConfig) string {
 	return publicBaseURL(addr, sc) + "/auth/callback"
 }
 
-// newAuthServer wires the platform login backend (PAM on Linux; a
-// fail-closed stub on other platforms until Phases 4-5) into a new
+// newAuthServer wires the platform login backend (PAM on Linux,
+// OpenDirectory on macOS) into a new
 // AuthServer for addr. A non-nil error means the login backend is
 // unavailable; callers MUST still start the HTTP server (loopback access
 // is unaffected) but MUST pass the resulting nil *authserver.AuthServer
