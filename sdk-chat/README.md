@@ -119,6 +119,10 @@ new-chat default. Only available adapters verified for live steering, native
 goals, and resumable native history are offered for new chats.
 
 In **Settings → AI**, choose **Google sign-in** or **Detected API key**.
+The managed installer makes `agy` available in `~/.local/bin` on Linux and
+macOS when it finds no existing `agy` command. Keep that directory on your shell
+PATH to run `agy --version` or `agy acp --login` from a fresh terminal.
+
 Google sign-in uses the account associated with a Google AI Pro or Ultra
 subscription and runs the supported `agy acp --login` flow in a Muxterm-managed,
 echo-disabled PTY. Settings shows the Google URL and accepts the one-time code
