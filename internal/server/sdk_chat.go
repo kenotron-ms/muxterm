@@ -29,6 +29,7 @@ import (
 // SDK chats are Go-owned records. Native harness IDs are resume pointers only.
 type sdkChat struct {
 	ID                  string    `json:"id"`
+	AgentID             string    `json:"agentId,omitempty"`
 	SideParentID        string    `json:"sideParentId,omitempty"`
 	WorkspaceID         string    `json:"workspaceId,omitempty"`
 	TerminalWorkspaceID string    `json:"terminalWorkspaceId,omitempty"`
@@ -166,43 +167,46 @@ func (s *Server) resolveSDKAttachments(ids []string) ([]sdkInputAttachment, erro
 }
 
 type sdkChatHost struct {
-	mu               sync.Mutex
-	updateAdmission  sync.RWMutex
-	updateUntil      atomic.Int64 // Unix nanos; zero or expired permits new turns.
-	runtimeGate      sync.RWMutex
-	lifecycleMu      sync.Mutex
-	goalDispatch     goalDispatchState
-	workSendMu       sync.RWMutex // Linearizes agent send admission with Work ownership transitions.
-	inboxDeliveryMu  sync.Mutex
-	nameLocks        map[string]*sync.Mutex
-	adapterLocks     map[string]*sync.Mutex
-	migrationLocks   map[string]*sync.Mutex
-	dir              string
-	socket           string
-	process          *exec.Cmd
-	done             chan struct{}
-	running          bool
-	manualStopped    bool
-	ampStopped       bool
-	ampVersion       string
-	sidecarVersions  map[string]string
-	ampSup           *amplifierchat.Host
-	ampMu            sync.Mutex
-	chats            map[string]*sdkChat
-	projects         map[string]*sdkProject
-	streams          map[string]map[chan sdkEvent]struct{}
-	subscriptions    map[string]*sdkChatSubscription
-	inboxStreams     map[string]map[chan struct{}]struct{}
-	workItems        map[string]*sdkWorkItem
-	onWorkChange     func()
-	onWorkResume     func(string, int)
-	nameStreams      map[chan string]struct{}
-	naming           map[string]bool
-	onEvent          func(sdkEvent)
-	originTokens     map[string]string
-	originTokenChats map[string]string
-	unifiedEvents    map[string]*unifiedEventProjection
-	goals            *goalLedger
+	mu                 sync.Mutex
+	updateAdmission    sync.RWMutex
+	updateUntil        atomic.Int64 // Unix nanos; zero or expired permits new turns.
+	runtimeGate        sync.RWMutex
+	lifecycleMu        sync.Mutex
+	goalDispatch       goalDispatchState
+	workSendMu         sync.RWMutex // Linearizes agent send admission with Work ownership transitions.
+	inboxDeliveryMu    sync.Mutex
+	nameLocks          map[string]*sync.Mutex
+	adapterLocks       map[string]*sync.Mutex
+	migrationLocks     map[string]*sync.Mutex
+	dir                string
+	socket             string
+	process            *exec.Cmd
+	done               chan struct{}
+	running            bool
+	manualStopped      bool
+	ampStopped         bool
+	ampVersion         string
+	sidecarVersions    map[string]string
+	ampSup             *amplifierchat.Host
+	ampMu              sync.Mutex
+	chats              map[string]*sdkChat
+	agents             map[string]*agentInstance
+	agentConversations map[string]*AgentConversationLink
+	agentDataErr       error
+	projects           map[string]*sdkProject
+	streams            map[string]map[chan sdkEvent]struct{}
+	subscriptions      map[string]*sdkChatSubscription
+	inboxStreams       map[string]map[chan struct{}]struct{}
+	workItems          map[string]*sdkWorkItem
+	onWorkChange       func()
+	onWorkResume       func(string, int)
+	nameStreams        map[chan string]struct{}
+	naming             map[string]bool
+	onEvent            func(sdkEvent)
+	originTokens       map[string]string
+	originTokenChats   map[string]string
+	unifiedEvents      map[string]*unifiedEventProjection
+	goals              *goalLedger
 }
 
 type unifiedEventProjection struct {
@@ -227,11 +231,12 @@ func sdkDataDir() string {
 	return filepath.Join(base, "muxterm", "sdk-chat")
 }
 func newSDKChatHost() *sdkChatHost {
-	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, migrationLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
+	h := &sdkChatHost{dir: sdkDataDir(), chats: map[string]*sdkChat{}, agents: map[string]*agentInstance{}, agentConversations: map[string]*AgentConversationLink{}, projects: map[string]*sdkProject{}, streams: map[string]map[chan sdkEvent]struct{}{}, subscriptions: map[string]*sdkChatSubscription{}, inboxStreams: map[string]map[chan struct{}]struct{}{}, workItems: map[string]*sdkWorkItem{}, nameStreams: map[chan string]struct{}{}, nameLocks: map[string]*sync.Mutex{}, adapterLocks: map[string]*sync.Mutex{}, migrationLocks: map[string]*sync.Mutex{}, naming: map[string]bool{}, originTokens: map[string]string{}, originTokenChats: map[string]string{}, unifiedEvents: map[string]*unifiedEventProjection{}}
 	h.goalDispatch.ctx, h.goalDispatch.cancel = context.WithCancel(context.Background())
 	h.goals = openGoalLedger(h.dir)
 	h.socket = filepath.Join(h.dir, "sidecar.sock")
 	h.loadSubscriptions()
+	h.agentDataErr = h.loadAgents()
 	entries, _ := os.ReadDir(h.dir)
 	// A catalog is authoritative once written. A removed project must stay
 	// removed even when an older chat record still names its former ID.
@@ -279,6 +284,9 @@ func newSDKChatHost() *sdkChatHost {
 		}
 	}
 	h.loadWorkItems()
+	if h.agentDataErr == nil {
+		h.agentDataErr = h.loadAgentConversations()
+	}
 	h.recoverPendingDeliveries()
 	return h
 }
@@ -2105,9 +2113,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, SideParentID string
-		SideConfig                                                                                                         bool     `json:"sideConfig"`
-		Attachments                                                                                                        []string `json:"attachments"`
+		WorkspaceID, ProjectPath, Harness, Provider, Bundle, Model, Effort, Prompt, Goal, Approval, WorkMode, SideParentID, AgentID string
+		SideConfig                                                                                                                  bool     `json:"sideConfig"`
+		Attachments                                                                                                                 []string `json:"attachments"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req) != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -2122,7 +2130,13 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		var parent sdkChat
 		if parentRecord != nil {
 			parent = *parentRecord
+			if req.AgentID != "" && req.AgentID != parent.AgentID {
+				h.mu.Unlock()
+				http.Error(w, "side chat agent must match parent", http.StatusBadRequest)
+				return
+			}
 			req.WorkspaceID, req.ProjectPath = parent.WorkspaceID, parent.ProjectPath
+			req.AgentID = parent.AgentID
 			if req.Harness == "" {
 				req.Harness = parent.Harness
 			}
@@ -2163,6 +2177,29 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if req.SideParentID == "" && req.SideConfig {
 		http.Error(w, "sideConfig is only for side chats", 400)
 		return
+	}
+	if req.AgentID != "" {
+		if h.agentDataErr != nil {
+			http.Error(w, "agent registry unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !humanBrowserRequest(r) && r.Context().Value(agentLinkContextKey{}) != true {
+			http.Error(w, "linking a chat to an agent requires a human or trusted connection", http.StatusForbidden)
+			return
+		}
+		h.mu.Lock()
+		agent := h.agents[req.AgentID]
+		h.mu.Unlock()
+		if agent == nil {
+			http.Error(w, "agent instance not found", http.StatusNotFound)
+			return
+		}
+		if req.Harness == "" {
+			req.Harness = agent.DefaultHarness
+		}
+		if req.ProjectPath == "" && req.WorkspaceID == "" {
+			req.ProjectPath = agent.DefaultProjectPath
+		}
 	}
 	if !s.eligibleNewChatHarness(r.Context(), req.Harness) {
 		http.Error(w, "harness is unavailable for a new chat", http.StatusUnprocessableEntity)
@@ -2370,6 +2407,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if plannedID, ok := r.Context().Value(workStartChatIDKey{}).(string); ok && plannedID != "" {
 		chatID = plannedID
 	}
+	if plannedID, ok := r.Context().Value(agentConnectionChatIDContextKey{}).(string); ok && plannedID != "" {
+		chatID = plannedID
+	}
 	if req.WorkMode == "worktree" {
 		root, err := exec.CommandContext(r.Context(), "git", "-C", req.ProjectPath, "rev-parse", "--show-toplevel").Output()
 		if err != nil || strings.TrimSpace(string(root)) != req.ProjectPath {
@@ -2397,7 +2437,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 	if len(title) > 70 {
 		title = title[:70] + "…"
 	}
-	c := &sdkChat{ID: chatID, SideParentID: req.SideParentID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Bundle: req.Bundle, Model: req.Model, Effort: req.Effort, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
+	c := &sdkChat{ID: chatID, AgentID: req.AgentID, SideParentID: req.SideParentID, WorkspaceID: req.WorkspaceID, ProjectPath: req.ProjectPath, SourceFolders: sourceFolders, WorkMode: req.WorkMode, Title: title, TitleSource: "opening", Harness: req.Harness, Provider: req.Provider, Bundle: req.Bundle, Model: req.Model, Effort: req.Effort, Approval: req.Approval, Goal: req.Goal, State: "starting", CreatedAt: time.Now().UTC()}
 	if req.Harness == "antigravity" {
 		c.RuntimeFlavor = "agy-cli-acp"
 	}
@@ -2428,7 +2468,9 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("chat %s could not start: %v", c.ID, err), 502)
 		return
 	}
-	if idle, ok := r.Context().Value(workStartIdleChatKey{}).(bool); ok && idle {
+	workIdle, _ := r.Context().Value(workStartIdleChatKey{}).(bool)
+	connectionIdle, _ := r.Context().Value(agentConnectionIdleChatContextKey{}).(bool)
+	if workIdle || connectionIdle {
 		// Work installs its approved native goal before admitting any opening
 		// input. This internal context is never accepted from an HTTP body.
 		writeSDKJSON(w, 201, c)
