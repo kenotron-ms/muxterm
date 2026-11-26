@@ -51,6 +51,7 @@ func (s *Server) handleGoalLedger(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	id := r.PathValue("id")
+	workID := r.URL.Query().Get("workId")
 	h.mu.Lock()
 	current := h.chats[id]
 	if current == nil {
@@ -61,7 +62,14 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 	chat := *current
 	h.mu.Unlock()
 	if r.Method == http.MethodGet {
+		h.mu.Lock()
 		document, err := h.goals.update(chat, nil)
+		matched := workID == "" || (err == nil && h.workGoalControlMatchesLocked(workID, id, document))
+		h.mu.Unlock()
+		if err == nil && !matched {
+			http.Error(w, "Work has no matching current goal in this chat", http.StatusConflict)
+			return
+		}
 		if err != nil {
 			http.Error(w, err.Error(), 503)
 			return
@@ -154,6 +162,10 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a proposal requires a condition of 1 to 4000 characters", 400)
 		return
 	}
+	if workID != "" && (!human || (req.Action != "pause" && req.Action != "resume")) {
+		http.Error(w, "Work goal control requires a human pause or resume", http.StatusForbidden)
+		return
+	}
 	var admitted bool
 	nativeAction := req.Action
 	if len(req.Evidence) > 32 || len(objective) > 16000 {
@@ -166,7 +178,13 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if workID != "" {
+		h.mu.Lock()
+	}
 	document, err := h.goals.update(chat, func(document *goalDocument) error {
+		if workID != "" && !h.workGoalControlMatchesLocked(workID, id, *document) {
+			return &goalRequestError{http.StatusConflict, "Work has no matching current goal in this chat"}
+		}
 		for _, receipt := range document.Receipts {
 			if receipt.ID == req.ClientRef {
 				if receipt.Actor != actor || receipt.Action != req.Action || (req.Action != "approve" && receipt.Objective != objective) || receipt.ProposalID != req.ProposalID || receipt.StartBy != req.StartBy || !slices.Equal(receipt.Evidence, req.Evidence) {
@@ -250,6 +268,9 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		admitted = status == "dispatching"
 		return nil
 	})
+	if workID != "" {
+		h.mu.Unlock()
+	}
 	if err != nil {
 		status := http.StatusServiceUnavailable
 		var rejection *goalRequestError

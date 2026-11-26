@@ -501,6 +501,9 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 			err = closeErr
 		}
 	}
+	if err == nil {
+		h.projectWorkGoalObservationLocked(c, event)
+	}
 	if err != nil {
 		log.Printf("append SDK chat event %s: %v", event.SessionID, err)
 		if c.Harness == "amplifier-unified" {

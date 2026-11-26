@@ -80,6 +80,54 @@ func (s *Server) resumeUnclaimedWorkKickoff(chatID string, controlVersion int) {
 	}
 }
 
+// A reused chat can retain historical Work links. Only the selected owner's
+// current filed condition can participate in the lifecycle.
+func workGoalMatches(item *sdkWorkItem, chatID string, document goalDocument) bool {
+	if item.OwnerSessionID != chatID || item.GoalFiledRevision == 0 || item.GoalFiledRevision != item.GoalRevision {
+		return false
+	}
+	for _, revision := range document.Revisions {
+		if revision.Revision == document.RequestedRevision && revision.Condition == item.GoalCondition {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *sdkChatHost) workGoalControlMatchesLocked(workID, chatID string, document goalDocument) bool {
+	item := h.workItems[workID]
+	chat := h.chats[chatID]
+	return item != nil && chat != nil && !chat.Archived &&
+		(item.Status == "active" || item.Status == "blocked") && workGoalMatches(item, chatID, document)
+}
+
+// Caller holds h.mu. Observation metadata never advances Work status or its
+// evidence gates. The exact native objective and current ledger must agree.
+func (h *sdkChatHost) projectWorkGoalObservationLocked(chat *sdkChat, event sdkEvent) {
+	if (event.Type != "goal.progress" && event.Type != "goal.snapshot") || event.Goal == nil || event.GoalState == "" {
+		return
+	}
+	document, err := h.goals.update(*chat, nil)
+	if err != nil || document.RequestedRevision == 0 || document.AppliedRevision != document.RequestedRevision ||
+		(event.GoalControlVersion != nil && *event.GoalControlVersion != document.ControlVersion) {
+		return
+	}
+	for _, item := range h.workItems {
+		if item.GoalCondition != *event.Goal || !workGoalMatches(item, chat.ID, document) ||
+			(item.Status != "active" && item.Status != "blocked" && item.Status != "review") {
+			continue
+		}
+		if item.GoalObservation != nil && item.GoalObservation.EventID == event.ID {
+			continue
+		}
+		copy := *item
+		copy.GoalObservation = &sdkWorkGoalObservation{EventID: event.ID, State: event.GoalState, Summary: event.GoalSummary, At: event.At}
+		if err := h.saveWorkLocked(&copy); err != nil {
+			log.Printf("record Work goal observation %s: %v", item.ID, err)
+		}
+	}
+}
+
 // Caller holds h.mu. Work status, not model prose, closes a Muxterm-owned goal.
 // Reconciliation repeats this projection after a crash between Work and ledger
 // writes, without ever starting another agent turn.
@@ -107,7 +155,7 @@ func (h *sdkChatHost) syncWorkOwnedTerminalGoalLocked(item *sdkWorkItem) {
 		return
 	}
 	document, err := h.goals.update(*chat, nil)
-	if err != nil || document.Mode != "muxterm-work" {
+	if err != nil || document.Mode != "muxterm-work" || !workGoalMatches(item, chat.ID, document) {
 		if err != nil {
 			log.Printf("read Work goal %s: %v", item.ID, err)
 		}
@@ -119,13 +167,13 @@ func (h *sdkChatHost) syncWorkOwnedTerminalGoalLocked(item *sdkWorkItem) {
 	if item.Status == "active" && (document.HumanPaused || (document.State != "awaiting-review" && document.State != "active")) {
 		return
 	}
-	if document.State == "cleared" && item.Status == "blocked" {
+	if (document.HumanPaused && state != "complete" && state != "cancelled") || (document.State == "cleared" && item.Status == "blocked") {
 		return
 	}
 	if document.State != state {
 		_, err = h.goals.update(*chat, func(document *goalDocument) error {
-			if document.Mode != "muxterm-work" {
-				return nil
+			if document.Mode != "muxterm-work" || !workGoalMatches(item, chat.ID, *document) || (document.HumanPaused && state != "complete" && state != "cancelled") {
+				return errGoalConflict
 			}
 			document.State = state
 			if state == "complete" {
@@ -180,7 +228,7 @@ func (s *Server) reconcileWorkOwnedGoals(ctx context.Context) {
 			continue
 		}
 		goal, err := h.goals.update(*chat, nil)
-		if err != nil || goal.Mode != "muxterm-work" || goal.HumanPaused || goal.State == "paused" || goal.State == "cleared" {
+		if err != nil || goal.Mode != "muxterm-work" || !workGoalMatches(item, chat.ID, goal) || goal.HumanPaused || goal.State == "paused" || goal.State == "cleared" {
 			continue
 		}
 		if goal.State != "active" || goal.RequestedRevision == 0 || goal.AppliedRevision != goal.RequestedRevision || goal.ExecutionAuthorizedRevision != goal.RequestedRevision {

@@ -22,6 +22,13 @@ import (
 
 // Work items coordinate sessions. A filed goal condition is installed as
 // the selected worker chat's native goal when the scheduler dispatches Work.
+type sdkWorkGoalObservation struct {
+	EventID string    `json:"eventId"`
+	State   string    `json:"state"`
+	Summary string    `json:"summary,omitempty"`
+	At      time.Time `json:"at"`
+}
+
 type sdkWorkItem struct {
 	GraphID            string                   `json:"graphId,omitempty"`
 	GraphIntegrationID string                   `json:"graphIntegrationId,omitempty"`
@@ -48,6 +55,7 @@ type sdkWorkItem struct {
 	GoalCondition      string                   `json:"goalCondition,omitempty"`
 	GoalRevision       int                      `json:"goalRevision,omitempty"`
 	GoalFiledRevision  int                      `json:"goalFiledRevision,omitempty"`
+	GoalObservation    *sdkWorkGoalObservation  `json:"goalObservation,omitempty"`
 	CreateGoal         *string                  `json:"createGoalCondition,omitempty"`
 	CreateDraft        bool                     `json:"createDraft,omitempty"`
 	GoalApproved       int                      `json:"goalApprovedRevision,omitempty"`

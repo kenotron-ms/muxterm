@@ -2792,6 +2792,11 @@ export class MuxSDKChat extends LitElement {
         if (this.currentGoalText(current)) this.openGoalTab();
         else this.commandNotice = 'No goal is set for this chat. Type /goal followed by a condition.';
       } else {
+        const previousCondition = this.currentGoalText(current);
+        if (command.action === 'set' && previousCondition && previousCondition !== command.condition) {
+          const confirmed = window.confirm(`Replace the current chat goal?\n\nCurrent condition\n${previousCondition}\n\nNew condition\n${command.condition}`);
+          if (!confirmed) return;
+        }
         const response = await fetch(this.chatPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/goal`), {
           method:'PATCH', headers:{'Content-Type':'application/json'},
           body:JSON.stringify({ action:command.action, objective:command.condition || '', clientRef:crypto.randomUUID(), expectedVersion:current.controlVersion }),
