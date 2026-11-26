@@ -247,7 +247,6 @@ func (s *Server) sendSDKRecovery(ctx context.Context, chat *sdkChat, inputID str
 	if s.voiceProvider() != "" {
 		content = sdkTaskInputWithVoiceContext(content, h.recentVoiceContext(chat.ID))
 	}
-	content = sdkChatInput(chat.ID, content)
 	h.workSendMu.RLock()
 	defer h.workSendMu.RUnlock()
 	notice, tokens := h.pendingWorkBoundaryNotice(chat.ID)
