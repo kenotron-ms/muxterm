@@ -52,6 +52,18 @@ func (s *Server) handleSDKWorkGoalReplace(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
+	receiptID := "work-replace:" + item.ID + ":" + req.ClientRef
+	for _, update := range item.Updates {
+		if update.ClientRef != receiptID {
+			continue
+		}
+		if update.GoalCondition == nil || *update.GoalCondition != condition || update.ExpectedRevision == nil || *update.ExpectedRevision != req.WorkRevision {
+			http.Error(w, "clientRef already used for another replacement", http.StatusConflict)
+			return
+		}
+		writeSDKJSON(w, http.StatusAccepted, item)
+		return
+	}
 	if item.Dispatch == nil || item.Dispatch.SessionID != item.OwnerSessionID ||
 		(item.Status != "active" && item.Status != "blocked") || item.GoalCondition == condition {
 		http.Error(w, "Work changed or has no replaceable dispatched goal", http.StatusConflict)
@@ -72,7 +84,6 @@ func (s *Server) handleSDKWorkGoalReplace(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	receiptID := "work-replace:" + item.ID + ":" + req.ClientRef
 	replacement := sdkWorkGoalReplacement{ClientRef: req.ClientRef, Condition: condition, OwnerSessionID: chat.ID,
 		DispatchRef: item.Dispatch.ClientRef, WorkRevision: req.WorkRevision, ControlVersion: req.ControlVersion}
 	intent := item.GoalReplacement

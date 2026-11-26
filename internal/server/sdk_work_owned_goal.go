@@ -87,9 +87,16 @@ func workGoalMatches(item *sdkWorkItem, chatID string, document goalDocument) bo
 		return false
 	}
 	for _, revision := range document.Revisions {
-		if revision.Revision == document.RequestedRevision && revision.Condition == item.GoalCondition {
+		if revision.Revision != document.RequestedRevision || revision.Condition != item.GoalCondition {
+			continue
+		}
+		if item.Dispatch == nil {
 			return true
 		}
+		return item.Dispatch.SessionID == chatID &&
+			(revision.Provenance == "filed-work:"+item.ID ||
+				revision.Provenance == "human-work-approval:"+item.ID ||
+				revision.Provenance == "human-work-replacement:"+item.ID)
 	}
 	return false
 }
@@ -99,7 +106,7 @@ func (h *sdkChatHost) workGoalControlMatchesLocked(workID, chatID string, docume
 	chat := h.chats[chatID]
 	return item != nil && chat != nil && !chat.Archived &&
 		(item.Status == "active" || item.Status == "blocked") &&
-		(item.Dispatch == nil || item.Dispatch.SessionID == chatID) && workGoalMatches(item, chatID, document)
+		workGoalMatches(item, chatID, document)
 }
 
 // Caller holds h.mu. Observation metadata never advances Work status or its
@@ -118,7 +125,7 @@ func (h *sdkChatHost) projectWorkGoalObservationLocked(chat *sdkChat, event sdkE
 			(item.Status != "active" && item.Status != "blocked" && item.Status != "review") {
 			continue
 		}
-		if item.GoalObservation != nil && item.GoalObservation.EventID == event.ID {
+		if item.GoalObservation != nil && (item.GoalObservation.EventID == event.ID || event.At.Before(item.GoalObservation.At)) {
 			continue
 		}
 		copy := *item
