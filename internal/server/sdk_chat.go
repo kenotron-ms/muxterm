@@ -194,6 +194,7 @@ type sdkChatHost struct {
 	subscriptions    map[string]*sdkChatSubscription
 	inboxStreams     map[string]map[chan struct{}]struct{}
 	workItems        map[string]*sdkWorkItem
+	workInterrupted  map[string]struct{}
 	onWorkChange     func()
 	onWorkResume     func(string, int)
 	nameStreams      map[chan string]struct{}
@@ -236,6 +237,7 @@ func newSDKChatHost() *sdkChatHost {
 	// A catalog is authoritative once written. A removed project must stay
 	// removed even when an older chat record still names its former ID.
 	hasProjectCatalog := false
+	h.workInterrupted = make(map[string]struct{})
 	for _, e := range entries {
 		if e.Name() == "projects.json" {
 			hasProjectCatalog = true
@@ -265,6 +267,9 @@ func newSDKChatHost() *sdkChatHost {
 			chat.Approval = "never"
 			if chat.State == "working" || chat.State == "starting" {
 				chat.State = "uncertain"
+			}
+			if chat.State == "uncertain" && !chat.TurnStartedAt.IsZero() {
+				h.workInterrupted[chat.ID] = struct{}{}
 			}
 			h.chats[chat.ID] = &chat
 		}
@@ -412,9 +417,11 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 	}
 	switch event.Type {
 	case "turn.started":
+		delete(h.workInterrupted, c.ID)
 		c.State = "working"
 		c.TurnStartedAt = event.At
 	case "input.accepted":
+		delete(h.workInterrupted, c.ID)
 		if c.MigrationPending && c.Harness == "antigravity" {
 			c.MigrationPending = false
 		}

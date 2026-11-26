@@ -423,20 +423,55 @@ func (h *sdkChatHost) loadWorkItems() {
 			}
 		}
 		if item.Dispatch != nil && item.Dispatch.State == "preparing" {
-			item.Dispatch.State = "uncertain"
-			item.Dispatch.Detail = "server restarted before dispatch acknowledgement; inspect the selected chat before retrying"
-			item.Dispatch.UpdatedAt = time.Now().UTC()
-			if err := h.saveWorkLocked(&item); err != nil {
-				log.Printf("mark work dispatch uncertain %s: %v", item.ID, err)
+			copy := item
+			dispatch := *item.Dispatch
+			now := time.Now().UTC()
+			copy.Dispatch = &dispatch
+			dispatch.State = "uncertain"
+			dispatch.Detail = "server restarted before dispatch acknowledgement; inspect the selected chat before retrying"
+			dispatch.UpdatedAt = now
+			// Preparation creates an idle chat. A fresh graph worker cannot
+			// receive kickoff until its assignment has been durably saved.
+			if item.GraphID != "" && item.Status == "open" && item.OwnerSessionID == "" &&
+				dispatch.ContextWorkID == "" && dispatch.AssignmentRevision == 0 && dispatch.KickoffAttempts == 0 {
+				copy.Dispatch = nil
+				copy.Revision++
+				copy.UpdatedAt = now
+				copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{
+					ID: sdkID(), ClientRef: "dispatch-requeued:" + dispatch.ClientRef, At: now,
+					Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Requeued an interrupted worker reservation before kickoff",
+					LinkedSessionID: dispatch.SessionID,
+				})
+			}
+			if err := h.saveWorkLocked(&copy); err != nil {
+				log.Printf("recover Work dispatch %s: %v", item.ID, err)
 			}
 		}
-		if item.Dispatch != nil && item.Dispatch.ContinuationState == "preparing" {
-			item.Dispatch.ContinuationState = "uncertain"
-			item.Status = "blocked"
-			item.BlockedReason = "Muxterm restarted before Work continuation acknowledgement; inspect the chat input receipt before retrying."
-			item.NextAction = "Inspect the Work continuation and chat receipt; resume the goal only after confirming delivery."
-			if err := h.saveWorkLocked(&item); err != nil {
-				log.Printf("mark Work continuation uncertain %s: %v", item.ID, err)
+		if item.Status == "active" && item.Dispatch != nil && item.Dispatch.ContinuationState == "preparing" {
+			copy := item
+			dispatch := *item.Dispatch
+			copy.Dispatch = &dispatch
+			exists, accepted, _ := h.workInputReceiptLocked(&item, "work-continue:"+item.ID+":"+dispatch.ContinuationEventID)
+			switch {
+			case accepted:
+				dispatch.ContinuationState = "accepted"
+			case !exists:
+				dispatch.ContinuationState = ""
+				dispatch.ContinuationEventID = ""
+				if dispatch.ContinuationCount > 0 {
+					dispatch.ContinuationCount--
+				}
+			default:
+				dispatch.ContinuationState = "uncertain"
+				copy.Status = "blocked"
+				copy.NeedsHuman = true
+				copy.BlockedReason = "Muxterm restarted before Work continuation acknowledgement."
+				copy.NextAction = "Inspect the selected chat's continuation receipt."
+			}
+			copy.Revision++
+			copy.UpdatedAt = time.Now().UTC()
+			if err := h.saveWorkLocked(&copy); err != nil {
+				log.Printf("recover Work continuation %s: %v", item.ID, err)
 			}
 		}
 	}
@@ -1006,7 +1041,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, evidence := range req.Evidence {
-		if len(evidence) == 0 || len(evidence) > 2048 {
+		if strings.TrimSpace(evidence) == "" || len(evidence) > 2048 {
 			http.Error(w, "invalid evidence reference", 400)
 			return
 		}
@@ -1260,8 +1295,9 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 		original := item.Acceptance
 		copy.CreateAcceptance = &original
 	}
+	goalChanged := req.GoalCondition != nil && (item.GraphID == "" || strings.TrimSpace(*req.GoalCondition) != item.GoalCondition)
 	goalRevision := 0
-	if req.GoalCondition != nil {
+	if goalChanged {
 		goalRevision = item.GoalRevision + 1
 	}
 	planBefore := slices.Clone(item.Plan)
@@ -1307,7 +1343,7 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Acceptance != nil {
 		copy.Acceptance = *req.Acceptance
 	}
-	if req.GoalCondition != nil {
+	if goalChanged {
 		copy.GoalCondition = strings.TrimSpace(*req.GoalCondition)
 		copy.GoalRevision++
 		check := checkWorkGoal(copy.GoalCondition, copy.GoalRevision)
@@ -1321,11 +1357,20 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.DesignPreview != nil {
 		copy.DesignPreview = req.DesignPreview
 	}
-	if (req.GoalCondition != nil || req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.DependsOn != nil || req.ProjectIDs != nil) && copy.Dispatch == nil && copy.OwnerSessionID == "" {
+	filingChanged := req.GoalCondition != nil || req.Title != nil || req.Brief != nil || req.Acceptance != nil || req.DependsOn != nil || req.ProjectIDs != nil
+	if item.GraphID != "" {
+		// Graph filing authorizes the checked condition, acceptance criteria,
+		// project and prerequisite set. A title edit or equivalent rewrite
+		// of an edge list does not change that authorization.
+		filingChanged = copy.GoalCondition != item.GoalCondition || copy.Brief != item.Brief || copy.Acceptance != item.Acceptance ||
+			req.DependsOn != nil && !slices.Equal(normalizeWorkDependencies(item.DependsOn), *req.DependsOn) ||
+			req.ProjectIDs != nil && !slices.Equal(h.workProjectIDsLocked(item), *req.ProjectIDs)
+	}
+	if filingChanged && copy.Dispatch == nil && copy.OwnerSessionID == "" {
 		copy.GoalApproved = 0
 		copy.GoalApprovedAt = nil
 		if copy.Readiness == "ready" {
-			if req.GoalCondition != nil && copy.GoalCheck.Passed {
+			if copy.GraphID == "" && req.GoalCondition != nil && copy.GoalCheck.Passed {
 				copy.GoalFiledRevision = copy.GoalRevision
 			} else {
 				copy.GoalFiledRevision = 0
@@ -1384,6 +1429,12 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 			writeSDKJSON(w, http.StatusConflict, map[string]any{"error": "unread Work comments; read and acknowledge them before completing", "commentAttention": attention, "retry": "Call read_work_comments, then acknowledge_work_comments with through_comment_id; retry this update with a new client_ref."})
 			return
 		}
+	}
+	if req.Status == "done" && copy.GraphID != "" && item.Status != "done" &&
+		(strings.TrimSpace(req.Outcome) == "" || len(req.Evidence) == 0) {
+		h.mu.Unlock()
+		http.Error(w, "completing filed graph work requires an outcome and verification evidence in the completion update", http.StatusConflict)
+		return
 	}
 	if req.Status == "done" && !workPlanComplete(copy.Plan) {
 		h.mu.Unlock()
