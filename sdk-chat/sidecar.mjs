@@ -348,7 +348,7 @@ async function command(cmd) {
     const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId,
       migrationTranscript: cmd.migrationTranscript || '', approval: cmd.approval,
       catalog: cmd.catalog === true, originFile: cmd.catalog === true ? '' : originFile(sessionId, cmd.originToken),
-      goalControlVersion: cmd.goalControlVersion,
+      openingTitle: cmd.openingTitle, goalControlVersion: cmd.goalControlVersion,
       inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
     if (['pi', 'deepseek', 'amplifier-unified'].includes(harness)) {

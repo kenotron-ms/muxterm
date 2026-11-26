@@ -20,7 +20,8 @@ func (h *sdkChatHost) scheduleNamingLocked(c *sdkChat) {
 	// Generic ACP chats keep their opening title until a person renames them.
 	// The title generator below invokes Codex and must not become a hidden
 	// dependency of Pi, OpenCode, or DeepSeek chat creation.
-	if isSDKACPHarness(c.Harness) {
+	// Unified receives the title from the original opening submission at creation.
+	if isSDKACPHarness(c.Harness) || c.Harness == "amplifier-unified" {
 		return
 	}
 	if c.TitleSource != "opening" || c.State != "ready" || c.UserTurns != 1 || c.TitleCheckedTurn != 0 || h.naming[c.ID] {

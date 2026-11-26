@@ -1,6 +1,6 @@
 // Connected Amplifier Unified client. Unified owns execution and its native history;
 // this adapter only projects its version-1 HTTP/SSE session into muxterm events.
-import { readFileSync } from 'node:fs';
+import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -69,6 +69,7 @@ export class UnifiedStream {
     this.clientId = `muxterm-${session.id}`;
     this.nativeId = session.nativeId || nativeSessionId(session.id);
     this.currentInputId = '';
+    this.inputDir = join(instanceDataHome(), 'muxterm', 'sdk-chat', 'unified-inputs', session.id);
     this.emittedInputs = new Set();
     this.emittedText = new Map();
     this.lastRevision = -1;
@@ -113,7 +114,8 @@ export class UnifiedStream {
       try {
         await this.request('POST', '/api/actions', { id: `muxterm-create-${this.session.id}`,
           action: 'session.create', args: { id: this.nativeId, workspace: this.session.cwd,
-            ...(this.session.bundle ? { bundle: this.session.bundle } : {}), select: false } }, 'session creation');
+            ...(this.session.bundle ? { bundle: this.session.bundle } : {}),
+            ...(this.session.openingTitle ? { title: this.session.openingTitle } : {}), select: false } }, 'session creation');
       } catch (error) {
         try {
           first = await this.request('GET', `/api/sessions/${encodeURIComponent(this.nativeId)}`,
@@ -163,17 +165,26 @@ export class UnifiedStream {
   async send(input) {
     await this.ready;
     if (input.attachments?.length) throw new Error('Unified attachments are not yet supported in Muxterm');
+    // Persist attribution and display text before Unified can publish its snapshot.
+    const path = this.inputPath(input.id);
+    const metadata = { kind: input.kind, source: input.source, text: input.displayContent ?? input.content };
+    mkdirSync(this.inputDir, { recursive: true, mode: 0o700 });
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify(metadata), { mode: 0o600 });
+      linkSync(temporary, path);
+    } catch (error) {
+      // A retry with this input ID uses the original projection.
+      if (error.code !== 'EEXIST') throw error;
+    } finally {
+      rmSync(temporary, { force: true });
+    }
     this.currentInputId = input.id;
     const result = await this.request('POST', `/api/sessions/${encodeURIComponent(this.nativeId)}/commands`, {
       id: input.id, action: 'conversation.send', args: { text: input.content },
     }, 'message acceptance');
     if (!result.accepted) throw new Error('Unified did not confirm message acceptance');
-    if (!this.emittedInputs.has(input.id)) {
-      this.emittedInputs.add(input.id);
-      this.emit(this.session.id, 'input.accepted', { id: `unified:input:${input.id}`,
-        inputId: input.id, kind: input.kind, source: input.source,
-        text: input.displayContent || input.content });
-    }
+    this.acceptInput(input.id, input.content);
     // SSE may have delivered the completed turn before the command reply.
     // Re-read after acknowledgement so an older snapshot cannot leave busy
     // set forever, and never turn an accepted send into uncertain delivery.
@@ -201,6 +212,23 @@ export class UnifiedStream {
     return { status: 'accepted' };
   }
 
+  inputPath(inputId) {
+    return join(this.inputDir, createHash('sha256').update(inputId).digest('hex'));
+  }
+
+  acceptInput(inputId, text) {
+    if (!inputId || this.emittedInputs.has(inputId)) return false;
+    let metadata = { kind: 'user', source: 'unified', text };
+    try {
+      metadata = JSON.parse(readFileSync(this.inputPath(inputId), 'utf8'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    this.emittedInputs.add(inputId);
+    this.emit(this.session.id, 'input.accepted', { id: `unified:input:${inputId}`, inputId, ...metadata });
+    return true;
+  }
+
   applySnapshot(frame) {
     if (frame.protocolVersion !== 1) {
       this.emit(this.session.id, 'error', { id: `unified:protocol-error:${this.nativeId}`,
@@ -219,12 +247,7 @@ export class UnifiedStream {
     for (const message of row.messages || []) {
       if (message.role === 'user') {
         const inputId = message.inputId || message.id;
-        if (inputId && !this.emittedInputs.has(inputId)) {
-          this.emittedInputs.add(inputId);
-          this.currentInputId = inputId;
-          this.emit(this.session.id, 'input.accepted', { id: `unified:input:${inputId}`,
-            inputId, kind: 'user', source: 'unified', text: message.text || '' });
-        }
+        if (this.acceptInput(inputId, message.text ?? '')) this.currentInputId = inputId;
       } else if (message.role === 'assistant' && message.text) {
         if (message.inputId === this.currentInputId) replyCommitted = true;
         this.emitAssistant(message.streamId || message.id, message.text);
