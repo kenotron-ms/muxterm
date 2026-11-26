@@ -328,14 +328,21 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if state == "uncertain" || state == "failed" {
-		if creatorID := result.CreatedBy.SessionID; creatorID != "" && creatorID != result.Dispatch.SessionID {
-			h.appendEvent(sdkEvent{SessionID: creatorID, Type: "work.attention", WorkID: id, Text: "Work kickoff needs inspection: " + result.Title + ". Open the Work tab for details."})
-		}
+		h.notifyWorkKickoffFailure(result)
 	}
 	if state == "starting" {
 		s.wakeWork()
 	}
 	writeSDKJSON(w, 200, result)
+}
+
+func (h *sdkChatHost) notifyWorkKickoffFailure(item sdkWorkItem) {
+	if item.Status != "blocked" || item.Dispatch == nil {
+		return
+	}
+	if creatorID := item.CreatedBy.SessionID; creatorID != "" && creatorID != item.Dispatch.SessionID {
+		h.appendEvent(sdkEvent{SessionID: creatorID, Type: "work.attention", WorkID: item.ID, Text: "Work kickoff needs inspection: " + item.Title + ". Open the Work tab for details."})
+	}
 }
 
 func workKickoffPrompt(item *sdkWorkItem) string {

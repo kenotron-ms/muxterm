@@ -214,10 +214,12 @@ func (s *Server) reconcileWorkKickoff(ctx context.Context, id string) {
 		state, detail = "failed", "The selected chat could not receive kickoff after three attempts. Check its availability and reopen Work to retry."
 	}
 	if state != "" {
-		_, err := h.finishWorkDispatchLocked(id, dispatch.ClientRef, state, detail)
+		result, err := h.finishWorkDispatchLocked(id, dispatch.ClientRef, state, detail)
 		h.mu.Unlock()
 		if err != nil {
 			log.Printf("reconcile Work kickoff %s: %v", id, err)
+		} else if state != "sent" {
+			h.notifyWorkKickoffFailure(result)
 		}
 		return
 	}
