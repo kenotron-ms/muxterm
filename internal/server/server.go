@@ -400,6 +400,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("GET /api/skills", protect(http.HandlerFunc(s.handleSkillsList)))
 	s.mux.Handle("GET /api/connections", protect(http.HandlerFunc(s.handleConnections)))
+	s.mux.Handle("GET /api/rooms/access/{owner}/{repo}", protect(http.HandlerFunc(s.handleRoomsAccess)))
 	s.mux.Handle("GET /api/connections/microsoft", protect(http.HandlerFunc(s.handleMicrosoftGraph)))
 	s.mux.Handle("POST /api/connections/microsoft/{account}/connect", protect(http.HandlerFunc(s.handleMicrosoftGraphConnect)))
 	s.mux.Handle("DELETE /api/connections/microsoft/{account}/connect", protect(http.HandlerFunc(s.handleMicrosoftGraphCancel)))
