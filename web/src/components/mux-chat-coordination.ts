@@ -519,6 +519,7 @@ export class MuxChatCoordination extends LitElement {
     if (item.status === 'open' && item.readiness === 'draft') return 'Draft';
     if (item.status === 'open' && (!item.goalCondition || !this.goalReady(item))) return item.goalCondition ? 'Goal needs attention' : 'Needs goal';
     if (item.readiness !== 'ready') return 'Draft';
+    if (item.dispatch?.state === 'starting' || item.dispatch?.state === 'preparing') return 'Starting worker';
     if (item.status === 'active' || item.ownerSessionId || item.dispatch) return 'In motion';
     return 'Ready to start';
   }
@@ -529,7 +530,12 @@ export class MuxChatCoordination extends LitElement {
     if (item.status === 'active' || item.ownerSessionId || item.dispatch) return 'play';
     return item.readiness === 'ready' ? 'flag' : 'clock';
   }
-  private summary(item: WorkItem) { return item.blockedReason || item.nextAction || item.progress || item.brief || 'Open to see the details.'; }
+  private kickoffProgress(item: WorkItem) {
+    return item.dispatch?.state === 'starting' && item.status === 'open' ? 'Muxterm is checking that the selected chat received the kickoff.' : '';
+  }
+  private summary(item: WorkItem) {
+    return this.kickoffProgress(item) || item.blockedReason || item.nextAction || item.progress || item.brief || 'Open to see the details.';
+  }
   private detailKey(item: WorkItem) { return `muxterm:work-detail-tab:${this.remoteHost || 'local'}:${this.projectId || item.projectIds?.[0] || 'all'}:${item.id}`; }
   private defaultTab(item: WorkItem): DetailTab { return item.status === 'active' || item.status === 'blocked' ? 'plan' : item.status === 'review' ? 'activity' : 'description'; }
   private restoreTab(item: WorkItem) {
@@ -676,9 +682,9 @@ export class MuxChatCoordination extends LitElement {
     const unreadCount = item.ownerSessionId ? this.unreadComments(item).length : 0;
     const state = this.status(item);
     const stateClass = item.status === 'blocked' ? 'blocked' : item.status === 'done' ? 'done' : item.waitingOn?.length ? 'waiting' : '';
-    const move = item.blockedReason || item.nextAction || '';
+    const move = this.kickoffProgress(item) || item.nextAction || item.blockedReason || '';
     const movePreview = activityPreview(move);
-    const inMotion = item.status === 'active' || item.status === 'blocked' || (item.status === 'open' && !!item.ownerSessionId);
+    const inMotion = item.status === 'active' || item.status === 'blocked' || (item.status === 'open' && (!!item.ownerSessionId || !!this.kickoffProgress(item)));
     const tab = this.selectedTab;
     return html`<article class="detail-view">
       ${this.projectId ? html`<mux-ui-button class="back" variant="quiet" size="small" @click=${() => { this.detail = undefined; }}>${icon('back')}Back to work</mux-ui-button>` : nothing}<div class="project detail-project">${icon('folder')}${this.workProjectName(item)}</div>
@@ -701,7 +707,7 @@ export class MuxChatCoordination extends LitElement {
         <section class="section"><h3>Worker agent</h3>${(item.status === 'open' || item.status === 'blocked') && !item.ownerSessionId && (!item.dispatch || item.dispatch.state === 'failed') ? html`<mux-ui-select label="Work harness" .value=${item.harness || ''} .options=${[{value:'',label:'AI default at dispatch'},...workHarnesses.map(harness => ({value:harness,label:harness}))]} ?disabled=${this.harnessSaving} @change=${(event: Event) => void this.changeHarness(item, (event.target as MuxUISelect).value)}></mux-ui-select><p>The selected agent must be available and able to run this Work goal.</p>` : html`<p>${item.harness ? `Selected on item: ${item.harness}` : 'AI default at dispatch'}${item.dispatch?.choiceSource ? ` · source: ${item.dispatch.choiceSource}` : ''}</p>`}</section>
         <section class="section"><h3>People</h3><p><strong>Owner:</strong> ${item.ownerSessionId ? this.chatLink(item.ownerSessionId) : 'Unassigned'}</p><p><strong>Reviewer:</strong> ${item.reviewerSessionId ? this.chatLink(item.reviewerSessionId) : 'None assigned'}</p><p><strong>Created by:</strong> ${this.actor(item.createdBy)}</p>${item.sessionIds?.length ? html`<p><strong>Linked chats:</strong> ${item.sessionIds.map((id, index) => html`${index ? ', ' : ''}${this.chatLink(id)}`)}</p>` : nothing}</section>
         ${this.dependencies(item)}
-        ${item.dispatch ? html`<section class="section"><h3>Dispatch</h3><p>${item.dispatch.state}${item.dispatch.sessionId ? html` · ${this.chatLink(item.dispatch.sessionId)}` : nothing}${item.dispatch.choiceSource ? ` · ${item.dispatch.choiceSource}` : ''}</p>${item.dispatch.selectionReason ? html`<p>${item.dispatch.selectionReason}</p>` : nothing}${item.dispatch.configuration ? html`<p>${item.dispatch.configuration.harness} · ${item.dispatch.configuration.provider || 'none'} · bundle ${item.dispatch.configuration.bundle || 'none'} · model ${item.dispatch.configuration.model || 'none'} · effort ${item.dispatch.configuration.effort || 'none'}</p>` : nothing}${item.dispatch.goalMode ? html`<p>Goal control: ${item.dispatch.goalMode === 'muxterm-work' ? 'Muxterm-owned Work goal' : 'Native agent goal'}</p>` : nothing}${item.dispatch.detail ? html`<p>${item.dispatch.detail}</p>` : nothing}</section>` : nothing}
+        ${item.dispatch ? html`<section class="section"><h3>Dispatch</h3><p>${item.dispatch.state === 'starting' ? 'Checking kickoff delivery' : item.dispatch.state}${item.dispatch.sessionId ? html` · ${this.chatLink(item.dispatch.sessionId)}` : nothing}${item.dispatch.choiceSource ? ` · ${item.dispatch.choiceSource}` : ''}</p>${item.dispatch.selectionReason ? html`<p>${item.dispatch.selectionReason}</p>` : nothing}${item.dispatch.configuration ? html`<p>${item.dispatch.configuration.harness} · ${item.dispatch.configuration.provider || 'none'} · bundle ${item.dispatch.configuration.bundle || 'none'} · model ${item.dispatch.configuration.model || 'none'} · effort ${item.dispatch.configuration.effort || 'none'}</p>` : nothing}${item.dispatch.goalMode ? html`<p>Goal control: ${item.dispatch.goalMode === 'muxterm-work' ? 'Muxterm-owned Work goal' : 'Native agent goal'}</p>` : nothing}${item.dispatch.detail ? html`<p>${item.dispatch.detail}</p>` : nothing}</section>` : nothing}
         ${item.labels?.length ? html`<section class="section"><h3>Labels</h3><div class="tags">${item.labels.map(label => html`<span class="tag">${label}</span>`)}</div></section>` : nothing}
       ` : tab === 'plan' ? html`
         ${move && (!inMotion || movePreview !== move) ? html`<section class=${`next ${item.status === 'blocked' ? 'blocked' : ''}`}><h3>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</h3><p>${move}</p></section>` : nothing}

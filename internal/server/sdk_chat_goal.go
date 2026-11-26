@@ -140,8 +140,8 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workOwned := chat.Harness == "opencode" && currentGoal.Mode == "muxterm-work"
-	if workOwned {
-		// Control sends hold the read side through admission. A human pause
+	if workOwned || human {
+		// Work sends hold the read side through admission. A human pause
 		// waits for in-flight admission, then closes the gate before another
 		// Work continuation can enter the adapter.
 		h.workSendMu.Lock()
@@ -300,7 +300,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 			nativeAction = "resume"
 		}
 		preserveStop := req.Action == "set" && document.RequestedRevision > 1 && slices.Contains([]string{"complete", "achieved", "stalled", "cap_hit", "cancelled", "error", "ended", "cleared", "uncertain"}, document.State)
-		go h.dispatchGoal(chat, req.ClientRef, nativeAction, condition, document.HumanPaused || (document.State == "paused" && nativeAction != "resume") || preserveStop, document.RequestedRevision, document.ControlVersion)
+		go h.dispatchGoal(chat, req.ClientRef, nativeAction, condition, document.HumanPaused || (document.State == "paused" && nativeAction != "resume") || preserveStop, document.RequestedRevision, document.ControlVersion, "")
 	}
 	writeSDKJSON(w, http.StatusAccepted, document)
 }
@@ -342,7 +342,7 @@ func (h *sdkChatHost) waitForCopilotIdle(ctx context.Context, chatID string) err
 	}
 }
 
-func (h *sdkChatHost) dispatchGoal(chat sdkChat, receiptID, action, objective string, paused bool, revision, controlVersion int) {
+func (h *sdkChatHost) dispatchGoal(chat sdkChat, receiptID, action, objective string, paused bool, revision, controlVersion int, workID string) {
 	h.goalDispatch.mu.Lock()
 	if h.goalDispatch.closed {
 		h.goalDispatch.mu.Unlock()
@@ -368,6 +368,23 @@ func (h *sdkChatHost) dispatchGoal(chat sdkChat, receiptID, action, objective st
 		err = h.resume(ctx, &chat)
 	}
 	var result json.RawMessage
+	if err == nil && workID != "" {
+		h.workSendMu.RLock()
+		defer h.workSendMu.RUnlock()
+		h.mu.Lock()
+		item := h.workItems[workID]
+		if !h.workKickoffEligibleLocked(item) || receiptID != "work-start-goal:"+workID+":"+item.Dispatch.ClientRef || item.Dispatch.SessionID != chat.ID {
+			err = errors.New("Work changed before native goal activation")
+		} else {
+			goal, readErr := h.goals.update(chat, nil)
+			if readErr != nil {
+				err = readErr
+			} else if goal.HumanPaused || goal.ControlVersion != controlVersion || goal.RequestedRevision != revision {
+				err = errors.New("Goal control changed before native Work activation")
+			}
+		}
+		h.mu.Unlock()
+	}
 	if err == nil {
 		result, err = h.call(ctx, "goal", map[string]any{"sessionId": chat.ID, "action": action, "objective": objective, "paused": paused, "revision": revision, "goalControlVersion": controlVersion})
 	}
@@ -394,8 +411,10 @@ func (h *sdkChatHost) dispatchGoal(chat sdkChat, receiptID, action, objective st
 			if err != nil {
 				receipt.Status = "uncertain"
 				receipt.Detail = err.Error()
-				document.Gap = "Native control unconfirmed: " + err.Error()
-				document.State = "uncertain"
+				if document.ControlVersion == controlVersion {
+					document.Gap = "Native control unconfirmed: " + err.Error()
+					document.State = "uncertain"
+				}
 			}
 		}
 		return nil

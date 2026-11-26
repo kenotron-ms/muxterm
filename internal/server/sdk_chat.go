@@ -530,7 +530,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		h.scheduleNamingLocked(c)
 	}
 	h.mu.Unlock()
-	if h.onWorkChange != nil && (event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain") {
+	if h.onWorkChange != nil && (event.Type == "input.accepted" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain") {
 		h.onWorkChange()
 	}
 	// The pending plan and source journal are durable before fanout. Subscriber
