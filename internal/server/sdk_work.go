@@ -56,6 +56,7 @@ type sdkWorkItem struct {
 	GoalRevision       int                      `json:"goalRevision,omitempty"`
 	GoalFiledRevision  int                      `json:"goalFiledRevision,omitempty"`
 	GoalObservation    *sdkWorkGoalObservation  `json:"goalObservation,omitempty"`
+	GoalReplacement    *sdkWorkGoalReplacement  `json:"goalReplacement,omitempty"`
 	CreateGoal         *string                  `json:"createGoalCondition,omitempty"`
 	CreateDraft        bool                     `json:"createDraft,omitempty"`
 	GoalApproved       int                      `json:"goalApprovedRevision,omitempty"`

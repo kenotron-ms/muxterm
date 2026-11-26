@@ -85,6 +85,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		Objective       string   `json:"objective"`
 		ClientRef       string   `json:"clientRef"`
 		ExpectedVersion *int     `json:"expectedVersion"`
+		WorkRevision    *int     `json:"workRevision"`
 		Evidence        []string `json:"evidence"`
 		ProposalID      string   `json:"proposalId"`
 		StartBy         string   `json:"startBy"`
@@ -178,12 +179,20 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if workID != "" {
-		h.mu.Lock()
-	}
+	h.mu.Lock()
 	document, err := h.goals.update(chat, func(document *goalDocument) error {
-		if workID != "" && !h.workGoalControlMatchesLocked(workID, id, *document) {
-			return &goalRequestError{http.StatusConflict, "Work has no matching current goal in this chat"}
+		for _, item := range h.workItems {
+			if item.OwnerSessionID == id && item.GoalReplacement != nil {
+				return &goalRequestError{http.StatusLocked, "a Work goal replacement is awaiting reconciliation"}
+			}
+		}
+		if workID != "" {
+			if !h.workGoalControlMatchesLocked(workID, id, *document) {
+				return &goalRequestError{http.StatusConflict, "Work has no matching current goal in this chat"}
+			}
+			if req.WorkRevision == nil || h.workItems[workID].Revision != *req.WorkRevision {
+				return &goalRequestError{http.StatusConflict, "Work changed; refresh before controlling its goal"}
+			}
 		}
 		for _, receipt := range document.Receipts {
 			if receipt.ID == req.ClientRef {
@@ -195,6 +204,9 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		}
 		if document.ControlVersion != *req.ExpectedVersion {
 			return errGoalConflict
+		}
+		if req.Action == "resume" && document.HumanPaused && document.AppliedRevision != document.RequestedRevision {
+			return &goalRequestError{http.StatusConflict, "confirm the requested goal is applied before releasing the human pause"}
 		}
 		if document.HumanPaused && !human && (req.Action == "resume" || req.Action == "start") {
 			return &goalRequestError{http.StatusForbidden, "only a human can release a human pause"}
@@ -268,9 +280,7 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		admitted = status == "dispatching"
 		return nil
 	})
-	if workID != "" {
-		h.mu.Unlock()
-	}
+	h.mu.Unlock()
 	if err != nil {
 		status := http.StatusServiceUnavailable
 		var rejection *goalRequestError

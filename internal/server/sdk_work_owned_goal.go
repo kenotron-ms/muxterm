@@ -98,7 +98,8 @@ func (h *sdkChatHost) workGoalControlMatchesLocked(workID, chatID string, docume
 	item := h.workItems[workID]
 	chat := h.chats[chatID]
 	return item != nil && chat != nil && !chat.Archived &&
-		(item.Status == "active" || item.Status == "blocked") && workGoalMatches(item, chatID, document)
+		(item.Status == "active" || item.Status == "blocked") &&
+		(item.Dispatch == nil || item.Dispatch.SessionID == chatID) && workGoalMatches(item, chatID, document)
 }
 
 // Caller holds h.mu. Observation metadata never advances Work status or its

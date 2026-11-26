@@ -18,8 +18,8 @@ type WorkActor = { kind: 'chat' | 'remote-chat' | 'human' | 'external-tool'; ses
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string; selectionReason?: string; choiceSource?: string; goalMode?: 'native' | 'muxterm-work'; contextWorkId?: string; fallback?: string; configuration?: { harness: string; provider: string; bundle?: string; model?: string; effort?: string } };
 type WorkStep = { id: string; title: string; status: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped' };
 type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; harness?: string; comment?: boolean; commentPriority?: 'normal' | 'high'; commentSource?: string; commentReadThrough?: string; commentNoticeState?: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean; planBefore?: WorkStep[]; planAfter?: WorkStep[]; planReason?: string; stepUpdates?: {id:string;status:WorkStep['status']}[] };
-type WorkChatGoal = { controlVersion:number; state:string; humanPaused:boolean; receipts:{id:string; action:string; status:string; detail?:string}[] };
-type WorkItem = { id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalObservation?: { eventId:string; state:string; summary?:string; at:string }; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; graphIntegrationId?: string; graphLinks?: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
+type WorkChatGoal = { requestedRevision:number; appliedRevision:number; controlVersion:number; state:string; humanPaused:boolean; receipts:{id:string; action:string; status:string; detail?:string}[] };
+type WorkItem = { id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalReplacement?: { clientRef:string; condition:string; workRevision:number; controlVersion:number }; goalObservation?: { eventId:string; state:string; summary?:string; at:string }; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; graphIntegrationId?: string; graphLinks?: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
 type DetailTab = 'description' | 'people' | 'plan' | 'activity';
 const detailTabs: { id: DetailTab; label: string; icon: 'description' | 'ownership' | 'plan' | 'clock' }[] = [
@@ -73,6 +73,7 @@ export class MuxChatCoordination extends LitElement {
   @state() private unmatchedGoalPath = '';
   @state() private goalSending = false;
   @state() private goalError = '';
+  @state() private replacementDraft?: { workId:string; revision:number; controlVersion:number; condition:string; clientRef:string };
   @state() private dependencyReferences: Record<string,WorkItem> = {};
   private loadingDependencies = new Set<string>();
   @state() private control?: WorkControl;
@@ -312,7 +313,7 @@ export class MuxChatCoordination extends LitElement {
     try {
       const document = await this.request<WorkChatGoal>(goal.path, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, clientRef: crypto.randomUUID(), expectedVersion: goal.document.controlVersion }),
+        body: JSON.stringify({ action, clientRef: crypto.randomUUID(), expectedVersion: goal.document.controlVersion, workRevision: this.detail?.revision }),
       });
       if (goal.path === this.workChatGoalPath(this.detail)) this.chatGoal = { path: goal.path, document };
     } catch (error) {
@@ -322,10 +323,42 @@ export class MuxChatCoordination extends LitElement {
       void this.refreshWorkChatGoal();
     }
   }
+  private async approveGoalReplacement() {
+    const draft = this.replacementDraft;
+    if (!draft || this.detail?.id !== draft.workId || this.goalSending) return;
+    this.goalSending = true;
+    this.goalError = '';
+    try {
+      const item = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(draft.workId)}/goal-replace`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientRef: draft.clientRef, condition: draft.condition, workRevision: draft.revision, controlVersion: draft.controlVersion }),
+      });
+      if (this.detail?.id === draft.workId) this.detail = item;
+      this.replacementDraft = undefined;
+    } catch (error) {
+      if (this.detail?.id === draft.workId) this.goalError = String(error);
+    } finally {
+      this.goalSending = false;
+      void this.refreshWorkChatGoal();
+    }
+  }
   private renderWorkChatGoal(item: WorkItem) {
     const goal = this.chatGoal;
     const path = this.workChatGoalPath(item);
     if (!path) return nothing;
+    if (item.goalReplacement) {
+      const intent = item.goalReplacement;
+      return html`<section class="section">
+        <h3>Approved replacement</h3>
+        <p>${intent.condition}</p>
+        <p>The goal remains paused. Finish filing the approved condition before resuming.</p>
+        <mux-ui-button variant="secondary" ?disabled=${this.goalSending} @click=${() => {
+          this.replacementDraft = { workId:item.id, revision:intent.workRevision, controlVersion:intent.controlVersion, condition:intent.condition, clientRef:intent.clientRef };
+          void this.approveGoalReplacement();
+        }}>Finish replacement</mux-ui-button>
+        ${this.goalError ? html`<p role="status">${this.goalError}</p>` : nothing}
+      </section>`;
+    }
     if (!goal || goal.path !== path) {
       return this.unmatchedGoalPath === path ? html`<p role="status">The owning chat has no current goal matching this Work condition.</p>` : nothing;
     }
@@ -334,11 +367,26 @@ export class MuxChatCoordination extends LitElement {
     const paused = goal.document.humanPaused;
     const uncertain = latest?.status === 'uncertain';
     const detail = this.goalError || (uncertain ? latest?.detail : '');
+    const applied = goal.document.appliedRevision === goal.document.requestedRevision;
+    const draft = this.replacementDraft?.workId === item.id ? this.replacementDraft : undefined;
     return html`<section class="section" aria-labelledby="work-chat-goal">
       <h3 id="work-chat-goal">Chat goal</h3>
-      <p role="status">${pending ? 'Awaiting confirmation' : uncertain ? 'Delivery uncertain' : paused ? 'Paused by you' : goal.document.state}</p>
-      <mux-ui-button variant="secondary" size="small" ?disabled=${pending || this.goalSending}
+      <p role="status">${pending ? latest?.action === 'pause' ? 'Pausing…' : latest?.action === 'resume' ? 'Resuming…' : 'Awaiting confirmation' : uncertain ? 'Delivery uncertain' : paused ? 'Paused by you' : goal.document.state}</p>
+      <mux-ui-button variant="secondary" size="small" ?disabled=${pending || this.goalSending || !!draft || (paused && !applied)}
         @click=${() => void this.controlWorkChatGoal(paused ? 'resume' : 'pause')}>${paused ? 'Resume goal' : 'Pause goal'}</mux-ui-button>
+      ${paused && applied && !pending && !uncertain && item.dispatch && !draft ? html`
+        <mux-ui-button variant="quiet" size="small" @click=${() => {
+          this.goalError = '';
+          this.replacementDraft = { workId:item.id, revision:item.revision, controlVersion:goal.document.controlVersion, condition:'', clientRef:crypto.randomUUID() };
+        }}>Replace goal</mux-ui-button>` : nothing}
+      ${draft ? html`<form class="section" @submit=${(event: SubmitEvent) => { event.preventDefault(); void this.approveGoalReplacement(); }}>
+        <label for="work-replacement-condition">Replacement goal condition</label>
+        <textarea id="work-replacement-condition" rows="8" maxlength="4000" required .value=${draft.condition}
+          @input=${(event: InputEvent) => { this.replacementDraft = { ...draft, condition:(event.target as HTMLTextAreaElement).value }; }}></textarea>
+        <p>The owning chat and Work history are retained. The new condition stays paused until you resume it.</p>
+        <mux-ui-button variant="secondary" ?disabled=${this.goalSending || !draft.condition.trim()} @click=${() => void this.approveGoalReplacement()}>Approve replacement</mux-ui-button>
+        <mux-ui-button variant="quiet" ?disabled=${this.goalSending} @click=${() => { this.replacementDraft = undefined; }}>Cancel</mux-ui-button>
+      </form>` : nothing}
       ${detail ? html`<p role="status">${detail}</p>` : nothing}
     </section>`;
   }
