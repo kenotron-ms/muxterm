@@ -47,26 +47,42 @@ func (s *Server) finishWorkDispatch(id, ref, state, detail string) (sdkWorkItem,
 	h := s.sdkChats
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.finishWorkDispatchLocked(id, ref, state, detail)
+}
+
+func (h *sdkChatHost) finishWorkDispatchLocked(id, ref, state, detail string) (sdkWorkItem, error) {
 	item := h.workItems[id]
 	if item == nil || item.Dispatch == nil || item.Dispatch.ClientRef != ref {
 		return sdkWorkItem{}, errors.New("work dispatch reservation changed")
 	}
 	copy := *item
-	if copy.Dispatch.State != "claimed" {
+	if copy.Status == "open" && copy.Dispatch.State != "claimed" {
 		dispatch := *copy.Dispatch
+		if state == "failed" && dispatch.State == "starting" && dispatch.Detail != "" {
+			detail += " Last attempt: " + dispatch.Detail
+		}
 		dispatch.State, dispatch.Detail = state, detail
 		dispatch.UpdatedAt = time.Now().UTC()
 		copy.Dispatch = &dispatch
 		if state == "failed" || state == "uncertain" {
 			copy.Status = "blocked"
-			copy.BlockedReason = "Selected Work harness " + dispatch.Configuration.Harness + " could not start: " + detail
-			copy.NextAction = "Inspect the selected runtime and dispatch receipts; set Work back to open and retry with a new client_ref once safe."
+			copy.BlockedReason = "The selected worker could not start."
+			copy.NextAction = "Check the selected worker, then reopen Work and start it again."
+			if state == "uncertain" {
+				copy.BlockedReason = "Muxterm could not confirm whether the selected worker started."
+				copy.NextAction = "Open the selected chat and check whether it received the Work kickoff before resolving this dispatch."
+				if dispatch.GoalMode == "native" {
+					copy.NextAction = "Open the selected chat and inspect its native goal before resolving the dispatch."
+				}
+			}
 			copy.NeedsHuman = true
 			copy.Updates = append(slices.Clone(copy.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "dispatch-outcome:" + ref,
 				At: dispatch.UpdatedAt, Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Selected worker could not start",
-				Text: copy.BlockedReason, Status: "blocked", BlockedReason: &copy.BlockedReason, NextAction: &copy.NextAction})
+				Text: detail, Status: "blocked", BlockedReason: &copy.BlockedReason, NextAction: &copy.NextAction})
 		}
-		copy.Revision++
+		if state != "sent" {
+			copy.Revision++
+		}
 		copy.UpdatedAt = dispatch.UpdatedAt
 		if err := h.saveWorkLocked(&copy); err != nil {
 			return sdkWorkItem{}, err
@@ -255,13 +271,6 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mu.Unlock()
-	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The filed Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Use the Work plan as execution guidance and the goal as the completion contract. On claim, each meaningful milestone, blocker, replan, and completion, call update_work_item with expected_revision to move relevant step_updates and update summary, progress, next_action, and status together. A replan sends the full plan and a reason; keep completed steps. Each update response includes unread commentAttention: read and acknowledge any comments before review or done. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your goal."
-	if goalMode == "muxterm-work" {
-		prompt = "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". Muxterm owns this Work goal; OpenCode does not expose native goal controls through ACP. The exact filed condition is below. Continue until Work is done or blocked; Muxterm may send a continuation after each completed turn. Read the Work record, claim it with your chat ID and latest expected_revision, then update its plan, summary, progress, next_action, and status at each milestone. Read and acknowledge Work comments before review or done. Report evidence or blockers in the Work record.\n\nFiled Work condition:\n" + copy.GoalCondition
-	}
-	if copy.PlanProtocol != "" {
-		prompt += " Filed plan update protocol: " + copy.PlanProtocol
-	}
 	state, detail := "sent", ""
 	if existing {
 		if err := s.applyReusedWorkConfiguration(r.Context(), workerID, config); err != nil {
@@ -304,33 +313,14 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if state == "sent" {
+	if state == "sent" && goalMode == "muxterm-work" {
 		goalState, err := s.installWorkGoal(workerID, &copy)
 		if err != nil {
 			state, detail = goalState, err.Error()
 		}
 	}
 	if state == "sent" {
-		payload, _ := json.Marshal(map[string]any{"clientRef": "work-start:" + id + ":" + req.ClientRef, "content": prompt})
-		request := httptest.NewRequestWithContext(context.WithValue(r.Context(), sdkWorkKickoffContextKey{}, id), http.MethodPost, "/api/sdk-chats/"+workerID+"/control-send", bytes.NewReader(payload))
-		request.SetPathValue("id", workerID)
-		if token := r.Header.Get("X-Muxterm-Origin"); token != "" {
-			request.Header.Set("X-Muxterm-Origin", token)
-			request.Header.Set("X-Muxterm-Agent", "1")
-		}
-		response := httptest.NewRecorder()
-		s.handleSDKControlSend(response, request)
-		if response.Code != 200 && response.Code != 202 {
-			state, detail = "uncertain", strings.TrimSpace(response.Body.String())
-			if response.Code >= 400 && response.Code < 500 {
-				state = "failed"
-			}
-		} else {
-			var receipt sdkControlReceipt
-			if json.Unmarshal(response.Body.Bytes(), &receipt) != nil || receipt.Status != "accepted" {
-				state, detail = "uncertain", "chat input acceptance was not confirmed"
-			}
-		}
+		state = "starting"
 	}
 	if len(detail) > 4096 {
 		detail = detail[:4096]
@@ -341,11 +331,33 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if state == "uncertain" || state == "failed" {
-		if creatorID := result.CreatedBy.SessionID; creatorID != "" && creatorID != result.Dispatch.SessionID {
-			h.appendEvent(sdkEvent{SessionID: creatorID, Type: "work.attention", WorkID: id, Text: "Work kickoff needs inspection: " + result.Title + ". Open the Work tab for details."})
-		}
+		h.notifyWorkKickoffFailure(result)
+	}
+	if state == "starting" {
+		s.wakeWork()
 	}
 	writeSDKJSON(w, 200, result)
+}
+
+func (h *sdkChatHost) notifyWorkKickoffFailure(item sdkWorkItem) {
+	if item.Status != "blocked" || item.Dispatch == nil {
+		return
+	}
+	if creatorID := item.CreatedBy.SessionID; creatorID != "" && creatorID != item.Dispatch.SessionID {
+		h.appendEvent(sdkEvent{SessionID: creatorID, Type: "work.attention", WorkID: item.ID, Text: "Work kickoff needs inspection: " + item.Title + ". Open the Work tab for details."})
+	}
+}
+
+func workKickoffPrompt(item *sdkWorkItem) string {
+	id, workerID, goalMode := item.ID, item.Dispatch.SessionID, item.Dispatch.GoalMode
+	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The filed Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Use the Work plan as execution guidance and the goal as the completion contract. On claim, each meaningful milestone, blocker, replan, and completion, call update_work_item with expected_revision to move relevant step_updates and update summary, progress, next_action, and status together. A replan sends the full plan and a reason; keep completed steps. Each update response includes unread commentAttention: read and acknowledge any comments before review or done. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your goal."
+	if goalMode == "muxterm-work" {
+		prompt = "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". Muxterm owns this Work goal; OpenCode does not expose native goal controls through ACP. The exact filed condition is below. Continue until Work is done or blocked; Muxterm may send a continuation after each completed turn. Read the Work record, claim it with your chat ID and latest expected_revision, then update its plan, summary, progress, next_action, and status at each milestone. Read and acknowledge Work comments before review or done. Report evidence or blockers in the Work record.\n\nFiled Work condition:\n" + item.GoalCondition
+	}
+	if item.PlanProtocol != "" {
+		prompt += " Filed plan update protocol: " + item.PlanProtocol
+	}
+	return prompt
 }
 
 // An uncertain kickoff needs an explicit, revision-fenced resolution after the

@@ -79,6 +79,7 @@ func (s *Server) workLoop(ctx context.Context) {
 }
 
 func (s *Server) reconcileWork(ctx context.Context) {
+	s.reconcileWorkKickoffs(ctx)
 	s.reconcileWorkFailures()
 	s.reconcileWorkOwnedGoals(ctx)
 	for ctx.Err() == nil {
@@ -131,6 +132,11 @@ func (s *Server) reconcileWorkFailures() {
 		}
 		worker := h.chats[workerID]
 		if item.OwnerSessionID == "" && item.Dispatch != nil && item.Dispatch.State == "sent" &&
+			item.Dispatch.GoalMode == "native" && worker != nil && !worker.Archived &&
+			worker.State == "uncertain" && time.Since(item.Dispatch.UpdatedAt) < 30*time.Second {
+			continue
+		}
+		if item.OwnerSessionID == "" && item.Dispatch != nil && item.Dispatch.State == "sent" &&
 			item.Dispatch.GoalMode == "muxterm-work" && worker != nil && worker.State == "ready" && worker.LastTurnOutcome == "cancelled" {
 			// A human pause can cancel kickoff before the agent claims Work.
 			// The explicit human resume path owns the next input receipt.
@@ -153,6 +159,10 @@ func (s *Server) reconcileWorkFailures() {
 			dispatch.Detail = "selected chat did not claim the work; inspect its transcript before retrying"
 			dispatch.UpdatedAt = now
 			copy.Dispatch = &dispatch
+			copy.Status = "blocked"
+			copy.NeedsHuman = true
+			copy.BlockedReason = "The selected worker stopped before claiming Work."
+			copy.NextAction = "Open the selected chat to inspect its transcript and decide how to resume."
 		} else {
 			copy.Status = "blocked"
 			copy.NeedsHuman = true

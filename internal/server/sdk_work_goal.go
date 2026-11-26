@@ -149,6 +149,15 @@ func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, erro
 	if item.GoalFiledRevision == item.GoalRevision {
 		provenance = "filed-work:" + item.ID
 	}
+	if item.Dispatch.GoalMode == "native" {
+		h.mu.Lock()
+		current := h.workItems[item.ID]
+		if !h.workKickoffEligibleLocked(current) || current.Dispatch.ClientRef != item.Dispatch.ClientRef ||
+			current.Dispatch.SessionID != chatID || current.Dispatch.KickoffAttempts != item.Dispatch.KickoffAttempts {
+			h.mu.Unlock()
+			return "failed", errors.New("Work kickoff changed before native activation")
+		}
+	}
 	document, err := h.goals.update(chat, func(document *goalDocument) error {
 		if document.ControlVersion != before.ControlVersion {
 			return errGoalConflict
@@ -172,6 +181,9 @@ func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, erro
 		}
 		return nil
 	})
+	if item.Dispatch.GoalMode == "native" {
+		h.mu.Unlock()
+	}
 	if err != nil {
 		return "failed", err
 	}
@@ -201,7 +213,7 @@ func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, erro
 			GoalControlVersion: &document.ControlVersion, Raw: json.RawMessage(`{"source":"muxterm-work"}`)})
 		return "sent", nil
 	}
-	h.dispatchGoal(chat, receiptID, "set", item.GoalCondition, false, goalRevision, document.ControlVersion)
+	h.dispatchGoal(chat, receiptID, "set", item.GoalCondition, false, goalRevision, document.ControlVersion, item.ID)
 	document, err = h.goals.update(chat, nil)
 	if err != nil {
 		return "uncertain", err

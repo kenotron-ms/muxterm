@@ -214,7 +214,7 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodGet, path, nil)
 			return workToolResult(args, result, err)
 		})
-	srv.Register("get_work_item", "Read a durable work record by canonical work_id or exact friendly reference (for example Work #42). Results include both id and reference, plus creator, owner, plan, dependencies, progress, and history. Unknown or ambiguous references fail clearly.",
+	srv.Register("get_work_item", "Read a Work record by ID or exact reference (for example Work #42). When a native goal starts a Work assignment without a kickoff message, use work_id=assigned to find this chat’s reserved or active Work. If still unassigned, claim it using its latest revision and dispatch.sessionId before executing the plan. Results include the ID, reference, owner, plan, dependencies, progress, and history.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp}), "required": []string{"work_id"}},
 		func(args map[string]any) (string, error) {
 			id, err := argString(args, "work_id")
