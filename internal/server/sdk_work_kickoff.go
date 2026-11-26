@@ -62,7 +62,7 @@ func (h *sdkChatHost) checkWorkKickoffLocked(workID, chatID, ref string, admissi
 		return false
 	}
 	goal, err := h.goals.update(*h.chats[chatID], nil)
-	if err != nil || goal.HumanPaused || goal.RequestedRevision == 0 || goal.AppliedRevision != goal.RequestedRevision ||
+	if err != nil || goal.HumanPaused || goal.RequestedRevision == 0 || goal.AppliedRevision != goal.RequestedRevision || (item.Dispatch.KickoffGoalHeld && goal.State != "paused") ||
 		goal.ExecutionAuthorizedRevision != goal.RequestedRevision || len(goal.Revisions) == 0 ||
 		goal.Revisions[len(goal.Revisions)-1].Condition != item.GoalCondition {
 		return false
@@ -147,9 +147,13 @@ func awaitingLateWorkKickoff(item *sdkWorkItem) bool {
 
 func (s *Server) reconcileWorkKickoffs(ctx context.Context) {
 	h := s.sdkChats
-	var pending []string
+	var pending, held []string
 	h.mu.Lock()
 	for id, item := range h.workItems {
+		if item.Dispatch != nil && item.Dispatch.KickoffGoalHeld && (item.Dispatch.State == "sent" || item.Dispatch.State == "claimed") &&
+			(item.Status == "open" || item.Status == "active") {
+			held = append(held, id)
+		}
 		if item.Dispatch != nil && (item.Dispatch.State == "starting" && item.Status == "open" || awaitingLateWorkKickoff(item)) {
 			pending = append(pending, id)
 		}
@@ -160,6 +164,12 @@ func (s *Server) reconcileWorkKickoffs(ctx context.Context) {
 			return
 		}
 		s.reconcileWorkKickoff(ctx, id)
+	}
+	for _, id := range held {
+		if ctx.Err() != nil {
+			return
+		}
+		s.releaseWorkKickoffGoal(id)
 	}
 }
 

@@ -201,7 +201,9 @@ func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, erro
 			GoalControlVersion: &document.ControlVersion, Raw: json.RawMessage(`{"source":"muxterm-work"}`)})
 		return "sent", nil
 	}
-	h.dispatchGoal(chat, receiptID, "set", item.GoalCondition, false, goalRevision, document.ControlVersion)
+	// An active Codex goal can start a turn without an input. Stage the goal
+	// until the explicit kickoff has durable acceptance evidence.
+	h.dispatchGoal(chat, receiptID, "set", item.GoalCondition, item.Dispatch.KickoffGoalHeld, goalRevision, document.ControlVersion)
 	document, err = h.goals.update(chat, nil)
 	if err != nil {
 		return "uncertain", err
@@ -220,7 +222,8 @@ func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, erro
 						return "uncertain", errors.New("native Work goal changed or was paused before dispatch input")
 					}
 				}
-				if document.AppliedRevision == goalRevision && document.RequestedRevision == goalRevision && !document.HumanPaused {
+				if document.AppliedRevision == goalRevision && document.RequestedRevision == goalRevision && !document.HumanPaused &&
+					(!item.Dispatch.KickoffGoalHeld || document.State == "paused") {
 					return "sent", nil
 				}
 				return "uncertain", errors.New("native Work goal was acknowledged but its exact revision was not observed as applied")

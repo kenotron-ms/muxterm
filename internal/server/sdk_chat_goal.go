@@ -131,7 +131,10 @@ func (s *Server) handleSDKGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workOwned := chat.Harness == "opencode" && currentGoal.Mode == "muxterm-work"
-	if workOwned {
+	workKickoff := chat.Harness == "codex" && slices.ContainsFunc(currentGoal.Receipts, func(receipt goalReceipt) bool {
+		return strings.HasPrefix(receipt.ID, "work-start-goal:")
+	})
+	if workOwned || workKickoff {
 		// Control sends hold the read side through admission. A human pause
 		// waits for in-flight admission, then closes the gate before another
 		// Work continuation can enter the adapter.

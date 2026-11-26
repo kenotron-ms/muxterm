@@ -143,6 +143,7 @@ type sdkWorkDispatch struct {
 	Configuration       *sdkWorkConfiguration `json:"configuration,omitempty"`
 	ChoiceSource        string                `json:"choiceSource,omitempty"`
 	GoalMode            string                `json:"goalMode,omitempty"`
+	KickoffGoalHeld     bool                  `json:"kickoffGoalHeld,omitempty"`
 	KickoffAttempts     int                   `json:"kickoffAttempts,omitempty"`
 	ContinuationEventID string                `json:"continuationEventId,omitempty"`
 	ContinuationState   string                `json:"continuationState,omitempty"`
