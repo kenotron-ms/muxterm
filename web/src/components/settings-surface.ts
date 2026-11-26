@@ -1504,7 +1504,15 @@ export class MuxSettingsSurface extends LitElement {
       }
       const catalog = await fetch(apiPath('/api/sdk-chat-catalog?harness=antigravity'));
       if (epoch !== this._antigravityEpoch) return;
-      this._antigravityStatus = catalog.ok ? 'connected' : 'sign-in';
+      if (catalog.ok) {
+        this._antigravityStatus = 'connected';
+        this._antigravityError = '';
+      } else {
+        const reason = (await catalog.text()).trim();
+        if (epoch !== this._antigravityEpoch) return;
+        this._antigravityStatus = 'sign-in';
+        if (login.state === 'complete') this._antigravityError = reason || 'Google sign-in finished, but Antigravity is not ready for a new chat. Check the connection and try again.';
+      }
     } catch (error) {
       if (epoch === this._antigravityEpoch) {
         this._antigravityStatus = 'error';
@@ -1563,19 +1571,20 @@ export class MuxSettingsSurface extends LitElement {
     finally { this._antigravityInstalling = false; }
   }
 
-  private async _antigravityLoginRequest(method: 'POST' | 'DELETE', callbackURL?: string): Promise<void> {
+  private async _antigravityLoginRequest(method: 'POST' | 'DELETE', code?: string): Promise<void> {
     if (this._antigravityBusy) return;
     this._antigravityBusy = true;
     this._antigravityError = '';
+    const submittedCode = code?.trim();
+    if (submittedCode !== undefined) this._antigravityCallback = '';
     try {
-      const response = await fetch(apiPath(`/api/ai/antigravity/login${callbackURL === undefined ? '' : '/callback'}`), {
-        method, ...(callbackURL === undefined ? {} : {
-          headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:callbackURL}),
+      const response = await fetch(apiPath(`/api/ai/antigravity/login${submittedCode === undefined ? '' : '/code'}`), {
+        method, ...(submittedCode === undefined ? {} : {
+          headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:submittedCode}),
         }),
       });
       if (!response.ok) throw new Error((await response.text()).trim());
       this._antigravityLogin = await response.json() as AntigravityLoginStatus;
-      if (callbackURL !== undefined) this._antigravityCallback = '';
       void this._loadAntigravity();
     } catch (error) { this._antigravityError = error instanceof Error ? error.message : String(error); }
     finally { this._antigravityBusy = false; }
@@ -1606,13 +1615,13 @@ export class MuxSettingsSurface extends LitElement {
       ${this._antigravityInstalling ? html`<mux-ui-feedback kind="loading" density="compact">Downloading and verifying Antigravity for this computer…</mux-ui-feedback>` : nothing}
       ${this._antigravityInstalledNow && installed ? html`<mux-ui-feedback kind="success" density="compact">Installed for this Muxterm user. Sign in to start chatting.</mux-ui-feedback>` : nothing}
       ${login.state === 'starting' ? html`<p>Starting Antigravity sign-in…</p>` : nothing}
-      ${login.state === 'awaiting_code' && login.url ? html`<p>Open Google's sign-in page. If the browser cannot reach the final localhost page, copy its complete address into the field below.</p><a class="ai-login-link" href=${login.url} target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><mux-ui-text-field class="ai-login-code" aria-label="Google callback URL" placeholder="http://127.0.0.1:…/?code=…" .value=${this._antigravityCallback} @input=${(event: Event) => { this._antigravityCallback = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
+      ${login.state === 'awaiting_code' && login.url ? html`<p>Muxterm is running the supported \`agy acp --login\` flow without terminal echo. Open Google's sign-in page in a browser, then paste the authorization code here, or paste the complete localhost callback URL. The code is sent directly to Muxterm and is not shown in chat or terminal history.</p><a class="ai-login-link" href=${login.url} target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a><mux-ui-text-field class="ai-login-code" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Google authorization code or localhost callback URL" placeholder="Authorization code or localhost callback URL" .value=${this._antigravityCallback} @input=${(event: Event) => { this._antigravityCallback = (event.target as MuxUITextField).value; }}></mux-ui-text-field>` : nothing}
       ${login.state === 'verifying' ? html`<p>Checking Google sign-in…</p>` : nothing}
       ${login.state === 'error' && this._antigravityStatus !== 'connected' ? html`<mux-ui-feedback kind="error" density="compact">${login.message || 'Antigravity sign-in failed.'}</mux-ui-feedback>` : nothing}
       ${this._antigravityError && this._antigravityStatus !== 'connected' ? html`<mux-ui-feedback kind="error" density="compact">${this._antigravityError}</mux-ui-feedback>` : nothing}
       <div class="ai-harness-actions">
         ${installed && this._antigravityStatus !== 'connected' && !signingIn ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityBusy} @click=${() => void this._antigravityLoginRequest('POST')}>${mode === 'google' ? 'Sign in with Google' : 'Connect API key'}</mux-ui-button>` : nothing}
-        ${login.state === 'awaiting_code' ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityBusy || !this._antigravityCallback.trim()} @click=${() => void this._antigravityLoginRequest('POST', this._antigravityCallback.trim())}>Finish sign-in</mux-ui-button>` : nothing}
+        ${login.state === 'awaiting_code' ? html`<mux-ui-button size="small" variant="primary" ?disabled=${this._antigravityBusy || !this._antigravityCallback.trim()} @click=${() => void this._antigravityLoginRequest('POST', this._antigravityCallback)}>Finish sign-in</mux-ui-button>` : nothing}
         ${signingIn ? html`<mux-ui-button size="small" variant="secondary" ?disabled=${this._antigravityBusy} @click=${() => void this._antigravityLoginRequest('DELETE')}>Cancel</mux-ui-button>` : nothing}
         <mux-ui-button size="small" variant="secondary" @click=${() => void this._loadAntigravity()}>Check connection</mux-ui-button>
       </div>

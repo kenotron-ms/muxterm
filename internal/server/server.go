@@ -138,6 +138,8 @@ type Server struct {
 	voiceGeneration     uint64        // guarded by voiceMu
 	geminiVoiceMu       sync.Mutex
 	geminiVoiceSessions map[string]geminiVoiceSession
+	antigravityLoginMu  sync.Mutex
+	antigravityLogin    *antigravityLogin
 
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
@@ -315,7 +317,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/ai/antigravity/login", protect(http.HandlerFunc(s.handleAntigravityLogin)))
 	s.mux.Handle("POST /api/ai/antigravity/login", protect(http.HandlerFunc(s.handleAntigravityLogin)))
 	s.mux.Handle("DELETE /api/ai/antigravity/login", protect(http.HandlerFunc(s.handleAntigravityLogin)))
-	s.mux.Handle("POST /api/ai/antigravity/login/callback", protect(http.HandlerFunc(s.handleAntigravityLoginCallback)))
+	s.mux.Handle("POST /api/ai/antigravity/login/code", protect(http.HandlerFunc(s.handleAntigravityLoginCode)))
 	s.mux.Handle("POST /api/ai/antigravity/install", protect(http.HandlerFunc(s.handleAntigravityInstall)))
 	s.mux.Handle("GET /api/ai/unified/connection", protect(http.HandlerFunc(s.handleUnifiedConnectionGet)))
 	s.mux.Handle("PUT /api/ai/unified/connection", protect(http.HandlerFunc(s.handleUnifiedConnectionPut)))
@@ -552,6 +554,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	// SDK chat adapters are child processes and are stopped with the server.
 	defer s.sdkChats.close()
+	defer s.cancelAntigravityLogin()
 	defer func() {
 		if h := s.currentSDKVoice(); h != nil {
 			h.close()

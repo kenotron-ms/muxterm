@@ -119,13 +119,21 @@ new-chat default. Only available adapters verified for live steering, native
 goals, and resumable native history are offered for new chats.
 
 In **Settings → AI**, choose **Google sign-in** or **Detected API key**.
-Google sign-in uses the Google account associated with a Google AI Pro or Ultra
-subscription. Antigravity's ACP login flow owns the OAuth exchange; muxterm does
-not store its OAuth token.
-The API-key option appears when `GEMINI_API_KEY` is in the server environment or
-`~/.amplifier/keys.env`. Muxterm passes the key to the Antigravity ACP process
-and never returns it to the browser. An API key uses a separate billing path.
-After choosing a method, check the connection before starting a chat.
+The managed installer makes `agy` available in `~/.local/bin` on Linux and
+macOS when it finds no existing `agy` command. Keep that directory on your shell
+PATH to run `agy --version` or `agy acp --login` from a fresh terminal.
+
+Google sign-in uses the account associated with a Google AI Pro or Ultra
+subscription and runs the supported `agy acp --login` flow in a Muxterm-managed,
+echo-disabled PTY. Settings shows the Google URL and accepts the one-time code
+or localhost callback URL in a password-style field, then passes it directly
+to the PTY. The code is not placed in chat or terminal scrollback. The `agy`
+CLI stores its own credentials; Muxterm does not store the OAuth token. After
+the CLI exits successfully, Settings checks ACP chat availability before
+showing the connection as ready. The API-key option appears when
+`GEMINI_API_KEY` is configured in the server environment or
+`~/.amplifier/keys.env`. Its value stays hidden from the browser and it uses a
+separate billing path.
 
 The client keeps one ACP process per supported harness and saves each native
 ACP session ID. Native session initialization is serialized on a shared
