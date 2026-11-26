@@ -79,6 +79,7 @@ func (s *Server) workLoop(ctx context.Context) {
 }
 
 func (s *Server) reconcileWork(ctx context.Context) {
+	s.reconcileWorkKickoffs(ctx)
 	s.reconcileWorkFailures()
 	s.reconcileWorkOwnedGoals(ctx)
 	for ctx.Err() == nil {
@@ -153,6 +154,10 @@ func (s *Server) reconcileWorkFailures() {
 			dispatch.Detail = "selected chat did not claim the work; inspect its transcript before retrying"
 			dispatch.UpdatedAt = now
 			copy.Dispatch = &dispatch
+			copy.Status = "blocked"
+			copy.NeedsHuman = true
+			copy.BlockedReason = "The selected worker stopped before claiming Work."
+			copy.NextAction = "Open the selected chat to inspect its transcript and decide how to resume."
 		} else {
 			copy.Status = "blocked"
 			copy.NeedsHuman = true
