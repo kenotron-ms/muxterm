@@ -213,7 +213,7 @@ func (s *Server) installWorkGoal(chatID string, item *sdkWorkItem) (string, erro
 			GoalControlVersion: &document.ControlVersion, Raw: json.RawMessage(`{"source":"muxterm-work"}`)})
 		return "sent", nil
 	}
-	h.dispatchGoal(chat, receiptID, "set", item.GoalCondition, false, goalRevision, document.ControlVersion)
+	h.dispatchGoal(chat, receiptID, "set", item.GoalCondition, false, goalRevision, document.ControlVersion, item.ID)
 	document, err = h.goals.update(chat, nil)
 	if err != nil {
 		return "uncertain", err
