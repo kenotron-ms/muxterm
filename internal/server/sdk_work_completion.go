@@ -10,6 +10,7 @@ import (
 )
 
 type sdkWorkCompletion struct {
+	ClosedWithoutReview    bool                `json:"closedWithoutReview,omitempty"`
 	Reason                 string              `json:"reason"`
 	Resolutions            []sdkWorkResolution `json:"resolutions,omitempty"`
 	ReviewedUnreadComments bool                `json:"reviewedUnreadComments,omitempty"`
@@ -54,7 +55,7 @@ func validateWorkCompletion(item *sdkWorkItem, completion *sdkWorkCompletion) er
 	if workStarting(item) {
 		return errors.New("wait for Work kickoff reconciliation before completing")
 	}
-	if workCommentAttention(item, item.OwnerSessionID) != nil && !completion.ReviewedUnreadComments {
+	if workCommentAttention(item, item.OwnerSessionID) != nil && !completion.ReviewedUnreadComments && !completion.ClosedWithoutReview {
 		return errors.New("review comments still unread by the owner and confirm before completing")
 	}
 	resolutions := make(map[string]sdkWorkResolution, len(completion.Resolutions))

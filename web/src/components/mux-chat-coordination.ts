@@ -683,7 +683,6 @@ export class MuxChatCoordination extends LitElement {
 
   private async submitCompletion(event: SubmitEvent, item: WorkItem) {
     event.preventDefault();
-    if (this.completing) return;
     const form = event.currentTarget as HTMLFormElement;
     const data = new FormData(form);
     const reviewedUnreadComments = form.querySelector('mux-ui-switch')?.checked === true;
@@ -691,13 +690,30 @@ export class MuxChatCoordination extends LitElement {
       id: step.id, status: data.get(`status-${step.id}`), reason: data.get(`reason-${step.id}`),
     }));
     const evidence = String(data.get('evidence') ?? '').split('\n').map(line => line.trim()).filter(Boolean);
+    await this.completeWork(item, {
+      reason: String(data.get('reason') ?? ''), resolutions, evidence, reviewedUnreadComments,
+    });
+  }
+
+  private async completeWork(item: WorkItem, completion?: {
+    reason: string; resolutions: {id:string;status:FormDataEntryValue | null;reason:FormDataEntryValue | null}[];
+    evidence: string[]; reviewedUnreadComments: boolean;
+  }) {
+    if (this.completing) return;
+    const details = completion ?? {
+      reason: 'Marked complete from Work details.',
+      resolutions: this.remainingSteps(item).map(step => ({
+        id: step.id, status: 'skipped', reason: 'Closed by a human with this step unfinished.',
+      })),
+      closedWithoutReview: true,
+    };
     this.completing = true;
     this.completionError = '';
     try {
       const updated = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(item.id)}/complete`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({clientRef: crypto.randomUUID(), expectedRevision: item.revision,
-          reason: data.get('reason'), resolutions, evidence, reviewedUnreadComments}),
+          ...details}),
       });
       if (this.detail?.id === item.id) {
         this.detail = updated;
@@ -706,7 +722,8 @@ export class MuxChatCoordination extends LitElement {
       this.completionItem = undefined;
       void this.refresh();
     } catch (error) {
-      this.completionError = String(error);
+      if (completion) this.completionError = String(error);
+      else this.navigationNotice = String(error);
       void this.refresh();
     } finally {
       this.completing = false;
@@ -806,12 +823,25 @@ export class MuxChatCoordination extends LitElement {
       ${inMotion && move ? html`<div class=${`next-brief ${item.status === 'blocked' ? 'blocked' : ''}`}><strong>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</strong><p>${movePreview}</p>${unreadCount ? html`<mux-ui-button variant="quiet" size="small" @click=${() => this.selectTab('activity')}>Read ${unreadCount} unread ${unreadCount === 1 ? 'comment' : 'comments'}</mux-ui-button>` : nothing}</div>` : nothing}
       ${this.completionItem?.id === item.id && item.status !== 'done' && item.status !== 'cancelled' ? this.completionForm(this.completionItem)
         : item.status !== 'done' && item.status !== 'cancelled' ? html`
-          <mux-ui-button variant="secondary" ?disabled=${!Array.isArray(item.updates)} @click=${() => {this.completionItem = item; this.completionError = '';}}>Mark complete</mux-ui-button>
+          <mux-ui-button variant="secondary" ?disabled=${this.completing || !Array.isArray(item.updates)} @click=${() => {
+            this.navigationNotice = '';
+            if (item.graphId) {
+              this.completionItem = item;
+              this.completionError = '';
+            } else {
+              void this.completeWork(item);
+            }
+          }}>Mark complete</mux-ui-button>
         ` : nothing}
       <div class="detail-tabs" role="tablist" aria-label="Work item details">
         ${detailTabs.map(entry => html`<mux-ui-button id=${`work-tab-${entry.id}`} class="detail-tab" variant="quiet" control-role="tab" controls="work-detail-panel" ?tab-selected=${tab === entry.id} ?tab-stop=${tab === entry.id} @click=${() => this.selectTab(entry.id)} @keydown=${(event: KeyboardEvent) => this.onDetailTabKeydown(event, entry.id)}>${icon(entry.icon)}<span class="detail-tab-label">${entry.label}</span>${entry.id === 'plan' && planSteps.length ? html`<span class="detail-tab-count" aria-label=${`${planSteps.length} steps`}>${planSteps.length}</span>` : entry.id === 'activity' && (unreadCount || updates.length) ? html`<span class="detail-tab-count" aria-label=${unreadCount ? `${unreadCount} unread comments` : `${updates.length} updates`}>${unreadCount || updates.length}</span>` : nothing}</mux-ui-button>`)}
       </div>
       <div id="work-detail-panel" class="detail-panel" role="tabpanel" aria-labelledby=${`work-tab-${tab}`} tabindex="0">
+      ${tab === 'plan' && !this.completionItem && !item.graphId && item.status !== 'done' && item.status !== 'cancelled' ? html`
+        <mux-ui-button variant="quiet" size="small" ?disabled=${this.completing || !Array.isArray(item.updates)} @click=${() => {
+          this.completionItem = item;
+          this.completionError = '';
+        }}>Review checklist before closing</mux-ui-button>` : nothing}
       ${tab === 'description' ? html`
         ${item.goalObservation ? html`<p>Last observed chat goal: ${item.goalObservation.state}${item.goalObservation.summary ? html` · ${item.goalObservation.summary}` : nothing}</p>` : nothing}
         ${this.renderWorkChatGoal(item)}
