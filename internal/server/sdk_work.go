@@ -143,6 +143,8 @@ type sdkWorkDispatch struct {
 	Configuration       *sdkWorkConfiguration `json:"configuration,omitempty"`
 	ChoiceSource        string                `json:"choiceSource,omitempty"`
 	GoalMode            string                `json:"goalMode,omitempty"`
+	AssignmentRevision  int                   `json:"assignmentRevision,omitempty"`
+	WorkGoalRevision    int                   `json:"workGoalRevision,omitempty"`
 	KickoffAttempts     int                   `json:"kickoffAttempts,omitempty"`
 	ContinuationEventID string                `json:"continuationEventId,omitempty"`
 	ContinuationState   string                `json:"continuationState,omitempty"`
@@ -1159,6 +1161,11 @@ func (s *Server) handleSDKWorkUpdate(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "only open work can change readiness", 409)
 			return
 		}
+	}
+	if req.OwnerSessionID != nil && workStarting(item) && item.OwnerSessionID != "" {
+		h.mu.Unlock()
+		http.Error(w, "worker ownership is fixed while kickoff is being reconciled", 409)
+		return
 	}
 	if req.OwnerSessionID != nil && item.Dispatch != nil && item.Dispatch.State != "failed" && item.OwnerSessionID == "" && *req.OwnerSessionID != item.Dispatch.SessionID {
 		h.mu.Unlock()

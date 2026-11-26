@@ -18,8 +18,8 @@ import (
 type workStartChatIDKey struct{}
 type workStartIdleChatKey struct{}
 
-func (h *sdkChatHost) eligibleWorkChatLocked(chat *sdkChat, item *sdkWorkItem, projects []string) bool {
-	if chat == nil || chat.Archived || chat.VoiceHandoff || chat.SideParentID != "" || chat.State != "ready" {
+func (h *sdkChatHost) eligibleWorkChatLocked(chat *sdkChat, item *sdkWorkItem, projects []string, fresh bool) bool {
+	if chat == nil || chat.Archived || chat.VoiceHandoff || chat.SideParentID != "" || chat.State != "ready" && !(fresh && chat.State == "starting") {
 		return false
 	}
 	if chat.ID == h.workCreatorLocked(item).SessionID {
@@ -56,7 +56,7 @@ func (h *sdkChatHost) finishWorkDispatchLocked(id, ref, state, detail string) (s
 		return sdkWorkItem{}, errors.New("work dispatch reservation changed")
 	}
 	copy := *item
-	if copy.Status == "open" && copy.Dispatch.State != "claimed" {
+	if (copy.Status == "open" || copy.Status == "active") && copy.Dispatch.State != "claimed" {
 		dispatch := *copy.Dispatch
 		if state == "failed" && dispatch.State == "starting" && dispatch.Detail != "" {
 			detail += " Last attempt: " + dispatch.Detail
@@ -64,8 +64,36 @@ func (h *sdkChatHost) finishWorkDispatchLocked(id, ref, state, detail string) (s
 		dispatch.State, dispatch.Detail = state, detail
 		dispatch.UpdatedAt = time.Now().UTC()
 		copy.Dispatch = &dispatch
+		if state == "starting" {
+			worker := h.chats[dispatch.SessionID]
+			projects := h.workProjectIDsLocked(item)
+			unreserved := *item
+			unreserved.Dispatch = nil
+			if item.Dispatch.State != "preparing" || copy.OwnerSessionID != "" {
+				return sdkWorkItem{}, errors.New("work assignment changed before startup")
+			}
+			if !h.workEligibleLocked(&unreserved, false) || !h.eligibleWorkChatLocked(worker, item, projects, dispatch.ContextWorkID == "") {
+				return h.finishWorkDispatchLocked(id, ref, "failed", "Work or its selected chat became ineligible before assignment.")
+			}
+			goal, err := h.goals.update(*worker, nil)
+			if err != nil || goal.HumanPaused || dispatch.GoalMode == "native" && goal.RequestedRevision != 0 {
+				return h.finishWorkDispatchLocked(id, ref, "failed", "The selected chat's goal changed or was paused before assignment.")
+			}
+			dispatch.AssignmentRevision = copy.Revision + 1
+			dispatch.WorkGoalRevision = copy.GoalRevision
+			copy.OwnerSessionID = dispatch.SessionID
+			copy.Status = "active"
+			copy.Updates = append(slices.Clone(copy.Updates), sdkWorkUpdate{
+				ID: sdkID(), ClientRef: "dispatch-assigned:" + ref, At: dispatch.UpdatedAt,
+				Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Scheduler assigned worker",
+				LinkedSessionID: dispatch.SessionID, OwnerSessionID: &copy.OwnerSessionID, Status: "active",
+			})
+		}
 		if state == "failed" || state == "uncertain" {
 			copy.Status = "blocked"
+			if state == "failed" && copy.OwnerSessionID == dispatch.SessionID {
+				copy.OwnerSessionID = ""
+			}
 			copy.BlockedReason = "The selected worker could not start."
 			copy.NextAction = "Check the selected worker, then reopen Work and start it again."
 			if state == "uncertain" {
@@ -166,7 +194,7 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	related := h.workContextCandidatesLocked(item)
 	candidates := make([]sdkChat, 0)
 	for _, chat := range h.chats {
-		if h.eligibleWorkChatLocked(chat, item, projects) {
+		if h.eligibleWorkChatLocked(chat, item, projects, false) {
 			candidates = append(candidates, *chat)
 		}
 	}
@@ -215,9 +243,9 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "work is not eligible to start", 409)
 		return
 	}
-	if item.Harness != "" && item.Harness != selectedHarness || item.Harness == "" && s.workDefaultHarness() != selectedHarness {
+	if item.Revision != selectedRevision || item.Harness == "" && s.workDefaultHarness() != selectedHarness {
 		h.mu.Unlock()
-		http.Error(w, "Work harness choice changed during selection; retry", http.StatusConflict)
+		http.Error(w, "Work changed during worker selection; retry", http.StatusConflict)
 		return
 	}
 	projects = slices.Clone(h.workProjectIDsLocked(item))
@@ -228,7 +256,7 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "related worker changed before dispatch; retry selection", 409)
 			return
 		}
-		if !h.eligibleWorkChatLocked(h.chats[relatedChatID], item, projects) || !goalReady[relatedChatID] {
+		if !h.eligibleWorkChatLocked(h.chats[relatedChatID], item, projects, false) || !goalReady[relatedChatID] {
 			h.mu.Unlock()
 			http.Error(w, "related worker is no longer ready; retry selection", 409)
 			return
@@ -330,10 +358,10 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	if state == "uncertain" || state == "failed" {
+	if result.Dispatch != nil && (result.Dispatch.State == "uncertain" || result.Dispatch.State == "failed") {
 		h.notifyWorkKickoffFailure(result)
 	}
-	if state == "starting" {
+	if result.Dispatch != nil && result.Dispatch.State == "starting" {
 		s.wakeWork()
 	}
 	writeSDKJSON(w, 200, result)
@@ -350,9 +378,9 @@ func (h *sdkChatHost) notifyWorkKickoffFailure(item sdkWorkItem) {
 
 func workKickoffPrompt(item *sdkWorkItem) string {
 	id, workerID, goalMode := item.ID, item.Dispatch.SessionID, item.Dispatch.GoalMode
-	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The filed Work condition has been installed as your native Chat Goal. Read the record with get_work_item. If it is no longer open, stop. If it is unassigned, claim it with update_work_item using your chat ID and the latest revision as expected_revision. Use the Work plan as execution guidance and the goal as the completion contract. On claim, each meaningful milestone, blocker, replan, and completion, call update_work_item with expected_revision to move relevant step_updates and update summary, progress, next_action, and status together. A replan sends the full plan and a reason; keep completed steps. Each update response includes unread commentAttention: read and acknowledge any comments before review or done. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your goal."
+	prompt := "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". The filed Work condition has been installed as your native Chat Goal. Read the record with get_work_item. Confirm this chat owns the item before executing the plan. Use the Work plan as execution guidance and the goal as the completion contract. On the first turn, each meaningful milestone, blocker, replan, and completion, call update_work_item with expected_revision to move relevant step_updates and update summary, progress, next_action, and status together. A replan sends the full plan and a reason; keep completed steps. Each update response includes unread commentAttention: read and acknowledge any comments before review or done. Then carry out next_action, keep the Work record current, and report evidence or blockers in both the Work record and your goal."
 	if goalMode == "muxterm-work" {
-		prompt = "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". Muxterm owns this Work goal; OpenCode does not expose native goal controls through ACP. The exact filed condition is below. Continue until Work is done or blocked; Muxterm may send a continuation after each completed turn. Read the Work record, claim it with your chat ID and latest expected_revision, then update its plan, summary, progress, next_action, and status at each milestone. Read and acknowledge Work comments before review or done. Report evidence or blockers in the Work record.\n\nFiled Work condition:\n" + item.GoalCondition
+		prompt = "Muxterm selected this chat for Work item " + id + ". Your chat ID is " + workerID + ". Muxterm owns this Work goal; OpenCode does not expose native goal controls through ACP. The exact filed condition is below. Continue until Work is done or blocked; Muxterm may send a continuation after each completed turn. Read the Work record, confirm this chat is the owner, then use the latest expected_revision to update its plan, summary, progress, next_action, and status at each milestone. Read and acknowledge Work comments before review or done. Report evidence or blockers in the Work record.\n\nFiled Work condition:\n" + item.GoalCondition
 	}
 	if item.PlanProtocol != "" {
 		prompt += " Filed plan update protocol: " + item.PlanProtocol

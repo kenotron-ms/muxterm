@@ -123,7 +123,7 @@ func (s *Server) reconcileWorkFailures() {
 	notices := []notice{}
 	h.mu.Lock()
 	for _, item := range h.workItems {
-		if item.Readiness != "ready" || item.Status == "done" || item.Status == "cancelled" || item.Status == "blocked" || item.Status == "review" {
+		if workStarting(item) || item.Readiness != "ready" || item.Status == "done" || item.Status == "cancelled" || item.Status == "blocked" || item.Status == "review" {
 			continue
 		}
 		workerID := item.OwnerSessionID

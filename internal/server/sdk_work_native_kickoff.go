@@ -15,7 +15,7 @@ func (s *Server) reconcileNativeWorkKickoff(ctx context.Context, id string) {
 	h.mu.Lock()
 	item := h.workItems[id]
 	if item == nil || item.Dispatch == nil || item.Dispatch.GoalMode != "native" ||
-		!(item.Status == "open" && item.Dispatch.State == "starting" || awaitingLateWorkKickoff(item)) {
+		!(workStarting(item) || awaitingLateWorkKickoff(item)) {
 		h.mu.Unlock()
 		return
 	}
@@ -102,7 +102,7 @@ func (s *Server) reconcileNativeWorkKickoff(ctx context.Context, id string) {
 	_, err = s.installWorkGoal(chat.ID, &copy)
 	if err != nil {
 		h.mu.Lock()
-		if current := h.workItems[id]; current != nil && current.Status == "open" && current.Dispatch != nil &&
+		if current := h.workItems[id]; workStarting(current) &&
 			current.Dispatch.ClientRef == dispatch.ClientRef && current.Dispatch.State == "starting" {
 			next := *current
 			outcome := *current.Dispatch
