@@ -9,6 +9,8 @@ import '../ui/button.js';
 import '../ui/range-field.js';
 import '../ui/select.js';
 import '../ui/text-area.js';
+import '../ui/text-field.js';
+import '../ui/switch.js';
 import './work-goal-review.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import type { MuxUISelect } from '../ui/select.js';
@@ -238,10 +240,7 @@ export class MuxChatCoordination extends LitElement {
     .activity-markdown .md-th,.activity-markdown .md-td { padding:var(--ui-space-2) var(--ui-space-3); border-bottom:var(--ui-space-px) solid var(--ui-border); text-align:left; }
     .activity-markdown .md-h { margin:var(--ui-space-4) 0 var(--ui-space-2); font-size:var(--ui-text-lg); }
     .completion-form { display:grid; gap:var(--ui-space-3); padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); overflow-wrap:anywhere; }
-    .completion-form fieldset { min-width:0; margin:0; border:1px solid var(--ui-border); }
-    .completion-form label { display:grid; gap:var(--ui-space-1); margin-block:var(--ui-space-2); }
-    .completion-form input:not([type=checkbox]), .completion-form select, .completion-form textarea { box-sizing:border-box; width:100%; padding:var(--ui-space-2); background:var(--ui-surface); color:inherit; border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); font:inherit; }
-    .completion-form label.completion-check { display:flex; align-items:start; }
+    .completion-form fieldset { display:grid; gap:var(--ui-space-3); min-width:0; margin:0; border:1px solid var(--ui-border); }
     .completion-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:var(--ui-space-2); }
     .activity-evidence { margin-top:var(--ui-space-3); font-size:var(--ui-text-md); }
     .comment-form { margin-top:var(--ui-space-6); display:grid; gap:var(--ui-space-3); }
@@ -685,7 +684,9 @@ export class MuxChatCoordination extends LitElement {
   private async submitCompletion(event: SubmitEvent, item: WorkItem) {
     event.preventDefault();
     if (this.completing) return;
-    const data = new FormData(event.currentTarget as HTMLFormElement);
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    const reviewedUnreadComments = form.querySelector('mux-ui-switch')?.checked === true;
     const resolutions = this.remainingSteps(item).map(step => ({
       id: step.id, status: data.get(`status-${step.id}`), reason: data.get(`reason-${step.id}`),
     }));
@@ -696,7 +697,7 @@ export class MuxChatCoordination extends LitElement {
       const updated = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(item.id)}/complete`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({clientRef: crypto.randomUUID(), expectedRevision: item.revision,
-          reason: data.get('reason'), resolutions, evidence, reviewedUnreadComments: data.has('reviewedComments')}),
+          reason: data.get('reason'), resolutions, evidence, reviewedUnreadComments}),
       });
       if (this.detail?.id === item.id) {
         this.detail = updated;
@@ -734,16 +735,19 @@ export class MuxChatCoordination extends LitElement {
       ${resolved.length ? html`<ul aria-label="Previously resolved steps">${resolved.map(step => html`<li>${step.title} · ${step.status === 'done' ? 'Done' : 'Skipped'}</li>`)}</ul>` : nothing}
       ${remaining.map(step => html`<fieldset>
         <legend>${step.title} · ${step.status.replace('_', ' ')}</legend>
-        <label>Resolution<select required name=${`status-${step.id}`}><option value="">Choose a resolution</option><option value="done">Done</option><option value="skipped">Skipped</option></select></label>
-        <label>Step reason<input required maxlength="2048" name=${`reason-${step.id}`}></label>
+        <mux-ui-select label="Resolution" required name=${`status-${step.id}`} .options=${[
+          {value:'', label:'Choose a resolution'}, {value:'done', label:'Done'}, {value:'skipped', label:'Skipped'},
+        ]}></mux-ui-select>
+        <mux-ui-text-field label="Step reason" required name=${`reason-${step.id}`}></mux-ui-text-field>
       </fieldset>`)}
       ${comments.length ? html`<section>
         <h4>Comments unread by the owner</h4>
         <ul>${comments.map(comment => html`<li><strong>${this.actor(comment.actor)}</strong><p>${comment.text}</p></li>`)}</ul>
-        <label class="completion-check"><input type="checkbox" required name="reviewedComments">I reviewed these comments. They will remain unread for the owner.</label>
+        <mux-ui-switch layout="row" label="I reviewed these comments" description="They will remain unread for the owner."></mux-ui-switch>
       </section>` : nothing}
-      <label>Completion reason<textarea required maxlength="4096" name="reason" rows="3"></textarea></label>
-      <label>${item.graphId ? 'Verification evidence' : 'New verification evidence (optional)'}<textarea ?required=${!!item.graphId} name="evidence" rows="2" placeholder="One reference per line"></textarea></label>
+      <mux-ui-text-area label="Completion reason" required name="reason" .maxLength=${4096} .rows=${3}></mux-ui-text-area>
+      <mux-ui-text-area label=${item.graphId ? 'Verification evidence' : 'New verification evidence (optional)'}
+        ?required=${!!item.graphId} name="evidence" .rows=${2} placeholder="One reference per line"></mux-ui-text-area>
       ${this.completionError ? html`<p role="alert">${this.completionError}</p>` : nothing}
       <div class="completion-actions">
         <mux-ui-button variant="quiet" ?disabled=${this.completing} @click=${() => { this.completionItem = undefined; }}>Cancel</mux-ui-button>
