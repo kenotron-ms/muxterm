@@ -1,3 +1,4 @@
+import { BASE_PATH } from './lib/base-path.js';
 import { subtleScrollbars } from './lib/subtle-scrollbars.js';
 import './ui/tokens.css';
 import './ui/dialog.js';
@@ -16,6 +17,7 @@ import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig }
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
 import { applyAppAppearance } from './lib/app-appearance.js';
+import { applyAppTypography, readAppTypography } from './lib/app-typography.js';
 import { applyPWAIconLinks } from './lib/pwa-icon.js';
 import { applyDocumentTitle } from './lib/instance-identity.js';
 import { installPwaWindowControls } from './lib/pwa-window-controls.js';
@@ -45,7 +47,7 @@ import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
 import './components/mux-sdk-chat.js';
 import type { MuxSDKChat } from './components/mux-sdk-chat.js';
-import { chatHost, rememberChatHost, rememberProjectHost } from './lib/remote-chat-routes.js';
+import { chatHost, rememberChatHost, rememberProjectHost, remoteChatPath } from './lib/remote-chat-routes.js';
 import './components/mux-new-chat.js';
 import './components/mux-scheduled-jobs.js';
 import './components/mux-connections.js';
@@ -110,12 +112,11 @@ function chatFromHash(): string | null {
   if (host) rememberChatHost(id, host);
   return id;
 }
-function workFromHash(chatId: string): string | null {
+function workLinkFromHash(chatId: string): {id:string; host:string} | null {
   const params = new URLSearchParams(window.location.hash.slice(1));
   const id = params.get('work');
-  const host = params.get('workHost');
-  if (!id || !/^[0-9a-f]{32}$/i.test(id) || (host && host !== chatHost(chatId))) return null;
-  return id;
+  if (!id || !/^[0-9a-f]{32}$/i.test(id)) return null;
+  return {id, host:params.get('workHost') ?? chatHost(chatId)};
 }
 
 function setChatHash(id: string | null, replace = false): void {
@@ -586,6 +587,7 @@ export class MuxApp extends LitElement {
   private _drawerOpen = false;
 
   @state() private _sdkChatId: string | null = null;
+  @state() private _deferChatSettings = false;
   private _lastSelectedSDKChatId: string | null = null;
   @state() private _terminalUtilityOpen = false;
   @state() private _paletteOpen = false;
@@ -829,7 +831,7 @@ export class MuxApp extends LitElement {
     if (this._sdkChatId === null) {
       const fromHash = chatFromHash();
       if (fromHash) {
-        this._selectMainSurface(fromHash, 'none');
+        this._selectMainSurface(fromHash, 'none', !!workLinkFromHash(fromHash));
         void this._openWorkFromHash(fromHash);
       }
     }
@@ -857,6 +859,7 @@ export class MuxApp extends LitElement {
     // Apply default theme tokens immediately so --mux-* and --chrome-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     applyChromeTokens(store.config.theme.palette);
+    applyAppTypography(readAppTypography());
     applyAppAppearance(store.config.theme.app, store.config.theme.mode, store.config.theme.backdrop);
     applyPWAIconLinks(store.config.theme.backdrop);
     // Reflect which machine this instance is running on — document title
@@ -1559,7 +1562,7 @@ export class MuxApp extends LitElement {
             <mux-scheduled-jobs .createFromChat=${this._jobEditorChatId} @job-new=${this._onJobNew} @chat-open=${this._onChatOpen}></mux-scheduled-jobs>` : this._sdkChatId === 'connections' ? html`
             <mux-connections .initialSelection=${this._connectionSelection} @connection-setup-chat=${this._onConnectionSetupChat}></mux-connections>` : this._sdkChatId === 'skills' ? html`
             <mux-skills></mux-skills>` : html`
-            <mux-sdk-chat .sessionId=${this._sdkChatId} .compact=${this._layoutMode === 'narrow'} @drawer-toggle=${this._onDrawerToggle} @chat-open=${this._onChatOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
+            <mux-sdk-chat .deferSettings=${this._deferChatSettings} .sessionId=${this._sdkChatId} .compact=${this._layoutMode === 'narrow'} @drawer-toggle=${this._onDrawerToggle} @chat-open=${this._onChatOpen} @work-open=${this._onWorkOpen} @pane-select=${this._onActivePane} @pane-create=${this._createPaneOptimistic} @pane-rename=${this._onPaneRename} @layout-save=${this._onLayoutSave} @terminal-open=${this._onTerminalOpen} @workspace-create=${this._onOpenCreateModal}></mux-sdk-chat>` : ''}
         </div>
 
       </div>
@@ -2233,7 +2236,7 @@ export class MuxApp extends LitElement {
     window.history.replaceState({ ...state, [HISTORY_MAIN_SURFACE_KEY]: view ?? 'terminal' }, '', window.location.href);
   }
 
-  private _selectMainSurface(view: string | null, history: 'push' | 'replace' | 'none' = 'push'): void {
+  private _selectMainSurface(view: string | null, history: 'push' | 'replace' | 'none' = 'push', deferChatSettings = false): void {
     if (history === 'push') this._rememberHistorySurface(this._sdkChatId);
     const chatId = view && !UTILITY_TITLES.has(view) ? view : null;
     // Utility screens share a URL with the terminal. Give each navigation a
@@ -2243,6 +2246,7 @@ export class MuxApp extends LitElement {
     }
     this._bootChatId = null;
     this._bootChatHost = '';
+    this._deferChatSettings = deferChatSettings;
     this._sdkChatId = view;
     if (chatId) this._lastSelectedSDKChatId = chatId;
     (window as Window & { muxSelectedSDKChat?: string }).muxSelectedSDKChat = chatId ?? '';
@@ -2391,7 +2395,7 @@ export class MuxApp extends LitElement {
   private _onChatHistory = (): void => {
     const id = chatFromHash();
     if (id) {
-      this._selectMainSurface(id, 'none');
+      this._selectMainSurface(id, 'none', !!workLinkFromHash(id));
       void this._openWorkFromHash(id);
     } else {
       const stored = (window.history.state as Record<string, unknown> | null)?.[HISTORY_MAIN_SURFACE_KEY];
@@ -2402,10 +2406,62 @@ export class MuxApp extends LitElement {
   };
 
   private async _openWorkFromHash(chatId: string): Promise<void> {
-    const workId = workFromHash(chatId);
-    if (!workId) return;
+    const link = workLinkFromHash(chatId);
+    if (!link) return;
     await this.updateComplete;
-    await this.renderRoot.querySelector<MuxSDKChat>('mux-sdk-chat')?.navigateWork(workId);
+    const source = this.renderRoot.querySelector<MuxSDKChat>('mux-sdk-chat');
+    if (source?.sessionId === chatId) await this._navigateWork(link.id, link.host, source, undefined, true);
+  }
+
+  private _workNavigation?: AbortController;
+
+  private _onWorkOpen = (event: CustomEvent<{id:string; host:string; source:MuxSDKChat; trigger?:HTMLElement}>): void => {
+    event.preventDefault();
+    const {id, host, source, trigger} = event.detail;
+    void this._navigateWork(id, host, source, trigger);
+  };
+
+  private async _navigateWork(id: string, host: string, source: MuxSDKChat, trigger?: HTMLElement, fromHash = false): Promise<void> {
+    this._workNavigation?.abort();
+    const navigation = this._workNavigation = new AbortController();
+    const sourceId = source.sessionId;
+    const surface = this._sdkChatId;
+    const current = () => !navigation.signal.aborted && this._sdkChatId === surface && source.isConnected && source.sessionId === sourceId;
+    const read = async <T>(path: string): Promise<T> => {
+      const response = await fetch(BASE_PATH + remoteChatPath(host, path).slice(1), {cache:'no-store', signal:navigation.signal});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json() as T;
+    };
+    let item: {id:string; title:string; ownerSessionId?:string};
+    try {
+      item = await read(`/api/sdk-work/${encodeURIComponent(id)}`);
+    } catch {
+      if (current()) await source.navigateWork(id, host, undefined, undefined, trigger);
+      return;
+    }
+    if (!current()) return;
+    const ownerId = item.ownerSessionId;
+    const sourceHost = chatHost(sourceId);
+    let notice: string | undefined;
+    if (ownerId && (ownerId !== sourceId || host !== sourceHost)) {
+      const owner = await read<SDKChat>(`/api/sdk-chats/${encodeURIComponent(ownerId)}`).catch(() => undefined);
+      if (!current()) return;
+      if (owner?.id === ownerId && !owner.archived) {
+        rememberChatHost(ownerId, host);
+        this._selectMainSurface(ownerId, fromHash ? 'none' : 'push', true);
+        this._jobEditorChatId = '';
+        this._newChatForJob = false;
+        this._closeDrawer();
+        await this.updateComplete;
+        const destination = this.renderRoot.querySelector<MuxSDKChat>('mux-sdk-chat');
+        if (destination?.sessionId === ownerId && !navigation.signal.aborted) {
+          await destination.navigateWork(item.id, host, undefined, item.title);
+        }
+        return;
+      }
+      notice = 'The owning chat is unavailable. Showing this Work item here.';
+    }
+    await source.navigateWork(item.id, host, notice, item.title, trigger);
   }
 
   private _onChatOpen = (e: Event): void => {

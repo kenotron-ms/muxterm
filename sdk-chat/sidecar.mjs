@@ -11,7 +11,6 @@ import { agentCommand } from './agent-command.mjs';
 import { ACPStream, isACPHarness, stopACPRuntimes } from './acp-stream.mjs';
 import { PiStream } from './pi-stream.mjs';
 import { DeepSeekStream } from './deepseek-stream.mjs';
-import { AntigravitySDKStream } from './antigravity-sdk-stream.mjs';
 import { UnifiedStream } from './unified-stream.mjs';
 import { antigravityLoginStatus, startAntigravityLogin, cancelAntigravityLogin, finishAntigravityLogin } from './antigravity-login.mjs';
 import { query, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
@@ -77,7 +76,7 @@ const capabilities = harness => harness === 'copilot'
   : harness === 'amplifier-unified'
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: true,
       attributed_service_input: false, native_steering: true }
-  : harness === 'pi' || harness === 'deepseek' || harness === 'antigravity-sdk'
+  : harness === 'pi' || harness === 'deepseek'
   ? { approvals: false, transcript_read: false, interrupt: true, live_input: false,
       attributed_service_input: false, native_steering: harness === 'pi' }
   : harness === 'claude'
@@ -257,6 +256,20 @@ async function runClaude(s) {
         for (const id of accepted) s.inFlightInputs.delete(id);
         if (s.cancelRequested || msg.subtype !== 'success') s.inFlightInputs.clear();
         s.busy = s.inFlightInputs.size > 0;
+        if (msg.usage) {
+          const { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens } = msg.usage;
+          emit(s.id, 'usage.observed', {
+            inputIds: accepted,
+            kind: 'result',
+            model: Object.keys(msg.modelUsage || {}).join(', '),
+            raw: {
+              inputTokens: [input_tokens, cache_read_input_tokens, cache_creation_input_tokens].every(Number.isSafeInteger)
+                ? input_tokens + cache_read_input_tokens + cache_creation_input_tokens : undefined,
+              outputTokens: output_tokens,
+              cachedInputTokens: cache_read_input_tokens,
+            },
+          });
+        }
         emit(s.id, s.cancelRequested || msg.subtype === 'interrupted' ? 'turn.cancelled'
           : msg.subtype === 'success' && !msg.is_error ? (s.busy ? 'turn.continued' : 'turn.completed') : 'error',
           { inputIds: accepted, message: msg.is_error ? msg.result || msg.subtype : msg.subtype });
@@ -329,7 +342,7 @@ async function command(cmd) {
   if (op === 'start' || op === 'resume') {
     if (harness === 'amplifier') throw new Error('Amplifier unavailable in this build');
     if (harness !== 'codex' && harness !== 'claude' && harness !== 'copilot' &&
-      !['pi', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness) && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
+      !['pi', 'deepseek', 'amplifier-unified'].includes(harness) && !isACPHarness(harness)) throw new Error(`Unsupported harness: ${harness}`);
     if (sessions.has(sessionId)) return { sessionId, capabilities: capabilities(harness) };
     if (cmd.approval !== 'never') throw new Error('Invalid chat approval policy');
     const s = { id: sessionId, harness, cwd, sourceFolders: cmd.sourceFolders || [], nativeId,
@@ -338,10 +351,10 @@ async function command(cmd) {
       goalControlVersion: cmd.goalControlVersion,
       inputs: [], pendingInputs: new Map(), inFlightInputs: new Set(), busy: false, closed: false, cancelRequested: false, model: cmd.model || '', effort: cmd.effort || '', permission: cmd.permission || 'full-permission', mode: cmd.mode || 'agent' };
     sessions.set(sessionId, s);
-    if (['pi', 'deepseek', 'antigravity-sdk', 'amplifier-unified'].includes(harness)) {
+    if (['pi', 'deepseek', 'amplifier-unified'].includes(harness)) {
       try {
         const Adapter = { pi: PiStream, deepseek: DeepSeekStream,
-          'antigravity-sdk': AntigravitySDKStream, 'amplifier-unified': UnifiedStream }[harness];
+          'amplifier-unified': UnifiedStream }[harness];
         s.native = new Adapter(s, emit);
         await s.native.ready;
       }
@@ -539,7 +552,7 @@ async function command(cmd) {
   }
   if (op === 'answerQuestion') {
     if (s.harness === 'codex' && s.codex) return s.codex.answerUserInput(cmd.questionId, cmd.answers);
-    if (s.harness === 'opencode' && s.acp) return s.acp.answerElicitation(cmd.questionId, cmd.answers);
+    if (s.harness === 'opencode' && s.acp) return s.acp.answerElicitation(cmd.questionId, cmd.answers, cmd.dismiss);
     throw new Error('This chat has no pending question');
   }
   if (op === 'interrupt') {

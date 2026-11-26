@@ -213,6 +213,7 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	}
 	h := s.sdkChats
 	workID, _ := r.Context().Value(sdkWorkKickoffContextKey{}).(string)
+	kickoff, isKickoff := r.Context().Value(workKickoffAdmission{}).(workKickoffAdmission)
 	continuationEventID, _ := r.Context().Value(sdkWorkContinuationContextKey{}).(string)
 	workNotice, isWorkNotice := r.Context().Value(sdkWorkCommentNoticeContextKey{}).(sdkWorkCommentNotice)
 	remoteSender := ""
@@ -250,6 +251,11 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chat := *c
+	if isKickoff && !h.checkWorkKickoffLocked(workID, id, req.ClientRef, kickoff) {
+		h.mu.Unlock()
+		http.Error(w, "Work kickoff is no longer eligible", http.StatusConflict)
+		return
+	}
 	if continuationEventID != "" && !h.workContinuationEligibleLocked(workID, id, continuationEventID) {
 		h.mu.Unlock()
 		http.Error(w, "Work continuation changed before admission", http.StatusConflict)
@@ -342,6 +348,11 @@ func (s *Server) handleSDKControlSend(w http.ResponseWriter, r *http.Request) {
 	if !stillAuthorized || currentOrigin != originChatID {
 		h.mu.Unlock()
 		http.Error(w, "chat capability was revoked before dispatch", http.StatusForbidden)
+		return
+	}
+	if isKickoff && !h.checkWorkKickoffLocked(workID, id, req.ClientRef, kickoff) {
+		h.mu.Unlock()
+		http.Error(w, "Work kickoff is no longer eligible", http.StatusConflict)
 		return
 	}
 	if continuationEventID != "" && !h.workContinuationEligibleLocked(workID, id, continuationEventID) {

@@ -527,7 +527,7 @@ func (h *sdkChatHost) appendEvent(event sdkEvent) {
 		h.scheduleNamingLocked(c)
 	}
 	h.mu.Unlock()
-	if h.onWorkChange != nil && (event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain") {
+	if h.onWorkChange != nil && (event.Type == "input.accepted" || event.Type == "turn.completed" || event.Type == "turn.cancelled" || event.Type == "error" || event.Type == "session.uncertain") {
 		h.onWorkChange()
 	}
 	// The pending plan and source journal are durable before fanout. Subscriber
@@ -654,7 +654,7 @@ func isMuxtermSandboxPath(value string) bool {
 // sdkSidecarXDGEnv returns the XDG environment for the SDK sidecar.
 //
 // The sidecar's process.env is what every agent harness child it spawns
-// (opencode, codex, claude, copilot, pi, deepseek, gemini, antigravity)
+// (opencode, codex, claude, copilot, pi, deepseek, antigravity)
 // inherits, and those CLIs resolve their config, credentials, and session
 // history from XDG_CONFIG_HOME/XDG_DATA_HOME. When an instance sandboxes those
 // values (the desktop app does, to keep its muxterm state apart from a
@@ -1532,40 +1532,15 @@ func sdkModeNames(value any) []string {
 }
 
 func isSDKACPHarness(harness string) bool {
-	switch harness {
-	case "gemini", "antigravity":
-		return true
-	}
-	return false
+	return harness == "antigravity"
 }
 
 func isSDKConfiguredHarness(harness string) bool {
-	return harness == "pi" || harness == "opencode" || harness == "deepseek" || harness == "antigravity-sdk" || harness == "amplifier-unified" || isSDKACPHarness(harness)
+	return harness == "pi" || harness == "opencode" || harness == "deepseek" || harness == "amplifier-unified" || isSDKACPHarness(harness)
 }
 
 func sdkACPExecutable(harness string) string {
 	switch harness {
-	case "gemini":
-		if value := os.Getenv("MUXTERM_ACP_GEMINI_COMMAND"); value != "" {
-			return value
-		}
-		if path, err := exec.LookPath("gemini"); err == nil {
-			return path
-		}
-		// User-level npm installs may be absent from a service's PATH.
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if npm, err := exec.LookPath("npm"); err == nil {
-			if prefix, err := exec.CommandContext(ctx, npm, "config", "get", "prefix").Output(); err == nil {
-				root := strings.TrimSpace(string(prefix))
-				if filepath.IsAbs(root) {
-					if path, err := exec.LookPath(filepath.Join(root, "bin", "gemini")); err == nil {
-						return path
-					}
-				}
-			}
-		}
-		return "gemini"
 	case "antigravity":
 		return antigravityCLIPath()
 	}
@@ -1921,9 +1896,7 @@ func (s *Server) handleSDKChatStartOptions(w http.ResponseWriter, r *http.Reques
 		{Harness: "pi", Provider: "configured"},
 		{Harness: "opencode", Provider: "configured"},
 		{Harness: "deepseek", Provider: "configured"},
-		{Harness: "gemini", Provider: "configured"},
 		{Harness: "antigravity", Provider: "configured"},
-		{Harness: "antigravity-sdk", Provider: "configured"},
 	}
 	options := make([]option, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -1998,21 +1971,8 @@ func (s *Server) eligibleNewChatHarness(parent context.Context, harness string) 
 	case "opencode":
 		_, _, err := sdkOpenCodeV2Executable(ctx)
 		return err == nil
-	case "gemini":
-		_, err := sdkExecutablePath(sdkACPExecutable("gemini"))
-		return err == nil
 	case "antigravity":
 		return antigravityAvailable()
-	case "antigravity-sdk":
-		if sdkAmplifierProviderKey("GEMINI_API_KEY") == "" {
-			return false
-		}
-		for _, command := range []string{"uv", "python3"} {
-			if _, err := sdkExecutablePath(command); err != nil {
-				return false
-			}
-		}
-		return true
 	case "amplifier-unified":
 		return unifiedConnectionAvailable()
 	case "pi", "deepseek":
@@ -2238,7 +2198,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			req.Provider = "configured"
 		case "copilot":
 			req.Provider = "github"
-		case "pi", "opencode", "deepseek", "gemini", "antigravity", "antigravity-sdk", "amplifier-unified":
+		case "pi", "opencode", "deepseek", "antigravity", "amplifier-unified":
 			req.Provider = "configured"
 		}
 	}
@@ -2313,18 +2273,6 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 			command := sdkACPExecutable(req.Harness)
 			if _, err := exec.LookPath(command); err != nil {
 				http.Error(w, "harness executable unavailable: "+command, 503)
-				return
-			}
-		}
-	}
-	if req.Harness == "antigravity-sdk" {
-		if sdkAmplifierProviderKey("GEMINI_API_KEY") == "" {
-			http.Error(w, "Antigravity SDK requires GEMINI_API_KEY", 503)
-			return
-		}
-		for _, name := range []string{"uv", "python3"} {
-			if _, err := sdkExecutablePath(name); err != nil {
-				http.Error(w, "Antigravity SDK requires "+name, 503)
 				return
 			}
 		}

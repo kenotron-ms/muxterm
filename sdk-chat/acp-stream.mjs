@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { readFileSync, mkdirSync, writeFileSync, accessSync, statSync, existsSync, constants } from 'node:fs';
+import { readFileSync, accessSync, statSync, existsSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join, delimiter, isAbsolute } from 'node:path';
@@ -10,7 +10,6 @@ import { instanceDataHome, instanceMcpEnv } from './instance-xdg.mjs';
 
 const profiles = {
   opencode: { command: 'opencode', args: ['acp'], env: 'MUXTERM_ACP_OPENCODE_COMMAND', mcp: true },
-  gemini: { command: 'gemini', args: ['--acp'], env: 'MUXTERM_ACP_GEMINI_COMMAND', mcp: true },
   antigravity: { command: 'agy', args: ['acp'], env: 'MUXTERM_ACP_ANTIGRAVITY_COMMAND', mcp: true },
 };
 
@@ -43,12 +42,10 @@ class ACPRuntime {
     this.stderr = '';
     const profile = profiles[harness];
     const launch = harness === 'antigravity' ? antigravityLaunch() : null;
-    const command = harness === 'gemini' ? geminiCommand()
-      : launch?.command || process.env[profile.env] || profile.command;
+    const command = launch?.command || process.env[profile.env] || profile.command;
     this.process = spawn(command, launch?.args || profile.args, {
       ...(harness === 'antigravity' ? { cwd: session.cwd } : {}),
-      env: harness === 'gemini' ? geminiEnvironment()
-        : harness === 'opencode' && !session.catalog ? opencodeEnvironment(mcpServers)
+      env: harness === 'opencode' && !session.catalog ? opencodeEnvironment(mcpServers)
         : launch?.env || process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -214,64 +211,6 @@ export function antigravityLaunch(mode = antigravityMode()) {
   return { command, args, env };
 }
 
-function geminiCommand() {
-  if (process.env.MUXTERM_ACP_GEMINI_COMMAND) return process.env.MUXTERM_ACP_GEMINI_COMMAND;
-  for (const directory of (process.env.PATH || '').split(delimiter)) {
-    if (!isAbsolute(directory)) continue;
-    const command = join(directory, 'gemini');
-    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
-    catch { /* Try the next directory. */ }
-  }
-  const prefix = spawnSync('npm', ['config', 'get', 'prefix'], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
-  const root = prefix.stdout?.trim();
-  if (prefix.status === 0 && isAbsolute(root || '')) {
-    const command = join(root, 'bin', 'gemini');
-    try { if (statSync(command).isFile()) { accessSync(command, constants.X_OK); return command; } }
-    catch { /* Let spawn report the unavailable CLI. */ }
-  }
-  return 'gemini';
-}
-
-function geminiEnvironment() {
-  const env = { ...process.env };
-  const dataHome = env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
-  let mode = 'google';
-  try { mode = readFileSync(join(dataHome, 'muxterm', 'gemini-auth-mode'), 'utf8').trim(); } catch { /* Google sign-in is the default. */ }
-  if (mode !== 'api-key') {
-    // The CLI may have saved API-key auth from a prior session. Force this
-    // launch to use the Google choice selected in muxterm without editing its settings.
-    delete env.GEMINI_API_KEY;
-    delete env.GOOGLE_API_KEY;
-    env.GEMINI_CLI_AUTH_OVERRIDE = 'oauth-personal';
-    return env;
-  }
-  delete env.GEMINI_CLI_AUTH_OVERRIDE;
-  let key = env.GEMINI_API_KEY?.trim();
-  if (!key) {
-    for (const name of ['keys.env', 'key.env']) {
-      try {
-        const data = readFileSync(join(homedir(), '.amplifier', name), 'utf8').slice(0, 65536);
-        const line = data.split('\n').find(line => /^\s*(?:export\s+)?GEMINI_API_KEY\s*=/.test(line));
-        if (line) { key = line.replace(/^\s*(?:export\s+)?GEMINI_API_KEY\s*=\s*/, '').trim().replace(/^(['"])(.*)\1$/, '$2'); break; }
-      } catch { /* Try the next standard key file. */ }
-    }
-  }
-  if (!key) throw new Error('GEMINI_API_KEY is not configured');
-  const root = join(dataHome, 'muxterm', 'gemini-api-key');
-  mkdirSync(join(root, '.gemini'), { recursive: true, mode: 0o700 });
-  const settings = join(root, '.gemini', 'settings.json');
-  try { readFileSync(settings); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    try { writeFileSync(settings, '{"security":{"auth":{"selectedType":"gemini-api-key"}}}\n', { flag: 'wx', mode: 0o600 }); }
-    catch (createError) { if (createError.code !== 'EEXIST') throw createError; }
-  }
-  env.GEMINI_CLI_HOME = root;
-  env.GEMINI_API_KEY = key;
-  delete env.GOOGLE_API_KEY;
-  return env;
-}
-
 export class ACPStream {
   constructor(session, emit, onProcessExit) {
     this.session = session;
@@ -292,7 +231,6 @@ export class ACPStream {
     this.interruptForSteer = false;
     this.stopDuringSteer = false;
     this.userStopRequested = false;
-    this.questionDismissed = false;
     this.turnInputIds = [];
     this.continuedInputIds = [];
     const profile = profiles[session.harness];
@@ -338,11 +276,7 @@ export class ACPStream {
       this.loading = true;
       try {
         if (this.agentCapabilities.sessionCapabilities?.resume) session = await this.withExit(this.connection.resumeSession({ ...params, sessionId: this.session.nativeId }));
-        // Gemini CLI advertises the legacy load capability and uses its raw
-        // session/load RPC here; revisit this when its ACP shape changes.
-        else if (this.agentCapabilities.loadSession) session = await this.withExit(this.session.harness === 'gemini'
-          ? this.connection.request('session/load', { ...params, sessionId: this.session.nativeId })
-          : this.connection.loadSession({ ...params, sessionId: this.session.nativeId }));
+        else if (this.agentCapabilities.loadSession) session = await this.withExit(this.connection.loadSession({ ...params, sessionId: this.session.nativeId }));
         else throw new Error(`${this.session.harness} does not advertise ACP session recovery`);
       } finally { this.loading = false; }
     } else {
@@ -353,9 +287,6 @@ export class ACPStream {
     this.runtime.register(this);
     this.configOptions = session.configOptions || [];
     this.modes = session.modes || null;
-    // Gemini CLI still publishes its model selector in the older ACP `models`
-    // response field. Remove this shim when Gemini publishes configOptions.
-    this.legacyModels = this.session.harness === 'gemini' ? session.models || null : null;
     this.startupInfo = session._meta?.piAcp?.startupInfo || '';
     this.startupBuffer = '';
     // A resumed ACP process starts with the agent's own defaults. Restore the
@@ -378,7 +309,7 @@ export class ACPStream {
   onExit(error) {
     if (this.closed || this.exitError) return;
     this.exitError = error;
-    this.resolveElicitations();
+    this.resolveElicitations('Agent disconnected');
     if (this.busy) this.emit(this.session.id, 'session.uncertain', { message: String(error) });
     this.onProcessExit?.();
   }
@@ -410,7 +341,7 @@ export class ACPStream {
           { label: 'Disable web search', description: 'OpenCode will remember this choice.' },
           { label: 'Not now', description: 'Cancel this search without saving a choice.' }] }];
       return new Promise(resolve => {
-        this.pendingElicitations.set(questionId, resolve);
+        this.pendingElicitations.set(questionId, { resolve });
         this.emit(this.session.id, 'question.requested', { itemId: questionId, raw: { questions, isBlocking: true } });
       });
     }
@@ -424,12 +355,70 @@ export class ACPStream {
       return { action: 'accept', content: { provider: 'exa' } };
     }
     this.selectExaNext = false;
-    return { action: 'cancel' };
+    if (params.requestedSchema?.type !== 'object' || !fields) return { action: 'cancel' };
+    const questions = [];
+    const optionsByField = new Map();
+    for (const [id, field] of Object.entries(fields)) {
+      if (id.endsWith('_custom') && fields[id.slice(0, -7)]) continue;
+      const multiple = field.type === 'array';
+      const schema = multiple ? field.items : field;
+      const choices = schema?.oneOf ?? schema?.anyOf;
+      if (multiple && !choices?.length) return { action: 'cancel' };
+      if ((!multiple && field.type !== 'string') || (choices && (!Array.isArray(choices) || !choices.every(option => typeof option?.const === 'string'))))
+        return { action: 'cancel' };
+      const options = choices?.map(option => ({
+        label: option.title || option.const, value: option.const, description: option.description || '',
+      })) ?? null;
+      optionsByField.set(id, options);
+      questions.push({
+        id, header: field.title || '', question: field.description || field.title || params.message,
+        isOther: fields[id + '_custom']?.type === 'string', isSecret: false, multiple, options,
+      });
+    }
+    if (!questions.length) return { action: 'cancel' };
+    this.confirmAccepted?.();
+    const questionId = randomUUID();
+    return new Promise(resolve => {
+      this.pendingElicitations.set(questionId, { resolve, questions, optionsByField, toolCallId: params.toolCallId });
+      this.emit(this.session.id, 'question.requested', { itemId: questionId, raw: { questions, isBlocking: true } });
+    });
   }
 
-  answerElicitation(questionId, answers) {
-    const resolve = this.pendingElicitations.get(questionId);
-    if (!resolve) throw new Error('This question is no longer waiting for an answer');
+  answerElicitation(questionId, answers, dismiss) {
+    const pending = this.pendingElicitations.get(questionId);
+    if (!pending) throw new Error('This question is no longer waiting for an answer');
+    const { resolve, questions, optionsByField } = pending;
+    if (dismiss) {
+      this.pendingElicitations.delete(questionId);
+      this.emit(this.session.id, 'question.resolved', { itemId: questionId, message: 'Dismissed by you' });
+      resolve({ action: 'decline' });
+      return { status: 'accepted' };
+    }
+    if (questions) {
+      const content = Object.create(null);
+      for (const question of questions) {
+        const answer = answers?.[question.id];
+        if (typeof answer !== 'string' || !answer.trim()) throw new Error('Answer each question to continue');
+        const options = optionsByField.get(question.id);
+        if (question.multiple) {
+          const selection = JSON.parse(answer);
+          const values = selection?.values;
+          const custom = selection?.custom;
+          if (!Array.isArray(values) || new Set(values).size !== values.length ||
+              !values.every(value => options.some(option => option.value === value)) ||
+              (custom && (!question.isOther || typeof custom !== 'string')) || (!values.length && !custom))
+            throw new Error('Choose one or more offered answers');
+          content[question.id] = values;
+          if (custom) content[question.id + '_custom'] = custom;
+        } else if (!options || options.some(option => option.value === answer)) content[question.id] = answer;
+        else if (question.isOther) content[question.id + '_custom'] = answer;
+        else throw new Error('Choose one of the offered answers');
+      }
+      this.pendingElicitations.delete(questionId);
+      resolve({ action: 'accept', content });
+      this.emit(this.session.id, 'question.answered', { itemId: questionId });
+      return { status: 'accepted' };
+    }
     const choice = answers?.choice;
     if (!['Use Exa', 'Disable web search', 'Not now'].includes(choice))
       throw new Error('Choose one of the offered answers');
@@ -443,10 +432,10 @@ export class ACPStream {
     return { status: 'accepted' };
   }
 
-  resolveElicitations() {
-    for (const [questionId, resolve] of this.pendingElicitations) {
+  resolveElicitations(message) {
+    for (const [questionId, { resolve }] of this.pendingElicitations) {
       resolve({ action: 'cancel' });
-      this.emit(this.session.id, 'question.resolved', { itemId: questionId });
+      this.emit(this.session.id, 'question.resolved', { itemId: questionId, message });
     }
     this.pendingElicitations.clear();
     this.selectExaNext = false;
@@ -482,7 +471,6 @@ export class ACPStream {
     if (this.busy && (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan', 'usage_update'].includes(update.sessionUpdate)
       || (update.sessionUpdate === 'session_info_update' && update._meta?.piAcp?.running === true))) this.confirmAccepted?.();
     if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && messageText) {
-      this.questionDismissed = false;
       if (this.nativeGoal) {
         this.nativeGoal.output = (this.nativeGoal.output + messageText).slice(-4096);
         const state = this.nativeGoal.output.includes('<!-- GOAL_COMPLETE -->') ? 'complete'
@@ -517,10 +505,16 @@ export class ACPStream {
         this.emit(this.session.id, 'tool.started', { toolId: id, name, raw: input });
       }
       if (update.status === 'completed' || update.status === 'failed') {
-        if (this.session.harness === 'opencode' && name === 'question' && update.status === 'failed' &&
-            /the user dismissed this question/i.test(JSON.stringify(update.rawOutput ?? update.content ?? '')))
-          this.questionDismissed = true;
-        this.emit(this.session.id, 'tool.completed', { toolId: id, name, raw: update.rawOutput ?? update.content ?? null,
+        const raw = update.rawOutput ?? update.content ?? null;
+        const questionCancelled = this.session.harness === 'opencode' && name === 'question' &&
+          update.status === 'failed' && /the user dismissed this question/i.test(JSON.stringify(raw));
+        for (const [questionId, pending] of this.pendingElicitations) {
+          if (!pending.toolCallId || pending.toolCallId !== id) continue;
+          this.pendingElicitations.delete(questionId);
+          this.emit(this.session.id, 'question.resolved', { itemId: questionId, message: 'Agent ended the question' });
+          pending.resolve({ action: 'cancel' });
+        }
+        this.emit(this.session.id, 'tool.completed', { toolId: id, name, raw: questionCancelled ? { error: 'OpenCode cancelled the question' } : raw,
           failed: update.status === 'failed' });
         this.tools.delete(id);
       }
@@ -705,7 +699,7 @@ export class ACPStream {
     if (this.antigravityStopEmitted) return;
     this.antigravityStopEmitted = true;
     this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: 'cancelled',
-      cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
+      cancelReason: this.userStopRequested ? 'user' : 'agent' });
   }
 
   async startPrompt(input, prompt) {
@@ -713,7 +707,6 @@ export class ACPStream {
     this.session.busy = true;
     this.session.cancelRequested = false;
     this.userStopRequested = false;
-    this.questionDismissed = false;
     this.turnActivity = false;
     this.turnInputIds = [...this.continuedInputIds, input.id];
     this.continuedInputIds = [];
@@ -741,7 +734,7 @@ export class ACPStream {
       } else if (result.stopReason === 'cancelled') {
         this.reminderCursor = 0;
         this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds,
-          message: result.stopReason, cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
+          message: result.stopReason, cancelReason: this.userStopRequested ? 'user' : 'agent' });
       }
       else if (result.stopReason === 'end_turn' && !this.turnActivity) {
         this.reminderCursor = 0;
@@ -758,7 +751,7 @@ export class ACPStream {
       if (!accepted) rejectEvidence(error);
       else if (this.interruptForSteer && this.stopDuringSteer && !this.exitError && !this.closed)
         this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds,
-          message: 'cancelled', cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
+          message: 'cancelled', cancelReason: this.userStopRequested ? 'user' : 'agent' });
       else if (this.interruptForSteer && !this.exitError && !this.closed) {
         this.continuedInputIds = this.turnInputIds;
         this.emit(this.session.id, 'turn.continued');
@@ -776,6 +769,7 @@ export class ACPStream {
         this.busy = false;
         this.session.busy = false;
       }
+      this.resolveElicitations('Turn ended');
       this.session.cancelRequested = false;
       this.userStopRequested = false;
       this.confirmAccepted = null;
@@ -789,9 +783,9 @@ export class ACPStream {
     if (this.steerPending) this.stopDuringSteer = true;
     this.session.cancelRequested = true;
     this.userStopRequested = true;
-    this.resolveElicitations();
     try { await this.connection.cancel({ sessionId: this.session.nativeId }); }
-    catch (error) { this.userStopRequested = false; throw error; }
+    catch (error) { this.userStopRequested = false; this.session.cancelRequested = false; throw error; }
+    this.resolveElicitations('Turn stopped');
     return { status: 'accepted' };
   }
 
@@ -800,9 +794,6 @@ export class ACPStream {
     const effort = this.configOptions.find(item => item.type === 'select' && item.category === 'thought_level');
     const entries = model?.options?.flatMap(item => item.options || [item]) || [];
     const effortEntries = effort?.options?.flatMap(item => item.options || [item]) || [];
-    if (!model && this.legacyModels) return { provider: 'configured', model: this.legacyModels.currentModelId || '', effort: '',
-      models: (this.legacyModels.availableModels || []).map(item => ({ id: item.modelId, label: item.name || item.modelId,
-        efforts: [], defaultEffort: '' })) };
     return { provider: 'configured', model: model?.currentValue || '', effort: effort?.currentValue || '',
       models: entries.map(item => ({ id: item.value, label: item.name,
         efforts: effortEntries.map(value => value.value), defaultEffort: effort?.currentValue || '' })) };
@@ -810,14 +801,6 @@ export class ACPStream {
 
   async applySelection(model, effort) {
     if (this.busy) throw new Error('Finish the current turn before changing settings');
-    if (model && this.legacyModels && !this.configOptions.some(item => item.type === 'select' && item.category === 'model')) {
-      if (!(this.legacyModels.availableModels || []).some(item => item.modelId === model)) throw new Error('Unsupported Gemini model');
-      if (model !== this.legacyModels.currentModelId) {
-        await this.withExit(this.connection.request('session/set_model', { sessionId: this.session.nativeId, modelId: model }));
-        this.legacyModels.currentModelId = model;
-      }
-      model = '';
-    }
     for (const [category, value] of [['model', model], ['thought_level', effort]]) {
       const option = this.configOptions.find(item => item.type === 'select' && item.category === category);
       if (value && option && value !== option.currentValue) {
@@ -841,7 +824,7 @@ export class ACPStream {
   async close() {
     if (this.closed) return;
     this.closed = true;
-    this.resolveElicitations();
+    this.resolveElicitations('Chat closed');
     await this.ready.catch(() => {});
     this.runtime.detach(this);
     if (this.session.harness === 'opencode') {

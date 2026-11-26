@@ -30,9 +30,10 @@ func (s *Server) handleSDKChatQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
+		Dismiss bool              `json:"dismiss"`
 		Answers map[string]string `json:"answers"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&request); err != nil || len(request.Answers) == 0 || len(request.Answers) > 3 {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&request); err != nil || (request.Dismiss && (chat.Harness != "opencode" || len(request.Answers) != 0)) || (!request.Dismiss && (len(request.Answers) == 0 || len(request.Answers) > 3)) {
 		http.Error(w, "invalid answers", http.StatusBadRequest)
 		return
 	}
@@ -44,7 +45,7 @@ func (s *Server) handleSDKChatQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	result, err := h.call(ctx, "answerQuestion", map[string]any{"sessionId": id, "questionId": questionID, "answers": request.Answers})
+	result, err := h.call(ctx, "answerQuestion", map[string]any{"sessionId": id, "questionId": questionID, "answers": request.Answers, "dismiss": request.Dismiss})
 	if err != nil {
 		if strings.Contains(err.Error(), "no longer waiting") || strings.Contains(err.Error(), "not resident") || strings.Contains(err.Error(), "no pending question") {
 			http.Error(w, "This question is no longer active", http.StatusConflict)

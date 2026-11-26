@@ -23,6 +23,20 @@ before filing. If you explicitly ask to review a draft first, the chat uses
 `draft=true`; draft revisions stay in Work history until you approve and file
 the exact condition.
 
+For a broader request, the chat first describes the smallest integrated outcome.
+It uses `create_work_graph` when parts can deliver separately verifiable
+capabilities or reusable handoffs. Each node includes its own scope, goal,
+evidence, and blocked exit. The final node verifies the integrated outcome
+and tracks release. A prerequisite link means the downstream node needs a
+specific upstream result. Independent nodes can start as project capacity
+allows.
+
+Graph filing validates and saves all nodes together. If a goal check fails,
+the chat revises the affected goal and rechecks the graph before submitting.
+If delivery is uncertain, replay the same submission with the same
+`client_ref` to retrieve the existing items. Work details link to the other
+outcomes and show the completion state of each prerequisite.
+
 A goal draft is reachable in two places:
 
 - The creating chat's **View work** action opens the Work detail review sheet.

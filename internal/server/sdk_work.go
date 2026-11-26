@@ -23,6 +23,9 @@ import (
 // Work items coordinate sessions. A filed goal condition is installed as
 // the selected worker chat's native goal when the scheduler dispatches Work.
 type sdkWorkItem struct {
+	GraphID            string                   `json:"graphId,omitempty"`
+	GraphIntegrationID string                   `json:"graphIntegrationId,omitempty"`
+	GraphLinks         []string                 `json:"graphLinks,omitempty"`
 	ID                 string                   `json:"id"`
 	Reference          string                   `json:"reference,omitempty"`
 	ClientRef          string                   `json:"clientRef"`
@@ -140,6 +143,7 @@ type sdkWorkDispatch struct {
 	Configuration       *sdkWorkConfiguration `json:"configuration,omitempty"`
 	ChoiceSource        string                `json:"choiceSource,omitempty"`
 	GoalMode            string                `json:"goalMode,omitempty"`
+	KickoffAttempts     int                   `json:"kickoffAttempts,omitempty"`
 	ContinuationEventID string                `json:"continuationEventId,omitempty"`
 	ContinuationState   string                `json:"continuationState,omitempty"`
 	ContinuationCount   int                   `json:"continuationCount,omitempty"`
@@ -374,6 +378,7 @@ func (h *sdkChatHost) resolveWorkReferenceLocked(reference string) (*sdkWorkItem
 
 func (h *sdkChatHost) loadWorkItems() {
 	// Startup is single-threaded; h.mu is not yet shared with request handlers.
+	h.loadWorkGraphs()
 	entries, err := os.ReadDir(filepath.Join(h.dir, "work"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("read work items: %v", err)
@@ -791,13 +796,38 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSDKWorkItem(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	h.mu.Lock()
-	item, resolveErr := h.resolveWorkReferenceLocked(r.PathValue("id"))
+	ref := r.PathValue("id")
+	var item *sdkWorkItem
+	var resolveErr error
+	if ref == "assigned" {
+		actor := h.requestWorkActorLocked(r)
+		for _, candidate := range h.workItems {
+			if actor.Kind != "chat" || (candidate.Status != "open" && candidate.Status != "active") {
+				continue
+			}
+			owner := candidate.OwnerSessionID
+			if owner == "" && candidate.Dispatch != nil && (candidate.Dispatch.State == "starting" || candidate.Dispatch.State == "sent") {
+				owner = candidate.Dispatch.SessionID
+			}
+			if owner != actor.SessionID {
+				continue
+			}
+			if item != nil {
+				resolveErr = errAmbiguousWorkReference
+				break
+			}
+			item = candidate
+		}
+	} else {
+		item, resolveErr = h.resolveWorkReferenceLocked(ref)
+	}
 	var copy sdkWorkItem
 	if item != nil {
 		copy = *item
 		copy.CreatedBy = h.workCreatorLocked(item)
 		copy.ProjectIDs = slices.Clone(h.workProjectIDsLocked(item))
 		copy.WaitingOn = h.workWaitingOnLocked(item)
+		copy.GraphLinks = h.workGraphLinksLocked(item)
 	}
 	h.mu.Unlock()
 	if errors.Is(resolveErr, errAmbiguousWorkReference) {

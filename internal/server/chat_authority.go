@@ -71,6 +71,9 @@ func agentChatPathAllowed(method, path string) bool {
 		}
 		return len(parts) == 3 && parts[0] != "" && parts[1] == "runs" && parts[2] != "" && method == http.MethodGet
 	}
+	if path == "/api/sdk-work/graph" {
+		return method == http.MethodPost
+	}
 	if path == "/api/sdk-work" {
 		return method == http.MethodGet || method == http.MethodPost
 	}

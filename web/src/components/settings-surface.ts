@@ -1,3 +1,4 @@
+import { APP_FONTS, DEFAULT_TYPOGRAPHY, TEXT_SIZES, readAppTypography, saveAppTypography } from '../lib/app-typography.js';
 import { subtleScrollbars } from '../lib/subtle-scrollbars.js';
 import { LitElement, html, css, nothing, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -24,7 +25,7 @@ import { appIconImage } from '../lib/pwa-icon.js';
 import { icon } from '../lib/icons.js';
 import { ArrowLeft, ChevronDown } from 'lucide';
 import geminiMark from '../assets/harness/gemini.svg?url';
-import { fetchUpdateStatus, fetchAutomaticUpdateStatus, setAutomaticUpdates, installUpdate, type UpdateStatus, type AutomaticUpdateStatus } from '../lib/update.js';
+import { fetchUpdateStatus, checkUpdateNow, fetchAutomaticUpdateStatus, setAutomaticUpdates, installUpdate, type UpdateStatus, type AutomaticUpdateStatus } from '../lib/update.js';
 import { macAppVersion, checkMacUpdate, installMacUpdate, fetchMacAutomaticUpdateStatus, setMacAutomaticUpdates, type MacUpdateStatus } from '../lib/mac-app.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import '../ui/confirmation.js';
@@ -254,7 +255,7 @@ export class MuxSettingsSurface extends LitElement {
       height: 100%;
       background: var(--ui-surface-base);
       color: var(--ui-text);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--app-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
       font-size: var(--ui-text-md);
       box-sizing: border-box;
       overflow: hidden;
@@ -341,6 +342,12 @@ export class MuxSettingsSurface extends LitElement {
     .appearance-heading .section-title { margin-bottom:var(--ui-space-2); }
     .appearance-help { margin:0; color:var(--ui-text-muted); font-size:var(--ui-text-sm); line-height:1.45; }
     .mode-toggle { display:flex; flex:none; padding:var(--ui-space-1); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); background:var(--ui-surface-raised); }
+    .typography { display:grid; gap:var(--ui-space-5); min-width:0; margin-bottom:var(--ui-space-8); }
+    .typography-controls { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,14rem),1fr)); gap:var(--ui-space-5); }
+    .typography mux-ui-range-field { padding:0; }
+    .typography-preview { border:1px solid var(--ui-border); border-radius:var(--ui-radius-lg); padding:var(--ui-space-5); font:var(--ui-text-lg)/1.68 var(--ui-content-font-family); overflow-wrap:anywhere; }
+    .typography-preview p { margin:var(--ui-space-2) 0 0; }
+    .typography-reset { justify-self:start; }
     .mode-toggle mux-ui-button::part(button) { min-height:0; border:0; border-radius:var(--ui-radius-sm); padding:var(--ui-space-3) var(--ui-space-5); background:transparent; color:var(--ui-text-muted); font:600 var(--ui-text-sm) var(--ui-font-sans); }
     .mode-toggle mux-ui-button[pressed]::part(button) { background:var(--ui-nav-selected); color:var(--ui-text); }
     .mode-toggle mux-ui-button::part(button):focus-visible,.appearance-choice::part(button):focus-visible,.terminal-theme-details summary:focus-visible { outline:2px solid var(--ui-focus); outline-offset:2px; }
@@ -682,6 +689,7 @@ export class MuxSettingsSurface extends LitElement {
   @property({ type: Boolean, attribute: 'page-mode', reflect: true }) pageMode = false;
 
   @state() private _section: SettingsSection = 'appearance';
+  @state() private _typography = readAppTypography();
   private _lastScrolledSection: SettingsSection | null = null;
   @state() private _updateStatus: UpdateStatus | null = null;
   @state() private _automaticUpdate: AutomaticUpdateStatus | null = null;
@@ -883,7 +891,7 @@ export class MuxSettingsSurface extends LitElement {
     if (section === 'remotes') void this._loadRemotes();
   }
 
-  private async _checkVersion(): Promise<void> {
+  private async _checkVersion(force = false): Promise<void> {
     if (this._checkingVersion || this._installingUpdate) return;
     this._checkingVersion = true;
     this._updateError = '';
@@ -892,7 +900,7 @@ export class MuxSettingsSurface extends LitElement {
         this._macUpdateStatus = await checkMacUpdate(status => { this._macUpdateStatus = status; });
         return;
       }
-      this._updateStatus = await fetchUpdateStatus();
+      this._updateStatus = await (force ? checkUpdateNow() : fetchUpdateStatus());
       window.dispatchEvent(new CustomEvent('muxterm-update-checked', { detail: this._updateStatus }));
     } catch (error) {
       this._updateError = macAppVersion() && error instanceof Error ? error.message : 'Could not check the version. Try again.';
@@ -974,7 +982,7 @@ export class MuxSettingsSurface extends LitElement {
         ${macVersion ? html`
           <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
           <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${this._checkingVersion || this._installingUpdate || macStatus?.phase !== 'available'} @click=${() => void this._installUpdate()}>Update and restart</mux-ui-button>` : html`
-          <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion()}>Check version</mux-ui-button>
+          <mux-ui-button variant="secondary" ?busy=${this._checkingVersion} ?disabled=${this._installingUpdate} @click=${() => void this._checkVersion(true)}>Check version</mux-ui-button>
           <mux-ui-button variant="primary" ?busy=${this._installingUpdate} ?disabled=${!status?.canUpdate || this._checkingVersion} @click=${() => void this._installUpdate()}>Update</mux-ui-button>`}
       </div>
       <mux-ui-feedback class="settings-feedback" kind=${macVersion ? this._updateError || macStatus?.phase === 'error' ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : macStatus?.phase === 'available' ? 'info' : 'success' : this._updateError || status?.error ? 'error' : this._checkingVersion || this._installingUpdate ? 'loading' : status?.updateAvailable ? 'info' : 'success'} density="compact">${message}</mux-ui-feedback>
@@ -1178,11 +1186,46 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  private _setTypography(preferences: typeof DEFAULT_TYPOGRAPHY) {
+    this._typography = preferences;
+    saveAppTypography(preferences);
+  }
+
+  private _renderTypography() {
+    const { font, size } = this._typography;
+    return html`
+      <section class="typography" aria-labelledby="typography-heading">
+        <h2 class="section-title" id="typography-heading">Typography</h2>
+        <div class="typography-controls">
+          <mux-ui-select label="App font" .value=${font}
+            .options=${APP_FONTS.map(option => ({ value: option.id, label: option.label }))}
+            @change=${(event: Event) => {
+              const choice = APP_FONTS.find(option => option.id === (event.target as MuxUISelect).value);
+              if (choice) this._setTypography({ font: choice.id, size });
+            }}
+          ></mux-ui-select>
+          <mux-ui-range-field label="Text size" min-label="Smaller" max-label="Larger" hide-value
+            .min=${0} .max=${TEXT_SIZES.length - 1} .value=${size}
+            .valueLabels=${TEXT_SIZES.map(option => option.label)}
+            @input=${(event: CustomEvent<{ value: number }>) => this._setTypography({ font, size: event.detail.value })}
+          ></mux-ui-range-field>
+        </div>
+        <div class="typography-preview">
+          <strong>Chat preview</strong>
+          <p>I’ll check the workspace, summarize what changed, and send you the next steps.</p>
+        </div>
+        <mux-ui-button class="typography-reset" variant="quiet" size="small"
+          @click=${() => this._setTypography(DEFAULT_TYPOGRAPHY)}>Reset typography</mux-ui-button>
+      </section>
+    `;
+  }
+
   private _renderAppearance() {
     const cfg = this.config;
     if (!cfg) return html``;
     const mode = cfg.theme.mode;
     return html`
+      ${this._renderTypography()}
       <section class="app-icon-section" aria-label="App icon">
         <div class="appearance-heading"><div><p class="section-title">App icon</p><p class="appearance-help">Your launcher icon follows this server's chat backdrop. Choose a backdrop below to change its subject and color.</p></div></div>
         <div class="app-icon-preview" aria-label="Icon previews">
@@ -1605,8 +1648,6 @@ export class MuxSettingsSurface extends LitElement {
         ${this._renderAntigravity()}
         ${SETUP_AGENTS.map(agent => this._renderSetupAgent(agent))}
         ${this._renderUnified()}
-        ${this._renderGemini()}
-        ${this._renderAntigravitySDK()}
       </div>
       ${this._runtimeError && !this._runtimeErrorHarness ? html`<mux-ui-feedback class="settings-feedback" kind="error" appearance="panel" density="compact">${this._runtimeError}</mux-ui-feedback>` : nothing}
       ${this._runtimeConfirmation ? html`<mux-ui-confirmation open .heading=${'Force restart chat runtime?'}
@@ -1617,18 +1658,6 @@ export class MuxSettingsSurface extends LitElement {
         @confirmation-cancel=${() => { if (!this._runtimeBusy) this._runtimeConfirmation = null; }}
         @confirmation-confirm=${this._confirmRuntimeForceRestart}></mux-ui-confirmation>` : nothing}
     `;
-  }
-
-  private _renderAntigravitySDK() {
-    const ready = this._readyAgents?.has('antigravity-sdk') ?? false;
-    const stopped = this._agentRuntimes.get('antigravity-sdk')?.state === 'stopped';
-    const label = stopped ? 'Runtime stopped' : ready ? 'Ready for new chats' : this._readyAgents === null ? 'Checking' : 'Setup needed';
-    return html`<details class="agent-card ai-harness">
-      <summary><span class="ai-harness-mark" style=${`--gemini-mark:url("${geminiMark}")`} aria-hidden="true"></span><span class="agent-identity"><span class="agent-title">Antigravity SDK</span><span class="agent-description">Google coding agent · Python SDK</span></span><mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
-      <div class="agent-body"><p>The Python SDK supports new chats when uv, Python 3, and GEMINI_API_KEY are available.</p>
-        ${this._renderRuntimeControls('antigravity-sdk', 'Antigravity SDK', true)}
-      </div>
-    </details>`;
   }
 
   private _renderUnified() {
@@ -1724,16 +1753,6 @@ export class MuxSettingsSurface extends LitElement {
   private _setDefaultHarness(defaultHarness: ResolvedConfig['ai']['defaultHarness']): void {
     if (!this.config) return;
     this._emit({ ai: { ...this.config.ai, defaultHarness } });
-  }
-
-  private _renderGemini() {
-    const ready = this._readyAgents?.has('gemini') ?? false;
-    const stopped = this._agentRuntimes.get('gemini')?.state === 'stopped';
-    const label = stopped ? 'Runtime stopped' : ready ? 'Ready for new chats' : this._readyAgents === null ? 'Checking' : 'Setup needed';
-    return html`<details class="agent-card">
-      <summary><span class="agent-identity"><span class="agent-title">Gemini CLI</span><span class="agent-description">Google coding agent · ACP</span></span><mux-ui-status-badge appearance="plain" tone=${ready && !stopped ? 'success' : 'neutral'} dot>${label}</mux-ui-status-badge><span class="agent-chevron" aria-hidden="true">${icon(ChevronDown,{size:16})}</span></summary>
-      <div class="agent-body"><p>Install and authenticate Gemini CLI to start new chats. <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Setup guide ↗</a></p>${this._renderRuntimeControls('gemini', 'Gemini CLI', ready)}</div>
-    </details>`;
   }
 
   private _renderSetupAgent(agent: typeof SETUP_AGENTS[number]) {
